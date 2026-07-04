@@ -1,0 +1,17 @@
+# Build artifacts
+/target
+**/*.rs.bk
+
+# Backtraces
+rustc-ice-*.txt
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp

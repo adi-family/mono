@@ -1,0 +1,14 @@
+[package]
+name = "adi-core"
+description = "Core shared library for the adi-family workspace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
