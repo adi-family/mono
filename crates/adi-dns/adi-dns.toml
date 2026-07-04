@@ -1,0 +1,44 @@
+# adi-dns configuration.
+#
+# Pass this file as the first argument:  adi-dns /path/to/adi-dns.toml
+# With no argument the built-in defaults below are used.
+#
+# Design goal: works on any machine that starts it, without fighting over a port
+# and without ever touching another local resolver (only `.domain` is served).
+
+# The TLD this resolver owns and registers with the OS. Only names under this
+# domain are ever routed to us; everything else stays on the machine's normal DNS.
+domain = "adi"
+
+# Loopback address to bind.
+bind_addr = "127.0.0.1"
+
+# Preferred UNPRIVILEGED port — no root needed to run. 10053 is high enough to
+# avoid privilege, below the ephemeral range, and clear of 15353 (ADI DNS /
+# adi.hive) and 5353 (mDNS).
+preferred_port = 10053
+
+# If the preferred port is busy on some machine, try these in order.
+fallback_ports = [10153, 24053]
+
+# NOTE (Windows): the OS route on Windows (NRPT) cannot target a custom port, so
+# there the resolver always binds :53 (as a service) regardless of the ports above.
+
+# Upstream resolvers for everything that isn't a local override.
+upstreams = ["1.1.1.1:53", "8.8.8.8:53"]
+
+# Self-register the OS route for `.domain` at startup and remove it at shutdown
+# (macOS /etc/resolver, Linux systemd-resolved, Windows NRPT). Needs admin/root;
+# if it can't, it logs a warning + the manual command and keeps serving. Best set
+# to true when running under a privileged supervisor (e.g. `adi daemon`).
+manage_os_routing = false
+
+# Split-DNS overrides. If omitted entirely, defaults to `domain -> 127.0.0.1`.
+# Longest suffix wins, so `v6.adi` beats `adi` for names under it.
+[[overrides]]
+suffix  = "adi"
+address = "127.0.0.1"
+
+# [[overrides]]
+# suffix  = "v6.adi"
+# address = "::1"

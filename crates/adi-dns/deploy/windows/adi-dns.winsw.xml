@@ -1,0 +1,37 @@
+<!--
+  WinSW (Windows Service Wrapper) definition for the adi-family DNS resolver.
+
+  supervisord does not run on Windows, so on Windows we wrap the same foreground
+  binary as a native Windows Service using WinSW (https://github.com/winsw/winsw)
+  or NSSM. Both supervise a foreground process and restart it on failure.
+
+  Install:
+    1. Put WinSW.exe next to this file, renamed to adi-dns.exe's wrapper, e.g.
+       adi-dns-service.exe, with adi-dns-service.xml = this file.
+    2. adi-dns-service.exe install
+    3. adi-dns-service.exe start
+
+  Binding :53 requires the service to run as LocalSystem (default) or an admin.
+  This wraps the Rust binary; to wrap CoreDNS instead, point <executable> at
+  coredns.exe with <arguments>-conf C:\adi-dns\Corefile</arguments>.
+-->
+<service>
+  <id>adi-dns</id>
+  <name>adi-family local DNS resolver</name>
+  <description>Split-DNS overrides + upstream forwarding for adi-family development.</description>
+
+  <executable>C:\adi-dns\adi-dns.exe</executable>
+  <arguments>C:\adi-dns\adi-dns.toml</arguments>
+
+  <!-- Restart on crash, matching supervisord's autorestart. -->
+  <onfailure action="restart" delay="5 sec"/>
+  <resetfailure>1 hour</resetfailure>
+
+  <log mode="roll-by-size">
+    <sizeThreshold>10240</sizeThreshold>
+    <keepFiles>5</keepFiles>
+  </log>
+
+  <env name="RUST_LOG" value="info"/>
+  <stoptimeout>10 sec</stoptimeout>
+</service>

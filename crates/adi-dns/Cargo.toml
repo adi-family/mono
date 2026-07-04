@@ -1,0 +1,29 @@
+[package]
+name = "adi-dns"
+description = "adi-family local DNS resolver: split-DNS overrides + upstream forwarding, run in the foreground under a supervisor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# DNS server + upstream resolver, all pure Rust (hickory-dns, ex trust-dns).
+hickory-server = { version = "0.26", features = ["resolver"] }
+hickory-resolver = "0.26"
+hickory-proto = "0.26"
+
+# Async runtime. `signal` lets us shut down cleanly when the supervisor sends SIGTERM.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
+async-trait = "0.1"
+
+# Config + observability. Logs go to stdout/stderr so the supervisor captures them.
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[lints]
+workspace = true

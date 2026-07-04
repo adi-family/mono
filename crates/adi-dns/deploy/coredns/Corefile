@@ -1,0 +1,32 @@
+# CoreDNS Corefile — the config-only equivalent of adi-dns.
+#
+# Same behavior as the Rust prototype: names under `.adi` are answered locally
+# (split-DNS), everything else is cached and forwarded upstream.
+#
+# Run in the FOREGROUND (CoreDNS does this by default) so a supervisor owns it:
+#   coredns -conf /etc/adi-dns/Corefile
+#
+# CoreDNS is a single static binary for Linux, macOS, and Windows.
+
+# --- Local dev zone: every name under .adi resolves locally -------------------
+adi:53 {
+    # `template` synthesizes an answer for any name in the zone (wildcard).
+    template IN A {
+        answer "{{ .Name }} 60 IN A 127.0.0.1"
+    }
+    template IN AAAA {
+        answer "{{ .Name }} 60 IN AAAA ::1"
+    }
+    log
+    errors
+}
+
+# --- Everything else: cache + forward to upstream resolvers -------------------
+.:53 {
+    cache 30
+    forward . 1.1.1.1 8.8.8.8 {
+        policy sequential
+    }
+    log
+    errors
+}
