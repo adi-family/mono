@@ -12,10 +12,12 @@
 //! `hickory-resolver` for the upstream forwarder.
 
 mod config;
+mod landing;
 mod os_routing;
+mod status;
 
 use std::fmt;
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -55,47 +57,103 @@ async fn main() -> anyhow::Result<()> {
         warn!("no config file given; using built-in defaults");
         Config::default()
     };
-    let ports = config.effective_ports();
-    info!(
-        domain = %config.domain,
-        bind_addr = %config.bind_addr,
-        ?ports,
-        upstreams = ?config.upstreams,
-        manage_os_routing = config.manage_os_routing,
-        "starting adi-dns"
-    );
+    // The DNS side is optional: a landing-only instance (`serve_dns = false`) skips
+    // it so a privileged process can own `:80` without fighting the unprivileged
+    // resolver for the DNS port. Returns the pieces the shutdown path needs.
+    let dns = if config.serve_dns {
+        let ports = config.effective_ports();
+        info!(
+            domain = %config.domain,
+            bind_addr = %config.bind_addr,
+            ?ports,
+            upstreams = ?config.upstreams,
+            manage_os_routing = config.manage_os_routing,
+            "starting adi-dns"
+        );
 
-    // Bind UDP + TCP on the first free candidate port, so a busy port on any given
-    // machine never blocks startup.
-    let (udp, tcp, bound) = bind_ports(config.bind_addr, &ports)
-        .await
-        .context("binding resolver listener")?;
-    info!(%bound, "listening");
+        // Bind UDP + TCP on the first free candidate port, so a busy port on any
+        // given machine never blocks startup.
+        let (udp, tcp, bound) = bind_ports(config.bind_addr, &ports)
+            .await
+            .context("binding resolver listener")?;
+        info!(%bound, "listening");
 
-    let handler = AdiHandler::new(&config)?;
-    let mut server = Server::new(handler);
-    server.register_socket(udp);
-    server.register_listener(tcp, TCP_TIMEOUT, RESPONSE_BUFFER);
+        let handler = AdiHandler::new(&config)?;
+        let mut server = Server::new(handler);
+        server.register_socket(udp);
+        server.register_listener(tcp, TCP_TIMEOUT, RESPONSE_BUFFER);
 
-    // Self-register the OS route for `.domain` at the port we actually bound.
-    let routing_installed = install_os_routing(&config, bound);
+        // Self-register the OS route for `.domain` at the port we actually bound.
+        let routing_installed = install_os_routing(&config, bound);
+
+        // Publish a status file so the controlling GUI can read the live state
+        // (running, bound port, route installed). Best-effort — never blocks serving.
+        let status_path = status::resolve_path(config.status_file.as_deref());
+        let status = status::Status::new(&config.domain, bound, routing_installed);
+        match status::write(&status_path, &status) {
+            Ok(()) => info!(path = %status_path.display(), "wrote status file"),
+            Err(e) => warn!(error = %e, path = %status_path.display(), "could not write status file"),
+        }
+
+        Some((server, routing_installed, status_path))
+    } else {
+        info!(domain = %config.domain, "serve_dns is off; running landing-only");
+        None
+    };
+
+    // Optionally serve the built-in HTTP "not found" page for `.domain`. Runs on
+    // its own task; a bind failure (needs root for :80 / a loopback alias) is
+    // logged there and never stops the process.
+    let landing_task = if config.landing.enabled {
+        let bind = config.landing.bind;
+        ensure_landing_address(bind.ip());
+        let domain = config.domain.clone();
+        Some(tokio::spawn(async move {
+            if let Err(e) = landing::serve(bind, domain).await {
+                warn!(error = %e, %bind, "landing HTTP server did not start");
+            }
+        }))
+    } else {
+        None
+    };
+
+    if dns.is_none() && landing_task.is_none() {
+        anyhow::bail!("nothing to do: serve_dns is false and landing is disabled");
+    }
 
     info!("adi-dns ready");
 
-    // Run until the server exits or the supervisor asks us to stop.
-    tokio::select! {
-        res = server.block_until_done() => res.context("DNS server terminated with error")?,
-        () = shutdown_signal() => info!("shutdown signal received; stopping"),
-    }
-
-    if routing_installed {
-        match os_routing::uninstall(&config.domain) {
-            Ok(()) => info!(domain = %config.domain, "removed OS route"),
-            Err(e) => warn!(error = %e, "failed to remove OS route; remove it manually"),
+    // Run until the DNS server exits (if it's running) or a stop signal arrives.
+    match dns {
+        Some((mut server, routing_installed, status_path)) => {
+            tokio::select! {
+                res = server.block_until_done() => res.context("DNS server terminated with error")?,
+                () = shutdown_signal() => info!("shutdown signal received; stopping"),
+            }
+            stop_landing(landing_task);
+            status::remove(&status_path);
+            if routing_installed {
+                match os_routing::uninstall(&config.domain) {
+                    Ok(()) => info!(domain = %config.domain, "removed OS route"),
+                    Err(e) => warn!(error = %e, "failed to remove OS route; remove it manually"),
+                }
+            }
+            let _ = server.shutdown_gracefully().await;
+        }
+        None => {
+            shutdown_signal().await;
+            info!("shutdown signal received; stopping");
+            stop_landing(landing_task);
         }
     }
-    let _ = server.shutdown_gracefully().await;
     Ok(())
+}
+
+/// Abort the landing server task, if one is running.
+fn stop_landing(task: Option<tokio::task::JoinHandle<()>>) {
+    if let Some(task) = task {
+        task.abort();
+    }
 }
 
 /// Bind UDP + TCP on the first candidate port that is free, tried in order.
@@ -141,6 +199,32 @@ fn install_os_routing(config: &Config, bound: SocketAddr) -> bool {
             );
             false
         }
+    }
+}
+
+/// Make the landing server's bind address usable. On macOS a non-`127.0.0.1`
+/// loopback address must be aliased onto `lo0` before it can be bound; elsewhere
+/// the whole `127.0.0.0/8` block already routes to loopback. Best-effort (needs
+/// root): a failure degrades to a warning, and the bind below simply fails if the
+/// address really isn't available.
+fn ensure_landing_address(ip: IpAddr) {
+    if ip == IpAddr::V4(Ipv4Addr::LOCALHOST) {
+        return; // always present
+    }
+    #[cfg(target_os = "macos")]
+    {
+        match std::process::Command::new("ifconfig")
+            .args(["lo0", "alias", &ip.to_string(), "up"])
+            .status()
+        {
+            Ok(s) if s.success() => info!(%ip, "aliased loopback address for landing server"),
+            Ok(s) => warn!(%ip, code = ?s.code(), "ifconfig lo0 alias failed (need root?)"),
+            Err(e) => warn!(%ip, error = %e, "could not run ifconfig to alias loopback"),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = ip; // 127.0.0.0/8 is already loopback on Linux/Windows
     }
 }
 
