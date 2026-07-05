@@ -1,0 +1,27 @@
+[package]
+name = "adi-hive"
+description = "adi-family reverse proxy: routes inbound HTTP by Host header to a local upstream (nginx-style), run in the foreground under a supervisor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Async runtime. `signal` lets us shut down cleanly when the supervisor sends
+# SIGTERM; `io-util` backs the byte-splicing proxy loop's read/write/copy.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util"] }
+
+# Config + observability. Logs go to stdout/stderr so the supervisor captures them.
+# The single config is a hive.yaml (nakit-yok format); serde_yaml_ng is the
+# maintained fork of the archived serde_yaml.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[lints]
+workspace = true

@@ -3,12 +3,11 @@
 //! owns its lifecycle. Built on hickory-dns.
 
 mod config;
-mod landing;
 mod os_routing;
 mod status;
 
 use std::fmt;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -45,90 +44,51 @@ async fn main() -> anyhow::Result<()> {
         warn!("no config file given; using built-in defaults");
         Config::default()
     };
-    let dns = if config.serve_dns {
-        let ports = config.effective_ports();
-        info!(
-            domain = %config.domain,
-            bind_addr = %config.bind_addr,
-            ?ports,
-            upstreams = ?config.upstreams,
-            manage_os_routing = config.manage_os_routing,
-            "starting adi-dns"
-        );
+    let ports = config.effective_ports();
+    info!(
+        domain = %config.domain,
+        bind_addr = %config.bind_addr,
+        ?ports,
+        upstreams = ?config.upstreams,
+        manage_os_routing = config.manage_os_routing,
+        "starting adi-dns"
+    );
 
-        let (udp, tcp, bound) = bind_ports(config.bind_addr, &ports)
-            .await
-            .context("binding resolver listener")?;
-        info!(%bound, "listening");
+    let (udp, tcp, bound) = bind_ports(config.bind_addr, &ports)
+        .await
+        .context("binding resolver listener")?;
+    info!(%bound, "listening");
 
-        let handler = AdiHandler::new(&config)?;
-        let mut server = Server::new(handler);
-        server.register_socket(udp);
-        server.register_listener(tcp, TCP_TIMEOUT, RESPONSE_BUFFER);
+    let handler = AdiHandler::new(&config)?;
+    let mut server = Server::new(handler);
+    server.register_socket(udp);
+    server.register_listener(tcp, TCP_TIMEOUT, RESPONSE_BUFFER);
 
-        let routing_installed = install_os_routing(&config, bound);
+    let routing_installed = install_os_routing(&config, bound);
 
-        let status_path = status::resolve_path(config.status_file.as_deref());
-        let status = status::Status::new(&config.domain, bound, routing_installed);
-        match status::write(&status_path, &status) {
-            Ok(()) => info!(path = %status_path.display(), "wrote status file"),
-            Err(e) => warn!(error = %e, path = %status_path.display(), "could not write status file"),
-        }
-
-        Some((server, routing_installed, status_path))
-    } else {
-        info!(domain = %config.domain, "serve_dns is off; running landing-only");
-        None
-    };
-
-    let landing_task = if config.landing.enabled {
-        let bind = config.landing.bind;
-        ensure_landing_address(bind.ip());
-        let domain = config.domain.clone();
-        Some(tokio::spawn(async move {
-            if let Err(e) = landing::serve(bind, domain).await {
-                warn!(error = %e, %bind, "landing HTTP server did not start");
-            }
-        }))
-    } else {
-        None
-    };
-
-    if dns.is_none() && landing_task.is_none() {
-        anyhow::bail!("nothing to do: serve_dns is false and landing is disabled");
+    let status_path = status::resolve_path(config.status_file.as_deref());
+    let status = status::Status::new(&config.domain, bound, routing_installed);
+    match status::write(&status_path, &status) {
+        Ok(()) => info!(path = %status_path.display(), "wrote status file"),
+        Err(e) => warn!(error = %e, path = %status_path.display(), "could not write status file"),
     }
 
     info!("adi-dns ready");
 
-    match dns {
-        Some((mut server, routing_installed, status_path)) => {
-            tokio::select! {
-                res = server.block_until_done() => res.context("DNS server terminated with error")?,
-                () = shutdown_signal() => info!("shutdown signal received; stopping"),
-            }
-            stop_landing(landing_task);
-            status::remove(&status_path);
-            if routing_installed {
-                match os_routing::uninstall(&config.domain) {
-                    Ok(()) => info!(domain = %config.domain, "removed OS route"),
-                    Err(e) => warn!(error = %e, "failed to remove OS route; remove it manually"),
-                }
-            }
-            let _ = server.shutdown_gracefully().await;
-        }
-        None => {
-            shutdown_signal().await;
-            info!("shutdown signal received; stopping");
-            stop_landing(landing_task);
-        }
+    tokio::select! {
+        res = server.block_until_done() => res.context("DNS server terminated with error")?,
+        () = shutdown_signal() => info!("shutdown signal received; stopping"),
     }
-    Ok(())
-}
 
-fn stop_landing(task: Option<tokio::task::JoinHandle<()>>) {
-    if let Some(task) = task {
-        task.abort();
+    status::remove(&status_path);
+    if routing_installed {
+        match os_routing::uninstall(&config.domain) {
+            Ok(()) => info!(domain = %config.domain, "removed OS route"),
+            Err(e) => warn!(error = %e, "failed to remove OS route; remove it manually"),
+        }
     }
+    let _ = server.shutdown_gracefully().await;
+    Ok(())
 }
 
 /// Bind UDP + TCP on the first free candidate port, tried in order.
@@ -170,29 +130,6 @@ fn install_os_routing(config: &Config, bound: SocketAddr) -> bool {
             );
             false
         }
-    }
-}
-
-/// On macOS a non-`127.0.0.1` loopback address must be aliased onto `lo0` before it
-/// can be bound; elsewhere the whole `127.0.0.0/8` already routes to loopback.
-fn ensure_landing_address(ip: IpAddr) {
-    if ip == IpAddr::V4(Ipv4Addr::LOCALHOST) {
-        return; // always present
-    }
-    #[cfg(target_os = "macos")]
-    {
-        match std::process::Command::new("ifconfig")
-            .args(["lo0", "alias", &ip.to_string(), "up"])
-            .status()
-        {
-            Ok(s) if s.success() => info!(%ip, "aliased loopback address for landing server"),
-            Ok(s) => warn!(%ip, code = ?s.code(), "ifconfig lo0 alias failed (need root?)"),
-            Err(e) => warn!(%ip, error = %e, "could not run ifconfig to alias loopback"),
-        }
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = ip; // 127.0.0.0/8 is already loopback on Linux/Windows
     }
 }
 

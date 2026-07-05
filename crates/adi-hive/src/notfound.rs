@@ -1,95 +1,10 @@
-//! A tiny built-in HTTP server that answers *every* request with a fixed `404`
-//! page, so opening `http://anything.<domain>/` shows a page instead of a bare
-//! connection error. Hand-rolled HTTP/1.x; the page is fully self-contained
-//! (inline CSS/JS, no external requests).
+//! The animated `4XX` fallback page adi-hive serves when a request's `Host` matches
+//! no configured route — i.e. you reached the `.adi` front door but no app answers to
+//! that name. Fully self-contained (inline CSS + JS, no external requests). Ported
+//! from adi-dns's former landing server so the whole `.adi` zone shares one page.
 
-use std::net::SocketAddr;
-use std::time::Duration;
-
-use anyhow::Context as _;
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-use tokio::net::{TcpListener, TcpStream};
-use tracing::{debug, info, warn};
-
-/// Caps per-connection memory against a client that never sends the blank line.
-const MAX_HEAD: usize = 8 * 1024;
-
-/// So a silent client can't tie up a task forever.
-const READ_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Errors only if the listener can't be bound (`:80` needs root); once bound,
-/// per-connection errors are logged, not returned.
-pub async fn serve(addr: SocketAddr, domain: String) -> anyhow::Result<()> {
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("binding landing HTTP listener on {addr}"))?;
-    info!(%addr, domain = %domain, "landing HTTP server listening");
-
-    loop {
-        match listener.accept().await {
-            Ok((stream, peer)) => {
-                tokio::spawn(async move {
-                    if let Err(e) = handle(stream).await {
-                        debug!(%peer, error = %e, "landing connection error");
-                    }
-                });
-            }
-            Err(e) => {
-                // Don't spin the loop hot on a transient accept error.
-                warn!(error = %e, "landing accept failed");
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-        }
-    }
-}
-
-async fn handle(mut stream: TcpStream) -> anyhow::Result<()> {
-    let _ = read_head(&mut stream).await?;
-    let body = not_found_page();
-    let response = format!(
-        "HTTP/1.1 404 Not Found\r\n\
-         Content-Type: text/html; charset=utf-8\r\n\
-         Content-Length: {len}\r\n\
-         Cache-Control: no-store\r\n\
-         Connection: close\r\n\
-         \r\n\
-         {body}",
-        len = body.len(),
-    );
-    stream.write_all(response.as_bytes()).await?;
-    stream.flush().await?;
-    let _ = stream.shutdown().await;
-    Ok(())
-}
-
-/// Read until the blank line ending the head, a size cap, or a timeout. Discarded;
-/// read only to be a well-behaved peer before replying.
-async fn read_head(stream: &mut TcpStream) -> anyhow::Result<String> {
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 1024];
-    loop {
-        let n = tokio::time::timeout(READ_TIMEOUT, stream.read(&mut chunk))
-            .await
-            .context("timed out reading request head")?
-            .context("reading request head")?;
-        if n == 0 {
-            break; // client closed
-        }
-        buf.extend_from_slice(&chunk[..n]);
-        if head_complete(&buf) || buf.len() >= MAX_HEAD {
-            break;
-        }
-    }
-    Ok(String::from_utf8_lossy(&buf).into_owned())
-}
-
-fn head_complete(buf: &[u8]) -> bool {
-    buf.windows(4).any(|w| w == b"\r\n\r\n")
-}
-
-/// The standalone 404 page. Self-contained (inline CSS + JS), no external requests.
-fn not_found_page() -> &'static str {
-    r##"<!doctype html>
+/// The standalone fallback page. Self-contained (inline CSS + JS), no external requests.
+pub const PAGE: &str = r##"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -244,22 +159,15 @@ fn not_found_page() -> &'static str {
   </script>
 </body>
 </html>
-"##
-}
+"##;
 
 #[cfg(test)]
 mod tests {
-    use super::{head_complete, not_found_page};
-
-    #[test]
-    fn detects_end_of_head() {
-        assert!(head_complete(b"GET / HTTP/1.1\r\nHost: a.adi\r\n\r\n"));
-        assert!(!head_complete(b"GET / HTTP/1.1\r\nHost: a.adi\r\n"));
-    }
+    use super::PAGE;
 
     #[test]
     fn page_is_a_self_contained_document() {
-        let page = not_found_page();
+        let page = PAGE;
         assert!(page.starts_with("<!doctype html>"), "is a full document");
         assert!(page.contains("class=\"adi-mark\""), "includes the animated mark");
         assert!(page.contains("err-code"), "includes the 4XX headline");

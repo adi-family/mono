@@ -1,5 +1,5 @@
 // Generates the ADI app-icon master PNG (1024×1024): the real hexagonal ADI mark from
-// the `.adi` landing page (crates/adi-dns/src/landing.rs), on a light squircle tile —
+// the `.adi` 4XX page (crates/adi-hive/src/notfound.rs), on a light squircle tile —
 // dark strokes + orange core, matching the web logo. Keep the coordinates in sync with
 // Sources/ADILogo.swift. Not part of the app; regenerate with `build.sh --regen-icon`:
 //

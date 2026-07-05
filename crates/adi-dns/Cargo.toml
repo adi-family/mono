@@ -14,9 +14,8 @@ hickory-server = { version = "0.26", features = ["resolver"] }
 hickory-resolver = "0.26"
 hickory-proto = "0.26"
 
-# Async runtime. `signal` lets us shut down cleanly when the supervisor sends
-# SIGTERM; `io-util` backs the built-in landing HTTP server's read/write.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util"] }
+# Async runtime. `signal` lets us shut down cleanly when the supervisor sends SIGTERM.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time"] }
 async-trait = "0.1"
 
 # Config + observability. Logs go to stdout/stderr so the supervisor captures them.

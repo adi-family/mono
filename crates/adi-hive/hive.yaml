@@ -1,0 +1,71 @@
+# hive.yaml — the single adi-hive config.
+#
+# Canonical location:  ~/.adi/mono/hive/hive.yaml  (honoring $ADI_DIR)
+# Override for testing: adi-hive /path/to/hive.yaml
+#
+# This is the nakit-yok hive spec format. adi-hive reads only the proxy-relevant
+# slice — `proxy.bind`, and per service its `proxy.host` + HTTP port
+# (`rollout.recreate.ports.http`). Every other field below (runner, healthcheck,
+# environment, depends_on, restart, …) is part of the wider hive spec and is
+# accepted-but-ignored by adi-hive.
+#
+# adi-hive pairs with adi-dns: adi-dns resolves *.adi to 127.0.0.53 (the front-door
+# address below), then adi-hive fans those hostnames out to the per-service HTTP
+# ports. A Host that matches no service gets an animated 4XX page.
+
+version: "1"
+
+proxy:
+  bind:
+    # The front door. adi-dns answers *.adi -> 127.0.0.53, so all .adi HTTP arrives
+    # here. Binding 127.0.0.53:80 needs root (and, on macOS, aliasing it onto lo0,
+    # which adi-hive does); a bind failure is non-fatal, so it keeps serving whatever
+    # else bound.
+    - "127.0.0.53:80"
+    # Unprivileged dev fallback — always bindable without root.
+    - "127.0.0.1:8080"
+
+services:
+  # A proxied service: Host: app.adi -> 127.0.0.1:8010
+  frontend:
+    proxy:
+      host: app.adi
+      path: /
+    rollout:
+      type: recreate
+      recreate:
+        ports:
+          http: 8010
+    runner:
+      type: script
+      script:
+        run: bun run dev
+        working_dir: frontend
+    healthcheck:
+      type: tcp
+      tcp:
+        port: "{{runtime.port.http}}"
+
+  # Host: api.adi -> 127.0.0.1:8009
+  backend:
+    proxy:
+      host: api.adi
+      path: /
+    rollout:
+      type: recreate
+      recreate:
+        ports:
+          http: 8009
+    runner:
+      type: script
+      script:
+        run: npm run start:dev
+        working_dir: backend
+
+  # No `proxy:` — not fronted by adi-hive, silently ignored.
+  postgres:
+    rollout:
+      type: recreate
+      recreate:
+        ports:
+          db: 8045

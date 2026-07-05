@@ -33,32 +33,6 @@ pub struct Config {
 
     #[serde(default)]
     pub status_file: Option<PathBuf>,
-
-    /// `false` = landing-only: serve just the HTTP page, no DNS listener.
-    #[serde(default = "default_true")]
-    pub serve_dns: bool,
-
-    #[serde(default)]
-    pub landing: LandingConfig,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct LandingConfig {
-    #[serde(default)]
-    pub enabled: bool,
-
-    #[serde(default = "default_landing_bind")]
-    pub bind: SocketAddr,
-}
-
-impl Default for LandingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            bind: default_landing_bind(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -112,8 +86,6 @@ impl Default for Config {
             manage_os_routing: false,
             overrides: Vec::new(),
             status_file: None,
-            serve_dns: true,
-            landing: LandingConfig::default(),
         }
     }
 }
@@ -132,14 +104,6 @@ fn default_fallback_ports() -> Vec<u16> {
 
 fn default_domain() -> String {
     "adi".to_string()
-}
-
-fn default_landing_bind() -> SocketAddr {
-    SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 53)), 80)
-}
-
-fn default_true() -> bool {
-    true
 }
 
 fn default_upstreams() -> Vec<SocketAddr> {

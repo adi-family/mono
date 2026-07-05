@@ -42,30 +42,17 @@ manage_os_routing = false
 # Split-DNS overrides. If omitted entirely, defaults to `domain -> 127.0.0.1`.
 # Longest suffix wins, so `v6.adi` beats `adi` for names under it.
 #
-# To front the domain with the built-in landing server (below), point the
-# override at the landing address instead of 127.0.0.1:
-#   address = "127.0.0.53"
+# `.adi` resolves to 127.0.0.53 — the adi-hive HTTP front door (the reverse proxy
+# binds 127.0.0.53:80). adi-hive routes each Host to its app, or serves an animated
+# 4XX page when no app matches. Use plain 127.0.0.1 instead if you run apps directly,
+# without adi-hive in front.
 [[overrides]]
 suffix  = "adi"
-address = "127.0.0.1"
+address = "127.0.0.53"
 
 # [[overrides]]
 # suffix  = "v6.adi"
 # address = "::1"
 
-# Run the DNS resolver. Default true. Set false for a LANDING-ONLY instance that
-# serves just the HTTP page below — e.g. a privileged process that owns :80 and
-# must not fight the unprivileged resolver for the DNS port.
-# serve_dns = true
-
-# Built-in HTTP "landing" server. When enabled, `adi-dns` also serves a styled
-# "not found" page for the domain, so opening `http://anything.adi/` shows a real
-# page instead of a bare connection error. Point the override above at `bind`'s IP
-# to route the domain here.
-#
-# Binding :80 (and, for a non-127.0.0.1 address, aliasing it onto lo0) needs root
-# — so this is off by default and best enabled under a privileged supervisor. A
-# bind failure is non-fatal: DNS keeps serving.
-[landing]
-enabled = false
-bind    = "127.0.0.53:80"
+# NOTE: adi-dns is DNS-only. The HTTP "not found" page for `.adi` now lives in
+# adi-hive (the front door above), so there is no landing server here anymore.

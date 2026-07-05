@@ -1,13 +1,13 @@
 import Foundation
 import SwiftUI
 
-/// The real ADI mark — the hexagonal "cage" from the `.adi` landing page
-/// (`crates/adi-dns/src/landing.rs`): an outer hexagon + inner hexagon with the three
+/// The real ADI mark — the hexagonal "cage" from the `.adi` 4XX page
+/// (`crates/adi-hive/src/notfound.rs`): an outer hexagon + inner hexagon with the three
 /// isometric box edges, the connecting spokes (each outer node → its nearest inner
 /// corners, opacity fading with distance), and an orange core. Strokes use `.primary`
 /// (the page's `currentColor`), so it adapts to light/dark; the core keeps the orange.
 ///
-/// Geometry + the spoke math are the landing SVG's verbatim (200×200 viewBox, resting
+/// Geometry + the spoke math are the page's SVG verbatim (200×200 viewBox, resting
 /// frame), so this stays identical to the web logo and to the app icon
 /// (`apps/macos/icon-gen.swift`).
 struct ADILogo: View {

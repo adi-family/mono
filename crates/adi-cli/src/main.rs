@@ -34,18 +34,18 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum DnsCommand {
-    /// Enable the DNS resolver (installs the route + landing page on first enable).
+    /// Enable the DNS resolver (installs the route + front-door proxy on first enable).
     Enable,
-    /// Disable the DNS resolver (leaves the route + landing page in place).
+    /// Disable the DNS resolver (leaves the route + front-door proxy in place).
     Disable,
     /// Show live DNS status.
     Status {
         #[arg(long)]
         json: bool,
     },
-    /// Install the `.adi` route + landing page (one admin prompt).
+    /// Install the `.adi` route + front-door proxy (one admin prompt).
     InstallRoute,
-    /// Remove the `.adi` route + landing page (one admin prompt).
+    /// Remove the `.adi` route + front-door proxy (one admin prompt).
     RemoveRoute,
 }
 

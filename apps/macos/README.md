@@ -79,7 +79,7 @@ crates/
                        Adi::dns() -> Dns { enable, disable, install_route, … }
     src/commands.rs      the Adi facade + the JSON status Report
     src/service.rs       the Service trait + report row types
-    src/dns.rs           the DNS service (adi-dns config + .adi route + landing daemon)
+    src/dns.rs           the DNS service (adi-dns config + .adi route + adi-hive front-door daemon)
     src/launchd.rs       write plist, bootstrap/bootout, is-loaded (talks to launchctl)
     src/status.rs        read adi-dns's status.json + PID liveness (kill -0)
     src/paths.rs         $HOME/<ADI_DIR>/mono file locations
@@ -100,8 +100,8 @@ apps/macos/
 ```
 
 The logo is the **real ADI mark** — the hexagonal cage + orange core from the `.adi`
-landing page (`crates/adi-dns/src/landing.rs`). `ADILogo.swift` (in-window) and
-`icon-gen.swift` (app icon) both draw it from the landing SVG's 200×200 coordinates, so
+4XX page (`crates/adi-hive/src/notfound.rs`). `ADILogo.swift` (in-window) and
+`icon-gen.swift` (app icon) both draw it from the page SVG's 200×200 coordinates, so
 they stay identical to the web logo; keep the coordinates in sync between the two.
 
 **App icon** — `icon-gen.swift` draws the master PNG, and `build.sh --regen-icon` runs it
@@ -110,9 +110,10 @@ bundle (Info.plist `CFBundleIconFile = ADI`).
 
 The app polls `adi-mono status --json` (which reports each service's
 `enabled`/`running`/`detail`) to drive the power button's on/off state and the status
-word; the button toggles the whole platform (`adi-mono enable` / `disable`). `adi-mono`
-and `adi-dns` are bundled side by side in `Contents/Resources/` (adi-mono resolves
-adi-dns as a sibling).
+word; the button toggles the whole platform (`adi-mono enable` / `disable`). `adi-mono`,
+`adi-dns`, and `adi-hive` are bundled side by side in `Contents/Resources/` (adi-mono
+resolves adi-dns and adi-hive as siblings; the `.adi` route + adi-hive front door are
+the privileged bits installed once).
 
 ### Adding a service
 

@@ -35,11 +35,13 @@ if [ "${1:-}" = "--regen-icon" ]; then
     exit 0
 fi
 
-echo "==> building adi-dns + adi-mono (release)"
-( cd "$ROOT" && cargo build -p adi-dns -p adi-cli --release )
+echo "==> building adi-dns + adi-hive + adi-mono (release)"
+( cd "$ROOT" && cargo build -p adi-dns -p adi-hive -p adi-cli --release )
 DNS_BIN="$ROOT/target/release/adi-dns"
+HIVE_BIN="$ROOT/target/release/adi-hive"   # the .adi front-door proxy (root LaunchDaemon)
 MONO_BIN="$ROOT/target/release/adi-mono"   # the adi-core CLI the app triggers
 [ -x "$DNS_BIN" ]  || { echo "error: $DNS_BIN missing"; exit 1; }
+[ -x "$HIVE_BIN" ] || { echo "error: $HIVE_BIN missing"; exit 1; }
 [ -x "$MONO_BIN" ] || { echo "error: $MONO_BIN missing"; exit 1; }
 
 echo "==> assembling $APP_NAME.app"
@@ -49,8 +51,10 @@ cp "$SCRIPT_DIR/Info.plist" "$APP/Contents/Info.plist"
 # App icon (Info.plist references it via CFBundleIconFile = ADI). Regenerate with
 # `build.sh --regen-icon`.
 [ -f "$ICNS" ] && cp "$ICNS" "$APP/Contents/Resources/$APP_NAME.icns"
-# adi-mono resolves adi-dns as a sibling, so both live side by side in Resources.
+# adi-mono resolves adi-dns and adi-hive as siblings, so all three live side by side
+# in Resources.
 cp "$DNS_BIN"  "$APP/Contents/Resources/adi-dns"
+cp "$HIVE_BIN" "$APP/Contents/Resources/adi-hive"
 cp "$MONO_BIN" "$APP/Contents/Resources/adi-mono"
 
 echo "==> compiling Swift ($ARCH-apple-macos$DEPLOY_TARGET)"
@@ -65,12 +69,14 @@ swiftc -parse-as-library -O \
 if [ -n "${SIGN_ID:-}" ]; then
     echo "==> codesign (Developer ID: $SIGN_ID)"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-dns"
+    codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-hive"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP/Contents/Resources/adi-mono"
     codesign --force --options runtime --timestamp --sign "$SIGN_ID" "$APP"
     codesign --verify --strict --verbose=2 "$APP"
 else
     echo "==> ad-hoc codesign (set SIGN_ID=\"Developer ID Application: …\" for a distributable build)"
     codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-dns"
+    codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-hive"
     codesign --force --sign - --timestamp=none "$APP/Contents/Resources/adi-mono"
     codesign --force --sign - --timestamp=none "$APP"
 fi
