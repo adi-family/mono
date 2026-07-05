@@ -5,10 +5,16 @@ LaunchAgents — enable/disable each, run service-specific actions, and see live
 status at a glance. **DNS** is the first built-in service; the registry is built so
 "some other" services and generic daemons slot in as data, not new UI.
 
-> Separate from the production `adi` platform. This app never touches the `adi`
-> daemon, its `~/Library/Application Support/adi` directory, or its ports. It keeps
-> its own namespace (`~/Library/Application Support/adi-menubar`, launchd labels
-> `family.adi.app.*`).
+> Runtime files live under `$HOME/<dir>/mono/`, where `<dir>` comes from the
+> `ADI_DIR` env var (default `.adi`, the adi platform home) — so by default
+> `~/.adi/mono/dns/`. The `mono` subdir keeps this app's files isolated from the
+> platform's own (`hive`/`cocoon`/`workforce`). launchd labels are namespaced
+> `family.adi.app.*`. This app never stops or restarts the production `adi` daemon
+> or collides with its ports.
+>
+> A login-launched LaunchAgent only sees env vars set in the launchd session, so
+> to override the directory use `launchctl setenv ADI_DIR <name>` (then relaunch),
+> not a shell `export`.
 
 ## Build
 

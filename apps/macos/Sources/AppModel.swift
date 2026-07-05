@@ -1,10 +1,21 @@
 import AppKit
 import Foundation
 
-/// Deliberately **not** `~/Library/Application Support/adi` — that belongs to the
-/// production `adi` platform; the menu-bar app keeps its own namespace.
+/// Base directory for the app's runtime files: `$HOME/<name>/mono`, where `<name>`
+/// is `ADI_DIR` (default `.adi`, the adi platform home). The `mono` subdir isolates
+/// this app's files from the platform's own (`hive`/`cocoon`/`workforce`). A
+/// login-launched LaunchAgent only sees env vars set in the launchd session
+/// (e.g. `launchctl setenv ADI_DIR …`), not shell exports.
 enum AppPaths {
-    static var support: String { NSHomeDirectory() + "/Library/Application Support/adi-menubar" }
+    static let dirName: String = {
+        let env = ProcessInfo.processInfo.environment["ADI_DIR"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let env, !env.isEmpty { return env }
+        return ".adi"
+    }()
+
+    /// `mono` = this menu-bar "mono-app" namespace, kept clear of the platform's dirs.
+    static var support: String { NSHomeDirectory() + "/" + dirName + "/mono" }
 }
 
 @MainActor
