@@ -1,0 +1,23 @@
+[package]
+name = "adi-cli"
+description = "The adi platform CLI — a thin argv adapter over adi-core's command surface."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# The produced binary name. This is the single source of truth for the eventual
+# rename to `adi` — change it here (and the matching constant in the Swift app).
+[[bin]]
+name = "adi-mono"
+path = "src/main.rs"
+
+[dependencies]
+adi-core = { workspace = true }
+clap = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -9,6 +9,9 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Read adi-dns's JSON status file and serialize the status report the GUI consumes.
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

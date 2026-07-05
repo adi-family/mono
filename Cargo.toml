@@ -18,10 +18,12 @@ repository = "https://github.com/mgorunuch/adi-family"
 adi-core = { path = "crates/adi-core" }
 
 # External crates (add as needed)
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 # anyhow = "1"
 # thiserror = "2"
 # tokio = { version = "1", features = ["full"] }
-# serde = { version = "1", features = ["derive"] }
 # tracing = "0.1"
 
 # Lints applied workspace-wide; member crates opt in with `[lints] workspace = true`.

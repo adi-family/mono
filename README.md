@@ -11,8 +11,13 @@ A Rust monorepo. All crates live under [`crates/`](crates/) and share one
 ├── rust-toolchain.toml   # pinned toolchain + components
 ├── rustfmt.toml          # formatting config
 └── crates/
-    └── adi-core/         # starter shared library
+    ├── adi-core/         # the platform command surface (Adi/Dns: enable, disable, status…)
+    ├── adi-cli/          # the `adi-mono` binary — a thin argv adapter over adi-core
+    └── adi-dns/          # the local DNS resolver (split-DNS overrides + forwarding)
 ```
+
+Frontends (e.g. the macOS menu-bar app in [`apps/`](apps/)) own no control logic —
+they trigger `adi-core` commands by running `adi-mono` and render its JSON status.
 
 ## Adding a crate
 
