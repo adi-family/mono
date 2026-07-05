@@ -10,6 +10,8 @@
     <string>family.adi.ADI</string>
     <key>CFBundleExecutable</key>
     <string>ADI</string>
+    <key>CFBundleIconFile</key>
+    <string>ADI</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -18,9 +20,7 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-    <!-- Menu-bar-only app: no Dock icon, no main window. -->
-    <key>LSUIElement</key>
-    <true/>
+    <!-- Standard windowed app: Dock icon + a main control window. -->
     <key>NSHumanReadableCopyright</key>
     <string>adi-family</string>
 </dict>

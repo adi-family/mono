@@ -1,16 +1,17 @@
 import SwiftUI
 
-/// Menu-bar-only (LSUIElement) app; supervises ADI services as launchd LaunchAgents.
+/// A standard single-window macOS app: a translucent control panel with a big On/Off
+/// button (see `ContentView`). The window sizes itself to its content, so it grows
+/// when the details panel is revealed.
 @main
 struct ADIApp: App {
     @StateObject private var model = AppModel()
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuContent(model: model)
-        } label: {
-            Image(systemName: model.anyRunning ? "square.stack.3d.up.fill" : "square.stack.3d.up")
+        Window("ADI", id: "main") {
+            ContentView(model: model)
         }
-        .menuBarExtraStyle(.menu)
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
     }
 }
