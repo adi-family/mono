@@ -1,19 +1,7 @@
-//! A tiny built-in HTTP server that answers *every* request with a styled,
-//! animated "4XX error" page.
-//!
-//! Why it exists: `adi-dns` maps the whole `.<domain>` suffix to a single
-//! loopback address (split-DNS). A browser that opens `http://anything.<domain>/`
-//! then makes an HTTP request to that address — and if nothing is listening it
-//! just gets a bare connection error. Pointing the override at an address this
-//! server owns turns that dead end into a clear page, and leaves room to route
-//! real apps here later.
-//!
-//! It is deliberately dependency-free: a hand-rolled HTTP/1.x responder over the
-//! tokio runtime the resolver already uses. It reads (and discards) the request
-//! head, then writes one fixed `404` response whose body is a fully self-contained
-//! HTML page — inline CSS plus a little JS for the animation, and **no external
-//! requests**. Binding a privileged port (`:80`) or a non-`127.0.0.1` loopback
-//! alias needs root; a bind failure is non-fatal — the DNS side keeps serving.
+//! A tiny built-in HTTP server that answers *every* request with a fixed `404`
+//! page, so opening `http://anything.<domain>/` shows a page instead of a bare
+//! connection error. Hand-rolled HTTP/1.x; the page is fully self-contained
+//! (inline CSS/JS, no external requests).
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -23,21 +11,14 @@ use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tracing::{debug, info, warn};
 
-/// Max bytes of request head we read before responding (headers only — any body
-/// is ignored). Caps memory per connection against a client that never sends the
-/// terminating blank line.
+/// Caps per-connection memory against a client that never sends the blank line.
 const MAX_HEAD: usize = 8 * 1024;
 
-/// Per-connection read timeout, so a silent client can't tie up a task forever.
+/// So a silent client can't tie up a task forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Bind `addr` and serve the not-found page until the task is dropped. Each
-/// accepted connection is handled on its own task.
-///
-/// # Errors
-/// Returns an error only if the listener cannot be bound (e.g. the port needs
-/// root, or the loopback alias for a non-`127.0.0.1` address is missing). Once
-/// bound, per-connection errors are logged and never bubble up.
+/// Errors only if the listener can't be bound (`:80` needs root); once bound,
+/// per-connection errors are logged, not returned.
 pub async fn serve(addr: SocketAddr, domain: String) -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr)
         .await
@@ -54,7 +35,7 @@ pub async fn serve(addr: SocketAddr, domain: String) -> anyhow::Result<()> {
                 });
             }
             Err(e) => {
-                // A transient accept error shouldn't spin the loop hot.
+                // Don't spin the loop hot on a transient accept error.
                 warn!(error = %e, "landing accept failed");
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
@@ -62,9 +43,6 @@ pub async fn serve(addr: SocketAddr, domain: String) -> anyhow::Result<()> {
     }
 }
 
-/// Drain the request head, then write the fixed 404 page and close the
-/// connection. The page is static, so the request is read only to let the client
-/// finish sending before we reply.
 async fn handle(mut stream: TcpStream) -> anyhow::Result<()> {
     let _ = read_head(&mut stream).await?;
     let body = not_found_page();
@@ -80,14 +58,12 @@ async fn handle(mut stream: TcpStream) -> anyhow::Result<()> {
     );
     stream.write_all(response.as_bytes()).await?;
     stream.flush().await?;
-    // Best-effort half-close; the client may already be gone.
     let _ = stream.shutdown().await;
     Ok(())
 }
 
-/// Read bytes until the blank line that ends the HTTP head, a size cap, or a
-/// timeout — whichever comes first. The content is discarded; we only read it to
-/// be a well-behaved peer before responding.
+/// Read until the blank line ending the head, a size cap, or a timeout. Discarded;
+/// read only to be a well-behaved peer before replying.
 async fn read_head(stream: &mut TcpStream) -> anyhow::Result<String> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
@@ -107,15 +83,11 @@ async fn read_head(stream: &mut TcpStream) -> anyhow::Result<String> {
     Ok(String::from_utf8_lossy(&buf).into_owned())
 }
 
-/// True once the buffer contains the CRLFCRLF that terminates the request head.
 fn head_complete(buf: &[u8]) -> bool {
     buf.windows(4).any(|w| w == b"\r\n\r\n")
 }
 
-/// The full standalone HTML page: a spinning isometric "3D box" ADI mark over a
-/// big "4XX error", with a JS-driven spin, distance-faded connection spokes, and
-/// a periodic "lag" glitch. Self-contained (inline CSS + JS), no external
-/// requests, animation always on. Static — the same bytes for every request.
+/// The standalone 404 page. Self-contained (inline CSS + JS), no external requests.
 fn not_found_page() -> &'static str {
     r##"<!doctype html>
 <html lang="en">

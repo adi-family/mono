@@ -1,9 +1,7 @@
 import Foundation
 
-/// Codable mirror of the JSON status file `adi-dns` writes on startup
-/// (see `crates/adi-dns/src/status.rs`). The controller polls this to learn the
-/// live state — most importantly the port the resolver actually bound, which it
-/// chooses dynamically at runtime.
+/// Codable mirror of the JSON status file `adi-dns` writes (see
+/// `crates/adi-dns/src/status.rs`) — polled to learn the dynamically-bound port.
 struct DaemonStatus: Codable {
     let pid: Int32
     let domain: String

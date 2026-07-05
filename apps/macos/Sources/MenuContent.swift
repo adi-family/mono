@@ -1,9 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// The dropdown shown from the menu-bar icon. Renders one block per managed
-/// service (status line, enable/disable, then any service-specific actions),
-/// followed by global actions.
 struct MenuContent: View {
     @ObservedObject var model: AppModel
 

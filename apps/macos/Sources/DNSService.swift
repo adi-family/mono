@@ -1,22 +1,14 @@
 import Foundation
 
-/// The `adi-dns` split-DNS resolver, packaged as an ADI service.
+/// The `adi-dns` resolver as an ADI service, split by privilege so the on/off
+/// toggle never needs a password:
+///   * **Resolver** — bundled `adi-dns` on an unprivileged port, per-user
+///     LaunchAgent. Answers `.adi` with `127.0.0.53`. Enable/Disable toggles this.
+///   * **Landing** — a second, landing-only `adi-dns` as a **root** LaunchDaemon
+///     binding `127.0.0.53:80` (it aliases `lo0`) to serve the "not found" page.
 ///
-/// Two pieces, split by privilege so the common on/off toggle never needs a
-/// password:
-///   * **Resolver** — the bundled `adi-dns` on an unprivileged port
-///     (`127.0.0.1:10053`), run as a per-user LaunchAgent. It answers `.adi` with
-///     `127.0.0.53` (a dedicated loopback address, clear of anything on
-///     `127.0.0.1`). Enable/Disable toggles just this — no admin prompt.
-///   * **Landing** — a second, *landing-only* `adi-dns` run as a **root**
-///     LaunchDaemon that binds `127.0.0.53:80` (aliasing `lo0` itself) and serves
-///     the built-in "not found" page. So `http://anything.adi/` shows a real page
-///     instead of falling through to whatever else is on `127.0.0.1:80`.
-///
-/// The route (`/etc/resolver/adi`) and the landing daemon are the only privileged
-/// bits; they're installed together in one admin action and left in place, so the
-/// day-to-day toggle stays prompt-free. Files live under the app's own support
-/// dir, separate from the production `adi` platform.
+/// The route and landing daemon are the only privileged bits — installed together
+/// in one admin action and left in place, so the day-to-day toggle stays prompt-free.
 struct DNSService: ManagedService {
     let id = "family.adi.app.dns"
     let name = "DNS"
@@ -24,15 +16,12 @@ struct DNSService: ManagedService {
     private let domain = "adi"
     private let port = 10053
 
-    /// Dedicated loopback address the domain resolves to, and where the landing
-    /// server binds `:80`. Kept off `127.0.0.1` so it never collides with anything
-    /// else serving there.
+    /// Kept off `127.0.0.1` so `:80` never collides with anything else serving there.
     private let landingAddr = "127.0.0.53"
     private let landingPort = 80
-    /// launchd label of the root landing daemon (distinct from the resolver agent).
     private let landingLabel = "family.adi.app.dns-landing"
 
-    // MARK: paths (namespaced under the app's own support dir)
+    // MARK: paths
     private var serviceDir: String { AppPaths.support + "/dns" }
     var statusPath: String { serviceDir + "/status.json" }
     var logPath: String { NSHomeDirectory() + "/Library/Logs/adi-dns.log" }
@@ -40,8 +29,8 @@ struct DNSService: ManagedService {
     private var stagePath: String { serviceDir + "/resolver-\(domain)" }
     private var resolverFile: String { "/etc/resolver/\(domain)" }
 
-    // Landing daemon: config + a staged plist that the admin step copies into
-    // /Library/LaunchDaemons (root-owned), plus its runtime log.
+    // Landing daemon: config + a staged plist the admin step copies into
+    // /Library/LaunchDaemons, plus its runtime log.
     private var landingConfigPath: String { serviceDir + "/adi-dns-landing.toml" }
     private var landingPlistStage: String { serviceDir + "/\(landingLabel).plist" }
     private var landingDaemonPlist: String { "/Library/LaunchDaemons/\(landingLabel).plist" }
@@ -60,11 +49,9 @@ struct DNSService: ManagedService {
         return [binaryPath, configPath]
     }
 
-    // Toggling the resolver must not re-prompt for admin every time. The route and
-    // the landing daemon are root-owned and persist across reboots, so they're
-    // installed once (a single admin prompt) and left in place — bootstrapping the
-    // unprivileged resolver afterward is silent. Removing them is an explicit user
-    // action (see `extraActions`), so Disable leaves them untouched.
+    // Route + landing daemon are installed once (one admin prompt) and left in
+    // place, so toggling the resolver never re-prompts. Disable leaves them; removal
+    // is an explicit action (see `extraActions`).
     func onEnable() { if !routeInstalled { installRoute() } }
     func onDisable() {}
 
@@ -90,10 +77,8 @@ struct DNSService: ManagedService {
 
     // MARK: DNS-specific
 
-    // "Installed" means the whole `.adi` front is in place — both the resolver
-    // route and the landing daemon. If either is missing (e.g. after an upgrade
-    // that added the daemon), the action reads "Install…" and re-runs the single
-    // idempotent admin step rather than stranding a half-configured state.
+    // Both bits must be present; if either is missing the action reads "Install…"
+    // and re-runs the idempotent admin step rather than stranding a half state.
     private var routeInstalled: Bool {
         FileManager.default.fileExists(atPath: resolverFile)
             && FileManager.default.fileExists(atPath: landingDaemonPlist)
@@ -110,9 +95,7 @@ struct DNSService: ManagedService {
         manage_os_routing = false
         status_file = "\(statusPath)"
 
-        # Answer .\(domain) with the dedicated loopback address the landing server
-        # owns, so a bare http://<name>.\(domain)/ reaches our page — not whatever
-        # else is on 127.0.0.1:80.
+        # Route .\(domain) to the landing address so http://<name>.\(domain)/ hits our page.
         [[overrides]]
         suffix = "\(domain)"
         address = "\(landingAddr)"
@@ -120,8 +103,8 @@ struct DNSService: ManagedService {
         try? cfg.write(toFile: configPath, atomically: true, encoding: .utf8)
     }
 
-    /// Stage the landing daemon's config and plist (unprivileged writes). The admin
-    /// step below copies the plist into /Library/LaunchDaemons and bootstraps it.
+    /// Stage the landing daemon's config + plist (unprivileged); the admin step
+    /// copies the plist into /Library/LaunchDaemons and bootstraps it.
     private func writeLandingArtifacts() {
         try? FileManager.default.createDirectory(atPath: serviceDir, withIntermediateDirectories: true)
         let cfg = """
@@ -145,8 +128,7 @@ struct DNSService: ManagedService {
     }
 
     /// The one privileged step: install the `/etc/resolver` route AND the root
-    /// landing daemon in a single admin prompt. The daemon aliases `lo0` and binds
-    /// `\(landingAddr):\(landingPort)` itself when launchd starts it.
+    /// landing daemon in a single admin prompt.
     private func installRoute() {
         try? FileManager.default.createDirectory(atPath: serviceDir, withIntermediateDirectories: true)
         try? "nameserver 127.0.0.1\nport \(port)\n".write(toFile: stagePath, atomically: true, encoding: .utf8)
@@ -166,8 +148,7 @@ struct DNSService: ManagedService {
         )
     }
 
-    /// Tear down both privileged bits (best-effort, so one missing piece doesn't
-    /// block the rest), including the `lo0` alias the daemon added.
+    /// Tear down both privileged bits, best-effort (incl. the `lo0` alias).
     private func removeRoute() {
         Launchd.runAdmin(
             "(launchctl bootout system/\(landingLabel) 2>/dev/null || true)"

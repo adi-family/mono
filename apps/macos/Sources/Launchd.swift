@@ -2,14 +2,8 @@ import AppKit
 import Darwin
 import Foundation
 
-/// Stateless helpers to supervise a bundled binary as a per-user launchd
-/// **LaunchAgent**. Every ADI service is managed the same way — only the program
-/// and its files differ — so this is the one place that talks to `launchctl`.
-///
-/// A service runs unprivileged in the user's GUI domain (`gui/$UID`), starts at
-/// login and on demand, and auto-restarts via `KeepAlive`. Enabling writes
-/// `~/Library/LaunchAgents/<label>.plist` with absolute paths; disabling boots it
-/// out and removes the plist.
+/// Supervises a bundled binary as a per-user launchd LaunchAgent (`gui/$UID`,
+/// `RunAtLoad` + `KeepAlive`). The one place that talks to `launchctl`.
 enum Launchd {
     static var guiDomain: String { "gui/\(getuid())" }
     static func target(_ label: String) -> String { "\(guiDomain)/\(label)" }
@@ -17,7 +11,6 @@ enum Launchd {
     static var launchAgentsDir: String { NSHomeDirectory() + "/Library/LaunchAgents" }
     static func plistPath(_ label: String) -> String { launchAgentsDir + "/\(label).plist" }
 
-    /// Write the plist and (re-)bootstrap the job so it starts now and at login.
     static func enable(label: String, program: [String], log: String, env: [String: String]) {
         writePlist(label: label, program: program, log: log, env: env)
         // Boot out any stale instance first so bootstrap can't fail on a dupe.
@@ -29,13 +22,11 @@ enum Launchd {
         _ = run(["/bin/launchctl", "enable", target(label)])
     }
 
-    /// Stop + unload the job and remove its plist.
     static func disable(label: String) {
         _ = run(["/bin/launchctl", "bootout", target(label)])
         try? FileManager.default.removeItem(atPath: plistPath(label))
     }
 
-    /// True when the job is installed and known to launchd.
     static func isLoaded(label: String) -> Bool {
         FileManager.default.fileExists(atPath: plistPath(label))
             && run(["/bin/launchctl", "print", target(label)]).status == 0
@@ -43,10 +34,8 @@ enum Launchd {
 
     // MARK: - Plist
 
-    /// Build a launchd plist. The XML is identical for a per-user LaunchAgent and a
-    /// root LaunchDaemon — only the install location and the domain it's
-    /// bootstrapped into differ — so a privileged service (e.g. the `.adi` landing
-    /// server) reuses this and stages the result for an admin `cp`.
+    /// Identical XML for a per-user LaunchAgent and a root LaunchDaemon — only the
+    /// install location differs — so the privileged landing daemon reuses this.
     static func plistXML(label: String, program: [String], log: String, env: [String: String]) -> String {
         let argsXML = program
             .map { "        <string>\(xmlEscape($0))</string>" }
@@ -105,7 +94,7 @@ enum Launchd {
         return try? JSONDecoder().decode(DaemonStatus.self, from: data)
     }
 
-    /// True if a process with `pid` currently exists (probe via signal 0).
+    /// True if `pid` exists (signal-0 probe; EPERM still means alive).
     static func processAlive(_ pid: Int32) -> Bool {
         guard pid > 0 else { return false }
         if kill(pid, 0) == 0 { return true }
@@ -114,7 +103,7 @@ enum Launchd {
 
     // MARK: - Processes
 
-    /// Run `argv` (argv[0] is an absolute path), returning status + combined output.
+    /// argv[0] must be an absolute path. Returns status + combined stdout/stderr.
     @discardableResult
     static func run(_ argv: [String]) -> (status: Int32, output: String) {
         let proc = Process()

@@ -1,35 +1,26 @@
-//! Self-registration of the OS "route `*.{domain}` to this resolver" integration.
+//! Routes `*.{domain}` to this resolver. Same concept, per-OS mechanism:
+//!   * macOS   → `/etc/resolver/<domain>`  (scoped resolver; supports a port)
+//!   * Linux   → systemd-resolved drop-in  (`Domains=~<domain>`; supports `ip:port`)
+//!   * Windows → NRPT rule for `.<domain>` (port-less — the resolver must be on `:53`)
 //!
-//! Same concept everywhere, different mechanism per OS:
-//!   * macOS   → `/etc/resolver/<domain>`      (mDNSResponder scoped resolver; supports a port)
-//!   * Linux   → systemd-resolved drop-in       (`Domains=~<domain>` split DNS; supports `ip:port`)
-//!   * Windows → NRPT rule for `.<domain>`       (port-less — the resolver must be on `:53`)
-//!
-//! Only `.<domain>` is ever routed; the default resolver and every other name are
-//! left untouched, so this never disturbs another local resolver (e.g. ADI DNS on
-//! `.test`). The string-building helpers below are always compiled and unit-tested;
-//! only the filesystem / command side effects are gated per target.
+//! Only `.<domain>` is ever routed, so this never disturbs another local resolver.
 
 use std::net::SocketAddr;
 
-/// Route `*.{domain}` to the resolver bound at `addr`. Needs admin/root.
 pub fn install(domain: &str, addr: SocketAddr) -> anyhow::Result<()> {
     platform::install(domain, addr)
 }
 
-/// Remove a route previously installed by [`install`].
 pub fn uninstall(domain: &str) -> anyhow::Result<()> {
     platform::uninstall(domain)
 }
 
-/// A copy-pasteable manual command, shown when auto-install can't run.
 pub fn describe_manual(domain: &str, addr: SocketAddr) -> String {
     platform::describe_manual(domain, addr)
 }
 
 // --- OS-independent content builders (always compiled + tested) --------------
 
-/// Contents of a macOS `/etc/resolver/<domain>` file pointing at `addr`.
 #[cfg(any(target_os = "macos", test))]
 fn macos_resolver_contents(addr: SocketAddr) -> String {
     let ip = addr.ip();
@@ -41,7 +32,6 @@ fn macos_resolver_contents(addr: SocketAddr) -> String {
     }
 }
 
-/// Contents of a Linux systemd-resolved drop-in for split-DNS on `domain`.
 #[cfg(any(target_os = "linux", test))]
 fn linux_resolved_contents(domain: &str, addr: SocketAddr) -> String {
     let dns = if addr.port() == 53 {
@@ -57,7 +47,6 @@ fn linux_resolved_contents(domain: &str, addr: SocketAddr) -> String {
     )
 }
 
-/// The NRPT namespace string for a domain on Windows (`adi` → `.adi`).
 #[cfg(any(target_os = "windows", test))]
 fn windows_namespace(domain: &str) -> String {
     format!(".{domain}")
@@ -185,7 +174,6 @@ mod platform {
             addr.port()
         );
         let ns = super::windows_namespace(domain);
-        // Replace any existing rule for this namespace, then add ours.
         let script = format!(
             "Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -contains '{ns}' }} | \
              ForEach-Object {{ Remove-DnsClientNrptRule -Name $_.Name -Force }}; \

@@ -1,8 +1,6 @@
 import SwiftUI
 
-/// ADI — a menu-bar-only (LSUIElement) app that supervises local ADI services as
-/// per-user launchd LaunchAgents. DNS is the first built-in service; the registry
-/// in ``AppModel`` is designed to hold more services and generic daemons.
+/// Menu-bar-only (LSUIElement) app; supervises ADI services as launchd LaunchAgents.
 @main
 struct ADIApp: App {
     @StateObject private var model = AppModel()
