@@ -8,8 +8,7 @@ use std::sync::OnceLock;
 use crate::paths;
 use crate::proc;
 
-/// The current uid, cached for the life of the process. Resolved via `id -u` so we
-/// avoid an `unsafe` `getuid` call; a short-lived CLI resolves it at most once.
+/// The current uid, cached; resolved via `id -u` to avoid an `unsafe` `getuid` call.
 fn uid() -> u32 {
     static UID: OnceLock<u32> = OnceLock::new();
     *UID.get_or_init(|| {
@@ -37,8 +36,7 @@ pub fn plist_path(label: &str) -> PathBuf {
     paths::launch_agents_dir().join(format!("{label}.plist"))
 }
 
-/// Install and start the `LaunchAgent`: write the plist, boot out any stale instance
-/// (so `bootstrap` can't fail on a dupe), bootstrap, then enable.
+/// Install and start the `LaunchAgent`: write the plist, boot out any stale instance (so `bootstrap` can't dupe-fail), bootstrap, then enable.
 pub fn enable(label: &str, program: &[String], log: &str, env: &[(String, String)]) {
     let dir = paths::launch_agents_dir();
     let _ = std::fs::create_dir_all(&dir);
@@ -68,15 +66,13 @@ pub fn disable(label: &str) {
     let _ = std::fs::remove_file(plist_path(label));
 }
 
-/// Loaded == the plist exists and `launchctl print` can address the service (i.e. the
-/// `LaunchAgent` is bootstrapped).
+/// Loaded == the plist exists and `launchctl print` can address the service.
 #[must_use]
 pub fn is_loaded(label: &str) -> bool {
     plist_path(label).exists() && proc::run(&["/bin/launchctl", "print", &target(label)]).ok()
 }
 
-/// Identical XML for a per-user `LaunchAgent` and a root `LaunchDaemon` — only the
-/// install location differs — so the privileged landing daemon reuses this.
+/// Identical XML for a per-user `LaunchAgent` and a root `LaunchDaemon`; only the install location differs.
 #[must_use]
 pub fn plist_xml(label: &str, program: &[String], log: &str, env: &[(String, String)]) -> String {
     let args_xml = program

@@ -8,8 +8,7 @@ use serde::Deserialize;
 
 use crate::proc;
 
-/// Mirror of the fields `adi-dns` emits. Extra fields are ignored so the two can
-/// evolve independently.
+/// Mirror of the fields `adi-dns` emits; extra fields are ignored so the two can evolve independently.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DaemonStatus {
     pub pid: i32,
@@ -28,9 +27,7 @@ pub fn read(path: &Path) -> Option<DaemonStatus> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Whether `pid` is a live process, probed with `kill -0` (signal 0 tests existence
-/// without delivering a signal). The resolver runs as the same uid, so a bare exit
-/// code is a reliable liveness check here.
+/// Whether `pid` is a live process, probed with `kill -0` (signal 0 tests existence).
 #[must_use]
 pub fn process_alive(pid: i32) -> bool {
     if pid <= 0 {

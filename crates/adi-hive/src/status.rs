@@ -1,6 +1,5 @@
-//! The JSON status file a controlling GUI reads to learn live state — the addresses
-//! the proxy actually bound and how many routes it is serving. Mirrors `adi-dns`'s
-//! status file so a supervisor/GUI treats every adi service the same way.
+//! The JSON status file a controlling GUI reads to learn live state — the addresses the
+//! proxy bound and how many routes it serves. Mirrors `adi-dns`'s status file.
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -34,8 +33,7 @@ impl Status {
     }
 }
 
-/// Precedence: the `ADI_HIVE_STATUS_FILE` env var, then `default` (the caller passes
-/// the path beside the config, in the writable mono namespace).
+/// Precedence: the `ADI_HIVE_STATUS_FILE` env var, then `default`.
 pub fn resolve_path(default: PathBuf) -> PathBuf {
     if let Ok(env) = std::env::var(STATUS_FILE_ENV)
         && !env.is_empty()

@@ -1,9 +1,6 @@
-//! The reverse-proxy core: accept an HTTP/1.x connection, read its request head,
-//! pick an upstream by `Host` header, then splice bytes both ways for the life of the
-//! connection. Hand-rolled L7 proxy — no HTTP framework; the head is parsed only far
-//! enough to route, and the original bytes are forwarded unchanged (upstream sees the
-//! real `Host`). A connection is bound to one upstream (the first request's host),
-//! which is what browsers expect: they open a separate connection per hostname.
+//! The reverse-proxy core: accept an HTTP/1.x connection, read its request head, pick an
+//! upstream by `Host` header, then splice bytes both ways. Hand-rolled L7 proxy — the head
+//! is parsed only far enough to route; original bytes are forwarded unchanged.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -49,8 +46,7 @@ impl Router {
     }
 }
 
-/// Accept loop for one listener. Errors only surface per-connection (logged, not
-/// returned); the loop itself runs until the task is aborted at shutdown.
+/// Accept loop for one listener; per-connection errors are logged, not returned, until the task is aborted.
 pub async fn serve(listener: TcpListener, router: Arc<Router>) {
     loop {
         match listener.accept().await {
@@ -78,9 +74,8 @@ async fn handle(mut client: TcpStream, router: &Router) -> anyhow::Result<()> {
         return respond_error(&mut client, 400, "Bad Request", "Missing Host header.").await;
     };
     let Some(upstream) = router.resolve(&host) else {
-        // Reached the `.adi` front door, but no app answers to this host: 404 with the
-        // animated fallback page. Distinct from 502 below, which means the app exists
-        // but its upstream is down.
+        // Reached the front door but no app answers this host: 404 fallback page (distinct
+        // from the 502 below, which means the app exists but its upstream is down).
         info!(%host, "no route");
         return respond_not_found(&mut client).await;
     };
@@ -95,8 +90,7 @@ async fn handle(mut client: TcpStream, router: &Router) -> anyhow::Result<()> {
     };
     debug!(%host, %upstream, "proxying");
 
-    // Forward the bytes we already consumed to route (head + any body that arrived
-    // with it), then splice the rest of the connection both ways.
+    // Forward the head bytes we already consumed, then splice the rest both ways.
     server.write_all(&head).await?;
 
     let (mut cread, mut cwrite) = client.split();
@@ -113,9 +107,7 @@ async fn handle(mut client: TcpStream, router: &Router) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Read until the blank line ending the head, a size cap, or a timeout. The returned
-/// buffer is forwarded verbatim, so it may include the first body bytes that arrived
-/// in the same read.
+/// Read until the blank line ending the head, a size cap, or a timeout; the returned buffer is forwarded verbatim (may include first body bytes).
 async fn read_head(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
     use anyhow::Context as _;
     let mut buf = Vec::new();
@@ -126,7 +118,7 @@ async fn read_head(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
             .context("timed out reading request head")?
             .context("reading request head")?;
         if n == 0 {
-            break; // client closed
+            break;
         }
         buf.extend_from_slice(&chunk[..n]);
         if head_complete(&buf) || buf.len() >= MAX_HEAD {
@@ -159,8 +151,7 @@ fn extract_host(head: &[u8]) -> Option<String> {
     None
 }
 
-/// Serve the animated `4XX` fallback page with a `404` — the request reached the
-/// front door but its `Host` matches no configured route.
+/// Serve the animated `4XX` fallback page with a `404` — `Host` matched no configured route.
 async fn respond_not_found(stream: &mut TcpStream) -> anyhow::Result<()> {
     let body = crate::notfound::PAGE;
     let response = format!(
@@ -179,9 +170,7 @@ async fn respond_not_found(stream: &mut TcpStream) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Write a small self-contained HTML error page and close. Used when we can't reach an
-/// upstream (`502`) or the request is malformed (`400`) — the client sees a real page,
-/// not a bare connection error.
+/// Write a small self-contained HTML error page and close (used for `502` upstream-down or `400` malformed).
 async fn respond_error(
     stream: &mut TcpStream,
     code: u16,

@@ -1,9 +1,5 @@
-//! The persisted ledger of static (reserved) leases.
-//!
-//! Only *static* allocations land here — a `(service, key)` pair that must resolve to
-//! the same port across restarts. Dynamic allocations are computed on the fly and never
-//! recorded (see [`crate::Ports::allocate_dynamic`]). The on-disk form is a small,
-//! human-readable JSON array of leases; lookups are linear because the set is tiny.
+//! The persisted ledger of static (reserved) leases — a small JSON array of
+//! `(service, key)` → port entries that survive restarts (dynamic ports are never recorded).
 
 use std::collections::HashSet;
 use std::path::Path;
@@ -12,8 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// One durable reservation: the port promised to a service's named port slot (the same
-/// keys `hive.yaml` uses under `rollout.recreate.ports`, e.g. `http`, `db`).
+/// One durable reservation: the port promised to a service's named port slot.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lease {
     /// The service that owns the port (e.g. `frontend`).
@@ -35,9 +30,7 @@ impl Registry {
     /// Load the registry from `path`. A missing file is an empty registry, not an error.
     ///
     /// # Errors
-    ///
-    /// Returns [`Error::Corrupt`] if the file exists but is not valid registry JSON, or
-    /// [`Error::Io`] on any other read failure.
+    /// Returns [`Error::Corrupt`] on invalid JSON, or [`Error::Io`] on any other read failure.
     pub fn load(path: &Path) -> Result<Self> {
         let raw = match std::fs::read_to_string(path) {
             Ok(raw) => raw,
@@ -50,12 +43,9 @@ impl Registry {
         })
     }
 
-    /// Persist the registry to `path`, creating parent directories as needed. The write
-    /// is atomic: the JSON is written to a sibling temp file and renamed into place, so a
-    /// reader never sees a half-written registry.
+    /// Persist the registry to `path` atomically (temp file + rename), creating parents.
     ///
     /// # Errors
-    ///
     /// Returns [`Error::Io`] if serialization or any filesystem step fails.
     pub fn save(&self, path: &Path) -> Result<()> {
         if let Some(parent) = path.parent() {
@@ -63,8 +53,7 @@ impl Registry {
         }
         let json = serde_json::to_vec_pretty(self).map_err(std::io::Error::other)?;
 
-        // Per-pid temp name: writers are already serialized by the registry lock, but a
-        // distinct name keeps the rename atomic and collision-free regardless.
+        // Per-pid temp name keeps the rename collision-free even though the lock serializes writers.
         let file_name = path.file_name().map_or_else(
             || "registry.json".to_string(),
             |n| n.to_string_lossy().into_owned(),
@@ -145,7 +134,6 @@ mod tests {
         assert_eq!(reg.get("backend", "http"), Some(8009));
         assert_eq!(reg.ports(), HashSet::from([8010, 8009]));
 
-        // Re-inserting the same pair replaces rather than duplicates.
         reg.insert("frontend", "http", 8011);
         assert_eq!(reg.get("frontend", "http"), Some(8011));
         assert_eq!(reg.leases().len(), 2);

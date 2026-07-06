@@ -1,7 +1,6 @@
-//! The `Service` trait every managed service conforms to, plus the report types the
-//! GUI renders. A service describes *what* to run and *where* its files live; the
-//! default trait methods drive the launchd lifecycle uniformly (mirroring Swift's
-//! `ManagedService` + `Launchd`), so adding a service is data, not new control flow.
+//! The `Service` trait every managed service conforms to, plus the report types the GUI
+//! renders. Default trait methods drive the launchd lifecycle uniformly, so adding a
+//! service is data, not new control flow.
 
 use std::path::PathBuf;
 
@@ -10,9 +9,7 @@ use serde::Serialize;
 use crate::launchd;
 use crate::status::{self, DaemonStatus};
 
-/// One selectable action for a service, rendered as a button by the GUI. `args` is
-/// the argv to invoke on the `adi-mono` CLI to perform it — so the GUI stays generic
-/// and every action round-trips back through the same command surface.
+/// One selectable action for a service; `args` is the argv to invoke on the `adi-mono` CLI to perform it.
 #[derive(Debug, Clone, Serialize)]
 pub struct Action {
     pub id: String,
@@ -40,7 +37,7 @@ pub trait Service {
     fn status_path(&self) -> PathBuf;
     fn log_path(&self) -> PathBuf;
 
-    /// Full argv (binary + args). May write a config file as a side effect.
+    /// Full argv (binary + args); may write a config file as a side effect.
     fn program(&self) -> Vec<String>;
 
     fn env(&self) -> Vec<(String, String)> {
@@ -78,8 +75,7 @@ pub trait Service {
         self.on_disable();
     }
 
-    /// Build this service's live report: loaded state, running PID, status line, and
-    /// the toggle action followed by any service-specific actions.
+    /// Build this service's live report: loaded state, running PID, status line, and actions.
     fn report(&self) -> ServiceReport {
         let enabled = launchd::is_loaded(&self.label());
         let status = status::read(&self.status_path());

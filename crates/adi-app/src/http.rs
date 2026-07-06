@@ -1,7 +1,5 @@
-//! A tiny HTTP/1.1 request reader and response writer — enough for a JSON API and a
-//! single-page app, with no web framework (the same hand-rolled approach as adi-hive's
-//! proxy). Every response sets `Connection: close`, so each request is its own
-//! connection: no keep-alive body-framing to track, which keeps this small and correct.
+//! A tiny hand-rolled HTTP/1.1 request reader and response writer for the JSON API and
+//! SPA. Every response sets `Connection: close`, so each request is its own connection.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -18,8 +16,7 @@ const MAX_BODY: usize = 1 << 20; // 1 MiB
 /// So a silent client can't tie up a connection forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A parsed request: method, full path (query included), and the buffered body. Headers
-/// are consumed during parsing (only `Content-Length` matters here) and not retained.
+/// A parsed request: method, full path (query included), and the buffered body.
 #[derive(Debug)]
 pub struct Request {
     pub method: String,
@@ -35,13 +32,10 @@ impl Request {
     }
 }
 
-/// Read one request from `stream`. Returns `Ok(None)` if the peer closed before sending
-/// anything (an idle connection), so the caller can just drop it.
+/// Read one request from `stream`; `Ok(None)` if the peer closed while idle.
 ///
 /// # Errors
-///
-/// Fails on a read/timeout error, a head larger than [`MAX_HEAD`], or a connection that
-/// closes mid-head.
+/// Fails on a read/timeout error, an oversized head, or a connection closed mid-head.
 pub async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Request>> {
     let mut buf = Vec::new();
     let mut chunk = [0u8; 2048];
@@ -85,8 +79,7 @@ fn find_head_end(buf: &[u8]) -> Option<usize> {
     buf.windows(4).position(|w| w == b"\r\n\r\n")
 }
 
-/// Parse the request line and headers out of the raw head (everything before the blank
-/// line). Header names are lowercased for case-insensitive lookup.
+/// Parse the request line and headers out of the raw head; header names are lowercased.
 fn parse_head(head: &[u8]) -> (String, String, HashMap<String, String>) {
     let text = String::from_utf8_lossy(head);
     let mut lines = text.split("\r\n");
@@ -106,7 +99,6 @@ fn parse_head(head: &[u8]) -> (String, String, HashMap<String, String>) {
 /// Write a full response and close the connection.
 ///
 /// # Errors
-///
 /// Fails if the socket write fails.
 pub async fn write_response(
     stream: &mut TcpStream,
@@ -134,7 +126,6 @@ pub async fn write_response(
 /// Write a JSON response with the given status.
 ///
 /// # Errors
-///
 /// Fails if the socket write fails.
 pub async fn write_json(stream: &mut TcpStream, status: u16, json: &str) -> anyhow::Result<()> {
     let reason = reason_phrase(status);
@@ -151,7 +142,6 @@ pub async fn write_json(stream: &mut TcpStream, status: u16, json: &str) -> anyh
 /// Write an HTML response with the given status.
 ///
 /// # Errors
-///
 /// Fails if the socket write fails.
 pub async fn write_html(stream: &mut TcpStream, status: u16, html: &str) -> anyhow::Result<()> {
     let reason = reason_phrase(status);

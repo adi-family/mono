@@ -1,20 +1,6 @@
 //! adi-core — the command surface for the adi platform, shared by every frontend.
-//!
-//! The GUI (and any other client) triggers platform commands through this crate
-//! instead of owning launchd/config/route logic itself. The shape mirrors the calls
-//! the app makes:
-//!
-//! ```no_run
-//! use adi_core::{Adi, Service};
-//!
-//! let adi = Adi::new();
-//! adi.enable();            // adi.enable()      — start every service
-//! adi.dns().enable();      // adi.dns.enable()  — start just DNS
-//! adi.dns().disable();     // adi.dns.disable()
-//! let report = adi.report(); // adi.status()    — live JSON-able state
-//! ```
-//!
-//! The `adi-mono` CLI (crate `adi-cli`) is a thin argv adapter over this API.
+//! Clients trigger platform commands through this crate instead of owning
+//! launchd/config/route logic. The `adi-mono` CLI is a thin argv adapter over this API.
 
 mod commands;
 pub mod dns;
@@ -28,7 +14,5 @@ pub use commands::{Adi, Report};
 pub use dns::Dns;
 pub use service::{Action, Service, ServiceReport};
 
-/// The CLI binary name. Currently `adi-mono`; the plan is to rename it to `adi`.
-/// Kept here as the single Rust-side source of truth for user-facing messages —
-/// the actual binary name is set once in `crates/adi-cli/Cargo.toml`.
+/// The CLI binary name — the single Rust-side source of truth for user-facing messages.
 pub const BIN_NAME: &str = "adi-mono";

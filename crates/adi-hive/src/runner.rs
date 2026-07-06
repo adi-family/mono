@@ -1,14 +1,6 @@
-//! Runs and supervises each service's local `runner` process, so the upstreams the
-//! proxy forwards to are actually alive — no manual `bun run dev`.
-//!
-//! One supervised task per [`RunnerSpec`]. Each task runs the command via `sh -c` in the
-//! service's working directory, with `PORT*` and static env injected (see
-//! [`crate::config`]), then loops: on exit it relaunches per the [`RestartPolicy`] with
-//! an exponential backoff (reset once a process has run long enough to be considered
-//! healthy). Every runner is spawned in its **own process group** so that at shutdown we
-//! can signal the whole tree — the `sh`, the dev server, and any grandchildren it forked
-//! — not just the top process. Shutdown is broadcast over a `watch` channel; each task
-//! `SIGTERM`s its group, waits a grace period, then `SIGKILL`s if needed.
+//! Runs and supervises each service's local `runner` process so the proxy's upstreams are
+//! alive. One task per [`RunnerSpec`]: run via `sh -c` in its own process group, relaunch
+//! per [`RestartPolicy`] with exponential backoff; shutdown `SIGTERM`s then `SIGKILL`s the group.
 
 use std::time::{Duration, Instant};
 
@@ -25,9 +17,7 @@ const INITIAL_BACKOFF: Duration = Duration::from_millis(500);
 /// Ceiling for the relaunch backoff.
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
-/// A process that ran at least this long before exiting is treated as healthy, so its
-/// backoff resets — otherwise a server that runs fine for hours then restarts would come
-/// back only after the maximum delay.
+/// A process that ran at least this long before exiting is treated as healthy, so its backoff resets.
 const STABLE_RUNTIME: Duration = Duration::from_secs(10);
 
 /// How long to wait after `SIGTERM` before escalating to `SIGKILL` at shutdown.
@@ -41,9 +31,7 @@ pub struct Supervisor {
 }
 
 impl Supervisor {
-    /// Spawn a supervised task per spec. Returns immediately; the runners come up in the
-    /// background. An empty `specs` yields a supervisor whose [`Supervisor::shutdown`] is
-    /// a no-op.
+    /// Spawn a supervised task per spec, returning immediately; an empty `specs` makes [`Supervisor::shutdown`] a no-op.
     #[must_use]
     pub fn start(specs: Vec<RunnerSpec>) -> Self {
         let (shutdown, rx) = watch::channel(false);
@@ -54,8 +42,7 @@ impl Supervisor {
         Self { shutdown, tasks }
     }
 
-    /// Signal every runner to stop, then wait for them all to terminate (each task kills
-    /// its process group before returning).
+    /// Signal every runner to stop, then wait for them all to terminate.
     pub async fn shutdown(self) {
         let _ = self.shutdown.send(true);
         for task in self.tasks {
@@ -64,8 +51,7 @@ impl Supervisor {
     }
 }
 
-/// Supervise one runner: (re)launch it, wait, and relaunch per policy until either the
-/// policy says stop or shutdown is requested.
+/// Supervise one runner: (re)launch and relaunch per policy until the policy says stop or shutdown is requested.
 async fn supervise(spec: RunnerSpec, mut rx: watch::Receiver<bool>) {
     let mut backoff = INITIAL_BACKOFF;
     loop {
@@ -138,8 +124,7 @@ fn spawn(spec: &RunnerSpec) -> std::io::Result<Child> {
     for (key, value) in &spec.env {
         cmd.env(key, value);
     }
-    // Kill the direct child if this task is dropped; the group kill at shutdown covers
-    // grandchildren.
+    // Kill the direct child if this task is dropped; the shutdown group-kill covers grandchildren.
     cmd.kill_on_drop(true);
     #[cfg(unix)]
     {
@@ -163,9 +148,7 @@ fn shell_command(run: &str) -> Command {
     cmd
 }
 
-/// Stop a running child at shutdown: on unix, `SIGTERM` its process group, wait a grace
-/// period, then `SIGKILL` the group if it's still up. Falls back to a direct kill when
-/// there's no pid or off unix.
+/// Stop a running child at shutdown: `SIGTERM` its process group, wait a grace period, then `SIGKILL` if still up (direct kill when off unix or no pid).
 async fn stop_child(child: &mut Child, pid: Option<u32>) {
     #[cfg(unix)]
     if let Some(pid) = pid {
@@ -184,8 +167,7 @@ async fn stop_child(child: &mut Child, pid: Option<u32>) {
     let _ = child.wait().await;
 }
 
-/// Send a signal to a whole process group. The runner is its group's leader, so the
-/// group id equals its pid; a negative pid targets the group (`kill -TERM -<pid>`).
+/// Send a signal to a whole process group (the runner leads its group, so a negative pid targets it).
 #[cfg(unix)]
 fn signal_group(pid: u32, signal: &str) {
     let _ = std::process::Command::new("kill")
@@ -198,8 +180,7 @@ fn next_backoff(current: Duration) -> Duration {
     (current * 2).min(MAX_BACKOFF)
 }
 
-/// Sleep for `dur`, or return early if shutdown is requested. Returns `true` if it was
-/// cut short by shutdown.
+/// Sleep for `dur`, or return early if shutdown is requested; returns `true` if cut short by shutdown.
 async fn sleep_or_shutdown(dur: Duration, rx: &mut watch::Receiver<bool>) -> bool {
     tokio::select! {
         () = tokio::time::sleep(dur) => false,

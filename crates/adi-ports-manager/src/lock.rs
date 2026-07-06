@@ -1,15 +1,6 @@
-//! A small cross-process advisory lock guarding the registry's read-modify-write.
-//!
-//! Because this is a *library* linked into several processes (`adi-core`, `adi-hive`,
-//! future callers), two `reserve` calls can race: both read the registry, both pick the
-//! same free port, both write — one lease is lost and two services collide. A lock file
-//! serializes that critical section. It is advisory (nothing forces callers through it),
-//! but every mutating path in this crate takes it.
-//!
-//! Acquisition is `O_EXCL` create-with-retry: whoever creates the file owns the lock and
-//! removes it on drop. A lock left behind by a crashed process is self-healed — if the
-//! file is older than [`STALE`], it is stolen — so a crash never wedges the registry
-//! permanently.
+//! A small cross-process advisory lock guarding the registry's read-modify-write:
+//! `O_EXCL` create-with-retry where the file's creator owns the lock and removes it on
+//! drop, and a lock older than [`STALE`] is stolen so a crash never wedges the registry.
 
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write as _};
@@ -28,8 +19,7 @@ const RETRY_DELAY: Duration = Duration::from_millis(25);
 /// A lock file older than this is assumed orphaned by a crashed holder and is stolen.
 const STALE: Duration = Duration::from_secs(30);
 
-/// An acquired lock. Holding the value holds the lock; dropping it releases the lock by
-/// removing the file.
+/// An acquired lock; dropping it releases the lock by removing the file.
 #[derive(Debug)]
 pub struct FileLock {
     path: PathBuf,
@@ -38,13 +28,8 @@ pub struct FileLock {
 impl FileLock {
     /// Acquire the lock at `path`, creating its parent directory if needed.
     ///
-    /// Retries until the lock is taken or [`TIMEOUT`] elapses, stealing a lock file
-    /// older than [`STALE`] on the way.
-    ///
     /// # Errors
-    ///
-    /// Returns [`Error::LockTimeout`] if the lock stays held past the timeout, or
-    /// [`Error::Io`] on an unexpected filesystem error.
+    /// Returns [`Error::LockTimeout`] past the timeout, or [`Error::Io`] on a filesystem error.
     pub fn acquire(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -119,7 +104,7 @@ mod tests {
         let _ = fs::remove_file(&path);
         {
             let _lock = FileLock::acquire(&path).expect("acquire");
-        } // dropped here
+        }
         let again = FileLock::acquire(&path).expect("re-acquire after drop");
         drop(again);
         let _ = fs::remove_file(&path);

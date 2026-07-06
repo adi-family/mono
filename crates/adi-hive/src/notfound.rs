@@ -1,7 +1,5 @@
-//! The animated `4XX` fallback page adi-hive serves when a request's `Host` matches
-//! no configured route — i.e. you reached the `.adi` front door but no app answers to
-//! that name. Fully self-contained (inline CSS + JS, no external requests). Ported
-//! from adi-dns's former landing server so the whole `.adi` zone shares one page.
+//! The animated `4XX` fallback page adi-hive serves when a request's `Host` matches no
+//! configured route. Fully self-contained (inline CSS + JS, no external requests).
 
 /// The standalone fallback page. Self-contained (inline CSS + JS), no external requests.
 pub const PAGE: &str = r##"<!doctype html>
@@ -175,7 +173,6 @@ mod tests {
         );
         assert!(page.contains("err-code"), "includes the 4XX headline");
         assert!(page.contains(">error<"), "includes the 'error' word");
-        // fully self-contained: no external asset references
         assert!(!page.contains("http://"), "no external http refs");
         assert!(!page.contains("https://"), "no external https refs");
     }

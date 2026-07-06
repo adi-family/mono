@@ -1,14 +1,6 @@
 //! The `adi-dns` resolver as an ADI service, split by privilege so the on/off toggle
-//! never needs a password (mirrors Swift's `DNSService`):
-//!   * **Resolver** — bundled `adi-dns` on an unprivileged port, per-user
-//!     `LaunchAgent`. Answers `.adi` with the front-door address. Enable/Disable
-//!     toggles it.
-//!   * **Front door** — `adi-hive` as a **root** `LaunchDaemon` binding
-//!     `127.0.0.53:80` (it aliases `lo0`), serving the animated 4XX page for unknown
-//!     hosts and routing known ones to their app ports.
-//!
-//! The route + front-door daemon are the only privileged bits — installed together in
-//! one admin action and left in place, so the day-to-day toggle stays prompt-free.
+//! never needs a password: an unprivileged per-user resolver `LaunchAgent`, plus a root
+//! front-door `LaunchDaemon` (`adi-hive` on `127.0.0.53:80`) installed once.
 
 use std::path::PathBuf;
 
@@ -53,26 +45,22 @@ fn frontdoor_plist_stage() -> PathBuf {
     service_dir().join(format!("{FRONTDOOR_LABEL}.plist"))
 }
 
-/// The bundled `adi-dns`, resolved as a sibling of the running executable (both live
-/// in the app's `Contents/Resources/`), overridable via `ADI_DNS_BIN`.
+/// The bundled `adi-dns`, resolved as a sibling of the running executable, overridable via `ADI_DNS_BIN`.
 fn binary_path() -> String {
     sibling_binary("adi-dns", "ADI_DNS_BIN")
 }
 
-/// The bundled `adi-hive` (the front-door proxy), resolved the same way as `adi-dns`,
-/// overridable via `ADI_HIVE_BIN`.
+/// The bundled `adi-hive` (the front-door proxy), resolved like `adi-dns`, overridable via `ADI_HIVE_BIN`.
 fn hive_binary_path() -> String {
     sibling_binary("adi-hive", "ADI_HIVE_BIN")
 }
 
-/// The bundled `adi-app` (the control panel the front door runs), overridable via
-/// `ADI_APP_BIN`.
+/// The bundled `adi-app` (the control panel the front door runs), overridable via `ADI_APP_BIN`.
 fn app_binary_path() -> String {
     sibling_binary("adi-app", "ADI_APP_BIN")
 }
 
-/// Resolve a bundled binary as a sibling of the running executable, honoring an
-/// explicit `env_override` path first, and falling back to the bare name on `PATH`.
+/// Resolve a bundled binary as a sibling of the running executable, honoring `env_override` first.
 fn sibling_binary(name: &str, env_override: &str) -> String {
     if let Some(p) = std::env::var_os(env_override)
         && !p.is_empty()
@@ -106,14 +94,9 @@ fn render_config() -> String {
     )
 }
 
-/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and serves the adi control
-/// panel (`adi-app`) at `app.{DOMAIN}`. adi-hive runs `adi-app` as a supervised runner
-/// and takes its port from the ports manager (no port is declared here), so it's a
-/// single hive that both routes and runs the app. Any other host gets the 4XX page.
-/// `app_bin` is the absolute path to the bundled `adi-app`.
+/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and serves the adi control panel (`adi-app`) at `app.{DOMAIN}`; any other host gets the 4XX page.
 fn render_frontdoor_hive(app_bin: &str) -> String {
-    // A plain multi-line literal so the YAML indentation is exact (no `\`-continuation,
-    // which would strip the leading spaces the nested keys need).
+    // Plain multi-line literal so YAML indentation is exact (`\`-continuation would strip leading spaces).
     format!(
         "# Written by adi-core — adi-hive front door for the .{DOMAIN} zone.
 # Serves the adi control panel (adi-app) at app.{DOMAIN}; adi-hive takes its port
@@ -139,12 +122,7 @@ fn write_config() {
     let _ = std::fs::write(config_path(), render_config());
 }
 
-/// Stage the front-door daemon's config + plist (unprivileged); the admin step copies
-/// the plist into `/Library/LaunchDaemons` and bootstraps it.
-///
-/// The daemon runs as **root**, so we pin `HOME`/`ADI_DIR` to the installing user's, or
-/// adi-hive's ports registry and paths would land under `/var/root/.adi` instead of the
-/// user's `~/.adi`. Captured here (adi-core runs as the user when staging).
+/// Stage the front-door daemon's config + plist (unprivileged); pins `HOME`/`ADI_DIR` to the installing user's, since the root daemon would otherwise use `/var/root/.adi`.
 fn write_frontdoor_artifacts() {
     let _ = std::fs::create_dir_all(service_dir());
     let _ = std::fs::write(
@@ -171,28 +149,24 @@ fn write_frontdoor_artifacts() {
     let _ = std::fs::write(frontdoor_plist_stage(), plist);
 }
 
-/// The DNS command surface (`adi.dns.*`). Zero-sized: all state lives on disk / in
-/// launchd, so this is a namespace whose methods take `self` only for the
-/// `adi.dns.enable()` call-site ergonomics the GUI mirrors.
+/// The DNS command surface (`adi.dns.*`) — a zero-sized facade; all state lives on disk / in launchd.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Dns;
 
-#[allow(clippy::unused_self)] // `Dns` is a zero-sized facade; `self` is for ergonomics.
+#[allow(clippy::unused_self)]
 impl Dns {
     #[must_use]
     pub fn new() -> Self {
         Self
     }
 
-    /// Both bits must be present; if either is missing the action reads "Install…" and
-    /// re-runs the idempotent admin step rather than stranding a half state.
+    /// Both bits must be present; a missing either re-runs the idempotent install rather than stranding a half state.
     #[must_use]
     pub fn route_installed(self) -> bool {
         resolver_file().exists() && PathBuf::from(FRONTDOOR_DAEMON_PLIST).exists()
     }
 
-    /// The one privileged step: install the `/etc/resolver` route AND the root
-    /// front-door daemon in a single admin prompt (`adi.dns.install_route()`).
+    /// The one privileged step: install the `/etc/resolver` route AND the root front-door daemon in a single admin prompt.
     pub fn install_route(self) {
         let _ = std::fs::create_dir_all(service_dir());
         let _ = std::fs::write(stage_path(), format!("nameserver 127.0.0.1\nport {PORT}\n"));
@@ -220,8 +194,7 @@ impl Dns {
         proc::run_admin(&shell);
     }
 
-    /// Tear down both privileged bits, best-effort (incl. the `lo0` alias)
-    /// (`adi.dns.remove_route()`).
+    /// Tear down both privileged bits, best-effort (incl. the `lo0` alias).
     pub fn remove_route(self) {
         let resolver = resolver_file();
         let resolver = resolver.to_string_lossy();
@@ -259,9 +232,7 @@ impl Service for Dns {
         vec![binary_path(), config_path().to_string_lossy().into_owned()]
     }
 
-    // Route + front-door daemon are installed once (one admin prompt) and left in
-    // place, so toggling the resolver never re-prompts. Disable leaves them; removal is
-    // an explicit action (see `extra_actions`).
+    // Installed once and left in place, so toggling never re-prompts; removal is an explicit action.
     fn on_enable(&self) {
         if !self.route_installed() {
             self.install_route();
@@ -277,8 +248,7 @@ impl Service for Dns {
     }
 }
 
-/// The install/remove-route action for the current route state. Pure, so the label +
-/// argv mapping is testable without touching `/etc/resolver`.
+/// The install/remove-route action for the current route state.
 fn route_action(installed: bool) -> Action {
     let (title, verb) = if installed {
         (format!("Remove .{DOMAIN} route + page"), "remove-route")

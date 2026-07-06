@@ -1,10 +1,5 @@
-//! Where the mono-app keeps its runtime files, mirroring the Swift `AppPaths`.
-//!
-//! Base directory: `$HOME/<ADI_DIR>/mono`, where `<ADI_DIR>` is the `ADI_DIR` env
-//! var (default `.adi`, the adi platform home). The `mono` subdir isolates this
-//! app's files from the platform's own (`hive`/`cocoon`/`workforce`). A
-//! login-launched `LaunchAgent` only sees env vars set in the launchd session
-//! (`launchctl setenv ADI_DIR …`), not shell exports.
+//! Where the mono-app keeps its runtime files (`$HOME/<ADI_DIR>/mono`, `ADI_DIR`
+//! defaulting to `.adi`), mirroring the Swift `AppPaths`.
 
 use std::path::PathBuf;
 
@@ -16,8 +11,7 @@ fn home() -> PathBuf {
     std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
 }
 
-/// The `ADI_DIR` value, trimmed; empty/unset falls back to `.adi`. Split out as a
-/// pure function so the precedence is unit-testable without touching the env.
+/// The `ADI_DIR` value, trimmed; empty/unset falls back to `.adi`.
 fn resolve_dir_name(env: Option<&str>) -> String {
     match env {
         Some(v) if !v.trim().is_empty() => v.trim().to_string(),

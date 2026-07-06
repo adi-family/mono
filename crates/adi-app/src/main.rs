@@ -1,13 +1,6 @@
-//! adi-app — the adi application server.
-//!
-//! One process, two roles behind `app.adi` (adi-hive proxies the host here):
-//! - `GET /` (and any non-`/api` path) serves the control-panel **SPA** (a single
-//!   embedded HTML file).
-//! - `/api/*` is the **Rust backend**: a JSON API over the live [`adi_ports_manager`]
-//!   port registry.
-//!
-//! It listens on `$PORT` (injected by the adi-hive runner) or an explicit `addr`
-//! argument, on loopback. Hand-rolled HTTP/1.1 (see [`http`]); no web framework.
+//! adi-app — the adi application server behind `app.adi`: one process serving the
+//! control-panel SPA at `GET /` and a JSON `/api/*` backend over [`adi_ports_manager`].
+//! Listens on `$PORT` or an explicit `addr` argument, on loopback.
 
 mod api;
 mod http;
@@ -64,8 +57,7 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Resolve where to listen: an explicit `SocketAddr`/`host:port` argument wins, else
-/// `127.0.0.1:$PORT`, else `127.0.0.1:DEFAULT_PORT`.
+/// Resolve where to listen: an explicit `addr` argument wins, else `$PORT`, else `DEFAULT_PORT`.
 fn listen_addr() -> SocketAddr {
     if let Some(arg) = std::env::args().nth(1) {
         if let Ok(addr) = arg.parse::<SocketAddr>() {
@@ -86,7 +78,7 @@ fn listen_addr() -> SocketAddr {
 /// Read one request, route it, and write the response.
 async fn handle(mut stream: TcpStream, ports: &Ports, start: Instant) -> anyhow::Result<()> {
     let Some(req) = http::read_request(&mut stream).await? else {
-        return Ok(()); // idle connection, peer closed
+        return Ok(());
     };
     debug!(method = %req.method, path = %req.path, "request");
 
@@ -122,8 +114,7 @@ async fn shutdown_signal() {
     }
 }
 
-/// Never resolves — used if the SIGTERM handler can't be installed, so the accept loop
-/// keeps running rather than busy-looping on an immediately-ready shutdown branch.
+/// Never resolves — keeps the accept loop alive if the SIGTERM handler can't be installed.
 #[cfg(unix)]
 async fn futures_pending() {
     std::future::pending::<()>().await;

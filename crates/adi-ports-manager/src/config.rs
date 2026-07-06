@@ -1,10 +1,5 @@
 //! How the allocator is parameterized: the range it hands ports out of, the ranges
 //! it must never touch, and where static leases persist.
-//!
-//! The defaults encode two hard facts about this machine (see `adi-family/CLAUDE.md`):
-//! privileged ports (`0..=1023`) need root and are off-limits to unprivileged dev
-//! services, and the `adi daemon` supervisor — including the protected ADI DNS on
-//! `127.0.0.1:15353` — lives in a band around `15353` that must never be collided with.
 
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
@@ -15,21 +10,16 @@ const MONO_SUBDIR: &str = "mono";
 const PORTS_SUBDIR: &str = "ports";
 const REGISTRY_FILE: &str = "registry.json";
 
-/// Default allocatable range — the 8000s, where the mono dev services already sit
-/// (`app.adi` → 8010, `api.adi` → 8009, …). Wide enough to never realistically run dry.
+/// Default allocatable range — the 8000s, where the mono dev services already sit.
 const DEFAULT_RANGE: RangeInclusive<u16> = 8000..=9999;
 
-/// Privileged ports: binding these needs root, and adi dev services are unprivileged,
-/// so they are never handed out.
+/// Privileged ports: binding these needs root, so they are never handed out.
 const PRIVILEGED_BAND: RangeInclusive<u16> = 0..=1023;
 
-/// The `adi daemon` supervisor band. ADI DNS listens on `127.0.0.1:15353` and is
-/// critical infra that must never be disturbed; reserve a generous margin around it.
+/// The `adi daemon` supervisor band around the protected ADI DNS on `127.0.0.1:15353`.
 const ADI_DAEMON_BAND: RangeInclusive<u16> = 15000..=15999;
 
-/// Parameters controlling allocation. Construct [`Config::default`] for the standard
-/// setup, or build one by hand to widen the range, add reserved bands, or point the
-/// registry somewhere else (tests do the latter).
+/// Parameters controlling allocation.
 #[derive(Debug, Clone)]
 pub struct Config {
     /// The inclusive range ports are drawn from.
@@ -51,15 +41,13 @@ impl Default for Config {
 }
 
 impl Config {
-    /// The standard configuration — identical to [`Config::default`], spelled as a
-    /// constructor for call sites that read better that way.
+    /// The standard configuration — identical to [`Config::default`].
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// True if `port` falls in any reserved band. Independent of [`Config::range`]:
-    /// a port can be out of range *and* reserved.
+    /// True if `port` falls in any reserved band.
     #[must_use]
     pub fn is_reserved(&self, port: u16) -> bool {
         self.reserved.iter().any(|band| band.contains(&port))
@@ -80,10 +68,7 @@ fn adi_dir_name() -> String {
         .unwrap_or_else(|| DEFAULT_ADI_DIR.to_string())
 }
 
-/// The canonical registry location: `$HOME/$ADI_DIR/mono/ports/registry.json`
-/// (default `~/.adi/mono/ports/registry.json`). Re-derives the `$HOME/$ADI_DIR/mono`
-/// path locally rather than depending on `adi-core`, so this crate stays a
-/// dependency-free leaf that `adi-core` itself can consume — exactly like `adi-hive`.
+/// The canonical registry location: `$HOME/$ADI_DIR/mono/ports/registry.json`.
 #[must_use]
 pub fn default_registry_path() -> PathBuf {
     home()
@@ -100,7 +85,6 @@ mod tests {
     #[test]
     fn default_range_avoids_the_reserved_bands() {
         let cfg = Config::default();
-        // Nothing in the allocatable range should be reserved by default.
         assert!(!cfg.is_reserved(*cfg.range.start()));
         assert!(!cfg.is_reserved(*cfg.range.end()));
         assert!(!cfg.is_reserved(8080));

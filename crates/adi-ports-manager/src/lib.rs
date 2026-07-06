@@ -1,30 +1,6 @@
-//! adi-ports-manager — allocate and track TCP ports for adi services.
-//!
-//! A pure library (no CLI, no daemon): other crates link it to get collision-free
-//! ports. Every port it hands out avoids three things — the configured reserved bands
-//! (privileged ports and the `adi daemon` band around ADI DNS on `127.0.0.1:15353`),
-//! ports already live on the machine (probed by trying to bind them), and ports it has
-//! already promised to someone else.
-//!
-//! Two allocation modes, matching how a service needs its port:
-//!
-//! - **Static** — [`Ports::reserve`]. A durable, idempotent lease keyed by
-//!   `(service, key)`, persisted to a JSON registry under `~/.adi/mono/ports/`. The
-//!   same pair always resolves to the same port across restarts, and the
-//!   read-modify-write is guarded by a cross-process lock. Use for services whose port
-//!   must be stable (so `hive.yaml`, `/etc/resolver`, docs, … can name it).
-//! - **Dynamic** — [`Ports::allocate_dynamic`]. Any currently-free port, computed on
-//!   the fly and *not* recorded. Use for throwaway/ephemeral needs where stability does
-//!   not matter.
-//!
-//! ```no_run
-//! use adi_ports_manager::Ports;
-//!
-//! let ports = Ports::new();
-//! let http = ports.reserve("frontend", "http")?;   // stable across restarts
-//! let scratch = ports.allocate_dynamic()?;         // ephemeral, not persisted
-//! # Ok::<(), adi_ports_manager::Error>(())
-//! ```
+//! adi-ports-manager — allocate and track TCP ports for adi services: a pure library
+//! (no CLI, no daemon) that hands out collision-free ports via static (persisted,
+//! stable) or dynamic (ephemeral) allocation.
 
 mod config;
 mod error;
@@ -42,9 +18,7 @@ pub use registry::{Lease, Registry};
 
 use lock::FileLock;
 
-/// The allocator facade. Cheap to clone; holds only its [`Config`]. All persistent
-/// state lives in the registry file the config points at, so multiple `Ports` values
-/// (even in different processes) sharing a registry path cooperate through it.
+/// The allocator facade. Cheap to clone; all persistent state lives in the registry file.
 #[derive(Debug, Clone)]
 pub struct Ports {
     config: Config,
@@ -57,9 +31,7 @@ impl Default for Ports {
 }
 
 impl Ports {
-    /// A manager with the [standard configuration](Config::default): the 8000s range,
-    /// the privileged + `adi daemon` reserved bands, and the registry at
-    /// `~/.adi/mono/ports/registry.json`.
+    /// A manager with the [standard configuration](Config::default).
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -67,8 +39,7 @@ impl Ports {
         }
     }
 
-    /// A manager with a caller-supplied [`Config`] (custom range, extra reserved bands,
-    /// or an alternate registry path).
+    /// A manager with a caller-supplied [`Config`].
     #[must_use]
     pub fn with_config(config: Config) -> Self {
         Self { config }
@@ -80,19 +51,10 @@ impl Ports {
         &self.config
     }
 
-    /// Reserve a **static** port for `(service, key)`, persisting it.
-    ///
-    /// Idempotent: if the pair already has a lease, that port is returned unchanged
-    /// (even if it is out of the current range or currently in use — a durable lease is
-    /// honored). Otherwise a fresh port is allocated — skipping reserved bands, ports
-    /// held by other leases, and ports currently bound on the machine — recorded, and
-    /// returned. The whole read-modify-write is serialized by a cross-process lock.
+    /// Reserve a **static** port for `(service, key)`, persisting it. Idempotent.
     ///
     /// # Errors
-    ///
-    /// - [`Error::LockTimeout`] if the registry lock cannot be taken.
-    /// - [`Error::Exhausted`] if no free port exists in the range.
-    /// - [`Error::Corrupt`] / [`Error::Io`] if the registry cannot be read or written.
+    /// Fails if the lock times out, the range is exhausted, or the registry I/O fails.
     pub fn reserve(&self, service: &str, key: &str) -> Result<u16> {
         let _lock = FileLock::acquire(&self.lock_path())?;
         let mut registry = Registry::load(&self.config.registry_path)?;
@@ -106,12 +68,10 @@ impl Ports {
         Ok(port)
     }
 
-    /// Release the static lease for `(service, key)`, returning the port it held (or
-    /// `None` if there was no such lease). The port becomes available for reuse.
+    /// Release the static lease for `(service, key)`, returning the port it held.
     ///
     /// # Errors
-    ///
-    /// Same failure modes as [`Ports::reserve`], minus [`Error::Exhausted`].
+    /// Fails if the registry lock or file I/O fails.
     pub fn release(&self, service: &str, key: &str) -> Result<Option<u16>> {
         let _lock = FileLock::acquire(&self.lock_path())?;
         let mut registry = Registry::load(&self.config.registry_path)?;
@@ -122,12 +82,10 @@ impl Ports {
         Ok(freed)
     }
 
-    /// The static port leased to `(service, key)`, if any. A read-only registry lookup;
-    /// takes no lock.
+    /// The static port leased to `(service, key)`, if any.
     ///
     /// # Errors
-    ///
-    /// [`Error::Corrupt`] / [`Error::Io`] if the registry cannot be read.
+    /// Fails if the registry cannot be read.
     pub fn get(&self, service: &str, key: &str) -> Result<Option<u16>> {
         let registry = Registry::load(&self.config.registry_path)?;
         Ok(registry.get(service, key))
@@ -136,31 +94,22 @@ impl Ports {
     /// A snapshot of every static lease currently recorded.
     ///
     /// # Errors
-    ///
-    /// [`Error::Corrupt`] / [`Error::Io`] if the registry cannot be read.
+    /// Fails if the registry cannot be read.
     pub fn leases(&self) -> Result<Vec<Lease>> {
         Ok(Registry::load(&self.config.registry_path)?.leases())
     }
 
     /// Allocate a **dynamic** port: the first free port in the range, *not* persisted.
     ///
-    /// It still avoids reserved bands, ports bound on the machine, and ports promised to
-    /// static leases (so a dynamic pick never stomps a reservation) — but because it is
-    /// not recorded, two dynamic calls with nothing bound between them can return the
-    /// same port. Bind promptly, or use [`Ports::reserve`] when you need a stable port.
-    ///
     /// # Errors
-    ///
-    /// - [`Error::Exhausted`] if no free port exists in the range.
-    /// - [`Error::Corrupt`] / [`Error::Io`] if the registry cannot be read.
+    /// Fails if the range is exhausted or the registry cannot be read.
     pub fn allocate_dynamic(&self) -> Result<u16> {
         // Read-only: honor static leases without taking the write lock.
         let taken = Registry::load(&self.config.registry_path)?.ports();
         self.find_free(&taken)
     }
 
-    /// True if `port` is allocatable and free right now: inside the range, not in a
-    /// reserved band, and currently bindable on loopback. Does not consult the registry.
+    /// True if `port` is allocatable and free right now (in range, not reserved, bindable).
     #[must_use]
     pub fn is_available(&self, port: u16) -> bool {
         self.config.range.contains(&port)
@@ -168,15 +117,13 @@ impl Ports {
             && probe::is_bindable(port)
     }
 
-    /// True if `port` falls in a reserved band (privileged ports, the `adi daemon`
-    /// band, …). Independent of the range.
+    /// True if `port` falls in a reserved band.
     #[must_use]
     pub fn is_reserved(&self, port: u16) -> bool {
         self.config.is_reserved(port)
     }
 
-    /// Scan the range for the first port that is not reserved, not in `taken`, and
-    /// bindable on the machine right now.
+    /// Scan the range for the first port that is not reserved, not in `taken`, and bindable.
     fn find_free(&self, taken: &HashSet<u16>) -> Result<u16> {
         for port in self.config.range.clone() {
             if self.config.is_reserved(port) || taken.contains(&port) {
@@ -244,7 +191,6 @@ mod tests {
         let again = ports.reserve("frontend", "http").expect("re-reserve");
         assert_eq!(first, again, "same pair must return the same port");
 
-        // A fresh manager over the same registry path sees the persisted lease.
         let reopened = Ports::with_config(ports.config().clone());
         assert_eq!(reopened.get("frontend", "http").expect("get"), Some(first));
         cleanup(&path);
@@ -290,7 +236,6 @@ mod tests {
         let err = ports.allocate_dynamic().expect_err("only port is busy");
         assert!(matches!(err, Error::Exhausted { .. }));
 
-        // reserve() hits the same wall.
         let err = ports.reserve("svc", "http").expect_err("only port is busy");
         assert!(matches!(err, Error::Exhausted { .. }));
         cleanup(&path);

@@ -1,7 +1,6 @@
 //! adi-hive — the adi-family reverse proxy: routes inbound HTTP by `Host` header to a
-//! local upstream (nginx-style), and launches + supervises each service's local
-//! `runner` so those upstreams are actually alive. Foreground process; a supervisor
-//! owns its lifecycle. Reads the `proxy:` and `runner:` slices of a hive spec.
+//! local upstream (nginx-style), and launches + supervises each service's local `runner`
+//! so those upstreams are alive. Foreground process owned by a supervisor.
 
 mod config;
 mod notfound;
@@ -29,9 +28,7 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
-    // The single hive config: an explicit path arg, else the canonical
-    // ~/.adi/mono/hive/hive.yaml. A missing file is not fatal — fall back to
-    // built-in defaults (bind 127.0.0.1:8080, no routes) so the daemon still runs.
+    // A missing config is not fatal: fall back to built-in defaults so the daemon still runs.
     let path = std::env::args()
         .nth(1)
         .map_or_else(config::default_config_path, PathBuf::from);
@@ -43,9 +40,7 @@ async fn main() -> anyhow::Result<()> {
         Hive::default()
     };
 
-    // Take ports from the ports manager (stable, registry-backed leases) rather than
-    // hand-picking them in hive.yaml: the proxy's own front-door bind port, and any
-    // service that doesn't declare one. Explicitly-configured ports/binds still win.
+    // Take ports from the ports manager (stable, registry-backed leases); explicit config still wins.
     let ports_manager = adi_ports_manager::Ports::new();
     for (service, port) in hive.allocate_missing_ports(&ports_manager) {
         info!(%service, port, "allocated service port from ports manager");
@@ -61,9 +56,8 @@ async fn main() -> anyhow::Result<()> {
     info!(binds = ?resolved.binds, routes = resolved.routes.len(), "starting adi-hive");
     let router = Arc::new(Router::new(&resolved.routes));
 
-    // Bind each address independently: a failure (e.g. :80 needs root, or the port is
-    // taken) is logged and skipped, not fatal, so the proxy still serves on the
-    // addresses it can bind. Only bail if nothing bound at all.
+    // Bind each address independently: a failure (privileged port, or in use) is logged and
+    // skipped, not fatal. Only bail if nothing bound at all.
     let mut bound = Vec::with_capacity(resolved.binds.len());
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
     for addr in &resolved.binds {
@@ -85,8 +79,7 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("no proxy address could be bound");
     }
 
-    // Status file sits beside the config in the writable mono namespace
-    // (e.g. ~/.adi/mono/hive/status.json), overridable via ADI_HIVE_STATUS_FILE.
+    // Status file sits beside the config, overridable via ADI_HIVE_STATUS_FILE.
     let status_path = status::resolve_path(path.with_file_name("status.json"));
     let status = status::Status::new(bound, resolved.routes.len());
     match status::write(&status_path, &status) {
@@ -94,8 +87,7 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => warn!(error = %e, path = %status_path.display(), "could not write status file"),
     }
 
-    // Launch and supervise the services' local runners so the proxied upstreams are
-    // actually alive. Relative working dirs are anchored at the hive.yaml's directory.
+    // Launch and supervise the services' local runners so the proxied upstreams are alive.
     let base_dir = path
         .parent()
         .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
@@ -111,8 +103,7 @@ async fn main() -> anyhow::Result<()> {
 
     shutdown_signal().await;
     info!("shutdown signal received; stopping");
-    // Stop the runners first (SIGTERM their process groups), bounded so a stuck child
-    // can't hang shutdown; then tear down the proxy listeners.
+    // Stop the runners first (bounded, so a stuck child can't hang shutdown), then the listeners.
     if tokio::time::timeout(TERM_TIMEOUT, supervisor.shutdown())
         .await
         .is_err()
@@ -129,13 +120,10 @@ async fn main() -> anyhow::Result<()> {
 /// Upper bound on how long shutdown waits for all runners to stop.
 const TERM_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// On macOS a non-`127.0.0.1` loopback address (e.g. the `127.0.0.53` front door) must
-/// be aliased onto `lo0` before it can be bound; elsewhere the whole `127.0.0.0/8`
-/// already routes to loopback. Best-effort — a failure here just makes the subsequent
-/// bind fail, which is already handled non-fatally.
+/// On macOS a non-`127.0.0.1` loopback address must be aliased onto `lo0` before it can be bound; elsewhere `127.0.0.0/8` already routes to loopback. Best-effort.
 fn ensure_loopback_alias(ip: IpAddr) {
     if ip == IpAddr::V4(Ipv4Addr::LOCALHOST) {
-        return; // always present
+        return;
     }
     #[cfg(target_os = "macos")]
     {

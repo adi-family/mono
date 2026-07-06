@@ -20,8 +20,7 @@ impl Output {
     }
 }
 
-/// Run `argv` (program + args) to completion. `argv[0]` must be an absolute path or
-/// resolvable on `PATH`. Accepts both `&str` and `String` elements.
+/// Run `argv` (program + args) to completion; `argv[0]` must be absolute or on `PATH`.
 pub fn run<S: AsRef<OsStr>>(argv: &[S]) -> Output {
     let Some((program, rest)) = argv.split_first() else {
         return Output {
@@ -48,9 +47,7 @@ pub fn run<S: AsRef<OsStr>>(argv: &[S]) -> Output {
     }
 }
 
-/// Run a shell command as root behind a single macOS Authorization prompt, via
-/// `osascript … with administrator privileges`. The GUI auth dialog is presented by
-/// the OS to the session, so it appears even though we run headless with piped I/O.
+/// Run a shell command as root behind a single macOS Authorization prompt (via `osascript`).
 pub fn run_admin(shell: &str) -> Output {
     // Escape for AppleScript string literal: backslash first, then double-quote.
     let escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");

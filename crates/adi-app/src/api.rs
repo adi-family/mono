@@ -1,9 +1,5 @@
-//! The `/api/*` surface: a real backend over the adi platform's live state. It reads
-//! and mutates the [`adi_ports_manager`] port registry, so the SPA is driving actual
-//! platform state, not a mock.
-//!
-//! Each handler returns `(status, json_body)`. The server ([`crate::main`]) owns the
-//! socket; these stay pure and testable.
+//! The `/api/*` surface: a real backend over the [`adi_ports_manager`] port registry.
+//! Each handler returns `(status, json_body)`; the server owns the socket.
 
 use std::time::Instant;
 
@@ -14,8 +10,7 @@ use serde_json::{Value, json};
 /// This crate's version, surfaced at `/api/health`.
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// A `(service, key)` pair naming a static port lease — the body of the reserve/release
-/// endpoints.
+/// A `(service, key)` pair naming a static port lease.
 #[derive(Debug, Deserialize)]
 struct LeaseRef {
     service: String,
@@ -54,8 +49,7 @@ pub fn ports(manager: &Ports) -> (u16, String) {
     }
 }
 
-/// `POST /api/ports/reserve` — reserve (or return the existing) static port for a
-/// `(service, key)`.
+/// `POST /api/ports/reserve` — reserve (or return the existing) static port for a `(service, key)`.
 #[must_use]
 pub fn reserve(manager: &Ports, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_lease_ref(body) else {
@@ -73,8 +67,7 @@ pub fn reserve(manager: &Ports, body: &[u8]) -> (u16, String) {
     }
 }
 
-/// `POST /api/ports/release` — release a static lease, reporting the freed port (or
-/// `null` if there was none).
+/// `POST /api/ports/release` — release a static lease, reporting the freed port.
 #[must_use]
 pub fn release(manager: &Ports, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_lease_ref(body) else {

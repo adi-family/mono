@@ -1,12 +1,6 @@
-//! The single hive config, loaded from `~/.adi/mono/hive/hive.yaml`.
-//!
-//! This parses the nakit-yok **hive.yaml** format, reading the slice adi-hive acts on:
-//! the reverse-proxy fields — `proxy.bind`, and per service its `proxy.host` + HTTP port
-//! (`rollout.recreate.ports.http`) — plus the fields needed to *run* a service locally:
-//! `runner.script` (the command + `working_dir`), `environment.static`, and `restart`.
-//! Everything else in the wider hive spec (healthcheck, hooks, `depends_on`, defaults,
-//! observability, …) is accepted-but-ignored: we deliberately do *not*
-//! `deny_unknown_fields`, so a full hive.yaml parses cleanly here.
+//! The single hive config, loaded from `~/.adi/mono/hive/hive.yaml`: the reverse-proxy
+//! fields and the fields needed to run a service locally. Unknown hive.yaml fields are
+//! accepted-but-ignored (no `deny_unknown_fields`).
 
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -26,9 +20,7 @@ const UPSTREAM_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
 /// The port-map key that names a service's HTTP port (what the proxy targets).
 const HTTP_PORT_KEY: &str = "http";
 
-/// The ports-manager lease for adi-hive's own front-door port, used when no explicit
-/// `proxy.bind` is configured. `proxy.name` overrides the service part (so several
-/// manager-bound hives can coexist with distinct leases).
+/// The ports-manager lease for adi-hive's own front-door port (when no explicit `proxy.bind`).
 const FRONT_DOOR_NAME: &str = "adi-hive";
 const FRONT_DOOR_KEY: &str = "front-door";
 
@@ -46,9 +38,7 @@ pub struct Hive {
 pub struct ProxyBinds {
     #[serde(default)]
     pub bind: Vec<SocketAddr>,
-    /// Optional name for the front door. When the bind port is manager-allocated (no
-    /// explicit `bind`), this is the ports-manager lease's service key. Defaults to
-    /// `adi-hive`.
+    /// Optional front-door name; the ports-manager lease key when the bind port is manager-allocated.
     #[serde(default)]
     pub name: Option<String>,
 }
@@ -59,8 +49,7 @@ pub struct ServiceSpec {
     pub proxy: Option<ServiceProxy>,
     #[serde(default)]
     pub rollout: Option<Rollout>,
-    /// How to actually run the service locally. Only `type: script` is supported;
-    /// other runner types parse but are skipped (their `script` is absent).
+    /// How to run the service locally; only `type: script` is supported (others parse but are skipped).
     #[serde(default)]
     pub runner: Option<Runner>,
     /// Extra environment for the runner (merged after the injected `PORT*` vars).
@@ -92,8 +81,7 @@ pub struct Recreate {
     pub ports: BTreeMap<String, u16>,
 }
 
-/// The `runner:` block. We model only the `script` runner (a shell command); a runner
-/// of any other `type` deserializes with `script == None` and is skipped.
+/// The `runner:` block; only the `script` runner is modelled (other types get `script == None`).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Runner {
     #[serde(default)]
@@ -104,8 +92,7 @@ pub struct Runner {
 pub struct Script {
     /// The shell command to run (executed via `sh -c`).
     pub run: String,
-    /// Where to run it, relative to the hive.yaml's directory (or absolute). Defaults
-    /// to the config directory itself.
+    /// Where to run it, relative to the hive.yaml's directory (or absolute); defaults to that directory.
     #[serde(default)]
     pub working_dir: Option<String>,
 }
@@ -117,8 +104,7 @@ pub struct Environment {
 }
 
 impl ServiceSpec {
-    /// The port the proxy forwards to: the `http` port if named, else the sole port
-    /// if there's exactly one, else `None` (nothing sensible to route to).
+    /// The port the proxy forwards to: the `http` port, else the sole port, else `None`.
     fn http_port(&self) -> Option<u16> {
         let ports = self.ports();
         if let Some(port) = ports.get(HTTP_PORT_KEY) {
@@ -139,8 +125,7 @@ impl ServiceSpec {
             .map_or(&EMPTY, |r| &r.ports)
     }
 
-    /// Set the service's `http` port, creating the `rollout.recreate.ports` path if
-    /// needed. Used to record a port allocated from the ports manager.
+    /// Set the service's `http` port, creating the `rollout.recreate.ports` path if needed.
     fn set_http_port(&mut self, port: u16) {
         self.rollout
             .get_or_insert_with(Rollout::default)
@@ -184,9 +169,7 @@ impl RestartPolicy {
     }
 }
 
-/// A single service resolved to a launchable, self-contained runner: the exact shell
-/// command (templates expanded), the absolute working directory, the environment to
-/// inject, and what to do when it exits.
+/// A service resolved to a launchable runner: command, working dir, env, and restart policy.
 #[derive(Debug, Clone)]
 pub struct RunnerSpec {
     pub name: String,
@@ -197,14 +180,7 @@ pub struct RunnerSpec {
 }
 
 impl Hive {
-    /// For every proxied or script-runner service that doesn't already declare an HTTP
-    /// port, reserve a stable one from the ports manager (a durable lease keyed by the
-    /// service name) and fill it in — so the proxy route and the runner's `$PORT` both
-    /// use the same manager-allocated port. Explicitly-declared ports are left as-is.
-    /// Returns the `(service, port)` pairs allocated, for logging.
-    ///
-    /// Best-effort: a service whose allocation fails is left without a port (it will be
-    /// skipped by routing) rather than aborting the whole config.
+    /// For each proxied/script-runner service without an HTTP port, reserve a stable one from the ports manager and fill it in; returns the `(service, port)` pairs allocated.
     pub fn allocate_missing_ports(&mut self, manager: &Ports) -> Vec<(String, u16)> {
         let mut allocated = Vec::new();
         for (name, svc) in &mut self.services {
@@ -222,12 +198,7 @@ impl Hive {
         allocated
     }
 
-    /// Take adi-hive's own front-door listen port from the ports manager: when no
-    /// explicit `proxy.bind` is set, reserve a stable port (a durable lease keyed by
-    /// `proxy.name`, default `adi-hive`) and bind loopback on it — so the proxy's port,
-    /// like the services', comes from the manager instead of a hard-coded default. An
-    /// explicit `proxy.bind` (e.g. the `127.0.0.53:80` front door) is left untouched.
-    /// Returns the reserved port, if one was taken.
+    /// Reserve adi-hive's own front-door bind port from the ports manager when no explicit `proxy.bind` is set; returns the reserved port, if any.
     pub fn allocate_bind_port(&mut self, manager: &Ports) -> Option<u16> {
         if !self.proxy.bind.is_empty() {
             return None;
@@ -245,9 +216,7 @@ impl Hive {
         }
     }
 
-    /// Every service that declares a `script` runner, resolved for launch. `base_dir`
-    /// (the hive.yaml's directory) anchors relative `working_dir`s. Services without a
-    /// script runner are omitted.
+    /// Every service that declares a `script` runner, resolved for launch; `base_dir` anchors relative `working_dir`s.
     #[must_use]
     pub fn runners(&self, base_dir: &Path) -> Vec<RunnerSpec> {
         let mut out = Vec::new();
@@ -268,9 +237,7 @@ impl Hive {
     }
 }
 
-/// Build the runner's environment: `PORT` = the http/sole port (the common single-port
-/// convention), a `PORT_<KEY>` for every named port, then the service's static env last
-/// so an explicit value wins over the injected defaults.
+/// Build the runner's env: `PORT` (http/sole port), a `PORT_<KEY>` per named port, then static env last.
 fn build_env(svc: &ServiceSpec, ports: &BTreeMap<String, u16>) -> Vec<(String, String)> {
     let mut env = Vec::new();
     if let Some(port) = svc.http_port() {
@@ -290,8 +257,7 @@ fn build_env(svc: &ServiceSpec, ports: &BTreeMap<String, u16>) -> Vec<(String, S
     env
 }
 
-/// Resolve a runner's working directory: absolute paths as-is, relative ones against
-/// `base_dir`, and `None` to `base_dir` itself.
+/// Resolve a runner's working directory against `base_dir` (absolute as-is, `None` → `base_dir`).
 fn resolve_working_dir(base_dir: &Path, dir: Option<&str>) -> PathBuf {
     match dir {
         Some(dir) => {
@@ -306,8 +272,7 @@ fn resolve_working_dir(base_dir: &Path, dir: Option<&str>) -> PathBuf {
     }
 }
 
-/// Substitute `{{ runtime.port.<key> }}` placeholders (any inner spacing) with the
-/// named port. Unknown keys and malformed placeholders are left verbatim.
+/// Substitute `{{ runtime.port.<key> }}` placeholders with the named port; unknown/malformed left verbatim.
 fn expand_templates(input: &str, ports: &BTreeMap<String, u16>) -> String {
     let mut out = String::with_capacity(input.len());
     let mut rest = input;
@@ -315,7 +280,6 @@ fn expand_templates(input: &str, ports: &BTreeMap<String, u16>) -> String {
         out.push_str(&rest[..open]);
         let after = &rest[open + 2..];
         let Some(close) = after.find("}}") else {
-            // No closing braces: emit the rest literally and stop.
             out.push_str("{{");
             rest = after;
             break;
@@ -327,7 +291,6 @@ fn expand_templates(input: &str, ports: &BTreeMap<String, u16>) -> String {
         {
             out.push_str(&port.to_string());
         } else {
-            // Unknown key or non-port placeholder: leave it verbatim.
             out.push_str("{{");
             out.push_str(&after[..close]);
             out.push_str("}}");
@@ -347,8 +310,7 @@ pub struct ResolvedRoute {
     pub upstream: SocketAddr,
 }
 
-/// Everything the daemon needs, derived from the spec: where to listen, where to
-/// route, and which proxied services were skipped (no usable HTTP port).
+/// Everything the daemon needs, derived from the spec: binds, routes, and skipped services.
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub binds: Vec<SocketAddr>,
@@ -377,7 +339,7 @@ impl Hive {
         let mut skipped = Vec::new();
         for (name, svc) in &self.services {
             let Some(proxy) = &svc.proxy else {
-                continue; // not fronted by the proxy
+                continue;
             };
             match svc.http_port() {
                 Some(port) => routes.push(ResolvedRoute {
@@ -399,10 +361,7 @@ fn default_bind() -> Vec<SocketAddr> {
     vec![SocketAddr::new(UPSTREAM_IP, 8080)]
 }
 
-/// The single canonical config location: `$HOME/$ADI_DIR/mono/hive/hive.yaml`
-/// (default `~/.adi/mono/hive/hive.yaml`). Mirrors `adi-core`'s `paths::support_dir`
-/// (`$HOME/$ADI_DIR/mono`) so adi-hive stays a standalone binary with no
-/// workspace-internal dependency, exactly like adi-dns.
+/// The canonical config location `$HOME/$ADI_DIR/mono/hive/hive.yaml` (default `~/.adi/mono/hive/hive.yaml`).
 #[must_use]
 pub fn default_config_path() -> PathBuf {
     let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
@@ -470,7 +429,6 @@ services:
             ]
         );
 
-        // Two proxied services become routes (BTreeMap → alphabetical by service name).
         let mut got: Vec<(String, String)> = r
             .routes
             .iter()
@@ -485,13 +443,11 @@ services:
             ]
         );
 
-        // postgres has no `proxy:` → not a route, not skipped.
         assert!(r.skipped.is_empty(), "postgres is silently not-routed");
     }
 
     #[test]
     fn ignores_unknown_hive_fields() {
-        // A service laden with fields adi-hive doesn't model still parses.
         let hive: Hive = serde_yaml_ng::from_str(
             r#"
 observability:
@@ -563,11 +519,8 @@ services:
         assert_eq!(runners.len(), 1);
         let frontend = &runners[0];
         assert_eq!(frontend.name, "frontend");
-        // The {{runtime.port.http}} template is expanded to the declared port.
         assert_eq!(frontend.run, "serve --port 8010");
-        // A relative working_dir is anchored at the config directory.
         assert_eq!(frontend.working_dir, Path::new("/project/web/frontend"));
-        // PORT = the http port; PORT_HTTP mirrors the named slot.
         assert!(
             frontend
                 .env
@@ -589,12 +542,10 @@ services:
             expand_templates("serve --port {{runtime.port.http}}", &ports),
             "serve --port 8010"
         );
-        // Arbitrary inner spacing is tolerated.
         assert_eq!(
             expand_templates("p={{ runtime.port.http }}", &ports),
             "p=8010"
         );
-        // Unknown key and a stray opener are left verbatim.
         assert_eq!(
             expand_templates("{{runtime.port.db}} and {{oops", &ports),
             "{{runtime.port.db}} and {{oops"
@@ -626,7 +577,6 @@ services:
         .unwrap();
         assert!(hive.resolve().routes.is_empty(), "no port yet -> no route");
 
-        // A ports manager with an isolated temp registry.
         let registry = std::env::temp_dir().join(format!(
             "adi-hive-alloc-{}-{:?}/registry.json",
             std::process::id(),
@@ -643,7 +593,6 @@ services:
         let (svc, port) = &allocated[0];
         assert_eq!(svc, "app");
 
-        // The allocated port now drives the route AND the runner's PORT env.
         let routes = hive.resolve().routes;
         assert_eq!(routes.len(), 1);
         assert_eq!(routes[0].upstream.port(), *port);
@@ -672,7 +621,6 @@ services:
             ..adi_ports_manager::Config::default()
         });
 
-        // No proxy.bind -> the port is reserved from the manager, bound on loopback.
         let mut hive = Hive::default();
         let port = hive
             .allocate_bind_port(&manager)
@@ -684,7 +632,6 @@ services:
         // Idempotent (same lease) and a no-op once bound.
         assert_eq!(hive.allocate_bind_port(&manager), None);
 
-        // An explicit bind is left untouched.
         let mut explicit: Hive =
             serde_yaml_ng::from_str(r#"proxy: { bind: ["127.0.0.53:80"] }"#).unwrap();
         assert_eq!(explicit.allocate_bind_port(&manager), None);

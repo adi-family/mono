@@ -1,7 +1,5 @@
-//! The command surface the GUI triggers: `Adi` is the top-level facade (`adi.enable()`,
-//! `adi.disable()`, `adi.status()`), and `Adi::dns()` returns the `Dns` subsystem
-//! (`adi.dns.enable()`, `adi.dns.disable()`, …). The `adi-mono` CLI is a thin argv
-//! adapter over this.
+//! The command surface the GUI triggers: `Adi` is the top-level facade and `Adi::dns()`
+//! returns the `Dns` subsystem. The `adi-mono` CLI is a thin argv adapter over this.
 
 use serde::Serialize;
 
@@ -15,13 +13,10 @@ pub struct Report {
     pub services: Vec<ServiceReport>,
 }
 
-/// The adi platform command surface. Zero-sized; groups the platform-wide commands
-/// and hands out subsystem facades like [`Dns`].
+/// The adi platform command surface — a zero-sized facade over the platform commands.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Adi;
 
-// `Adi` is a zero-sized facade; some methods take `self` only for `adi.dns()`-style
-// call-site ergonomics rather than because they read state.
 #[allow(clippy::unused_self)]
 impl Adi {
     #[must_use]
@@ -35,7 +30,7 @@ impl Adi {
         Dns::new()
     }
 
-    /// Every managed service, in display order. New services slot in here.
+    /// Every managed service, in display order.
     fn services(self) -> Vec<Box<dyn Service>> {
         vec![Box::new(Dns::new())]
     }

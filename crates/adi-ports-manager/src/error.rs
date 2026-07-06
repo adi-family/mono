@@ -1,5 +1,4 @@
-//! The crate's error type. Hand-rolled (no `thiserror`) so the dependency set stays
-//! `serde` + `serde_json` only, matching the workspace's keep-deps-minimal ethos.
+//! The crate's error type, hand-rolled to keep the dependency set minimal.
 
 use std::fmt;
 use std::ops::RangeInclusive;
@@ -11,14 +10,12 @@ pub type Result<T> = std::result::Result<T, Error>;
 /// Everything that can go wrong allocating or persisting a port.
 #[derive(Debug)]
 pub enum Error {
-    /// Every port in the configured range is reserved or already in use, so no
-    /// allocation could be made.
+    /// Every port in the configured range is reserved or already in use.
     Exhausted {
         /// The range that was scanned end to end without finding a free port.
         range: RangeInclusive<u16>,
     },
-    /// The registry lock could not be acquired before the timeout — another
-    /// process is holding it (or crashed without releasing a fresh lock).
+    /// The registry lock could not be acquired before the timeout.
     LockTimeout {
         /// The lock file that could not be taken.
         path: PathBuf,

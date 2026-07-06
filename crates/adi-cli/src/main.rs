@@ -1,7 +1,6 @@
-//! adi-mono — the adi platform CLI. A thin argv adapter over `adi-core`'s command
-//! surface: every subcommand maps 1:1 to a method call (`adi-mono dns enable` →
-//! `Adi::new().dns().enable()`), so the GUI can trigger platform actions by running
-//! this binary. Named `adi-mono` today; slated to become `adi`.
+//! adi-mono — the adi platform CLI: a thin argv adapter over `adi-core`'s command
+//! surface where every subcommand maps 1:1 to a method call, so the GUI can trigger
+//! platform actions by running this binary.
 
 use adi_core::{Adi, Report, Service, ServiceReport};
 use clap::{Parser, Subcommand};

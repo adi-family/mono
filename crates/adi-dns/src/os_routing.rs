@@ -1,9 +1,5 @@
-//! Routes `*.{domain}` to this resolver. Same concept, per-OS mechanism:
-//!   * macOS   → `/etc/resolver/<domain>`  (scoped resolver; supports a port)
-//!   * Linux   → systemd-resolved drop-in  (`Domains=~<domain>`; supports `ip:port`)
-//!   * Windows → NRPT rule for `.<domain>` (port-less — the resolver must be on `:53`)
-//!
-//! Only `.<domain>` is ever routed, so this never disturbs another local resolver.
+//! Routes `*.{domain}` to this resolver via a per-OS mechanism; only `.<domain>` is ever
+//! routed, so this never disturbs another local resolver.
 
 use std::net::SocketAddr;
 
