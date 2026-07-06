@@ -1,0 +1,43 @@
+[package]
+name = "adi-webapp"
+description = "The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared /api wire types. Without the `server` feature it stays wasm-safe — no
+# adi-ports-manager, no filesystem I/O reaches this crate.
+adi-webapp-api = { workspace = true }
+
+# The reactive UI framework, client-side-rendered to wasm.
+leptos = { version = "0.8", features = ["csr"] }
+
+# Browser plumbing: fetch (gloo-net), interval timers (gloo-timers), panics routed to the
+# console, spawn_local for async in event handlers, and the web APIs the theme toggle uses.
+gloo-net = { version = "0.6", features = ["json"] }
+gloo-timers = "0.3"
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+console_error_panic_hook = "0.1"
+web-sys = { version = "0.3", features = [
+    "Window",
+    "Document",
+    "Element",
+    "Storage",
+    "MediaQueryList",
+    "Location",
+    "History",       # push/replaceState for client-side routing
+    "EventTarget",   # popstate listener (back/forward)
+    "MouseEvent",    # nav-link click handling
+] }
+
+# (De)serialize the shared DTOs on the client side.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

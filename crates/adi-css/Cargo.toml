@@ -1,0 +1,19 @@
+[package]
+name = "adi-css"
+description = "The adi design system: SCSS tokens + components compiled to CSS, shared by the wasm webapp (via Trunk) and Rust-rendered pages (via the STYLESHEET const)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The crate exposes only a compiled-CSS string const — no runtime dependencies.
+
+[build-dependencies]
+# Pure-Rust Sass compiler: turns scss/adi.scss into CSS at build time, no external binary.
+grass = "0.13"
+
+[lints]
+workspace = true

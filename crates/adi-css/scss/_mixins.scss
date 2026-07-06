@@ -1,0 +1,31 @@
+// Reusable Sass helpers. Kept tiny on purpose — tokens do most of the work.
+
+// Standard focus ring, applied to `:focus-visible`.
+@mixin focus-ring {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+// An uppercase, letter-spaced label (tile/field/table headings).
+@mixin eyebrow($size: var(--text-xs)) {
+  text-transform: uppercase;
+  letter-spacing: .12em;
+  font-size: $size;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+// The shared surface treatment behind tiles and panels.
+@mixin card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+// Below this width the panel/tiles collapse to a single column.
+$breakpoint-narrow: 620px;
+
+@mixin narrow {
+  @media (max-width: $breakpoint-narrow) { @content; }
+}

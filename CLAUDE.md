@@ -24,3 +24,22 @@ Two hard rules — never violate them:
    free port. **Avoid `15353` and the surrounding range** — that range is used by
    `adi daemon` services. For ad-hoc local DNS testing use a high, unused port
    such as `45353`.
+
+## Deploying: restart, don't just warn
+
+When a change needs a service restart to take effect (e.g. after swapping a new
+`adi-app` binary into `/Applications/ADI.app/Contents/Resources/` for `app.adi`),
+**restart that service yourself** so the deploy actually lands. Do **not** stop at
+warning that the running/deployed copy is stale — finish the job.
+
+- **Be surgical.** Restart only the target service's process. For `app.adi`, kill
+  just the app-service `adi-app` (`pkill -9 -f 'ADI.app/Contents/Resources/adi-app$'`
+  — the `$` anchor matches `adi-app` only, never the `adi-hive` front door); its
+  supervisor's `restart: on-failure` respawns it on the new binary.
+- **Use `sudo` when the service runs as root** (the front door + `app` bind
+  privileged ports, so they run as root). If passwordless `sudo` isn't available
+  and you can't run it non-interactively, immediately hand the user the exact
+  `! sudo …` restart command to run — still drive the restart to completion; don't
+  leave it at "the current one is bad".
+- **The one exception is ADI DNS (`adi.hive`)** — never restart it (see the hard
+  rule above). Everything here is about the `app`/`webhook`/front-door services.

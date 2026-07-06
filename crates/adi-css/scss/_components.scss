@@ -1,0 +1,477 @@
+// Component layer: the adi design system. Every class is `adi-` prefixed and follows
+// BEM (`block__element--modifier`) so it composes without colliding with a host page.
+
+@use "mixins" as *;
+
+// ---- layout ------------------------------------------------------------------------
+.adi-container {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 28px 24px 72px;
+}
+
+.adi-spacer {
+  flex: 1;
+}
+
+// ---- app shell + sidebar -----------------------------------------------------------
+// A full-height two-column layout: a sticky nav rail on the left, scrolling content on
+// the right. Collapses to a stacked top bar on narrow viewports.
+.adi-shell {
+  display: flex;
+  align-items: flex-start;
+  min-height: 100vh;
+}
+
+.adi-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  flex: 0 0 232px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: 26px 16px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+
+  &__brand {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+    padding: 0 8px;
+  }
+
+  &__foot {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0 8px;
+  }
+}
+
+.adi-main {
+  flex: 1;
+  min-width: 0; // let wide children (tables) scroll instead of stretching the layout
+}
+
+// ---- sidebar nav -------------------------------------------------------------------
+.adi-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 9px 12px;
+    border-radius: var(--radius-sm);
+    color: var(--muted);
+    text-decoration: none;
+    font-size: var(--text-md);
+    font-weight: 550;
+    transition: background var(--transition), color var(--transition);
+
+    &:hover {
+      background: var(--surface-2);
+      color: var(--ink);
+    }
+
+    &[aria-current="page"] {
+      background: color-mix(in srgb, var(--accent) 14%, transparent);
+      color: var(--accent-ink);
+      font-weight: 650;
+    }
+  }
+
+  // A labelled section, e.g. a "Settings" group with its pages listed beneath.
+  &__group {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: var(--space-5);
+  }
+
+  &__heading {
+    @include eyebrow(var(--text-xs));
+    padding: 0 12px;
+    margin-bottom: var(--space-2);
+  }
+}
+
+// Stack the rail into a top bar when there isn't room for two columns.
+@media (max-width: 860px) {
+  .adi-shell { flex-direction: column; }
+
+  .adi-sidebar {
+    position: static;
+    height: auto;
+    flex-basis: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--space-4);
+    padding: 12px 16px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+
+    .adi-spacer { display: none; }
+  }
+
+  .adi-nav {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .adi-nav__group { margin-top: 0; }
+
+  .adi-sidebar__foot { margin-left: auto; }
+}
+
+// ---- top bar -----------------------------------------------------------------------
+.adi-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding-bottom: 22px;
+  margin-bottom: 26px;
+  border-bottom: 1px solid var(--border);
+
+  &__brand {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-3);
+  }
+
+  &__sub {
+    @include eyebrow(11px);
+    letter-spacing: .16em;
+    font-weight: 600;
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--text-lg);
+    font-weight: 650;
+    letter-spacing: -.2px;
+  }
+}
+
+.adi-logo {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: var(--text-lg);
+  letter-spacing: -.5px;
+  color: var(--ink);
+
+  &__dot { color: var(--accent); }
+}
+
+// ---- status pill (state via `data-state`) ------------------------------------------
+.adi-status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+
+  &__led {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--muted);
+    box-shadow: 0 0 0 0 transparent;
+  }
+
+  &[data-state="online"] &__led {
+    background: var(--online);
+    animation: adi-pulse 2.4s infinite;
+  }
+
+  &[data-state="down"] &__led {
+    background: var(--down);
+  }
+}
+
+@keyframes adi-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--online) 55%, transparent); }
+  70%  { box-shadow: 0 0 0 7px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adi-status__led { animation: none !important; }
+}
+
+// ---- buttons -----------------------------------------------------------------------
+// Base button; variants layer on colour/shape.
+.adi-btn {
+  font: inherit;
+  font-weight: 600;
+  font-size: 13.5px;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+
+  &--primary {
+    padding: 9px 16px;
+    background: var(--accent);
+    color: var(--on-accent);
+
+    &:hover { background: var(--accent-ink); }
+    &:disabled { opacity: .55; cursor: progress; }
+  }
+
+  // Square icon button.
+  &--icon {
+    display: inline-grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    border-color: var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 15px;
+
+    &:hover { color: var(--ink); border-color: var(--accent); }
+  }
+
+  // Low-emphasis text button (e.g. row actions); tinted danger on hover.
+  &--link {
+    padding: 4px 6px;
+    background: none;
+    border: none;
+    color: var(--muted);
+    font-weight: 400;
+    font-size: 13px;
+    border-radius: var(--radius-sm);
+
+    &:hover {
+      color: var(--down);
+      background: color-mix(in srgb, var(--down) 12%, transparent);
+    }
+  }
+}
+
+// ---- segmented toggle (two+ options, one active via `aria-pressed`) ----------------
+.adi-segmented {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+
+  &__option {
+    font: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 5px 13px;
+    border: none;
+    background: none;
+    color: var(--muted);
+    border-radius: var(--radius-pill);
+    transition: background var(--transition), color var(--transition);
+
+    &:hover { color: var(--ink); }
+
+    &[aria-pressed="true"] {
+      background: var(--surface);
+      color: var(--ink);
+      box-shadow: 0 1px 2px rgba(16, 24, 32, .08);
+    }
+  }
+}
+
+// ---- card + summary tiles ----------------------------------------------------------
+.adi-card {
+  @include card;
+}
+
+.adi-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-4);
+  margin-bottom: 26px;
+
+  @include narrow { grid-template-columns: 1fr; }
+}
+
+.adi-tile {
+  @include card;
+  padding: var(--space-4) 18px;
+
+  &__label {
+    @include eyebrow(var(--text-xs));
+    letter-spacing: .14em;
+  }
+
+  &__value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--text-xl);
+    font-weight: 600;
+    margin-top: 6px;
+    letter-spacing: -.5px;
+  }
+
+  &__note {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    margin-top: 2px;
+  }
+}
+
+// ---- panel -------------------------------------------------------------------------
+.adi-panel {
+  @include card;
+  overflow: hidden;
+
+  // Stacked panels get clear breathing room between the cards.
+  & + & {
+    margin-top: var(--space-6);
+  }
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-4) 18px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--text-base);
+    font-weight: 650;
+  }
+}
+
+.adi-updated {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+// ---- table -------------------------------------------------------------------------
+.adi-tablewrap {
+  overflow-x: auto;
+}
+
+.adi-table {
+  width: 100%;
+  border-collapse: collapse;
+
+  th,
+  td {
+    text-align: left;
+    padding: 11px 18px;
+    white-space: nowrap;
+  }
+
+  th {
+    @include eyebrow(var(--text-xs));
+    letter-spacing: .1em;
+    background: var(--surface-2);
+  }
+
+  td {
+    border-top: 1px solid var(--border);
+    font-size: var(--text-md);
+  }
+
+  tbody tr:hover td { background: var(--surface-2); }
+
+  // A port/number cell: accent-tinted and monospaced.
+  .adi-table__port {
+    font-weight: 650;
+    color: var(--accent-ink);
+  }
+}
+
+.adi-empty {
+  padding: 30px 18px;
+  text-align: center;
+  color: var(--muted);
+  font-size: var(--text-md);
+}
+
+// ---- chip --------------------------------------------------------------------------
+.adi-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+// ---- form --------------------------------------------------------------------------
+.adi-form {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-end;
+  flex-wrap: wrap;
+  padding: var(--space-4) 18px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.adi-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+
+  &__label {
+    @include eyebrow(10px);
+  }
+}
+
+.adi-input {
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 13.5px;
+  padding: 8px 11px;
+  width: 150px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+  }
+}
+
+// ---- flash (kind via `data-kind`) --------------------------------------------------
+.adi-flash {
+  min-height: 18px;
+  padding: 0 18px 14px;
+  font-size: 13px;
+  background: var(--surface-2);
+
+  &[data-kind="err"] { color: var(--down); }
+  &[data-kind="ok"]  { color: var(--online); }
+}
+
+// ---- page footer -------------------------------------------------------------------
+.adi-footer {
+  margin-top: 26px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  text-align: center;
+
+  code { font-family: var(--font-mono); }
+}

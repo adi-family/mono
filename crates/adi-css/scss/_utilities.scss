@@ -1,0 +1,28 @@
+// Utility layer: a few single-purpose helpers. Kept deliberately small — reach for a
+// component before adding utilities.
+
+.adi-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.adi-muted {
+  color: var(--muted);
+}
+
+.adi-tabnums {
+  font-variant-numeric: tabular-nums;
+}
+
+// Visually hidden but available to assistive tech.
+.adi-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

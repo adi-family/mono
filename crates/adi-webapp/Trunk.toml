@@ -1,0 +1,20 @@
+# Trunk build settings for the adi webapp. The `dist/` output is embedded into adi-app,
+# which serves it at app.adi — that is the production path.
+[build]
+target = "index.html"
+dist = "dist"
+
+# Watch the webapp AND the shared design system, so editing adi-css SCSS hot-reloads too.
+[watch]
+watch = [".", "../adi-css/scss"]
+ignore = ["dist"]
+
+# `trunk serve` is only for standalone UI iteration. It proxies /api to a locally running
+# adi-app so fetches resolve; point the backend at whatever port adi-app is on.
+[serve]
+addresses = ["127.0.0.1"]
+port = 9080
+
+[[proxy]]
+rewrite = "/api/"
+backend = "http://127.0.0.1:8090/api/"

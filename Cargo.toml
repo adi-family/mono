@@ -1,6 +1,20 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# adi-webapp targets wasm32 and is built by Trunk, never by a native `cargo build`. Keep
+# it out of the default set so `cargo build`/`cargo test` (no `--workspace`) skip it; it
+# stays a member so it still inherits workspace metadata/lints and builds with `-p`.
+default-members = [
+    "crates/adi-app",
+    "crates/adi-cli",
+    "crates/adi-config",
+    "crates/adi-core",
+    "crates/adi-css",
+    "crates/adi-dns",
+    "crates/adi-hive",
+    "crates/adi-ports-manager",
+    "crates/adi-webapp-api",
+]
 
 # Shared metadata inherited by member crates via `field.workspace = true`.
 [workspace.package]
@@ -17,7 +31,9 @@ repository = "https://github.com/mgorunuch/adi-family"
 # Internal crates
 adi-config = { path = "crates/adi-config" }
 adi-core = { path = "crates/adi-core" }
+adi-css = { path = "crates/adi-css" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
+adi-webapp-api = { path = "crates/adi-webapp-api" }
 
 # External crates (add as needed)
 clap = { version = "4", features = ["derive"] }

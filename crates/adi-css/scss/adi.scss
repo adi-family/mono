@@ -1,0 +1,11 @@
+// adi design system — entry point.
+//
+// The `@use` order below sets the cascade order of the compiled CSS:
+// tokens (custom properties) → base (reset/defaults) → components → utilities.
+// Both consumers compile this same file: Trunk (for the wasm webapp's <link>) and the
+// adi-css crate's build.rs (via grass, for the Rust `STYLESHEET` const).
+
+@use "tokens";
+@use "base";
+@use "components";
+@use "utilities";

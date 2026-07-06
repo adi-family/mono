@@ -1,0 +1,27 @@
+[package]
+name = "adi-webapp-api"
+description = "The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+default = []
+# The native-only server side: the /api handlers over the live port registry. The wasm
+# frontend depends on this crate WITHOUT this feature, so it pulls in only the DTO types
+# (and never adi-ports-manager, which does filesystem I/O and can't target wasm).
+server = ["dep:adi-ports-manager", "dep:serde_json"]
+
+[dependencies]
+# The wire types are pure serde — this is the only dependency that reaches wasm.
+serde = { workspace = true }
+
+# Server-only: the live registry the handlers operate on, and JSON serialization.
+adi-ports-manager = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+// Base layer: a minimal reset and document defaults. Scoped to the essentials so the
+// library composes with a host page rather than fighting it.
+
+@use "mixins" as *;
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+// One consistent focus ring across every focusable element.
+:focus-visible {
+  @include focus-ring;
+}
