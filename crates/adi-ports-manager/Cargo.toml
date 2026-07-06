@@ -1,0 +1,19 @@
+[package]
+name = "adi-ports-manager"
+description = "Allocate and track TCP ports for adi services, avoiding reserved ranges and ports already live on the machine. Pure library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The static-lease registry is a small JSON ledger persisted under
+# ~/.adi/mono/ports/registry.json. Only serde is needed — no runtime, no net crate
+# (availability probing uses std's TcpListener directly).
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,31 @@
+[package]
+name = "adi-app"
+description = "The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "adi-app"
+path = "src/main.rs"
+
+[dependencies]
+# Real platform state behind /api: the port registry.
+adi-ports-manager = { workspace = true }
+
+# Async runtime for the hand-rolled HTTP/1.1 server (same lightweight approach as
+# adi-hive — no web framework).
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util"] }
+
+# JSON API bodies + logging to stdout/stderr (captured by the supervisor).
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[lints]
+workspace = true

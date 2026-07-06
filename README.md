@@ -11,9 +11,12 @@ A Rust monorepo. All crates live under [`crates/`](crates/) and share one
 ├── rust-toolchain.toml   # pinned toolchain + components
 ├── rustfmt.toml          # formatting config
 └── crates/
-    ├── adi-core/         # the platform command surface (Adi/Dns: enable, disable, status…)
-    ├── adi-cli/          # the `adi-mono` binary — a thin argv adapter over adi-core
-    └── adi-dns/          # the local DNS resolver (split-DNS overrides + forwarding)
+    ├── adi-core/          # the platform command surface (Adi/Dns: enable, disable, status…)
+    ├── adi-cli/           # the `adi-mono` binary — a thin argv adapter over adi-core
+    ├── adi-dns/           # the local DNS resolver (split-DNS overrides + forwarding)
+    ├── adi-hive/          # reverse proxy / .adi front door + runs & supervises service runners
+    ├── adi-ports-manager/ # port allocator: collision-free static + dynamic ports (library)
+    └── adi-app/           # the adi app served at app.adi: control-panel SPA + Rust /api backend
 ```
 
 Frontends (e.g. the macOS menu-bar app in [`apps/`](apps/)) own no control logic —

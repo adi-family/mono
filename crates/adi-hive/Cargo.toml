@@ -9,9 +9,14 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Allocate a stable port for any proxied/runner service that doesn't declare one, so
+# ports come from the platform's registry instead of being hand-picked in hive.yaml.
+adi-ports-manager = { workspace = true }
+
 # Async runtime. `signal` lets us shut down cleanly when the supervisor sends
-# SIGTERM; `io-util` backs the byte-splicing proxy loop's read/write/copy.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util"] }
+# SIGTERM; `io-util` backs the byte-splicing proxy loop's read/write/copy; `process`
+# runs and supervises the service runners; `sync` backs the shutdown broadcast (watch).
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util", "process", "sync"] }
 
 # Config + observability. Logs go to stdout/stderr so the supervisor captures them.
 # The single config is a hive.yaml (nakit-yok format); serde_yaml_ng is the

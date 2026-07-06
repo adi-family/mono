@@ -14,7 +14,9 @@ use std::time::Duration;
 use anyhow::Context as _;
 use config::Config;
 use hickory_server::net::runtime::{Time, TokioRuntimeProvider};
-use hickory_server::proto::op::{Header, HeaderCounts, MessageType, Metadata, OpCode, ResponseCode};
+use hickory_server::proto::op::{
+    Header, HeaderCounts, MessageType, Metadata, OpCode, ResponseCode,
+};
 use hickory_server::proto::rr::rdata::{A, AAAA};
 use hickory_server::proto::rr::{LowerName, Name, RData, Record, RecordType};
 use hickory_server::resolver::config::{NameServerConfig, ResolverConfig};
@@ -136,7 +138,7 @@ fn install_os_routing(config: &Config, bound: SocketAddr) -> bool {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
@@ -187,11 +189,15 @@ impl AdiHandler {
             })
             .collect::<Vec<_>>();
         let resolver_config = ResolverConfig::from_parts(None, Vec::new(), name_servers);
-        let resolver = Resolver::builder_with_config(resolver_config, TokioRuntimeProvider::default())
-            .build()
-            .context("building upstream resolver")?;
+        let resolver =
+            Resolver::builder_with_config(resolver_config, TokioRuntimeProvider::default())
+                .build()
+                .context("building upstream resolver")?;
 
-        Ok(Self { overrides, resolver })
+        Ok(Self {
+            overrides,
+            resolver,
+        })
     }
 
     fn match_override(&self, qname: &LowerName) -> Option<IpAddr> {
@@ -232,13 +238,16 @@ impl AdiHandler {
             info!(%name, %rtype, %ip, "override");
             metadata.authoritative = true;
             let records = Self::override_records(&name, rtype, ip);
-            return self.send(request, response_handle, metadata, &records).await;
+            return self
+                .send(request, response_handle, metadata, &records)
+                .await;
         }
 
         match self.resolver.lookup(name.clone(), rtype).await {
             Ok(lookup) => {
                 let records = lookup.answers().to_vec();
-                self.send(request, response_handle, metadata, &records).await
+                self.send(request, response_handle, metadata, &records)
+                    .await
             }
             Err(e) if e.is_nx_domain() => {
                 self.send_code(request, response_handle, metadata, ResponseCode::NXDomain)

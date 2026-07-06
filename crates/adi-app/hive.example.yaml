@@ -1,0 +1,19 @@
+# Example: wire the adi app under app.adi.
+#
+# adi-hive resolves app.adi -> this service's http port, and its runner launches
+# adi-app (injecting $PORT). The browser hits app.adi; adi-app serves the SPA at / and
+# the Rust API at /api. Merge this `app` service into your ~/.adi/mono/hive/hive.yaml.
+
+services:
+  app:
+    proxy:
+      host: app.adi
+    rollout:
+      recreate:
+        ports:
+          http: 8010          # adi-hive proxies app.adi here; injected as $PORT
+    restart: on-failure
+    runner:
+      type: script
+      script:
+        run: adi-app          # on $PATH; or an absolute path to the built binary

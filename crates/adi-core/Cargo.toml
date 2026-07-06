@@ -13,5 +13,10 @@ repository.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+# Validate that the generated front-door hive.yaml is well-formed YAML with the
+# expected shape (catches indentation bugs in render_frontdoor_hive).
+serde_yaml_ng = "0.10"
+
 [lints]
 workspace = true

@@ -1,15 +1,18 @@
 //! adi-hive — the adi-family reverse proxy: routes inbound HTTP by `Host` header to a
-//! local upstream (nginx-style). Foreground process; a supervisor owns its lifecycle.
-//! Models the `proxy:` section of a hive spec.
+//! local upstream (nginx-style), and launches + supervises each service's local
+//! `runner` so those upstreams are actually alive. Foreground process; a supervisor
+//! owns its lifecycle. Reads the `proxy:` and `runner:` slices of a hive spec.
 
 mod config;
 mod notfound;
 mod proxy;
+mod runner;
 mod status;
 
 use std::net::{IpAddr, Ipv4Addr};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use config::Hive;
 use proxy::Router;
@@ -32,13 +35,24 @@ async fn main() -> anyhow::Result<()> {
     let path = std::env::args()
         .nth(1)
         .map_or_else(config::default_config_path, PathBuf::from);
-    let hive = if path.exists() {
+    let mut hive = if path.exists() {
         info!(path = %path.display(), "loading hive config");
         Hive::load(&path)?
     } else {
         warn!(path = %path.display(), "no hive config; using built-in defaults (bind 127.0.0.1:8080, no routes)");
         Hive::default()
     };
+
+    // Take ports from the ports manager (stable, registry-backed leases) rather than
+    // hand-picking them in hive.yaml: the proxy's own front-door bind port, and any
+    // service that doesn't declare one. Explicitly-configured ports/binds still win.
+    let ports_manager = adi_ports_manager::Ports::new();
+    for (service, port) in hive.allocate_missing_ports(&ports_manager) {
+        info!(%service, port, "allocated service port from ports manager");
+    }
+    if let Some(port) = hive.allocate_bind_port(&ports_manager) {
+        info!(port, "allocated front-door bind port from ports manager");
+    }
 
     let resolved = hive.resolve();
     for skipped in &resolved.skipped {
@@ -80,16 +94,40 @@ async fn main() -> anyhow::Result<()> {
         Err(e) => warn!(error = %e, path = %status_path.display(), "could not write status file"),
     }
 
+    // Launch and supervise the services' local runners so the proxied upstreams are
+    // actually alive. Relative working dirs are anchored at the hive.yaml's directory.
+    let base_dir = path
+        .parent()
+        .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+    let runners = hive.runners(&base_dir);
+    if runners.is_empty() {
+        info!("no service runners declared");
+    } else {
+        info!(count = runners.len(), "supervising service runners");
+    }
+    let supervisor = runner::Supervisor::start(runners);
+
     info!("adi-hive ready");
 
     shutdown_signal().await;
     info!("shutdown signal received; stopping");
+    // Stop the runners first (SIGTERM their process groups), bounded so a stuck child
+    // can't hang shutdown; then tear down the proxy listeners.
+    if tokio::time::timeout(TERM_TIMEOUT, supervisor.shutdown())
+        .await
+        .is_err()
+    {
+        warn!("timed out stopping runners");
+    }
     for task in tasks {
         task.abort();
     }
     status::remove(&status_path);
     Ok(())
 }
+
+/// Upper bound on how long shutdown waits for all runners to stop.
+const TERM_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// On macOS a non-`127.0.0.1` loopback address (e.g. the `127.0.0.53` front door) must
 /// be aliased onto `lo0` before it can be bound; elsewhere the whole `127.0.0.0/8`
@@ -119,7 +157,7 @@ fn ensure_loopback_alias(ip: IpAddr) {
 async fn shutdown_signal() {
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},

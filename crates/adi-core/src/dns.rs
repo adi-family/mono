@@ -65,6 +65,12 @@ fn hive_binary_path() -> String {
     sibling_binary("adi-hive", "ADI_HIVE_BIN")
 }
 
+/// The bundled `adi-app` (the control panel the front door runs), overridable via
+/// `ADI_APP_BIN`.
+fn app_binary_path() -> String {
+    sibling_binary("adi-app", "ADI_APP_BIN")
+}
+
 /// Resolve a bundled binary as a sibling of the running executable, honoring an
 /// explicit `env_override` path first, and falling back to the bare name on `PATH`.
 fn sibling_binary(name: &str, env_override: &str) -> String {
@@ -100,14 +106,31 @@ fn render_config() -> String {
     )
 }
 
-/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and, with no services,
-/// answers every `.adi` host with the 4XX page — preserving the old landing behavior.
-/// Real routes are added here (or in the user's `hive.yaml`) as apps register.
-fn render_frontdoor_hive() -> String {
+/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and serves the adi control
+/// panel (`adi-app`) at `app.{DOMAIN}`. adi-hive runs `adi-app` as a supervised runner
+/// and takes its port from the ports manager (no port is declared here), so it's a
+/// single hive that both routes and runs the app. Any other host gets the 4XX page.
+/// `app_bin` is the absolute path to the bundled `adi-app`.
+fn render_frontdoor_hive(app_bin: &str) -> String {
+    // A plain multi-line literal so the YAML indentation is exact (no `\`-continuation,
+    // which would strip the leading spaces the nested keys need).
     format!(
-        "# Written by adi-core — adi-hive front door for the .{DOMAIN} zone.\n\
-         # No services yet: every host gets the 4XX page. Add services to route hosts.\n\
-         proxy:\n  bind:\n    - \"{FRONTDOOR_ADDR}:{FRONTDOOR_PORT}\"\n",
+        "# Written by adi-core — adi-hive front door for the .{DOMAIN} zone.
+# Serves the adi control panel (adi-app) at app.{DOMAIN}; adi-hive takes its port
+# from the ports manager. Any other host gets the animated 4XX page.
+proxy:
+  bind:
+    - \"{FRONTDOOR_ADDR}:{FRONTDOOR_PORT}\"
+services:
+  app:
+    proxy:
+      host: app.{DOMAIN}
+    restart: on-failure
+    runner:
+      type: script
+      script:
+        run: \"'{app_bin}'\"
+"
     )
 }
 
@@ -118,9 +141,24 @@ fn write_config() {
 
 /// Stage the front-door daemon's config + plist (unprivileged); the admin step copies
 /// the plist into `/Library/LaunchDaemons` and bootstraps it.
+///
+/// The daemon runs as **root**, so we pin `HOME`/`ADI_DIR` to the installing user's, or
+/// adi-hive's ports registry and paths would land under `/var/root/.adi` instead of the
+/// user's `~/.adi`. Captured here (adi-core runs as the user when staging).
 fn write_frontdoor_artifacts() {
     let _ = std::fs::create_dir_all(service_dir());
-    let _ = std::fs::write(frontdoor_config_path(), render_frontdoor_hive());
+    let _ = std::fs::write(
+        frontdoor_config_path(),
+        render_frontdoor_hive(&app_binary_path()),
+    );
+    let env = [
+        ("RUST_LOG".to_string(), "info".to_string()),
+        (
+            "HOME".to_string(),
+            std::env::var("HOME").unwrap_or_default(),
+        ),
+        ("ADI_DIR".to_string(), paths::dir_name()),
+    ];
     let plist = launchd::plist_xml(
         FRONTDOOR_LABEL,
         &[
@@ -128,7 +166,7 @@ fn write_frontdoor_artifacts() {
             frontdoor_config_path().to_string_lossy().into_owned(),
         ],
         FRONTDOOR_LOG,
-        &[("RUST_LOG".to_string(), "info".to_string())],
+        &env,
     );
     let _ = std::fs::write(frontdoor_plist_stage(), plist);
 }
@@ -269,12 +307,21 @@ mod tests {
     }
 
     #[test]
-    fn frontdoor_hive_binds_the_front_door() {
-        let cfg = render_frontdoor_hive();
-        assert!(cfg.contains("proxy:"));
+    fn frontdoor_hive_serves_the_control_panel_and_is_valid_yaml() {
+        let cfg = render_frontdoor_hive("/opt/ADI.app/Contents/Resources/adi-app");
         assert!(cfg.contains("- \"127.0.0.53:80\""));
-        // No services block: every host falls through to the 4XX page.
-        assert!(!cfg.contains("services:"));
+
+        // It must parse as YAML with the expected shape (catches indentation bugs).
+        let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&cfg).expect("valid YAML");
+        assert_eq!(v["proxy"]["bind"][0].as_str(), Some("127.0.0.53:80"));
+        let app = &v["services"]["app"];
+        assert_eq!(app["proxy"]["host"].as_str(), Some("app.adi"));
+        assert_eq!(
+            app["runner"]["script"]["run"].as_str(),
+            Some("'/opt/ADI.app/Contents/Resources/adi-app'")
+        );
+        // No port declared -> adi-hive allocates it from the ports manager.
+        assert!(app["rollout"].is_null());
     }
 
     #[test]

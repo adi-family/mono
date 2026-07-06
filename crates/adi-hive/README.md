@@ -21,17 +21,34 @@ missing, adi-hive falls back to built-in defaults — bind `127.0.0.1:8080`, no 
 so the daemon still runs.
 
 The file is the nakit-yok **hive spec** format (see
-`~/projects/nakit-yok/.adi/hive.yaml`). adi-hive parses only the proxy-relevant slice
-and ignores the rest:
+`~/projects/nakit-yok/.adi/hive.yaml`). adi-hive reads two slices and ignores the rest:
 
-- `proxy.bind` — the addresses to listen on.
-- for each service, `proxy.host` + its HTTP port (`rollout.recreate.ports.http`) —
-  one routing rule `Host: <host> → 127.0.0.1:<http port>`.
+- **Proxy:** `proxy.bind` (addresses to listen on) and, per service, `proxy.host` +
+  its HTTP port (`rollout.recreate.ports.http`) → one rule `Host: <host> →
+  127.0.0.1:<http port>`.
+- **Run:** per service, `runner.script` (`run` + optional `working_dir`),
+  `environment.static`, and `restart` — what to launch and how to keep it alive.
 
-Everything else in a hive.yaml (runner, healthcheck, environment, hooks, depends_on,
-restart, defaults, observability, …) is accepted-but-ignored. A service without a
-`proxy:` block is simply not routed. See [`hive.yaml`](./hive.yaml) for a worked
-example.
+Everything else (healthcheck, hooks, depends_on, defaults, observability, …) is
+accepted-but-ignored. A service without a `proxy:` block is simply not routed; one
+without a `runner.script` is simply not launched. See [`hive.yaml`](./hive.yaml) for a
+worked example.
+
+## Running services
+
+For each service that declares a `script` runner, adi-hive launches the command and
+supervises it, so the port it proxies to is actually serving — no manual `bun run dev`:
+
+- Runs `run` via `sh -c` in `working_dir` (relative to the hive.yaml's directory).
+- Injects the ports as env: `PORT` = the service's http/sole port, plus a
+  `PORT_<KEY>` for every named port. `{{runtime.port.<key>}}` placeholders in `run`
+  and env values are expanded too. The service's `environment.static` is merged last,
+  so an explicit value wins.
+- On exit it relaunches per `restart` (`always` | `on-failure` (default) | `no`) with
+  an exponential backoff.
+- Each runner runs in its own process group, so on SIGTERM adi-hive tears down the
+  whole tree (the shell, the dev server, and anything it forked) — no orphans holding
+  a port.
 
 ## How it fits
 

@@ -169,7 +169,10 @@ mod tests {
     fn page_is_a_self_contained_document() {
         let page = PAGE;
         assert!(page.starts_with("<!doctype html>"), "is a full document");
-        assert!(page.contains("class=\"adi-mark\""), "includes the animated mark");
+        assert!(
+            page.contains("class=\"adi-mark\""),
+            "includes the animated mark"
+        );
         assert!(page.contains("err-code"), "includes the 4XX headline");
         assert!(page.contains(">error<"), "includes the 'error' word");
         // fully self-contained: no external asset references

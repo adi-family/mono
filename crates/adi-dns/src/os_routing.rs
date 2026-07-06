@@ -82,7 +82,7 @@ mod platform {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(anyhow::Error::new(e).context(format!("removing {}", path.display())))
+                return Err(anyhow::Error::new(e).context(format!("removing {}", path.display())));
             }
         }
         flush_cache();
@@ -99,7 +99,9 @@ mod platform {
 
     fn flush_cache() {
         let _ = Command::new("dscacheutil").arg("-flushcache").status();
-        let _ = Command::new("killall").args(["-HUP", "mDNSResponder"]).status();
+        let _ = Command::new("killall")
+            .args(["-HUP", "mDNSResponder"])
+            .status();
     }
 }
 
@@ -133,7 +135,7 @@ mod platform {
             Ok(()) => {}
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => {
-                return Err(anyhow::Error::new(e).context(format!("removing {}", path.display())))
+                return Err(anyhow::Error::new(e).context(format!("removing {}", path.display())));
             }
         }
         restart_resolved()
@@ -153,7 +155,10 @@ mod platform {
             .args(["restart", "systemd-resolved"])
             .status()
             .context("running systemctl restart systemd-resolved")?;
-        anyhow::ensure!(status.success(), "systemctl restart systemd-resolved failed");
+        anyhow::ensure!(
+            status.success(),
+            "systemctl restart systemd-resolved failed"
+        );
         Ok(())
     }
 }
@@ -195,7 +200,9 @@ mod platform {
 
     pub fn describe_manual(domain: &str, _addr: SocketAddr) -> String {
         let ns = super::windows_namespace(domain);
-        format!("Add-DnsClientNrptRule -Namespace '{ns}' -NameServers '127.0.0.1'  (elevated PowerShell)")
+        format!(
+            "Add-DnsClientNrptRule -Namespace '{ns}' -NameServers '127.0.0.1'  (elevated PowerShell)"
+        )
     }
 
     fn run_powershell(script: &str) -> anyhow::Result<()> {

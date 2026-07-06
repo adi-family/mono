@@ -16,6 +16,7 @@ repository = "https://github.com/mgorunuch/adi-family"
 [workspace.dependencies]
 # Internal crates
 adi-core = { path = "crates/adi-core" }
+adi-ports-manager = { path = "crates/adi-ports-manager" }
 
 # External crates (add as needed)
 clap = { version = "4", features = ["derive"] }

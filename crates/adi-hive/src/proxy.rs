@@ -89,7 +89,8 @@ async fn handle(mut client: TcpStream, router: &Router) -> anyhow::Result<()> {
         Ok(s) => s,
         Err(e) => {
             warn!(%host, %upstream, error = %e, "upstream connect failed");
-            return respond_error(&mut client, 502, "Bad Gateway", "Upstream is unavailable.").await;
+            return respond_error(&mut client, 502, "Bad Gateway", "Upstream is unavailable.")
+                .await;
         }
     };
     debug!(%host, %upstream, "proxying");
