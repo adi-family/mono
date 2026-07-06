@@ -24,7 +24,7 @@ const FRONTDOOR_LOG: &str = "/Library/Logs/adi-hive-frontdoor.log";
 // MARK: file locations (free helpers — all state is on disk / in launchd)
 
 fn service_dir() -> PathBuf {
-    paths::support_dir().join("dns")
+    adi_config::Config::open().module("dns").dir().to_path_buf()
 }
 fn config_path() -> PathBuf {
     service_dir().join("adi-dns.toml")

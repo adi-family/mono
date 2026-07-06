@@ -11,8 +11,9 @@ use anyhow::Context as _;
 use serde::Deserialize;
 use tracing::warn;
 
-const ADI_DIR_ENV: &str = "ADI_DIR";
-const DEFAULT_ADI_DIR: &str = ".adi";
+/// The store module the hive config lives under, and the raw config file within it.
+const HIVE_MODULE: &str = "hive";
+const HIVE_CONFIG_FILE: &str = "hive.yaml";
 
 /// Upstreams are always local — a service's HTTP port on loopback.
 const UPSTREAM_IP: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
@@ -362,18 +363,13 @@ fn default_bind() -> Vec<SocketAddr> {
 }
 
 /// The canonical config location `$HOME/$ADI_DIR/mono/hive/hive.yaml` (default `~/.adi/mono/hive/hive.yaml`).
+/// The location comes from the shared [`adi_config`] store; hive owns the YAML format
+/// and reads it as a raw file within the `hive` module.
 #[must_use]
 pub fn default_config_path() -> PathBuf {
-    let home = std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from);
-    let adi_dir = std::env::var(ADI_DIR_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_ADI_DIR.to_string());
-    home.join(adi_dir)
-        .join("mono")
-        .join("hive")
-        .join("hive.yaml")
+    adi_config::Config::open()
+        .module(HIVE_MODULE)
+        .raw_path(HIVE_CONFIG_FILE)
 }
 
 #[cfg(test)]

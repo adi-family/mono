@@ -4,10 +4,8 @@
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
-const ADI_DIR_ENV: &str = "ADI_DIR";
-const DEFAULT_ADI_DIR: &str = ".adi";
-const MONO_SUBDIR: &str = "mono";
-const PORTS_SUBDIR: &str = "ports";
+/// The store module ports state lives under, and the raw registry file within it.
+const PORTS_MODULE: &str = "ports";
 const REGISTRY_FILE: &str = "registry.json";
 
 /// Default allocatable range — the 8000s, where the mono dev services already sit.
@@ -54,28 +52,14 @@ impl Config {
     }
 }
 
-/// `$HOME`, or `/` if unset — the same fallback `adi-core`'s `paths` module uses.
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
-}
-
-/// The `ADI_DIR` env value, trimmed; empty or unset falls back to `.adi`.
-fn adi_dir_name() -> String {
-    std::env::var(ADI_DIR_ENV)
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_ADI_DIR.to_string())
-}
-
 /// The canonical registry location: `$HOME/$ADI_DIR/mono/ports/registry.json`.
+/// The path comes from the shared [`adi_config`] store; this crate owns the file's
+/// JSON format and persists it as a raw file within the `ports` module.
 #[must_use]
 pub fn default_registry_path() -> PathBuf {
-    home()
-        .join(adi_dir_name())
-        .join(MONO_SUBDIR)
-        .join(PORTS_SUBDIR)
-        .join(REGISTRY_FILE)
+    adi_config::Config::open()
+        .module(PORTS_MODULE)
+        .raw_path(REGISTRY_FILE)
 }
 
 #[cfg(test)]

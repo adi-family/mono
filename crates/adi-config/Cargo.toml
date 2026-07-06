@@ -1,0 +1,18 @@
+[package]
+name = "adi-config"
+description = "The adi configurator: per-module settings directories with typed TOML config files and raw file storage under the ~/.adi/mono namespace. Pure library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# serde derives the config types callers persist; toml is the on-disk format for the
+# typed config-file helper. Raw-file storage is just bytes via std::fs — no extra deps.
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

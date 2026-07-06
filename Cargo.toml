@@ -15,6 +15,7 @@ repository = "https://github.com/mgorunuch/adi-family"
 # `some-dep = { workspace = true }` so versions stay aligned repo-wide.
 [workspace.dependencies]
 # Internal crates
+adi-config = { path = "crates/adi-config" }
 adi-core = { path = "crates/adi-core" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 
@@ -22,6 +23,7 @@ adi-ports-manager = { path = "crates/adi-ports-manager" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+toml = "0.8"
 # anyhow = "1"
 # thiserror = "2"
 # tokio = { version = "1", features = ["full"] }

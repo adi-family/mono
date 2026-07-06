@@ -37,9 +37,9 @@ ports.release("frontend", "http")?;               // free the lease
 ## State
 
 Static leases persist as a small JSON array at
-`~/.adi/mono/ports/registry.json` (honoring `$ADI_DIR`, the same
-`$HOME/$ADI_DIR/mono` namespace `adi-core`/`adi-hive` use). Dynamic allocations are
-computed on the fly and never recorded.
+`~/.adi/mono/ports/registry.json`. The path comes from the shared `adi-config` store
+(the `ports` module, honoring `$ADI_DIR`); this crate owns the JSON format and keeps it
+there as a raw file. Dynamic allocations are computed on the fly and never recorded.
 
 The `(service, key)` keys mirror `hive.yaml`'s `rollout.recreate.ports` slots
 (`http`, `db`, …), so a future integration can populate those ports from here.

@@ -9,6 +9,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# The shared configurator decides where hive.yaml lives (the `hive` module dir under
+# ~/.adi/mono); hive owns the YAML format and reads it as a raw file there.
+adi-config = { workspace = true }
+
 # Allocate a stable port for any proxied/runner service that doesn't declare one, so
 # ports come from the platform's registry instead of being hand-picked in hive.yaml.
 adi-ports-manager = { workspace = true }

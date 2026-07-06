@@ -25,9 +25,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-config"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "adi-core"
 version = "0.1.0"
 dependencies = [
+ "adi-config",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -54,6 +63,7 @@ dependencies = [
 name = "adi-hive"
 version = "0.1.0"
 dependencies = [
+ "adi-config",
  "adi-ports-manager",
  "anyhow",
  "serde",
@@ -68,6 +78,7 @@ dependencies = [
 name = "adi-ports-manager"
 version = "0.1.0"
 dependencies = [
+ "adi-config",
  "serde",
  "serde_json",
 ]

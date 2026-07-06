@@ -1,10 +1,9 @@
-//! Where the mono-app keeps its runtime files (`$HOME/<ADI_DIR>/mono`, `ADI_DIR`
-//! defaulting to `.adi`), mirroring the Swift `AppPaths`.
+//! Where the mono-app keeps its runtime files. The store directory itself
+//! (`$HOME/<ADI_DIR>/mono`, `ADI_DIR` defaulting to `.adi`) is owned by the shared
+//! [`adi_config`] store; this module only adds the macOS `Library/*` locations that
+//! sit outside it, mirroring the Swift `AppPaths`.
 
 use std::path::PathBuf;
-
-const DEFAULT_DIR: &str = ".adi";
-const MONO_SUBDIR: &str = "mono";
 
 /// `$HOME`, or `/` if unset (matching `NSHomeDirectory` fallbacks closely enough).
 fn home() -> PathBuf {
@@ -12,22 +11,15 @@ fn home() -> PathBuf {
 }
 
 /// The `ADI_DIR` value, trimmed; empty/unset falls back to `.adi`.
-fn resolve_dir_name(env: Option<&str>) -> String {
-    match env {
-        Some(v) if !v.trim().is_empty() => v.trim().to_string(),
-        _ => DEFAULT_DIR.to_string(),
-    }
-}
-
 #[must_use]
 pub fn dir_name() -> String {
-    resolve_dir_name(std::env::var("ADI_DIR").ok().as_deref())
+    adi_config::dir_name()
 }
 
-/// `$HOME/<ADI_DIR>/mono` — the mono-app namespace root.
+/// `$HOME/<ADI_DIR>/mono` — the mono-app store directory.
 #[must_use]
 pub fn support_dir() -> PathBuf {
-    home().join(dir_name()).join(MONO_SUBDIR)
+    adi_config::dir()
 }
 
 /// `$HOME/Library/LaunchAgents` — where per-user `LaunchAgent` plists live.
@@ -47,15 +39,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn dir_name_prefers_env_when_present() {
-        assert_eq!(resolve_dir_name(Some(".custom")), ".custom");
-        assert_eq!(resolve_dir_name(Some("  spaced  ")), "spaced");
+    fn support_dir_is_under_the_mono_namespace() {
+        assert!(support_dir().ends_with("mono"));
     }
 
     #[test]
-    fn dir_name_falls_back_to_default() {
-        assert_eq!(resolve_dir_name(None), DEFAULT_DIR);
-        assert_eq!(resolve_dir_name(Some("   ")), DEFAULT_DIR);
-        assert_eq!(resolve_dir_name(Some("")), DEFAULT_DIR);
+    fn launch_agents_and_logs_live_under_library() {
+        assert!(launch_agents_dir().ends_with("Library/LaunchAgents"));
+        assert!(logs_dir().ends_with("Library/Logs"));
     }
 }
