@@ -1,5 +1,7 @@
 # adi-family — project instructions
 
+please prefer working on the main unless asked to checkout. we value speed over stability now.
+
 ## ⚠️ ADI DNS — DO NOT DISTURB (highest priority)
 
 The machine runs **ADI DNS** as the `adi.hive` service under the `adi daemon`
