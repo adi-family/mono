@@ -16,11 +16,44 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
+use adi_projects::Projects;
 use adi_webapp_api::handlers;
 use include_dir::{Dir, include_dir};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+/// Owns the mesh [`Daemon`] the control panel starts/stops in-process, so it lives only as
+/// long as this app. `None` when stopped. The async mutex serializes start/stop.
+#[derive(Debug, Default)]
+struct MeshCtl {
+    daemon: Mutex<Option<Daemon>>,
+}
+
+impl MeshCtl {
+    /// Whether the mesh daemon is currently running.
+    async fn running(&self) -> bool {
+        self.daemon.lock().await.is_some()
+    }
+
+    /// Start the daemon if it isn't already up.
+    async fn start(&self) -> anyhow::Result<()> {
+        let mut slot = self.daemon.lock().await;
+        if slot.is_none() {
+            *slot = Some(Daemon::start().await?);
+        }
+        Ok(())
+    }
+
+    /// Stop the daemon if it's running (a clean teardown: tasks joined, ticket cleared).
+    async fn stop(&self) {
+        if let Some(daemon) = self.daemon.lock().await.take() {
+            daemon.stop().await;
+        }
+    }
+}
 
 /// The webapp's Trunk build output, embedded so the binary is self-contained. Empty until
 /// `trunk build` runs in `crates/adi-webapp`; [`serve_asset`] serves a placeholder when
@@ -50,7 +83,21 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(addr).await?;
     let local = listener.local_addr().unwrap_or(addr);
     let ports = Arc::new(Ports::new());
+    let projects = Arc::new(Projects::open());
     let webapp_dist = Arc::new(webapp_dist_override());
+    // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
+    // (non-blocking, best-effort) so the whole stack is up once the app is — the control
+    // panel's Stop button still stops it for the session.
+    let mesh = Arc::new(MeshCtl::default());
+    {
+        let mesh = Arc::clone(&mesh);
+        tokio::spawn(async move {
+            match mesh.start().await {
+                Ok(()) => info!("mesh autostarted"),
+                Err(e) => warn!(error = %e, "mesh autostart failed"),
+            }
+        });
+    }
     let start = Instant::now();
     info!(%local, registry = %ports.config().registry_path.display(), "adi-app listening");
     if let Some(dir) = webapp_dist.as_ref() {
@@ -62,9 +109,14 @@ async fn main() -> anyhow::Result<()> {
             accepted = listener.accept() => match accepted {
                 Ok((stream, peer)) => {
                     let ports = Arc::clone(&ports);
+                    let projects = Arc::clone(&projects);
                     let webapp_dist = Arc::clone(&webapp_dist);
+                    let mesh = Arc::clone(&mesh);
                     tokio::spawn(async move {
-                        if let Err(e) = handle(stream, &ports, start, webapp_dist.as_deref()).await {
+                        if let Err(e) =
+                            handle(stream, &ports, &projects, &mesh, start, webapp_dist.as_deref())
+                                .await
+                        {
                             debug!(%peer, error = %e, "connection error");
                         }
                     });
@@ -77,6 +129,8 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    // Stop the in-process mesh daemon (if the panel started it) before exiting.
+    mesh.stop().await;
     Ok(())
 }
 
@@ -102,6 +156,8 @@ fn listen_addr() -> SocketAddr {
 async fn handle(
     mut stream: TcpStream,
     ports: &Ports,
+    projects: &Projects,
+    mesh: &MeshCtl,
     start: Instant,
     dist: Option<&Path>,
 ) -> anyhow::Result<()> {
@@ -117,12 +173,57 @@ async fn handle(
         ("GET", "/api/ports/used") => handlers::used_ports(scan::listening_ports()),
         ("POST", "/api/ports/reserve") => handlers::reserve(ports, &req.body),
         ("POST", "/api/ports/release") => handlers::release(ports, &req.body),
+        // Projects: metadata CRUD over ~/.adi/mono/projects. Each mutation returns the
+        // fresh list so the panel refreshes in one round-trip.
+        ("GET", "/api/projects") => handlers::projects(projects),
+        ("POST", "/api/projects/create") => handlers::create_project(projects, &req.body),
+        ("POST", "/api/projects/archive") => handlers::archive_project(projects, &req.body),
+        ("POST", "/api/projects/unarchive") => handlers::unarchive_project(projects, &req.body),
+        ("POST", "/api/projects/remove") => handlers::remove_project(projects, &req.body),
+        // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
+        // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
+        ("GET", p) if p.starts_with("/api/projects/") => {
+            handlers::project_detail(projects, &p["/api/projects/".len()..])
+        }
+        // Mesh: config CRUD (reads/writes ~/.adi/mono/mesh) plus starting/stopping the
+        // in-process daemon. The daemon's run state is this app's, so it's passed in.
+        ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),
+        ("POST", "/api/mesh/start") => mesh_start(mesh).await,
+        ("POST", "/api/mesh/stop") => mesh_stop(mesh).await,
+        ("POST", "/api/mesh/allow") => handlers::mesh_allow(mesh.running().await, &req.body),
+        ("POST", "/api/mesh/deny") => handlers::mesh_deny(mesh.running().await, &req.body),
+        ("POST", "/api/mesh/peers/allow") => {
+            handlers::mesh_allow_peer(mesh.running().await, &req.body)
+        }
+        ("POST", "/api/mesh/peers/deny") => {
+            handlers::mesh_deny_peer(mesh.running().await, &req.body)
+        }
+        ("POST", "/api/mesh/forwards/add") => {
+            handlers::mesh_add_forward(mesh.running().await, &req.body)
+        }
+        ("POST", "/api/mesh/forwards/remove") => {
+            handlers::mesh_remove_forward(mesh.running().await, &req.body)
+        }
         (_, p) if p.starts_with("/api") => handlers::error(404, "no such API endpoint"),
         // Any other GET serves a webapp asset, or the app shell for client-side routing.
         ("GET", p) => return serve_asset(&mut stream, p, dist).await,
         _ => handlers::error(405, "method not allowed"),
     };
     http::write_json(&mut stream, status, &body).await
+}
+
+/// `POST /api/mesh/start` — bring the in-process mesh daemon up, then report fresh state.
+async fn mesh_start(mesh: &MeshCtl) -> (u16, String) {
+    match mesh.start().await {
+        Ok(()) => handlers::mesh(true),
+        Err(e) => handlers::error(500, &format!("starting mesh: {e}")),
+    }
+}
+
+/// `POST /api/mesh/stop` — stop the in-process mesh daemon, then report fresh state.
+async fn mesh_stop(mesh: &MeshCtl) -> (u16, String) {
+    mesh.stop().await;
+    handlers::mesh(false)
 }
 
 /// Serve a webapp asset. With a disk override ([`DIST_ENV`]) set, files come from that

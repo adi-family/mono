@@ -30,7 +30,11 @@ fn config_path() -> PathBuf {
     service_dir().join("adi-dns.toml")
 }
 fn status_file() -> PathBuf {
-    service_dir().join("status.json")
+    // A resolver-specific name: the front-door adi-hive writes its OWN `status.json` in this
+    // same dir (it sits beside `hive-frontdoor.yaml`), so sharing the name makes the two
+    // clobber each other — the GUI then misreads the proxy's status as the resolver's, its
+    // shape doesn't match, and the service shows a stuck "starting…". Keep them separate.
+    service_dir().join("resolver.json")
 }
 fn stage_path() -> PathBuf {
     service_dir().join(format!("resolver-{DOMAIN}"))
@@ -55,13 +59,8 @@ fn hive_binary_path() -> String {
     sibling_binary("adi-hive", "ADI_HIVE_BIN")
 }
 
-/// The bundled `adi-app` (the control panel the front door runs), overridable via `ADI_APP_BIN`.
-fn app_binary_path() -> String {
-    sibling_binary("adi-app", "ADI_APP_BIN")
-}
-
 /// Resolve a bundled binary as a sibling of the running executable, honoring `env_override` first.
-fn sibling_binary(name: &str, env_override: &str) -> String {
+pub(crate) fn sibling_binary(name: &str, env_override: &str) -> String {
     if let Some(p) = std::env::var_os(env_override)
         && !p.is_empty()
     {
@@ -94,13 +93,17 @@ fn render_config() -> String {
     )
 }
 
-/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and serves the adi control panel (`adi-app`) at `app.{DOMAIN}`; any other host gets the 4XX page.
-fn render_frontdoor_hive(app_bin: &str) -> String {
+/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and **proxies** `app.{DOMAIN}`
+/// to the control panel (`adi-app`) on `app_port`. It no longer *runs* adi-app — that's a
+/// separate per-user `LaunchAgent` ([`crate::app`]) so the on/off toggle can start/stop it
+/// (and its in-process mesh) without a password. Any other host gets the 4XX page.
+fn render_frontdoor_hive(app_port: u16) -> String {
     // Plain multi-line literal so YAML indentation is exact (`\`-continuation would strip leading spaces).
     format!(
         "# Written by adi-core — adi-hive front door for the .{DOMAIN} zone.
-# Serves the adi control panel (adi-app) at app.{DOMAIN}; adi-hive takes its port
-# from the ports manager. Any other host gets the animated 4XX page.
+# Always-on plumbing: proxies app.{DOMAIN} to the adi control panel (adi-app), which runs
+# as its own per-user LaunchAgent on this same reserved port so it can be toggled without a
+# password. Any other host gets the animated 4XX page.
 proxy:
   bind:
     - \"{FRONTDOOR_ADDR}:{FRONTDOOR_PORT}\"
@@ -108,11 +111,10 @@ services:
   app:
     proxy:
       host: app.{DOMAIN}
-    restart: on-failure
-    runner:
-      type: script
-      script:
-        run: \"'{app_bin}'\"
+    rollout:
+      recreate:
+        ports:
+          http: {app_port}
 "
     )
 }
@@ -127,7 +129,7 @@ fn write_frontdoor_artifacts() {
     let _ = std::fs::create_dir_all(service_dir());
     let _ = std::fs::write(
         frontdoor_config_path(),
-        render_frontdoor_hive(&app_binary_path()),
+        render_frontdoor_hive(crate::app::port()),
     );
     let env = [
         ("RUST_LOG".to_string(), "info".to_string()),
@@ -147,6 +149,14 @@ fn write_frontdoor_artifacts() {
         &env,
     );
     let _ = std::fs::write(frontdoor_plist_stage(), plist);
+}
+
+/// True when the installed front-door config already matches what we'd render now, so no
+/// privileged update/restart is needed. A mismatch (or missing file) means the front door
+/// is running an old config and should be refreshed once.
+fn frontdoor_config_current() -> bool {
+    let rendered = render_frontdoor_hive(crate::app::port());
+    std::fs::read_to_string(frontdoor_config_path()).is_ok_and(|on_disk| on_disk == rendered)
 }
 
 /// The DNS command surface (`adi.dns.*`) — a zero-sized facade; all state lives on disk / in launchd.
@@ -194,6 +204,23 @@ impl Dns {
         proc::run_admin(&shell);
     }
 
+    /// Update the installed front door to the current config and restart it — the one
+    /// privileged step of an upgrade (a single admin prompt). Needed when the on-disk
+    /// front-door config is stale; after this the front door is proxy-only and the on/off
+    /// toggle never touches it again.
+    pub fn update_frontdoor(self) {
+        write_frontdoor_artifacts();
+        // Reload the front door with the new config. `kickstart -k` atomically kills and
+        // restarts an already-loaded job, so it re-reads the config without the
+        // bootout→bootstrap race (bootout is async; a racing bootstrap can't rebind :80).
+        // If it isn't loaded, bootstrap it instead.
+        let shell = format!(
+            "launchctl kickstart -k system/{FRONTDOOR_LABEL} 2>/dev/null\
+             || (launchctl bootstrap system '{FRONTDOOR_DAEMON_PLIST}' && launchctl enable system/{FRONTDOOR_LABEL})"
+        );
+        proc::run_admin(&shell);
+    }
+
     /// Tear down both privileged bits, best-effort (incl. the `lo0` alias).
     pub fn remove_route(self) {
         let resolver = resolver_file();
@@ -232,10 +259,14 @@ impl Service for Dns {
         vec![binary_path(), config_path().to_string_lossy().into_owned()]
     }
 
-    // Installed once and left in place, so toggling never re-prompts; removal is an explicit action.
+    // Installed once and left in place, so toggling never re-prompts; removal is an explicit
+    // action. The one exception is a stale front-door config (e.g. upgrading from the old
+    // runner-based front door to the proxy-only one) — update it once here.
     fn on_enable(&self) {
         if !self.route_installed() {
             self.install_route();
+        } else if !frontdoor_config_current() {
+            self.update_frontdoor();
         }
     }
 
@@ -277,8 +308,8 @@ mod tests {
     }
 
     #[test]
-    fn frontdoor_hive_serves_the_control_panel_and_is_valid_yaml() {
-        let cfg = render_frontdoor_hive("/opt/ADI.app/Contents/Resources/adi-app");
+    fn frontdoor_hive_proxies_the_control_panel_and_is_valid_yaml() {
+        let cfg = render_frontdoor_hive(8091);
         assert!(cfg.contains("- \"127.0.0.53:80\""));
 
         // It must parse as YAML with the expected shape (catches indentation bugs).
@@ -286,12 +317,12 @@ mod tests {
         assert_eq!(v["proxy"]["bind"][0].as_str(), Some("127.0.0.53:80"));
         let app = &v["services"]["app"];
         assert_eq!(app["proxy"]["host"].as_str(), Some("app.adi"));
+        // Proxy-only: routes app.adi to the reserved port and does NOT run adi-app itself.
         assert_eq!(
-            app["runner"]["script"]["run"].as_str(),
-            Some("'/opt/ADI.app/Contents/Resources/adi-app'")
+            app["rollout"]["recreate"]["ports"]["http"].as_u64(),
+            Some(8091)
         );
-        // No port declared -> adi-hive allocates it from the ports manager.
-        assert!(app["rollout"].is_null());
+        assert!(app["runner"].is_null());
     }
 
     #[test]

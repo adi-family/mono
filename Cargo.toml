@@ -12,7 +12,9 @@ default-members = [
     "crates/adi-css",
     "crates/adi-dns",
     "crates/adi-hive",
+    "crates/adi-mesh",
     "crates/adi-ports-manager",
+    "crates/adi-projects",
     "crates/adi-webapp-api",
 ]
 
@@ -32,11 +34,16 @@ repository = "https://github.com/mgorunuch/adi-family"
 adi-config = { path = "crates/adi-config" }
 adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }
+adi-mesh = { path = "crates/adi-mesh" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
+adi-projects = { path = "crates/adi-projects" }
 adi-webapp-api = { path = "crates/adi-webapp-api" }
 
 # External crates (add as needed)
 clap = { version = "4", features = ["derive"] }
+# Peer-to-peer QUIC transport with relay-assisted NAT traversal and dial-by-EndpointId
+# discovery; the backbone of adi-mesh.
+iroh = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"

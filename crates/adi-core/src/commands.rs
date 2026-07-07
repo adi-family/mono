@@ -3,6 +3,7 @@
 
 use serde::Serialize;
 
+use crate::app::App;
 use crate::dns::Dns;
 use crate::service::{Service, ServiceReport};
 
@@ -30,15 +31,34 @@ impl Adi {
         Dns::new()
     }
 
-    /// Every managed service, in display order.
+    /// The projects registry backed by the standard store — `Adi::new().projects().list()`.
+    #[must_use]
+    pub fn projects(self) -> adi_projects::Projects {
+        adi_projects::Projects::open()
+    }
+
+    /// Every managed service, in display + apply order. DNS is first so, when enabling, its
+    /// `on_enable` migrates the front door (proxy-only) before the control-panel agent
+    /// binds the shared port — otherwise the old runner-supervised adi-app would collide
+    /// with the new agent on it.
     fn services(self) -> Vec<Box<dyn Service>> {
-        vec![Box::new(Dns::new())]
+        vec![Box::new(Dns::new()), Box::new(App::new())]
     }
 
     /// Enable every service (`adi.enable()`).
     pub fn enable(self) {
         for svc in self.services() {
             svc.enable();
+        }
+    }
+
+    /// Bring every service up **without restarting any that are already running**
+    /// (`adi.up()`) — the launch-time bootstrap. On a fresh machine this installs and
+    /// starts everything (one admin prompt for the privileged DNS route/front door); on a
+    /// machine where the stack is already up it's a no-op that never interrupts the DNS.
+    pub fn ensure_enabled(self) {
+        for svc in self.services() {
+            svc.ensure_enabled();
         }
     }
 

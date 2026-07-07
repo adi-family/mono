@@ -20,6 +20,11 @@ final class AppModel: ObservableObject {
 
     init() {
         refresh()
+        // Bring the whole stack up on launch (`adi-mono up`): idempotent and it never
+        // restarts a running service, so on a machine that's already up it's a no-op, while
+        // on a fresh one it installs + starts everything (one admin prompt for the DNS
+        // route + front door). This is what makes services autostart when the app opens.
+        perform(["up"])
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }
         }

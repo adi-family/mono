@@ -1,0 +1,43 @@
+[package]
+name = "adi-mesh"
+description = "adi-family peer mesh over iroh: expose a machine's allow-listed local ports to authorized peers, and forward a local port to a peer's allowed port — peer-to-peer (QUIC + relay-assisted NAT traversal), no public IP required."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "adi-mesh"
+path = "src/main.rs"
+
+[dependencies]
+# Persist the iroh identity (a stable EndpointId) and the typed mesh.toml under the
+# `mesh` module dir of ~/.adi/mono; the store owns *where*, this crate owns the formats.
+adi-config = { workspace = true }
+
+# The peer-to-peer transport: QUIC connections dialled by EndpointId, with relays doing
+# NAT traversal and n0 discovery resolving an id to its current addresses.
+iroh = { workspace = true }
+
+# CLI surface: run | id | allow | deny | allow-peer | forward | unforward | list.
+clap = { workspace = true }
+
+# The typed mesh.toml config shape; serde_json also encodes the shareable address ticket.
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+
+# Async runtime. `net` binds the local forward listeners + dials local upstreams;
+# `io-util` backs the byte-splicing tunnel; `signal` handles the supervisor's SIGTERM;
+# `sync` broadcasts shutdown to every accept loop.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "io-util", "sync", "time"] }
+
+# Logging to stdout/stderr (captured by the supervisor) + ergonomic error plumbing.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[lints]
+workspace = true

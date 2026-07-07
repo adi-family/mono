@@ -10,18 +10,29 @@ repository.workspace = true
 
 [features]
 default = []
-# The native-only server side: the /api handlers over the live port registry. The wasm
-# frontend depends on this crate WITHOUT this feature, so it pulls in only the DTO types
-# (and never adi-ports-manager, which does filesystem I/O and can't target wasm).
-server = ["dep:adi-ports-manager", "dep:serde_json"]
+# The native-only server side: the /api handlers over the live port registry and mesh
+# config. The wasm frontend depends on this crate WITHOUT this feature, so it pulls in only
+# the DTO types (never adi-ports-manager or adi-mesh, which do filesystem I/O / link iroh
+# and can't target wasm).
+server = [
+    "dep:adi-ports-manager",
+    "dep:adi-mesh",
+    "dep:adi-projects",
+    "dep:serde_json",
+    "dep:serde_yaml_ng",
+]
 
 [dependencies]
 # The wire types are pure serde — this is the only dependency that reaches wasm.
 serde = { workspace = true }
 
-# Server-only: the live registry the handlers operate on, and JSON serialization.
+# Server-only: the live port registry, the mesh config/identity/ticket library, the projects
+# registry, JSON, and YAML (to read a project's .adi/hive.yaml for the detail view).
 adi-ports-manager = { workspace = true, optional = true }
+adi-mesh = { workspace = true, optional = true }
+adi-projects = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
+serde_yaml_ng = { version = "0.10", optional = true }
 
 [lints]
 workspace = true

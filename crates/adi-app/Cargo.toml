@@ -19,6 +19,13 @@ adi-webapp-api = { workspace = true, features = ["server"] }
 # Constructing the live port registry the handlers operate on.
 adi-ports-manager = { workspace = true }
 
+# The projects registry the /api/projects handlers operate on.
+adi-projects = { workspace = true }
+
+# The mesh runtime, started/stopped in-process behind the control panel's "Start mesh"
+# button — so the daemon lives only as long as this app process.
+adi-mesh = { workspace = true }
+
 # The shared design system, inlined into server-rendered pages (the placeholder / any
 # future front-door page) so they match the webapp.
 adi-css = { workspace = true }
@@ -29,7 +36,7 @@ include_dir = "0.7"
 
 # Async runtime for the hand-rolled HTTP/1.1 server (same lightweight approach as
 # adi-hive — no web framework). `fs` powers the ADI_WEBAPP_DIST disk-serve dev mode.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util", "fs"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util", "fs", "sync"] }
 
 # Logging to stdout/stderr (captured by the supervisor).
 tracing = "0.1"

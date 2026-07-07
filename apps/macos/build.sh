@@ -16,8 +16,14 @@ APP_NAME="ADI"
 DEPLOY_TARGET="13.0"
 BUILD="$SCRIPT_DIR/build"
 APP="$BUILD/$APP_NAME.app"
-ARCH="$(uname -m)"  # arm64 (Apple Silicon) or x86_64 (Intel)
 ICNS="$SCRIPT_DIR/$APP_NAME.icns"
+
+# Build a universal (arm64 + x86_64) app so it runs on both Apple Silicon and
+# Intel Macs. A single-arch build fails to launch on the other arch with
+# "bad CPU type in executable". Rust builds per-triple, Swift per-arch, then
+# `lipo` fuses each Mach-O into one fat binary.
+RUST_TARGETS=(aarch64-apple-darwin x86_64-apple-darwin)
+SWIFT_ARCHES=(arm64 x86_64)
 
 # Regenerate the app icon from icon-gen.swift (matches Sources/ADILogo.swift), then exit.
 if [ "${1:-}" = "--regen-icon" ]; then
@@ -35,16 +41,17 @@ if [ "${1:-}" = "--regen-icon" ]; then
     exit 0
 fi
 
-echo "==> building adi-dns + adi-hive + adi-app + adi-mono (release)"
-( cd "$ROOT" && cargo build -p adi-dns -p adi-hive -p adi-app -p adi-cli --release )
-DNS_BIN="$ROOT/target/release/adi-dns"
-HIVE_BIN="$ROOT/target/release/adi-hive"   # the .adi front-door proxy (root LaunchDaemon)
-APP_BIN="$ROOT/target/release/adi-app"     # the control panel the front door serves at app.adi
-MONO_BIN="$ROOT/target/release/adi-mono"   # the adi-core CLI the app triggers
-[ -x "$DNS_BIN" ]  || { echo "error: $DNS_BIN missing"; exit 1; }
-[ -x "$HIVE_BIN" ] || { echo "error: $HIVE_BIN missing"; exit 1; }
-[ -x "$APP_BIN" ]  || { echo "error: $APP_BIN missing"; exit 1; }
-[ -x "$MONO_BIN" ] || { echo "error: $MONO_BIN missing"; exit 1; }
+echo "==> building adi-dns + adi-hive + adi-app + adi-mono (release, universal: ${RUST_TARGETS[*]})"
+( cd "$ROOT" && MACOSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET" cargo build \
+    -p adi-dns -p adi-hive -p adi-app -p adi-cli --release \
+    "${RUST_TARGETS[@]/#/--target=}" )
+# Each --target=<triple> lands its output in target/<triple>/release/, so verify
+# every binary exists for every arch before we lipo them together.
+for name in adi-dns adi-hive adi-app adi-mono; do
+    for t in "${RUST_TARGETS[@]}"; do
+        [ -x "$ROOT/target/$t/release/$name" ] || { echo "error: $ROOT/target/$t/release/$name missing"; exit 1; }
+    done
+done
 
 echo "==> assembling $APP_NAME.app"
 rm -rf "$APP"
@@ -54,17 +61,25 @@ cp "$SCRIPT_DIR/Info.plist" "$APP/Contents/Info.plist"
 # `build.sh --regen-icon`.
 [ -f "$ICNS" ] && cp "$ICNS" "$APP/Contents/Resources/$APP_NAME.icns"
 # adi-mono resolves adi-dns/adi-hive/adi-app as siblings, so they all live side by side
-# in Resources (adi-hive runs adi-app as the app.adi front-door service).
-cp "$DNS_BIN"  "$APP/Contents/Resources/adi-dns"
-cp "$HIVE_BIN" "$APP/Contents/Resources/adi-hive"
-cp "$APP_BIN"  "$APP/Contents/Resources/adi-app"
-cp "$MONO_BIN" "$APP/Contents/Resources/adi-mono"
+# in Resources (adi-hive runs adi-app as the app.adi front-door service). Fuse the
+# per-arch builds into one universal Mach-O each.
+for name in adi-dns adi-hive adi-app adi-mono; do
+    srcs=(); for t in "${RUST_TARGETS[@]}"; do srcs+=("$ROOT/target/$t/release/$name"); done
+    lipo -create "${srcs[@]}" -output "$APP/Contents/Resources/$name"
+done
 
-echo "==> compiling Swift ($ARCH-apple-macos$DEPLOY_TARGET)"
-swiftc -parse-as-library -O \
-    -target "${ARCH}-apple-macos${DEPLOY_TARGET}" \
-    -o "$APP/Contents/MacOS/$APP_NAME" \
-    "$SCRIPT_DIR"/Sources/*.swift
+echo "==> compiling Swift (universal: ${SWIFT_ARCHES[*]}, macos$DEPLOY_TARGET)"
+SWIFT_TMP="$(mktemp -d)"
+trap 'rm -rf "$SWIFT_TMP"' EXIT
+swift_slices=()
+for a in "${SWIFT_ARCHES[@]}"; do
+    swiftc -parse-as-library -O \
+        -target "${a}-apple-macos${DEPLOY_TARGET}" \
+        -o "$SWIFT_TMP/$APP_NAME-$a" \
+        "$SCRIPT_DIR"/Sources/*.swift
+    swift_slices+=("$SWIFT_TMP/$APP_NAME-$a")
+done
+lipo -create "${swift_slices[@]}" -output "$APP/Contents/MacOS/$APP_NAME"
 
 # Sign nested Mach-O first, then the bundle. With SIGN_ID set (a "Developer ID
 # Application" identity) we sign for distribution: hardened runtime + secure

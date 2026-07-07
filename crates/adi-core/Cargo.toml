@@ -12,6 +12,14 @@ repository.workspace = true
 # The shared configurator owns the ~/.adi/mono namespace `paths` resolves against.
 adi-config = { workspace = true }
 
+# The control-panel (adi-app) runs as a user LaunchAgent on a stable port taken from the
+# ports manager; the front door proxies app.adi to that same reserved port.
+adi-ports-manager = { workspace = true }
+
+# The projects registry (metadata manifests under ~/.adi/mono/projects). The CLI drives it
+# through this facade so `adi-mono projects …` stays a thin adapter over adi-core.
+adi-projects = { workspace = true }
+
 # Read adi-dns's JSON status file and serialize the status report the GUI consumes.
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -259,6 +259,19 @@
       background: color-mix(in srgb, var(--down) 12%, transparent);
     }
   }
+
+  // Neutral outlined button (e.g. the Copy buttons beside the id/ticket).
+  &--ghost {
+    padding: 8px 14px;
+    background: var(--surface);
+    border-color: var(--border);
+    color: var(--muted);
+
+    &:hover {
+      color: var(--ink);
+      border-color: var(--accent);
+    }
+  }
 }
 
 // ---- segmented toggle (two+ options, one active via `aria-pressed`) ----------------
@@ -354,6 +367,21 @@
     font-size: var(--text-base);
     font-weight: 650;
   }
+
+  // A plain padded body for panels that aren't a table/form (e.g. the id/ticket block).
+  &__body {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    padding: var(--space-4) 18px;
+  }
+}
+
+// A read-only value next to its Copy button (the shareable id / ticket).
+.adi-copyrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
 .adi-updated {
@@ -435,6 +463,14 @@
   &__label {
     @include eyebrow(10px);
   }
+
+  // A muted one-liner under a field explaining what it is / how to share it.
+  &__hint {
+    font-size: var(--text-sm);
+    color: var(--muted);
+
+    code { font-family: var(--font-mono); }
+  }
 }
 
 .adi-input {
@@ -453,6 +489,13 @@
     outline-offset: 1px;
     border-color: var(--accent);
   }
+
+  // Fill the available width (the id/ticket fields, and the peer inputs in a flex form).
+  &--wide {
+    width: 100%;
+    flex: 1;
+    min-width: 0;
+  }
 }
 
 // ---- flash (kind via `data-kind`) --------------------------------------------------
@@ -464,6 +507,27 @@
 
   &[data-kind="err"] { color: var(--down); }
   &[data-kind="ok"]  { color: var(--online); }
+
+  // A standalone card variant (a page-level toast, not a panel footer): the tinted
+  // border/background makes it read as its own element between sections.
+  &--card {
+    min-height: 0;
+    padding: 10px 14px;
+    margin-bottom: 26px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface);
+    font-weight: 550;
+
+    &[data-kind="err"] {
+      border-color: color-mix(in srgb, var(--down) 45%, var(--border));
+      background: color-mix(in srgb, var(--down) 8%, var(--surface));
+    }
+    &[data-kind="ok"] {
+      border-color: color-mix(in srgb, var(--online) 45%, var(--border));
+      background: color-mix(in srgb, var(--online) 8%, var(--surface));
+    }
+  }
 }
 
 // ---- page footer -------------------------------------------------------------------

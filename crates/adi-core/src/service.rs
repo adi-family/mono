@@ -70,18 +70,36 @@ pub trait Service {
         self.on_enable();
     }
 
+    /// Enable the service **only if it isn't already loaded**, so a launch-time bootstrap
+    /// never bootouts/restarts a running service (critical for the DNS, which must not be
+    /// interrupted). When already loaded, just re-run the idempotent [`on_enable`](Self::on_enable)
+    /// so any one-time side effects (e.g. the DNS route/front-door install) are in place —
+    /// those are themselves guarded, so this stays a no-op on a fully-provisioned machine.
+    fn ensure_enabled(&self) {
+        if launchd::is_loaded(&self.label()) {
+            self.on_enable();
+        } else {
+            self.enable();
+        }
+    }
+
     fn disable(&self) {
         launchd::disable(&self.label());
         self.on_disable();
+    }
+
+    /// Whether the service is currently up. Defaults to "its status file names a live
+    /// PID"; a service without a status file (e.g. the control panel) overrides this to
+    /// probe differently (e.g. whether its port is listening).
+    fn is_running(&self) -> bool {
+        status::read(&self.status_path()).is_some_and(|s| status::process_alive(s.pid))
     }
 
     /// Build this service's live report: loaded state, running PID, status line, and actions.
     fn report(&self) -> ServiceReport {
         let enabled = launchd::is_loaded(&self.label());
         let status = status::read(&self.status_path());
-        let running = status
-            .as_ref()
-            .is_some_and(|s| status::process_alive(s.pid));
+        let running = self.is_running();
 
         let detail = if running {
             self.detail(status.as_ref())
