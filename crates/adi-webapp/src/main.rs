@@ -660,23 +660,34 @@ fn service_rows(
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            // Only a service with a `run` command has a runner to start.
+            // Only a service with a `run` command has a runner to start/stop.
             let has_runner = s.run.is_some();
+            let running = s.running;
             let run = s.run.unwrap_or_else(|| "—".to_string());
             let restart = s.restart.unwrap_or_else(|| "—".to_string());
-            let start_project = project.clone();
-            let start_name = name.clone();
-            let action = if has_runner {
+            // Action reflects live state: Stop (+ a running dot) when up, Start when down.
+            let action = if !has_runner {
+                view! { <span class="adi-muted">"—"</span> }.into_any()
+            } else if running {
+                let (p, n) = (project.clone(), name.clone());
                 view! {
-                    <button class="adi-btn adi-btn--ghost" type="button"
-                        title="Run this service's command with its ports-manager port"
-                        on:click=move |_| start_service(state, Some(start_project.clone()), start_name.clone())>
-                        "Start"
+                    <span style="color:var(--ok,#3fb950);margin-right:.5rem" title="Primary port is listening">"● Running"</span>
+                    <button class="adi-btn adi-btn--ghost" type="button" title="Stop this service"
+                        on:click=move |_| stop_service(state, Some(p.clone()), n.clone())>
+                        "Stop"
                     </button>
                 }
                 .into_any()
             } else {
-                view! { <span class="adi-muted">"—"</span> }.into_any()
+                let (p, n) = (project.clone(), name.clone());
+                view! {
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        title="Run this service's command with its ports-manager port"
+                        on:click=move |_| start_service(state, Some(p.clone()), n.clone())>
+                        "Start"
+                    </button>
+                }
+                .into_any()
             };
             view! {
                 <tr>
@@ -1018,6 +1029,25 @@ fn start_service(state: State, project: Option<String>, service: String) {
             Err(e) => state
                 .flash
                 .set(Some(Flash::err(format!("Couldn't start {service}: {e}")))),
+        }
+    });
+}
+
+/// Stop a running service on the backend (kill its port's listener), then refresh the project page.
+fn stop_service(state: State, project: Option<String>, service: String) {
+    spawn_local(async move {
+        match fetch::stop_service(project.clone(), service.clone()).await {
+            Ok(r) => {
+                state
+                    .flash
+                    .set(Some(Flash::ok(format!("Stopped {}.", r.service))));
+                if let Some(id) = project {
+                    reload_project(state, id);
+                }
+            }
+            Err(e) => state
+                .flash
+                .set(Some(Flash::err(format!("Couldn't stop {service}: {e}")))),
         }
     });
 }
@@ -2245,7 +2275,7 @@ mod fetch {
         ApiError, DirListing, FileContent, FilesRef, Health, HiveState, MeshForwardRef,
         MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, PortsState, ProjectDetail,
         ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, StartResult, StartService,
-        UsedPorts, WriteFile,
+        StopResult, UsedPorts, WriteFile,
     };
     use gloo_net::http::{Request, Response};
     use serde::Serialize;
@@ -2346,6 +2376,13 @@ mod fetch {
         service: String,
     ) -> Result<StartResult, String> {
         post("/api/hive/start", &StartService { project, service }).await
+    }
+
+    pub async fn stop_service(
+        project: Option<String>,
+        service: String,
+    ) -> Result<StopResult, String> {
+        post("/api/hive/stop", &StartService { project, service }).await
     }
 
     // Project files: browse/read/edit the files under a project's own directory (jailed to it).

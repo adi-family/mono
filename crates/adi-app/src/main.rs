@@ -188,7 +188,8 @@ async fn handle(
         // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
         // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
         ("GET", p) if p.starts_with("/api/projects/") => {
-            handlers::project_detail(projects, &p["/api/projects/".len()..])
+            let listening: Vec<u16> = scan::listening_ports().into_iter().map(|u| u.port).collect();
+            handlers::project_detail(projects, &p["/api/projects/".len()..], &listening)
         }
         // Every hive service across all projects + the global front-door, with live status.
         // The listening-port scan is platform I/O, so the host does it and passes the ports in.
@@ -201,6 +202,8 @@ async fn handle(
         }
         // Launch a service's runner (its `run` command) with the ports-manager PORT injected.
         ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
+        // Stop a running service (kill whatever listens on its resolved port).
+        ("POST", "/api/hive/stop") => handlers::stop_service(projects, &req.body),
         // Mesh: config CRUD (reads/writes ~/.adi/mono/mesh) plus starting/stopping the
         // in-process daemon. The daemon's run state is this app's, so it's passed in.
         ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),

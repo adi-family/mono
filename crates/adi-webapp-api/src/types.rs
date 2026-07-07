@@ -205,6 +205,13 @@ pub struct StartResult {
     pub pid: u32,
 }
 
+/// Response from `POST /api/hive/stop` — the stopped service and the port whose listener was killed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StopResult {
+    pub service: String,
+    pub port: Option<u16>,
+}
+
 /// One named port a service declares (`rollout.recreate.ports.<key> = <port>`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicePort {
@@ -228,6 +235,9 @@ pub struct ProjectService {
     /// Restart policy (`restart`), e.g. `on-failure`.
     #[serde(default)]
     pub restart: Option<String>,
+    /// Whether the service's primary port is currently listening.
+    #[serde(default)]
+    pub running: bool,
 }
 
 /// `GET /api/projects/<id>` — one project's manifest plus the services parsed from its

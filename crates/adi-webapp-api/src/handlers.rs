@@ -19,8 +19,8 @@ use crate::types::{
     ApiError, DirListing, FileContent, FileEntry, FilesRef, Health, HiveService, HiveState, Lease,
     LeaseRef, MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
     NewProject, PortsState, Project, ProjectDetail, ProjectRef, ProjectService, ProjectsState,
-    Range, ReleaseResponse, ReserveResponse, ServicePort, StartResult, StartService, UsedPort,
-    UsedPorts, WriteFile,
+    Range, ReleaseResponse, ReserveResponse, ServicePort, StartResult, StartService, StopResult,
+    UsedPort, UsedPorts, WriteFile,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -162,16 +162,17 @@ pub fn unarchive_project(store: &Projects, body: &[u8]) -> (u16, String) {
 }
 
 /// `GET /api/projects/<id>` — one project's manifest plus the services parsed from its
-/// `.adi/hive.yaml` (what's "inside" the project).
+/// `.adi/hive.yaml` (what's "inside" the project). `listening` is the set of currently-listening
+/// TCP ports (the host scans the platform and passes it), so each service gets a live running flag.
 #[must_use]
-pub fn project_detail(store: &Projects, id: &str) -> (u16, String) {
+pub fn project_detail(store: &Projects, id: &str, listening: &[u16]) -> (u16, String) {
     let project = match store.get(id) {
         Ok(Some(project)) => project,
         Ok(None) => return error(404, &format!("no such project: {id}")),
         Err(e) => return project_error(&e),
     };
     let (has_hive, services) = match store.hive_path(id) {
-        Ok(path) => read_hive_services(&path),
+        Ok(path) => read_hive_services(&path, listening),
         Err(e) => return project_error(&e),
     };
     ok_json(&ProjectDetail {
@@ -252,10 +253,11 @@ struct HiveScript {
     working_dir: Option<String>,
 }
 
-/// Read a project's `.adi/hive.yaml` into `(has_hive, services)`. A missing file is
-/// `(false, [])`; a present-but-unparseable file is `(true, [])` — the project has a hive
-/// config, just not one we can summarize.
-fn read_hive_services(path: &Path) -> (bool, Vec<ProjectService>) {
+/// Read a project's `.adi/hive.yaml` into `(has_hive, services)`, tagging each service with a live
+/// running flag (its primary port is in `listening`). A missing file is `(false, [])`; a
+/// present-but-unparseable file is `(true, [])` — the project has a hive config, just not one we
+/// can summarize.
+fn read_hive_services(path: &Path, listening: &[u16]) -> (bool, Vec<ProjectService>) {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return (false, Vec::new());
     };
@@ -270,10 +272,8 @@ fn read_hive_services(path: &Path) -> (bool, Vec<ProjectService>) {
     let services = doc
         .services
         .into_iter()
-        .map(|(name, svc)| ProjectService {
-            name,
-            host: svc.proxy.map(|p| p.host),
-            ports: svc
+        .map(|(name, svc)| {
+            let ports: Vec<ServicePort> = svc
                 .rollout
                 .and_then(|r| r.recreate)
                 .map(|r| {
@@ -282,9 +282,16 @@ fn read_hive_services(path: &Path) -> (bool, Vec<ProjectService>) {
                         .map(|(key, port)| ServicePort { key, port })
                         .collect()
                 })
-                .unwrap_or_default(),
-            run: svc.runner.and_then(|r| r.script).map(|s| s.run),
-            restart: svc.restart,
+                .unwrap_or_default();
+            let running = primary_port(&ports).is_some_and(|p| listening.contains(&p));
+            ProjectService {
+                name,
+                host: svc.proxy.map(|p| p.host),
+                ports,
+                run: svc.runner.and_then(|r| r.script).map(|s| s.run),
+                restart: svc.restart,
+                running,
+            }
         })
         .collect();
     (true, services)
@@ -525,7 +532,7 @@ fn collect_hive_services(
     listening: &[u16],
     out: &mut Vec<HiveService>,
 ) {
-    let (_has_hive, parsed) = read_hive_services(path);
+    let (_has_hive, parsed) = read_hive_services(path, listening);
     for svc in parsed {
         let port = primary_port(&svc.ports);
         let running = port.is_some_and(|p| listening.contains(&p));
@@ -604,6 +611,57 @@ pub fn start_service(store: &Projects, body: &[u8]) -> (u16, String) {
         }),
         Err(e) => error(500, &format!("starting `{}`: {e}", req.service)),
     }
+}
+
+/// `POST /api/hive/stop` {project?, service} — stop a running service by killing whatever listens
+/// on its resolved port (the runner was spawned in its own process group; a plain kill on the
+/// listener stops it).
+#[must_use]
+pub fn stop_service(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Ok(req) = serde_json::from_slice::<StartService>(body) else {
+        return error(400, "expected JSON body { project?, service }");
+    };
+    let hive_path = match &req.project {
+        Some(id) => match store.hive_path(id) {
+            Ok(hive) => hive,
+            Err(e) => return project_error(&e),
+        },
+        None => store.config().module("hive").raw_path("hive.yaml"),
+    };
+    let Ok(raw) = std::fs::read_to_string(&hive_path) else {
+        return error(404, "no hive.yaml for that target");
+    };
+    let (yaml, commands) = adi_ports_manager::preprocess(&raw);
+    let Ok(doc) =
+        adi_ports_manager::with_commands(commands, || serde_yaml_ng::from_str::<HiveDoc>(&yaml))
+    else {
+        return error(422, "could not parse the hive.yaml");
+    };
+    let Some(svc) = doc.services.get(&req.service) else {
+        return error(404, &format!("no service `{}` in the hive", req.service));
+    };
+    let Some(port) = service_http_port(svc) else {
+        return error(400, &format!("service `{}` has no port to stop", req.service));
+    };
+    match kill_listener(port) {
+        Ok(()) => ok_json(&StopResult {
+            service: req.service,
+            port: Some(port),
+        }),
+        Err(e) => error(500, &format!("stopping `{}`: {e}", req.service)),
+    }
+}
+
+/// SIGTERM whatever process is listening on `port` (best-effort, via `lsof` + `kill`).
+fn kill_listener(port: u16) -> std::io::Result<()> {
+    std::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "pids=$(lsof -ti tcp:{port} -sTCP:LISTEN 2>/dev/null); [ -n \"$pids\" ] && kill $pids || true"
+        ))
+        .env("PATH", augmented_path())
+        .status()?;
+    Ok(())
 }
 
 /// The service's proxied port: the `http` slot, else the sole declared port, else `None`.
