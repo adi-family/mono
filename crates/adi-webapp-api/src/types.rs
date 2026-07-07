@@ -238,6 +238,37 @@ impl ProjectDetail {
     }
 }
 
+// ---- hive (every service across all projects + the global front-door) ----------------
+
+/// One service in the aggregated Hive view: where it's declared, its config, and whether it's
+/// currently up. Collected from each project's `.adi/hive.yaml` and the global front-door hive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HiveService {
+    /// The project id this service belongs to, or `None` for the global `~/.adi/mono/hive/hive.yaml`.
+    #[serde(default)]
+    pub project: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub host: Option<String>,
+    pub ports: Vec<ServicePort>,
+    #[serde(default)]
+    pub run: Option<String>,
+    #[serde(default)]
+    pub restart: Option<String>,
+    /// The port `running` was decided on (the `http` port, else the sole declared port).
+    #[serde(default)]
+    pub primary_port: Option<u16>,
+    /// Whether `primary_port` is currently listening on the machine.
+    pub running: bool,
+}
+
+/// `GET /api/hive` — every Hive service across all projects plus the global front-door hive,
+/// each with a live running/stopped flag.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HiveState {
+    pub services: Vec<HiveService>,
+}
+
 /// A JSON error body: `{ "ok": false, "error": "…" }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiError {

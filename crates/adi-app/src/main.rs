@@ -185,6 +185,15 @@ async fn handle(
         ("GET", p) if p.starts_with("/api/projects/") => {
             handlers::project_detail(projects, &p["/api/projects/".len()..])
         }
+        // Every hive service across all projects + the global front-door, with live status.
+        // The listening-port scan is platform I/O, so the host does it and passes the ports in.
+        ("GET", "/api/hive") => {
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
+            handlers::hive(projects, &listening)
+        }
         // Mesh: config CRUD (reads/writes ~/.adi/mono/mesh) plus starting/stopping the
         // in-process daemon. The daemon's run state is this app's, so it's passed in.
         ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),

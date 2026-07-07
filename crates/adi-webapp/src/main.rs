@@ -7,8 +7,8 @@
 #![allow(non_snake_case)] // Leptos components are PascalCase by convention.
 
 use adi_webapp_api::types::{
-    Health, LeaseRef, MeshForwardRef, MeshState, NewProject, PortsState, Project, ProjectDetail,
-    ProjectsState, UsedPorts,
+    Health, HiveState, LeaseRef, MeshForwardRef, MeshState, NewProject, PortsState, Project,
+    ProjectDetail, ProjectsState, UsedPorts,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -37,6 +37,7 @@ fn App() -> impl IntoView {
     let mesh = RwSignal::new(None::<MeshState>);
     let projects = RwSignal::new(None::<ProjectsState>);
     let project_detail = RwSignal::new(None::<ProjectDetail>);
+    let hive = RwSignal::new(None::<HiveState>);
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
     let current_project = RwSignal::new(project_id_from_path(&current_path()).unwrap_or_default());
@@ -51,6 +52,7 @@ fn App() -> impl IntoView {
         projects,
         project_detail,
         current_project,
+        hive,
     };
 
     // The Projects page's local form: the create inputs, a busy flag, and the active/archived filter.
@@ -119,7 +121,11 @@ fn App() -> impl IntoView {
         let _ = current_project.get();
         if matches!(
             route.get(),
-            Route::Projects | Route::ProjectDetail | Route::PortsManager | Route::Mesh
+            Route::Projects
+                | Route::ProjectDetail
+                | Route::Hive
+                | Route::PortsManager
+                | Route::Mesh
         ) {
             spawn_local(load(state));
         }
@@ -145,6 +151,11 @@ fn App() -> impl IntoView {
                     </a>
                     <div class="adi-nav__group">
                         <div class="adi-nav__heading">"Settings"</div>
+                        <a class="adi-nav__item" href=Route::Hive.path()
+                            aria-current=move || aria_current(route, Route::Hive)
+                            on:click=move |ev| spa_click(&ev, route, Route::Hive)>
+                            <span>"Hive"</span>
+                        </a>
                         <a class="adi-nav__item" href=Route::PortsManager.path()
                             aria-current=move || aria_current(route, Route::PortsManager)
                             on:click=move |ev| spa_click(&ev, route, Route::PortsManager)>
@@ -184,6 +195,7 @@ fn App() -> impl IntoView {
                         Route::Overview => overview_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route),
+                        Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
                     }}
@@ -651,6 +663,134 @@ where
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
     });
+}
+
+/// The Hive settings page: every service declared across all projects' `.adi/hive.yaml` plus
+/// the global front-door hive, each with a live running/stopped indicator.
+fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
+    let State { hive, .. } = state;
+    view! {
+        <section class="adi-tiles">
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Services"</div>
+                <div class="adi-tile__value">
+                    {move || hive.get().map_or_else(|| "—".to_string(), |h| h.services.len().to_string())}
+                </div>
+                <div class="adi-tile__note">"across all projects + front-door"</div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Running"</div>
+                <div class="adi-tile__value">
+                    {move || hive.get().map_or_else(|| "—".to_string(),
+                        |h| h.services.iter().filter(|s| s.running).count().to_string())}
+                </div>
+                <div class="adi-tile__note">
+                    {move || hive.get().map_or_else(|| "primary port listening".to_string(),
+                        |h| format!("{} stopped", h.services.iter().filter(|s| !s.running).count()))}
+                </div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Projects"</div>
+                <div class="adi-tile__value">
+                    {move || hive.get().map_or_else(|| "—".to_string(), |h| {
+                        let mut ids: Vec<&String> = h.services.iter().filter_map(|s| s.project.as_ref()).collect();
+                        ids.sort_unstable();
+                        ids.dedup();
+                        ids.len().to_string()
+                    })}
+                </div>
+                <div class="adi-tile__note">"contributing services (+ front-door)"</div>
+            </div>
+        </section>
+
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Hive services"</h2>
+                <span class="adi-spacer"></span>
+                <span class="adi-updated">
+                    {move || hive.get().map_or(String::new(), |h| format!("{} services", h.services.len()))}
+                </span>
+            </div>
+            <div class="adi-tablewrap">
+                <table class="adi-table">
+                    <thead>
+                        <tr>
+                            <th>"Source"</th><th>"Service"</th><th>"Host"</th><th>"Ports"</th>
+                            <th>"Command"</th><th>"Restart"</th><th>"Status"</th>
+                        </tr>
+                    </thead>
+                    <tbody>{move || hive_rows(state, route)}</tbody>
+                </table>
+            </div>
+            <footer class="adi-footer">
+                "Read from each project's " <code>".adi/hive.yaml"</code> " and the global "
+                <code>"~/.adi/mono/hive/hive.yaml"</code> ". Status = the service's primary port is listening."
+            </footer>
+        </section>
+    }
+    .into_any()
+}
+
+/// Rows for the aggregated hive table: global (front-door) services first, then per project;
+/// the source cell links into the owning project's detail page.
+fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
+    let Some(h) = state.hive.get() else {
+        return view! { <tr><td class="adi-empty" colspan="7">"Loading…"</td></tr> }.into_any();
+    };
+    if h.services.is_empty() {
+        return view! {
+            <tr><td class="adi-empty" colspan="7">"No hive services declared in any project or the global hive."</td></tr>
+        }
+        .into_any();
+    }
+    let mut services = h.services;
+    // Global (project == None) sorts first (None < Some), then by project id, then service name.
+    services.sort_by(|a, b| a.project.cmp(&b.project).then_with(|| a.name.cmp(&b.name)));
+    services
+        .into_iter()
+        .map(|s| {
+            let source = match &s.project {
+                None => view! { <span class="adi-chip">"front-door"</span> }.into_any(),
+                Some(id) => {
+                    let open_id = id.clone();
+                    let href = format!("/projects/{id}");
+                    view! {
+                        <a class="adi-btn adi-btn--link adi-mono" href=href
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                                ev.prevent_default();
+                                open_project(state, route, open_id.clone());
+                            }>{id.clone()}</a>
+                    }.into_any()
+                }
+            };
+            let host = s.host.unwrap_or_else(|| "—".to_string());
+            let ports = if s.ports.is_empty() {
+                "—".to_string()
+            } else {
+                s.ports.iter().map(|p| format!("{}:{}", p.key, p.port)).collect::<Vec<_>>().join(", ")
+            };
+            let run = s.run.unwrap_or_else(|| "—".to_string());
+            let restart = s.restart.unwrap_or_else(|| "—".to_string());
+            let (state_attr, label) = if s.running { ("online", "Running") } else { ("down", "Stopped") };
+            view! {
+                <tr>
+                    <td>{source}</td>
+                    <td class="adi-mono">{s.name}</td>
+                    <td class="adi-mono">{host}</td>
+                    <td class="adi-mono adi-table__port">{ports}</td>
+                    <td class="adi-mono adi-muted">{run}</td>
+                    <td class="adi-muted">{restart}</td>
+                    <td>
+                        <span class="adi-status" data-state=state_attr>
+                            <span class="adi-status__led"></span><span>{label}</span>
+                        </span>
+                    </td>
+                </tr>
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
 }
 
 /// Format a Unix timestamp (seconds) as a `YYYY-MM-DD` UTC date; `0` renders as `—`. Pure
@@ -1214,6 +1354,7 @@ enum Route {
     Projects,
     /// A single project's detail page (`/projects/<id>`); the id lives in `State::current_project`.
     ProjectDetail,
+    Hive,
     PortsManager,
     Mesh,
 }
@@ -1226,6 +1367,7 @@ impl Route {
         }
         match path {
             "/projects" => Route::Projects,
+            "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
             _ => Route::Overview,
@@ -1238,6 +1380,7 @@ impl Route {
         match self {
             Route::Overview => "/overview",
             Route::Projects | Route::ProjectDetail => "/projects",
+            Route::Hive => "/settings/hive",
             Route::PortsManager => "/settings/ports-manager",
             Route::Mesh => "/settings/mesh",
         }
@@ -1249,6 +1392,7 @@ impl Route {
             Route::Overview => "Overview",
             Route::Projects => "Projects",
             Route::ProjectDetail => "Project",
+            Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",
         }
@@ -1354,6 +1498,7 @@ struct State {
     projects: RwSignal<Option<ProjectsState>>,
     project_detail: RwSignal<Option<ProjectDetail>>,
     current_project: RwSignal<String>,
+    hive: RwSignal<Option<HiveState>>,
 }
 
 /// The Projects page's local signals: the create-form inputs, a busy flag, and the
@@ -1417,6 +1562,11 @@ async fn load(s: State) {
         && let Ok(d) = fetch::project_detail(&id).await
     {
         s.project_detail.set(Some(d));
+    }
+    if path == Route::Hive.path()
+        && let Ok(h) = fetch::hive().await
+    {
+        s.hive.set(Some(h));
     }
     if path == Route::PortsManager.path()
         && let Ok(u) = fetch::used().await
@@ -1649,9 +1799,9 @@ fn prefers_dark() -> bool {
 /// Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 mod fetch {
     use adi_webapp_api::types::{
-        ApiError, Health, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
-        NewProject, PortsState, ProjectDetail, ProjectRef, ProjectsState, ReleaseResponse,
-        ReserveResponse, UsedPorts,
+        ApiError, Health, HiveState, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef,
+        MeshState, NewProject, PortsState, ProjectDetail, ProjectRef, ProjectsState,
+        ReleaseResponse, ReserveResponse, UsedPorts,
     };
     use gloo_net::http::{Request, Response};
     use serde::Serialize;
@@ -1741,6 +1891,10 @@ mod fetch {
 
     pub async fn remove_project(id: String) -> Result<ProjectsState, String> {
         post("/api/projects/remove", &ProjectRef { id }).await
+    }
+
+    pub async fn hive() -> Result<HiveState, String> {
+        get("/api/hive").await
     }
 
     async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {

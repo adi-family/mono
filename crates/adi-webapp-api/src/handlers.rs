@@ -14,10 +14,10 @@ use adi_projects::{Error as ProjectStoreError, Projects};
 use serde::Deserialize;
 
 use crate::types::{
-    ApiError, Health, Lease, LeaseRef, MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef,
-    MeshPortRef, MeshState, NewProject, PortsState, Project, ProjectDetail, ProjectRef,
-    ProjectService, ProjectsState, Range, ReleaseResponse, ReserveResponse, ServicePort, UsedPort,
-    UsedPorts,
+    ApiError, Health, HiveService, HiveState, Lease, LeaseRef, MeshForward, MeshForwardRef,
+    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, PortsState, Project,
+    ProjectDetail, ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse,
+    ReserveResponse, ServicePort, UsedPort, UsedPorts,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -201,11 +201,11 @@ pub fn remove_project(store: &Projects, body: &[u8]) -> (u16, String) {
 #[derive(Deserialize)]
 struct HiveDoc {
     #[serde(default)]
-    services: BTreeMap<String, HiveService>,
+    services: BTreeMap<String, YamlService>,
 }
 
 #[derive(Deserialize)]
-struct HiveService {
+struct YamlService {
     #[serde(default)]
     proxy: Option<HiveProxy>,
     #[serde(default)]
@@ -275,6 +275,73 @@ fn read_hive_services(path: &Path) -> (bool, Vec<ProjectService>) {
         })
         .collect();
     (true, services)
+}
+
+// MARK: hive — every service across all projects + the global front-door hive
+
+/// The port key that names a service's HTTP port (mirrors adi-hive's `HTTP_PORT_KEY`).
+const HTTP_PORT_KEY: &str = "http";
+
+/// The port a service's liveness is judged on: the `http` port, else the sole port, else `None`.
+fn primary_port(ports: &[ServicePort]) -> Option<u16> {
+    if let Some(p) = ports.iter().find(|p| p.key == HTTP_PORT_KEY) {
+        return Some(p.port);
+    }
+    match ports {
+        [only] => Some(only.port),
+        _ => None,
+    }
+}
+
+/// `GET /api/hive` — aggregate every service declared across all projects' `.adi/hive.yaml`
+/// plus the global `~/.adi/mono/hive/hive.yaml`, tagged with a live running flag. `listening`
+/// is the set of currently-listening TCP ports (the host does the platform scan and passes it).
+#[must_use]
+pub fn hive(store: &Projects, listening: &[u16]) -> (u16, String) {
+    let mut services = Vec::new();
+
+    // The global front-door hive lives in the `hive` module of the same store the projects use.
+    let global = store.config().module("hive").raw_path("hive.yaml");
+    collect_hive_services(None, &global, listening, &mut services);
+
+    // Each project's own hive.yaml (skips archived? no — show every registered project).
+    match store.list() {
+        Ok(projects) => {
+            for project in projects {
+                if let Ok(path) = store.hive_path(&project.id) {
+                    collect_hive_services(Some(&project.id), &path, listening, &mut services);
+                }
+            }
+        }
+        Err(e) => return project_error(&e),
+    }
+
+    ok_json(&HiveState { services })
+}
+
+/// Parse one hive.yaml and append its services to `out`, tagged with `project` and a running
+/// flag (its primary port is in `listening`).
+fn collect_hive_services(
+    project: Option<&str>,
+    path: &Path,
+    listening: &[u16],
+    out: &mut Vec<HiveService>,
+) {
+    let (_has_hive, parsed) = read_hive_services(path);
+    for svc in parsed {
+        let port = primary_port(&svc.ports);
+        let running = port.is_some_and(|p| listening.contains(&p));
+        out.push(HiveService {
+            project: project.map(str::to_string),
+            name: svc.name,
+            host: svc.host,
+            ports: svc.ports,
+            run: svc.run,
+            restart: svc.restart,
+            primary_port: port,
+            running,
+        });
+    }
 }
 
 /// Flatten a stored project into its wire [`Project`] DTO.

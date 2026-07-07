@@ -15,6 +15,7 @@ default = []
 # the DTO types (never adi-ports-manager or adi-mesh, which do filesystem I/O / link iroh
 # and can't target wasm).
 server = [
+    "dep:adi-config",
     "dep:adi-ports-manager",
     "dep:adi-mesh",
     "dep:adi-projects",
@@ -26,8 +27,10 @@ server = [
 # The wire types are pure serde — this is the only dependency that reaches wasm.
 serde = { workspace = true }
 
-# Server-only: the live port registry, the mesh config/identity/ticket library, the projects
-# registry, JSON, and YAML (to read a project's .adi/hive.yaml for the detail view).
+# Server-only: the config store (to locate the global hive.yaml), the live port registry, the
+# mesh config/identity/ticket library, the projects registry, JSON, and YAML (to read each
+# .adi/hive.yaml for the detail + aggregated-hive views).
+adi-config = { workspace = true, optional = true }
 adi-ports-manager = { workspace = true, optional = true }
 adi-mesh = { workspace = true, optional = true }
 adi-projects = { workspace = true, optional = true }
