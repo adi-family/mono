@@ -4,6 +4,8 @@
 
 use std::path::PathBuf;
 
+use serde::{Deserialize, Serialize};
+
 use crate::launchd;
 use crate::paths;
 use crate::proc;
@@ -47,6 +49,48 @@ fn frontdoor_config_path() -> PathBuf {
 }
 fn frontdoor_plist_stage() -> PathBuf {
     service_dir().join(format!("{FRONTDOOR_LABEL}.plist"))
+}
+
+// MARK: front-door settings — the .adi hosts the front door proxies to the control panel
+
+/// Simple, user-editable settings for the always-on front door: the `.adi` hosts proxied to
+/// the control panel (`adi-app`). Every host is an alternative name for the *same* adi-app
+/// process — they all share its single ports-manager-allocated port — so e.g. `api.adi` reaches
+/// the very `/api` that `app.adi` serves. Lives at `~/.adi/mono/dns/frontdoor.toml`; edit
+/// `hosts` to add or rename entries.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FrontdoorSettings {
+    hosts: Vec<String>,
+}
+
+impl Default for FrontdoorSettings {
+    fn default() -> Self {
+        Self {
+            hosts: vec![format!("app.{DOMAIN}"), format!("api.{DOMAIN}")],
+        }
+    }
+}
+
+/// The typed `frontdoor.toml` settings file within the `dns` module.
+fn frontdoor_settings() -> adi_config::ConfigFile<FrontdoorSettings> {
+    adi_config::Config::open()
+        .module("dns")
+        .file("frontdoor.toml")
+}
+
+/// The front-door hosts to render, materializing the default `frontdoor.toml` on first use so
+/// it's there to edit. Any read/parse failure, or an empty list, falls back to the defaults —
+/// the front door must always render *something* (never an empty proxy).
+fn frontdoor_hosts() -> Vec<String> {
+    let hosts = frontdoor_settings()
+        .load_or_create()
+        .unwrap_or_default()
+        .hosts;
+    if hosts.is_empty() {
+        FrontdoorSettings::default().hosts
+    } else {
+        hosts
+    }
 }
 
 /// The bundled `adi-dns`, resolved as a sibling of the running executable, overridable via `ADI_DNS_BIN`.
@@ -93,29 +137,38 @@ fn render_config() -> String {
     )
 }
 
-/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and **proxies** `app.{DOMAIN}`
-/// to the control panel (`adi-app`) on `app_port`. It no longer *runs* adi-app — that's a
-/// separate per-user `LaunchAgent` ([`crate::app`]) so the on/off toggle can start/stop it
-/// (and its in-process mesh) without a password. Any other host gets the 4XX page.
-fn render_frontdoor_hive(app_port: u16) -> String {
-    // Plain multi-line literal so YAML indentation is exact (`\`-continuation would strip leading spaces).
+/// The front-door `hive.yaml`: adi-hive binds `127.0.0.53:80` and **proxies** every host in
+/// `hosts` (from [`frontdoor_hosts`]) to the control panel (`adi-app`) on `app_port` — all to
+/// the same process, so `api.adi` reaches the same `/api` `app.adi` serves. It no longer *runs*
+/// adi-app — that's a separate per-user `LaunchAgent` ([`crate::app`]) so the on/off toggle can
+/// start/stop it (and its in-process mesh) without a password. Any other host gets the 4XX page.
+fn render_frontdoor_hive(hosts: &[String], app_port: u16) -> String {
+    // One `services:` entry per host, keyed by the host's first label (`app.adi` → `app`). All
+    // point at the same `app_port` — different names for one upstream. Built as a plain literal
+    // so YAML indentation is exact.
+    use std::fmt::Write as _;
+    let mut routes = String::new();
+    for host in hosts {
+        let name = host
+            .split('.')
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(host);
+        let _ = write!(
+            routes,
+            "  {name}:\n    proxy:\n      host: {host}\n    rollout:\n      recreate:\n        ports:\n          http: {app_port}\n"
+        );
+    }
     format!(
         "# Written by adi-core — adi-hive front door for the .{DOMAIN} zone.
-# Always-on plumbing: proxies app.{DOMAIN} to the adi control panel (adi-app), which runs
-# as its own per-user LaunchAgent on this same reserved port so it can be toggled without a
-# password. Any other host gets the animated 4XX page.
+# Always-on plumbing: proxies the hosts below to the adi control panel (adi-app), which runs
+# as its own per-user LaunchAgent on this reserved port so it can be toggled without a
+# password. Hosts come from ~/.adi/mono/dns/frontdoor.toml. Any other host gets the 4XX page.
 proxy:
   bind:
     - \"{FRONTDOOR_ADDR}:{FRONTDOOR_PORT}\"
 services:
-  app:
-    proxy:
-      host: app.{DOMAIN}
-    rollout:
-      recreate:
-        ports:
-          http: {app_port}
-"
+{routes}"
     )
 }
 
@@ -129,7 +182,7 @@ fn write_frontdoor_artifacts() {
     let _ = std::fs::create_dir_all(service_dir());
     let _ = std::fs::write(
         frontdoor_config_path(),
-        render_frontdoor_hive(crate::app::port()),
+        render_frontdoor_hive(&frontdoor_hosts(), crate::app::port()),
     );
     let env = [
         ("RUST_LOG".to_string(), "info".to_string()),
@@ -155,7 +208,7 @@ fn write_frontdoor_artifacts() {
 /// privileged update/restart is needed. A mismatch (or missing file) means the front door
 /// is running an old config and should be refreshed once.
 fn frontdoor_config_current() -> bool {
-    let rendered = render_frontdoor_hive(crate::app::port());
+    let rendered = render_frontdoor_hive(&frontdoor_hosts(), crate::app::port());
     std::fs::read_to_string(frontdoor_config_path()).is_ok_and(|on_disk| on_disk == rendered)
 }
 
@@ -309,20 +362,30 @@ mod tests {
 
     #[test]
     fn frontdoor_hive_proxies_the_control_panel_and_is_valid_yaml() {
-        let cfg = render_frontdoor_hive(8091);
+        let hosts = vec!["app.adi".to_string(), "api.adi".to_string()];
+        let cfg = render_frontdoor_hive(&hosts, 8091);
         assert!(cfg.contains("- \"127.0.0.53:80\""));
 
         // It must parse as YAML with the expected shape (catches indentation bugs).
         let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&cfg).expect("valid YAML");
         assert_eq!(v["proxy"]["bind"][0].as_str(), Some("127.0.0.53:80"));
-        let app = &v["services"]["app"];
-        assert_eq!(app["proxy"]["host"].as_str(), Some("app.adi"));
-        // Proxy-only: routes app.adi to the reserved port and does NOT run adi-app itself.
-        assert_eq!(
-            app["rollout"]["recreate"]["ports"]["http"].as_u64(),
-            Some(8091)
-        );
-        assert!(app["runner"].is_null());
+
+        // Every host becomes a service keyed by its first label, all pointing at the same port
+        // (different names for one adi-app upstream). Proxy-only: no runner.
+        for (name, host) in [("app", "app.adi"), ("api", "api.adi")] {
+            let svc = &v["services"][name];
+            assert_eq!(svc["proxy"]["host"].as_str(), Some(host));
+            assert_eq!(
+                svc["rollout"]["recreate"]["ports"]["http"].as_u64(),
+                Some(8091)
+            );
+            assert!(svc["runner"].is_null());
+        }
+    }
+
+    #[test]
+    fn frontdoor_settings_default_to_app_and_api_dot_adi() {
+        assert_eq!(FrontdoorSettings::default().hosts, ["app.adi", "api.adi"]);
     }
 
     #[test]
