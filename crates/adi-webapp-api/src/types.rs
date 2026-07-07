@@ -188,6 +188,23 @@ pub struct ProjectRef {
     pub id: String,
 }
 
+/// Request body for `POST /api/hive/start` — launch one hive service's runner. `project` is the
+/// owning project id, or `None` for the global front-door hive.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartService {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub service: String,
+}
+
+/// Response from `POST /api/hive/start` — the launched service, its injected port, and the child pid.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartResult {
+    pub service: String,
+    pub port: Option<u16>,
+    pub pid: u32,
+}
+
 /// One named port a service declares (`rollout.recreate.ports.<key> = <port>`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicePort {

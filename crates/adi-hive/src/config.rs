@@ -29,6 +29,10 @@ const FRONT_DOOR_KEY: &str = "front-door";
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Hive {
+    /// Glob patterns (e.g. `$ADI_PROJECTS_DIR/**/hive.yaml`) whose matched hive.yaml files are
+    /// fanned in as proxy routes, so this hive is the single front door for every project.
+    #[serde(default)]
+    pub imports: Vec<String>,
     #[serde(default)]
     pub proxy: ProxyBinds,
     #[serde(default)]
@@ -78,7 +82,10 @@ pub struct Rollout {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Recreate {
-    #[serde(default)]
+    /// Named ports. Each value is a literal integer or a `` bash`ports-manager.get('name')` ``
+    /// command (rewritten by the loader's preprocessor into a `datacommand:<hash>` placeholder),
+    /// executed to reserve a port when the config is read.
+    #[serde(default, deserialize_with = "adi_ports_manager::ports_map")]
     pub ports: BTreeMap<String, u16>,
 }
 
@@ -302,6 +309,69 @@ fn expand_templates(input: &str, ports: &BTreeMap<String, u16>) -> String {
     out
 }
 
+// MARK: imports — fan every project's hive.yaml into one front door
+
+/// Substitute config variables in an import pattern: `$ADI_PROJECTS_DIR` (the projects module
+/// dir, honoring `$ADI_DIR`) and `$HOME`.
+fn expand_vars(pattern: &str) -> String {
+    let cfg = adi_config::Config::open();
+    let projects = cfg.module("projects").dir().to_string_lossy().into_owned();
+    let mut out = pattern.replace("$ADI_PROJECTS_DIR", &projects);
+    if let Some(home) = std::env::var_os("HOME") {
+        out = out.replace("$HOME", &home.to_string_lossy());
+    }
+    out
+}
+
+/// Resolve an import pattern to concrete files. Supports `<base>/**/<filename>` (walk `<base>`
+/// recursively, collect files named `<filename>`) and a plain path (included if it exists).
+fn find_imports(pattern: &str) -> Vec<PathBuf> {
+    if let Some((base, filename)) = pattern.split_once("/**/") {
+        let mut out = Vec::new();
+        walk_collect(Path::new(base), filename, &mut out);
+        out.sort();
+        out
+    } else {
+        let p = PathBuf::from(pattern);
+        if p.exists() { vec![p] } else { Vec::new() }
+    }
+}
+
+/// Recursively collect files named `filename` under `dir`.
+fn walk_collect(dir: &Path, filename: &str, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            walk_collect(&path, filename, out);
+        } else if path.file_name().is_some_and(|n| n == filename) {
+            out.push(path);
+        }
+    }
+}
+
+/// The namespace for an imported hive's services: the project id from
+/// `.../<project>/.adi/hive.yaml`, else the file's parent dir name, else `import`.
+fn import_namespace(file: &Path) -> String {
+    let parent = file.parent();
+    let ns = if parent.and_then(Path::file_name).is_some_and(|n| n == ".adi") {
+        parent.and_then(Path::parent).and_then(Path::file_name)
+    } else {
+        parent.and_then(Path::file_name)
+    };
+    ns.map_or_else(|| "import".to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Whether two paths point at the same file (canonicalized), so a hive never imports itself.
+fn same_file(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => a == b,
+    }
+}
+
 // MARK: resolution — from the parsed spec to what the daemon runs
 
 /// One routing rule the proxy enforces: `Host: host` → `upstream`.
@@ -320,12 +390,51 @@ pub struct Resolved {
 }
 
 impl Hive {
+    /// Load a hive.yaml and fan in every service reachable through its `imports`, so one hive can
+    /// front-door an entire machine.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
+        let mut hive = Self::parse_file(path)?;
+        hive.apply_imports(path);
+        Ok(hive)
+    }
+
+    /// Parse a single hive.yaml with no import expansion: rewrite `bash`…`` port commands into
+    /// valid YAML placeholders, then parse with the command table installed so port fields run
+    /// their commands on read.
+    fn parse_file(path: &Path) -> anyhow::Result<Self> {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("reading config file {}", path.display()))?;
-        let hive: Self = serde_yaml_ng::from_str(&raw)
-            .with_context(|| format!("parsing config file {}", path.display()))?;
+        let (yaml, commands) = adi_ports_manager::preprocess(&raw);
+        let hive: Self = adi_ports_manager::with_commands(commands, || {
+            serde_yaml_ng::from_str(&yaml)
+        })
+        .with_context(|| format!("parsing config file {}", path.display()))?;
         Ok(hive)
+    }
+
+    /// Expand each `imports` glob and merge the matched hive.yaml files' services in as
+    /// **proxy-only** routes — keyed `<project>/<service>`, with runners stripped (the front door
+    /// routes them; it does not run them, so a root front door never spawns user processes).
+    /// Best-effort: an unreadable or unparsable import is logged and skipped, never fatal.
+    fn apply_imports(&mut self, base: &Path) {
+        let patterns = std::mem::take(&mut self.imports);
+        for pattern in patterns {
+            for file in find_imports(&expand_vars(&pattern)) {
+                if same_file(&file, base) {
+                    continue; // never import ourselves
+                }
+                match Self::parse_file(&file) {
+                    Ok(child) => {
+                        let ns = import_namespace(&file);
+                        for (name, mut svc) in child.services {
+                            svc.runner = None;
+                            self.services.entry(format!("{ns}/{name}")).or_insert(svc);
+                        }
+                    }
+                    Err(e) => warn!(file = %file.display(), error = %e, "skipping unreadable import"),
+                }
+            }
+        }
     }
 
     #[must_use]
@@ -549,6 +658,46 @@ services:
     }
 
     #[test]
+    fn imports_fan_in_project_services_namespaced_and_proxy_only() {
+        // A temp tree: <base>/proj/.adi/hive.yaml with a proxied service that has a runner and an
+        // integer port (no ports-manager command, so the test touches no registry).
+        let base = std::env::temp_dir().join(format!(
+            "adi-hive-imports-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let proj = base.join("proj/.adi");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join("hive.yaml"),
+            "services:\n  app:\n    proxy: { host: proj.adi }\n    rollout: { recreate: { ports: { http: 9123 } } }\n    runner: { type: script, script: { run: \"echo hi\" } }\n",
+        )
+        .unwrap();
+        // A parent hive that imports the temp tree via a `<base>/**/hive.yaml` glob.
+        let parent = base.join("parent.yaml");
+        std::fs::write(
+            &parent,
+            format!("imports:\n  - {}/**/hive.yaml\n", base.display()),
+        )
+        .unwrap();
+
+        let hive = Hive::load(&parent).expect("load with imports");
+        // Fanned in under `<project>/<service>`, proxy kept, runner stripped (proxy-only).
+        let svc = hive.services.get("proj/app").expect("imported service present");
+        assert_eq!(svc.proxy.as_ref().expect("proxy").host, "proj.adi");
+        assert_eq!(svc.http_port(), Some(9123));
+        assert!(svc.runner.is_none(), "imported services are proxy-only");
+        // resolve() routes the imported host to the imported port.
+        let routes = hive.resolve().routes;
+        assert!(
+            routes
+                .iter()
+                .any(|r| r.host == "proj.adi" && r.upstream.port() == 9123)
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn restart_policy_parses_case_insensitively_with_on_failure_default() {
         assert_eq!(RestartPolicy::parse(Some("Always")), RestartPolicy::Always);
         assert_eq!(RestartPolicy::parse(Some(" no ")), RestartPolicy::Never);
@@ -601,6 +750,46 @@ services:
 
         // Idempotent: a second pass allocates nothing (the port is already set).
         assert!(hive.allocate_missing_ports(&manager).is_empty());
+        let _ = std::fs::remove_dir_all(registry.parent().unwrap());
+    }
+
+    #[test]
+    fn resolves_a_bash_backtick_port_command_written_unquoted() {
+        let registry = std::env::temp_dir().join(format!(
+            "adi-hive-cmd-{}-{:?}/registry.json",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(registry.parent().unwrap());
+        let manager = adi_ports_manager::Ports::with_config(adi_ports_manager::Config {
+            registry_path: registry.clone(),
+            ..adi_ports_manager::Config::default()
+        });
+
+        // The command is written UNQUOTED, in flow style, exactly as a project hive.yaml does:
+        // `http: bash`ports-manager.get('demo/app')``. The preprocessor rewrites it to a valid
+        // `datacommand:<hash>` placeholder; parsing then runs it on read, reserving the port
+        // against the (overridden) registry.
+        let raw = r"
+services:
+  app:
+    proxy: { host: demo.adi, path: / }
+    rollout: { recreate: { ports: { http: bash`ports-manager.get('demo/app')` } } }
+";
+        let (yaml, commands) = adi_ports_manager::preprocess(raw);
+        let hive: Hive = adi_ports_manager::with_ports(manager.clone(), || {
+            adi_ports_manager::with_commands(commands, || serde_yaml_ng::from_str(&yaml))
+                .expect("preprocessed bash`…` command parses and resolves")
+        });
+
+        let port = manager
+            .get("demo/app", "port")
+            .expect("lookup")
+            .expect("the command reserved a port on read");
+        let routes = hive.resolve().routes;
+        assert_eq!(routes.len(), 1);
+        assert_eq!(routes[0].host, "demo.adi");
+        assert_eq!(routes[0].upstream.port(), port);
         let _ = std::fs::remove_dir_all(registry.parent().unwrap());
     }
 

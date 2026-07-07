@@ -7,6 +7,7 @@ mod error;
 mod lock;
 mod probe;
 mod registry;
+mod template;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -15,6 +16,10 @@ pub use config::{Config, default_registry_path};
 pub use error::{Error, Result};
 pub use probe::is_bindable;
 pub use registry::{Lease, Registry};
+// Config-field port commands: the `bash`…`` preprocessor (`preprocess`/`Commands`/`with_commands`)
+// plus serde `deserialize_with` helpers (`port`/`ports_map`) that run `datacommand:<hash>`
+// placeholders on read. See the `template` module.
+pub use template::{Commands, Port, port, ports_map, preprocess, with_commands, with_ports};
 
 use lock::FileLock;
 

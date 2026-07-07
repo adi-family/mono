@@ -518,6 +518,8 @@ fn detail_body(
     let has_hive = d.has_hive;
     let services = d.services.clone();
     let service_count = services.len();
+    let reload_id = id.clone();
+    let rows_id = id.clone();
 
     // Archive / restore action.
     let toggle_id = id.clone();
@@ -609,14 +611,17 @@ fn detail_body(
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Services"</h2>
                 <span class="adi-spacer"></span>
+                <button class="adi-btn adi-btn--ghost" type="button"
+                    title="Re-read this project's .adi/hive.yaml from disk"
+                    on:click=move |_| reload_project(state, reload_id.clone())>"Reload config"</button>
                 <span class="adi-updated">"the project's .adi/hive.yaml"</span>
             </div>
             <div class="adi-tablewrap">
                 <table class="adi-table">
                     <thead>
-                        <tr><th>"Service"</th><th>"Host"</th><th>"Ports"</th><th>"Command"</th><th>"Restart"</th></tr>
+                        <tr><th>"Service"</th><th>"Host"</th><th>"Ports"</th><th>"Command"</th><th>"Restart"</th><th></th></tr>
                     </thead>
-                    <tbody>{service_rows(services, has_hive)}</tbody>
+                    <tbody>{service_rows(state, rows_id, services, has_hive)}</tbody>
                 </table>
             </div>
         </section>
@@ -625,19 +630,26 @@ fn detail_body(
 }
 
 /// Rows for the services table: a message when there's no hive / no services, else one row per
-/// service (host, ports as `key:port`, run command, restart policy).
-fn service_rows(services: Vec<adi_webapp_api::types::ProjectService>, has_hive: bool) -> AnyView {
+/// service (host, ports as `key:port`, run command, restart policy, and a Start action for
+/// services that declare a runner).
+fn service_rows(
+    state: State,
+    project: String,
+    services: Vec<adi_webapp_api::types::ProjectService>,
+    has_hive: bool,
+) -> AnyView {
     if services.is_empty() {
         let msg = if has_hive {
             "This project's .adi/hive.yaml declares no services."
         } else {
             "No .adi/hive.yaml — this project has no runtime services yet."
         };
-        return view! { <tr><td class="adi-empty" colspan="5">{msg}</td></tr> }.into_any();
+        return view! { <tr><td class="adi-empty" colspan="6">{msg}</td></tr> }.into_any();
     }
     services
         .into_iter()
         .map(|s| {
+            let name = s.name.clone();
             let host = s.host.unwrap_or_else(|| "—".to_string());
             let ports = if s.ports.is_empty() {
                 "—".to_string()
@@ -648,15 +660,32 @@ fn service_rows(services: Vec<adi_webapp_api::types::ProjectService>, has_hive: 
                     .collect::<Vec<_>>()
                     .join(", ")
             };
+            // Only a service with a `run` command has a runner to start.
+            let has_runner = s.run.is_some();
             let run = s.run.unwrap_or_else(|| "—".to_string());
             let restart = s.restart.unwrap_or_else(|| "—".to_string());
+            let start_project = project.clone();
+            let start_name = name.clone();
+            let action = if has_runner {
+                view! {
+                    <button class="adi-btn adi-btn--ghost" type="button"
+                        title="Run this service's command with its ports-manager port"
+                        on:click=move |_| start_service(state, Some(start_project.clone()), start_name.clone())>
+                        "Start"
+                    </button>
+                }
+                .into_any()
+            } else {
+                view! { <span class="adi-muted">"—"</span> }.into_any()
+            };
             view! {
                 <tr>
-                    <td class="adi-mono">{s.name}</td>
+                    <td class="adi-mono">{name}</td>
                     <td class="adi-mono">{host}</td>
                     <td class="adi-mono adi-table__port">{ports}</td>
                     <td class="adi-mono adi-muted">{run}</td>
                     <td class="adi-muted">{restart}</td>
+                    <td>{action}</td>
                 </tr>
             }
         })
@@ -972,6 +1001,59 @@ fn fmt_size(bytes: u64) -> String {
 
 /// The Hive settings page: every service declared across all projects' `.adi/hive.yaml` plus
 /// the global front-door hive, each with a live running/stopped indicator.
+/// Start a service's runner on the backend (its `run` command, with the ports-manager `PORT`
+/// injected), then refresh the project page so its status can flip to running.
+fn start_service(state: State, project: Option<String>, service: String) {
+    spawn_local(async move {
+        match fetch::start_service(project.clone(), service.clone()).await {
+            Ok(r) => {
+                let at = r.port.map_or(String::new(), |p| format!(" on :{p}"));
+                state
+                    .flash
+                    .set(Some(Flash::ok(format!("Started {}{at}.", r.service))));
+                if let Some(id) = project {
+                    reload_project(state, id);
+                }
+            }
+            Err(e) => state
+                .flash
+                .set(Some(Flash::err(format!("Couldn't start {service}: {e}")))),
+        }
+    });
+}
+
+/// Re-fetch one project's detail — which re-reads its `.adi/hive.yaml` from disk (re-running any
+/// `bash`…`` port commands) — and refresh the project page.
+fn reload_project(state: State, id: String) {
+    spawn_local(async move {
+        match fetch::project_detail(&id).await {
+            Ok(d) => {
+                state.project_detail.set(Some(d));
+                state.flash.set(Some(Flash::ok("Reloaded project config.".to_string())));
+            }
+            Err(e) => state
+                .flash
+                .set(Some(Flash::err(format!("Couldn't reload project config: {e}")))),
+        }
+    });
+}
+
+/// Re-fetch `/api/hive` — which re-reads every project's `.adi/hive.yaml` and the global hive
+/// from disk (re-running any `bash`…`` port commands) — and refresh the Services view.
+fn reload_hive(state: State) {
+    spawn_local(async move {
+        match fetch::hive().await {
+            Ok(h) => {
+                state.hive.set(Some(h));
+                state.flash.set(Some(Flash::ok("Reloaded hive config.".to_string())));
+            }
+            Err(e) => state
+                .flash
+                .set(Some(Flash::err(format!("Couldn't reload hive config: {e}")))),
+        }
+    });
+}
+
 fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
     let State { hive, .. } = state;
     view! {
@@ -1012,6 +1094,9 @@ fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Hive services"</h2>
                 <span class="adi-spacer"></span>
+                <button class="adi-btn adi-btn--ghost" type="button"
+                    title="Re-read every project's .adi/hive.yaml and the global hive from disk"
+                    on:click=move |_| reload_hive(state)>"Reload config"</button>
                 <span class="adi-updated">
                     {move || hive.get().map_or(String::new(), |h| format!("{} services", h.services.len()))}
                 </span>
@@ -2159,7 +2244,8 @@ mod fetch {
     use adi_webapp_api::types::{
         ApiError, DirListing, FileContent, FilesRef, Health, HiveState, MeshForwardRef,
         MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, PortsState, ProjectDetail,
-        ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, UsedPorts, WriteFile,
+        ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, StartResult, StartService,
+        UsedPorts, WriteFile,
     };
     use gloo_net::http::{Request, Response};
     use serde::Serialize;
@@ -2253,6 +2339,13 @@ mod fetch {
 
     pub async fn hive() -> Result<HiveState, String> {
         get("/api/hive").await
+    }
+
+    pub async fn start_service(
+        project: Option<String>,
+        service: String,
+    ) -> Result<StartResult, String> {
+        post("/api/hive/start", &StartService { project, service }).await
     }
 
     // Project files: browse/read/edit the files under a project's own directory (jailed to it).

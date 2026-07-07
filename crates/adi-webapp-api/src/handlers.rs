@@ -4,7 +4,8 @@
 //! which pulls in the filesystem-backed registry and so is native-only.
 
 use std::collections::BTreeMap;
-use std::path::{Component, Path};
+use std::os::unix::process::CommandExt;
+use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 use adi_fs::{Error as FsError, Jail};
@@ -18,7 +19,8 @@ use crate::types::{
     ApiError, DirListing, FileContent, FileEntry, FilesRef, Health, HiveService, HiveState, Lease,
     LeaseRef, MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
     NewProject, PortsState, Project, ProjectDetail, ProjectRef, ProjectService, ProjectsState,
-    Range, ReleaseResponse, ReserveResponse, ServicePort, UsedPort, UsedPorts, WriteFile,
+    Range, ReleaseResponse, ReserveResponse, ServicePort, StartResult, StartService, UsedPort,
+    UsedPorts, WriteFile,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -230,7 +232,10 @@ struct HiveRollout {
 
 #[derive(Deserialize)]
 struct HiveRecreate {
-    #[serde(default)]
+    /// Values may be literals or `` bash`ports-manager.get('name')` `` commands (preprocessed into
+    /// `datacommand:<hash>` placeholders), executed to reserve ports when this view reads the
+    /// config (see `adi_ports_manager::preprocess` / `ports_map`).
+    #[serde(default, deserialize_with = "adi_ports_manager::ports_map")]
     ports: BTreeMap<String, u16>,
 }
 
@@ -243,6 +248,8 @@ struct HiveRunner {
 #[derive(Deserialize)]
 struct HiveScript {
     run: String,
+    #[serde(default)]
+    working_dir: Option<String>,
 }
 
 /// Read a project's `.adi/hive.yaml` into `(has_hive, services)`. A missing file is
@@ -252,7 +259,12 @@ fn read_hive_services(path: &Path) -> (bool, Vec<ProjectService>) {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return (false, Vec::new());
     };
-    let Ok(doc) = serde_yaml_ng::from_str::<HiveDoc>(&raw) else {
+    // Rewrite `bash`…`` port commands into valid YAML, then parse with the command table
+    // installed so port fields resolve and run their commands on read.
+    let (yaml, commands) = adi_ports_manager::preprocess(&raw);
+    let Ok(doc) =
+        adi_ports_manager::with_commands(commands, || serde_yaml_ng::from_str::<HiveDoc>(&yaml))
+    else {
         return (true, Vec::new());
     };
     let services = doc
@@ -528,6 +540,148 @@ fn collect_hive_services(
             running,
         });
     }
+}
+
+/// `POST /api/hive/start` — launch a hive service's runner (its `run` command) with the
+/// ports-manager-allocated `PORT` injected, in its working directory. The child is detached (its
+/// own process group) and its output goes to `<workdir>/server.log`; status then reflects the
+/// service's primary port listening.
+#[must_use]
+pub fn start_service(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Ok(req) = serde_json::from_slice::<StartService>(body) else {
+        return error(400, "expected JSON body { project?, service }");
+    };
+
+    // Resolve the hive.yaml and the default working directory for this target.
+    let (hive_path, default_dir) = match &req.project {
+        Some(id) => match (store.hive_path(id), store.project_dir(id)) {
+            (Ok(hive), Ok(dir)) => (hive, Some(dir)),
+            (Err(e), _) | (_, Err(e)) => return project_error(&e),
+        },
+        None => (
+            store.config().module("hive").raw_path("hive.yaml"),
+            None,
+        ),
+    };
+
+    let Ok(raw) = std::fs::read_to_string(&hive_path) else {
+        return error(404, "no hive.yaml for that target");
+    };
+    // Preprocess so `bash`…`` port commands resolve (and reserve their port) on read.
+    let (yaml, commands) = adi_ports_manager::preprocess(&raw);
+    let Ok(doc) =
+        adi_ports_manager::with_commands(commands, || serde_yaml_ng::from_str::<HiveDoc>(&yaml))
+    else {
+        return error(422, "could not parse the hive.yaml");
+    };
+
+    let Some(svc) = doc.services.get(&req.service) else {
+        return error(404, &format!("no service `{}` in the hive", req.service));
+    };
+    let Some(script) = svc.runner.as_ref().and_then(|r| r.script.as_ref()) else {
+        return error(
+            400,
+            &format!("service `{}` has no script runner to start", req.service),
+        );
+    };
+
+    let port = service_http_port(svc);
+    // Don't spawn a doomed process if the port is already taken — the service looks up already.
+    if let Some(p) = port
+        && !adi_ports_manager::is_bindable(p)
+    {
+        return error(
+            409,
+            &format!("service `{}` looks already running on :{p}", req.service),
+        );
+    }
+    let workdir = resolve_workdir(script.working_dir.as_deref(), default_dir.as_deref());
+    match spawn_runner(&script.run, &workdir, port) {
+        Ok(pid) => ok_json(&StartResult {
+            service: req.service,
+            port,
+            pid,
+        }),
+        Err(e) => error(500, &format!("starting `{}`: {e}", req.service)),
+    }
+}
+
+/// The service's proxied port: the `http` slot, else the sole declared port, else `None`.
+fn service_http_port(svc: &YamlService) -> Option<u16> {
+    let ports = svc
+        .rollout
+        .as_ref()
+        .and_then(|r| r.recreate.as_ref())
+        .map(|r| &r.ports)?;
+    ports
+        .get("http")
+        .copied()
+        .or_else(|| (ports.len() == 1).then(|| *ports.values().next().unwrap()))
+}
+
+/// Resolve a runner's working directory: an explicit absolute path as-is, a relative one against
+/// the project dir, else the project dir (or the current dir when there is none).
+fn resolve_workdir(explicit: Option<&str>, default_dir: Option<&Path>) -> PathBuf {
+    match explicit {
+        Some(dir) => {
+            let p = Path::new(dir);
+            if p.is_absolute() {
+                p.to_path_buf()
+            } else if let Some(base) = default_dir {
+                base.join(dir)
+            } else {
+                p.to_path_buf()
+            }
+        }
+        None => default_dir.map_or_else(|| PathBuf::from("."), Path::to_path_buf),
+    }
+}
+
+/// Spawn `sh -c "<run>"` detached (its own process group, so it survives an app restart), in
+/// `workdir`, with `PORT`/`PORT_HTTP` and an augmented `PATH` so user tools (bun, node, …)
+/// resolve under a minimal launchd environment. Output is redirected to `<workdir>/server.log`.
+fn spawn_runner(run: &str, workdir: &Path, port: Option<u16>) -> std::io::Result<u32> {
+    use std::process::{Command, Stdio};
+
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(run)
+        .current_dir(workdir)
+        .env("PATH", augmented_path())
+        .process_group(0)
+        .stdin(Stdio::null());
+    if let Some(p) = port {
+        cmd.env("PORT", p.to_string())
+            .env("PORT_HTTP", p.to_string());
+    }
+    match std::fs::File::create(workdir.join("server.log")) {
+        Ok(log) => {
+            let errlog = log.try_clone()?;
+            cmd.stdout(Stdio::from(log)).stderr(Stdio::from(errlog));
+        }
+        Err(_) => {
+            cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        }
+    }
+    Ok(cmd.spawn()?.id())
+}
+
+/// A `PATH` that includes the user's common tool directories, so a runner launched under a
+/// minimal launchd environment can still find `bun`, `node`, and Homebrew binaries.
+fn augmented_path() -> String {
+    let mut parts = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        parts.push(format!("{home}/.bun/bin"));
+        parts.push(format!("{home}/.local/bin"));
+    }
+    parts.push("/opt/homebrew/bin".to_string());
+    parts.push("/usr/local/bin".to_string());
+    parts.push("/usr/bin".to_string());
+    parts.push("/bin".to_string());
+    if let Ok(existing) = std::env::var("PATH") {
+        parts.push(existing);
+    }
+    parts.join(":")
 }
 
 /// Flatten a stored project into its wire [`Project`] DTO.

@@ -199,6 +199,8 @@ async fn handle(
                 .collect();
             handlers::hive(projects, &listening)
         }
+        // Launch a service's runner (its `run` command) with the ports-manager PORT injected.
+        ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
         // Mesh: config CRUD (reads/writes ~/.adi/mono/mesh) plus starting/stopping the
         // in-process daemon. The daemon's run state is this app's, so it's passed in.
         ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),
