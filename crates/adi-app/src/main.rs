@@ -180,6 +180,11 @@ async fn handle(
         ("POST", "/api/projects/archive") => handlers::archive_project(projects, &req.body),
         ("POST", "/api/projects/unarchive") => handlers::unarchive_project(projects, &req.body),
         ("POST", "/api/projects/remove") => handlers::remove_project(projects, &req.body),
+        // Project files: browse/read/edit the files under a project's own directory, confined
+        // to it by the adi-fs jail (no climbing out). Body carries { id, path } (+ content on write).
+        ("POST", "/api/projects/files") => handlers::list_files(projects, &req.body),
+        ("POST", "/api/projects/file/read") => handlers::read_file(projects, &req.body),
+        ("POST", "/api/projects/file/write") => handlers::write_file(projects, &req.body),
         // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
         // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
         ("GET", p) if p.starts_with("/api/projects/") => {

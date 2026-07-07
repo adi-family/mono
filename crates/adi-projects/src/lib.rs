@@ -77,6 +77,18 @@ impl Projects {
         self.config.module(PROJECTS_MODULE).dir().to_path_buf()
     }
 
+    /// A project's own directory: `projects/<id>`. This is the base a file browser is confined
+    /// to (see `adi-fs`) — everything the project owns, including its `.adi/hive.yaml`, lives
+    /// under it. Returns the path even if the directory doesn't exist yet.
+    ///
+    /// # Errors
+    /// [`Error::InvalidId`] for an unsafe id — the security boundary before the id is joined
+    /// onto the store path.
+    pub fn project_dir(&self, id: &str) -> Result<PathBuf> {
+        validate_id(id)?;
+        Ok(self.dir().join(id))
+    }
+
     /// Where a project's runtime hive config lives: `projects/<id>/.adi/hive.yaml`. This crate
     /// owns the project *layout* (so callers don't re-derive it) but not the YAML format —
     /// adi-hive does. Returns the path even if the file doesn't exist.
@@ -84,8 +96,7 @@ impl Projects {
     /// # Errors
     /// [`Error::InvalidId`] for an unsafe id.
     pub fn hive_path(&self, id: &str) -> Result<PathBuf> {
-        validate_id(id)?;
-        Ok(self.dir().join(id).join(".adi").join("hive.yaml"))
+        Ok(self.project_dir(id)?.join(".adi").join("hive.yaml"))
     }
 
     /// The manifest file handle for `id`, at `projects/<id>/config.toml` (touches no disk).
@@ -335,6 +346,17 @@ mod tests {
         ));
         assert!(matches!(store.remove(".."), Err(Error::InvalidId(_))));
         assert!(matches!(store.hive_path("../x"), Err(Error::InvalidId(_))));
+        assert!(matches!(
+            store.project_dir("../x"),
+            Err(Error::InvalidId(_))
+        ));
+    }
+
+    #[test]
+    fn project_dir_is_the_id_directory_under_projects() {
+        let store = scratch("projdir");
+        let dir = store.project_dir("demo").expect("project dir");
+        assert!(dir.ends_with("projects/demo"), "got {}", dir.display());
     }
 
     #[test]

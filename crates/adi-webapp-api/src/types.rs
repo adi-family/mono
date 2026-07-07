@@ -238,6 +238,82 @@ impl ProjectDetail {
     }
 }
 
+// ---- files (a project's own directory, browsed through an isolated jail) --------------
+
+/// One entry in a project directory [`DirListing`]: a file or subdirectory with lightweight
+/// stats. `is_dir` follows a symlink (it describes the target); `is_symlink` flags a link.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    /// The entry's name — a single path segment (join it onto the listing's `path`).
+    pub name: String,
+    /// Whether the entry is (or points at) a directory.
+    pub is_dir: bool,
+    /// Whether the entry itself is a symbolic link.
+    #[serde(default)]
+    pub is_symlink: bool,
+    /// The file size in bytes (0 for directories).
+    pub size: u64,
+    /// Last-modified time as Unix epoch seconds, when the platform reports it.
+    #[serde(default)]
+    pub modified: Option<u64>,
+}
+
+/// Request body for browsing/reading within a project's directory — `POST /api/projects/files`
+/// and `/api/projects/file/read`. `path` is relative to the project root (`""` is the root);
+/// it may never climb out of it (`..`, absolute paths, and symlink escapes are refused).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesRef {
+    /// The project id (its directory under `~/.adi/mono/projects`).
+    pub id: String,
+    /// The path within the project, relative to its root.
+    #[serde(default)]
+    pub path: String,
+}
+
+/// `POST /api/projects/files` — a directory listing within a project's own directory, browsed
+/// through the isolated [`adi_fs`] jail so nothing outside the project is reachable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DirListing {
+    /// The project id this listing belongs to.
+    pub id: String,
+    /// The listed directory, relative to the project root (`""` is the root).
+    pub path: String,
+    /// The parent directory (relative to the project root), or `None` at the root — so the UI
+    /// can offer an "up" control without re-deriving it.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// The directory's entries, sorted directories-first then case-insensitively by name.
+    pub entries: Vec<FileEntry>,
+}
+
+/// `POST /api/projects/file/read` — one text file's contents, read through the project jail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileContent {
+    /// The project id the file belongs to.
+    pub id: String,
+    /// The file path, relative to the project root.
+    pub path: String,
+    /// The file's UTF-8 text (binary files are rejected rather than returned here).
+    pub content: String,
+    /// The file size in bytes.
+    pub size: u64,
+    /// Last-modified time as Unix epoch seconds, when the platform reports it.
+    #[serde(default)]
+    pub modified: Option<u64>,
+}
+
+/// Request body for saving a file — `POST /api/projects/file/write`. Writes are atomic and
+/// create any missing parent directories within the project. Same jail rules as [`FilesRef`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteFile {
+    /// The project id the file belongs to.
+    pub id: String,
+    /// The file path to write, relative to the project root.
+    pub path: String,
+    /// The new UTF-8 text contents.
+    pub content: String,
+}
+
 // ---- hive (every service across all projects + the global front-door) ----------------
 
 /// One service in the aggregated Hive view: where it's declared, its config, and whether it's

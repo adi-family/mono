@@ -19,6 +19,7 @@ server = [
     "dep:adi-ports-manager",
     "dep:adi-mesh",
     "dep:adi-projects",
+    "dep:adi-fs",
     "dep:serde_json",
     "dep:serde_yaml_ng",
 ]
@@ -34,6 +35,8 @@ adi-config = { workspace = true, optional = true }
 adi-ports-manager = { workspace = true, optional = true }
 adi-mesh = { workspace = true, optional = true }
 adi-projects = { workspace = true, optional = true }
+# The base-directory-jailed filesystem backing the project file browser/editor endpoints.
+adi-fs = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }
 

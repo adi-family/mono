@@ -7,8 +7,8 @@
 #![allow(non_snake_case)] // Leptos components are PascalCase by convention.
 
 use adi_webapp_api::types::{
-    Health, HiveState, LeaseRef, MeshForwardRef, MeshState, NewProject, PortsState, Project,
-    ProjectDetail, ProjectsState, UsedPorts,
+    DirListing, Health, HiveState, LeaseRef, MeshForwardRef, MeshState, NewProject, PortsState,
+    Project, ProjectDetail, ProjectsState, UsedPorts,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -41,6 +41,7 @@ fn App() -> impl IntoView {
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
     let current_project = RwSignal::new(project_id_from_path(&current_path()).unwrap_or_default());
+    let files = FilesState::new();
     let state = State {
         status,
         ports,
@@ -53,6 +54,7 @@ fn App() -> impl IntoView {
         project_detail,
         current_project,
         hive,
+        files,
     };
 
     // The Projects page's local form: the create inputs, a busy flag, and the active/archived filter.
@@ -128,6 +130,21 @@ fn App() -> impl IntoView {
                 | Route::Mesh
         ) {
             spawn_local(load(state));
+        }
+    });
+
+    // Load the project file browser (from the root) whenever the open project changes to one
+    // the browser isn't already showing. Kept separate from `load` so the 4s poll never
+    // re-fetches over the editor buffer mid-edit.
+    Effect::new(move |_| {
+        let id = current_project.get();
+        if matches!(route.get(), Route::ProjectDetail)
+            && !id.is_empty()
+            && files.loaded_for.get_untracked() != id
+        {
+            files.reset();
+            files.loaded_for.set(id.clone());
+            spawn_local(load_dir(state, id, String::new()));
         }
     });
 
@@ -472,6 +489,8 @@ fn project_detail_view(state: State, route: RwSignal<Route>) -> AnyView {
             Some(d) => detail_body(state, route, confirm_delete, d),
         }}
 
+        {files_view(state)}
+
         <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
             {move || flash.get().map(|f| f.msg).unwrap_or_default()}
         </div>
@@ -663,6 +682,292 @@ where
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
     });
+}
+
+// ---- project files (browse + edit the files under a project's own directory) --------
+
+/// Load the listing for directory `path` (relative to the project root) into the browser. On
+/// success the current `dir` follows the server's normalized path; on failure it flashes.
+async fn load_dir(state: State, id: String, path: String) {
+    match fetch::list_files(&id, &path).await {
+        Ok(listing) => {
+            state.files.dir.set(listing.path.clone());
+            state.files.listing.set(Some(listing));
+        }
+        Err(e) => state.flash.set(Some(Flash::err(e))),
+    }
+}
+
+/// Navigate the browser into directory `path` (a dir click or the "up" control).
+fn open_dir(state: State, path: String) {
+    let id = state.current_project.get_untracked();
+    if !id.is_empty() {
+        spawn_local(load_dir(state, id, path));
+    }
+}
+
+/// Open file `path` in the editor, loading its content into the buffer (and remembering it as
+/// the baseline so edits are detectable).
+fn open_file(state: State, path: String) {
+    let id = state.current_project.get_untracked();
+    if id.is_empty() {
+        return;
+    }
+    state.files.busy.set(true);
+    spawn_local(async move {
+        match fetch::read_file(&id, &path).await {
+            Ok(fc) => {
+                state.files.open.set(Some(fc.path.clone()));
+                state.files.original.set(fc.content.clone());
+                state.files.buffer.set(fc.content);
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        state.files.busy.set(false);
+    });
+}
+
+/// Save the editor buffer back to the open file, then refresh the listing so its size/modified
+/// update. Resets the baseline to the saved content so the dirty state clears.
+fn save_file(state: State) {
+    let id = state.current_project.get_untracked();
+    let Some(path) = state.files.open.get_untracked() else {
+        return;
+    };
+    if id.is_empty() {
+        return;
+    }
+    let content = state.files.buffer.get_untracked();
+    state.files.busy.set(true);
+    spawn_local(async move {
+        match fetch::write_file(&id, &path, &content).await {
+            Ok(fc) => {
+                state.files.original.set(fc.content.clone());
+                state.files.buffer.set(fc.content);
+                state.flash.set(Some(Flash::ok(format!("Saved {path}."))));
+                load_dir(state, id, state.files.dir.get_untracked()).await;
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        state.files.busy.set(false);
+    });
+}
+
+/// Close the editor, discarding the buffer (a fresh open reloads from disk anyway).
+fn close_file(state: State) {
+    state.files.open.set(None);
+    state.files.original.set(String::new());
+    state.files.buffer.set(String::new());
+}
+
+/// Join a directory path and an entry name into a project-relative path (the root is `""`).
+fn join_rel(dir: &str, name: &str) -> String {
+    if dir.is_empty() {
+        name.to_string()
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
+/// The Files panel on a project's detail page: a breadcrumb + directory listing scoped to the
+/// project's own directory (via the isolated jail), plus an in-place editor for the selected
+/// text file — so `.adi/hive.yaml` (and anything beside it) is editable here.
+fn files_view(state: State) -> AnyView {
+    let files = state.files;
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Files"</h2>
+                <span class="adi-spacer"></span>
+                <button class="adi-btn adi-btn--ghost" type="button" prop:disabled=move || files.busy.get()
+                    on:click=move |_| open_dir(state, files.dir.get_untracked())>"Reload"</button>
+            </div>
+            <div class="adi-panel__body">
+                {move || crumbs_view(state)}
+            </div>
+            <div class="adi-tablewrap">
+                <table class="adi-table">
+                    <thead>
+                        <tr><th>"Name"</th><th>"Size"</th><th>"Modified"</th></tr>
+                    </thead>
+                    <tbody>{move || file_rows(state)}</tbody>
+                </table>
+            </div>
+            {move || match files.open.get() {
+                None => view! {
+                    <div class="adi-panel__body">
+                        <span class="adi-muted">"Select a file above to view or edit it. Directories open in place; there's no going outside this project."</span>
+                    </div>
+                }.into_any(),
+                Some(path) => editor_view(state, path),
+            }}
+        </section>
+    }
+    .into_any()
+}
+
+/// The breadcrumb trail for the file browser: the project root plus each segment of the current
+/// directory, every ancestor clickable to jump straight there.
+fn crumbs_view(state: State) -> AnyView {
+    let dir = state.files.dir.get();
+    let id = state.current_project.get();
+    let mut crumbs: Vec<(String, String)> = vec![(id, String::new())]; // (label, target dir)
+    let mut acc = String::new();
+    if !dir.is_empty() {
+        for segment in dir.split('/') {
+            acc = join_rel(&acc, segment);
+            crumbs.push((segment.to_string(), acc.clone()));
+        }
+    }
+    let last = crumbs.len() - 1;
+    view! {
+        <div class="adi-crumbs">
+            {crumbs.into_iter().enumerate().map(|(i, (label, target))| {
+                let sep = (i > 0).then(|| view! { <span class="adi-crumbs__sep">"/"</span> });
+                let node = if i == last {
+                    view! { <span class="adi-crumbs__here">{label}</span> }.into_any()
+                } else {
+                    view! {
+                        <a class="adi-btn adi-btn--link" href="#"
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.prevent_default();
+                                open_dir(state, target.clone());
+                            }>{label}</a>
+                    }.into_any()
+                };
+                view! { {sep}{node} }
+            }).collect::<Vec<_>>()}
+        </div>
+    }
+    .into_any()
+}
+
+/// Rows for the file listing: an "up" row when not at the root, then directories (which open in
+/// place) and files (which open in the editor), with size and modified date.
+fn file_rows(state: State) -> AnyView {
+    let files = state.files;
+    let Some(listing) = files.listing.get() else {
+        return view! { <tr><td class="adi-empty" colspan="3">"Loading…"</td></tr> }.into_any();
+    };
+    let dir = listing.path.clone();
+    let mut rows: Vec<AnyView> = Vec::new();
+
+    // An "up" row to the parent directory, when there is one.
+    if let Some(parent) = listing.parent.clone() {
+        rows.push(
+            view! {
+                <tr>
+                    <td>
+                        <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.prevent_default();
+                                open_dir(state, parent.clone());
+                            }>
+                            <span class="adi-filerow__icon">"↑"</span><span>".."</span>
+                        </a>
+                    </td>
+                    <td class="adi-muted">"—"</td>
+                    <td class="adi-muted">"—"</td>
+                </tr>
+            }
+            .into_any(),
+        );
+    }
+
+    if listing.entries.is_empty() && listing.parent.is_none() {
+        return view! { <tr><td class="adi-empty" colspan="3">"This project directory is empty."</td></tr> }
+            .into_any();
+    }
+
+    for entry in listing.entries {
+        let path = join_rel(&dir, &entry.name);
+        let modified = entry.modified.map_or_else(|| "—".to_string(), fmt_date);
+        let open = state.files.open.get();
+        let is_open = open.as_deref() == Some(path.as_str());
+        if entry.is_dir {
+            rows.push(view! {
+                <tr>
+                    <td>
+                        <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                ev.prevent_default();
+                                open_dir(state, path.clone());
+                            }>
+                            <span class="adi-filerow__icon">"▸"</span><span>{entry.name}"/"</span>
+                        </a>
+                    </td>
+                    <td class="adi-muted">"—"</td>
+                    <td class="adi-mono adi-muted">{modified}</td>
+                </tr>
+            }.into_any());
+        } else {
+            let size = fmt_size(entry.size);
+            rows.push(
+                view! {
+                    <tr>
+                        <td>
+                            <a class="adi-btn adi-btn--link adi-filerow" href="#"
+                                aria-current=move || if is_open { "true" } else { "false" }
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.prevent_default();
+                                    open_file(state, path.clone());
+                                }>
+                                <span class="adi-filerow__icon">"·"</span><span>{entry.name}</span>
+                            </a>
+                        </td>
+                        <td class="adi-mono adi-muted">{size}</td>
+                        <td class="adi-mono adi-muted">{modified}</td>
+                    </tr>
+                }
+                .into_any(),
+            );
+        }
+    }
+    rows.into_any()
+}
+
+/// The in-place editor for the open file: a toolbar (path, dirty state, Save/Reload/Close) and a
+/// monospace textarea bound to the buffer.
+fn editor_view(state: State, path: String) -> AnyView {
+    let files = state.files;
+    let dirty = move || files.buffer.get() != files.original.get();
+    let reload_path = path.clone();
+    view! {
+        <div class="adi-form" style="justify-content:flex-start; align-items:center">
+            <span class="adi-chip adi-mono">{path}</span>
+            <span class="adi-muted" style="font-size:13px">
+                {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
+            </span>
+            <span class="adi-spacer" style="flex:1"></span>
+            <button class="adi-btn adi-btn--primary" type="button"
+                prop:disabled=move || files.busy.get() || !dirty()
+                on:click=move |_| save_file(state)>"Save"</button>
+            <button class="adi-btn adi-btn--ghost" type="button"
+                prop:disabled=move || files.busy.get()
+                on:click=move |_| open_file(state, reload_path.clone())>"Reload"</button>
+            <button class="adi-btn adi-btn--link" type="button"
+                on:click=move |_| close_file(state)>"Close"</button>
+        </div>
+        <div class="adi-panel__body">
+            <textarea class="adi-textarea" spellcheck="false" autocomplete="off"
+                prop:value=move || files.buffer.get()
+                on:input=move |ev| files.buffer.set(event_target_value(&ev))></textarea>
+        </div>
+    }
+    .into_any()
+}
+
+/// Format a byte count as `N B` / `N.N KB` / `N.N MB`.
+fn fmt_size(bytes: u64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let n = bytes as f64;
+    if bytes < 1024 {
+        format!("{bytes} B")
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", n / 1024.0)
+    } else {
+        format!("{:.1} MB", n / (1024.0 * 1024.0))
+    }
 }
 
 /// The Hive settings page: every service declared across all projects' `.adi/hive.yaml` plus
@@ -1470,6 +1775,8 @@ fn project_id_from_path(path: &str) -> Option<String> {
 /// Navigate to a project's detail page, clearing any stale detail so it shows a loading state.
 fn open_project(state: State, route: RwSignal<Route>, id: String) {
     state.project_detail.set(None);
+    // Clear the file browser so the load effect re-fetches from this project's root.
+    state.files.reset();
     state.current_project.set(id.clone());
     push_state(&format!("/projects/{id}"));
     route.set(Route::ProjectDetail);
@@ -1479,6 +1786,7 @@ fn open_project(state: State, route: RwSignal<Route>, id: String) {
 /// Navigate back to the projects list.
 fn go_projects(state: State, route: RwSignal<Route>) {
     state.current_project.set(String::new());
+    state.files.reset();
     push_state(Route::Projects.path());
     route.set(Route::Projects);
     scroll_top();
@@ -1499,6 +1807,56 @@ struct State {
     project_detail: RwSignal<Option<ProjectDetail>>,
     current_project: RwSignal<String>,
     hive: RwSignal<Option<HiveState>>,
+    /// The project file browser/editor state (the Files panel on the detail page).
+    files: FilesState,
+}
+
+/// The project detail page's file browser + editor state, scoped to the open project's own
+/// directory (served through the isolated `adi-fs` jail). `Copy` (arena handles) so it threads
+/// into the view and async handlers. Loading is navigation-driven, not part of the 4s poll, so
+/// the poll never clobbers the editor buffer.
+#[derive(Clone, Copy)]
+struct FilesState {
+    /// The directory currently being browsed, relative to the project root (`""` is the root).
+    dir: RwSignal<String>,
+    /// The listing of `dir`, or `None` while loading.
+    listing: RwSignal<Option<DirListing>>,
+    /// The file open in the editor (its path relative to the project root), or `None`.
+    open: RwSignal<Option<String>>,
+    /// The open file's last-loaded/saved content — compared against `buffer` to detect edits.
+    original: RwSignal<String>,
+    /// The editable textarea buffer.
+    buffer: RwSignal<String>,
+    /// Whether a read/write is in flight (disables the editor's buttons).
+    busy: RwSignal<bool>,
+    /// Which project id the browser currently reflects — so re-entering a fresh project reloads.
+    loaded_for: RwSignal<String>,
+}
+
+impl FilesState {
+    /// Fresh signals for the file browser (root dir, nothing loaded or open).
+    fn new() -> Self {
+        Self {
+            dir: RwSignal::new(String::new()),
+            listing: RwSignal::new(None),
+            open: RwSignal::new(None),
+            original: RwSignal::new(String::new()),
+            buffer: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+            loaded_for: RwSignal::new(String::new()),
+        }
+    }
+
+    /// Clear the browser back to "nothing loaded" (used when leaving a project or switching to
+    /// another), so the load effect re-fetches from the root next time.
+    fn reset(self) {
+        self.dir.set(String::new());
+        self.listing.set(None);
+        self.open.set(None);
+        self.original.set(String::new());
+        self.buffer.set(String::new());
+        self.loaded_for.set(String::new());
+    }
 }
 
 /// The Projects page's local signals: the create-form inputs, a busy flag, and the
@@ -1799,9 +2157,9 @@ fn prefers_dark() -> bool {
 /// Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 mod fetch {
     use adi_webapp_api::types::{
-        ApiError, Health, HiveState, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef,
-        MeshState, NewProject, PortsState, ProjectDetail, ProjectRef, ProjectsState,
-        ReleaseResponse, ReserveResponse, UsedPorts,
+        ApiError, DirListing, FileContent, FilesRef, Health, HiveState, MeshForwardRef,
+        MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, PortsState, ProjectDetail,
+        ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, UsedPorts, WriteFile,
     };
     use gloo_net::http::{Request, Response};
     use serde::Serialize;
@@ -1895,6 +2253,42 @@ mod fetch {
 
     pub async fn hive() -> Result<HiveState, String> {
         get("/api/hive").await
+    }
+
+    // Project files: browse/read/edit the files under a project's own directory (jailed to it).
+
+    pub async fn list_files(id: &str, path: &str) -> Result<DirListing, String> {
+        post(
+            "/api/projects/files",
+            &FilesRef {
+                id: id.to_string(),
+                path: path.to_string(),
+            },
+        )
+        .await
+    }
+
+    pub async fn read_file(id: &str, path: &str) -> Result<FileContent, String> {
+        post(
+            "/api/projects/file/read",
+            &FilesRef {
+                id: id.to_string(),
+                path: path.to_string(),
+            },
+        )
+        .await
+    }
+
+    pub async fn write_file(id: &str, path: &str, content: &str) -> Result<FileContent, String> {
+        post(
+            "/api/projects/file/write",
+            &WriteFile {
+                id: id.to_string(),
+                path: path.to_string(),
+                content: content.to_string(),
+            },
+        )
+        .await
     }
 
     async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {

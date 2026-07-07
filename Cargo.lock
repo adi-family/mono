@@ -73,6 +73,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-fs"
+version = "0.1.0"
+
+[[package]]
 name = "adi-hive"
 version = "0.1.0"
 dependencies = [
@@ -141,6 +145,7 @@ name = "adi-webapp-api"
 version = "0.1.0"
 dependencies = [
  "adi-config",
+ "adi-fs",
  "adi-mesh",
  "adi-ports-manager",
  "adi-projects",

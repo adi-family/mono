@@ -4,9 +4,10 @@
 //! which pulls in the filesystem-backed registry and so is native-only.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Component, Path};
 use std::time::Instant;
 
+use adi_fs::{Error as FsError, Jail};
 use adi_mesh::config::{Forward, MeshConfig};
 use adi_mesh::{identity, ticket};
 use adi_ports_manager::Ports;
@@ -14,10 +15,10 @@ use adi_projects::{Error as ProjectStoreError, Projects};
 use serde::Deserialize;
 
 use crate::types::{
-    ApiError, Health, HiveService, HiveState, Lease, LeaseRef, MeshForward, MeshForwardRef,
-    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, PortsState, Project,
-    ProjectDetail, ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse,
-    ReserveResponse, ServicePort, UsedPort, UsedPorts,
+    ApiError, DirListing, FileContent, FileEntry, FilesRef, Health, HiveService, HiveState, Lease,
+    LeaseRef, MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
+    NewProject, PortsState, Project, ProjectDetail, ProjectRef, ProjectService, ProjectsState,
+    Range, ReleaseResponse, ReserveResponse, ServicePort, UsedPort, UsedPorts, WriteFile,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -275,6 +276,191 @@ fn read_hive_services(path: &Path) -> (bool, Vec<ProjectService>) {
         })
         .collect();
     (true, services)
+}
+
+// MARK: files — a project's own directory, browsed/edited through an isolated jail
+
+/// The largest text file we'll read into the editor or accept on a write. Keeps a single
+/// response/request bounded (project files here are configs — small); a larger file is
+/// refused rather than truncated. Comfortably under the server's 1 MiB request-body cap.
+const MAX_TEXT_BYTES: u64 = 512 * 1024;
+
+/// `POST /api/projects/files` — list a directory inside a project's own directory, confined to
+/// it by the [`adi_fs`] jail (no `..`, no absolute paths, no symlink escape). `path` is relative
+/// to the project root (`""` is the root).
+#[must_use]
+pub fn list_files(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_files_ref(body) else {
+        return bad_files_ref();
+    };
+    let jail = match project_jail(store, &req.id) {
+        Ok(jail) => jail,
+        Err(resp) => return resp,
+    };
+    match jail.list(&req.path) {
+        Ok(entries) => {
+            let path = normalize_rel(&req.path);
+            let parent = parent_rel(&path);
+            ok_json(&DirListing {
+                id: req.id,
+                path,
+                parent,
+                entries: entries.into_iter().map(file_entry).collect(),
+            })
+        }
+        Err(e) => fs_error(&e),
+    }
+}
+
+/// `POST /api/projects/file/read` — read one text file inside a project's directory. Binary
+/// files and files over [`MAX_TEXT_BYTES`] are refused rather than returned.
+#[must_use]
+pub fn read_file(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_files_ref(body) else {
+        return bad_files_ref();
+    };
+    let jail = match project_jail(store, &req.id) {
+        Ok(jail) => jail,
+        Err(resp) => return resp,
+    };
+    read_file_content(&jail, &req.id, &req.path)
+}
+
+/// `POST /api/projects/file/write` — atomically save one text file inside a project's directory,
+/// creating any missing parents within it. Returns the fresh [`FileContent`] (re-read from disk)
+/// so the client updates its size/modified in one round-trip.
+#[must_use]
+pub fn write_file(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_write_file(body) else {
+        return error(
+            400,
+            "expected JSON body { \"id\": \"…\", \"path\": \"…\", \"content\": \"…\" }",
+        );
+    };
+    if req.content.len() as u64 > MAX_TEXT_BYTES {
+        return error(
+            413,
+            &format!("file too large to save (max {MAX_TEXT_BYTES} bytes)"),
+        );
+    }
+    let jail = match project_jail(store, &req.id) {
+        Ok(jail) => jail,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = jail.write(&req.path, req.content.as_bytes()) {
+        return fs_error(&e);
+    }
+    // Re-read so the response carries the authoritative size/modified after the write.
+    read_file_content(&jail, &req.id, &req.path)
+}
+
+/// Read `rel` as text and shape a [`FileContent`], enforcing the [`MAX_TEXT_BYTES`] cap.
+fn read_file_content(jail: &Jail, id: &str, rel: &str) -> (u16, String) {
+    let meta = match jail.metadata(rel) {
+        Ok(meta) => meta,
+        Err(e) => return fs_error(&e),
+    };
+    if meta.is_dir {
+        return error(400, &format!("not a file: {rel}"));
+    }
+    if meta.size > MAX_TEXT_BYTES {
+        return error(
+            413,
+            &format!(
+                "file too large to edit ({} bytes, max {MAX_TEXT_BYTES})",
+                meta.size
+            ),
+        );
+    }
+    match jail.read_to_string(rel) {
+        Ok(content) => ok_json(&FileContent {
+            id: id.to_string(),
+            path: normalize_rel(rel),
+            content,
+            size: meta.size,
+            modified: meta.modified,
+        }),
+        Err(e) => fs_error(&e),
+    }
+}
+
+/// Build a jail rooted at a *registered* project's directory. A path with an unsafe id is a
+/// 400; an unregistered id is a 404 (mirroring [`project_detail`]); a store failure is a 500.
+fn project_jail(store: &Projects, id: &str) -> Result<Jail, (u16, String)> {
+    // Only registered projects are browsable — same existence gate as the detail view.
+    match store.get(id) {
+        Ok(Some(_)) => {}
+        Ok(None) => return Err(error(404, &format!("no such project: {id}"))),
+        Err(e) => return Err(project_error(&e)),
+    }
+    let dir = store.project_dir(id).map_err(|e| project_error(&e))?;
+    Ok(Jail::new(dir))
+}
+
+/// Map a jail [`FsError`] to an HTTP status: an escape/`not-a-file` is a 400, a missing path a
+/// 404, a non-UTF-8 (binary) file a 415, and any other I/O error a 500.
+fn fs_error(e: &FsError) -> (u16, String) {
+    let status = match e {
+        FsError::Escape(_) | FsError::NotAFile(_) => 400,
+        FsError::NotFound(_) => 404,
+        FsError::NotText(_) => 415,
+        FsError::Io { .. } => 500,
+    };
+    error(status, &e.to_string())
+}
+
+/// Flatten an [`adi_fs::Entry`] into its wire [`FileEntry`] DTO.
+fn file_entry(entry: adi_fs::Entry) -> FileEntry {
+    FileEntry {
+        name: entry.name,
+        is_dir: entry.is_dir,
+        is_symlink: entry.is_symlink,
+        size: entry.size,
+        modified: entry.modified,
+    }
+}
+
+/// Normalize a jailed relative path to a clean display form: keep only real segments joined by
+/// `/`, dropping `.` and redundant separators. `..`/absolute paths never reach here (the jail
+/// rejects them first). The project root is the empty string.
+fn normalize_rel(rel: &str) -> String {
+    Path::new(rel)
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The parent of a normalized relative path: `None` at the root, else the path with its last
+/// segment removed (a top-level entry's parent is the root, `""`).
+fn parent_rel(norm: &str) -> Option<String> {
+    if norm.is_empty() {
+        return None;
+    }
+    match norm.rsplit_once('/') {
+        Some((head, _)) => Some(head.to_string()),
+        None => Some(String::new()),
+    }
+}
+
+fn parse_files_ref(body: &[u8]) -> Option<FilesRef> {
+    let req: FilesRef = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty()).then_some(req)
+}
+
+fn bad_files_ref() -> (u16, String) {
+    error(
+        400,
+        "expected JSON body { \"id\": \"…\", \"path\"?: \"…\" }",
+    )
+}
+
+fn parse_write_file(body: &[u8]) -> Option<WriteFile> {
+    let req: WriteFile = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty() && !req.path.trim().is_empty()).then_some(req)
 }
 
 // MARK: hive — every service across all projects + the global front-door hive
@@ -668,5 +854,101 @@ mod tests {
         let m = temp_manager();
         assert_eq!(reserve(&m, b"not json").0, 400);
         assert_eq!(reserve(&m, br#"{"service":"","key":"x"}"#).0, 400);
+    }
+
+    // ---- files -----------------------------------------------------------------------
+
+    /// A projects store rooted in an isolated temp dir, with a registered `demo` project whose
+    /// `.adi/hive.yaml` exists (mirroring the real on-disk layout).
+    fn temp_projects() -> Projects {
+        let root = std::env::temp_dir().join(format!(
+            "adi-webapp-api-files-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let store = Projects::with_config(adi_config::Config::with_root(&root));
+        store.create("demo", Some("Demo".into()), None).unwrap();
+        let hive = store.hive_path("demo").unwrap();
+        std::fs::create_dir_all(hive.parent().unwrap()).unwrap();
+        std::fs::write(&hive, b"version: \"1\"\n").unwrap();
+        store
+    }
+
+    #[test]
+    fn list_files_shows_the_project_tree() {
+        let store = temp_projects();
+        let (status, body) = list_files(&store, br#"{"id":"demo","path":""}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["path"], "");
+        assert!(v["parent"].is_null());
+        let names: Vec<&str> = v["entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["name"].as_str().unwrap())
+            .collect();
+        assert!(names.contains(&".adi"));
+        assert!(names.contains(&"config.toml"));
+
+        // Descend into `.adi`; its parent is the root.
+        let (_, body) = list_files(&store, br#"{"id":"demo","path":".adi"}"#);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["path"], ".adi");
+        assert_eq!(v["parent"], "");
+    }
+
+    #[test]
+    fn read_then_write_round_trips_the_hive_file() {
+        let store = temp_projects();
+        let (status, body) = read_file(&store, br#"{"id":"demo","path":".adi/hive.yaml"}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["content"], "version: \"1\"\n");
+
+        let (status, body) = write_file(
+            &store,
+            br#"{"id":"demo","path":".adi/hive.yaml","content":"version: \"2\"\n"}"#,
+        );
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["content"], "version: \"2\"\n");
+
+        // The write actually hit disk.
+        let (_, body) = read_file(&store, br#"{"id":"demo","path":".adi/hive.yaml"}"#);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["content"], "version: \"2\"\n");
+    }
+
+    #[test]
+    fn escaping_paths_are_refused_with_400() {
+        let store = temp_projects();
+        assert_eq!(list_files(&store, br#"{"id":"demo","path":".."}"#).0, 400);
+        assert_eq!(
+            read_file(&store, br#"{"id":"demo","path":"../../secret"}"#).0,
+            400
+        );
+        assert_eq!(
+            write_file(&store, br#"{"id":"demo","path":"../evil","content":"x"}"#).0,
+            400
+        );
+    }
+
+    #[test]
+    fn unregistered_project_is_a_404() {
+        let store = temp_projects();
+        assert_eq!(list_files(&store, br#"{"id":"ghost","path":""}"#).0, 404);
+        // An unsafe id is rejected before any disk access, as a 400.
+        assert_eq!(list_files(&store, br#"{"id":"../x","path":""}"#).0, 400);
+    }
+
+    #[test]
+    fn reading_a_missing_file_is_a_404() {
+        let store = temp_projects();
+        assert_eq!(
+            read_file(&store, br#"{"id":"demo","path":"nope.txt"}"#).0,
+            404
+        );
     }
 }

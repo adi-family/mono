@@ -498,6 +498,60 @@
   }
 }
 
+// A code-editor textarea: full-width, monospace, vertically resizable. Used by the project
+// file editor to edit `.adi/hive.yaml` (and any other text file) in place.
+.adi-textarea {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  width: 100%;
+  min-height: 340px;
+  padding: 12px 14px;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+
+  &:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+    border-color: var(--accent);
+  }
+}
+
+// A breadcrumb trail for the file browser: clickable path segments separated by a slash.
+.adi-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+
+  &__sep {
+    color: var(--muted);
+    padding: 0 2px;
+  }
+
+  // The current (last) segment isn't a link.
+  &__here { color: var(--ink); font-weight: 600; }
+}
+
+// A file-browser row name: an icon glyph plus the entry name. Directories get the accent.
+.adi-filerow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+
+  &__icon { color: var(--muted); width: 1em; text-align: center; }
+  &--dir &__icon { color: var(--accent); }
+}
+
 // ---- flash (kind via `data-kind`) --------------------------------------------------
 .adi-flash {
   min-height: 18px;
