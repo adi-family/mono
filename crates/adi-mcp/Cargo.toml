@@ -1,0 +1,47 @@
+[package]
+name = "adi-mcp"
+description = "The adi platform MCP server: exposes adi tools (tasks, projects, files, status) to AI agents over stdio, with tool groups selected at launch via --features."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "adi-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# The official Rust MCP SDK. `server` + `macros` (the `#[tool]`/`#[tool_router]` surface)
+# come from the defaults; `transport-io` adds the stdio transport agents spawn us over.
+rmcp = { version = "2", features = ["server", "macros", "transport-io"] }
+# JSON Schema for tool input types. Pinned to rmcp's schemars (1.x) so cargo unifies to ONE
+# version and the derived `JsonSchema` impls satisfy rmcp's `Parameters<T>` bound.
+schemars = "1"
+
+# Platform surfaces the tools wrap: the configurator owns where `tasks.json` lives; adi-core
+# is the projects/status facade; adi-fs is the jailed project filesystem; adi-projects maps a
+# project id to its jail base directory.
+adi-config = { workspace = true }
+adi-core = { workspace = true }
+adi-fs = { workspace = true }
+adi-projects = { workspace = true }
+
+# CLI surface (`--features`, `--list-features`); serde/json (de)serialize tool args, the JSON
+# payloads tools return, and the tasks store on disk.
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async runtime rmcp runs on. `macros` for `#[tokio::main]`, `rt-multi-thread` for the worker
+# pool, `io-std` for the stdio transport.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std"] }
+# Errors bubble up through the store/tools; logging goes to STDERR only — stdout is the
+# JSON-RPC channel and must not be polluted.
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true
