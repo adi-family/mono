@@ -311,8 +311,10 @@ Keep the reference app's proven loops; drive them off structured status.
   for the auto-spawner (default 3), measured across all live `Session`s.
 - **Auto-spawn ("task starter").** A periodic sweep drains the **task queue**: for each *ready*
   task that **resolves to an existing agent**, if under capacity, it emits `agent.pre_run` (§9a),
-  spawns a `Session`, and marks the task in-progress. **Hard rule (ported):** never auto-start a
-  task that is blocked, already in-progress, or done. The queue is the `adi-mcp` `tasks` feature
+  spawns a `Session`. The task's stored status stays `open` while the agent runs — "running" is a
+  *session* fact, not a task status; the agent marks it `done` on success. **Hard rule (ported):**
+  only tasks whose **effective** status is `ready` are picked — a `blocked` (has an open subtask),
+  `done`, or `archived` task is never auto-started. The queue is the `adi-mcp` `tasks` feature
   (see §14).
   **Assignment resolution — how a task picks its agent (first match wins):**
   1. **Explicit assignee** — the task names an agent → that agent.
@@ -469,10 +471,11 @@ this event." The system is opt-in per trigger, never a fixed pre/post pair.
 - **Task queue → `adi-mcp` `tasks` feature.** The task starter (§9) reads/writes tasks through
   adi-mcp. **Current state:** the `tasks` feature *exists* but **no tasks are populated yet** — so
   step one is simply to start creating tasks (by hand, from the UI, or by planner agents); agents
-  come after. Two small extensions the queue needs to drive assignment + the hard rule: a **`tag`**
-  (and/or an explicit **`assignee`**) field on a task, and a **`blocked`** status (adi-mcp tasks
-  today are pending/in_progress/done/cancelled — read pending as "ready", in_progress as "doing";
-  add `blocked` so the hard rule has something to skip).
+  come after. **The tasks model is now implemented** to serve this: stored status is the minimal
+  `open`/`done`/`archived`, tasks form a tree via `parent` (subtasks), and each task carries
+  `tag`/`assignee` for assignment. **`blocked`/`ready` are computed** from the subtree — an open
+  task is `blocked` while any direct child is open, else `ready` — so the "never auto-start
+  blocked" rule needs no stored flag: the starter filters `effective == ready`.
 - **Targets → `adi-projects`.** An agent is scoped to a project; the roster is seeded per project.
 - **Tool surface → `adi-mcp`.** `ToolScope` = an `adi-mcp --features` selection (§7), including the
   agent-editable CLI store (§7a).

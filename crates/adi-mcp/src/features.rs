@@ -57,7 +57,7 @@ impl Feature {
     #[must_use]
     pub const fn summary(self) -> &'static str {
         match self {
-            Feature::Tasks => "persistent task tracker",
+            Feature::Tasks => "persistent task tree (open/done/archived; computed blocked/ready)",
             Feature::Projects => "adi projects registry",
             Feature::Files => "jailed project file access",
             Feature::Status => "platform service status (read-only)",
@@ -70,7 +70,9 @@ impl Feature {
     #[must_use]
     pub const fn tools(self) -> &'static [&'static str] {
         match self {
-            Feature::Tasks => &["create", "list", "get", "update", "delete"],
+            Feature::Tasks => &[
+                "create", "list", "get", "update", "complete", "archive", "reopen", "delete",
+            ],
             Feature::Projects => &["list", "get", "create", "archive", "unarchive"],
             Feature::Files => &["list", "read", "write"],
             Feature::Status => &["report"],
