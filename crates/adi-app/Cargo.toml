@@ -22,6 +22,9 @@ adi-ports-manager = { workspace = true }
 # The projects registry the /api/projects handlers operate on.
 adi-projects = { workspace = true }
 
+# The task tree store the read-only /api/tasks handler reads.
+adi-tasks = { workspace = true }
+
 # The mesh runtime, started/stopped in-process behind the control panel's "Start mesh"
 # button — so the daemon lives only as long as this app process.
 adi-mesh = { workspace = true }

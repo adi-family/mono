@@ -265,6 +265,57 @@ impl ProjectDetail {
     }
 }
 
+// ---- tasks (the task tree under ~/.adi/mono/mcp/tasks.json) --------------------------
+
+/// One task, flattened for the wire. `status` is the stored lifecycle state
+/// (`open`/`done`/`archived`); `effective` is the computed status
+/// (`ready`/`blocked`/`done`/`archived`, derived from the stored state plus direct children).
+/// `parent` is the id of the parent task, if any — the client rebuilds the tree from these links.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRow {
+    pub id: String,
+    pub title: String,
+    #[serde(default)]
+    pub details: Option<String>,
+    pub status: String,
+    pub effective: String,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub parent: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub assignee: Option<String>,
+    pub children_total: usize,
+    pub children_open: usize,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// `GET /api/tasks` — every task in the tree as a flat list, ordered by task number. The client
+/// nests them into a tree by `parent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TasksState {
+    pub tasks: Vec<TaskRow>,
+}
+
+/// Request body creating a task — `POST /api/tasks/create`. Only `title` is required; a given
+/// `parent` must be an existing task id (which makes the new task a subtask). The create endpoint
+/// returns a fresh [`TasksState`], so the client refreshes the tree from one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewTask {
+    pub title: String,
+    #[serde(default)]
+    pub details: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub tag: Option<String>,
+    #[serde(default)]
+    pub parent: Option<String>,
+}
+
 // ---- files (a project's own directory, browsed through an isolated jail) --------------
 
 /// One entry in a project directory [`DirListing`]: a file or subdirectory with lightweight

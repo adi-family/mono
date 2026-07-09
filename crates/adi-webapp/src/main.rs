@@ -7,8 +7,8 @@
 #![allow(non_snake_case)] // Leptos components are PascalCase by convention.
 
 use adi_webapp_api::types::{
-    DirListing, Health, HiveState, LeaseRef, MeshForwardRef, MeshState, NewProject, PortsState,
-    Project, ProjectDetail, ProjectsState, UsedPorts,
+    DirListing, Health, HiveState, LeaseRef, MeshForwardRef, MeshState, NewProject, NewTask,
+    PortsState, Project, ProjectDetail, ProjectsState, TaskRow, TasksState, UsedPorts,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -37,6 +37,7 @@ fn App() -> impl IntoView {
     let mesh = RwSignal::new(None::<MeshState>);
     let projects = RwSignal::new(None::<ProjectsState>);
     let project_detail = RwSignal::new(None::<ProjectDetail>);
+    let tasks = RwSignal::new(None::<TasksState>);
     let hive = RwSignal::new(None::<HiveState>);
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
@@ -53,6 +54,7 @@ fn App() -> impl IntoView {
         projects,
         project_detail,
         current_project,
+        tasks,
         hive,
         files,
     };
@@ -64,6 +66,15 @@ fn App() -> impl IntoView {
         description: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
         show_archived: RwSignal::new(false),
+    };
+
+    // The Tasks page's local create form.
+    let tasks_form = TasksForm {
+        title: RwSignal::new(String::new()),
+        parent: RwSignal::new(String::new()),
+        tag: RwSignal::new(String::new()),
+        details: RwSignal::new(String::new()),
+        busy: RwSignal::new(false),
     };
 
     let form = Form {
@@ -125,6 +136,7 @@ fn App() -> impl IntoView {
             route.get(),
             Route::Projects
                 | Route::ProjectDetail
+                | Route::Tasks
                 | Route::Hive
                 | Route::PortsManager
                 | Route::Mesh
@@ -165,6 +177,11 @@ fn App() -> impl IntoView {
                         aria-current=move || if matches!(route.get(), Route::Projects | Route::ProjectDetail) { "page" } else { "false" }
                         on:click=move |ev| spa_click(&ev, route, Route::Projects)>
                         <span>"Projects"</span>
+                    </a>
+                    <a class="adi-nav__item" href=Route::Tasks.path()
+                        aria-current=move || aria_current(route, Route::Tasks)
+                        on:click=move |ev| spa_click(&ev, route, Route::Tasks)>
+                        <span>"Tasks"</span>
                     </a>
                     <div class="adi-nav__group">
                         <div class="adi-nav__heading">"Settings"</div>
@@ -212,6 +229,7 @@ fn App() -> impl IntoView {
                         Route::Overview => overview_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route),
+                        Route::Tasks => tasks_view(state, tasks_form),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
@@ -459,6 +477,266 @@ where
             b.set(false);
         }
     });
+}
+
+/// The Tasks page: a read-only view of the task tree (`~/.adi/mono/mcp/tasks.json`), shared with
+/// the `adi-task` CLI and the `tasks_*` MCP tools. Stat tiles plus a nested table; mutations stay
+/// in the CLI/MCP surface.
+fn tasks_view(state: State, form: TasksForm) -> AnyView {
+    let tasks = state.tasks;
+    let secs_since = state.secs_since;
+    let flash = state.flash;
+    let TasksForm {
+        title,
+        parent,
+        tag,
+        details,
+        busy,
+    } = form;
+    view! {
+        <section class="adi-tiles">
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Tasks"</div>
+                <div class="adi-tile__value">
+                    {move || tasks.get().map_or_else(|| "—".to_string(), |t| t.tasks.len().to_string())}
+                </div>
+                <div class="adi-tile__note">"in the tree"</div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Ready"</div>
+                <div class="adi-tile__value">
+                    {move || tasks.get().map_or_else(|| "—".to_string(),
+                        |t| task_count(&t, "ready").to_string())}
+                </div>
+                <div class="adi-tile__note">"actionable now"</div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Blocked"</div>
+                <div class="adi-tile__value">
+                    {move || tasks.get().map_or_else(|| "—".to_string(),
+                        |t| task_count(&t, "blocked").to_string())}
+                </div>
+                <div class="adi-tile__note">"waiting on subtasks"</div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Done"</div>
+                <div class="adi-tile__value">
+                    {move || tasks.get().map_or_else(|| "—".to_string(),
+                        |t| task_count(&t, "done").to_string())}
+                </div>
+                <div class="adi-tile__note">"completed"</div>
+            </div>
+        </section>
+
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Task tree"</h2>
+                <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
+            </div>
+
+            <div class="adi-tablewrap">
+                <table class="adi-table">
+                    <thead>
+                        <tr><th>"Task"</th><th>"ID"</th><th>"Tag"</th><th>"Status"</th><th>"Subtasks"</th></tr>
+                    </thead>
+                    <tbody>
+                        {move || task_rows(tasks)}
+                    </tbody>
+                </table>
+            </div>
+            <form class="adi-form" on:submit=move |ev| {
+                ev.prevent_default();
+                let t = title.get().trim().to_string();
+                if t.is_empty() {
+                    flash.set(Some(Flash::err("A task title is required.".to_string())));
+                    return;
+                }
+                let det = details.get().trim().to_string();
+                let par = parent.get().trim().to_string();
+                let tg = tag.get().trim().to_string();
+                let body = NewTask {
+                    title: t.clone(),
+                    details: (!det.is_empty()).then_some(det),
+                    project: None,
+                    tag: (!tg.is_empty()).then_some(tg),
+                    parent: (!par.is_empty()).then_some(par),
+                };
+                title.set(String::new());
+                details.set(String::new());
+                parent.set(String::new());
+                tag.set(String::new());
+                apply_tasks(state, Some(busy), format!("Created task “{t}”."),
+                    fetch::create_task(body));
+            }>
+                <div class="adi-field" style="flex:1 1 220px; min-width:0">
+                    <label class="adi-field__label" for="task-title">"Title"</label>
+                    <input class="adi-input adi-input--wide" id="task-title" placeholder="What needs doing?" autocomplete="off"
+                        prop:value=move || title.get()
+                        on:input=move |ev| title.set(event_target_value(&ev)) />
+                </div>
+                <div class="adi-field">
+                    <label class="adi-field__label" for="task-parent">"Parent (subtask of)"</label>
+                    <select class="adi-input" id="task-parent"
+                        prop:value=move || parent.get()
+                        on:change=move |ev| parent.set(event_target_value(&ev))>
+                        <option value="">"— none (root) —"</option>
+                        {move || tasks.get().map(|t| t.tasks.into_iter().map(|task| {
+                            let id = task.id.clone();
+                            let label = format!("{} · {}", task.id, task.title);
+                            view! { <option value=id>{label}</option> }
+                        }).collect::<Vec<_>>()).unwrap_or_default()}
+                    </select>
+                </div>
+                <div class="adi-field">
+                    <label class="adi-field__label" for="task-tag">"Tag"</label>
+                    <input class="adi-input adi-mono" id="task-tag" placeholder="agent name" autocomplete="off"
+                        prop:value=move || tag.get()
+                        on:input=move |ev| tag.set(event_target_value(&ev)) />
+                    <span class="adi-field__hint">"= an agent name auto-starts it"</span>
+                </div>
+                <div class="adi-field" style="flex:1 1 200px; min-width:0">
+                    <label class="adi-field__label" for="task-details">"Details"</label>
+                    <input class="adi-input adi-input--wide" id="task-details" placeholder="optional notes" autocomplete="off"
+                        prop:value=move || details.get()
+                        on:input=move |ev| details.set(event_target_value(&ev)) />
+                </div>
+                <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
+                    "Add task"
+                </button>
+            </form>
+            <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
+                {move || flash.get().map(|f| f.msg).unwrap_or_default()}
+            </div>
+            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+                "Completing, archiving, editing, and deleting stay in the " <code>"adi-task"</code>
+                " CLI and the " <code>"tasks_*"</code> " MCP tools."
+            </div>
+        </section>
+    }
+    .into_any()
+}
+
+/// Count tasks whose computed effective status equals `effective` (`ready`/`blocked`/`done`/`archived`).
+fn task_count(state: &TasksState, effective: &str) -> usize {
+    state.tasks.iter().filter(|t| t.effective == effective).count()
+}
+
+/// Run a task mutation (currently just create): set the returned tree and a success flash, or an
+/// error flash; toggles `busy` around the request when a form is driving it.
+fn apply_tasks<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+where
+    F: std::future::Future<Output = Result<TasksState, String>> + 'static,
+{
+    if let Some(b) = busy {
+        b.set(true);
+    }
+    spawn_local(async move {
+        match fut.await {
+            Ok(t) => {
+                state.tasks.set(Some(t));
+                state.flash.set(Some(Flash::ok(ok_msg)));
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        if let Some(b) = busy {
+            b.set(false);
+        }
+    });
+}
+
+/// Render the task table body: a loading/empty placeholder, or the tree flattened into rows
+/// (a parent immediately followed by its subtree), each indented by its depth.
+fn task_rows(tasks: RwSignal<Option<TasksState>>) -> AnyView {
+    let Some(state_tasks) = tasks.get() else {
+        return view! { <tr><td class="adi-empty" colspan="5">"Loading…"</td></tr> }.into_any();
+    };
+    if state_tasks.tasks.is_empty() {
+        return view! {
+            <tr><td class="adi-empty" colspan="5">
+                "No tasks yet — add one below, or use the adi-task CLI or the tasks_create MCP tool."
+            </td></tr>
+        }
+        .into_any();
+    }
+
+    task_tree_rows(state_tasks.tasks)
+        .into_iter()
+        .map(|(depth, t)| {
+            let indent = format!("padding-left:{}px", depth * 20);
+            let subtasks = if t.children_total > 0 {
+                format!("{}/{} open", t.children_open, t.children_total)
+            } else {
+                String::new()
+            };
+            let details = t.details.unwrap_or_default();
+            let label = effective_label_title(&t.effective);
+            let tag_cell = match t.tag {
+                Some(tg) if !tg.trim().is_empty() => {
+                    view! { <span class="adi-chip adi-mono">{tg}</span> }.into_any()
+                }
+                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
+            };
+            view! {
+                <tr>
+                    <td title=details><span style=indent>{t.title}</span></td>
+                    <td class="adi-mono adi-muted">{t.id}</td>
+                    <td>{tag_cell}</td>
+                    <td><span class="adi-tstatus" data-status=t.effective>{label}</span></td>
+                    <td class="adi-mono adi-muted">{subtasks}</td>
+                </tr>
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+/// Flatten the flat task list into depth-annotated tree order: each task is immediately followed
+/// by its subtree (children in their incoming order). A task whose `parent` isn't in the set is
+/// treated as a root, so no task is ever dropped.
+fn task_tree_rows(rows: Vec<TaskRow>) -> Vec<(usize, TaskRow)> {
+    use std::collections::{HashMap, HashSet};
+
+    let ids: HashSet<String> = rows.iter().map(|r| r.id.clone()).collect();
+    let mut children: HashMap<String, Vec<TaskRow>> = HashMap::new();
+    let mut roots: Vec<TaskRow> = Vec::new();
+    for r in rows {
+        match &r.parent {
+            Some(p) if ids.contains(p) => children.entry(p.clone()).or_default().push(r),
+            _ => roots.push(r),
+        }
+    }
+
+    fn walk(
+        node: TaskRow,
+        depth: usize,
+        children: &mut HashMap<String, Vec<TaskRow>>,
+        out: &mut Vec<(usize, TaskRow)>,
+    ) {
+        let id = node.id.clone();
+        out.push((depth, node));
+        if let Some(kids) = children.remove(&id) {
+            for kid in kids {
+                walk(kid, depth + 1, children, out);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for root in roots {
+        walk(root, 0, &mut children, &mut out);
+    }
+    out
+}
+
+/// The capitalized display label for a computed effective status.
+fn effective_label_title(effective: &str) -> &'static str {
+    match effective {
+        "ready" => "Ready",
+        "blocked" => "Blocked",
+        "done" => "Done",
+        "archived" => "Archived",
+        _ => "—",
+    }
 }
 
 /// The project detail page (`/projects/<id>`): the manifest, its actions, and the services
@@ -1774,6 +2052,8 @@ enum Route {
     Projects,
     /// A single project's detail page (`/projects/<id>`); the id lives in `State::current_project`.
     ProjectDetail,
+    /// The read-only task tree (`/tasks`).
+    Tasks,
     Hive,
     PortsManager,
     Mesh,
@@ -1787,6 +2067,7 @@ impl Route {
         }
         match path {
             "/projects" => Route::Projects,
+            "/tasks" => Route::Tasks,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
@@ -1800,6 +2081,7 @@ impl Route {
         match self {
             Route::Overview => "/overview",
             Route::Projects | Route::ProjectDetail => "/projects",
+            Route::Tasks => "/tasks",
             Route::Hive => "/settings/hive",
             Route::PortsManager => "/settings/ports-manager",
             Route::Mesh => "/settings/mesh",
@@ -1812,6 +2094,7 @@ impl Route {
             Route::Overview => "Overview",
             Route::Projects => "Projects",
             Route::ProjectDetail => "Project",
+            Route::Tasks => "Tasks",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",
@@ -1921,6 +2204,8 @@ struct State {
     projects: RwSignal<Option<ProjectsState>>,
     project_detail: RwSignal<Option<ProjectDetail>>,
     current_project: RwSignal<String>,
+    /// The read-only task tree (`/api/tasks`), shown on the Tasks page.
+    tasks: RwSignal<Option<TasksState>>,
     hive: RwSignal<Option<HiveState>>,
     /// The project file browser/editor state (the Files panel on the detail page).
     files: FilesState,
@@ -1985,6 +2270,19 @@ struct ProjectsForm {
     show_archived: RwSignal<bool>,
 }
 
+/// The Tasks page's local signals: the create-form inputs (title, optional parent id, optional
+/// tag, optional details) and a busy flag. The `tag` matters — a tag matching an agent name is
+/// what auto-assigns/auto-starts the task (see docs/adi-agents.md). `Copy` so it threads into
+/// the page view and handlers.
+#[derive(Clone, Copy)]
+struct TasksForm {
+    title: RwSignal<String>,
+    parent: RwSignal<String>,
+    tag: RwSignal<String>,
+    details: RwSignal<String>,
+    busy: RwSignal<bool>,
+}
+
 /// The reserve form's local signals; `Copy` so it threads into the page view and handlers.
 #[derive(Clone, Copy)]
 struct Form {
@@ -2035,6 +2333,11 @@ async fn load(s: State) {
         && let Ok(d) = fetch::project_detail(&id).await
     {
         s.project_detail.set(Some(d));
+    }
+    if path == Route::Tasks.path()
+        && let Ok(t) = fetch::tasks().await
+    {
+        s.tasks.set(Some(t));
     }
     if path == Route::Hive.path()
         && let Ok(h) = fetch::hive().await
@@ -2274,8 +2577,8 @@ mod fetch {
     use adi_webapp_api::types::{
         ApiError, DirListing, FileContent, FilesRef, Health, HiveState, MeshForwardRef,
         MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, PortsState, ProjectDetail,
-        ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, StartResult, StartService,
-        StopResult, UsedPorts, WriteFile,
+        NewTask, ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, StartResult,
+        StartService, StopResult, TasksState, UsedPorts, WriteFile,
     };
     use gloo_net::http::{Request, Response};
     use serde::Serialize;
@@ -2365,6 +2668,14 @@ mod fetch {
 
     pub async fn remove_project(id: String) -> Result<ProjectsState, String> {
         post("/api/projects/remove", &ProjectRef { id }).await
+    }
+
+    pub async fn tasks() -> Result<TasksState, String> {
+        get("/api/tasks").await
+    }
+
+    pub async fn create_task(body: NewTask) -> Result<TasksState, String> {
+        post("/api/tasks/create", &body).await
     }
 
     pub async fn hive() -> Result<HiveState, String> {

@@ -13,14 +13,15 @@ use adi_mesh::config::{Forward, MeshConfig};
 use adi_mesh::{identity, ticket};
 use adi_ports_manager::Ports;
 use adi_projects::{Error as ProjectStoreError, Projects};
+use adi_tasks::{EffectiveStatus, Error as TaskStoreError, TaskStatus, TaskView, Tasks};
 use serde::Deserialize;
 
 use crate::types::{
     ApiError, DirListing, FileContent, FileEntry, FilesRef, Health, HiveService, HiveState, Lease,
     LeaseRef, MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
-    NewProject, PortsState, Project, ProjectDetail, ProjectRef, ProjectService, ProjectsState,
-    Range, ReleaseResponse, ReserveResponse, ServicePort, StartResult, StartService, StopResult,
-    UsedPort, UsedPorts, WriteFile,
+    NewProject, NewTask, PortsState, Project, ProjectDetail, ProjectRef, ProjectService,
+    ProjectsState, Range, ReleaseResponse, ReserveResponse, ServicePort, StartResult, StartService,
+    StopResult, TaskRow, TasksState, UsedPort, UsedPorts, WriteFile,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -195,6 +196,42 @@ pub fn remove_project(store: &Projects, body: &[u8]) -> (u16, String) {
     match store.remove(req.id.trim()) {
         Ok(_) => projects(store),
         Err(e) => project_error(&e),
+    }
+}
+
+// MARK: tasks — the task tree under ~/.adi/mono/mcp/tasks.json
+
+/// `GET /api/tasks` — the whole task tree as a flat list, ordered by task number so a parent
+/// precedes the children created after it. The client nests them into a tree by `parent`.
+#[must_use]
+pub fn tasks(store: &Tasks) -> (u16, String) {
+    match store.list(None, None, None, None) {
+        Ok(mut views) => {
+            views.sort_by_key(|v| task_num(&v.task.id));
+            ok_json(&TasksState {
+                tasks: views.iter().map(task_row).collect(),
+            })
+        }
+        Err(e) => task_error(&e),
+    }
+}
+
+/// `POST /api/tasks/create` — create a task (stored status `open`), then report the fresh tree.
+/// Only `title` is required; a given `parent` must be an existing task id.
+#[must_use]
+pub fn create_task(store: &Tasks, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_new_task(body) else {
+        return bad_new_task();
+    };
+    match store.create(
+        req.title.trim().to_string(),
+        req.details,
+        req.project,
+        req.tag,
+        req.parent,
+    ) {
+        Ok(_) => tasks(store),
+        Err(e) => task_error(&e),
     }
 }
 
@@ -763,6 +800,70 @@ fn project_error(e: &ProjectStoreError) -> (u16, String) {
         ProjectStoreError::Config(_) | ProjectStoreError::Io(_) => 500,
     };
     error(status, &e.to_string())
+}
+
+/// Flatten a store [`TaskView`] into its wire [`TaskRow`] DTO, stringifying the status enums.
+fn task_row(view: &TaskView) -> TaskRow {
+    let task = &view.task;
+    TaskRow {
+        id: task.id.clone(),
+        title: task.title.clone(),
+        details: task.details.clone(),
+        status: task_status_label(task.status).to_string(),
+        effective: effective_status_label(view.effective).to_string(),
+        project: task.project.clone(),
+        parent: task.parent.clone(),
+        tag: task.tag.clone(),
+        assignee: task.assignee.clone(),
+        children_total: view.children_total,
+        children_open: view.children_open,
+        created_at: task.created_at,
+        updated_at: task.updated_at,
+    }
+}
+
+/// The wire label for a stored task status.
+fn task_status_label(s: TaskStatus) -> &'static str {
+    match s {
+        TaskStatus::Open => "open",
+        TaskStatus::Done => "done",
+        TaskStatus::Archived => "archived",
+    }
+}
+
+/// The wire label for a computed effective status.
+fn effective_status_label(e: EffectiveStatus) -> &'static str {
+    match e {
+        EffectiveStatus::Ready => "ready",
+        EffectiveStatus::Blocked => "blocked",
+        EffectiveStatus::Done => "done",
+        EffectiveStatus::Archived => "archived",
+    }
+}
+
+/// The numeric part of a `t<N>` id, for stable ordering (0 if it doesn't parse).
+fn task_num(id: &str) -> u64 {
+    id.strip_prefix('t').and_then(|n| n.parse().ok()).unwrap_or(0)
+}
+
+/// Map a task-store error to an HTTP status: missing → 404, bad edit → 400, archived → 409, else 500.
+fn task_error(e: &TaskStoreError) -> (u16, String) {
+    let status = match e {
+        TaskStoreError::NotFound(_) => 404,
+        TaskStoreError::ParentMissing(_) | TaskStoreError::Cycle => 400,
+        TaskStoreError::ReopenFirst => 409,
+        TaskStoreError::Store(_) => 500,
+    };
+    error(status, &e.to_string())
+}
+
+fn parse_new_task(body: &[u8]) -> Option<NewTask> {
+    let req: NewTask = serde_json::from_slice(body).ok()?;
+    (!req.title.trim().is_empty()).then_some(req)
+}
+
+fn bad_new_task() -> (u16, String) {
+    error(400, "expected JSON body { \"title\": \"…\" } with a non-empty title")
 }
 
 fn parse_new_project(body: &[u8]) -> Option<NewProject> {

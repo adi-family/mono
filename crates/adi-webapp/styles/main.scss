@@ -1,3 +1,41 @@
-// The adi webapp's stylesheet — just the shared design system. Trunk compiles this to CSS
-// and injects it into <head>.
+// The adi webapp's stylesheet — the shared design system plus a few app-local additions.
+// Trunk compiles this to CSS and injects it into <head>.
 @use "../../adi-css/scss/adi";
+
+// ---- task effective-status badge ---------------------------------------------------
+// A pill whose colour encodes a task's computed status (ready / blocked / done / archived),
+// leading with a small status dot. Used on the read-only Tasks page.
+.adi-tstatus {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+
+  &::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+
+  &[data-status="ready"] {
+    color: var(--online);
+    &::before { background: var(--online); }
+  }
+
+  &[data-status="blocked"] {
+    color: var(--down);
+    &::before { background: var(--down); }
+  }
+
+  // Done and archived stay muted (they're "settled"); archived reads as dimmer still.
+  &[data-status="archived"] { opacity: 0.7; }
+}

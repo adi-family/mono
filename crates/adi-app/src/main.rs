@@ -19,6 +19,7 @@ use std::time::Instant;
 use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
+use adi_tasks::Tasks;
 use adi_webapp_api::handlers;
 use include_dir::{Dir, include_dir};
 use tokio::net::{TcpListener, TcpStream};
@@ -84,6 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let local = listener.local_addr().unwrap_or(addr);
     let ports = Arc::new(Ports::new());
     let projects = Arc::new(Projects::open());
+    let tasks = Arc::new(Tasks::open());
     let webapp_dist = Arc::new(webapp_dist_override());
     // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
     // (non-blocking, best-effort) so the whole stack is up once the app is — the control
@@ -110,12 +112,20 @@ async fn main() -> anyhow::Result<()> {
                 Ok((stream, peer)) => {
                     let ports = Arc::clone(&ports);
                     let projects = Arc::clone(&projects);
+                    let tasks = Arc::clone(&tasks);
                     let webapp_dist = Arc::clone(&webapp_dist);
                     let mesh = Arc::clone(&mesh);
                     tokio::spawn(async move {
-                        if let Err(e) =
-                            handle(stream, &ports, &projects, &mesh, start, webapp_dist.as_deref())
-                                .await
+                        if let Err(e) = handle(
+                            stream,
+                            &ports,
+                            &projects,
+                            &tasks,
+                            &mesh,
+                            start,
+                            webapp_dist.as_deref(),
+                        )
+                        .await
                         {
                             debug!(%peer, error = %e, "connection error");
                         }
@@ -157,6 +167,7 @@ async fn handle(
     mut stream: TcpStream,
     ports: &Ports,
     projects: &Projects,
+    tasks: &Tasks,
     mesh: &MeshCtl,
     start: Instant,
     dist: Option<&Path>,
@@ -191,6 +202,10 @@ async fn handle(
             let listening: Vec<u16> = scan::listening_ports().into_iter().map(|u| u.port).collect();
             handlers::project_detail(projects, &p["/api/projects/".len()..], &listening)
         }
+        // Tasks: the task tree (~/.adi/mono/mcp/tasks.json), shared with the adi-mcp `tasks_*`
+        // tools and the `adi-task` CLI. Create returns the fresh tree so the panel refreshes.
+        ("GET", "/api/tasks") => handlers::tasks(tasks),
+        ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
         // Every hive service across all projects + the global front-door, with live status.
         // The listening-port scan is platform I/O, so the host does it and passes the ports in.
         ("GET", "/api/hive") => {
