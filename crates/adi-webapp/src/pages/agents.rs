@@ -110,6 +110,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
                         <option value="api:anthropic">"Anthropic (API)"</option>
                         <option value="api:openai">"OpenAI (API)"</option>
                         <option value="api:gemini">"Gemini (API)"</option>
+                        <option value="api:monshoot">"Monshoot (API)"</option>
                         <option value="api:ollama">"Ollama (local)"</option>
                     </select>
                 </div>
@@ -284,6 +285,7 @@ fn backend_model_placeholder(backend: &str) -> &'static str {
         "api:anthropic" => "claude-opus-4-8",
         "api:openai" => "gpt-5-codex / o3",
         "api:gemini" => "gemini-2.5-pro / gemini-2.5-flash",
+        "api:monshoot" => "kimi-k2.6 / kimi-k2",
         "api:ollama" => "llama3.1 / qwen2.5-coder",
         _ => "model alias",
     }
