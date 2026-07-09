@@ -133,8 +133,6 @@ struct AgentDef {
     params: AgentParams,      // temperature, max turns, permission mode, extra env
     role: Option<String>,     // "solver" | "planner" | "triager" | …  (drives task→agent map)
     tags: Vec<String>,        // free-form (e.g. milestone tag) for dispatch/filtering
-    pre_hook: Option<HookRef>,   // sh script run BEFORE the run (setup); non-zero aborts (§5a)
-    post_hook: Option<HookRef>,  // sh script run AFTER the run (teardown); gets the outcome (§5a)
     starred: bool,            // pinned in the UI / preferred for quick-dispatch
 }
 ```
@@ -143,23 +141,9 @@ struct AgentDef {
 or inside the project dir. They're created via CLI/API/UI and seeded in bulk by the roster
 (§9). A `backend` value is parsed to a `BackendRef { kind: Cli|Api, engine: String }`.
 
-### 5a. Hooks (pre/post — shell scripts)
-
-Every agent may declare a **pre-hook** and a **post-hook**: `sh` scripts that run around a
-`Session`, so setup/teardown lives with the agent rather than being hand-done each run.
-
-- **Pre-hook** runs **before** the backend starts — setup: prepare the workspace, fetch inputs,
-  warm a browser profile, compute and export extra env. A **non-zero exit aborts the run**
-  (configurable), so a failed setup never launches a half-ready agent.
-- **Post-hook** runs **after** the agent exits — teardown: collect artifacts, file findings,
-  clean up, notify. It runs **whether the agent succeeded or failed**, and is handed the outcome.
-- **Contract:** each hook is `sh <script>`, executed with `cwd` = the `adi-fs` workspace, under a
-  timeout, with the agent context in the environment — `ADI_PROJECT`, `ADI_AGENT`, `ADI_SESSION`,
-  `ADI_WORKSPACE`, plus (post-hook only) `ADI_EXIT_STATUS` / `ADI_AGENT_STATUS`. A `HookRef` is a
-  workspace-relative script path (resolved through the jail) or a CLI-store reference (§7a), so
-  hooks are versioned with the project.
-- **Optional layering:** per-agent hooks are the default; a project may also declare default
-  hooks the orchestrator runs for *every* agent, with the agent's own hooks nested inside them.
+Hooks are **not** a field on `AgentDef`. Lifecycle behaviour lives in one **global,
+event-driven hooks registry** — see §9a. An "agent pre/post hook" is just a global hook bound to
+the `agent.pre_run` / `agent.post_run` events and filtered to that agent.
 
 ---
 
@@ -326,7 +310,7 @@ Keep the reference app's proven loops; drive them off structured status.
 - **Concurrency.** Per-project **slots** (cap, default like the app's 10) and a global **capacity**
   for the auto-spawner (default 3), measured across all live `Session`s.
 - **Auto-spawn ("task starter").** A periodic sweep drains the **task queue**: for each *ready*
-  task that **resolves to an existing agent**, if under capacity, it runs the agent's pre-hook,
+  task that **resolves to an existing agent**, if under capacity, it emits `agent.pre_run` (§9a),
   spawns a `Session`, and marks the task in-progress. **Hard rule (ported):** never auto-start a
   task that is blocked, already in-progress, or done. The queue is the `adi-mcp` `tasks` feature
   (see §14).
@@ -349,6 +333,59 @@ Keep the reference app's proven loops; drive them off structured status.
 - **Supervision.** The orchestrator can run inside a host process, or as an `adi-hive`-supervised
   service (the workspace already supervises long-running services this way). Boot-time
   auto-start/reaper toggles persist via `adi-config` (the app's `automation-state.json`).
+
+### 9a. Lifecycle hooks (global, event-driven)
+
+Hooks live in **one global registry**, not on individual agents, and fire on **lifecycle
+events**. The old per-agent pre/post scripts are just two events (`agent.pre_run` /
+`agent.post_run`) any hook can subscribe to and filter to a specific agent — so the capability is
+preserved and generalized: *any* event can trigger *any* number of hooks.
+
+**Triggers — a catalog of lifecycle events** the orchestrator, task queue, and sessions emit
+(extensible: new subsystems add events; hooks stay decoupled from the emitters):
+- **Task:** `task.created`, `task.ready`, `task.blocked`, `task.assigned`, `task.completed`,
+  `task.archived`, `task.reopened`.
+- **Agent / session:** `agent.pre_run` (before the backend starts), `agent.spawned`,
+  `agent.post_run` (after exit), `agent.failed`, `agent.stuck`, `session.reaped`.
+- **Orchestrator:** `roster.seeded`, `sweep.tick`, … and anything a future subsystem emits.
+
+**A hook** binds one-or-more triggers to a **run template**, with an optional match filter:
+```toml
+[[hook]]
+name     = "notify-done"
+on       = ["task.completed", "agent.failed"]      # a hook can watch many triggers
+match    = { project = "acme", tag = "athz-*" }    # optional; omit = fire for all
+template = "notify"                                 # a reusable run template (below)
+blocking = false                                    # fire-and-forget
+```
+
+**Custom run templates** — *how* a hook runs is a reusable, parameterized template (`sh` by
+default) with the event context interpolated, so many hooks share one runner and you can author
+bespoke ones per event:
+```toml
+[template.notify]
+body = "curl -s $ADI_WEBHOOK -d \"{{event}} {{task.id}} {{task.title}}\""
+
+[template.warm-browser]
+body = "./.adi/hooks/warm-browser.sh"    # a workspace .sh, resolved through the adi-fs jail
+```
+
+**Per-event customization + opt-out.** A trigger has **no built-in lifecycle** of its own — if no
+hook subscribes, nothing runs. You attach a custom template for a specific event, override it, or
+**disable a hook for a given event** (`enabled = false`, or a `skip` match) — "no lifecycle for
+this event." The system is opt-in per trigger, never a fixed pre/post pair.
+
+**Execution contract.**
+- **Blocking vs async.** A hook declares `blocking`. `agent.pre_run` hooks are blocking and a
+  **non-zero exit aborts the run** (the old pre-hook guarantee); notify-style hooks
+  (`task.completed`, …) are async fire-and-forget. `agent.post_run` runs on success *or* failure
+  and receives the outcome.
+- **Context.** Each hook runs `sh`-style under a timeout, cwd = the relevant `adi-fs` workspace,
+  with the event payload in the environment — `ADI_EVENT` plus whichever of `ADI_TASK`,
+  `ADI_AGENT`, `ADI_SESSION`, `ADI_PROJECT`, `ADI_WORKSPACE`, `ADI_EXIT_STATUS` the event carries
+  (the same fields are available as `{{…}}` to templates).
+- **Storage.** The hook registry + templates persist via `adi-config`; script bodies a template
+  references resolve through the workspace jail, so they version with the project.
 
 ---
 
@@ -439,8 +476,8 @@ Keep the reference app's proven loops; drive them off structured status.
 - **Targets → `adi-projects`.** An agent is scoped to a project; the roster is seeded per project.
 - **Tool surface → `adi-mcp`.** `ToolScope` = an `adi-mcp --features` selection (§7), including the
   agent-editable CLI store (§7a).
-- **Workspace → `adi-fs`.** The session cwd is an `adi-fs` jail; hooks (§5a) and the CLI store
-  write inside it.
+- **Workspace → `adi-fs`.** The session cwd is an `adi-fs` jail; lifecycle-hook scripts (§9a) and
+  the CLI store write inside it.
 - **State → `adi-config`.** AgentDefs, roster, orchestrator prefs, and transcripts.
 - **Supervision → `adi-hive`.** The orchestrator can run as an `adi-hive`-supervised service (like
   the other long-running services), reachable behind the front door.
@@ -451,7 +488,8 @@ Keep the reference app's proven loops; drive them off structured status.
 1. **Start using tasks.** Populate the `adi-mcp` `tasks` queue and add the `tag`/`assignee` +
    `blocked` extensions. No agents yet — this stage is useful on its own.
 2. **MVP agent.** One CLI backend (claude headless) a human runs against a task (§15).
-3. **Auto-spawn.** The task starter picks up tasks by tag==name / manual map, with pre/post hooks.
+3. **Auto-spawn.** The task starter picks up tasks by tag==name / manual map, firing lifecycle
+   hooks (§9a) around each run.
 4. **Roster, reaper, CLI store, UI.** The full lifecycle and operator surface.
 
 ---
