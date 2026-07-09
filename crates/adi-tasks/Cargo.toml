@@ -1,0 +1,27 @@
+[package]
+name = "adi-tasks"
+description = "The adi task tree: a persistent tree of work items (one JSON document under ~/.adi/mono/mcp) with a minimal stored status and a computed effective status. Pure library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared configurator decides where state lives (the `mcp` module dir under ~/.adi/mono)
+# and does the atomic temp-then-rename writes. A pure-library dep — no runtime, no net.
+adi-config = { workspace = true }
+
+# The task document is a plain serde/JSON structure. `serde` derives it; `serde_json` reads
+# and writes it. `schemars` derives `JsonSchema` on the two status enums so the adi-mcp tool
+# argument structs that embed them keep their generated schemas.
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = "1"
+
+# Store load/save unify `adi-config` and `serde_json` failures behind one boxed error.
+anyhow = "1"
+
+[lints]
+workspace = true

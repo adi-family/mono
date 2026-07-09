@@ -33,6 +33,9 @@ adi-config = { workspace = true }
 adi-core = { workspace = true }
 adi-fs = { workspace = true }
 adi-projects = { workspace = true }
+# The task tree the `tasks` MCP tools and the `adi-task` CLI drive — extracted into its own
+# pure library so the same store also backs the app.adi web UI. This crate is just a frontend.
+adi-tasks = { workspace = true }
 
 # CLI surface (`--features`, `--list-features`); serde/json (de)serialize tool args, the JSON
 # payloads tools return, and the tasks store on disk.

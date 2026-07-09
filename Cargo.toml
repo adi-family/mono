@@ -17,6 +17,7 @@ default-members = [
     "crates/adi-mesh",
     "crates/adi-ports-manager",
     "crates/adi-projects",
+    "crates/adi-tasks",
     "crates/adi-webapp-api",
 ]
 
@@ -40,6 +41,7 @@ adi-fs = { path = "crates/adi-fs" }
 adi-mesh = { path = "crates/adi-mesh" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }
+adi-tasks = { path = "crates/adi-tasks" }
 adi-webapp-api = { path = "crates/adi-webapp-api" }
 
 # External crates (add as needed)

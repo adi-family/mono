@@ -10,6 +10,7 @@ dependencies = [
  "adi-mesh",
  "adi-ports-manager",
  "adi-projects",
+ "adi-tasks",
  "adi-webapp-api",
  "anyhow",
  "include_dir",
@@ -99,6 +100,7 @@ dependencies = [
  "adi-core",
  "adi-fs",
  "adi-projects",
+ "adi-tasks",
  "anyhow",
  "clap",
  "rmcp",
@@ -144,6 +146,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-tasks"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "anyhow",
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "adi-webapp"
 version = "0.1.0"
 dependencies = [
@@ -168,6 +181,7 @@ dependencies = [
  "adi-mesh",
  "adi-ports-manager",
  "adi-projects",
+ "adi-tasks",
  "serde",
  "serde_json",
  "serde_yaml_ng",
