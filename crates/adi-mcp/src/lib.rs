@@ -24,3 +24,7 @@ mod tasks;
 
 pub use features::{Feature, FeatureSet};
 pub use server::AdiMcp;
+
+/// The `adi-task` binary's entry point — a small CLI over the same task store the `tasks` MCP
+/// feature uses. See [`tasks::cli`].
+pub use tasks::cli::run as run_tasks_cli;

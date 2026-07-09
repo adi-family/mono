@@ -12,6 +12,12 @@ repository.workspace = true
 name = "adi-mcp"
 path = "src/main.rs"
 
+# A tiny CLI over the same task store the `tasks` MCP feature uses — for creating and driving
+# the task tree by hand (the "populate the queue" step) without an MCP client.
+[[bin]]
+name = "adi-task"
+path = "src/bin/adi-task.rs"
+
 [dependencies]
 # The official Rust MCP SDK. `server` + `macros` (the `#[tool]`/`#[tool_router]` surface)
 # come from the defaults; `transport-io` adds the stdio transport agents spawn us over.
