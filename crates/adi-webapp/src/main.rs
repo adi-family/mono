@@ -188,43 +188,19 @@ fn App() -> impl IntoView {
                     <span class="adi-bar__sub">"control panel"</span>
                 </div>
                 <nav class="adi-nav">
-                    <a class="adi-nav__item" href=Route::Overview.path()
-                        aria-current=move || aria_current(route, Route::Overview)
-                        on:click=move |ev| spa_click(&ev, route, Route::Overview)>
-                        <span>"Overview"</span>
-                    </a>
+                    {nav_item(route, Route::Overview, "Overview")}
                     <a class="adi-nav__item" href=Route::Projects.path()
                         aria-current=move || if matches!(route.get(), Route::Projects | Route::ProjectDetail) { "page" } else { "false" }
                         on:click=move |ev| spa_click(&ev, route, Route::Projects)>
                         <span>"Projects"</span>
                     </a>
-                    <a class="adi-nav__item" href=Route::Tasks.path()
-                        aria-current=move || aria_current(route, Route::Tasks)
-                        on:click=move |ev| spa_click(&ev, route, Route::Tasks)>
-                        <span>"Tasks"</span>
-                    </a>
-                    <a class="adi-nav__item" href=Route::Agents.path()
-                        aria-current=move || aria_current(route, Route::Agents)
-                        on:click=move |ev| spa_click(&ev, route, Route::Agents)>
-                        <span>"Agents"</span>
-                    </a>
+                    {nav_item(route, Route::Tasks, "Tasks")}
+                    {nav_item(route, Route::Agents, "Agents")}
                     <div class="adi-nav__group">
                         <div class="adi-nav__heading">"Settings"</div>
-                        <a class="adi-nav__item" href=Route::Hive.path()
-                            aria-current=move || aria_current(route, Route::Hive)
-                            on:click=move |ev| spa_click(&ev, route, Route::Hive)>
-                            <span>"Hive"</span>
-                        </a>
-                        <a class="adi-nav__item" href=Route::PortsManager.path()
-                            aria-current=move || aria_current(route, Route::PortsManager)
-                            on:click=move |ev| spa_click(&ev, route, Route::PortsManager)>
-                            <span>"Ports Manager"</span>
-                        </a>
-                        <a class="adi-nav__item" href=Route::Mesh.path()
-                            aria-current=move || aria_current(route, Route::Mesh)
-                            on:click=move |ev| spa_click(&ev, route, Route::Mesh)>
-                            <span>"Mesh"</span>
-                        </a>
+                        {nav_item(route, Route::Hive, "Hive")}
+                        {nav_item(route, Route::PortsManager, "Ports Manager")}
+                        {nav_item(route, Route::Mesh, "Mesh")}
                     </div>
                 </nav>
                 <span class="adi-spacer"></span>
@@ -278,21 +254,139 @@ fn placeholder_row(colspan: &'static str, msg: &str) -> AnyView {
     view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
 }
 
+// ---- shared view helpers ------------------------------------------------------------
+// Small building blocks the pages compose from, so the repeated markup (stat tiles, table
+// shells, the flash line, segmented filters) lives in one place instead of at every call site.
+
+/// One stat tile in an `adi-tiles` strip: a label, a big value, and a sub-note. `value`/`note`
+/// take any view, so a caller passes either a literal or a reactive `move || …` closure.
+fn tile(label: &'static str, value: impl IntoView + 'static, note: impl IntoView + 'static) -> impl IntoView {
+    view! {
+        <div class="adi-tile">
+            <div class="adi-tile__label">{label}</div>
+            <div class="adi-tile__value">{value}</div>
+            <div class="adi-tile__note">{note}</div>
+        </div>
+    }
+}
+
+/// The standard table shell: the `adi-tablewrap` scroll box, a header row built from `headers`
+/// (an empty string yields a blank action column), and `body` as the `<tbody>`.
+fn data_table(headers: &'static [&'static str], body: impl IntoView + 'static) -> impl IntoView {
+    view! {
+        <div class="adi-tablewrap">
+            <table class="adi-table">
+                <thead>
+                    <tr>{headers.iter().map(|h| view! { <th>{*h}</th> }).collect::<Vec<_>>()}</tr>
+                </thead>
+                <tbody>{body}</tbody>
+            </table>
+        </div>
+    }
+}
+
+/// The one-line status message shown under a form: reads the shared `flash` signal, colouring
+/// itself via `data-kind`.
+fn flash_view(flash: RwSignal<Option<Flash>>) -> impl IntoView {
+    view! {
+        <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
+            {move || flash.get().map(|f| f.msg).unwrap_or_default()}
+        </div>
+    }
+}
+
+/// A two-option segmented toggle bound to a `bool` signal: the left button selects `false`, the
+/// right selects `true`, each reflecting the state through `aria-pressed`.
+fn segmented(
+    aria_label: &'static str,
+    signal: RwSignal<bool>,
+    left: &'static str,
+    right: &'static str,
+) -> impl IntoView {
+    view! {
+        <div class="adi-segmented" role="group" aria-label=aria_label>
+            <button class="adi-segmented__option" type="button"
+                aria-pressed=move || (!signal.get()).to_string()
+                on:click=move |_| signal.set(false)>{left}</button>
+            <button class="adi-segmented__option" type="button"
+                aria-pressed=move || signal.get().to_string()
+                on:click=move |_| signal.set(true)>{right}</button>
+        </div>
+    }
+}
+
+/// A read-only field with a Copy button (the mesh id/ticket rows): selects on focus and copies to
+/// the clipboard. `node` lets the button reach the input's live text.
+fn copy_row(node: NodeRef<leptos::html::Input>, value: impl Fn() -> String + Send + 'static) -> impl IntoView {
+    view! {
+        <div class="adi-copyrow">
+            <input class="adi-input adi-input--wide adi-mono" readonly=true node_ref=node
+                prop:value=value
+                on:focus=move |ev| select_target(&ev) />
+            <button class="adi-btn adi-btn--ghost" type="button"
+                on:click=move |_| copy_field(node)>"Copy"</button>
+        </div>
+    }
+}
+
+/// One sidebar nav link that navigates client-side and marks itself `aria-current` when active.
+/// (The Projects link stays inline — it is also current on the project-detail route.)
+fn nav_item(route: RwSignal<Route>, target: Route, label: &'static str) -> impl IntoView {
+    view! {
+        <a class="adi-nav__item" href=target.path()
+            aria-current=move || aria_current(route, target)
+            on:click=move |ev| spa_click(&ev, route, target)>
+            <span>{label}</span>
+        </a>
+    }
+}
+
+/// A labeled text input bound to a `String` signal — the `adi-field` wrapper the forms repeat.
+/// Optional props toggle the mono/wide input classes, a numeric input mode, a trailing hint line,
+/// and the field wrapper's flex style.
+#[component]
+fn TextField(
+    /// The input's `id` (also the label's `for`).
+    id: &'static str,
+    /// The field's label text.
+    label: &'static str,
+    /// The bound value signal.
+    value: RwSignal<String>,
+    #[prop(optional)] placeholder: &'static str,
+    #[prop(optional)] hint: &'static str,
+    #[prop(optional)] mono: bool,
+    #[prop(optional)] wide: bool,
+    #[prop(optional)] numeric: bool,
+    #[prop(optional)] field_style: &'static str,
+) -> impl IntoView {
+    let mut class = String::from("adi-input");
+    if wide {
+        class.push_str(" adi-input--wide");
+    }
+    if mono {
+        class.push_str(" adi-mono");
+    }
+    let inputmode = if numeric { "numeric" } else { "text" };
+    view! {
+        <div class="adi-field" style=field_style>
+            <label class="adi-field__label" for=id>{label}</label>
+            <input class=class id=id placeholder=placeholder autocomplete="off" inputmode=inputmode
+                prop:value=move || value.get()
+                on:input=move |ev| value.set(event_target_value(&ev)) />
+            {(!hint.is_empty()).then(|| view! { <span class="adi-field__hint">{hint}</span> })}
+        </div>
+    }
+}
+
 /// The Overview page: system liveness at a glance.
 fn overview_view(state: State) -> AnyView {
     let State { health, .. } = state;
     view! {
         <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Uptime"</div>
-                <div class="adi-tile__value">
-                    {move || health.get().map_or_else(|| "—".to_string(), |h| fmt_uptime(h.uptime_secs))}
-                </div>
-                <div class="adi-tile__note">
-                    {move || health.get().map_or_else(|| "adi-app".to_string(),
-                        |h| format!("{} v{}", h.service, h.version))}
-                </div>
-            </div>
+            {tile("Uptime",
+                move || health.get().map_or_else(|| "—".to_string(), |h| fmt_uptime(h.uptime_secs)),
+                move || health.get().map_or_else(|| "adi-app".to_string(),
+                    |h| format!("{} v{}", h.service, h.version)))}
         </section>
     }
     .into_any()
@@ -317,24 +411,14 @@ fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Route>) -> An
     } = form;
     view! {
         <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Projects"</div>
-                <div class="adi-tile__value">
-                    {move || projects.get().map_or_else(|| "—".to_string(), |p| p.projects.len().to_string())}
-                </div>
-                <div class="adi-tile__note">"registered manifests"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Active"</div>
-                <div class="adi-tile__value">
-                    {move || projects.get().map_or_else(|| "—".to_string(),
-                        |p| p.projects.iter().filter(|x| !x.is_archived()).count().to_string())}
-                </div>
-                <div class="adi-tile__note">
-                    {move || projects.get().map_or_else(|| "not archived".to_string(),
-                        |p| format!("{} archived", p.projects.iter().filter(|x| x.is_archived()).count()))}
-                </div>
-            </div>
+            {tile("Projects",
+                move || projects.get().map_or_else(|| "—".to_string(), |p| p.projects.len().to_string()),
+                "registered manifests")}
+            {tile("Active",
+                move || projects.get().map_or_else(|| "—".to_string(),
+                    |p| p.projects.iter().filter(|x| !x.is_archived()).count().to_string()),
+                move || projects.get().map_or_else(|| "not archived".to_string(),
+                    |p| format!("{} archived", p.projects.iter().filter(|x| x.is_archived()).count())))}
         </section>
 
         <section class="adi-panel">
@@ -342,26 +426,11 @@ fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Route>) -> An
                 <h2 class="adi-panel__title">"Registered projects"</h2>
                 <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
                 <span class="adi-spacer"></span>
-                <div class="adi-segmented" role="group" aria-label="Filter projects">
-                    <button class="adi-segmented__option" type="button"
-                        aria-pressed=move || (!show_archived.get()).to_string()
-                        on:click=move |_| show_archived.set(false)>"Active"</button>
-                    <button class="adi-segmented__option" type="button"
-                        aria-pressed=move || show_archived.get().to_string()
-                        on:click=move |_| show_archived.set(true)>"All"</button>
-                </div>
+                {segmented("Filter projects", show_archived, "Active", "All")}
             </div>
 
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr><th>"Name"</th><th>"ID"</th><th>"Created"</th><th>"Status"</th><th></th></tr>
-                    </thead>
-                    <tbody>
-                        {move || project_rows(state, show_archived, route)}
-                    </tbody>
-                </table>
-            </div>
+            {data_table(&["Name", "ID", "Created", "Status", ""],
+                move || project_rows(state, show_archived, route))}
 
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
@@ -383,31 +452,15 @@ fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Route>) -> An
                 apply_projects(state, Some(busy), format!("Registered project {pid}."),
                     fetch::create_project(body));
             }>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="proj-id">"Project id"</label>
-                    <input class="adi-input adi-mono" id="proj-id" placeholder="my-app" autocomplete="off"
-                        prop:value=move || id.get()
-                        on:input=move |ev| id.set(event_target_value(&ev)) />
-                </div>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="proj-name">"Name"</label>
-                    <input class="adi-input" id="proj-name" placeholder="My App (defaults to the id)" autocomplete="off"
-                        prop:value=move || name.get()
-                        on:input=move |ev| name.set(event_target_value(&ev)) />
-                </div>
-                <div class="adi-field" style="flex:1 1 240px; min-width:0">
-                    <label class="adi-field__label" for="proj-desc">"Description"</label>
-                    <input class="adi-input adi-input--wide" id="proj-desc" placeholder="optional one-liner" autocomplete="off"
-                        prop:value=move || description.get()
-                        on:input=move |ev| description.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="proj-id" label="Project id" placeholder="my-app" mono=true value=id />
+                <TextField id="proj-name" label="Name" placeholder="My App (defaults to the id)" value=name />
+                <TextField id="proj-desc" label="Description" placeholder="optional one-liner" wide=true
+                    field_style="flex:1 1 240px; min-width:0" value=description />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add project"
                 </button>
             </form>
-            <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
-                {move || flash.get().map(|f| f.msg).unwrap_or_default()}
-            </div>
+            {flash_view(flash)}
         </section>
     }
     .into_any()
@@ -545,37 +598,18 @@ fn tasks_view(state: State, form: TasksForm) -> AnyView {
     } = form;
     view! {
         <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Tasks"</div>
-                <div class="adi-tile__value">
-                    {move || tasks.get().map_or_else(|| "—".to_string(), |t| t.tasks.len().to_string())}
-                </div>
-                <div class="adi-tile__note">"in the tree"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Ready"</div>
-                <div class="adi-tile__value">
-                    {move || tasks.get().map_or_else(|| "—".to_string(),
-                        |t| task_count(&t, "ready").to_string())}
-                </div>
-                <div class="adi-tile__note">"actionable now"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Blocked"</div>
-                <div class="adi-tile__value">
-                    {move || tasks.get().map_or_else(|| "—".to_string(),
-                        |t| task_count(&t, "blocked").to_string())}
-                </div>
-                <div class="adi-tile__note">"waiting on subtasks"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Done"</div>
-                <div class="adi-tile__value">
-                    {move || tasks.get().map_or_else(|| "—".to_string(),
-                        |t| task_count(&t, "done").to_string())}
-                </div>
-                <div class="adi-tile__note">"completed"</div>
-            </div>
+            {tile("Tasks",
+                move || tasks.get().map_or_else(|| "—".to_string(), |t| t.tasks.len().to_string()),
+                "in the tree")}
+            {tile("Ready",
+                move || tasks.get().map_or_else(|| "—".to_string(), |t| task_count(&t, "ready").to_string()),
+                "actionable now")}
+            {tile("Blocked",
+                move || tasks.get().map_or_else(|| "—".to_string(), |t| task_count(&t, "blocked").to_string()),
+                "waiting on subtasks")}
+            {tile("Done",
+                move || tasks.get().map_or_else(|| "—".to_string(), |t| task_count(&t, "done").to_string()),
+                "completed")}
         </section>
 
         <section class="adi-panel">
@@ -584,16 +618,7 @@ fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
             </div>
 
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr><th>"Task"</th><th>"ID"</th><th>"Tag"</th><th>"Status"</th><th>"Subtasks"</th></tr>
-                    </thead>
-                    <tbody>
-                        {move || task_rows(tasks)}
-                    </tbody>
-                </table>
-            </div>
+            {data_table(&["Task", "ID", "Tag", "Status", "Subtasks"], move || task_rows(tasks))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let t = title.get().trim().to_string();
@@ -618,12 +643,8 @@ fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 apply_tasks(state, Some(busy), format!("Created task “{t}”."),
                     fetch::create_task(body));
             }>
-                <div class="adi-field" style="flex:1 1 220px; min-width:0">
-                    <label class="adi-field__label" for="task-title">"Title"</label>
-                    <input class="adi-input adi-input--wide" id="task-title" placeholder="What needs doing?" autocomplete="off"
-                        prop:value=move || title.get()
-                        on:input=move |ev| title.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="task-title" label="Title" placeholder="What needs doing?" wide=true
+                    field_style="flex:1 1 220px; min-width:0" value=title />
                 <div class="adi-field">
                     <label class="adi-field__label" for="task-parent">"Parent (subtask of)"</label>
                     <select class="adi-input" id="task-parent"
@@ -637,26 +658,15 @@ fn tasks_view(state: State, form: TasksForm) -> AnyView {
                         }).collect::<Vec<_>>()).unwrap_or_default()}
                     </select>
                 </div>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="task-tag">"Tag"</label>
-                    <input class="adi-input adi-mono" id="task-tag" placeholder="agent name" autocomplete="off"
-                        prop:value=move || tag.get()
-                        on:input=move |ev| tag.set(event_target_value(&ev)) />
-                    <span class="adi-field__hint">"= an agent name auto-starts it"</span>
-                </div>
-                <div class="adi-field" style="flex:1 1 200px; min-width:0">
-                    <label class="adi-field__label" for="task-details">"Details"</label>
-                    <input class="adi-input adi-input--wide" id="task-details" placeholder="optional notes" autocomplete="off"
-                        prop:value=move || details.get()
-                        on:input=move |ev| details.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="task-tag" label="Tag" placeholder="agent name" mono=true
+                    hint="= an agent name auto-starts it" value=tag />
+                <TextField id="task-details" label="Details" placeholder="optional notes" wide=true
+                    field_style="flex:1 1 200px; min-width:0" value=details />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add task"
                 </button>
             </form>
-            <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
-                {move || flash.get().map(|f| f.msg).unwrap_or_default()}
-            </div>
+            {flash_view(flash)}
             <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
                 "Completing, archiving, editing, and deleting stay in the " <code>"adi-task"</code>
                 " CLI and the " <code>"tasks_*"</code> " MCP tools."
@@ -796,34 +806,18 @@ fn agents_view(state: State, form: AgentsForm) -> AnyView {
     } = form;
     view! {
         <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Agents"</div>
-                <div class="adi-tile__value">
-                    {move || agents.get().map_or_else(|| "—".to_string(), |a| a.agents.len().to_string())}
-                </div>
-                <div class="adi-tile__note">"defined"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"CLI"</div>
-                <div class="adi-tile__value">
-                    {move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "cli").to_string())}
-                </div>
-                <div class="adi-tile__note">"shell a vendor CLI"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"API"</div>
-                <div class="adi-tile__value">
-                    {move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "api").to_string())}
-                </div>
-                <div class="adi-tile__note">"in-loop provider API"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Starred"</div>
-                <div class="adi-tile__value">
-                    {move || agents.get().map_or_else(|| "—".to_string(), |a| agent_starred(&a).to_string())}
-                </div>
-                <div class="adi-tile__note">"pinned"</div>
-            </div>
+            {tile("Agents",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| a.agents.len().to_string()),
+                "defined")}
+            {tile("CLI",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "cli").to_string()),
+                "shell a vendor CLI")}
+            {tile("API",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "api").to_string()),
+                "in-loop provider API")}
+            {tile("Starred",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_starred(&a).to_string()),
+                "pinned")}
         </section>
 
         <section class="adi-panel">
@@ -832,16 +826,7 @@ fn agents_view(state: State, form: AgentsForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
             </div>
 
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr><th>"Name"</th><th>"Backend"</th><th>"Model"</th><th>"Tags"</th><th></th></tr>
-                    </thead>
-                    <tbody>
-                        {move || agent_rows(state, form)}
-                    </tbody>
-                </table>
-            </div>
+            {data_table(&["Name", "Backend", "Model", "Tags", ""], move || agent_rows(state, form))}
 
             <div class="adi-panel__head" style="border-top:1px solid var(--border)">
                 <h2 class="adi-panel__title">
@@ -883,13 +868,8 @@ fn agents_view(state: State, form: AgentsForm) -> AnyView {
                 editing.set(Some(nm.clone()));
                 apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
             }>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="agent-name">"Name"</label>
-                    <input class="adi-input adi-mono" id="agent-name" placeholder="athz-solver" autocomplete="off"
-                        prop:value=move || name.get()
-                        on:input=move |ev| name.set(event_target_value(&ev)) />
-                    <span class="adi-field__hint">"a task tagged this name auto-starts it"</span>
-                </div>
+                <TextField id="agent-name" label="Name" placeholder="athz-solver" mono=true
+                    hint="a task tagged this name auto-starts it" value=name />
                 <div class="adi-field">
                     <label class="adi-field__label" for="agent-backend">"Backend"</label>
                     <select class="adi-input" id="agent-backend"
@@ -927,39 +907,21 @@ fn agents_view(state: State, form: AgentsForm) -> AnyView {
                         </div>
                     }.into_any()),
                     "api" => Some(view! {
-                        <div class="adi-field">
-                            <label class="adi-field__label" for="agent-temp">"Temperature"</label>
-                            <input class="adi-input" id="agent-temp" placeholder="0.0 – 2.0" autocomplete="off"
-                                prop:value=move || temperature.get()
-                                on:input=move |ev| temperature.set(event_target_value(&ev)) />
-                        </div>
+                        <TextField id="agent-temp" label="Temperature" placeholder="0.0 – 2.0" value=temperature />
                     }.into_any()),
                     _ => None,
                 }}
-                <div class="adi-field">
-                    <label class="adi-field__label" for="agent-turns">"Max turns"</label>
-                    <input class="adi-input" id="agent-turns" placeholder="optional" autocomplete="off"
-                        prop:value=move || max_turns.get()
-                        on:input=move |ev| max_turns.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="agent-turns" label="Max turns" placeholder="optional" value=max_turns />
                 <label class="adi-field" style="flex-direction:row; align-items:center; gap:7px; align-self:center">
                     <input type="checkbox" prop:checked=move || starred.get()
                         on:change=move |ev| starred.set(event_target_checked(&ev)) />
                     <span class="adi-field__label" style="margin:0">"Starred"</span>
                 </label>
-                <div class="adi-field" style="flex:1 1 100%; min-width:0">
-                    <label class="adi-field__label" for="agent-tags">"Tags"</label>
-                    <input class="adi-input adi-input--wide" id="agent-tags" placeholder="comma-separated (dispatch / filtering)" autocomplete="off"
-                        prop:value=move || tags.get()
-                        on:input=move |ev| tags.set(event_target_value(&ev)) />
-                </div>
-                <div class="adi-field" style="flex:1 1 100%; min-width:0">
-                    <label class="adi-field__label" for="agent-tools">"Tool scope"</label>
-                    <input class="adi-input adi-input--wide adi-mono" id="agent-tools" placeholder="adi-mcp features, e.g. tasks,files[read]" autocomplete="off"
-                        prop:value=move || tools.get()
-                        on:input=move |ev| tools.set(event_target_value(&ev)) />
-                    <span class="adi-field__hint">"which adi-mcp tools this agent may use"</span>
-                </div>
+                <TextField id="agent-tags" label="Tags" placeholder="comma-separated (dispatch / filtering)"
+                    wide=true field_style="flex:1 1 100%; min-width:0" value=tags />
+                <TextField id="agent-tools" label="Tool scope" placeholder="adi-mcp features, e.g. tasks,files[read]"
+                    wide=true mono=true hint="which adi-mcp tools this agent may use"
+                    field_style="flex:1 1 100%; min-width:0" value=tools />
                 <div class="adi-field" style="flex:1 1 100%; min-width:0">
                     <label class="adi-field__label" for="agent-prompt">"System prompt"</label>
                     <textarea class="adi-textarea" id="agent-prompt" placeholder="The system prompt that seeds this agent…"
@@ -970,9 +932,7 @@ fn agents_view(state: State, form: AgentsForm) -> AnyView {
                     {move || if editing.get().is_some() { "Update agent" } else { "Create agent" }}
                 </button>
             </form>
-            <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
-                {move || flash.get().map(|f| f.msg).unwrap_or_default()}
-            </div>
+            {flash_view(flash)}
             <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
                 "Definitions only — spawning/running agents (backends, sessions, auto-start) is future
                  work per " <code>"docs/adi-agents.md"</code> "."
@@ -1129,9 +1089,7 @@ fn project_detail_view(state: State, route: RwSignal<Route>) -> AnyView {
 
         {files_view(state)}
 
-        <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
-            {move || flash.get().map(|f| f.msg).unwrap_or_default()}
-        </div>
+        {flash_view(flash)}
     }
     .into_any()
 }
@@ -1226,16 +1184,8 @@ fn detail_body(
                 <div class="adi-tile__value adi-mono" style="font-size:1.1rem">{id}</div>
                 <div class="adi-tile__note">"directory under ~/.adi/mono/projects"</div>
             </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Created"</div>
-                <div class="adi-tile__value">{created}</div>
-                <div class="adi-tile__note">{archived_note}</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Services"</div>
-                <div class="adi-tile__value">{service_count.to_string()}</div>
-                <div class="adi-tile__note">"from .adi/hive.yaml"</div>
-            </div>
+            {tile("Created", created, archived_note)}
+            {tile("Services", service_count.to_string(), "from .adi/hive.yaml")}
         </section>
 
         {description.map(|text| view! {
@@ -1254,14 +1204,8 @@ fn detail_body(
                     on:click=move |_| reload_project(state, reload_id.clone())>"Reload config"</button>
                 <span class="adi-updated">"the project's .adi/hive.yaml"</span>
             </div>
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr><th>"Service"</th><th>"Host"</th><th>"Ports"</th><th>"Command"</th><th>"Restart"</th><th></th></tr>
-                    </thead>
-                    <tbody>{service_rows(state, rows_id, services, has_hive)}</tbody>
-                </table>
-            </div>
+            {data_table(&["Service", "Host", "Ports", "Command", "Restart", ""],
+                service_rows(state, rows_id, services, has_hive))}
         </section>
     }
     .into_any()
@@ -1455,14 +1399,7 @@ fn files_view(state: State) -> AnyView {
             <div class="adi-panel__body">
                 {move || crumbs_view(state)}
             </div>
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr><th>"Name"</th><th>"Size"</th><th>"Modified"</th></tr>
-                    </thead>
-                    <tbody>{move || file_rows(state)}</tbody>
-                </table>
-            </div>
+            {data_table(&["Name", "Size", "Modified"], move || file_rows(state))}
             {move || match files.open.get() {
                 None => view! {
                     <div class="adi-panel__body">
@@ -1717,36 +1654,22 @@ fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
     let State { hive, .. } = state;
     view! {
         <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Services"</div>
-                <div class="adi-tile__value">
-                    {move || hive.get().map_or_else(|| "—".to_string(), |h| h.services.len().to_string())}
-                </div>
-                <div class="adi-tile__note">"across all projects + front-door"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Running"</div>
-                <div class="adi-tile__value">
-                    {move || hive.get().map_or_else(|| "—".to_string(),
-                        |h| h.services.iter().filter(|s| s.running).count().to_string())}
-                </div>
-                <div class="adi-tile__note">
-                    {move || hive.get().map_or_else(|| "primary port listening".to_string(),
-                        |h| format!("{} stopped", h.services.iter().filter(|s| !s.running).count()))}
-                </div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Projects"</div>
-                <div class="adi-tile__value">
-                    {move || hive.get().map_or_else(|| "—".to_string(), |h| {
-                        let mut ids: Vec<&String> = h.services.iter().filter_map(|s| s.project.as_ref()).collect();
-                        ids.sort_unstable();
-                        ids.dedup();
-                        ids.len().to_string()
-                    })}
-                </div>
-                <div class="adi-tile__note">"contributing services (+ front-door)"</div>
-            </div>
+            {tile("Services",
+                move || hive.get().map_or_else(|| "—".to_string(), |h| h.services.len().to_string()),
+                "across all projects + front-door")}
+            {tile("Running",
+                move || hive.get().map_or_else(|| "—".to_string(),
+                    |h| h.services.iter().filter(|s| s.running).count().to_string()),
+                move || hive.get().map_or_else(|| "primary port listening".to_string(),
+                    |h| format!("{} stopped", h.services.iter().filter(|s| !s.running).count())))}
+            {tile("Projects",
+                move || hive.get().map_or_else(|| "—".to_string(), |h| {
+                    let mut ids: Vec<&String> = h.services.iter().filter_map(|s| s.project.as_ref()).collect();
+                    ids.sort_unstable();
+                    ids.dedup();
+                    ids.len().to_string()
+                }),
+                "contributing services (+ front-door)")}
         </section>
 
         <section class="adi-panel">
@@ -1760,17 +1683,8 @@ fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
                     {move || hive.get().map_or(String::new(), |h| format!("{} services", h.services.len()))}
                 </span>
             </div>
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr>
-                            <th>"Source"</th><th>"Service"</th><th>"Host"</th><th>"Ports"</th>
-                            <th>"Command"</th><th>"Restart"</th><th>"Status"</th>
-                        </tr>
-                    </thead>
-                    <tbody>{move || hive_rows(state, route)}</tbody>
-                </table>
-            </div>
+            {data_table(&["Source", "Service", "Host", "Ports", "Command", "Restart", "Status"],
+                move || hive_rows(state, route))}
             <footer class="adi-footer">
                 "Read from each project's " <code>".adi/hive.yaml"</code> " and the global "
                 <code>"~/.adi/mono/hive/hive.yaml"</code> ". Status = the service's primary port is listening."
@@ -1893,26 +1807,16 @@ fn ports_manager_view(state: State, form: Form, managed_only: RwSignal<bool>) ->
     } = form;
     view! {
         <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Active leases"</div>
-                <div class="adi-tile__value">
-                    {move || ports.get().map_or_else(|| "—".to_string(), |p| p.leases.len().to_string())}
-                </div>
-                <div class="adi-tile__note">"reserved static ports"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Allocatable range"</div>
-                <div class="adi-tile__value">
-                    {move || ports.get().map_or_else(|| "—".to_string(),
-                        |p| format!("{}–{}", p.range.start, p.range.end))}
-                </div>
-                <div class="adi-tile__note">
-                    {move || ports.get().map_or_else(|| "ports handed out from here".to_string(), |p| {
-                        let span = u32::from(p.range.end) - u32::from(p.range.start) + 1;
-                        format!("{span} ports · {} reserved bands", p.reserved.len())
-                    })}
-                </div>
-            </div>
+            {tile("Active leases",
+                move || ports.get().map_or_else(|| "—".to_string(), |p| p.leases.len().to_string()),
+                "reserved static ports")}
+            {tile("Allocatable range",
+                move || ports.get().map_or_else(|| "—".to_string(),
+                    |p| format!("{}–{}", p.range.start, p.range.end)),
+                move || ports.get().map_or_else(|| "ports handed out from here".to_string(), |p| {
+                    let span = u32::from(p.range.end) - u32::from(p.range.start) + 1;
+                    format!("{span} ports · {} reserved bands", p.reserved.len())
+                }))}
         </section>
 
         <section class="adi-panel">
@@ -1922,16 +1826,7 @@ fn ports_manager_view(state: State, form: Form, managed_only: RwSignal<bool>) ->
                 <span class="adi-updated">{move || updated_text(ports, secs_since)}</span>
             </div>
 
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr><th>"Service"</th><th>"Key"</th><th>"Port"</th><th></th></tr>
-                    </thead>
-                    <tbody>
-                        {move || rows_view(state)}
-                    </tbody>
-                </table>
-            </div>
+            {data_table(&["Service", "Key", "Port", ""], move || rows_view(state))}
 
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
@@ -1955,18 +1850,8 @@ fn ports_manager_view(state: State, form: Form, managed_only: RwSignal<bool>) ->
                     reserving.set(false);
                 });
             }>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="svc">"Service"</label>
-                    <input class="adi-input" id="svc" placeholder="frontend" autocomplete="off"
-                        prop:value=move || svc.get()
-                        on:input=move |ev| svc.set(event_target_value(&ev)) />
-                </div>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="key">"Port key"</label>
-                    <input class="adi-input" id="key" placeholder="http" autocomplete="off"
-                        prop:value=move || key.get()
-                        on:input=move |ev| key.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="svc" label="Service" placeholder="frontend" value=svc />
+                <TextField id="key" label="Port key" placeholder="http" value=key />
                 <button class="adi-btn adi-btn--primary" type="submit"
                     prop:disabled=move || reserving.get()>
                     "Reserve port"
@@ -1974,9 +1859,7 @@ fn ports_manager_view(state: State, form: Form, managed_only: RwSignal<bool>) ->
                 <span class="adi-spacer" style="flex:1"></span>
                 <span class="adi-chip adi-mono">{move || reserved.get()}</span>
             </form>
-            <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
-                {move || flash.get().map(|f| f.msg).unwrap_or_default()}
-            </div>
+            {flash_view(flash)}
         </section>
 
         <section class="adi-panel">
@@ -1986,25 +1869,9 @@ fn ports_manager_view(state: State, form: Form, managed_only: RwSignal<bool>) ->
                     {move || used.get().map_or(String::new(), |u| format!("{} listening", u.ports.len()))}
                 </span>
                 <span class="adi-spacer"></span>
-                <div class="adi-segmented" role="group" aria-label="Filter ports">
-                    <button class="adi-segmented__option" type="button"
-                        aria-pressed=move || (!managed_only.get()).to_string()
-                        on:click=move |_| managed_only.set(false)>"All"</button>
-                    <button class="adi-segmented__option" type="button"
-                        aria-pressed=move || managed_only.get().to_string()
-                        on:click=move |_| managed_only.set(true)>"ADI managed"</button>
-                </div>
+                {segmented("Filter ports", managed_only, "All", "ADI managed")}
             </div>
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead>
-                        <tr><th>"Port"</th><th>"Process"</th><th>"PID"</th><th>"Owner"</th></tr>
-                    </thead>
-                    <tbody>
-                        {move || used_rows_view(state, managed_only)}
-                    </tbody>
-                </table>
-            </div>
+            {data_table(&["Port", "Process", "PID", "Owner"], move || used_rows_view(state, managed_only))}
         </section>
     }
     .into_any()
@@ -2016,28 +1883,16 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
     let mesh = state.mesh;
     view! {
         <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Daemon"</div>
-                <div class="adi-tile__value">
-                    {move || mesh.get().map_or_else(|| "—".to_string(),
-                        |m| if m.running { "running".to_string() } else { "stopped".to_string() })}
-                </div>
-                <div class="adi-tile__note">"runs adi-mesh; publishes a ticket while up"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Ports exposed"</div>
-                <div class="adi-tile__value">
-                    {move || mesh.get().map_or_else(|| "—".to_string(), |m| m.allow.len().to_string())}
-                </div>
-                <div class="adi-tile__note">"reachable by peers"</div>
-            </div>
-            <div class="adi-tile">
-                <div class="adi-tile__label">"Forwards"</div>
-                <div class="adi-tile__value">
-                    {move || mesh.get().map_or_else(|| "—".to_string(), |m| m.forwards.len().to_string())}
-                </div>
-                <div class="adi-tile__note">"local → peer tunnels"</div>
-            </div>
+            {tile("Daemon",
+                move || mesh.get().map_or_else(|| "—".to_string(),
+                    |m| if m.running { "running".to_string() } else { "stopped".to_string() }),
+                "runs adi-mesh; publishes a ticket while up")}
+            {tile("Ports exposed",
+                move || mesh.get().map_or_else(|| "—".to_string(), |m| m.allow.len().to_string()),
+                "reachable by peers")}
+            {tile("Forwards",
+                move || mesh.get().map_or_else(|| "—".to_string(), |m| m.forwards.len().to_string()),
+                "local → peer tunnels")}
         </section>
 
         {move || state.flash.get().map(|f| view! {
@@ -2078,26 +1933,13 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
             <div class="adi-panel__body">
                 <div class="adi-field">
                     <label class="adi-field__label">"Endpoint ID"</label>
-                    <div class="adi-copyrow">
-                        <input class="adi-input adi-input--wide adi-mono" readonly=true node_ref=form.id_ref
-                            prop:value=move || mesh.get().map(|m| m.id).unwrap_or_default()
-                            on:focus=move |ev| select_target(&ev) />
-                        <button class="adi-btn adi-btn--ghost" type="button"
-                            on:click=move |_| copy_field(form.id_ref)>"Copy"</button>
-                    </div>
+                    {copy_row(form.id_ref, move || mesh.get().map(|m| m.id).unwrap_or_default())}
                     <div class="adi-field__hint">"The minimal token a peer can dial (resolved via discovery)."</div>
                 </div>
                 <div class="adi-field">
                     <label class="adi-field__label">"Ticket"</label>
                     {move || match mesh.get().and_then(|m| m.ticket) {
-                        Some(ticket) => view! {
-                            <div class="adi-copyrow">
-                                <input class="adi-input adi-input--wide adi-mono" readonly=true node_ref=form.ticket_ref
-                                    prop:value=ticket on:focus=move |ev| select_target(&ev) />
-                                <button class="adi-btn adi-btn--ghost" type="button"
-                                    on:click=move |_| copy_field(form.ticket_ref)>"Copy"</button>
-                            </div>
-                        }.into_any(),
+                        Some(ticket) => copy_row(form.ticket_ref, move || ticket.clone()).into_any(),
                         None => view! {
                             <div class="adi-field__hint adi-muted">
                                 "Start the mesh daemon (the "<strong>"Start mesh"</strong>" button above) to publish a ticket a peer can dial without discovery."
@@ -2113,12 +1955,7 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Ports exposed to peers"</h2>
             </div>
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead><tr><th>"Port"</th><th></th></tr></thead>
-                    <tbody>{move || mesh_allow_rows(state)}</tbody>
-                </table>
-            </div>
+            {data_table(&["Port", ""], move || mesh_allow_rows(state))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 if let Some(port) = parse_port(&form.allow_port.get()) {
@@ -2127,12 +1964,8 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
                         fetch::mesh_allow(port));
                 }
             }>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="mesh-allow-port">"Local port"</label>
-                    <input class="adi-input" id="mesh-allow-port" inputmode="numeric" placeholder="3000"
-                        autocomplete="off" prop:value=move || form.allow_port.get()
-                        on:input=move |ev| form.allow_port.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="mesh-allow-port" label="Local port" placeholder="3000" numeric=true
+                    value=form.allow_port />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || form.busy.get()>
                     "Expose port"
                 </button>
@@ -2147,12 +1980,7 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
                     |m| if m.authorized_peers.is_empty() { "any peer allowed".to_string() }
                         else { format!("{} allowed", m.authorized_peers.len()) })}</span>
             </div>
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead><tr><th>"Endpoint ID"</th><th></th></tr></thead>
-                    <tbody>{move || mesh_peer_rows(state)}</tbody>
-                </table>
-            </div>
+            {data_table(&["Endpoint ID", ""], move || mesh_peer_rows(state))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let peer = form.peer.get().trim().to_string();
@@ -2162,12 +1990,8 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
                         fetch::mesh_allow_peer(peer));
                 }
             }>
-                <div class="adi-field" style="flex:1 1 240px; min-width:0">
-                    <label class="adi-field__label" for="mesh-peer">"Peer id or ticket"</label>
-                    <input class="adi-input adi-input--wide adi-mono" id="mesh-peer" placeholder="an EndpointId or adimesh: ticket"
-                        autocomplete="off" prop:value=move || form.peer.get()
-                        on:input=move |ev| form.peer.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="mesh-peer" label="Peer id or ticket" placeholder="an EndpointId or adimesh: ticket"
+                    wide=true mono=true field_style="flex:1 1 240px; min-width:0" value=form.peer />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || form.busy.get()>
                     "Authorize peer"
                 </button>
@@ -2180,12 +2004,7 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">"local 127.0.0.1:port → a peer's port"</span>
             </div>
-            <div class="adi-tablewrap">
-                <table class="adi-table">
-                    <thead><tr><th>"Name"</th><th>"Local"</th><th>"Peer"</th><th>"Remote"</th><th></th></tr></thead>
-                    <tbody>{move || mesh_forward_rows(state)}</tbody>
-                </table>
-            </div>
+            {data_table(&["Name", "Local", "Peer", "Remote", ""], move || mesh_forward_rows(state))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let peer = form.fwd_peer.get().trim().to_string();
@@ -2201,24 +2020,10 @@ fn mesh_view(state: State, form: MeshForm) -> AnyView {
                     _ => {}
                 }
             }>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="fwd-listen">"Local port"</label>
-                    <input class="adi-input" id="fwd-listen" inputmode="numeric" placeholder="5000" autocomplete="off"
-                        prop:value=move || form.fwd_listen.get()
-                        on:input=move |ev| form.fwd_listen.set(event_target_value(&ev)) />
-                </div>
-                <div class="adi-field" style="flex:1 1 220px; min-width:0">
-                    <label class="adi-field__label" for="fwd-peer">"Peer id or ticket"</label>
-                    <input class="adi-input adi-input--wide adi-mono" id="fwd-peer" placeholder="peer to reach"
-                        autocomplete="off" prop:value=move || form.fwd_peer.get()
-                        on:input=move |ev| form.fwd_peer.set(event_target_value(&ev)) />
-                </div>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="fwd-port">"Remote port"</label>
-                    <input class="adi-input" id="fwd-port" inputmode="numeric" placeholder="3000" autocomplete="off"
-                        prop:value=move || form.fwd_port.get()
-                        on:input=move |ev| form.fwd_port.set(event_target_value(&ev)) />
-                </div>
+                <TextField id="fwd-listen" label="Local port" placeholder="5000" numeric=true value=form.fwd_listen />
+                <TextField id="fwd-peer" label="Peer id or ticket" placeholder="peer to reach" wide=true mono=true
+                    field_style="flex:1 1 220px; min-width:0" value=form.fwd_peer />
+                <TextField id="fwd-port" label="Remote port" placeholder="3000" numeric=true value=form.fwd_port />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || form.busy.get()>
                     "Add forward"
                 </button>
