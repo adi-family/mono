@@ -12,16 +12,18 @@ use adi_fs::{Error as FsError, Jail};
 use adi_mesh::config::{Forward, MeshConfig};
 use adi_mesh::{identity, ticket};
 use adi_ports_manager::Ports;
+use adi_agents::{AgentManifest, Agents, Error as AgentStoreError};
 use adi_projects::{Error as ProjectStoreError, Projects};
 use adi_tasks::{EffectiveStatus, Error as TaskStoreError, TaskStatus, TaskView, Tasks};
 use serde::Deserialize;
 
 use crate::types::{
-    ApiError, DirListing, FileContent, FileEntry, FilesRef, Health, HiveService, HiveState, Lease,
-    LeaseRef, MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
-    NewProject, NewTask, PortsState, Project, ProjectDetail, ProjectRef, ProjectService,
-    ProjectsState, Range, ReleaseResponse, ReserveResponse, ServicePort, StartResult, StartService,
-    StopResult, TaskRow, TasksState, UsedPort, UsedPorts, WriteFile,
+    AgentDto, AgentRef, AgentsState, ApiError, DirListing, FileContent, FileEntry, FilesRef,
+    Health, HiveService, HiveState, Lease, LeaseRef, MeshForward, MeshForwardRef, MeshListenRef,
+    MeshPeerRef, MeshPortRef, MeshState, NewProject, NewTask, PortsState, Project, ProjectDetail,
+    ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse, ReserveResponse, SaveAgent,
+    ServicePort, StartResult, StartService, StopResult, TaskRow, TasksState, UsedPort, UsedPorts,
+    WriteFile,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -864,6 +866,122 @@ fn parse_new_task(body: &[u8]) -> Option<NewTask> {
 
 fn bad_new_task() -> (u16, String) {
     error(400, "expected JSON body { \"title\": \"…\" } with a non-empty title")
+}
+
+// MARK: agents — AgentDef definitions under ~/.adi/mono/agents
+
+/// `GET /api/agents` — every registered agent definition. Each mutation endpoint below returns a
+/// fresh [`AgentsState`], so the client refreshes from one round-trip.
+#[must_use]
+pub fn agents(store: &Agents) -> (u16, String) {
+    match store.list() {
+        Ok(list) => ok_json(&AgentsState {
+            agents: list.into_iter().map(agent_dto).collect(),
+        }),
+        Err(e) => agent_error(&e),
+    }
+}
+
+/// `POST /api/agents/save` — create or update an agent definition (an upsert keyed by `name`),
+/// then report the fresh list. `name` and `backend` are required.
+#[must_use]
+pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_save_agent(body) else {
+        return bad_save_agent();
+    };
+    let name = req.name.trim().to_string();
+    let manifest = AgentManifest {
+        backend: req.backend.trim().to_string(),
+        system_prompt: req.system_prompt,
+        tools: req.tools.trim().to_string(),
+        model: clean(req.model),
+        permission_mode: clean(req.permission_mode),
+        temperature: req.temperature,
+        max_turns: req.max_turns,
+        tags: req
+            .tags
+            .into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
+        starred: req.starred,
+        // The store owns the timestamps.
+        created_at: 0,
+        updated_at: 0,
+    };
+    match store.save(&name, manifest) {
+        Ok(_) => agents(store),
+        Err(e) => agent_error(&e),
+    }
+}
+
+/// `POST /api/agents/delete` — delete an agent definition, then report the fresh list.
+#[must_use]
+pub fn delete_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_agent_ref(body) else {
+        return bad_agent_ref();
+    };
+    match store.delete(req.name.trim()) {
+        Ok(_) => agents(store),
+        Err(e) => agent_error(&e),
+    }
+}
+
+/// Flatten a stored agent into its wire [`AgentDto`], computing the backend kind for the client.
+fn agent_dto(agent: adi_agents::Agent) -> AgentDto {
+    let backend_kind = agent.manifest.backend_kind().to_string();
+    let m = agent.manifest;
+    AgentDto {
+        name: agent.name,
+        backend: m.backend,
+        backend_kind,
+        system_prompt: m.system_prompt,
+        tools: m.tools,
+        model: m.model,
+        permission_mode: m.permission_mode,
+        temperature: m.temperature,
+        max_turns: m.max_turns,
+        tags: m.tags,
+        starred: m.starred,
+        created_at: m.created_at,
+        updated_at: m.updated_at,
+    }
+}
+
+/// Map an agent-store error to an HTTP status: bad name → 400, missing → 404, else 500.
+fn agent_error(e: &AgentStoreError) -> (u16, String) {
+    let status = match e {
+        AgentStoreError::InvalidName(_) => 400,
+        AgentStoreError::NotFound(_) => 404,
+        AgentStoreError::Config(_) | AgentStoreError::Io(_) => 500,
+    };
+    error(status, &e.to_string())
+}
+
+fn parse_save_agent(body: &[u8]) -> Option<SaveAgent> {
+    let req: SaveAgent = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty() && !req.backend.trim().is_empty()).then_some(req)
+}
+
+fn bad_save_agent() -> (u16, String) {
+    error(
+        400,
+        "expected JSON body { \"name\": \"…\", \"backend\": \"…\", … } with a non-empty name and backend",
+    )
+}
+
+fn parse_agent_ref(body: &[u8]) -> Option<AgentRef> {
+    let req: AgentRef = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty()).then_some(req)
+}
+
+fn bad_agent_ref() -> (u16, String) {
+    error(400, "expected JSON body { \"name\": \"…\" }")
+}
+
+/// Trim a string, dropping it entirely when blank (so an empty optional field clears).
+fn clean(value: Option<String>) -> Option<String> {
+    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
 }
 
 fn parse_new_project(body: &[u8]) -> Option<NewProject> {

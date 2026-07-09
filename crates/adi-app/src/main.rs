@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use adi_agents::Agents;
 use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
@@ -86,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
     let ports = Arc::new(Ports::new());
     let projects = Arc::new(Projects::open());
     let tasks = Arc::new(Tasks::open());
+    let agents = Arc::new(Agents::open());
     let webapp_dist = Arc::new(webapp_dist_override());
     // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
     // (non-blocking, best-effort) so the whole stack is up once the app is — the control
@@ -113,6 +115,7 @@ async fn main() -> anyhow::Result<()> {
                     let ports = Arc::clone(&ports);
                     let projects = Arc::clone(&projects);
                     let tasks = Arc::clone(&tasks);
+                    let agents = Arc::clone(&agents);
                     let webapp_dist = Arc::clone(&webapp_dist);
                     let mesh = Arc::clone(&mesh);
                     tokio::spawn(async move {
@@ -121,6 +124,7 @@ async fn main() -> anyhow::Result<()> {
                             &ports,
                             &projects,
                             &tasks,
+                            &agents,
                             &mesh,
                             start,
                             webapp_dist.as_deref(),
@@ -163,11 +167,15 @@ fn listen_addr() -> SocketAddr {
 }
 
 /// Read one request, route it, and write the response.
+// The dispatcher threads each store handle through by reference; grouping them into a context
+// struct would be churn for no gain in a single hand-rolled router.
+#[allow(clippy::too_many_arguments)]
 async fn handle(
     mut stream: TcpStream,
     ports: &Ports,
     projects: &Projects,
     tasks: &Tasks,
+    agents: &Agents,
     mesh: &MeshCtl,
     start: Instant,
     dist: Option<&Path>,
@@ -206,6 +214,11 @@ async fn handle(
         // tools and the `adi-task` CLI. Create returns the fresh tree so the panel refreshes.
         ("GET", "/api/tasks") => handlers::tasks(tasks),
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
+        // Agents: AgentDef definitions (~/.adi/mono/agents). Create/edit/delete only — no
+        // run/orchestration yet (see docs/adi-agents.md). Save is an upsert keyed by name.
+        ("GET", "/api/agents") => handlers::agents(agents),
+        ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
+        ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
         // Every hive service across all projects + the global front-door, with live status.
         // The listening-port scan is platform I/O, so the host does it and passes the ports in.
         ("GET", "/api/hive") => {

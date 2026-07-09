@@ -20,6 +20,7 @@ server = [
     "dep:adi-mesh",
     "dep:adi-projects",
     "dep:adi-tasks",
+    "dep:adi-agents",
     "dep:adi-fs",
     "dep:serde_json",
     "dep:serde_yaml_ng",
@@ -38,6 +39,8 @@ adi-mesh = { workspace = true, optional = true }
 adi-projects = { workspace = true, optional = true }
 # The task tree store backing the read-only Tasks tab (GET /api/tasks).
 adi-tasks = { workspace = true, optional = true }
+# The agent-definition store backing the Agents tab (/api/agents*).
+adi-agents = { workspace = true, optional = true }
 # The base-directory-jailed filesystem backing the project file browser/editor endpoints.
 adi-fs = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

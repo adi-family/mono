@@ -316,6 +316,74 @@ pub struct NewTask {
     pub parent: Option<String>,
 }
 
+// ---- agents (AgentDef definitions under ~/.adi/mono/agents) --------------------------
+
+/// One agent definition, flattened for the wire. `backend` is a `kind:engine` string
+/// (`cli:claude`, `api:anthropic`, …); `backend_kind` is the `cli`/`api` prefix, which decides
+/// which params apply (permission mode for CLI, temperature for API).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentDto {
+    pub name: String,
+    pub backend: String,
+    pub backend_kind: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
+    pub tools: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub starred: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// `GET /api/agents` — every registered agent definition, sorted by name. Each mutation endpoint
+/// returns a fresh one, so the client refreshes from one round-trip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentsState {
+    pub agents: Vec<AgentDto>,
+}
+
+/// Request body for `POST /api/agents/save` — create or update an agent definition (an upsert
+/// keyed by `name`). `name` and `backend` are required; the rest are optional settings, some
+/// of which only apply to one backend kind. Timestamps are owned by the server.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SaveAgent {
+    pub name: String,
+    pub backend: String,
+    #[serde(default)]
+    pub system_prompt: String,
+    #[serde(default)]
+    pub tools: String,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub permission_mode: Option<String>,
+    #[serde(default)]
+    pub temperature: Option<f64>,
+    #[serde(default)]
+    pub max_turns: Option<u32>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub starred: bool,
+}
+
+/// Request body naming an agent — `POST /api/agents/delete`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRef {
+    pub name: String,
+}
+
 // ---- files (a project's own directory, browsed through an isolated jail) --------------
 
 /// One entry in a project directory [`DirListing`]: a file or subdirectory with lightweight

@@ -7,8 +7,9 @@
 #![allow(non_snake_case)] // Leptos components are PascalCase by convention.
 
 use adi_webapp_api::types::{
-    DirListing, Health, HiveState, LeaseRef, MeshForwardRef, MeshState, NewProject, NewTask,
-    PortsState, Project, ProjectDetail, ProjectsState, TaskRow, TasksState, UsedPorts,
+    AgentDto, AgentsState, DirListing, Health, HiveState, LeaseRef, MeshForwardRef, MeshState,
+    NewProject, NewTask, PortsState, Project, ProjectDetail, ProjectsState, SaveAgent, TaskRow,
+    TasksState, UsedPorts,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -38,6 +39,7 @@ fn App() -> impl IntoView {
     let projects = RwSignal::new(None::<ProjectsState>);
     let project_detail = RwSignal::new(None::<ProjectDetail>);
     let tasks = RwSignal::new(None::<TasksState>);
+    let agents = RwSignal::new(None::<AgentsState>);
     let hive = RwSignal::new(None::<HiveState>);
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
@@ -55,6 +57,7 @@ fn App() -> impl IntoView {
         project_detail,
         current_project,
         tasks,
+        agents,
         hive,
         files,
     };
@@ -74,6 +77,22 @@ fn App() -> impl IntoView {
         parent: RwSignal::new(String::new()),
         tag: RwSignal::new(String::new()),
         details: RwSignal::new(String::new()),
+        busy: RwSignal::new(false),
+    };
+
+    // The Agents page's local create/edit form.
+    let agents_form = AgentsForm {
+        name: RwSignal::new(String::new()),
+        backend: RwSignal::new(String::new()),
+        model: RwSignal::new(String::new()),
+        permission_mode: RwSignal::new(String::new()),
+        temperature: RwSignal::new(String::new()),
+        max_turns: RwSignal::new(String::new()),
+        tags: RwSignal::new(String::new()),
+        tools: RwSignal::new(String::new()),
+        system_prompt: RwSignal::new(String::new()),
+        starred: RwSignal::new(false),
+        editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
     };
 
@@ -137,6 +156,7 @@ fn App() -> impl IntoView {
             Route::Projects
                 | Route::ProjectDetail
                 | Route::Tasks
+                | Route::Agents
                 | Route::Hive
                 | Route::PortsManager
                 | Route::Mesh
@@ -182,6 +202,11 @@ fn App() -> impl IntoView {
                         aria-current=move || aria_current(route, Route::Tasks)
                         on:click=move |ev| spa_click(&ev, route, Route::Tasks)>
                         <span>"Tasks"</span>
+                    </a>
+                    <a class="adi-nav__item" href=Route::Agents.path()
+                        aria-current=move || aria_current(route, Route::Agents)
+                        on:click=move |ev| spa_click(&ev, route, Route::Agents)>
+                        <span>"Agents"</span>
                     </a>
                     <div class="adi-nav__group">
                         <div class="adi-nav__heading">"Settings"</div>
@@ -230,6 +255,7 @@ fn App() -> impl IntoView {
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route),
                         Route::Tasks => tasks_view(state, tasks_form),
+                        Route::Agents => agents_view(state, agents_form),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
@@ -737,6 +763,349 @@ fn effective_label_title(effective: &str) -> &'static str {
         "archived" => "Archived",
         _ => "—",
     }
+}
+
+/// The Agents page: create, edit, and delete agent definitions (docs/adi-agents.md §5) — pick a
+/// backend, a system prompt, a tool scope, and backend-specific params. No run/orchestration here;
+/// this only edits the stored spec. The form adapts its params to the chosen backend kind.
+fn agents_view(state: State, form: AgentsForm) -> AnyView {
+    let agents = state.agents;
+    let secs_since = state.secs_since;
+    let flash = state.flash;
+    let AgentsForm {
+        name,
+        backend,
+        model,
+        permission_mode,
+        temperature,
+        max_turns,
+        tags,
+        tools,
+        system_prompt,
+        starred,
+        editing,
+        busy,
+    } = form;
+    view! {
+        <section class="adi-tiles">
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Agents"</div>
+                <div class="adi-tile__value">
+                    {move || agents.get().map_or_else(|| "—".to_string(), |a| a.agents.len().to_string())}
+                </div>
+                <div class="adi-tile__note">"defined"</div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"CLI"</div>
+                <div class="adi-tile__value">
+                    {move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "cli").to_string())}
+                </div>
+                <div class="adi-tile__note">"shell a vendor CLI"</div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"API"</div>
+                <div class="adi-tile__value">
+                    {move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "api").to_string())}
+                </div>
+                <div class="adi-tile__note">"in-loop provider API"</div>
+            </div>
+            <div class="adi-tile">
+                <div class="adi-tile__label">"Starred"</div>
+                <div class="adi-tile__value">
+                    {move || agents.get().map_or_else(|| "—".to_string(), |a| agent_starred(&a).to_string())}
+                </div>
+                <div class="adi-tile__note">"pinned"</div>
+            </div>
+        </section>
+
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Agent definitions"</h2>
+                <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
+            </div>
+
+            <div class="adi-tablewrap">
+                <table class="adi-table">
+                    <thead>
+                        <tr><th>"Name"</th><th>"Backend"</th><th>"Model"</th><th>"Tags"</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        {move || agent_rows(state, form)}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="adi-panel__head" style="border-top:1px solid var(--border)">
+                <h2 class="adi-panel__title">
+                    {move || match editing.get() {
+                        Some(n) => format!("Editing “{n}”"),
+                        None => "New agent".to_string(),
+                    }}
+                </h2>
+                <span class="adi-spacer"></span>
+                <button class="adi-btn adi-btn--link" type="button"
+                    on:click=move |_| clear_agent_form(form)>"New agent"</button>
+            </div>
+
+            <form class="adi-form" on:submit=move |ev| {
+                ev.prevent_default();
+                let nm = name.get().trim().to_string();
+                if nm.is_empty() {
+                    flash.set(Some(Flash::err("An agent name is required.".to_string())));
+                    return;
+                }
+                let be = backend.get();
+                if be.trim().is_empty() {
+                    flash.set(Some(Flash::err("Pick a backend.".to_string())));
+                    return;
+                }
+                let kind = agent_backend_kind(&be);
+                let body = SaveAgent {
+                    name: nm.clone(),
+                    backend: be.clone(),
+                    system_prompt: system_prompt.get(),
+                    tools: tools.get().trim().to_string(),
+                    model: opt_str(model.get()),
+                    permission_mode: if kind == "cli" { opt_str(permission_mode.get()) } else { None },
+                    temperature: if kind == "api" { temperature.get().trim().parse::<f64>().ok() } else { None },
+                    max_turns: max_turns.get().trim().parse::<u32>().ok(),
+                    tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
+                    starred: starred.get(),
+                };
+                editing.set(Some(nm.clone()));
+                apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
+            }>
+                <div class="adi-field">
+                    <label class="adi-field__label" for="agent-name">"Name"</label>
+                    <input class="adi-input adi-mono" id="agent-name" placeholder="athz-solver" autocomplete="off"
+                        prop:value=move || name.get()
+                        on:input=move |ev| name.set(event_target_value(&ev)) />
+                    <span class="adi-field__hint">"a task tagged this name auto-starts it"</span>
+                </div>
+                <div class="adi-field">
+                    <label class="adi-field__label" for="agent-backend">"Backend"</label>
+                    <select class="adi-input" id="agent-backend"
+                        prop:value=move || backend.get()
+                        on:change=move |ev| backend.set(event_target_value(&ev))>
+                        <option value="">"— pick a backend —"</option>
+                        <option value="cli:claude">"Claude (CLI)"</option>
+                        <option value="cli:codex">"Codex (CLI)"</option>
+                        <option value="api:anthropic">"Anthropic (API)"</option>
+                        <option value="api:openai">"OpenAI (API)"</option>
+                        <option value="api:gemini">"Gemini (API)"</option>
+                        <option value="api:ollama">"Ollama (local)"</option>
+                    </select>
+                </div>
+                <div class="adi-field">
+                    <label class="adi-field__label" for="agent-model">"Model"</label>
+                    <input class="adi-input adi-mono" id="agent-model" autocomplete="off"
+                        placeholder=move || backend_model_placeholder(&backend.get())
+                        prop:value=move || model.get()
+                        on:input=move |ev| model.set(event_target_value(&ev)) />
+                </div>
+                {move || match agent_backend_kind(&backend.get()) {
+                    "cli" => Some(view! {
+                        <div class="adi-field">
+                            <label class="adi-field__label" for="agent-perm">"Permission mode"</label>
+                            <select class="adi-input" id="agent-perm"
+                                prop:value=move || permission_mode.get()
+                                on:change=move |ev| permission_mode.set(event_target_value(&ev))>
+                                <option value="">"— default —"</option>
+                                <option value="default">"default"</option>
+                                <option value="acceptEdits">"acceptEdits"</option>
+                                <option value="plan">"plan"</option>
+                                <option value="bypassPermissions">"bypassPermissions"</option>
+                            </select>
+                        </div>
+                    }.into_any()),
+                    "api" => Some(view! {
+                        <div class="adi-field">
+                            <label class="adi-field__label" for="agent-temp">"Temperature"</label>
+                            <input class="adi-input" id="agent-temp" placeholder="0.0 – 2.0" autocomplete="off"
+                                prop:value=move || temperature.get()
+                                on:input=move |ev| temperature.set(event_target_value(&ev)) />
+                        </div>
+                    }.into_any()),
+                    _ => None,
+                }}
+                <div class="adi-field">
+                    <label class="adi-field__label" for="agent-turns">"Max turns"</label>
+                    <input class="adi-input" id="agent-turns" placeholder="optional" autocomplete="off"
+                        prop:value=move || max_turns.get()
+                        on:input=move |ev| max_turns.set(event_target_value(&ev)) />
+                </div>
+                <label class="adi-field" style="flex-direction:row; align-items:center; gap:7px; align-self:center">
+                    <input type="checkbox" prop:checked=move || starred.get()
+                        on:change=move |ev| starred.set(event_target_checked(&ev)) />
+                    <span class="adi-field__label" style="margin:0">"Starred"</span>
+                </label>
+                <div class="adi-field" style="flex:1 1 100%; min-width:0">
+                    <label class="adi-field__label" for="agent-tags">"Tags"</label>
+                    <input class="adi-input adi-input--wide" id="agent-tags" placeholder="comma-separated (dispatch / filtering)" autocomplete="off"
+                        prop:value=move || tags.get()
+                        on:input=move |ev| tags.set(event_target_value(&ev)) />
+                </div>
+                <div class="adi-field" style="flex:1 1 100%; min-width:0">
+                    <label class="adi-field__label" for="agent-tools">"Tool scope"</label>
+                    <input class="adi-input adi-input--wide adi-mono" id="agent-tools" placeholder="adi-mcp features, e.g. tasks,files[read]" autocomplete="off"
+                        prop:value=move || tools.get()
+                        on:input=move |ev| tools.set(event_target_value(&ev)) />
+                    <span class="adi-field__hint">"which adi-mcp tools this agent may use"</span>
+                </div>
+                <div class="adi-field" style="flex:1 1 100%; min-width:0">
+                    <label class="adi-field__label" for="agent-prompt">"System prompt"</label>
+                    <textarea class="adi-textarea" id="agent-prompt" placeholder="The system prompt that seeds this agent…"
+                        prop:value=move || system_prompt.get()
+                        on:input=move |ev| system_prompt.set(event_target_value(&ev))></textarea>
+                </div>
+                <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
+                    {move || if editing.get().is_some() { "Update agent" } else { "Create agent" }}
+                </button>
+            </form>
+            <div class="adi-flash" data-kind=move || flash.get().map_or("none", |f| f.kind)>
+                {move || flash.get().map(|f| f.msg).unwrap_or_default()}
+            </div>
+            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+                "Definitions only — spawning/running agents (backends, sessions, auto-start) is future
+                 work per " <code>"docs/adi-agents.md"</code> "."
+            </div>
+        </section>
+    }
+    .into_any()
+}
+
+/// Count agents whose backend kind (`cli`/`api`) matches.
+fn agent_count_kind(st: &AgentsState, kind: &str) -> usize {
+    st.agents.iter().filter(|a| a.backend_kind == kind).count()
+}
+
+/// Count starred agents.
+fn agent_starred(st: &AgentsState) -> usize {
+    st.agents.iter().filter(|a| a.starred).count()
+}
+
+/// Render the agents table body: a loading/empty placeholder, or one row per agent with Edit
+/// (loads it into the form) and Delete actions.
+fn agent_rows(state: State, form: AgentsForm) -> AnyView {
+    let Some(st) = state.agents.get() else {
+        return view! { <tr><td class="adi-empty" colspan="5">"Loading…"</td></tr> }.into_any();
+    };
+    if st.agents.is_empty() {
+        return view! {
+            <tr><td class="adi-empty" colspan="5">"No agents yet — define one below."</td></tr>
+        }
+        .into_any();
+    }
+    st.agents
+        .into_iter()
+        .map(|a| {
+            let name_disp = if a.starred { format!("★ {}", a.name) } else { a.name.clone() };
+            let backend = a.backend.clone();
+            let model = a.model.clone().unwrap_or_default();
+            let tags = a.tags.join(", ");
+            let del_name = a.name.clone();
+            let a_edit = a.clone();
+            view! {
+                <tr>
+                    <td>{name_disp}</td>
+                    <td class="adi-mono">{backend}</td>
+                    <td class="adi-mono adi-muted">{model}</td>
+                    <td class="adi-muted">{tags}</td>
+                    <td style="text-align:right; white-space:nowrap">
+                        <button class="adi-btn adi-btn--link"
+                            on:click=move |_| load_agent_into_form(form, &a_edit)>"Edit"</button>
+                        " "
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_agents(state, None, format!("Deleted {del_name}."),
+                                fetch::delete_agent(del_name.clone()));
+                        }>"Delete"</button>
+                    </td>
+                </tr>
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+/// Run an agents mutation: set the returned list and a success flash, or an error flash; toggles
+/// `busy` around the request when a form is driving it.
+fn apply_agents<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+where
+    F: std::future::Future<Output = Result<AgentsState, String>> + 'static,
+{
+    if let Some(b) = busy {
+        b.set(true);
+    }
+    spawn_local(async move {
+        match fut.await {
+            Ok(a) => {
+                state.agents.set(Some(a));
+                state.flash.set(Some(Flash::ok(ok_msg)));
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        if let Some(b) = busy {
+            b.set(false);
+        }
+    });
+}
+
+/// Load an existing agent into the create/edit form (the Edit action).
+fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
+    form.name.set(a.name.clone());
+    form.backend.set(a.backend.clone());
+    form.model.set(a.model.clone().unwrap_or_default());
+    form.permission_mode.set(a.permission_mode.clone().unwrap_or_default());
+    form.temperature.set(a.temperature.map(|t| t.to_string()).unwrap_or_default());
+    form.max_turns.set(a.max_turns.map(|n| n.to_string()).unwrap_or_default());
+    form.tags.set(a.tags.join(", "));
+    form.tools.set(a.tools.clone());
+    form.system_prompt.set(a.system_prompt.clone());
+    form.starred.set(a.starred);
+    form.editing.set(Some(a.name.clone()));
+    scroll_top();
+}
+
+/// Reset the create/edit form back to a blank "New agent" state.
+fn clear_agent_form(form: AgentsForm) {
+    form.name.set(String::new());
+    form.backend.set(String::new());
+    form.model.set(String::new());
+    form.permission_mode.set(String::new());
+    form.temperature.set(String::new());
+    form.max_turns.set(String::new());
+    form.tags.set(String::new());
+    form.tools.set(String::new());
+    form.system_prompt.set(String::new());
+    form.starred.set(false);
+    form.editing.set(None);
+}
+
+/// The backend kind (`cli`/`api`) — the part before the `:` in a backend id; `""` if none.
+fn agent_backend_kind(backend: &str) -> &str {
+    match backend.split_once(':') {
+        Some((kind, _)) => kind,
+        None => "",
+    }
+}
+
+/// A per-backend placeholder for the model field, hinting the expected alias.
+fn backend_model_placeholder(backend: &str) -> &'static str {
+    match backend {
+        "cli:claude" => "opus / sonnet / fable / haiku",
+        "cli:codex" => "gpt-5-codex",
+        "api:anthropic" => "claude-opus-4-8",
+        "api:openai" => "gpt-5-codex / o3",
+        "api:gemini" => "gemini-2.5-pro / gemini-2.5-flash",
+        "api:ollama" => "llama3.1 / qwen2.5-coder",
+        _ => "model alias",
+    }
+}
+
+/// Trim a form string into an optional, dropping it when blank.
+fn opt_str(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 /// The project detail page (`/projects/<id>`): the manifest, its actions, and the services
@@ -2054,6 +2423,8 @@ enum Route {
     ProjectDetail,
     /// The read-only task tree (`/tasks`).
     Tasks,
+    /// Agent definitions (`/agents`).
+    Agents,
     Hive,
     PortsManager,
     Mesh,
@@ -2068,6 +2439,7 @@ impl Route {
         match path {
             "/projects" => Route::Projects,
             "/tasks" => Route::Tasks,
+            "/agents" => Route::Agents,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
@@ -2082,6 +2454,7 @@ impl Route {
             Route::Overview => "/overview",
             Route::Projects | Route::ProjectDetail => "/projects",
             Route::Tasks => "/tasks",
+            Route::Agents => "/agents",
             Route::Hive => "/settings/hive",
             Route::PortsManager => "/settings/ports-manager",
             Route::Mesh => "/settings/mesh",
@@ -2095,6 +2468,7 @@ impl Route {
             Route::Projects => "Projects",
             Route::ProjectDetail => "Project",
             Route::Tasks => "Tasks",
+            Route::Agents => "Agents",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",
@@ -2206,6 +2580,8 @@ struct State {
     current_project: RwSignal<String>,
     /// The read-only task tree (`/api/tasks`), shown on the Tasks page.
     tasks: RwSignal<Option<TasksState>>,
+    /// Agent definitions (`/api/agents`), shown on the Agents page.
+    agents: RwSignal<Option<AgentsState>>,
     hive: RwSignal<Option<HiveState>>,
     /// The project file browser/editor state (the Files panel on the detail page).
     files: FilesState,
@@ -2283,6 +2659,25 @@ struct TasksForm {
     busy: RwSignal<bool>,
 }
 
+/// The Agents page's local create/edit form. Numeric fields (`temperature`, `max_turns`) are held
+/// as strings and parsed on submit; `editing` is `Some(name)` while an existing agent is loaded
+/// into the form (drives the header + a "New agent" reset). `Copy` so it threads into handlers.
+#[derive(Clone, Copy)]
+struct AgentsForm {
+    name: RwSignal<String>,
+    backend: RwSignal<String>,
+    model: RwSignal<String>,
+    permission_mode: RwSignal<String>,
+    temperature: RwSignal<String>,
+    max_turns: RwSignal<String>,
+    tags: RwSignal<String>,
+    tools: RwSignal<String>,
+    system_prompt: RwSignal<String>,
+    starred: RwSignal<bool>,
+    editing: RwSignal<Option<String>>,
+    busy: RwSignal<bool>,
+}
+
 /// The reserve form's local signals; `Copy` so it threads into the page view and handlers.
 #[derive(Clone, Copy)]
 struct Form {
@@ -2338,6 +2733,11 @@ async fn load(s: State) {
         && let Ok(t) = fetch::tasks().await
     {
         s.tasks.set(Some(t));
+    }
+    if path == Route::Agents.path()
+        && let Ok(a) = fetch::agents().await
+    {
+        s.agents.set(Some(a));
     }
     if path == Route::Hive.path()
         && let Ok(h) = fetch::hive().await
@@ -2577,8 +2977,9 @@ mod fetch {
     use adi_webapp_api::types::{
         ApiError, DirListing, FileContent, FilesRef, Health, HiveState, MeshForwardRef,
         MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, PortsState, ProjectDetail,
-        NewTask, ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, StartResult,
-        StartService, StopResult, TasksState, UsedPorts, WriteFile,
+        AgentRef, AgentsState, NewTask, ProjectRef, ProjectsState, ReleaseResponse,
+        ReserveResponse, SaveAgent, StartResult, StartService, StopResult, TasksState, UsedPorts,
+        WriteFile,
     };
     use gloo_net::http::{Request, Response};
     use serde::Serialize;
@@ -2676,6 +3077,20 @@ mod fetch {
 
     pub async fn create_task(body: NewTask) -> Result<TasksState, String> {
         post("/api/tasks/create", &body).await
+    }
+
+    // Agents: every endpoint returns the fresh AgentsState so the page updates in one round-trip.
+
+    pub async fn agents() -> Result<AgentsState, String> {
+        get("/api/agents").await
+    }
+
+    pub async fn save_agent(body: SaveAgent) -> Result<AgentsState, String> {
+        post("/api/agents/save", &body).await
+    }
+
+    pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
+        post("/api/agents/delete", &AgentRef { name }).await
     }
 
     pub async fn hive() -> Result<HiveState, String> {
