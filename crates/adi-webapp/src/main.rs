@@ -271,6 +271,13 @@ fn App() -> impl IntoView {
     }
 }
 
+/// A single full-width placeholder row spanning `colspan` columns — the
+/// `<tr><td class="adi-empty">…</td></tr>` every table body falls back to for its loading, empty,
+/// or error state.
+fn placeholder_row(colspan: &'static str, msg: &str) -> AnyView {
+    view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
+}
+
 /// The Overview page: system liveness at a glance.
 fn overview_view(state: State) -> AnyView {
     let State { health, .. } = state;
@@ -411,7 +418,7 @@ fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Route>) -> An
 /// page; the trailing action archives/restores it.
 fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Route>) -> AnyView {
     let Some(state_projects) = state.projects.get() else {
-        return view! { <tr><td class="adi-empty" colspan="5">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("5", "Loading…");
     };
     let show_all = show_archived.get();
     let rows: Vec<Project> = state_projects
@@ -426,7 +433,7 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
         } else {
             "No active projects. Add one below, or switch to All to see archived ones."
         };
-        return view! { <tr><td class="adi-empty" colspan="5">{msg}</td></tr> }.into_any();
+        return placeholder_row("5", msg);
     }
 
     rows.into_iter()
@@ -482,19 +489,27 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
         .into_any()
 }
 
-/// Run a projects mutation: set the returned state and a success flash, or an error flash;
-/// toggles `busy` around the request when a form is driving it.
-fn apply_projects<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
-where
-    F: std::future::Future<Output = Result<ProjectsState, String>> + 'static,
+/// Run a mutation that returns fresh state `T`, hand the result to `store`, and flash success or
+/// the error; toggles `busy` around the request when a form is driving it. The `apply_projects` /
+/// `apply_tasks` / `apply_agents` / `apply_mesh` helpers are thin typed wrappers over this — each
+/// differs only in which page-state signal receives the result.
+fn apply_mutation<T, S, F>(
+    state: State,
+    busy: Option<RwSignal<bool>>,
+    ok_msg: String,
+    store: S,
+    fut: F,
+) where
+    S: Fn(State, T) + 'static,
+    F: std::future::Future<Output = Result<T, String>> + 'static,
 {
     if let Some(b) = busy {
         b.set(true);
     }
     spawn_local(async move {
         match fut.await {
-            Ok(p) => {
-                state.projects.set(Some(p));
+            Ok(v) => {
+                store(state, v);
                 state.flash.set(Some(Flash::ok(ok_msg)));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
@@ -503,6 +518,15 @@ where
             b.set(false);
         }
     });
+}
+
+/// Run a projects mutation: set the returned state and a success flash, or an error flash;
+/// toggles `busy` around the request when a form is driving it.
+fn apply_projects<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
+where
+    F: std::future::Future<Output = Result<ProjectsState, String>> + 'static,
+{
+    apply_mutation(state, busy, ok_msg, |s, p| s.projects.set(Some(p)), fut);
 }
 
 /// The Tasks page: a read-only view of the task tree (`~/.adi/mono/mcp/tasks.json`), shared with
@@ -653,36 +677,20 @@ fn apply_tasks<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fu
 where
     F: std::future::Future<Output = Result<TasksState, String>> + 'static,
 {
-    if let Some(b) = busy {
-        b.set(true);
-    }
-    spawn_local(async move {
-        match fut.await {
-            Ok(t) => {
-                state.tasks.set(Some(t));
-                state.flash.set(Some(Flash::ok(ok_msg)));
-            }
-            Err(e) => state.flash.set(Some(Flash::err(e))),
-        }
-        if let Some(b) = busy {
-            b.set(false);
-        }
-    });
+    apply_mutation(state, busy, ok_msg, |s, t| s.tasks.set(Some(t)), fut);
 }
 
 /// Render the task table body: a loading/empty placeholder, or the tree flattened into rows
 /// (a parent immediately followed by its subtree), each indented by its depth.
 fn task_rows(tasks: RwSignal<Option<TasksState>>) -> AnyView {
     let Some(state_tasks) = tasks.get() else {
-        return view! { <tr><td class="adi-empty" colspan="5">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("5", "Loading…");
     };
     if state_tasks.tasks.is_empty() {
-        return view! {
-            <tr><td class="adi-empty" colspan="5">
-                "No tasks yet — add one below, or use the adi-task CLI or the tasks_create MCP tool."
-            </td></tr>
-        }
-        .into_any();
+        return placeholder_row(
+            "5",
+            "No tasks yet — add one below, or use the adi-task CLI or the tasks_create MCP tool.",
+        );
     }
 
     task_tree_rows(state_tasks.tasks)
@@ -988,13 +996,10 @@ fn agent_starred(st: &AgentsState) -> usize {
 /// (loads it into the form) and Delete actions.
 fn agent_rows(state: State, form: AgentsForm) -> AnyView {
     let Some(st) = state.agents.get() else {
-        return view! { <tr><td class="adi-empty" colspan="5">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("5", "Loading…");
     };
     if st.agents.is_empty() {
-        return view! {
-            <tr><td class="adi-empty" colspan="5">"No agents yet — define one below."</td></tr>
-        }
-        .into_any();
+        return placeholder_row("5", "No agents yet — define one below.");
     }
     st.agents
         .into_iter()
@@ -1033,21 +1038,7 @@ fn apply_agents<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, f
 where
     F: std::future::Future<Output = Result<AgentsState, String>> + 'static,
 {
-    if let Some(b) = busy {
-        b.set(true);
-    }
-    spawn_local(async move {
-        match fut.await {
-            Ok(a) => {
-                state.agents.set(Some(a));
-                state.flash.set(Some(Flash::ok(ok_msg)));
-            }
-            Err(e) => state.flash.set(Some(Flash::err(e))),
-        }
-        if let Some(b) = busy {
-            b.set(false);
-        }
-    });
+    apply_mutation(state, busy, ok_msg, |s, a| s.agents.set(Some(a)), fut);
 }
 
 /// Load an existing agent into the create/edit form (the Edit action).
@@ -1291,27 +1282,19 @@ fn service_rows(
         } else {
             "No .adi/hive.yaml — this project has no runtime services yet."
         };
-        return view! { <tr><td class="adi-empty" colspan="6">{msg}</td></tr> }.into_any();
+        return placeholder_row("6", msg);
     }
     services
         .into_iter()
         .map(|s| {
             let name = s.name.clone();
-            let host = s.host.unwrap_or_else(|| "—".to_string());
-            let ports = if s.ports.is_empty() {
-                "—".to_string()
-            } else {
-                s.ports
-                    .iter()
-                    .map(|p| format!("{}:{}", p.key, p.port))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+            let host = dash(s.host);
+            let ports = fmt_ports(&s.ports);
             // Only a service with a `run` command has a runner to start/stop.
             let has_runner = s.run.is_some();
             let running = s.running;
-            let run = s.run.unwrap_or_else(|| "—".to_string());
-            let restart = s.restart.unwrap_or_else(|| "—".to_string());
+            let run = dash(s.run);
+            let restart = dash(s.restart);
             // Action reflects live state: Stop (+ a running dot) when up, Start when down.
             let action = if !has_runner {
                 view! { <span class="adi-muted">"—"</span> }.into_any()
@@ -1534,7 +1517,7 @@ fn crumbs_view(state: State) -> AnyView {
 fn file_rows(state: State) -> AnyView {
     let files = state.files;
     let Some(listing) = files.listing.get() else {
-        return view! { <tr><td class="adi-empty" colspan="3">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("3", "Loading…");
     };
     let dir = listing.path.clone();
     let mut rows: Vec<AnyView> = Vec::new();
@@ -1562,8 +1545,7 @@ fn file_rows(state: State) -> AnyView {
     }
 
     if listing.entries.is_empty() && listing.parent.is_none() {
-        return view! { <tr><td class="adi-empty" colspan="3">"This project directory is empty."</td></tr> }
-            .into_any();
+        return placeholder_row("3", "This project directory is empty.");
     }
 
     for entry in listing.entries {
@@ -1802,13 +1784,13 @@ fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
 /// the source cell links into the owning project's detail page.
 fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
     let Some(h) = state.hive.get() else {
-        return view! { <tr><td class="adi-empty" colspan="7">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("7", "Loading…");
     };
     if h.services.is_empty() {
-        return view! {
-            <tr><td class="adi-empty" colspan="7">"No hive services declared in any project or the global hive."</td></tr>
-        }
-        .into_any();
+        return placeholder_row(
+            "7",
+            "No hive services declared in any project or the global hive.",
+        );
     }
     let mut services = h.services;
     // Global (project == None) sorts first (None < Some), then by project id, then service name.
@@ -1831,14 +1813,10 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
                     }.into_any()
                 }
             };
-            let host = s.host.unwrap_or_else(|| "—".to_string());
-            let ports = if s.ports.is_empty() {
-                "—".to_string()
-            } else {
-                s.ports.iter().map(|p| format!("{}:{}", p.key, p.port)).collect::<Vec<_>>().join(", ")
-            };
-            let run = s.run.unwrap_or_else(|| "—".to_string());
-            let restart = s.restart.unwrap_or_else(|| "—".to_string());
+            let host = dash(s.host);
+            let ports = fmt_ports(&s.ports);
+            let run = dash(s.run);
+            let restart = dash(s.restart);
             let (state_attr, label) = if s.running { ("online", "Running") } else { ("down", "Stopped") };
             view! {
                 <tr>
@@ -1858,6 +1836,24 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// Format a service's declared port bindings as `key:port, key:port`, or `—` when it declares none.
+fn fmt_ports(ports: &[adi_webapp_api::types::ServicePort]) -> String {
+    if ports.is_empty() {
+        "—".to_string()
+    } else {
+        ports
+            .iter()
+            .map(|p| format!("{}:{}", p.key, p.port))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// An optional string for a table cell, falling back to an em dash when it's absent.
+fn dash(value: Option<String>) -> String {
+    value.unwrap_or_else(|| "—".to_string())
 }
 
 /// Format a Unix timestamp (seconds) as a `YYYY-MM-DD` UTC date; `0` renders as `—`. Pure
@@ -2245,13 +2241,10 @@ fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
 /// button to stop exposing it.
 fn mesh_allow_rows(state: State) -> AnyView {
     let Some(mesh) = state.mesh.get() else {
-        return view! { <tr><td class="adi-empty" colspan="2">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("2", "Loading…");
     };
     if mesh.allow.is_empty() {
-        return view! {
-            <tr><td class="adi-empty" colspan="2">"No ports exposed — add one below to let peers reach it."</td></tr>
-        }
-        .into_any();
+        return placeholder_row("2", "No ports exposed — add one below to let peers reach it.");
     }
     let mut ports = mesh.allow;
     ports.sort_unstable();
@@ -2277,13 +2270,13 @@ fn mesh_allow_rows(state: State) -> AnyView {
 /// Rows for the authorized-peers table: a note when open to any peer, else one row per id.
 fn mesh_peer_rows(state: State) -> AnyView {
     let Some(mesh) = state.mesh.get() else {
-        return view! { <tr><td class="adi-empty" colspan="2">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("2", "Loading…");
     };
     if mesh.authorized_peers.is_empty() {
-        return view! {
-            <tr><td class="adi-empty" colspan="2">"Any peer may use the exposed ports. Add one to restrict access."</td></tr>
-        }
-        .into_any();
+        return placeholder_row(
+            "2",
+            "Any peer may use the exposed ports. Add one to restrict access.",
+        );
     }
     mesh.authorized_peers
         .into_iter()
@@ -2308,13 +2301,13 @@ fn mesh_peer_rows(state: State) -> AnyView {
 /// Rows for the forwards table: a placeholder, or one row per forward with a remove button.
 fn mesh_forward_rows(state: State) -> AnyView {
     let Some(mesh) = state.mesh.get() else {
-        return view! { <tr><td class="adi-empty" colspan="5">"Loading…"</td></tr> }.into_any();
+        return placeholder_row("5", "Loading…");
     };
     if mesh.forwards.is_empty() {
-        return view! {
-            <tr><td class="adi-empty" colspan="5">"No forwards — add one below to reach a peer's port locally."</td></tr>
-        }
-        .into_any();
+        return placeholder_row(
+            "5",
+            "No forwards — add one below to reach a peer's port locally.",
+        );
     }
     mesh.forwards
         .into_iter()
@@ -2345,21 +2338,7 @@ fn apply_mesh<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut
 where
     F: std::future::Future<Output = Result<MeshState, String>> + 'static,
 {
-    if let Some(b) = busy {
-        b.set(true);
-    }
-    spawn_local(async move {
-        match fut.await {
-            Ok(m) => {
-                state.mesh.set(Some(m));
-                state.flash.set(Some(Flash::ok(ok_msg)));
-            }
-            Err(e) => state.flash.set(Some(Flash::err(e))),
-        }
-        if let Some(b) = busy {
-            b.set(false);
-        }
-    });
+    apply_mutation(state, busy, ok_msg, |s, m| s.mesh.set(Some(m)), fut);
 }
 
 /// Parse a `1..=65535` port from user input, rejecting blanks and `0`.
@@ -2760,11 +2739,10 @@ async fn load(s: State) {
 /// by port. Reads `ports` reactively, so it re-renders on every refresh.
 fn rows_view(state: State) -> AnyView {
     match state.ports.get() {
-        None => view! { <tr><td class="adi-empty" colspan="4">"Loading…"</td></tr> }.into_any(),
-        Some(p) if p.leases.is_empty() => view! {
-            <tr><td class="adi-empty" colspan="4">"No ports reserved yet — reserve one below."</td></tr>
+        None => placeholder_row("4", "Loading…"),
+        Some(p) if p.leases.is_empty() => {
+            placeholder_row("4", "No ports reserved yet — reserve one below.")
         }
-        .into_any(),
         Some(p) => {
             let mut leases = p.leases;
             leases.sort_by_key(|l| l.port);
@@ -2811,7 +2789,7 @@ fn rows_view(state: State) -> AnyView {
 /// ones when `managed_only`. A port is ADI-managed when a registry lease binds it.
 fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
     let Some(used) = state.used.get() else {
-        return view! { <tr><td class="adi-empty" colspan="4">"Scanning…"</td></tr> }.into_any();
+        return placeholder_row("4", "Scanning…");
     };
     let leases = state.ports.get().map(|p| p.leases).unwrap_or_default();
     let managed = managed_only.get();
@@ -2837,7 +2815,7 @@ fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
         } else {
             "No listening ports found."
         };
-        return view! { <tr><td class="adi-empty" colspan="4">{msg}</td></tr> }.into_any();
+        return placeholder_row("4", msg);
     }
 
     rows.into_iter()
@@ -2849,7 +2827,7 @@ fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
                 .into_any(),
                 None => view! { <td class="adi-muted">"—"</td> }.into_any(),
             };
-            let process = u.process.unwrap_or_else(|| "—".to_string());
+            let process = dash(u.process);
             let pid = u.pid.map_or_else(|| "—".to_string(), |p| p.to_string());
             view! {
                 <tr>
