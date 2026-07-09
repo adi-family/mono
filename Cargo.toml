@@ -5,6 +5,7 @@ members = ["crates/*"]
 # it out of the default set so `cargo build`/`cargo test` (no `--workspace`) skip it; it
 # stays a member so it still inherits workspace metadata/lints and builds with `-p`.
 default-members = [
+    "crates/adi-agents",
     "crates/adi-app",
     "crates/adi-cli",
     "crates/adi-config",
@@ -34,6 +35,7 @@ repository = "https://github.com/mgorunuch/adi-family"
 # `some-dep = { workspace = true }` so versions stay aligned repo-wide.
 [workspace.dependencies]
 # Internal crates
+adi-agents = { path = "crates/adi-agents" }
 adi-config = { path = "crates/adi-config" }
 adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }

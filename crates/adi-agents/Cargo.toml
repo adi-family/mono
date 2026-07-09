@@ -1,0 +1,20 @@
+[package]
+name = "adi-agents"
+description = "Agent definitions (AgentDef) for the adi platform: a reusable, backend-agnostic spec — backend (cli:claude/cli:codex/api:anthropic/api:openai), system prompt, tool scope, model/params, role/tags — stored one TOML file per agent under ~/.adi/mono/agents. Pure library: the definition/store layer of the adi-agents orchestration spec (docs/adi-agents.md); no spawn/run yet."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared configurator decides where state lives (the `agents` module dir under
+# ~/.adi/mono) and does the atomic TOML (de)serialization of each agent's manifest.
+adi-config = { workspace = true }
+
+# The manifest is a plain serde/TOML document; `adi-config` does the actual TOML.
+serde = { workspace = true }
+
+[lints]
+workspace = true
