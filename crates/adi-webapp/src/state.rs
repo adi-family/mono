@@ -2,6 +2,8 @@
 //! structs, the backend-liveness/flash enums, and the `load` routine that fans a fetch into the
 //! signals. Every page module reads from [`State`]; the router and view helpers thread it around.
 
+use std::collections::BTreeMap;
+
 use adi_webapp_api::types::{
     AgentsState, DirListing, Health, HiveState, MeshState, PortsState, ProjectDetail,
     ProjectsState, TasksState, UsedPorts,
@@ -121,6 +123,7 @@ pub(crate) struct AgentsForm {
     pub(crate) tools: RwSignal<String>,
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
+    pub(crate) extra: RwSignal<BTreeMap<String, String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
 }

@@ -1,6 +1,7 @@
 //! The on-disk agent definition ([`AgentManifest`], serialized as `<name>.toml`) and the
 //! name-attached view of a loaded agent ([`Agent`]).
 
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -42,6 +43,9 @@ pub struct AgentManifest {
     /// Pinned in the UI / preferred for quick-dispatch.
     #[serde(default)]
     pub starred: bool,
+    /// Backend-specific fields not yet promoted to first-class manifest properties.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: BTreeMap<String, String>,
     /// When the definition was created, as Unix epoch seconds.
     #[serde(default)]
     pub created_at: u64,

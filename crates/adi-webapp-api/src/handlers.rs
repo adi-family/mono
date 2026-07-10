@@ -18,7 +18,8 @@ use adi_tasks::{EffectiveStatus, Error as TaskStoreError, TaskStatus, TaskView, 
 use serde::Deserialize;
 
 use crate::types::{
-    AgentDto, AgentRef, AgentsState, ApiError, DirListing, FileContent, FileEntry, FilesRef,
+    AgentBackendOption, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption,
+    AgentFormSpec, AgentRef, AgentsState, ApiError, DirListing, FileContent, FileEntry, FilesRef,
     Health, HiveService, HiveState, Lease, LeaseRef, MeshForward, MeshForwardRef, MeshListenRef,
     MeshPeerRef, MeshPortRef, MeshState, NewProject, NewTask, PortsState, Project, ProjectDetail,
     ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse, ReserveResponse, SaveAgent,
@@ -877,6 +878,7 @@ pub fn agents(store: &Agents) -> (u16, String) {
     match store.list() {
         Ok(list) => ok_json(&AgentsState {
             agents: list.into_iter().map(agent_dto).collect(),
+            form: agent_form_spec(),
         }),
         Err(e) => agent_error(&e),
     }
@@ -905,6 +907,7 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
             .filter(|t| !t.is_empty())
             .collect(),
         starred: req.starred,
+        extra: clean_extra(req.extra),
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -943,9 +946,173 @@ fn agent_dto(agent: adi_agents::Agent) -> AgentDto {
         max_turns: m.max_turns,
         tags: m.tags,
         starred: m.starred,
+        extra: m.extra,
         created_at: m.created_at,
         updated_at: m.updated_at,
     }
+}
+
+/// Static backend/form metadata for the Agents page. This lives server-side so the API defines
+/// both the selectable backends and the field shape the client renders.
+fn agent_form_spec() -> AgentFormSpec {
+    let mut fields = Vec::new();
+
+    let mut name = agent_field("name", "Name", AgentFormFieldKind::Text);
+    name.placeholder = "athz-solver".into();
+    name.hint = "a task tagged this name auto-starts it".into();
+    name.mono = true;
+    name.required = true;
+    fields.push(name);
+
+    let mut backend = agent_field("backend", "Backend", AgentFormFieldKind::Select);
+    backend.required = true;
+    fields.push(backend);
+
+    let mut model = agent_field("model", "Model", AgentFormFieldKind::Text);
+    model.placeholder = "model alias".into();
+    model.mono = true;
+    fields.push(model);
+
+    let mut permission = agent_field(
+        "permission_mode",
+        "Permission mode",
+        AgentFormFieldKind::Select,
+    );
+    permission.backend_kinds = strings(&["cli"]);
+    permission.options = vec![
+        agent_option("", "— default —"),
+        agent_option("default", "default"),
+        agent_option("acceptEdits", "acceptEdits"),
+        agent_option("plan", "plan"),
+        agent_option("bypassPermissions", "bypassPermissions"),
+    ];
+    fields.push(permission);
+
+    let mut temperature = agent_field("temperature", "Temperature", AgentFormFieldKind::Number);
+    temperature.placeholder = "0.0 - 2.0".into();
+    temperature.backend_kinds = strings(&["api"]);
+    temperature.numeric = true;
+    fields.push(temperature);
+
+    let mut max_turns = agent_field("max_turns", "Max turns", AgentFormFieldKind::Number);
+    max_turns.placeholder = "optional".into();
+    max_turns.numeric = true;
+    fields.push(max_turns);
+
+    let mut role = agent_field("role", "Role", AgentFormFieldKind::Text);
+    role.placeholder = "solver / planner / triager".into();
+    fields.push(role);
+
+    let mut api_key_env = agent_field("api_key_env", "API key env", AgentFormFieldKind::Text);
+    api_key_env.placeholder = "OPENAI_API_KEY".into();
+    api_key_env.hint = "environment variable read by this backend".into();
+    api_key_env.backend_kinds = strings(&["api"]);
+    api_key_env.mono = true;
+    fields.push(api_key_env);
+
+    let mut base_url = agent_field("base_url", "Base URL", AgentFormFieldKind::Text);
+    base_url.placeholder = "http://localhost:11434".into();
+    base_url.backend_ids = strings(&["api:ollama"]);
+    base_url.mono = true;
+    base_url.wide = true;
+    fields.push(base_url);
+
+    fields.push(agent_field(
+        "starred",
+        "Starred",
+        AgentFormFieldKind::Checkbox,
+    ));
+
+    let mut tags = agent_field("tags", "Tags", AgentFormFieldKind::Text);
+    tags.placeholder = "comma-separated (dispatch / filtering)".into();
+    tags.wide = true;
+    fields.push(tags);
+
+    let mut tools = agent_field("tools", "Tool scope", AgentFormFieldKind::Text);
+    tools.placeholder = "adi-mcp features, e.g. tasks,files[read]".into();
+    tools.hint = "which adi-mcp tools this agent may use".into();
+    tools.mono = true;
+    tools.wide = true;
+    fields.push(tools);
+
+    let mut prompt = agent_field(
+        "system_prompt",
+        "System prompt",
+        AgentFormFieldKind::Textarea,
+    );
+    prompt.placeholder = "The system prompt that seeds this agent...".into();
+    prompt.wide = true;
+    fields.push(prompt);
+
+    AgentFormSpec {
+        backends: vec![
+            agent_backend(
+                "cli:claude",
+                "Claude (CLI)",
+                "cli",
+                "opus / sonnet / fable / haiku",
+            ),
+            agent_backend("cli:codex", "Codex (CLI)", "cli", "gpt-5-codex"),
+            agent_backend("api:anthropic", "Anthropic (API)", "api", "claude-opus-4-8"),
+            agent_backend("api:openai", "OpenAI (API)", "api", "gpt-5-codex / o3"),
+            agent_backend(
+                "api:gemini",
+                "Gemini (API)",
+                "api",
+                "gemini-2.5-pro / gemini-2.5-flash",
+            ),
+            agent_backend(
+                "api:monshoot",
+                "Monshoot (API)",
+                "api",
+                "kimi-k2.6 / kimi-k2",
+            ),
+            agent_backend(
+                "api:ollama",
+                "Ollama (local)",
+                "api",
+                "llama3.1 / qwen2.5-coder",
+            ),
+        ],
+        fields,
+    }
+}
+
+fn agent_backend(id: &str, label: &str, kind: &str, model_placeholder: &str) -> AgentBackendOption {
+    AgentBackendOption {
+        id: id.into(),
+        label: label.into(),
+        kind: kind.into(),
+        model_placeholder: model_placeholder.into(),
+    }
+}
+
+fn agent_field(name: &str, label: &str, kind: AgentFormFieldKind) -> AgentFormField {
+    AgentFormField {
+        name: name.into(),
+        label: label.into(),
+        kind,
+        placeholder: String::new(),
+        hint: String::new(),
+        options: Vec::new(),
+        backend_ids: Vec::new(),
+        backend_kinds: Vec::new(),
+        mono: false,
+        wide: false,
+        numeric: false,
+        required: false,
+    }
+}
+
+fn agent_option(value: &str, label: &str) -> AgentFormOption {
+    AgentFormOption {
+        value: value.into(),
+        label: label.into(),
+    }
+}
+
+fn strings(values: &[&str]) -> Vec<String> {
+    values.iter().map(|v| (*v).to_string()).collect()
 }
 
 /// Map an agent-store error to an HTTP status: bad name → 400, missing → 404, else 500.
@@ -982,6 +1149,20 @@ fn bad_agent_ref() -> (u16, String) {
 /// Trim a string, dropping it entirely when blank (so an empty optional field clears).
 fn clean(value: Option<String>) -> Option<String> {
     value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+}
+
+/// Trim dynamic backend parameters and drop empty or unsafe keys.
+fn clean_extra(extra: BTreeMap<String, String>) -> BTreeMap<String, String> {
+    extra
+        .into_iter()
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, v)| !k.is_empty() && !v.is_empty() && safe_extra_key(k))
+        .collect()
+}
+
+fn safe_extra_key(key: &str) -> bool {
+    key.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
 fn parse_new_project(body: &[u8]) -> Option<NewProject> {
@@ -1229,6 +1410,16 @@ mod tests {
         })
     }
 
+    fn temp_agents() -> Agents {
+        let root = std::env::temp_dir().join(format!(
+            "adi-webapp-api-agents-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Agents::with_config(adi_config::Config::with_root(root))
+    }
+
     #[test]
     fn health_reports_ok_and_identity() {
         let (status, body) = health("adi-app", "1.2.3", Instant::now());
@@ -1285,6 +1476,57 @@ mod tests {
         let m = temp_manager();
         assert_eq!(reserve(&m, b"not json").0, 400);
         assert_eq!(reserve(&m, br#"{"service":"","key":"x"}"#).0, 400);
+    }
+
+    #[test]
+    fn agents_response_includes_form_schema() {
+        let store = temp_agents();
+        let (status, body) = agents(&store);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+
+        let backends = v["form"]["backends"].as_array().unwrap();
+        assert!(
+            backends.iter().any(|b| {
+                b["id"] == "api:openai" && b["model_placeholder"] == "gpt-5-codex / o3"
+            })
+        );
+
+        let fields = v["form"]["fields"].as_array().unwrap();
+        assert!(fields.iter().any(|f| f["name"] == "api_key_env"));
+        assert!(fields.iter().any(|f| {
+            f["name"] == "permission_mode"
+                && f["backend_kinds"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|kind| kind == "cli")
+        }));
+    }
+
+    #[test]
+    fn save_agent_round_trips_extra_params() {
+        let store = temp_agents();
+        let (status, body) = save_agent(
+            &store,
+            br#"{
+                "name":"api-solver",
+                "backend":"api:openai",
+                "extra":{
+                    "role":" solver ",
+                    "api_key_env":" OPENAI_API_KEY ",
+                    "bad key":"drop",
+                    "empty":""
+                }
+            }"#,
+        );
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let agent = &v["agents"].as_array().unwrap()[0];
+        assert_eq!(agent["extra"]["role"], "solver");
+        assert_eq!(agent["extra"]["api_key_env"], "OPENAI_API_KEY");
+        assert!(agent["extra"]["bad key"].is_null());
+        assert!(agent["extra"]["empty"].is_null());
     }
 
     // ---- files -----------------------------------------------------------------------

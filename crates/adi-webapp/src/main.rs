@@ -10,6 +10,8 @@
 
 #![allow(non_snake_case)] // Leptos components are PascalCase by convention.
 
+use std::collections::BTreeMap;
+
 mod fetch;
 mod pages;
 mod routing;
@@ -111,6 +113,7 @@ fn App() -> impl IntoView {
         tools: RwSignal::new(String::new()),
         system_prompt: RwSignal::new(String::new()),
         starred: RwSignal::new(false),
+        extra: RwSignal::new(BTreeMap::new()),
         editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
     };

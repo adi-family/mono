@@ -2,15 +2,18 @@
 //! backend, a system prompt, a tool scope, and backend-specific params. No run/orchestration here;
 //! this only edits the stored spec. The form adapts its params to the chosen backend kind.
 
-use adi_webapp_api::types::{AgentDto, AgentsState, SaveAgent};
+use std::collections::BTreeMap;
+
+use adi_webapp_api::types::{
+    AgentBackendOption, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption, AgentsState,
+    SaveAgent,
+};
 use leptos::prelude::*;
 
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{AgentsForm, Flash, State};
-use crate::ui::{
-    TextField, apply_mutation, data_table, flash_view, placeholder_row, tile, updated_text,
-};
+use crate::ui::{apply_mutation, data_table, flash_view, placeholder_row, tile, updated_text};
 
 /// The Agents page: create, edit, and delete agent definitions (docs/adi-agents.md §5) — pick a
 /// backend, a system prompt, a tool scope, and backend-specific params. No run/orchestration here;
@@ -30,6 +33,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
         tools,
         system_prompt,
         starred,
+        extra,
         editing,
         busy,
     } = form;
@@ -81,7 +85,9 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
                     flash.set(Some(Flash::err("Pick a backend.".to_string())));
                     return;
                 }
-                let kind = agent_backend_kind(&be);
+                let st = agents.get();
+                let kind = agent_backend_kind_from_state(st.as_ref(), &be)
+                    .unwrap_or_else(|| agent_backend_kind(&be).to_string());
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be.clone(),
@@ -93,71 +99,12 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
                     max_turns: max_turns.get().trim().parse::<u32>().ok(),
                     tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                     starred: starred.get(),
+                    extra: agent_extra_values(st.as_ref(), &be, extra.get()),
                 };
                 editing.set(Some(nm.clone()));
                 apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
             }>
-                <TextField id="agent-name" label="Name" placeholder="athz-solver" mono=true
-                    hint="a task tagged this name auto-starts it" value=name />
-                <div class="adi-field">
-                    <label class="adi-field__label" for="agent-backend">"Backend"</label>
-                    <select class="adi-input" id="agent-backend"
-                        prop:value=move || backend.get()
-                        on:change=move |ev| backend.set(event_target_value(&ev))>
-                        <option value="">"— pick a backend —"</option>
-                        <option value="cli:claude">"Claude (CLI)"</option>
-                        <option value="cli:codex">"Codex (CLI)"</option>
-                        <option value="api:anthropic">"Anthropic (API)"</option>
-                        <option value="api:openai">"OpenAI (API)"</option>
-                        <option value="api:gemini">"Gemini (API)"</option>
-                        <option value="api:monshoot">"Monshoot (API)"</option>
-                        <option value="api:ollama">"Ollama (local)"</option>
-                    </select>
-                </div>
-                <div class="adi-field">
-                    <label class="adi-field__label" for="agent-model">"Model"</label>
-                    <input class="adi-input adi-mono" id="agent-model" autocomplete="off"
-                        placeholder=move || backend_model_placeholder(&backend.get())
-                        prop:value=move || model.get()
-                        on:input=move |ev| model.set(event_target_value(&ev)) />
-                </div>
-                {move || match agent_backend_kind(&backend.get()) {
-                    "cli" => Some(view! {
-                        <div class="adi-field">
-                            <label class="adi-field__label" for="agent-perm">"Permission mode"</label>
-                            <select class="adi-input" id="agent-perm"
-                                prop:value=move || permission_mode.get()
-                                on:change=move |ev| permission_mode.set(event_target_value(&ev))>
-                                <option value="">"— default —"</option>
-                                <option value="default">"default"</option>
-                                <option value="acceptEdits">"acceptEdits"</option>
-                                <option value="plan">"plan"</option>
-                                <option value="bypassPermissions">"bypassPermissions"</option>
-                            </select>
-                        </div>
-                    }.into_any()),
-                    "api" => Some(view! {
-                        <TextField id="agent-temp" label="Temperature" placeholder="0.0 – 2.0" value=temperature />
-                    }.into_any()),
-                    _ => None,
-                }}
-                <TextField id="agent-turns" label="Max turns" placeholder="optional" value=max_turns />
-                <label class="adi-field" style="flex-direction:row; align-items:center; gap:7px; align-self:center">
-                    <input type="checkbox" prop:checked=move || starred.get()
-                        on:change=move |ev| starred.set(event_target_checked(&ev)) />
-                    <span class="adi-field__label" style="margin:0">"Starred"</span>
-                </label>
-                <TextField id="agent-tags" label="Tags" placeholder="comma-separated (dispatch / filtering)"
-                    wide=true field_style="flex:1 1 100%; min-width:0" value=tags />
-                <TextField id="agent-tools" label="Tool scope" placeholder="adi-mcp features, e.g. tasks,files[read]"
-                    wide=true mono=true hint="which adi-mcp tools this agent may use"
-                    field_style="flex:1 1 100%; min-width:0" value=tools />
-                <div class="adi-field" style="flex:1 1 100%; min-width:0">
-                    <label class="adi-field__label" for="agent-prompt">"System prompt"</label>
-                    <textarea class="adi-textarea" id="agent-prompt" placeholder="The system prompt that seeds this agent…"
-                        prop:value=move || system_prompt.get()
-                        on:input=move |ev| system_prompt.set(event_target_value(&ev))></textarea>
-                </div>
+                {move || agent_form_fields(state, form)}
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     {move || if editing.get().is_some() { "Update agent" } else { "Create agent" }}
                 </button>
@@ -180,6 +127,330 @@ fn agent_count_kind(st: &AgentsState, kind: &str) -> usize {
 /// Count starred agents.
 fn agent_starred(st: &AgentsState) -> usize {
     st.agents.iter().filter(|a| a.starred).count()
+}
+
+/// Render the agent form from the server-provided schema.
+fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
+    let Some(st) = state.agents.get() else {
+        return view! {
+            <div class="adi-muted" style="padding:0 0 8px">"Loading agent form..."</div>
+        }
+        .into_any();
+    };
+    let backend = form.backend.get();
+    let backends = st.form.backends.clone();
+    st.form
+        .fields
+        .into_iter()
+        .filter(|field| field_applies(field, &backend))
+        .map(|field| render_agent_field(field, backends.clone(), form))
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+/// Dispatch one schema field to the small renderer for its control kind.
+fn render_agent_field(
+    field: AgentFormField,
+    backends: Vec<AgentBackendOption>,
+    form: AgentsForm,
+) -> AnyView {
+    match field.kind {
+        AgentFormFieldKind::Select if field.name == "backend" => {
+            render_backend_select(field, backends, form)
+        }
+        AgentFormFieldKind::Select => render_agent_select(field, form),
+        AgentFormFieldKind::Checkbox => render_agent_checkbox(field, form),
+        AgentFormFieldKind::Textarea => render_agent_textarea(field, form),
+        AgentFormFieldKind::Text | AgentFormFieldKind::Number => {
+            render_agent_input(field, backends, form)
+        }
+    }
+}
+
+/// The backend selector: its options and model placeholders are owned by the API.
+fn render_backend_select(
+    field: AgentFormField,
+    backends: Vec<AgentBackendOption>,
+    form: AgentsForm,
+) -> AnyView {
+    let id = field_id(&field.name);
+    let label_for = id.clone();
+    let label = field.label.clone();
+    let first_label = if backends.is_empty() {
+        "Loading backends..."
+    } else {
+        "— pick a backend —"
+    };
+    view! {
+        <div class="adi-field" style=field_style(&field)>
+            <label class="adi-field__label" for=label_for>{label}</label>
+            <select class="adi-input" id=id
+                prop:value=move || form.backend.get()
+                on:change=move |ev| form.backend.set(event_target_value(&ev))>
+                <option value="">{first_label}</option>
+                {backends.into_iter().map(|backend| {
+                    let id = backend.id;
+                    let label = backend.label;
+                    view! { <option value=id>{label}</option> }
+                }).collect::<Vec<_>>()}
+            </select>
+        </div>
+    }
+    .into_any()
+}
+
+/// Render a server-described select bound to either a first-class form signal or `extra`.
+fn render_agent_select(field: AgentFormField, form: AgentsForm) -> AnyView {
+    let id = field_id(&field.name);
+    let label_for = id.clone();
+    let label = field.label.clone();
+    let name_for_value = field.name.clone();
+    let name_for_change = field.name.clone();
+    let options = field.options.clone();
+    view! {
+        <div class="adi-field" style=field_style(&field)>
+            <label class="adi-field__label" for=label_for>{label}</label>
+            <select class="adi-input" id=id
+                prop:value=move || agent_field_value(form, &name_for_value)
+                on:change=move |ev| set_agent_field_value(form, &name_for_change, event_target_value(&ev))>
+                {options.into_iter().map(|opt| option_view(opt)).collect::<Vec<_>>()}
+            </select>
+        </div>
+    }
+    .into_any()
+}
+
+/// Render a text/number input bound to either a first-class form signal or `extra`.
+fn render_agent_input(
+    field: AgentFormField,
+    backends: Vec<AgentBackendOption>,
+    form: AgentsForm,
+) -> AnyView {
+    let id = field_id(&field.name);
+    let label_for = id.clone();
+    let label = field.label.clone();
+    let placeholder = field_placeholder(&field, &backends, &form.backend.get());
+    let class = field_class(&field);
+    let style = field_style(&field);
+    let inputmode = if field.numeric || matches!(field.kind, AgentFormFieldKind::Number) {
+        "numeric"
+    } else {
+        "text"
+    };
+    let hint = field.hint.clone();
+    let show_hint = !hint.is_empty();
+    let name_for_value = field.name.clone();
+    let name_for_input = field.name.clone();
+    view! {
+        <div class="adi-field" style=style>
+            <label class="adi-field__label" for=label_for>{label}</label>
+            <input class=class id=id placeholder=placeholder autocomplete="off" inputmode=inputmode
+                prop:value=move || agent_field_value(form, &name_for_value)
+                on:input=move |ev| set_agent_field_value(form, &name_for_input, event_target_value(&ev)) />
+            {show_hint.then(|| view! { <span class="adi-field__hint">{hint}</span> })}
+        </div>
+    }
+    .into_any()
+}
+
+/// Render a checkbox. `starred` is first-class; any other checkbox is stored as an extra bool.
+fn render_agent_checkbox(field: AgentFormField, form: AgentsForm) -> AnyView {
+    let label = field.label.clone();
+    let name_for_value = field.name.clone();
+    let name_for_change = field.name.clone();
+    view! {
+        <label class="adi-field" style="flex-direction:row; align-items:center; gap:7px; align-self:center">
+            <input type="checkbox"
+                prop:checked=move || agent_field_bool(form, &name_for_value)
+                on:change=move |ev| set_agent_field_bool(form, &name_for_change, event_target_checked(&ev)) />
+            <span class="adi-field__label" style="margin:0">{label}</span>
+        </label>
+    }
+    .into_any()
+}
+
+/// Render a textarea bound to either a first-class form signal or `extra`.
+fn render_agent_textarea(field: AgentFormField, form: AgentsForm) -> AnyView {
+    let id = field_id(&field.name);
+    let label_for = id.clone();
+    let label = field.label.clone();
+    let placeholder = field.placeholder.clone();
+    let style = field_style(&field);
+    let name_for_value = field.name.clone();
+    let name_for_input = field.name.clone();
+    view! {
+        <div class="adi-field" style=style>
+            <label class="adi-field__label" for=label_for>{label}</label>
+            <textarea class="adi-textarea" id=id placeholder=placeholder
+                prop:value=move || agent_field_value(form, &name_for_value)
+                on:input=move |ev| set_agent_field_value(form, &name_for_input, event_target_value(&ev))></textarea>
+        </div>
+    }
+    .into_any()
+}
+
+fn option_view(opt: AgentFormOption) -> impl IntoView {
+    let value = opt.value;
+    let label = opt.label;
+    view! { <option value=value>{label}</option> }
+}
+
+fn field_applies(field: &AgentFormField, backend: &str) -> bool {
+    if field.backend_ids.is_empty() && field.backend_kinds.is_empty() {
+        return true;
+    }
+    if backend.is_empty() {
+        return false;
+    }
+    field.backend_ids.iter().any(|id| id == backend)
+        || field
+            .backend_kinds
+            .iter()
+            .any(|kind| kind == agent_backend_kind(backend))
+}
+
+fn field_id(name: &str) -> String {
+    format!("agent-{}", name.replace('_', "-"))
+}
+
+fn field_style(field: &AgentFormField) -> String {
+    if field.wide || matches!(field.kind, AgentFormFieldKind::Textarea) {
+        "flex:1 1 100%; min-width:0".into()
+    } else {
+        String::new()
+    }
+}
+
+fn field_class(field: &AgentFormField) -> String {
+    let mut class = String::from("adi-input");
+    if field.wide {
+        class.push_str(" adi-input--wide");
+    }
+    if field.mono {
+        class.push_str(" adi-mono");
+    }
+    class
+}
+
+fn field_placeholder(
+    field: &AgentFormField,
+    backends: &[AgentBackendOption],
+    backend: &str,
+) -> String {
+    if field.name == "model"
+        && let Some(selected) = selected_backend(backends, backend)
+        && !selected.model_placeholder.is_empty()
+    {
+        return selected.model_placeholder.clone();
+    }
+    field.placeholder.clone()
+}
+
+fn selected_backend<'a>(
+    backends: &'a [AgentBackendOption],
+    backend: &str,
+) -> Option<&'a AgentBackendOption> {
+    backends.iter().find(|b| b.id == backend)
+}
+
+fn agent_backend_kind_from_state(st: Option<&AgentsState>, backend: &str) -> Option<String> {
+    st.and_then(|st| selected_backend(&st.form.backends, backend).map(|b| b.kind.clone()))
+}
+
+fn agent_field_value(form: AgentsForm, name: &str) -> String {
+    match name {
+        "name" => form.name.get(),
+        "backend" => form.backend.get(),
+        "model" => form.model.get(),
+        "permission_mode" => form.permission_mode.get(),
+        "temperature" => form.temperature.get(),
+        "max_turns" => form.max_turns.get(),
+        "tags" => form.tags.get(),
+        "tools" => form.tools.get(),
+        "system_prompt" => form.system_prompt.get(),
+        other => form.extra.get().get(other).cloned().unwrap_or_default(),
+    }
+}
+
+fn set_agent_field_value(form: AgentsForm, name: &str, value: String) {
+    match name {
+        "name" => form.name.set(value),
+        "backend" => form.backend.set(value),
+        "model" => form.model.set(value),
+        "permission_mode" => form.permission_mode.set(value),
+        "temperature" => form.temperature.set(value),
+        "max_turns" => form.max_turns.set(value),
+        "tags" => form.tags.set(value),
+        "tools" => form.tools.set(value),
+        "system_prompt" => form.system_prompt.set(value),
+        other => set_agent_extra(form.extra, other, value),
+    }
+}
+
+fn agent_field_bool(form: AgentsForm, name: &str) -> bool {
+    match name {
+        "starred" => form.starred.get(),
+        other => form.extra.get().get(other).is_some_and(|v| v == "true"),
+    }
+}
+
+fn set_agent_field_bool(form: AgentsForm, name: &str, value: bool) {
+    match name {
+        "starred" => form.starred.set(value),
+        other => set_agent_extra(
+            form.extra,
+            other,
+            if value { "true".into() } else { String::new() },
+        ),
+    }
+}
+
+fn set_agent_extra(extra: RwSignal<BTreeMap<String, String>>, name: &str, value: String) {
+    extra.update(|values| {
+        if value.is_empty() {
+            values.remove(name);
+        } else {
+            values.insert(name.to_string(), value);
+        }
+    });
+}
+
+fn agent_extra_values(
+    st: Option<&AgentsState>,
+    backend: &str,
+    values: BTreeMap<String, String>,
+) -> BTreeMap<String, String> {
+    values
+        .into_iter()
+        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
+        .filter(|(k, v)| {
+            !k.is_empty()
+                && !v.is_empty()
+                && st.is_none_or(|st| {
+                    st.form.fields.iter().any(|field| {
+                        field.name == *k
+                            && is_extra_field(&field.name)
+                            && field_applies(field, backend)
+                    })
+                })
+        })
+        .collect()
+}
+
+fn is_extra_field(name: &str) -> bool {
+    !matches!(
+        name,
+        "name"
+            | "backend"
+            | "model"
+            | "permission_mode"
+            | "temperature"
+            | "max_turns"
+            | "tags"
+            | "tools"
+            | "system_prompt"
+            | "starred"
+    )
 }
 
 /// Render the agents table body: a loading/empty placeholder, or one row per agent with Edit
@@ -250,6 +521,7 @@ fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.tools.set(a.tools.clone());
     form.system_prompt.set(a.system_prompt.clone());
     form.starred.set(a.starred);
+    form.extra.set(a.extra.clone());
     form.editing.set(Some(a.name.clone()));
     scroll_top();
 }
@@ -266,6 +538,7 @@ fn clear_agent_form(form: AgentsForm) {
     form.tools.set(String::new());
     form.system_prompt.set(String::new());
     form.starred.set(false);
+    form.extra.set(BTreeMap::new());
     form.editing.set(None);
 }
 
@@ -274,20 +547,6 @@ fn agent_backend_kind(backend: &str) -> &str {
     match backend.split_once(':') {
         Some((kind, _)) => kind,
         None => "",
-    }
-}
-
-/// A per-backend placeholder for the model field, hinting the expected alias.
-fn backend_model_placeholder(backend: &str) -> &'static str {
-    match backend {
-        "cli:claude" => "opus / sonnet / fable / haiku",
-        "cli:codex" => "gpt-5-codex",
-        "api:anthropic" => "claude-opus-4-8",
-        "api:openai" => "gpt-5-codex / o3",
-        "api:gemini" => "gemini-2.5-pro / gemini-2.5-flash",
-        "api:monshoot" => "kimi-k2.6 / kimi-k2",
-        "api:ollama" => "llama3.1 / qwen2.5-coder",
-        _ => "model alias",
     }
 }
 

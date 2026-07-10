@@ -3,6 +3,8 @@
 //! module compiles unchanged for `wasm32-unknown-unknown` — the frontend deserializes the
 //! very types the backend serializes.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 /// `GET /api/health` — liveness plus identity and uptime.
@@ -318,6 +320,71 @@ pub struct NewTask {
 
 // ---- agents (AgentDef definitions under ~/.adi/mono/agents) --------------------------
 
+/// UI/schema metadata for the Agents create/edit form. The backend owns this so adding a
+/// backend or exposing another backend-specific parameter doesn't require a webapp rebuild that
+/// hardcodes the new option list or placeholder text.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFormSpec {
+    pub backends: Vec<AgentBackendOption>,
+    pub fields: Vec<AgentFormField>,
+}
+
+/// One selectable agent backend in the form.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentBackendOption {
+    pub id: String,
+    pub label: String,
+    pub kind: String,
+    #[serde(default)]
+    pub model_placeholder: String,
+}
+
+/// One rendered form control. `backend_ids` and `backend_kinds` are visibility filters; an empty
+/// pair means the field is always visible.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFormField {
+    pub name: String,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub kind: AgentFormFieldKind,
+    #[serde(default)]
+    pub placeholder: String,
+    #[serde(default)]
+    pub hint: String,
+    #[serde(default)]
+    pub options: Vec<AgentFormOption>,
+    #[serde(default)]
+    pub backend_ids: Vec<String>,
+    #[serde(default)]
+    pub backend_kinds: Vec<String>,
+    #[serde(default)]
+    pub mono: bool,
+    #[serde(default)]
+    pub wide: bool,
+    #[serde(default)]
+    pub numeric: bool,
+    #[serde(default)]
+    pub required: bool,
+}
+
+/// A select option for a form field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFormOption {
+    pub value: String,
+    pub label: String,
+}
+
+/// The small set of controls the client knows how to render from [`AgentFormField`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFormFieldKind {
+    Text,
+    Number,
+    Select,
+    Checkbox,
+    Textarea,
+}
+
 /// One agent definition, flattened for the wire. `backend` is a `kind:engine` string
 /// (`cli:claude`, `api:anthropic`, …); `backend_kind` is the `cli`/`api` prefix, which decides
 /// which params apply (permission mode for CLI, temperature for API).
@@ -342,6 +409,8 @@ pub struct AgentDto {
     pub tags: Vec<String>,
     #[serde(default)]
     pub starred: bool,
+    #[serde(default)]
+    pub extra: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -351,6 +420,7 @@ pub struct AgentDto {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentsState {
     pub agents: Vec<AgentDto>,
+    pub form: AgentFormSpec,
 }
 
 /// Request body for `POST /api/agents/save` — create or update an agent definition (an upsert
@@ -376,6 +446,8 @@ pub struct SaveAgent {
     pub tags: Vec<String>,
     #[serde(default)]
     pub starred: bool,
+    #[serde(default)]
+    pub extra: BTreeMap<String, String>,
 }
 
 /// Request body naming an agent — `POST /api/agents/delete`.
