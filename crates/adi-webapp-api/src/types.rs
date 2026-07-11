@@ -267,7 +267,7 @@ impl ProjectDetail {
     }
 }
 
-// ---- tasks (the task tree under ~/.adi/mono/mcp/tasks.json) --------------------------
+// ---- tasks (the task tree under ~/.adi/mono/tasks/tasks.json) ------------------------
 
 /// One task, flattened for the wire. `status` is the stored lifecycle state
 /// (`open`/`done`/`archived`); `effective` is the computed status

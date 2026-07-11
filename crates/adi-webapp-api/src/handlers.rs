@@ -8,11 +8,11 @@ use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
+use adi_agents::{AgentManifest, Agents, Error as AgentStoreError};
 use adi_fs::{Error as FsError, Jail};
 use adi_mesh::config::{Forward, MeshConfig};
 use adi_mesh::{identity, ticket};
 use adi_ports_manager::Ports;
-use adi_agents::{AgentManifest, Agents, Error as AgentStoreError};
 use adi_projects::{Error as ProjectStoreError, Projects};
 use adi_tasks::{EffectiveStatus, Error as TaskStoreError, TaskStatus, TaskView, Tasks};
 use serde::Deserialize;
@@ -202,7 +202,7 @@ pub fn remove_project(store: &Projects, body: &[u8]) -> (u16, String) {
     }
 }
 
-// MARK: tasks — the task tree under ~/.adi/mono/mcp/tasks.json
+// MARK: tasks — the task tree under ~/.adi/mono/tasks/tasks.json
 
 /// `GET /api/tasks` — the whole task tree as a flat list, ordered by task number so a parent
 /// precedes the children created after it. The client nests them into a tree by `parent`.
@@ -210,7 +210,7 @@ pub fn remove_project(store: &Projects, body: &[u8]) -> (u16, String) {
 pub fn tasks(store: &Tasks) -> (u16, String) {
     match store.list(None, None, None, None) {
         Ok(mut views) => {
-            views.sort_by_key(|v| task_num(&v.task.id));
+            views.sort_by(task_order);
             ok_json(&TasksState {
                 tasks: views.iter().map(task_row).collect(),
             })
@@ -605,10 +605,7 @@ pub fn start_service(store: &Projects, body: &[u8]) -> (u16, String) {
             (Ok(hive), Ok(dir)) => (hive, Some(dir)),
             (Err(e), _) | (_, Err(e)) => return project_error(&e),
         },
-        None => (
-            store.config().module("hive").raw_path("hive.yaml"),
-            None,
-        ),
+        None => (store.config().module("hive").raw_path("hive.yaml"), None),
     };
 
     let Ok(raw) = std::fs::read_to_string(&hive_path) else {
@@ -681,7 +678,10 @@ pub fn stop_service(store: &Projects, body: &[u8]) -> (u16, String) {
         return error(404, &format!("no service `{}` in the hive", req.service));
     };
     let Some(port) = service_http_port(svc) else {
-        return error(400, &format!("service `{}` has no port to stop", req.service));
+        return error(
+            400,
+            &format!("service `{}` has no port to stop", req.service),
+        );
     };
     match kill_listener(port) {
         Ok(()) => ok_json(&StopResult {
@@ -844,9 +844,13 @@ fn effective_status_label(e: EffectiveStatus) -> &'static str {
     }
 }
 
-/// The numeric part of a `t<N>` id, for stable ordering (0 if it doesn't parse).
-fn task_num(id: &str) -> u64 {
-    id.strip_prefix('t').and_then(|n| n.parse().ok()).unwrap_or(0)
+/// Stable task ordering: by creation time (so a parent precedes children created after it),
+/// with the id as a tiebreak. Works across both id schemes (`t<N>` and Jira `<KEY>-<N>`).
+fn task_order(a: &TaskView, b: &TaskView) -> std::cmp::Ordering {
+    a.task
+        .created_at
+        .cmp(&b.task.created_at)
+        .then_with(|| a.task.id.cmp(&b.task.id))
 }
 
 /// Map a task-store error to an HTTP status: missing → 404, bad edit → 400, archived → 409, else 500.
@@ -866,7 +870,10 @@ fn parse_new_task(body: &[u8]) -> Option<NewTask> {
 }
 
 fn bad_new_task() -> (u16, String) {
-    error(400, "expected JSON body { \"title\": \"…\" } with a non-empty title")
+    error(
+        400,
+        "expected JSON body { \"title\": \"…\" } with a non-empty title",
+    )
 }
 
 // MARK: agents — AgentDef definitions under ~/.adi/mono/agents
@@ -954,6 +961,7 @@ fn agent_dto(agent: adi_agents::Agent) -> AgentDto {
 
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
 /// both the selectable backends and the field shape the client renders.
+#[allow(clippy::too_many_lines)]
 fn agent_form_spec() -> AgentFormSpec {
     let mut fields = Vec::new();
 
@@ -973,64 +981,272 @@ fn agent_form_spec() -> AgentFormSpec {
     model.mono = true;
     fields.push(model);
 
-    let mut permission = agent_field(
-        "permission_mode",
-        "Permission mode",
-        AgentFormFieldKind::Select,
-    );
-    permission.backend_kinds = strings(&["cli"]);
-    permission.options = vec![
-        agent_option("", "— default —"),
-        agent_option("default", "default"),
-        agent_option("acceptEdits", "acceptEdits"),
-        agent_option("plan", "plan"),
-        agent_option("bypassPermissions", "bypassPermissions"),
-    ];
+    // ---- cli:claude ----
+    let mut permission =
+        field_ids("permission_mode", "Permission mode", AgentFormFieldKind::Select, &["cli:claude"]);
+    permission.options = opts(&[
+        ("", "— default —"),
+        ("acceptEdits", "acceptEdits"),
+        ("auto", "auto"),
+        ("bypassPermissions", "bypassPermissions"),
+        ("manual", "manual"),
+        ("dontAsk", "dontAsk"),
+        ("plan", "plan"),
+    ]);
     fields.push(permission);
 
-    let mut temperature = agent_field("temperature", "Temperature", AgentFormFieldKind::Number);
-    temperature.placeholder = "0.0 - 2.0".into();
-    temperature.backend_kinds = strings(&["api"]);
-    temperature.numeric = true;
-    fields.push(temperature);
+    fields.push(sel_field(
+        "effort",
+        "Effort",
+        &["cli:claude", "api:anthropic"],
+        opts(&[
+            ("", "— default —"),
+            ("low", "low"),
+            ("medium", "medium"),
+            ("high", "high"),
+            ("xhigh", "xhigh"),
+            ("max", "max"),
+        ]),
+        "thinking / reasoning depth",
+    ));
+
+    fields.push(sel_field(
+        "output_format",
+        "Output format",
+        &["cli:claude"],
+        opts(&[("", "text (default)"), ("json", "json"), ("stream-json", "stream-json")]),
+        "how the run result is emitted",
+    ));
+
+    let mut allowed = txt_field(
+        "allowed_tools",
+        "Allowed tools",
+        &["cli:claude"],
+        "Bash(git *) Edit Read",
+        "built-in tools to allow",
+    );
+    allowed.wide = true;
+    fields.push(allowed);
+
+    let mut disallowed = txt_field(
+        "disallowed_tools",
+        "Disallowed tools",
+        &["cli:claude"],
+        "Bash(rm *) WebFetch",
+        "built-in tools to deny",
+    );
+    disallowed.wide = true;
+    fields.push(disallowed);
+
+    fields.push(num_field(
+        "max_budget_usd",
+        "Max budget (USD)",
+        &["cli:claude"],
+        "e.g. 5",
+        "hard spend cap (print mode)",
+    ));
+
+    fields.push(txt_field(
+        "fallback_model",
+        "Fallback model",
+        &["cli:claude"],
+        "sonnet",
+        "used when the primary model is overloaded",
+    ));
+
+    let mut append = field_ids(
+        "append_system_prompt",
+        "Append system prompt",
+        AgentFormFieldKind::Textarea,
+        &["cli:claude"],
+    );
+    append.placeholder = "Appended after the default system prompt…".into();
+    append.wide = true;
+    fields.push(append);
+
+    // ---- cli:codex ----
+    fields.push(sel_field(
+        "sandbox",
+        "Sandbox",
+        &["cli:codex"],
+        opts(&[
+            ("", "— default —"),
+            ("read-only", "read-only"),
+            ("workspace-write", "workspace-write"),
+            ("danger-full-access", "danger-full-access"),
+        ]),
+        "filesystem / exec sandbox policy",
+    ));
+
+    fields.push(sel_field(
+        "approval",
+        "Approval",
+        &["cli:codex"],
+        opts(&[
+            ("", "— default —"),
+            ("untrusted", "untrusted"),
+            ("on-request", "on-request"),
+            ("on-failure", "on-failure"),
+            ("never", "never"),
+        ]),
+        "when to ask before running a command",
+    ));
+
+    fields.push(sel_field(
+        "reasoning_effort",
+        "Reasoning effort",
+        &["cli:codex", "api:openai"],
+        opts(&[("", "— default —"), ("low", "low"), ("medium", "medium"), ("high", "high")]),
+        "reasoning depth",
+    ));
+
+    fields.push(txt_field(
+        "working_dir",
+        "Working dir",
+        &["cli:codex"],
+        "/path/to/repo",
+        "agent working root (-C)",
+    ));
+
+    fields.push(chk_field("skip_git_repo_check", "Skip git-repo check", &["cli:codex"]));
+    fields.push(chk_field("web_search", "Web search", &["cli:codex"]));
+    fields.push(chk_field("json_events", "JSONL events", &["cli:codex"]));
+
+    // ---- cli:* shared ----
+    let mut add_dir = field_kinds("add_dir", "Add dir", AgentFormFieldKind::Text, &["cli"]);
+    add_dir.placeholder = "/extra/writable/dir".into();
+    add_dir.hint = "additional writable directory".into();
+    add_dir.mono = true;
+    add_dir.wide = true;
+    fields.push(add_dir);
+
+    // ---- api:anthropic ----
+    fields.push(sel_field(
+        "thinking",
+        "Thinking",
+        &["api:anthropic"],
+        opts(&[("", "— default —"), ("adaptive", "adaptive"), ("disabled", "disabled")]),
+        "extended-thinking mode",
+    ));
+
+    // ---- api:openai ----
+    fields.push(num_field("frequency_penalty", "Frequency penalty", &["api:openai"], "-2.0 – 2.0", ""));
+    fields.push(num_field(
+        "presence_penalty",
+        "Presence penalty",
+        &["api:openai", "api:monshoot"],
+        "-2.0 – 2.0",
+        "",
+    ));
+    fields.push(sel_field(
+        "response_format",
+        "Response format",
+        &["api:openai", "api:monshoot"],
+        opts(&[
+            ("", "— default —"),
+            ("text", "text"),
+            ("json_object", "json_object"),
+            ("json_schema", "json_schema"),
+        ]),
+        "structured output",
+    ));
+
+    // ---- api:gemini ----
+    fields.push(num_field(
+        "thinking_budget",
+        "Thinking budget",
+        &["api:gemini"],
+        "tokens",
+        "thinkingConfig budget",
+    ));
+
+    // ---- api:ollama ----
+    fields.push(num_field("num_ctx", "Context size", &["api:ollama"], "e.g. 8192", "context window (num_ctx)"));
+    fields.push(num_field("repeat_penalty", "Repeat penalty", &["api:ollama"], "e.g. 1.1", ""));
+    fields.push(num_field("min_p", "Min-p", &["api:ollama"], "0.0 – 1.0", ""));
+    fields.push(txt_field(
+        "keep_alive",
+        "Keep alive",
+        &["api:ollama"],
+        "5m / -1",
+        "how long to keep the model loaded",
+    ));
+    fields.push(chk_field("think", "Thinking", &["api:ollama"]));
+    fields.push(sel_field(
+        "format",
+        "Response format",
+        &["api:ollama"],
+        opts(&[("", "— default —"), ("json", "json")]),
+        "structured output",
+    ));
+
+    // ---- api sampling (backend-scoped) ----
+    // temperature is left OFF the backends where a non-default value 400s: Anthropic current
+    // models, OpenAI o-series/gpt-5, and Monshoot kimi-k2.6 (verified). It stays only where it's
+    // a normal knob — Gemini and Ollama.
+    fields.push(num_field("temperature", "Temperature", &["api:gemini", "api:ollama"], "0.0 – 2.0", ""));
+    fields.push(num_field(
+        "top_p",
+        "Top-p",
+        &["api:openai", "api:gemini", "api:monshoot", "api:ollama"],
+        "0.0 – 1.0",
+        "",
+    ));
+    fields.push(num_field("top_k", "Top-k", &["api:gemini", "api:ollama"], "e.g. 40", ""));
+    fields.push(num_field(
+        "seed",
+        "Seed",
+        &["api:openai", "api:gemini", "api:ollama"],
+        "e.g. 42",
+        "deterministic sampling",
+    ));
+
+    // ---- api:* shared ----
+    let mut max_tokens =
+        field_kinds("max_tokens", "Max output tokens", AgentFormFieldKind::Number, &["api"]);
+    max_tokens.placeholder = "e.g. 4096".into();
+    max_tokens.hint = "maps to each provider's output-cap field".into();
+    max_tokens.numeric = true;
+    fields.push(max_tokens);
+
+    let mut stop = field_kinds("stop", "Stop sequences", AgentFormFieldKind::Text, &["api"]);
+    stop.placeholder = "comma-separated".into();
+    stop.hint = "stop generation on these strings".into();
+    stop.mono = true;
+    stop.wide = true;
+    fields.push(stop);
 
     let mut max_turns = agent_field("max_turns", "Max turns", AgentFormFieldKind::Number);
     max_turns.placeholder = "optional".into();
+    max_turns.hint = "harness cap on agent turns per run".into();
     max_turns.numeric = true;
     fields.push(max_turns);
 
-    let mut role = agent_field("role", "Role", AgentFormFieldKind::Text);
-    role.placeholder = "solver / planner / triager".into();
-    fields.push(role);
-
-    let mut api_key_env = agent_field("api_key_env", "API key env", AgentFormFieldKind::Text);
+    let mut api_key_env =
+        field_kinds("api_key_env", "API key env", AgentFormFieldKind::Text, &["api"]);
     api_key_env.placeholder = "OPENAI_API_KEY".into();
     api_key_env.hint = "environment variable read by this backend".into();
-    api_key_env.backend_kinds = strings(&["api"]);
     api_key_env.mono = true;
     fields.push(api_key_env);
 
-    let mut base_url = agent_field("base_url", "Base URL", AgentFormFieldKind::Text);
-    base_url.placeholder = "http://localhost:11434".into();
-    base_url.backend_ids = strings(&["api:ollama"]);
+    let mut base_url = field_kinds("base_url", "Base URL", AgentFormFieldKind::Text, &["api"]);
+    base_url.placeholder = "provider endpoint override".into();
+    base_url.hint = "e.g. https://api.moonshot.ai/v1 · http://localhost:11434".into();
     base_url.mono = true;
     base_url.wide = true;
     fields.push(base_url);
 
-    fields.push(agent_field(
-        "starred",
-        "Starred",
-        AgentFormFieldKind::Checkbox,
-    ));
+    // ---- always shown ----
+    fields.push(agent_field("starred", "Starred", AgentFormFieldKind::Checkbox));
 
     let mut tags = agent_field("tags", "Tags", AgentFormFieldKind::Text);
     tags.placeholder = "comma-separated (dispatch / filtering)".into();
     tags.wide = true;
     fields.push(tags);
 
-    let mut tools = agent_field("tools", "Tool scope", AgentFormFieldKind::Text);
-    tools.placeholder = "adi-mcp features, e.g. tasks,files[read]".into();
-    tools.hint = "which adi-mcp tools this agent may use".into();
+    let mut tools = agent_field("tools", "CLI commands", AgentFormFieldKind::Text);
+    tools.placeholder = "tasks,projects,agents".into();
+    tools.hint = "which adi-mono command groups this agent may use".into();
     tools.mono = true;
     tools.wide = true;
     fields.push(tools);
@@ -1065,7 +1281,7 @@ fn agent_form_spec() -> AgentFormSpec {
                 "api:monshoot",
                 "Monshoot (API)",
                 "api",
-                "kimi-k2.6 / kimi-k2",
+                "kimi-k2.6 / kimi-k2.5 / kimi-k2.7-code",
             ),
             agent_backend(
                 "api:ollama",
@@ -1115,6 +1331,62 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|v| (*v).to_string()).collect()
 }
 
+/// A field visible only for specific backend ids (e.g. `cli:claude`).
+fn field_ids(name: &str, label: &str, kind: AgentFormFieldKind, ids: &[&str]) -> AgentFormField {
+    let mut f = agent_field(name, label, kind);
+    f.backend_ids = strings(ids);
+    f
+}
+
+/// A field visible for whole backend kinds (`cli` / `api`).
+fn field_kinds(name: &str, label: &str, kind: AgentFormFieldKind, kinds: &[&str]) -> AgentFormField {
+    let mut f = agent_field(name, label, kind);
+    f.backend_kinds = strings(kinds);
+    f
+}
+
+/// A select field scoped to backend ids, with a hint.
+fn sel_field(
+    name: &str,
+    label: &str,
+    ids: &[&str],
+    options: Vec<AgentFormOption>,
+    hint: &str,
+) -> AgentFormField {
+    let mut f = field_ids(name, label, AgentFormFieldKind::Select, ids);
+    f.options = options;
+    f.hint = hint.into();
+    f
+}
+
+/// A numeric field scoped to backend ids.
+fn num_field(name: &str, label: &str, ids: &[&str], placeholder: &str, hint: &str) -> AgentFormField {
+    let mut f = field_ids(name, label, AgentFormFieldKind::Number, ids);
+    f.placeholder = placeholder.into();
+    f.hint = hint.into();
+    f.numeric = true;
+    f
+}
+
+/// A monospace text field scoped to backend ids.
+fn txt_field(name: &str, label: &str, ids: &[&str], placeholder: &str, hint: &str) -> AgentFormField {
+    let mut f = field_ids(name, label, AgentFormFieldKind::Text, ids);
+    f.placeholder = placeholder.into();
+    f.hint = hint.into();
+    f.mono = true;
+    f
+}
+
+/// A checkbox scoped to backend ids (stored as a `"true"` string in `extra`).
+fn chk_field(name: &str, label: &str, ids: &[&str]) -> AgentFormField {
+    field_ids(name, label, AgentFormFieldKind::Checkbox, ids)
+}
+
+/// Build a select-option list from `(value, label)` pairs.
+fn opts(pairs: &[(&str, &str)]) -> Vec<AgentFormOption> {
+    pairs.iter().map(|&(v, l)| agent_option(v, l)).collect()
+}
+
 /// Map an agent-store error to an HTTP status: bad name → 400, missing → 404, else 500.
 fn agent_error(e: &AgentStoreError) -> (u16, String) {
     let status = match e {
@@ -1148,7 +1420,9 @@ fn bad_agent_ref() -> (u16, String) {
 
 /// Trim a string, dropping it entirely when blank (so an empty optional field clears).
 fn clean(value: Option<String>) -> Option<String> {
-    value.map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    value
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Trim dynamic backend parameters and drop empty or unsafe keys.
@@ -1494,14 +1768,25 @@ mod tests {
 
         let fields = v["form"]["fields"].as_array().unwrap();
         assert!(fields.iter().any(|f| f["name"] == "api_key_env"));
+        // permission_mode is now Claude-only (Codex uses sandbox / approval instead).
         assert!(fields.iter().any(|f| {
             f["name"] == "permission_mode"
-                && f["backend_kinds"]
+                && f["backend_ids"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|kind| kind == "cli")
+                    .any(|id| id == "cli:claude")
         }));
+        // Newly exposed backend-specific params are present.
+        for name in ["effort", "sandbox", "approval", "thinking", "num_ctx", "max_tokens"] {
+            assert!(fields.iter().any(|f| f["name"] == name), "missing field {name}");
+        }
+        // Temperature now applies only where a non-default value is safe (Gemini, Ollama) — not
+        // the reasoning / current-model backends where it 400s.
+        let temperature = fields.iter().find(|f| f["name"] == "temperature").unwrap();
+        let temp_ids = temperature["backend_ids"].as_array().unwrap();
+        assert!(temp_ids.iter().any(|id| id == "api:ollama"));
+        assert!(!temp_ids.iter().any(|id| id == "api:anthropic"));
     }
 
     #[test]
@@ -1513,8 +1798,8 @@ mod tests {
                 "name":"api-solver",
                 "backend":"api:openai",
                 "extra":{
-                    "role":" solver ",
                     "api_key_env":" OPENAI_API_KEY ",
+                    "base_url":" http://localhost:11434 ",
                     "bad key":"drop",
                     "empty":""
                 }
@@ -1523,8 +1808,8 @@ mod tests {
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
         let agent = &v["agents"].as_array().unwrap()[0];
-        assert_eq!(agent["extra"]["role"], "solver");
         assert_eq!(agent["extra"]["api_key_env"], "OPENAI_API_KEY");
+        assert_eq!(agent["extra"]["base_url"], "http://localhost:11434");
         assert!(agent["extra"]["bad key"].is_null());
         assert!(agent["extra"]["empty"].is_null());
     }

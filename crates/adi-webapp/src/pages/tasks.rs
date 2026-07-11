@@ -1,25 +1,26 @@
-//! The Tasks page: a read-only view of the task tree (`~/.adi/mono/mcp/tasks.json`), shared with
-//! the `adi-task` CLI and the `tasks_*` MCP tools. Stat tiles plus a nested table; mutations stay
-//! in the CLI/MCP surface (only create is exposed here).
+//! The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`). Stat tiles plus a
+//! nested table; deeper mutations stay in the `adi-mono tasks ...` CLI surface.
 
-use adi_webapp_api::types::{NewTask, TaskRow, TasksState};
+use adi_webapp_api::types::{NewTask, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
-    TextField, apply_mutation, data_table, flash_view, placeholder_row, tile, updated_text,
+    TextField, apply_mutation, data_table, effective_label_title, flash_view, placeholder_row,
+    task_tree_rows, tile, updated_text,
 };
 
-/// The Tasks page: a read-only view of the task tree (`~/.adi/mono/mcp/tasks.json`), shared with
-/// the `adi-task` CLI and the `tasks_*` MCP tools. Stat tiles plus a nested table; mutations stay
-/// in the CLI/MCP surface.
+/// The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`). Stat tiles plus a
+/// nested table; deeper mutations stay in the `adi-mono tasks ...` CLI surface.
 pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
     let tasks = state.tasks;
+    let projects = state.projects;
     let secs_since = state.secs_since;
     let flash = state.flash;
     let TasksForm {
         title,
+        project,
         parent,
         tag,
         details,
@@ -47,7 +48,7 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
             </div>
 
-            {data_table(&["Task", "ID", "Tag", "Status", "Subtasks"], move || task_rows(tasks))}
+            {data_table(&["Task", "ID", "Project", "Tag", "Status", "Subtasks"], move || task_rows(tasks))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let t = title.get().trim().to_string();
@@ -58,10 +59,11 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 let det = details.get().trim().to_string();
                 let par = parent.get().trim().to_string();
                 let tg = tag.get().trim().to_string();
+                let proj = project.get().trim().to_string();
                 let body = NewTask {
                     title: t.clone(),
                     details: (!det.is_empty()).then_some(det),
-                    project: None,
+                    project: (!proj.is_empty()).then_some(proj),
                     tag: (!tg.is_empty()).then_some(tg),
                     parent: (!par.is_empty()).then_some(par),
                 };
@@ -69,11 +71,27 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 details.set(String::new());
                 parent.set(String::new());
                 tag.set(String::new());
+                // Keep the project selected — filing several tasks under one project is common.
                 apply_tasks(state, Some(busy), format!("Created task “{t}”."),
                     fetch::create_task(body));
             }>
                 <TextField id="task-title" label="Title" placeholder="What needs doing?" wide=true
                     field_style="flex:1 1 220px; min-width:0" value=title />
+                <div class="adi-field">
+                    <label class="adi-field__label" for="task-project">"Project"</label>
+                    <select class="adi-input" id="task-project"
+                        prop:value=move || project.get()
+                        on:change=move |ev| project.set(event_target_value(&ev))>
+                        <option value="">"— none —"</option>
+                        {move || projects.get().map(|p| p.projects.into_iter()
+                            .filter(|proj| !proj.is_archived())
+                            .map(|proj| {
+                                let id = proj.id.clone();
+                                let label = if proj.name == proj.id { proj.id.clone() } else { format!("{} · {}", proj.id, proj.name) };
+                                view! { <option value=id>{label}</option> }
+                            }).collect::<Vec<_>>()).unwrap_or_default()}
+                    </select>
+                </div>
                 <div class="adi-field">
                     <label class="adi-field__label" for="task-parent">"Parent (subtask of)"</label>
                     <select class="adi-input" id="task-parent"
@@ -97,8 +115,8 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
             </form>
             {flash_view(flash)}
             <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
-                "Completing, archiving, editing, and deleting stay in the " <code>"adi-task"</code>
-                " CLI and the " <code>"tasks_*"</code> " MCP tools."
+                "Completing, archiving, editing, and deleting stay in the "
+                <code>"adi-mono tasks"</code> " CLI."
             </div>
         </section>
     }
@@ -127,12 +145,12 @@ where
 /// (a parent immediately followed by its subtree), each indented by its depth.
 fn task_rows(tasks: RwSignal<Option<TasksState>>) -> AnyView {
     let Some(state_tasks) = tasks.get() else {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row("6", "Loading…");
     };
     if state_tasks.tasks.is_empty() {
         return placeholder_row(
-            "5",
-            "No tasks yet — add one below, or use the adi-task CLI or the tasks_create MCP tool.",
+            "6",
+            "No tasks yet — add one below, or use the adi-mono tasks add CLI command.",
         );
     }
 
@@ -147,6 +165,12 @@ fn task_rows(tasks: RwSignal<Option<TasksState>>) -> AnyView {
             };
             let details = t.details.unwrap_or_default();
             let label = effective_label_title(&t.effective);
+            let project_cell = match t.project {
+                Some(p) if !p.trim().is_empty() => {
+                    view! { <span class="adi-chip adi-mono">{p}</span> }.into_any()
+                }
+                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
+            };
             let tag_cell = match t.tag {
                 Some(tg) if !tg.trim().is_empty() => {
                     view! { <span class="adi-chip adi-mono">{tg}</span> }.into_any()
@@ -157,6 +181,7 @@ fn task_rows(tasks: RwSignal<Option<TasksState>>) -> AnyView {
                 <tr>
                     <td title=details><span style=indent>{t.title}</span></td>
                     <td class="adi-mono adi-muted">{t.id}</td>
+                    <td>{project_cell}</td>
                     <td>{tag_cell}</td>
                     <td><span class="adi-tstatus" data-status=t.effective>{label}</span></td>
                     <td class="adi-mono adi-muted">{subtasks}</td>
@@ -165,53 +190,4 @@ fn task_rows(tasks: RwSignal<Option<TasksState>>) -> AnyView {
         })
         .collect::<Vec<_>>()
         .into_any()
-}
-
-/// Flatten the flat task list into depth-annotated tree order: each task is immediately followed
-/// by its subtree (children in their incoming order). A task whose `parent` isn't in the set is
-/// treated as a root, so no task is ever dropped.
-fn task_tree_rows(rows: Vec<TaskRow>) -> Vec<(usize, TaskRow)> {
-    use std::collections::{HashMap, HashSet};
-
-    let ids: HashSet<String> = rows.iter().map(|r| r.id.clone()).collect();
-    let mut children: HashMap<String, Vec<TaskRow>> = HashMap::new();
-    let mut roots: Vec<TaskRow> = Vec::new();
-    for r in rows {
-        match &r.parent {
-            Some(p) if ids.contains(p) => children.entry(p.clone()).or_default().push(r),
-            _ => roots.push(r),
-        }
-    }
-
-    fn walk(
-        node: TaskRow,
-        depth: usize,
-        children: &mut HashMap<String, Vec<TaskRow>>,
-        out: &mut Vec<(usize, TaskRow)>,
-    ) {
-        let id = node.id.clone();
-        out.push((depth, node));
-        if let Some(kids) = children.remove(&id) {
-            for kid in kids {
-                walk(kid, depth + 1, children, out);
-            }
-        }
-    }
-
-    let mut out = Vec::new();
-    for root in roots {
-        walk(root, 0, &mut children, &mut out);
-    }
-    out
-}
-
-/// The capitalized display label for a computed effective status.
-fn effective_label_title(effective: &str) -> &'static str {
-    match effective {
-        "ready" => "Ready",
-        "blocked" => "Blocked",
-        "done" => "Done",
-        "archived" => "Archived",
-        _ => "—",
-    }
 }

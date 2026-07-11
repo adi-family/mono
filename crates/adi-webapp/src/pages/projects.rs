@@ -1,7 +1,7 @@
 //! The Projects page: the registry of project metadata manifests, with a create form and
 //! per-project archive/restore controls.
 
-use adi_webapp_api::types::{NewProject, Project, ProjectsState};
+use adi_webapp_api::types::{NewProject, Project, ProjectsState, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
@@ -49,7 +49,7 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                 {segmented("Filter projects", show_archived, "Active", "All")}
             </div>
 
-            {data_table(&["Name", "ID", "Created", "Status", ""],
+            {data_table(&["Name", "ID", "Tasks", "Created", "Status", ""],
                 move || project_rows(state, show_archived, route))}
 
             <form class="adi-form" on:submit=move |ev| {
@@ -91,8 +91,9 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
 /// page; the trailing action archives/restores it.
 fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Route>) -> AnyView {
     let Some(state_projects) = state.projects.get() else {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row("6", "Loading…");
     };
+    let tasks = state.tasks.get();
     let show_all = show_archived.get();
     let rows: Vec<Project> = state_projects
         .projects
@@ -106,7 +107,7 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
         } else {
             "No active projects. Add one below, or switch to All to see archived ones."
         };
-        return placeholder_row("5", msg);
+        return placeholder_row("6", msg);
     }
 
     rows.into_iter()
@@ -141,6 +142,7 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
             let title = p.description.clone().unwrap_or_default();
             let open_id = id.clone();
             let href = format!("/projects/{id}");
+            let tasks_cell = task_count_cell(tasks.as_ref(), &p.id);
             view! {
                 <tr>
                     <td title=title>
@@ -152,6 +154,7 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
                             }>{p.name}</a>
                     </td>
                     <td class="adi-mono">{p.id}</td>
+                    <td>{tasks_cell}</td>
                     <td class="adi-mono adi-muted">{created}</td>
                     <td>{status}</td>
                     <td style="text-align:right">{action}</td>
@@ -160,6 +163,31 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// The Tasks-column cell for a project: `<open> open` (with the total in the tooltip) when it has
+/// tasks, else a muted em dash. `None` tasks (still loading) also renders the dash.
+fn task_count_cell(tasks: Option<&TasksState>, project_id: &str) -> AnyView {
+    let Some(tasks) = tasks else {
+        return view! { <span class="adi-muted">"—"</span> }.into_any();
+    };
+    let mine = tasks
+        .tasks
+        .iter()
+        .filter(|t| t.project.as_deref() == Some(project_id));
+    let mut open = 0usize;
+    let mut total = 0usize;
+    for t in mine {
+        total += 1;
+        if t.status == "open" {
+            open += 1;
+        }
+    }
+    if total == 0 {
+        return view! { <span class="adi-muted">"—"</span> }.into_any();
+    }
+    let tip = format!("{open} open · {total} total");
+    view! { <span class="adi-chip adi-mono" title=tip>{format!("{open} open")}</span> }.into_any()
 }
 
 /// Run a projects mutation: set the returned state and a success flash, or an error flash;

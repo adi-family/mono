@@ -15,7 +15,8 @@ A Rust monorepo. All crates live under [`crates/`](crates/) and share one
     ├── adi-cli/           # the `adi-mono` binary — a thin argv adapter over adi-core
     ├── adi-dns/           # the local DNS resolver (split-DNS overrides + forwarding)
     ├── adi-hive/          # reverse proxy / .adi front door + runs & supervises service runners
-    ├── adi-mcp/           # MCP server: exposes adi tools (tasks, projects, files, status) to agents over stdio; groups or specific tools picked via --features "tasks[create,list],…"
+    ├── adi-agents/        # agent definitions stored under ~/.adi/mono/agents
+    ├── adi-tasks/         # task tree stored under ~/.adi/mono/tasks
     ├── adi-mesh/          # peer-to-peer port forwarding over iroh: expose allow-listed local ports to peers
     ├── adi-ports-manager/ # port allocator: collision-free static + dynamic ports (library)
     └── adi-app/           # the adi app served at app.adi: control-panel SPA + Rust /api backend

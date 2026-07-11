@@ -3,14 +3,14 @@
 //! task's effective status and validate tree edits. None of this touches disk; the [`Tasks`]
 //! store in [`crate`] owns I/O.
 
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A task's *stored* lifecycle state — the only status written to disk. Legacy names from the
 /// previous model are accepted on read (via serde aliases) so old `tasks.json` files still load.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     /// Not yet finished (covers legacy `pending` / `in_progress`).
@@ -24,7 +24,7 @@ pub enum TaskStatus {
 }
 
 /// A task's *computed* status, derived from its stored status and direct children. Never stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectiveStatus {
     /// Open with no open direct child — actionable now.
@@ -103,11 +103,16 @@ impl TaskView {
     }
 }
 
-/// The on-disk document: a monotonic id counter plus the task list.
+/// The on-disk document: the id counters plus the task list. `next_id` numbers project-less tasks
+/// (the legacy `t<n>` scheme); `seq` holds a per-project-key high-water mark so project-scoped
+/// tasks get stable, never-reused Jira-style `<KEY>-<n>` ids (a deleted top task's number is not
+/// handed out again).
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(crate) struct TasksDoc {
     #[serde(default)]
     pub(crate) next_id: u64,
+    #[serde(default)]
+    pub(crate) seq: BTreeMap<String, u64>,
     #[serde(default)]
     pub(crate) tasks: Vec<Task>,
 }
@@ -143,8 +148,13 @@ pub(crate) enum ParentChange {
 // ---- derivation (pure, over the full task list) ----------------------------------------
 
 /// The direct children of `id` in `tasks` (those whose `parent` equals `id`).
-pub(crate) fn direct_children<'a>(tasks: &'a [Task], id: &'a str) -> impl Iterator<Item = &'a Task> {
-    tasks.iter().filter(move |t| t.parent.as_deref() == Some(id))
+pub(crate) fn direct_children<'a>(
+    tasks: &'a [Task],
+    id: &'a str,
+) -> impl Iterator<Item = &'a Task> {
+    tasks
+        .iter()
+        .filter(move |t| t.parent.as_deref() == Some(id))
 }
 
 /// The computed status of `task` given the full task list: `archived`/`done` mirror the stored
@@ -184,9 +194,36 @@ pub(crate) fn would_cycle(tasks: &[Task], task_id: &str, new_parent: &str) -> bo
         if pid == task_id {
             return true;
         }
-        cursor = tasks.iter().find(|t| t.id == pid).and_then(|t| t.parent.clone());
+        cursor = tasks
+            .iter()
+            .find(|t| t.id == pid)
+            .and_then(|t| t.parent.clone());
     }
     false
+}
+
+/// The Jira-style key for a project id: its uppercase form (`my-app` → `MY-APP`). A project's
+/// task ids are `<KEY>-<n>`, so the key is what groups them and gives the shared human-readable
+/// prefix. Deriving it from the id keeps keys unique without a separate stored field.
+pub(crate) fn project_key(project: &str) -> String {
+    project.trim().to_ascii_uppercase()
+}
+
+/// The trailing number of a `<KEY>-<n>` id whose prefix is exactly `key`, or `None` when it isn't
+/// one of that key's ids (the legacy `t<n>` ids and other keys' ids never match).
+fn id_num(id: &str, key: &str) -> Option<u64> {
+    id.strip_prefix(key)?.strip_prefix('-')?.parse().ok()
+}
+
+/// The highest task number already in use under `key`, or 0 if none — seeds the per-key counter
+/// so ids stay unique even for tasks created before the counter existed (or under a case-variant
+/// project id that maps to the same key).
+pub(crate) fn max_num_for_key(tasks: &[Task], key: &str) -> u64 {
+    tasks
+        .iter()
+        .filter_map(|t| id_num(&t.id, key))
+        .max()
+        .unwrap_or(0)
 }
 
 /// The current time as Unix epoch seconds (0 if the clock predates the epoch).

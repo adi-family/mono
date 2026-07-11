@@ -10,7 +10,7 @@ use crate::error::{Error, Result};
 
 /// A reusable, backend-agnostic agent definition — the stored spec from docs/adi-agents.md §5,
 /// minus the orchestration/run machinery (which is future work). It says *what* an agent is
-/// (which engine, which system prompt, which tools, which knobs), not how to run it.
+/// (which engine, which system prompt, which CLI commands, which knobs), not how to run it.
 ///
 /// Unknown fields are ignored so the manifest can gain fields without breaking older stores.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
@@ -21,7 +21,8 @@ pub struct AgentManifest {
     /// The system prompt seeding the agent (the resolved prompt body). May be empty.
     #[serde(default)]
     pub system_prompt: String,
-    /// The tool scope: an `adi-mcp --features` selection string, e.g. `tasks,files[read]`.
+    /// The CLI command scope this agent may use, e.g. `tasks,projects`. This is stored in the
+    /// historical `tools` field for compatibility with existing manifests.
     #[serde(default)]
     pub tools: String,
     /// Backend-specific model alias, e.g. `opus`/`sonnet` (claude), `gpt-5-codex` (codex).

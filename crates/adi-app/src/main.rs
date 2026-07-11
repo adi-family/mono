@@ -207,11 +207,14 @@ async fn handle(
         // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
         // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
         ("GET", p) if p.starts_with("/api/projects/") => {
-            let listening: Vec<u16> = scan::listening_ports().into_iter().map(|u| u.port).collect();
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
             handlers::project_detail(projects, &p["/api/projects/".len()..], &listening)
         }
-        // Tasks: the task tree (~/.adi/mono/mcp/tasks.json), shared with the adi-mcp `tasks_*`
-        // tools and the `adi-task` CLI. Create returns the fresh tree so the panel refreshes.
+        // Tasks: the task tree (~/.adi/mono/tasks/tasks.json). The CLI is the write-oriented
+        // command center; create returns the fresh tree so the panel refreshes.
         ("GET", "/api/tasks") => handlers::tasks(tasks),
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
         // Agents: AgentDef definitions (~/.adi/mono/agents). Create/edit/delete only — no

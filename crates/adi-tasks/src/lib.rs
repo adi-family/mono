@@ -1,5 +1,5 @@
 //! adi-tasks — the adi task tree: a pure library (no CLI, no daemon) over the shared
-//! [`adi_config`] store. State is one JSON document (`tasks.json`) under the `mcp` module dir of
+//! [`adi_config`] store. State is one JSON document (`tasks.json`) under the `tasks` module dir of
 //! `~/.adi/mono`, so tasks survive across processes; every method opens the store fresh and
 //! writes atomically (via the configurator's temp-then-rename).
 //!
@@ -38,15 +38,18 @@ pub use error::{Error, Result};
 pub use task::{EffectiveStatus, Task, TaskPatch, TaskStatus, TaskView};
 
 use task::{
-    ParentChange, TasksDoc, clean, descendants, now_unix, would_cycle,
+    ParentChange, TasksDoc, clean, descendants, max_num_for_key, now_unix, project_key, would_cycle,
 };
 
-/// The config module (`~/.adi/mono/mcp`) the tracker persists under.
-const MODULE: &str = "mcp";
+/// The config module (`~/.adi/mono/tasks`) the tracker persists under.
+const MODULE: &str = "tasks";
+/// Legacy module name used by the old task store location. Loaded once and copied forward so
+/// existing task trees keep working.
+const LEGACY_MODULE: &str = "mcp";
 /// The tracker's on-disk document.
 const TASKS_FILE: &str = "tasks.json";
 
-/// The task tree store: reads and writes the `tasks.json` document under the `mcp` module dir.
+/// The task tree store: reads and writes the `tasks.json` document under the `tasks` module dir.
 /// Cheap to clone; all state is on disk.
 #[derive(Debug, Clone)]
 pub struct Tasks {
@@ -80,21 +83,34 @@ impl Tasks {
         &self.config
     }
 
-    /// The `mcp` module directory: `~/.adi/mono/mcp` (where `tasks.json` lives).
+    /// The `tasks` module directory: `~/.adi/mono/tasks` (where `tasks.json` lives).
     #[must_use]
     pub fn dir(&self) -> PathBuf {
         self.module().dir().to_path_buf()
     }
 
-    /// The `mcp` config module handle.
+    /// The `tasks` config module handle.
     fn module(&self) -> Module {
         self.config.module(MODULE)
+    }
+
+    /// The pre-removal storage location (`~/.adi/mono/mcp/tasks.json`), read only as a migration
+    /// source when the current task file does not exist yet.
+    fn legacy_module(&self) -> Module {
+        self.config.module(LEGACY_MODULE)
     }
 
     fn load(&self) -> anyhow::Result<TasksDoc> {
         match self.module().read_raw(TASKS_FILE)? {
             Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
-            None => Ok(TasksDoc::default()),
+            None => match self.legacy_module().read_raw(TASKS_FILE)? {
+                Some(bytes) => {
+                    let doc = serde_json::from_slice(&bytes)?;
+                    self.save(&doc)?;
+                    Ok(doc)
+                }
+                None => Ok(TasksDoc::default()),
+            },
         }
     }
 
@@ -105,6 +121,11 @@ impl Tasks {
     }
 
     /// Create a new `open` task. If `parent` is given (and non-blank) it must already exist.
+    ///
+    /// The new task's id follows its project: a project-scoped task gets a Jira-style `<KEY>-<n>`
+    /// id (`KEY` is the uppercased project id, `n` a per-key counter); a project-less task keeps
+    /// the legacy global `t<n>` id. When no project is given but a parent is, the task inherits
+    /// the parent's project so a subtask shares the parent's key.
     ///
     /// # Errors
     /// [`Error::ParentMissing`] for an unknown parent id, or [`Error::Store`] on an I/O failure.
@@ -123,21 +144,45 @@ impl Tasks {
         {
             return Err(Error::ParentMissing(pid.to_string()));
         }
-        doc.next_id += 1;
+        // An explicit project wins; otherwise a subtask inherits its parent's project so it
+        // lands under the same Jira key.
+        let mut project = clean(project);
+        if project.is_none()
+            && let Some(pid) = parent.as_deref()
+        {
+            project = doc
+                .tasks
+                .iter()
+                .find(|t| t.id == pid)
+                .and_then(|t| t.project.clone());
+        }
+        let id = match project.as_deref() {
+            Some(p) => {
+                let key = project_key(p);
+                // Seed the counter from any existing ids so it never collides, then take the next.
+                let seed = max_num_for_key(&doc.tasks, &key);
+                let n = doc.seq.entry(key.clone()).or_insert(seed);
+                *n += 1;
+                format!("{key}-{n}")
+            }
+            None => {
+                doc.next_id += 1;
+                format!("t{}", doc.next_id)
+            }
+        };
         let now = now_unix();
         let task = Task {
-            id: format!("t{}", doc.next_id),
+            id: id.clone(),
             title,
             details: clean(details),
             status: TaskStatus::Open,
-            project: clean(project),
+            project,
             parent,
             tag: clean(tag),
             assignee: None,
             created_at: now,
             updated_at: now,
         };
-        let id = task.id.clone();
         doc.tasks.push(task);
         self.save(&doc)?;
         view_of(&doc, &id)
@@ -373,24 +418,132 @@ mod tests {
     }
 
     #[test]
+    fn project_tasks_get_jira_ids_with_per_key_counters() {
+        let store = scratch("jira");
+        let a = store
+            .create("a".into(), None, Some("demo".into()), None, None)
+            .expect("create");
+        let b = store
+            .create("b".into(), None, Some("demo".into()), None, None)
+            .expect("create");
+        // Uppercased project id is the key; the counter is per key.
+        assert_eq!(a.task.id, "DEMO-1");
+        assert_eq!(b.task.id, "DEMO-2");
+        // A different project starts its own sequence.
+        let c = store
+            .create("c".into(), None, Some("my-app".into()), None, None)
+            .expect("create");
+        assert_eq!(c.task.id, "MY-APP-1");
+        // Project-less tasks still use the legacy global scheme.
+        let d = store
+            .create("d".into(), None, None, None, None)
+            .expect("create");
+        assert_eq!(d.task.id, "t1");
+    }
+
+    #[test]
+    fn subtask_inherits_parent_project_and_key() {
+        let store = scratch("inherit");
+        let root = store
+            .create("root".into(), None, Some("demo".into()), None, None)
+            .expect("create");
+        assert_eq!(root.task.id, "DEMO-1");
+        // No project given, but the parent is in `demo` — the child lands under DEMO too.
+        let child = store
+            .create("child".into(), None, None, None, Some("DEMO-1".into()))
+            .expect("create");
+        assert_eq!(child.task.id, "DEMO-2");
+        assert_eq!(child.task.project.as_deref(), Some("demo"));
+    }
+
+    #[test]
+    fn deleting_the_top_task_does_not_reuse_its_number() {
+        let store = scratch("noreuse");
+        store
+            .create("a".into(), None, Some("demo".into()), None, None)
+            .expect("create");
+        store
+            .create("b".into(), None, Some("demo".into()), None, None)
+            .expect("create");
+        store.delete("DEMO-2").expect("delete");
+        // The counter persists, so the next id is DEMO-3, not a reused DEMO-2.
+        let c = store
+            .create("c".into(), None, Some("demo".into()), None, None)
+            .expect("create");
+        assert_eq!(c.task.id, "DEMO-3");
+    }
+
+    #[test]
+    fn legacy_task_file_is_copied_to_the_tasks_module() {
+        let store = scratch("legacy");
+        store
+            .config()
+            .module("mcp")
+            .write_raw(
+                "tasks.json",
+                br#"{
+                  "next_id": 1,
+                  "tasks": [{
+                    "id": "t1",
+                    "title": "legacy task",
+                    "status": "open",
+                    "created_at": 1,
+                    "updated_at": 1
+                  }]
+                }"#,
+            )
+            .expect("write legacy task file");
+
+        let tasks = store
+            .list(None, None, None, None)
+            .expect("load from legacy task file");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task.title, "legacy task");
+        assert!(
+            store
+                .config()
+                .module("tasks")
+                .read_raw("tasks.json")
+                .expect("read migrated task file")
+                .is_some(),
+            "loading the legacy file should materialize the new task file"
+        );
+    }
+
+    #[test]
     fn effective_status_derives_from_direct_children() {
         let store = scratch("effective");
         mk(&store, "root", None);
         mk(&store, "child", Some("t1"));
         // The parent is blocked while its child is open.
-        assert_eq!(store.get("t1").expect("get").effective, EffectiveStatus::Blocked);
+        assert_eq!(
+            store.get("t1").expect("get").effective,
+            EffectiveStatus::Blocked
+        );
         store.complete("t2").expect("complete child");
         // With no open child, the parent is ready again.
-        assert_eq!(store.get("t1").expect("get").effective, EffectiveStatus::Ready);
+        assert_eq!(
+            store.get("t1").expect("get").effective,
+            EffectiveStatus::Ready
+        );
     }
 
     #[test]
     fn complete_is_idempotent_and_reopen_restores_open() {
         let store = scratch("complete");
         mk(&store, "task", None);
-        assert_eq!(store.complete("t1").expect("done").task.status, TaskStatus::Done);
-        assert_eq!(store.complete("t1").expect("done again").task.status, TaskStatus::Done);
-        assert_eq!(store.reopen("t1").expect("reopen").task.status, TaskStatus::Open);
+        assert_eq!(
+            store.complete("t1").expect("done").task.status,
+            TaskStatus::Done
+        );
+        assert_eq!(
+            store.complete("t1").expect("done again").task.status,
+            TaskStatus::Done
+        );
+        assert_eq!(
+            store.reopen("t1").expect("reopen").task.status,
+            TaskStatus::Open
+        );
     }
 
     #[test]
@@ -411,7 +564,10 @@ mod tests {
         let done_child = mk(&store, "done-child", Some("t1"));
         store.complete(&done_child.task.id).expect("complete");
         store.archive("t1", true).expect("archive cascade");
-        assert_eq!(store.get("t2").expect("get").task.status, TaskStatus::Archived);
+        assert_eq!(
+            store.get("t2").expect("get").task.status,
+            TaskStatus::Archived
+        );
         // A `done` descendant is left as-is.
         assert_eq!(store.get("t3").expect("get").task.status, TaskStatus::Done);
     }
@@ -436,7 +592,10 @@ mod tests {
         mk(&store, "leaf", Some("t2"));
         store.delete("t2").expect("delete mid");
         // The leaf's parent is now the deleted task's parent (the root).
-        assert_eq!(store.get("t3").expect("get").task.parent.as_deref(), Some("t1"));
+        assert_eq!(
+            store.get("t3").expect("get").task.parent.as_deref(),
+            Some("t1")
+        );
         assert!(matches!(store.get("t2"), Err(Error::NotFound(_))));
     }
 
@@ -446,7 +605,9 @@ mod tests {
         mk(&store, "a", None);
         mk(&store, "b", None);
         store.complete("t2").expect("complete");
-        let open = store.list(None, None, Some(TaskStatus::Open), None).expect("list open");
+        let open = store
+            .list(None, None, Some(TaskStatus::Open), None)
+            .expect("list open");
         assert_eq!(open.len(), 1);
         assert_eq!(open[0].task.id, "t1");
         let done = store

@@ -14,7 +14,6 @@ default-members = [
     "crates/adi-dns",
     "crates/adi-fs",
     "crates/adi-hive",
-    "crates/adi-mcp",
     "crates/adi-mesh",
     "crates/adi-ports-manager",
     "crates/adi-projects",

@@ -95,6 +95,7 @@ fn App() -> impl IntoView {
     // The Tasks page's local create form.
     let tasks_form = TasksForm {
         title: RwSignal::new(String::new()),
+        project: RwSignal::new(String::new()),
         parent: RwSignal::new(String::new()),
         tag: RwSignal::new(String::new()),
         details: RwSignal::new(String::new()),

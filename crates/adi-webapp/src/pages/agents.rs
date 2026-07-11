@@ -1,5 +1,5 @@
 //! The Agents page: create, edit, and delete agent definitions (docs/adi-agents.md §5) — pick a
-//! backend, a system prompt, a tool scope, and backend-specific params. No run/orchestration here;
+//! backend, a system prompt, a CLI command scope, and backend-specific params. No run/orchestration here;
 //! this only edits the stored spec. The form adapts its params to the chosen backend kind.
 
 use std::collections::BTreeMap;
@@ -16,7 +16,7 @@ use crate::state::{AgentsForm, Flash, State};
 use crate::ui::{apply_mutation, data_table, flash_view, placeholder_row, tile, updated_text};
 
 /// The Agents page: create, edit, and delete agent definitions (docs/adi-agents.md §5) — pick a
-/// backend, a system prompt, a tool scope, and backend-specific params. No run/orchestration here;
+/// backend, a system prompt, a CLI command scope, and backend-specific params. No run/orchestration here;
 /// this only edits the stored spec. The form adapts its params to the chosen backend kind.
 pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
     let agents = state.agents;
@@ -86,16 +86,19 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
                     return;
                 }
                 let st = agents.get();
-                let kind = agent_backend_kind_from_state(st.as_ref(), &be)
-                    .unwrap_or_else(|| agent_backend_kind(&be).to_string());
+                // Whether each backend-conditional first-class param applies is driven by the
+                // server schema (does a field of that name apply to this backend?), so rescoping a
+                // field in the API also stops its value being sent for backends it no longer fits.
+                let pm_applies = agent_param_applies(st.as_ref(), &be, "permission_mode");
+                let temp_applies = agent_param_applies(st.as_ref(), &be, "temperature");
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be.clone(),
                     system_prompt: system_prompt.get(),
                     tools: tools.get().trim().to_string(),
                     model: opt_str(model.get()),
-                    permission_mode: if kind == "cli" { opt_str(permission_mode.get()) } else { None },
-                    temperature: if kind == "api" { temperature.get().trim().parse::<f64>().ok() } else { None },
+                    permission_mode: if pm_applies { opt_str(permission_mode.get()) } else { None },
+                    temperature: if temp_applies { temperature.get().trim().parse::<f64>().ok() } else { None },
                     max_turns: max_turns.get().trim().parse::<u32>().ok(),
                     tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                     starred: starred.get(),
@@ -353,8 +356,16 @@ fn selected_backend<'a>(
     backends.iter().find(|b| b.id == backend)
 }
 
-fn agent_backend_kind_from_state(st: Option<&AgentsState>, backend: &str) -> Option<String> {
-    st.and_then(|st| selected_backend(&st.form.backends, backend).map(|b| b.kind.clone()))
+/// Whether the schema exposes a field named `name` for `backend`. The submit uses this to decide
+/// whether a backend-conditional first-class param (`permission_mode` / `temperature`) applies to
+/// the chosen backend, keeping the gating in sync with the server-owned field scoping.
+fn agent_param_applies(st: Option<&AgentsState>, backend: &str, name: &str) -> bool {
+    st.is_some_and(|st| {
+        st.form
+            .fields
+            .iter()
+            .any(|f| f.name == name && field_applies(f, backend))
+    })
 }
 
 fn agent_field_value(form: AgentsForm, name: &str) -> String {

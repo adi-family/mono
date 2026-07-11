@@ -95,13 +95,15 @@ pub(crate) struct ProjectsForm {
     pub(crate) show_archived: RwSignal<bool>,
 }
 
-/// The Tasks page's local signals: the create-form inputs (title, optional parent id, optional
-/// tag, optional details) and a busy flag. The `tag` matters — a tag matching an agent name is
-/// what auto-assigns/auto-starts the task (see docs/adi-agents.md). `Copy` so it threads into
-/// the page view and handlers.
+/// The Tasks page's local signals: the create-form inputs (title, optional project/parent/tag,
+/// optional details) and a busy flag. A tag matching an agent name is the future dispatch hook
+/// (see docs/adi-agents.md). `Copy` so it threads into the page view and handlers.
 #[derive(Clone, Copy)]
 pub(crate) struct TasksForm {
     pub(crate) title: RwSignal<String>,
+    /// The project to file the task under (its id), or empty for a project-less task. A
+    /// project-scoped task gets a Jira-style `<KEY>-<n>` id.
+    pub(crate) project: RwSignal<String>,
     pub(crate) parent: RwSignal<String>,
     pub(crate) tag: RwSignal<String>,
     pub(crate) details: RwSignal<String>,
@@ -213,20 +215,32 @@ pub(crate) async fn load(s: State) {
     }
     // Page-specific data, fetched only where it's shown.
     let path = current_path();
-    if path == Route::Projects.path()
-        && let Ok(p) = fetch::projects().await
-    {
-        s.projects.set(Some(p));
+    if path == Route::Projects.path() {
+        if let Ok(p) = fetch::projects().await {
+            s.projects.set(Some(p));
+        }
+        // The list shows a per-project open-task count, so it needs the task tree too.
+        if let Ok(t) = fetch::tasks().await {
+            s.tasks.set(Some(t));
+        }
     }
-    if let Some(id) = project_id_from_path(&path)
-        && let Ok(d) = fetch::project_detail(&id).await
-    {
-        s.project_detail.set(Some(d));
+    if let Some(id) = project_id_from_path(&path) {
+        if let Ok(d) = fetch::project_detail(&id).await {
+            s.project_detail.set(Some(d));
+        }
+        // The detail page's Tasks panel filters the shared task tree to this project.
+        if let Ok(t) = fetch::tasks().await {
+            s.tasks.set(Some(t));
+        }
     }
-    if path == Route::Tasks.path()
-        && let Ok(t) = fetch::tasks().await
-    {
-        s.tasks.set(Some(t));
+    if path == Route::Tasks.path() {
+        if let Ok(t) = fetch::tasks().await {
+            s.tasks.set(Some(t));
+        }
+        // The create form's project picker is populated from the registered projects.
+        if let Ok(p) = fetch::projects().await {
+            s.projects.set(Some(p));
+        }
     }
     if path == Route::Agents.path()
         && let Ok(a) = fetch::agents().await

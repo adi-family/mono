@@ -1,7 +1,7 @@
 //! adi-agents — reusable agent definitions ([`AgentManifest`]) for the adi platform: a pure
 //! library (no CLI, no daemon, no spawn/run yet) over the shared [`adi_config`] store. Each agent
 //! is one `<name>.toml` file under `~/.adi/mono/agents/`, holding its backend, system prompt, tool
-//! scope, model/params, and role/tags.
+//! command scope, model/params, and tags.
 //!
 //! This is the **definition/store layer** of the larger adi-agents orchestration spec
 //! (docs/adi-agents.md): it owns *what an agent is*, so the control panel can create and edit

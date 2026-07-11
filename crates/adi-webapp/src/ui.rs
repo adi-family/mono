@@ -3,7 +3,7 @@
 //! the generic mutation runner, and the theme toggle live in one place instead of at every call
 //! site.
 
-use adi_webapp_api::types::{PortsState, ServicePort};
+use adi_webapp_api::types::{PortsState, ServicePort, TaskRow};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -195,6 +195,59 @@ pub(crate) fn fmt_ports(ports: &[ServicePort]) -> String {
 /// An optional string for a table cell, falling back to an em dash when it's absent.
 pub(crate) fn dash(value: Option<String>) -> String {
     value.unwrap_or_else(|| "—".to_string())
+}
+
+/// The capitalized display label for a task's computed effective status (`ready`/`blocked`/
+/// `done`/`archived`), used with the `adi-tstatus` pill on both the Tasks page and a project's
+/// detail panel.
+pub(crate) fn effective_label_title(effective: &str) -> &'static str {
+    match effective {
+        "ready" => "Ready",
+        "blocked" => "Blocked",
+        "done" => "Done",
+        "archived" => "Archived",
+        _ => "—",
+    }
+}
+
+/// Flatten a flat task list into depth-annotated tree order: each task is immediately followed by
+/// its subtree (children in their incoming order), so a caller renders one row per task and indents
+/// by the returned depth. A task whose `parent` isn't in the set is treated as a root, so nothing is
+/// ever dropped. Depth is **unbounded** — the tree may nest arbitrarily deep. Shared by the global
+/// Tasks page and a project's detail panel.
+pub(crate) fn task_tree_rows(rows: Vec<TaskRow>) -> Vec<(usize, TaskRow)> {
+    use std::collections::{HashMap, HashSet};
+
+    let ids: HashSet<String> = rows.iter().map(|r| r.id.clone()).collect();
+    let mut children: HashMap<String, Vec<TaskRow>> = HashMap::new();
+    let mut roots: Vec<TaskRow> = Vec::new();
+    for r in rows {
+        match &r.parent {
+            Some(p) if ids.contains(p) => children.entry(p.clone()).or_default().push(r),
+            _ => roots.push(r),
+        }
+    }
+
+    fn walk(
+        node: TaskRow,
+        depth: usize,
+        children: &mut HashMap<String, Vec<TaskRow>>,
+        out: &mut Vec<(usize, TaskRow)>,
+    ) {
+        let id = node.id.clone();
+        out.push((depth, node));
+        if let Some(kids) = children.remove(&id) {
+            for kid in kids {
+                walk(kid, depth + 1, children, out);
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    for root in roots {
+        walk(root, 0, &mut children, &mut out);
+    }
+    out
 }
 
 /// Format a Unix timestamp (seconds) as a `YYYY-MM-DD` UTC date; `0` renders as `—`. Pure

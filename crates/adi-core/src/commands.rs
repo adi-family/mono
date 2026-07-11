@@ -37,6 +37,18 @@ impl Adi {
         adi_projects::Projects::open()
     }
 
+    /// The task tree backed by the standard store — `Adi::new().tasks().list(...)`.
+    #[must_use]
+    pub fn tasks(self) -> adi_tasks::Tasks {
+        adi_tasks::Tasks::open()
+    }
+
+    /// The agent-definition registry backed by the standard store.
+    #[must_use]
+    pub fn agents(self) -> adi_agents::Agents {
+        adi_agents::Agents::open()
+    }
+
     /// Every managed service, in display + apply order. DNS is first so, when enabling, its
     /// `on_enable` migrates the front door (proxy-only) before the control-panel agent
     /// binds the shared port — otherwise the old runner-supervised adi-app would collide
