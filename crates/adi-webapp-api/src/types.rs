@@ -413,6 +413,9 @@ pub struct AgentDto {
     pub tags: Vec<String>,
     #[serde(default)]
     pub starred: bool,
+    /// The project this agent is filed under (its id), or `None` for a global agent.
+    #[serde(default)]
+    pub project: Option<String>,
     #[serde(default)]
     pub extra: BTreeMap<String, String>,
     pub created_at: u64,
@@ -457,6 +460,9 @@ pub struct SaveAgent {
     pub tags: Vec<String>,
     #[serde(default)]
     pub starred: bool,
+    /// The project to file the agent under (its id); blank/omitted saves a global agent.
+    #[serde(default)]
+    pub project: Option<String>,
     #[serde(default)]
     pub extra: BTreeMap<String, String>,
 }

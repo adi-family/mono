@@ -239,9 +239,11 @@ mod tests {
         m.model = Some("opus".into());
         m.permission_mode = Some("default".into());
         m.tags = vec!["athz".into()];
+        m.project = Some("demo".into());
         let saved = store.save("athz-solver", m).expect("save");
         assert_eq!(saved.name, "athz-solver");
         assert_eq!(saved.manifest.model.as_deref(), Some("opus"));
+        assert_eq!(saved.manifest.project.as_deref(), Some("demo"));
         assert!(saved.manifest.created_at > 0);
 
         let got = store.get("athz-solver").expect("get").expect("present");

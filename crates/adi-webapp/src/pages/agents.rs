@@ -34,6 +34,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
     let AgentsForm {
         name,
         backend,
+        project,
         model,
         permission_mode,
         temperature,
@@ -57,7 +58,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                 <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
             </div>
 
-            {data_table(&["Name", "Backend", "Model", "Tags", ""], move || agent_rows(state, form, watch))}
+            {data_table(&["Name", "Backend", "Model", "Project", "Tags", ""], move || agent_rows(state, form, watch))}
 
             <div class="adi-panel__head" style="border-top:1px solid var(--border)">
                 <h2 class="adi-panel__title">
@@ -101,6 +102,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                     max_turns: max_turns.get().trim().parse::<u32>().ok(),
                     tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                     starred: starred.get(),
+                    project: opt_str(project.get()),
                     extra: agent_extra_values(st.as_ref(), &be, extra.get()),
                 };
                 editing.set(Some(nm.clone()));
@@ -180,7 +182,7 @@ fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
         .fields
         .into_iter()
         .filter(|field| field_applies(field, &backend, &provider))
-        .map(|field| render_agent_field(field, backends.clone(), form))
+        .map(|field| render_agent_field(field, backends.clone(), state, form))
         .collect::<Vec<_>>()
         .into_any()
 }
@@ -189,11 +191,15 @@ fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
 fn render_agent_field(
     field: AgentFormField,
     backends: Vec<AgentBackendOption>,
+    state: State,
     form: AgentsForm,
 ) -> AnyView {
     match field.kind {
         AgentFormFieldKind::Select if field.name == "backend" => {
             render_backend_select(field, backends, form)
+        }
+        AgentFormFieldKind::Select if field.name == "project" => {
+            render_project_select(field, state, form)
         }
         AgentFormFieldKind::Select => render_agent_select(field, form),
         AgentFormFieldKind::Checkbox => render_agent_checkbox(field, form),
@@ -231,6 +237,37 @@ fn render_backend_select(
                     view! { <option value=id>{label}</option> }
                 }).collect::<Vec<_>>()}
             </select>
+        </div>
+    }
+    .into_any()
+}
+
+/// The project selector: the schema names the field, but its options are the registered
+/// projects, which only the client knows live — filled from the projects state (as the
+/// Triggers form does). An empty value files the agent globally.
+fn render_project_select(field: AgentFormField, state: State, form: AgentsForm) -> AnyView {
+    let id = field_id(&field.name);
+    let label_for = id.clone();
+    let label = field.label.clone();
+    let hint = field.hint.clone();
+    let show_hint = !hint.is_empty();
+    let projects = state.projects;
+    view! {
+        <div class="adi-field" style=field_style(&field)>
+            <label class="adi-field__label" for=label_for>{label}</label>
+            <select class="adi-input" id=id
+                prop:value=move || form.project.get()
+                on:change=move |ev| form.project.set(event_target_value(&ev))>
+                <option value="">"— global —"</option>
+                {move || projects.get().map(|p| p.projects.into_iter()
+                    .filter(|proj| !proj.is_archived())
+                    .map(|proj| {
+                        let id = proj.id.clone();
+                        let label = if proj.name == proj.id { proj.id.clone() } else { format!("{} · {}", proj.id, proj.name) };
+                        view! { <option value=id>{label}</option> }
+                    }).collect::<Vec<_>>()).unwrap_or_default()}
+            </select>
+            {show_hint.then(|| view! { <span class="adi-field__hint">{hint}</span> })}
         </div>
     }
     .into_any()
@@ -418,6 +455,7 @@ fn agent_field_value(form: AgentsForm, name: &str) -> String {
     match name {
         "name" => form.name.get(),
         "backend" => form.backend.get(),
+        "project" => form.project.get(),
         "model" => form.model.get(),
         "permission_mode" => form.permission_mode.get(),
         "temperature" => form.temperature.get(),
@@ -433,6 +471,7 @@ fn set_agent_field_value(form: AgentsForm, name: &str, value: String) {
     match name {
         "name" => form.name.set(value),
         "backend" => form.backend.set(value),
+        "project" => form.project.set(value),
         "model" => form.model.set(value),
         "permission_mode" => form.permission_mode.set(value),
         "temperature" => form.temperature.set(value),
@@ -500,6 +539,7 @@ fn is_extra_field(name: &str) -> bool {
         name,
         "name"
             | "backend"
+            | "project"
             | "model"
             | "permission_mode"
             | "temperature"
@@ -515,10 +555,10 @@ fn is_extra_field(name: &str) -> bool {
 /// View (live session), Edit (loads it into the form), and Delete actions.
 fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
     let Some(st) = state.agents.get() else {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row("6", "Loading…");
     };
     if st.agents.is_empty() {
-        return placeholder_row("5", "No agents yet — define one below.");
+        return placeholder_row("6", "No agents yet — define one below.");
     }
     st.agents
         .into_iter()
@@ -530,36 +570,25 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
             };
             let backend = a.backend.clone();
             let model = a.model.clone().unwrap_or_default();
+            let project_cell = match &a.project {
+                Some(p) if !p.trim().is_empty() => {
+                    let p = p.clone();
+                    view! { <span class="adi-chip adi-mono">{p}</span> }.into_any()
+                }
+                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
+            };
             let tags = a.tags.join(", ");
-            let run_name = a.name.clone();
             let del_name = a.name.clone();
-            let show_run = a.runnable && !a.running;
-            let running = a.running;
             let a_edit = a.clone();
             view! {
                 <tr>
                     <td>{name_disp}</td>
                     <td class="adi-mono">{backend}</td>
                     <td class="adi-mono adi-muted">{model}</td>
+                    <td>{project_cell}</td>
                     <td class="adi-muted">{tags}</td>
                     <td style="text-align:right; white-space:nowrap">
-                        {running.then(|| {
-                            let watch_name = run_name.clone();
-                            let stop_name = run_name.clone();
-                            view! {
-                                <button class="adi-btn adi-btn--link" title="watch the live tmux session"
-                                    on:click=move |_| open_watch(watch, watch_name.clone())>"● View"</button>
-                                " "
-                                <button class="adi-btn adi-btn--link" title="kill the tmux session"
-                                    on:click=move |_| stop_agent(state, watch, stop_name.clone())>"■ Stop"</button>
-                                " "
-                            }
-                        })}
-                        {show_run.then(|| { let run_name = run_name.clone(); view! {
-                            <button class="adi-btn adi-btn--link"
-                                on:click=move |_| run_agent(state, run_name.clone())>"▶ Run"</button>
-                            " "
-                        }})}
+                        {agent_actions(state, watch, &a)}
                         <button class="adi-btn adi-btn--link"
                             on:click=move |_| load_agent_into_form(form, &a_edit)>"Edit"</button>
                         " "
@@ -573,6 +602,35 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// The Run / View / Stop action buttons for one agent row — shared between the global Agents
+/// table and a project's Agents panel. Run shows only for a runnable, stopped agent; View/Stop
+/// only while its tmux session is live.
+pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> AnyView {
+    let run_name = a.name.clone();
+    let show_run = a.runnable && !a.running;
+    let running = a.running;
+    view! {
+        {running.then(|| {
+            let watch_name = run_name.clone();
+            let stop_name = run_name.clone();
+            view! {
+                <button class="adi-btn adi-btn--link" title="watch the live tmux session"
+                    on:click=move |_| open_watch(watch, watch_name.clone())>"● View"</button>
+                " "
+                <button class="adi-btn adi-btn--link" title="kill the tmux session"
+                    on:click=move |_| stop_agent(state, watch, stop_name.clone())>"■ Stop"</button>
+                " "
+            }
+        })}
+        {show_run.then(|| { let run_name = run_name.clone(); view! {
+            <button class="adi-btn adi-btn--link"
+                on:click=move |_| run_agent(state, run_name.clone())>"▶ Run"</button>
+            " "
+        }})}
+    }
+    .into_any()
 }
 
 /// Run an agents mutation: set the returned list and a success flash, or an error flash; toggles
@@ -634,8 +692,9 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
 }
 
 /// The live-view panel: a 1s-refreshed capture of the watched agent's tmux pane, with a send
-/// bar to type into the session. Renders nothing while no agent is being watched.
-fn live_view(state: State, watch: AgentsWatch) -> Option<AnyView> {
+/// bar to type into the session. Renders nothing while no agent is being watched. Shared with
+/// a project's Agents panel.
+pub(crate) fn live_view(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let name = watch.name.get()?;
     let peek = watch.peek.get();
     let attach = peek.as_ref().map(|p| p.attach.clone()).unwrap_or_default();
@@ -735,6 +794,7 @@ fn send_to_agent(state: State, watch: AgentsWatch, text: String, key: &'static s
 fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.name.set(a.name.clone());
     form.backend.set(a.backend.clone());
+    form.project.set(a.project.clone().unwrap_or_default());
     form.model.set(a.model.clone().unwrap_or_default());
     form.permission_mode
         .set(a.permission_mode.clone().unwrap_or_default());
@@ -755,6 +815,7 @@ fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
 fn clear_agent_form(form: AgentsForm) {
     form.name.set(String::new());
     form.backend.set(String::new());
+    form.project.set(String::new());
     form.model.set(String::new());
     form.permission_mode.set(String::new());
     form.temperature.set(String::new());

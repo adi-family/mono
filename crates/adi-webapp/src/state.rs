@@ -119,6 +119,8 @@ pub(crate) struct TasksForm {
 pub(crate) struct AgentsForm {
     pub(crate) name: RwSignal<String>,
     pub(crate) backend: RwSignal<String>,
+    /// The project to file the agent under (its id), or empty for a global agent.
+    pub(crate) project: RwSignal<String>,
     pub(crate) model: RwSignal<String>,
     pub(crate) permission_mode: RwSignal<String>,
     pub(crate) temperature: RwSignal<String>,
@@ -312,6 +314,10 @@ pub(crate) async fn load(s: State) {
         if let Ok(t) = fetch::triggers().await {
             s.triggers.set(Some(t));
         }
+        // And its Agents panel filters the shared agent list.
+        if let Ok(a) = fetch::agents().await {
+            s.agents.set(Some(a));
+        }
     }
     if path == Route::Tasks.path() {
         if let Ok(t) = fetch::tasks().await {
@@ -322,10 +328,14 @@ pub(crate) async fn load(s: State) {
             s.projects.set(Some(p));
         }
     }
-    if path == Route::Agents.path()
-        && let Ok(a) = fetch::agents().await
-    {
-        s.agents.set(Some(a));
+    if path == Route::Agents.path() {
+        if let Ok(a) = fetch::agents().await {
+            s.agents.set(Some(a));
+        }
+        // The create form's project picker is populated from the registered projects.
+        if let Ok(p) = fetch::projects().await {
+            s.projects.set(Some(p));
+        }
     }
     if path == Route::Triggers.path() {
         if let Ok(t) = fetch::triggers().await {

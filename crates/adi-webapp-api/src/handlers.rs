@@ -950,6 +950,7 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
             .filter(|t| !t.is_empty())
             .collect(),
         starred: req.starred,
+        project: clean(req.project),
         extra: clean_extra(req.extra),
         // The store owns the timestamps.
         created_at: 0,
@@ -1062,6 +1063,7 @@ fn agent_dto(agent: adi_agents::Agent, sessions: &std::collections::BTreeSet<Str
         max_turns: m.max_turns,
         tags: m.tags,
         starred: m.starred,
+        project: m.project,
         extra: m.extra,
         created_at: m.created_at,
         updated_at: m.updated_at,
@@ -1098,6 +1100,13 @@ fn agent_form_spec() -> AgentFormSpec {
     let mut backend = agent_field("backend", "Backend", AgentFormFieldKind::Select);
     backend.required = true;
     fields.push(backend);
+
+    // The project the agent is filed under (or global). The options are the registered
+    // projects, which only the client knows live — it special-cases this field by name and
+    // fills the select from its projects state, like the Triggers form does.
+    let mut project = agent_field("project", "Project", AgentFormFieldKind::Select);
+    project.hint = "shows on that project's page".into();
+    fields.push(project);
 
     // The adi harness runs its own agentic loop and needs to know which provider API to call;
     // provider-specific knobs below are scoped to this choice via `providers`.

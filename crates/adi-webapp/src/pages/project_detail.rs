@@ -3,15 +3,17 @@
 //! directory (via the isolated `adi-fs` jail).
 
 use adi_webapp_api::types::{
-    NewTask, ProjectDetail, ProjectService, ProjectsState, SaveTrigger, TasksState, TriggersState,
+    AgentsState, NewTask, ProjectDetail, ProjectService, ProjectsState, SaveAgent, SaveTrigger,
+    TasksState, TriggersState,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
+use super::agents::{agent_actions, live_view as agent_live_view};
 use super::triggers::{log_view, trigger_actions};
 use crate::routing::{Route, go_projects};
-use crate::state::{Flash, State, TriggersLogView};
+use crate::state::{AgentsWatch, Flash, State, TriggersLogView};
 use crate::ui::{
     TextField, apply_mutation, dash, data_table, effective_label_title, flash_view, fmt_date,
     fmt_ports, placeholder_row, task_tree_rows, tile,
@@ -23,6 +25,7 @@ pub(crate) fn project_detail_view(
     state: State,
     route: RwSignal<Route>,
     triggers_log: TriggersLogView,
+    agents_watch: AgentsWatch,
 ) -> AnyView {
     let State {
         project_detail,
@@ -48,6 +51,13 @@ pub(crate) fn project_detail_view(
         code: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
+    // The project-scoped quick agent create form (same lifetime rationale as the task form).
+    let agent_form = QuickAgentForm {
+        name: RwSignal::new(String::new()),
+        backend: RwSignal::new(String::new()),
+        system_prompt: RwSignal::new(String::new()),
+        busy: RwSignal::new(false),
+    };
     view! {
         <div class="adi-bar">
             <a class="adi-btn adi-btn--link" href=Route::Projects.path()
@@ -66,6 +76,10 @@ pub(crate) fn project_detail_view(
         }}
 
         {tasks_panel(state, task_form)}
+
+        {move || agent_live_view(state, agents_watch)}
+
+        {agents_panel(state, agent_form, agents_watch)}
 
         {move || log_view(triggers_log)}
 
@@ -497,6 +511,146 @@ fn project_task_options(state: State) -> AnyView {
             let value = t.id.clone();
             let label = format!("{indent}{} · {}", t.id, t.title);
             view! { <option value=value>{label}</option> }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+// ---- project agents (the shared agent list, filtered to this project) -----------------
+
+/// The project detail page's quick agent create form (name, backend, system prompt; the project
+/// is fixed to the open project). Full editing — models, permission modes, backend params —
+/// lives on the Agents page. `Copy` so it threads into the panel view and its submit handler.
+#[derive(Clone, Copy)]
+struct QuickAgentForm {
+    name: RwSignal<String>,
+    backend: RwSignal<String>,
+    system_prompt: RwSignal<String>,
+    busy: RwSignal<bool>,
+}
+
+/// The Agents panel on a project's detail page: the agents filed under this project (from the
+/// shared list at `/api/agents`) with live Run/View/Stop actions, plus a quick create form
+/// pre-scoped to it.
+fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatch) -> AnyView {
+    let QuickAgentForm {
+        name,
+        backend,
+        system_prompt,
+        busy,
+    } = form;
+    let agents = state.agents;
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Agents"</h2>
+                <span class="adi-updated">"filed under this project"</span>
+            </div>
+            {data_table(&["Name", "Backend", "Model", "Status", ""], move || project_agent_rows(state, watch))}
+            <form class="adi-form" on:submit=move |ev| {
+                ev.prevent_default();
+                let id = state.current_project.get_untracked();
+                if id.is_empty() {
+                    return;
+                }
+                let nm = name.get().trim().to_string();
+                if nm.is_empty() {
+                    state.flash.set(Some(Flash::err("An agent name is required.".to_string())));
+                    return;
+                }
+                let be = backend.get().trim().to_string();
+                if be.is_empty() {
+                    state.flash.set(Some(Flash::err("Pick a backend.".to_string())));
+                    return;
+                }
+                let body = SaveAgent {
+                    name: nm.clone(),
+                    backend: be,
+                    system_prompt: system_prompt.get(),
+                    tools: String::new(),
+                    model: None,
+                    permission_mode: None,
+                    temperature: None,
+                    max_turns: None,
+                    tags: Vec::new(),
+                    starred: false,
+                    project: Some(id),
+                    extra: std::collections::BTreeMap::new(),
+                };
+                name.set(String::new());
+                system_prompt.set(String::new());
+                apply_mutation(state, Some(busy), format!("Created agent “{nm}”."),
+                    |s: State, a: AgentsState| s.agents.set(Some(a)), fetch::save_agent(body));
+            }>
+                <TextField id="pagent-name" label="Name" placeholder="athz-solver" mono=true
+                    hint="a task tagged this name auto-starts it" value=name />
+                <div class="adi-field">
+                    <label class="adi-field__label" for="pagent-backend">"Backend"</label>
+                    <select class="adi-input" id="pagent-backend"
+                        prop:value=move || backend.get()
+                        on:change=move |ev| backend.set(event_target_value(&ev))>
+                        <option value="">"— pick a backend —"</option>
+                        {move || agents.get().map(|a| a.form.backends.into_iter().map(|b| {
+                            let id = b.id.clone();
+                            view! { <option value=id>{b.label}</option> }
+                        }).collect::<Vec<_>>()).unwrap_or_default()}
+                    </select>
+                </div>
+                <TextField id="pagent-prompt" label="System prompt" placeholder="optional seed prompt" wide=true
+                    field_style="flex:1 1 260px; min-width:0" value=system_prompt />
+                <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
+                    "Add agent"
+                </button>
+            </form>
+            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+                "These appear in the global " <code>"Agents"</code> " list too. Models, permission
+                 modes, and other backend params live on the Agents page."
+            </div>
+        </section>
+    }
+    .into_any()
+}
+
+/// Rows for the project's agent table: this project's agents with the shared Run/View/Stop
+/// actions. Loading/empty placeholders otherwise.
+fn project_agent_rows(state: State, watch: AgentsWatch) -> AnyView {
+    let id = state.current_project.get();
+    let Some(st) = state.agents.get() else {
+        return placeholder_row("5", "Loading…");
+    };
+    let mine: Vec<_> = st
+        .agents
+        .into_iter()
+        .filter(|a| a.project.as_deref() == Some(id.as_str()))
+        .collect();
+    if mine.is_empty() {
+        return placeholder_row("5", "No agents in this project yet — add one below.");
+    }
+    mine.into_iter()
+        .map(|a| {
+            let name_disp = if a.starred {
+                format!("★ {}", a.name)
+            } else {
+                a.name.clone()
+            };
+            let backend = a.backend.clone();
+            let model = a.model.clone().unwrap_or_default();
+            let status = if a.running {
+                view! { <span class="adi-tstatus" data-status="ready">"Running"</span> }.into_any()
+            } else {
+                view! { <span class="adi-muted">"—"</span> }.into_any()
+            };
+            view! {
+                <tr>
+                    <td>{name_disp}</td>
+                    <td class="adi-mono">{backend}</td>
+                    <td class="adi-mono adi-muted">{model}</td>
+                    <td>{status}</td>
+                    <td style="text-align:right; white-space:nowrap">
+                        {agent_actions(state, watch, &a)}
+                    </td>
+                </tr>
+            }
         })
         .collect::<Vec<_>>()
         .into_any()

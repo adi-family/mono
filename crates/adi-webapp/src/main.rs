@@ -109,6 +109,7 @@ fn App() -> impl IntoView {
     let agents_form = AgentsForm {
         name: RwSignal::new(String::new()),
         backend: RwSignal::new(String::new()),
+        project: RwSignal::new(String::new()),
         model: RwSignal::new(String::new()),
         permission_mode: RwSignal::new(String::new()),
         temperature: RwSignal::new(String::new()),
@@ -212,8 +213,9 @@ fn App() -> impl IntoView {
         ) {
             spawn_local(load(state));
         }
-        // Leaving the Agents page closes the live view, so its 1s poll stops.
-        if !matches!(route.get(), Route::Agents) {
+        // Leaving the pages that show the agents live view closes it, so its 1s poll stops
+        // (it also renders on a project's detail page, whose Agents panel shares the actions).
+        if !matches!(route.get(), Route::Agents | Route::ProjectDetail) {
             agents_watch.close();
         }
         // Likewise, leaving the pages that show the fire-log view closes it (it also renders
@@ -288,7 +290,7 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Overview => overview_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
-                        Route::ProjectDetail => project_detail_view(state, route, triggers_log),
+                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),

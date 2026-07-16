@@ -198,6 +198,9 @@ enum TasksCommand {
     Delete { id: String },
 }
 
+// `Save` carries the whole definition's worth of flags, dwarfing the name-only variants; a
+// one-shot CLI enum, so the size gap costs nothing worth boxing over.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 enum AgentsCommand {
     /// List agent definitions.
@@ -236,6 +239,9 @@ enum AgentsCommand {
         tags: Vec<String>,
         #[arg(long)]
         starred: bool,
+        /// The project to file the agent under (its id); omit for a global agent.
+        #[arg(long)]
+        project: Option<String>,
         /// Repeatable key=value backend-specific parameter.
         #[arg(long = "extra")]
         extra: Vec<String>,
@@ -561,6 +567,7 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
             max_turns,
             tags,
             starred,
+            project,
             extra,
             json,
         } => {
@@ -575,6 +582,7 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
                 max_turns,
                 tags: clean_tags(tags),
                 starred,
+                project: clean(project),
                 extra: parse_extra(extra)?,
                 created_at: 0,
                 updated_at: 0,
@@ -800,6 +808,9 @@ fn print_agent(agent: &Agent) {
     );
     if let Some(model) = &agent.manifest.model {
         println!("  model: {model}");
+    }
+    if let Some(project) = &agent.manifest.project {
+        println!("  project: {project}");
     }
     if !agent.manifest.tools.trim().is_empty() {
         println!("  commands: {}", agent.manifest.tools);

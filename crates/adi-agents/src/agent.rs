@@ -48,6 +48,11 @@ pub struct AgentManifest {
     /// Pinned in the UI / preferred for quick-dispatch.
     #[serde(default)]
     pub starred: bool,
+    /// The project this agent is filed under (its [`adi-projects`] id), or `None` for a
+    /// global agent. Pure metadata: it scopes where the agent shows up (a project's detail
+    /// page), not what it may do.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// Backend-specific fields not yet promoted to first-class manifest properties.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,
