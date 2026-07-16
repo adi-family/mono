@@ -3,8 +3,8 @@
 //! directory (via the isolated `adi-fs` jail).
 
 use adi_webapp_api::types::{
-    AgentsState, NewTask, ProjectDetail, ProjectService, ProjectsState, SaveAgent, SaveTrigger,
-    TasksState, TriggersState,
+    AgentsState, NewProject, NewTask, ProjectDetail, ProjectService, ProjectsState, SaveAgent,
+    SaveTrigger, TasksState, TriggersState,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -12,7 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use super::agents::{agent_actions, live_view as agent_live_view};
 use super::triggers::{log_view, trigger_actions};
-use crate::routing::{Route, go_projects};
+use crate::routing::{Route, go_projects, open_project};
 use crate::state::{AgentsWatch, Flash, State, TriggersLogView};
 use crate::ui::{
     TextField, apply_mutation, dash, data_table, effective_label_title, flash_view, fmt_date,
@@ -58,6 +58,12 @@ pub(crate) fn project_detail_view(
         system_prompt: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
+    // The sub-project quick create form (same lifetime rationale as the task form).
+    let subproject_form = QuickSubprojectForm {
+        id: RwSignal::new(String::new()),
+        name: RwSignal::new(String::new()),
+        busy: RwSignal::new(false),
+    };
     view! {
         <div class="adi-bar">
             <a class="adi-btn adi-btn--link" href=Route::Projects.path()
@@ -74,6 +80,8 @@ pub(crate) fn project_detail_view(
             }.into_any(),
             Some(d) => detail_body(state, route, confirm_delete, d),
         }}
+
+        {subprojects_panel(state, route, subproject_form)}
 
         {tasks_panel(state, task_form)}
 
@@ -134,14 +142,14 @@ fn detail_body(
     let archive_btn = if archived {
         view! {
             <button class="adi-btn" on:click=move |_| {
-                apply_detail_mutation(state, toggle_id.clone(),
+                apply_detail_mutation(state, toggle_id.clone(), None,
                     format!("Restored {}.", toggle_id), fetch::unarchive_project(toggle_id.clone()));
             }>"Restore"</button>
         }.into_any()
     } else {
         view! {
             <button class="adi-btn" on:click=move |_| {
-                apply_detail_mutation(state, toggle_id.clone(),
+                apply_detail_mutation(state, toggle_id.clone(), None,
                     format!("Archived {}.", toggle_id), fetch::archive_project(toggle_id.clone()));
             }>"Archive"</button>
         }
@@ -185,6 +193,7 @@ fn detail_body(
         <div class="adi-bar">
             <h1 class="adi-bar__title">{name}</h1>
             <span class="adi-chip">{status_label}</span>
+            {parent_link(state, route, d.parent.clone())}
             <span class="adi-spacer" style="flex:1"></span>
             {archive_btn}
             {delete_ctrl}
@@ -221,6 +230,24 @@ fn detail_body(
         </section>
     }
     .into_any()
+}
+
+/// The header's link up to a sub-project's parent page, or nothing for a top-level project.
+fn parent_link(state: State, route: RwSignal<Route>, parent: Option<String>) -> Option<AnyView> {
+    let pid = parent?;
+    let open_pid = pid.clone();
+    let href = format!("/projects/{pid}");
+    Some(
+        view! {
+            <a class="adi-btn adi-btn--link" href=href title="open the parent project"
+                on:click=move |ev: web_sys::MouseEvent| {
+                    if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                    ev.prevent_default();
+                    open_project(state, route, open_pid.clone());
+                }>{format!("↑ {pid}")}</a>
+        }
+        .into_any(),
+    )
 }
 
 /// Rows for the services table: a message when there's no hive / no services, else one row per
@@ -290,12 +317,16 @@ fn service_rows(
         .into_any()
 }
 
-/// Run a detail-page mutation (archive/restore) that returns the fresh project list, then
-/// re-fetch this project's detail so the page reflects the change; flashes success or error.
-fn apply_detail_mutation<F>(state: State, id: String, ok_msg: String, fut: F)
+/// Run a detail-page mutation (archive/restore, sub-project create) that returns the fresh
+/// project list, then re-fetch this project's detail so the page reflects the change; flashes
+/// success or error. Toggles `busy` around the request when a form is driving it.
+fn apply_detail_mutation<F>(state: State, id: String, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
 where
     F: std::future::Future<Output = Result<ProjectsState, String>> + 'static,
 {
+    if let Some(busy) = busy {
+        busy.set(true);
+    }
     spawn_local(async move {
         match fut.await {
             Ok(list) => {
@@ -306,6 +337,9 @@ where
                 state.flash.set(Some(Flash::ok(ok_msg)));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        if let Some(busy) = busy {
+            busy.set(false);
         }
     });
 }
@@ -366,6 +400,113 @@ fn reload_project(state: State, id: String) {
             )))),
         }
     });
+}
+
+// ---- sub-projects (registered projects nested under this one) -------------------------
+
+/// The project detail page's quick sub-project create form (id and optional name; the parent is
+/// fixed to the open project). Descriptions and deeper nesting live on the Projects page.
+/// `Copy` so it threads into the panel view and its submit handler.
+#[derive(Clone, Copy)]
+struct QuickSubprojectForm {
+    id: RwSignal<String>,
+    name: RwSignal<String>,
+    busy: RwSignal<bool>,
+}
+
+/// The Sub-projects panel on a project's detail page: the projects nested directly under this
+/// one (served in the detail payload), each opening its own detail page, plus a quick create
+/// form pre-scoped to the open project as the parent.
+fn subprojects_panel(state: State, route: RwSignal<Route>, form: QuickSubprojectForm) -> AnyView {
+    let QuickSubprojectForm { id, name, busy } = form;
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Sub-projects"</h2>
+                <span class="adi-updated">"nested under this project"</span>
+            </div>
+            {data_table(&["Name", "ID", "Created", "Status"], move || subproject_rows(state, route))}
+            <form class="adi-form" on:submit=move |ev| {
+                ev.prevent_default();
+                let parent = state.current_project.get_untracked();
+                if parent.is_empty() {
+                    return;
+                }
+                let pid = id.get().trim().to_string();
+                if pid.is_empty() {
+                    state.flash.set(Some(Flash::err("A project id is required.".to_string())));
+                    return;
+                }
+                let display = name.get().trim().to_string();
+                let body = NewProject {
+                    id: pid.clone(),
+                    name: (!display.is_empty()).then_some(display),
+                    description: None,
+                    parent: Some(parent.clone()),
+                };
+                id.set(String::new());
+                name.set(String::new());
+                // The mutation returns the fresh project list; re-fetching the detail then pulls
+                // the new sub-project into this panel.
+                apply_detail_mutation(state, parent, Some(busy), format!("Registered sub-project {pid}."),
+                    fetch::create_project(body));
+            }>
+                <TextField id="psub-id" label="Project id" placeholder="my-app-sub" mono=true value=id />
+                <TextField id="psub-name" label="Name" placeholder="defaults to the id" wide=true
+                    field_style="flex:1 1 220px; min-width:0" value=name />
+                <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
+                    "Add sub-project"
+                </button>
+            </form>
+            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+                "These are full projects (each with its own directory, tasks, agents, and triggers),
+                 nested here. They appear in the global " <code>"Projects"</code> " list too."
+            </div>
+        </section>
+    }
+    .into_any()
+}
+
+/// Rows for the sub-projects table: one per nested project, its name opening the detail page.
+/// Loading/empty placeholders otherwise.
+fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
+    let Some(d) = state.project_detail.get() else {
+        return placeholder_row("4", "Loading…");
+    };
+    if d.subprojects.is_empty() {
+        return placeholder_row("4", "No sub-projects yet — add one below.");
+    }
+    d.subprojects
+        .into_iter()
+        .map(|p| {
+            let id = p.id.clone();
+            let open_id = id.clone();
+            let href = format!("/projects/{id}");
+            let created = fmt_date(p.created_at);
+            let title = p.description.clone().unwrap_or_default();
+            let status = if p.is_archived() {
+                view! { <span class="adi-chip">"Archived"</span> }.into_any()
+            } else {
+                view! { <span class="adi-muted">"Active"</span> }.into_any()
+            };
+            view! {
+                <tr>
+                    <td title=title>
+                        <a class="adi-btn adi-btn--link" href=href
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                                ev.prevent_default();
+                                open_project(state, route, open_id.clone());
+                            }>{p.name}</a>
+                    </td>
+                    <td class="adi-mono">{id}</td>
+                    <td class="adi-mono adi-muted">{created}</td>
+                    <td>{status}</td>
+                </tr>
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
 }
 
 // ---- project tasks (the shared task tree, filtered to this project) ------------------

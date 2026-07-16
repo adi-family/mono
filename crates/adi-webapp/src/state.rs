@@ -93,6 +93,8 @@ pub(crate) struct ProjectsForm {
     pub(crate) id: RwSignal<String>,
     pub(crate) name: RwSignal<String>,
     pub(crate) description: RwSignal<String>,
+    /// The project to nest the new one under (its id), or empty for a top-level project.
+    pub(crate) parent: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) show_archived: RwSignal<bool>,
 }

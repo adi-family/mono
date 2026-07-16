@@ -96,6 +96,9 @@ enum ProjectsCommand {
         /// An optional one-line description.
         #[arg(long)]
         description: Option<String>,
+        /// The registered project to nest this one under (a sub-project); omit for top-level.
+        #[arg(long)]
+        parent: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -374,9 +377,10 @@ fn run_projects(adi: Adi, command: ProjectsCommand) -> Result<(), adi_core::Proj
             id,
             name,
             description,
+            parent,
             json,
         } => {
-            let project = store.create(&id, name, description)?;
+            let project = store.create(&id, name, description, parent)?;
             if json {
                 print_json(&project);
             } else {
@@ -762,6 +766,9 @@ fn print_project(project: &Project) {
     println!("{} — {} [{state}]", project.id, project.display_name());
     if let Some(description) = &project.manifest.description {
         println!("  {description}");
+    }
+    if let Some(parent) = &project.manifest.parent {
+        println!("  parent: {parent}");
     }
 }
 

@@ -138,7 +138,7 @@ pub fn create_project(store: &Projects, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_new_project(body) else {
         return bad_new_project();
     };
-    match store.create(req.id.trim(), req.name, req.description) {
+    match store.create(req.id.trim(), req.name, req.description, req.parent) {
         Ok(_) => projects(store),
         Err(e) => project_error(&e),
     }
@@ -182,14 +182,20 @@ pub fn project_detail(store: &Projects, id: &str, listening: &[u16]) -> (u16, St
         Ok(path) => read_hive_services(&path, listening),
         Err(e) => return project_error(&e),
     };
+    let subprojects = match store.children(id) {
+        Ok(children) => children.into_iter().map(project_dto).collect(),
+        Err(e) => return project_error(&e),
+    };
     ok_json(&ProjectDetail {
         name: project.display_name().to_string(),
         id: project.id,
         description: project.manifest.description,
+        parent: project.manifest.parent,
         created_at: project.manifest.created_at,
         archived_at: project.manifest.archived_at,
         has_hive,
         services,
+        subprojects,
     })
 }
 
@@ -792,6 +798,7 @@ fn project_dto(project: adi_projects::Project) -> Project {
         id: project.id,
         name,
         description: project.manifest.description,
+        parent: project.manifest.parent,
         created_at: project.manifest.created_at,
         archived_at: project.manifest.archived_at,
     }

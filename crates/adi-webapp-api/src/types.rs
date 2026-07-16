@@ -152,6 +152,9 @@ pub struct Project {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The id of the project this one nests under (a sub-project), or `None` for top-level.
+    #[serde(default)]
+    pub parent: Option<String>,
     pub created_at: u64,
     #[serde(default)]
     pub archived_at: Option<u64>,
@@ -182,6 +185,10 @@ pub struct NewProject {
     pub name: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// The id of the project to nest the new one under (a sub-project); blank/omitted
+    /// registers a top-level project. Must name a registered project.
+    #[serde(default)]
+    pub parent: Option<String>,
 }
 
 /// Request body naming a project — `POST /api/projects/archive`, `/unarchive`, and `/remove`.
@@ -251,12 +258,19 @@ pub struct ProjectDetail {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The id of the project this one nests under (a sub-project), or `None` for top-level.
+    #[serde(default)]
+    pub parent: Option<String>,
     pub created_at: u64,
     #[serde(default)]
     pub archived_at: Option<u64>,
     /// Whether a `.adi/hive.yaml` exists for this project.
     pub has_hive: bool,
     pub services: Vec<ProjectService>,
+    /// The direct sub-projects of this project, sorted by id — so the detail page lists them
+    /// without a second request.
+    #[serde(default)]
+    pub subprojects: Vec<Project>,
 }
 
 impl ProjectDetail {

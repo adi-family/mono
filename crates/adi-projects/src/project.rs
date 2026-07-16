@@ -19,6 +19,11 @@ pub struct Manifest {
     /// An optional one-line description.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// The id of the project this one nests under (a sub-project), or `None` for a top-level
+    /// project. Pure metadata over a flat store: every project keeps its own directory under
+    /// `projects/` whatever its parent — only listings/UI nest by these links.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
     /// When the project was registered, as Unix epoch seconds.
     #[serde(default)]
     pub created_at: u64,

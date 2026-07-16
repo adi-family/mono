@@ -91,6 +91,7 @@ fn App() -> impl IntoView {
         id: RwSignal::new(String::new()),
         name: RwSignal::new(String::new()),
         description: RwSignal::new(String::new()),
+        parent: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
         show_archived: RwSignal::new(false),
     };

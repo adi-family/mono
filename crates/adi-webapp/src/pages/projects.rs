@@ -26,6 +26,7 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
         id,
         name,
         description,
+        parent,
         busy,
         show_archived,
     } = form;
@@ -61,19 +62,39 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                 }
                 let display = name.get().trim().to_string();
                 let desc = description.get().trim().to_string();
+                let par = parent.get().trim().to_string();
                 let body = NewProject {
                     id: pid.clone(),
                     name: (!display.is_empty()).then_some(display),
                     description: (!desc.is_empty()).then_some(desc),
+                    parent: (!par.is_empty()).then_some(par),
                 };
                 id.set(String::new());
                 name.set(String::new());
                 description.set(String::new());
+                parent.set(String::new());
                 apply_projects(state, Some(busy), format!("Registered project {pid}."),
                     fetch::create_project(body));
             }>
                 <TextField id="proj-id" label="Project id" placeholder="my-app" mono=true value=id />
                 <TextField id="proj-name" label="Name" placeholder="My App (defaults to the id)" value=name />
+                <div class="adi-field">
+                    <label class="adi-field__label" for="proj-parent">"Parent (sub-project of)"</label>
+                    <select class="adi-input" id="proj-parent"
+                        prop:value=move || parent.get()
+                        on:change=move |ev| parent.set(event_target_value(&ev))>
+                        <option value="">"— none (top-level) —"</option>
+                        {move || projects.get().map(|p| project_tree_rows(p.projects.into_iter()
+                            .filter(|proj| !proj.is_archived()).collect()).into_iter()
+                            .map(|(depth, proj)| {
+                                // Non-breaking spaces so the depth indent survives inside <option> text.
+                                let indent = "\u{00a0}\u{00a0}".repeat(depth);
+                                let value = proj.id.clone();
+                                let label = format!("{indent}{}", proj.id);
+                                view! { <option value=value>{label}</option> }
+                            }).collect::<Vec<_>>()).unwrap_or_default()}
+                    </select>
+                </div>
                 <TextField id="proj-desc" label="Description" placeholder="optional one-liner" wide=true
                     field_style="flex:1 1 240px; min-width:0" value=description />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
@@ -110,8 +131,9 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
         return placeholder_row("6", msg);
     }
 
-    rows.into_iter()
-        .map(|p| {
+    project_tree_rows(rows)
+        .into_iter()
+        .map(|(depth, p)| {
             let archived = p.is_archived();
             let id = p.id.clone();
             let action = if archived {
@@ -143,15 +165,18 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
             let open_id = id.clone();
             let href = format!("/projects/{id}");
             let tasks_cell = task_count_cell(tasks.as_ref(), &p.id);
+            let indent = format!("padding-left:{}px", depth * 20);
             view! {
                 <tr>
                     <td title=title>
-                        <a class="adi-btn adi-btn--link" href=href
-                            on:click=move |ev: web_sys::MouseEvent| {
-                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
-                                ev.prevent_default();
-                                open_project(state, route, open_id.clone());
-                            }>{p.name}</a>
+                        <span style=indent>
+                            <a class="adi-btn adi-btn--link" href=href
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                                    ev.prevent_default();
+                                    open_project(state, route, open_id.clone());
+                                }>{p.name}</a>
+                        </span>
                     </td>
                     <td class="adi-mono">{p.id}</td>
                     <td>{tasks_cell}</td>
@@ -163,6 +188,45 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// Flatten projects into depth-annotated tree order by their `parent` links: every root followed
+/// by its sub-projects (recursively), preserving the incoming id sort among siblings. A project
+/// whose parent isn't in the list (filtered out, or removed) renders as a root — nothing is lost.
+/// Mirrors `task_tree_rows` for the task tree.
+pub(crate) fn project_tree_rows(rows: Vec<Project>) -> Vec<(usize, Project)> {
+    use std::collections::{HashMap, HashSet};
+
+    fn walk(
+        node: Project,
+        depth: usize,
+        children: &mut std::collections::HashMap<String, Vec<Project>>,
+        out: &mut Vec<(usize, Project)>,
+    ) {
+        let id = node.id.clone();
+        out.push((depth, node));
+        if let Some(kids) = children.remove(&id) {
+            for kid in kids {
+                walk(kid, depth + 1, children, out);
+            }
+        }
+    }
+
+    let ids: HashSet<String> = rows.iter().map(|r| r.id.clone()).collect();
+    let mut children: HashMap<String, Vec<Project>> = HashMap::new();
+    let mut roots: Vec<Project> = Vec::new();
+    for r in rows {
+        match &r.parent {
+            Some(p) if ids.contains(p) => children.entry(p.clone()).or_default().push(r),
+            _ => roots.push(r),
+        }
+    }
+
+    let mut out = Vec::new();
+    for root in roots {
+        walk(root, 0, &mut children, &mut out);
+    }
+    out
 }
 
 /// The Tasks-column cell for a project: `<open> open` (with the total in the tooltip) when it has
