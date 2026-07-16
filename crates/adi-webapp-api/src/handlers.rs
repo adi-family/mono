@@ -23,7 +23,8 @@ use crate::types::{
     AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError,
     DirListing, FileContent, FileEntry, FilesRef,
     Health, HiveService, HiveState, HookAck, Lease, LeaseRef, MeshForward, MeshForwardRef,
-    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, NewTask, PortsState, Project,
+    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, NewService, NewTask,
+    PortsState, Project,
     ProjectDetail, ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse,
     ReserveResponse, SaveAgent, SaveTrigger, ServicePort, StartResult, StartService, StopResult,
     TaskRow, TasksState, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog, TriggerRef,
@@ -699,6 +700,139 @@ pub fn stop_service(store: &Projects, body: &[u8]) -> (u16, String) {
         }),
         Err(e) => error(500, &format!("stopping `{}`: {e}", req.service)),
     }
+}
+
+/// `POST /api/hive/create` — add a service to a project's `.adi/hive.yaml` (creating the file
+/// if needed), then return the fresh [`ProjectDetail`]. The existing YAML is patched as a
+/// value tree so fields this view doesn't model survive, and `` bash`…` `` port commands
+/// round-trip through their preprocessed placeholders (comments don't survive a rewrite).
+/// Without an explicit `port`, the `http` port is written as a
+/// `` ports-manager.get('<project>/<name>', 'http') `` command — the same lease the hive
+/// daemon resolves for the imported service, so both sides agree on the port.
+#[must_use]
+pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> (u16, String) {
+    use serde_yaml_ng::{Mapping, Value as Yaml};
+
+    fn ystr(s: &str) -> Yaml {
+        Yaml::String(s.to_string())
+    }
+    /// A trimmed, non-empty optional field.
+    fn given(field: Option<&str>) -> Option<&str> {
+        field.map(str::trim).filter(|s| !s.is_empty())
+    }
+
+    let Ok(req) = serde_json::from_slice::<NewService>(body) else {
+        return error(
+            400,
+            "expected JSON body { project, name, run, host?, port?, working_dir?, restart? }",
+        );
+    };
+    let project = req.project.trim();
+    let name = req.name.trim();
+    let run = req.run.trim();
+    if !valid_service_name(name) {
+        return error(
+            400,
+            "a service name is letters, digits, `.`, `-`, `_` (and not `.`/`..`)",
+        );
+    }
+    if run.is_empty() {
+        return error(400, "a run command is required");
+    }
+    match store.get(project) {
+        Ok(Some(_)) => {}
+        Ok(None) => return error(404, &format!("no such project: {project}")),
+        Err(e) => return project_error(&e),
+    }
+    let path = match store.hive_path(project) {
+        Ok(path) => path,
+        Err(e) => return project_error(&e),
+    };
+
+    // Load the existing document (a missing/empty file is an empty mapping). A file we can't
+    // parse is refused rather than clobbered — it can be fixed in the project's Files tab.
+    let raw = std::fs::read_to_string(&path).unwrap_or_default();
+    let (yaml, mut commands) = adi_ports_manager::preprocess(&raw);
+    let mut doc = match serde_yaml_ng::from_str::<Yaml>(&yaml) {
+        Ok(Yaml::Null) => Yaml::Mapping(Mapping::new()),
+        Ok(doc @ Yaml::Mapping(_)) => doc,
+        Ok(_) => return error(422, "the existing hive.yaml is not a YAML mapping"),
+        Err(_) => return error(
+            422,
+            "could not parse the existing hive.yaml — fix it in the project's files first",
+        ),
+    };
+
+    // Build the new `services.<name>` entry.
+    let mut svc = Mapping::new();
+    if let Some(host) = given(req.host.as_deref()) {
+        let mut proxy = Mapping::new();
+        proxy.insert(ystr("host"), ystr(host));
+        svc.insert(ystr("proxy"), Yaml::Mapping(proxy));
+    }
+    let http_port = match req.port {
+        Some(p) => Yaml::Number(p.into()),
+        None => ystr(&commands.placeholder(&format!("ports-manager.get('{project}/{name}', 'http')"))),
+    };
+    let mut ports = Mapping::new();
+    ports.insert(ystr("http"), http_port);
+    let mut recreate = Mapping::new();
+    recreate.insert(ystr("ports"), Yaml::Mapping(ports));
+    let mut rollout = Mapping::new();
+    rollout.insert(ystr("recreate"), Yaml::Mapping(recreate));
+    svc.insert(ystr("rollout"), Yaml::Mapping(rollout));
+    let mut script = Mapping::new();
+    script.insert(ystr("run"), ystr(run));
+    if let Some(dir) = given(req.working_dir.as_deref()) {
+        script.insert(ystr("working_dir"), ystr(dir));
+    }
+    let mut runner = Mapping::new();
+    runner.insert(ystr("script"), Yaml::Mapping(script));
+    svc.insert(ystr("runner"), Yaml::Mapping(runner));
+    if let Some(restart) = given(req.restart.as_deref()) {
+        svc.insert(ystr("restart"), ystr(restart));
+    }
+
+    // Insert it under `services:`, refusing to overwrite an existing entry.
+    let Yaml::Mapping(root) = &mut doc else {
+        unreachable!("doc was matched to a mapping above");
+    };
+    let services = root
+        .entry(ystr("services"))
+        .or_insert_with(|| Yaml::Mapping(Mapping::new()));
+    let Yaml::Mapping(services) = services else {
+        return error(422, "the existing hive.yaml `services` is not a mapping");
+    };
+    let key = ystr(name);
+    if services.contains_key(&key) {
+        return error(409, &format!("service `{name}` already exists in this project"));
+    }
+    services.insert(key, Yaml::Mapping(svc));
+
+    let text = match serde_yaml_ng::to_string(&doc) {
+        Ok(text) => commands.restore(&text),
+        Err(e) => return error(500, &format!("re-serializing hive.yaml: {e}")),
+    };
+    if let Some(dir) = path.parent()
+        && let Err(e) = std::fs::create_dir_all(dir)
+    {
+        return error(500, &format!("creating {}: {e}", dir.display()));
+    }
+    if let Err(e) = std::fs::write(&path, text) {
+        return error(500, &format!("writing {}: {e}", path.display()));
+    }
+    project_detail(store, project, listening)
+}
+
+/// Validate a service name: a single YAML key that is also safe as a ports-manager lease
+/// segment and a filesystem-adjacent token — mirrors the trigger-name rule.
+fn valid_service_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
 /// SIGTERM whatever process is listening on `port` (best-effort, via `lsof` + `kill`).
@@ -2121,6 +2255,83 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         Agents::with_config(adi_config::Config::with_root(root))
+    }
+
+    #[test]
+    fn create_service_writes_the_hive_yaml_and_reports_it() {
+        let store = temp_projects();
+        // The auto `http` port is a ports-manager command the detail read executes, so pin
+        // command execution to an isolated registry.
+        let (status, body) = adi_ports_manager::with_ports(temp_manager(), || {
+            create_service(
+                &store,
+                br#"{"project":"demo","name":"api","run":"bun run start","host":"demo.adi"}"#,
+                &[],
+            )
+        });
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["services"][0]["name"], "api");
+        assert_eq!(v["services"][0]["host"], "demo.adi");
+        assert_eq!(v["services"][0]["run"], "bun run start");
+        let text = std::fs::read_to_string(store.hive_path("demo").unwrap()).unwrap();
+        assert!(
+            text.contains("bash`ports-manager.get('demo/api', 'http')`"),
+            "the auto port is written as a ports-manager command, got: {text}"
+        );
+        assert!(
+            text.contains("version"),
+            "fields outside `services` survive the rewrite, got: {text}"
+        );
+    }
+
+    #[test]
+    fn create_service_preserves_existing_entries_and_their_port_commands() {
+        let store = temp_projects();
+        let path = store.hive_path("demo").unwrap();
+        std::fs::write(
+            &path,
+            "services:\n  web:\n    rollout:\n      recreate:\n        ports:\n          http: bash`ports-manager.get('demo/web', 'http')`\n    runner:\n      script:\n        run: bun serve\n",
+        )
+        .unwrap();
+        let (status, body) = adi_ports_manager::with_ports(temp_manager(), || {
+            create_service(
+                &store,
+                br#"{"project":"demo","name":"api","run":"cargo run","port":45112}"#,
+                &[],
+            )
+        });
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["services"].as_array().unwrap().len(), 2);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("bash`ports-manager.get('demo/web', 'http')`"),
+            "the existing entry's port command survives the rewrite, got: {text}"
+        );
+        assert!(text.contains("45112"), "the explicit port is written: {text}");
+    }
+
+    #[test]
+    fn create_service_refuses_duplicates_bad_names_and_unknown_projects() {
+        let store = temp_projects();
+        let req = br#"{"project":"demo","name":"api","run":"bun start","port":45113}"#;
+        let (status, _) = create_service(&store, req, &[]);
+        assert_eq!(status, 200);
+        let (status, _) = create_service(&store, req, &[]);
+        assert_eq!(status, 409, "the same name again is a conflict");
+        let (status, _) = create_service(
+            &store,
+            br#"{"project":"demo","name":"../evil","run":"x"}"#,
+            &[],
+        );
+        assert_eq!(status, 400, "a path-escaping name is rejected");
+        let (status, _) = create_service(
+            &store,
+            br#"{"project":"nope","name":"api","run":"x","port":45114}"#,
+            &[],
+        );
+        assert_eq!(status, 404, "an unregistered project is rejected");
     }
 
     #[test]

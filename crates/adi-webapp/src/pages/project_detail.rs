@@ -3,8 +3,8 @@
 //! directory (via the isolated `adi-fs` jail).
 
 use adi_webapp_api::types::{
-    AgentsState, NewProject, NewTask, ProjectDetail, ProjectService, ProjectsState, SaveAgent,
-    SaveTrigger, TasksState, TriggersState,
+    AgentsState, NewProject, NewService, NewTask, ProjectDetail, ProjectService, ProjectsState,
+    SaveAgent, SaveTrigger, TasksState, TriggersState,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -64,6 +64,14 @@ pub(crate) fn project_detail_view(
         name: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
+    // The quick service create form (same lifetime rationale as the task form).
+    let service_form = QuickServiceForm {
+        name: RwSignal::new(String::new()),
+        run: RwSignal::new(String::new()),
+        host: RwSignal::new(String::new()),
+        port: RwSignal::new(String::new()),
+        busy: RwSignal::new(false),
+    };
     view! {
         <div class="adi-bar">
             <a class="adi-btn adi-btn--link" href=Route::Projects.path()
@@ -78,7 +86,7 @@ pub(crate) fn project_detail_view(
             None => view! {
                 <section class="adi-panel"><div class="adi-empty">"Loading…"</div></section>
             }.into_any(),
-            Some(d) => detail_body(state, route, confirm_delete, d),
+            Some(d) => detail_body(state, route, confirm_delete, service_form, d),
         }}
 
         {subprojects_panel(state, route, subproject_form)}
@@ -114,12 +122,27 @@ struct TaskForm {
     busy: RwSignal<bool>,
 }
 
+/// The quick service create form (name, run command, optional host and port; the project is
+/// fixed to the open project). The service lands in the project's `.adi/hive.yaml`; editing or
+/// removing one means editing that file in the Files panel. `Copy` so it threads into the
+/// panel view and its submit handler.
+#[derive(Clone, Copy)]
+struct QuickServiceForm {
+    name: RwSignal<String>,
+    run: RwSignal<String>,
+    host: RwSignal<String>,
+    /// The explicit `http` port as typed, or empty for an auto-leased ports-manager port.
+    port: RwSignal<String>,
+    busy: RwSignal<bool>,
+}
+
 /// Render one loaded [`ProjectDetail`]: header + actions, key facts, description, and the
 /// services table. Rebuilt whenever the `project_detail` signal changes.
 fn detail_body(
     state: State,
     route: RwSignal<Route>,
     confirm_delete: RwSignal<bool>,
+    service_form: QuickServiceForm,
     d: ProjectDetail,
 ) -> AnyView {
     let archived = d.is_archived();
@@ -227,6 +250,11 @@ fn detail_body(
             </div>
             {data_table(&["Service", "Host", "Ports", "Command", "Restart", ""],
                 service_rows(state, rows_id, services, has_hive))}
+            {service_create_form(state, service_form)}
+            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+                "Written to the project's " <code>".adi/hive.yaml"</code> " — the front door picks the "
+                "service up from there. Edit or remove services by editing that file in the Files panel."
+            </div>
         </section>
     }
     .into_any()
@@ -315,6 +343,83 @@ fn service_rows(
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// The quick service create form under the Services table: name + run command, an optional
+/// proxied host, and an optional explicit port (empty → a ports-manager-leased one). Posts to
+/// `/api/hive/create`, which writes the service into the project's `.adi/hive.yaml` and
+/// returns the fresh detail.
+fn service_create_form(state: State, form: QuickServiceForm) -> AnyView {
+    let QuickServiceForm {
+        name,
+        run,
+        host,
+        port,
+        busy,
+    } = form;
+    view! {
+        <form class="adi-form" on:submit=move |ev| {
+            ev.prevent_default();
+            let id = state.current_project.get_untracked();
+            if id.is_empty() {
+                return;
+            }
+            let nm = name.get().trim().to_string();
+            if nm.is_empty() {
+                state.flash.set(Some(Flash::err("A service name is required.".to_string())));
+                return;
+            }
+            let run_cmd = run.get().trim().to_string();
+            if run_cmd.is_empty() {
+                state.flash.set(Some(Flash::err("A run command is required.".to_string())));
+                return;
+            }
+            let host_v = host.get().trim().to_string();
+            let port_txt = port.get().trim().to_string();
+            let port_v = if port_txt.is_empty() {
+                None
+            } else {
+                match port_txt.parse::<u16>() {
+                    Ok(p) => Some(p),
+                    Err(_) => {
+                        state.flash.set(Some(Flash::err(
+                            "The port must be a number (1–65535), or empty for an auto-leased one.".to_string(),
+                        )));
+                        return;
+                    }
+                }
+            };
+            let body = NewService {
+                project: id,
+                name: nm.clone(),
+                run: run_cmd,
+                host: (!host_v.is_empty()).then_some(host_v),
+                port: port_v,
+                working_dir: None,
+                restart: None,
+            };
+            name.set(String::new());
+            run.set(String::new());
+            host.set(String::new());
+            port.set(String::new());
+            apply_mutation(state, Some(busy), format!("Added service “{nm}”."),
+                |s: State, d: ProjectDetail| s.project_detail.set(Some(d)), fetch::create_service(body));
+        }>
+            <TextField id="pservice-name" label="Name" placeholder="api" mono=true
+                hint="the key under services:" value=name />
+            <TextField id="pservice-run" label="Command" placeholder="bun run start" mono=true wide=true
+                field_style="flex:1 1 260px; min-width:0"
+                hint="runs as sh -c with PORT injected" value=run />
+            <TextField id="pservice-host" label="Host" placeholder="myapp.adi" mono=true
+                hint="optional — routed by the front door" value=host />
+            <TextField id="pservice-port" label="Port" placeholder="auto" mono=true numeric=true
+                hint="optional — auto-leased when empty" value=port />
+            <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
+                "Add service"
+            </button>
+        </form>
+    }
+    .into_any()
 }
 
 /// Run a detail-page mutation (archive/restore, sub-project create) that returns the fresh

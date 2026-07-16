@@ -65,9 +65,41 @@ thread_local! {
 }
 
 /// The `hash → command source` map produced by [`preprocess`], carried opaquely to
-/// [`with_commands`]. Callers never inspect it.
+/// [`with_commands`]. Callers never inspect it, but [`Commands::restore`] can rewrite the
+/// placeholders in re-serialized YAML back into their `` bash`…` `` source, so a config can
+/// round-trip through preprocess → parse → patch → serialize without losing its commands.
 #[derive(Debug, Clone, Default)]
 pub struct Commands(HashMap<String, String>);
+
+impl Commands {
+    /// Register `command` and return its `datacommand:<hash>` placeholder value — for building
+    /// *new* config values that [`restore`](Self::restore) will rewrite into `` bash`…` ``
+    /// alongside the ones [`preprocess`] collected.
+    pub fn placeholder(&mut self, command: &str) -> String {
+        let hash = hash_command(command);
+        self.0.insert(hash.clone(), command.to_string());
+        format!("{SCHEME}{hash}")
+    }
+
+    /// The reverse of [`preprocess`]: rewrite every known `datacommand:<hash>` placeholder in
+    /// `text` (quoted or plain, as a serializer may emit either) back to its `` bash`…` ``
+    /// command source. Unknown placeholders are left verbatim.
+    #[must_use]
+    pub fn restore(&self, text: &str) -> String {
+        let mut out = text.to_string();
+        for (hash, command) in &self.0 {
+            let bash = format!("{COMMAND_TAG}{command}`");
+            for needle in [
+                format!("\"{SCHEME}{hash}\""),
+                format!("'{SCHEME}{hash}'"),
+                format!("{SCHEME}{hash}"),
+            ] {
+                out = out.replace(&needle, &bash);
+            }
+        }
+        out
+    }
+}
 
 /// Rewrite raw config text into plain YAML: every `` bash`…` `` command becomes a quoted
 /// `"datacommand:<hash>"` placeholder, and the returned [`Commands`] maps each hash back to its
@@ -341,6 +373,38 @@ mod tests {
         let (yaml, commands) = preprocess("a:\n  b: 8090\n");
         assert_eq!(yaml, "a:\n  b: 8090\n");
         assert!(commands.0.is_empty());
+    }
+
+    #[test]
+    fn restore_reverses_preprocess() {
+        let raw = "a:\n  b: bash`ports-manager.get('x', 'http')`\n  c: 8090\n";
+        let (yaml, commands) = preprocess(raw);
+        assert_eq!(commands.restore(&yaml), raw);
+    }
+
+    #[test]
+    fn restore_handles_quoted_and_plain_placeholders() {
+        let (_, mut commands) = preprocess("");
+        let placeholder = commands.placeholder("ports-manager.get('svc')");
+        let quoted = format!("a: \"{placeholder}\"\n");
+        let single = format!("a: '{placeholder}'\n");
+        let plain = format!("a: {placeholder}\n");
+        let want = "a: bash`ports-manager.get('svc')`\n";
+        assert_eq!(commands.restore(&quoted), want);
+        assert_eq!(commands.restore(&single), want);
+        assert_eq!(commands.restore(&plain), want);
+    }
+
+    #[test]
+    fn placeholder_registers_the_command_for_parsing() {
+        let (manager, path) = temp_manager();
+        let (_, mut commands) = preprocess("");
+        let placeholder = commands.placeholder("ports-manager.get('fresh/app', 'http')");
+        let port = with_ports(manager.clone(), || {
+            with_commands(commands, || resolve(&placeholder)).expect("resolves")
+        });
+        assert_eq!(manager.get("fresh/app", "http").expect("lookup"), Some(port));
+        cleanup(&path);
     }
 
     #[test]

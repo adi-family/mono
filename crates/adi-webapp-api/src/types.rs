@@ -221,6 +221,32 @@ pub struct StopResult {
     pub port: Option<u16>,
 }
 
+/// Request body for `POST /api/hive/create` — add a service to a project's `.adi/hive.yaml`.
+/// Responds with the fresh [`ProjectDetail`] so the page updates in one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewService {
+    /// The owning project id (services are always project-scoped; the global front-door
+    /// hive is hand-edited, not API-managed).
+    pub project: String,
+    /// The service name — the key under `services:` and the ports-manager lease segment.
+    pub name: String,
+    /// The runner command (`runner.script.run`), executed via `sh -c`.
+    pub run: String,
+    /// The proxied host (`proxy.host`, e.g. `demo.adi`); omitted → no front-door route.
+    #[serde(default)]
+    pub host: Option<String>,
+    /// An explicit `http` port; omitted → a `` ports-manager.get('<project>/<name>', 'http') ``
+    /// command is written instead, so the port is leased on read.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// The runner's working directory, relative to the project dir (`runner.script.working_dir`).
+    #[serde(default)]
+    pub working_dir: Option<String>,
+    /// Restart policy (`always` | `on-failure` | `no`); omitted → adi-hive's default.
+    #[serde(default)]
+    pub restart: Option<String>,
+}
+
 /// One named port a service declares (`rollout.recreate.ports.<key> = <port>`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServicePort {

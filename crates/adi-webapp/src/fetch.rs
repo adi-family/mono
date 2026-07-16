@@ -4,7 +4,7 @@ use adi_webapp_api::types::{
     AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError, DirListing, FileContent,
     FilesRef, Health, HiveState,
     LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
-    NewTask, PortsState, ProjectDetail, ProjectRef, ProjectsState, ReleaseResponse,
+    NewService, NewTask, PortsState, ProjectDetail, ProjectRef, ProjectsState, ReleaseResponse,
     ReserveResponse, SaveAgent, SaveTrigger, StartResult, StartService, StopResult, TasksState,
     TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WriteFile,
 };
@@ -169,6 +169,12 @@ pub async fn start_service(
 
 pub async fn stop_service(project: Option<String>, service: String) -> Result<StopResult, String> {
     post("/api/hive/stop", &StartService { project, service }).await
+}
+
+/// Add a service to a project's `.adi/hive.yaml`; returns the fresh detail so the
+/// project page updates in one round-trip.
+pub async fn create_service(body: NewService) -> Result<ProjectDetail, String> {
+    post("/api/hive/create", &body).await
 }
 
 // Project files: browse/read/edit the files under a project's own directory (jailed to it).

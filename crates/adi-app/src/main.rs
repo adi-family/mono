@@ -262,6 +262,15 @@ async fn handle(
         ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
         // Stop a running service (kill whatever listens on its resolved port).
         ("POST", "/api/hive/stop") => handlers::stop_service(projects, &req.body),
+        // Add a service to a project's .adi/hive.yaml, then return the fresh project detail
+        // (which needs the listening-port scan for the running flags).
+        ("POST", "/api/hive/create") => {
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
+            handlers::create_service(projects, &req.body, &listening)
+        }
         // Mesh: config CRUD (reads/writes ~/.adi/mono/mesh) plus starting/stopping the
         // in-process daemon. The daemon's run state is this app's, so it's passed in.
         ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),
