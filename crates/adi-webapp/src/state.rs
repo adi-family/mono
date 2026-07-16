@@ -210,6 +210,41 @@ impl HookLogView {
     }
 }
 
+/// The project detail page's hook editor: which hook script is open (`None` = closed) —
+/// keyed by (project id, hook name) so save/reload always target the project the file was
+/// read from — plus the edit buffer and its saved baseline. Rendered as its own panel next
+/// to the Workspaces panel; a navigation builds a fresh (closed) one. `Copy` so it threads
+/// into the view and async handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct HookEditor {
+    /// The open (project id, hook name), or `None` while the editor is closed.
+    pub(crate) open: RwSignal<Option<(String, String)>>,
+    /// The last-loaded/saved content — compared against `buffer` to detect edits.
+    pub(crate) original: RwSignal<String>,
+    /// The editable textarea buffer.
+    pub(crate) buffer: RwSignal<String>,
+    /// Whether a read/write is in flight (disables the editor's buttons).
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl HookEditor {
+    pub(crate) fn new() -> Self {
+        Self {
+            open: RwSignal::new(None),
+            original: RwSignal::new(String::new()),
+            buffer: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+        }
+    }
+
+    /// Close the editor and drop its buffers.
+    pub(crate) fn close(self) {
+        self.open.set(None);
+        self.original.set(String::new());
+        self.buffer.set(String::new());
+    }
+}
+
 /// The Agents page's live view: which agent's tmux pane is being watched (`None` = closed), the
 /// latest snapshot, and the send-bar input buffer. The shell polls a fresh peek every second
 /// while open; leaving the page closes it. `Copy` so it threads into the poll closure and

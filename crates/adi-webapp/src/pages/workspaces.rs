@@ -1,17 +1,21 @@
 //! The Workspaces panel on a project's detail page: the project's working copies (created
 //! by its hook scripts — the first by `init`, later ones by `workspace`) plus the hook files
-//! themselves with Run/Log/Edit actions. Hooks are plain files at `.adi/hooks/<name>`, so
-//! the Edit action just opens them in the Files editor below.
+//! themselves with Run/Log/Edit actions. Hooks are plain files at `.adi/hooks/<name>`; the
+//! Edit action opens them in a dedicated hook editor panel rendered right above this one.
 
 use adi_webapp_api::types::{NewProjectHook, NewWorkspace, WorkspacesState};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use super::project_detail::open_file;
 use crate::fetch;
 use crate::routing::scroll_top;
-use crate::state::{Flash, HookLogView, State};
+use crate::state::{Flash, HookEditor, HookLogView, State};
 use crate::ui::{TextField, data_table, fmt_date, placeholder_row};
+
+/// A hook's path inside the project, as the file API sees it.
+fn hook_rel_path(name: &str) -> String {
+    format!(".adi/hooks/{name}")
+}
 
 /// The panel's workspace create form (name, an optional absolute path, and the "link local"
 /// switch; the project is fixed to the open project). `Copy` so it threads into handlers.
@@ -46,6 +50,7 @@ pub(crate) fn workspaces_panel(
     form: WorkspaceForm,
     hook_form: NewHookForm,
     log: HookLogView,
+    editor: HookEditor,
 ) -> AnyView {
     let WorkspaceForm {
         name,
@@ -88,7 +93,7 @@ pub(crate) fn workspaces_panel(
                 <h2 class="adi-panel__title">"Hooks"</h2>
                 <span class="adi-updated">"plain files under " <code>".adi/hooks"</code></span>
             </div>
-            {data_table(&["Hook", "Status", "Last run", ""], move || hook_rows(state, log))}
+            {data_table(&["Hook", "Status", "Last run", ""], move || hook_rows(state, log, editor))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_hook(state, hook_form);
@@ -112,7 +117,7 @@ pub(crate) fn workspaces_panel(
             <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
                 "The first workspace runs the " <code>"init"</code> " hook (e.g. git clone); every "
                 "further one runs " <code>"workspace"</code> " (e.g. git worktree add). Other hooks "
-                "run manually. Edit opens the script in the Files editor below."
+                "run manually. Edit opens the script right here, in the hook editor."
             </div>
         </section>
     }
@@ -201,7 +206,7 @@ fn workspace_rows(state: State, confirm_remove: RwSignal<Option<String>>) -> Any
 }
 
 /// Rows for the hooks table: each hook file with Run / Log / Edit actions.
-fn hook_rows(state: State, log: HookLogView) -> AnyView {
+fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
     let Some(snapshot) = current_snapshot(state) else {
         return placeholder_row("4", "Loading…");
     };
@@ -227,7 +232,7 @@ fn hook_rows(state: State, log: HookLogView) -> AnyView {
             let ran = h.last_run_at.map_or_else(|| "—".to_string(), fmt_date);
             let run_name = h.name.clone();
             let log_name = h.name.clone();
-            let edit_path = format!(".adi/hooks/{}", h.name);
+            let edit_name = h.name.clone();
             view! {
                 <tr>
                     <td>
@@ -245,8 +250,8 @@ fn hook_rows(state: State, log: HookLogView) -> AnyView {
                         <button class="adi-btn adi-btn--link" title="show the last run's output"
                             on:click=move |_| open_hook_log(state, log, log_name.clone())>"Log"</button>
                         " "
-                        <button class="adi-btn adi-btn--link" title="open the script in the Files editor"
-                            on:click=move |_| open_file(state, edit_path.clone())>"Edit"</button>
+                        <button class="adi-btn adi-btn--link" title="open the script in the hook editor"
+                            on:click=move |_| open_hook_editor(state, editor, edit_name.clone())>"Edit"</button>
                     </td>
                 </tr>
             }
@@ -398,6 +403,110 @@ fn open_hook_log(state: State, log: HookLogView, name: String) {
     log.watched.set(Some((id, name)));
     poll_hook_log(log);
     scroll_top();
+}
+
+/// Open a hook script in the hook editor (the Edit action): load `.adi/hooks/<name>`
+/// through the project file API into the buffer, then scroll up to where the editor panel
+/// renders.
+fn open_hook_editor(state: State, editor: HookEditor, name: String) {
+    let id = state.current_project.get_untracked();
+    if id.is_empty() {
+        return;
+    }
+    editor.busy.set(true);
+    spawn_local(async move {
+        match fetch::read_file(&id, &hook_rel_path(&name)).await {
+            Ok(fc) => {
+                editor.open.set(Some((id, name)));
+                editor.original.set(fc.content.clone());
+                editor.buffer.set(fc.content);
+                scroll_top();
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        editor.busy.set(false);
+    });
+}
+
+/// Save the hook editor's buffer back to the script, then refresh the workspaces snapshot
+/// so the hook's size/modified update in the table.
+fn save_hook(state: State, editor: HookEditor) {
+    let Some((id, name)) = editor.open.get_untracked() else {
+        return;
+    };
+    let content = editor.buffer.get_untracked();
+    editor.busy.set(true);
+    spawn_local(async move {
+        match fetch::write_file(&id, &hook_rel_path(&name), &content).await {
+            Ok(fc) => {
+                editor.original.set(fc.content.clone());
+                editor.buffer.set(fc.content);
+                state
+                    .flash
+                    .set(Some(Flash::ok(format!("Saved hook “{name}”."))));
+                if let Ok(snapshot) = fetch::workspaces(&id).await {
+                    state.workspaces.set(Some(snapshot));
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        editor.busy.set(false);
+    });
+}
+
+/// Reload the open hook's script from disk, dropping any unsaved edits.
+fn reload_hook(state: State, editor: HookEditor) {
+    let Some((id, name)) = editor.open.get_untracked() else {
+        return;
+    };
+    editor.busy.set(true);
+    spawn_local(async move {
+        match fetch::read_file(&id, &hook_rel_path(&name)).await {
+            Ok(fc) => {
+                editor.original.set(fc.content.clone());
+                editor.buffer.set(fc.content);
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        editor.busy.set(false);
+    });
+}
+
+/// The hook editor panel: a toolbar (script path, dirty state, Save/Reload/Close) and a
+/// monospace textarea bound to the buffer. Renders nothing while no hook is open.
+pub(crate) fn hook_editor_view(state: State, editor: HookEditor) -> Option<AnyView> {
+    let (_, name) = editor.open.get()?;
+    let dirty = move || editor.buffer.get() != editor.original.get();
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">{format!("Edit hook — {name}")}</h2>
+                <span class="adi-updated">"runs as sh -c, detached"</span>
+            </div>
+            <div class="adi-form" style="justify-content:flex-start; align-items:center">
+                <span class="adi-chip adi-mono">{hook_rel_path(&name)}</span>
+                <span class="adi-muted" style="font-size:13px">
+                    {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
+                </span>
+                <span class="adi-spacer" style="flex:1"></span>
+                <button class="adi-btn adi-btn--primary" type="button"
+                    prop:disabled=move || editor.busy.get() || !dirty()
+                    on:click=move |_| save_hook(state, editor)>"Save"</button>
+                <button class="adi-btn adi-btn--ghost" type="button"
+                    prop:disabled=move || editor.busy.get()
+                    on:click=move |_| reload_hook(state, editor)>"Reload"</button>
+                <button class="adi-btn adi-btn--link" type="button"
+                    on:click=move |_| editor.close()>"Close"</button>
+            </div>
+            <div class="adi-panel__body">
+                <textarea class="adi-textarea adi-mono" spellcheck="false" autocomplete="off"
+                    prop:value=move || editor.buffer.get()
+                    on:input=move |ev| editor.buffer.set(event_target_value(&ev))></textarea>
+            </div>
+        </section>
+    }
+    .into_any()
+    .into()
 }
 
 /// Fetch a fresh log snapshot for the watched hook, if any. The shell calls this every
