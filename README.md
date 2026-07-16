@@ -58,3 +58,9 @@ cargo fmt                # format
 cargo clippy --workspace # lint
 cargo run -p <crate>     # run a specific binary crate
 ```
+
+## License
+
+Business Source License 1.1 — see [LICENSE](LICENSE). Free for personal,
+educational, research, and small-business use; larger commercial use needs a
+separate license from the Licensor (https://the-ihor.com).

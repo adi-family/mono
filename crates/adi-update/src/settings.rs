@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Where releases are announced by default: the `manifest.json` asset of the latest
 /// GitHub release. Point `manifest_url` at any static host to change channels.
 pub const DEFAULT_MANIFEST_URL: &str =
-    "https://github.com/mgorunuch/adi-family/releases/latest/download/manifest.json";
+    "https://github.com/adi-family/mono/releases/latest/download/manifest.json";
 
 const DEFAULT_CHECK_INTERVAL_HOURS: u64 = 6;
 

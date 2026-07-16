@@ -28,9 +28,10 @@ default-members = [
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-license = "MIT OR Apache-2.0"
+# Business Source License 1.1 (see LICENSE); BUSL-1.1 is its SPDX identifier.
+license = "BUSL-1.1"
 authors = ["mgorunuch <alkudel.ui@gmail.com>"]
-repository = "https://github.com/mgorunuch/adi-family"
+repository = "https://github.com/adi-family/mono"
 
 # Central dependency versions. Member crates reference these with
 # `some-dep = { workspace = true }` so versions stay aligned repo-wide.

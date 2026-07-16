@@ -13,7 +13,7 @@
 #   apps/macos/publish.sh --notes "..."   # release notes (also embedded in the manifest)
 #
 # Env:
-#   ADI_UPDATE_REPO  GitHub repo the release goes to (default: mgorunuch/adi-family)
+#   ADI_UPDATE_REPO  GitHub repo the release goes to (default: adi-family/mono)
 #
 # Uploading needs the `gh` CLI, authenticated (`gh auth login`), and the repo to exist.
 # With --no-upload the manifest + DMG in build/ are ready for any static host instead —
@@ -30,7 +30,7 @@ MANIFEST="$BUILD/manifest.json"
 # Same credential auto-load as release.sh, so this can run standalone.
 if [ -f "$SCRIPT_DIR/.env" ]; then set -a; . "$SCRIPT_DIR/.env"; set +a; fi
 
-REPO="${ADI_UPDATE_REPO:-mgorunuch/adi-family}"
+REPO="${ADI_UPDATE_REPO:-adi-family/mono}"
 SKIP_BUILD=false
 UPLOAD=true
 NOTES=""

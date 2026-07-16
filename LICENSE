@@ -1,0 +1,58 @@
+Business Source License 1.1
+
+Licensor: Ihor (the-ihor.com)
+Licensed Work: ADI Family — the ADI platform monorepo (adi-family/mono)
+The Licensed Work is (c) 2026 Ihor
+
+Use Limitation:
+
+You may not use the Licensed Work for a Commercial Purpose without a
+separate commercial license from the Licensor.
+
+"Commercial Purpose" means use of the Licensed Work in any manner that
+is primarily intended for or directed toward commercial advantage or
+monetary compensation by an entity with more than $1,000,000 USD in
+annual revenue or more than 10 employees.
+
+Grant of Rights:
+
+Subject to the Use Limitation above, the Licensor grants you a
+non-exclusive, worldwide, royalty-free license to:
+
+1. Use the Licensed Work for personal, educational, research, and
+   non-commercial purposes
+2. Use the Licensed Work for commercial purposes if you are an
+   individual or organization with less than $1,000,000 USD in annual
+   revenue AND fewer than 10 employees
+3. View, study, and modify the source code for the above permitted uses
+4. Create derivative works for the above permitted uses
+
+Restrictions:
+
+1. You may NOT distribute, sublicense, or sell copies of the Licensed
+   Work or derivative works without explicit written permission from
+   the Licensor
+2. You may NOT use the Licensed Work to create a competing product or
+   service
+3. You may NOT remove or alter any copyright notices, license terms,
+   or attribution in the Licensed Work
+4. Large corporations (>$1M revenue or >10 employees) may NOT use this
+   software without a commercial license
+
+No Warranty:
+
+THE LICENSED WORK IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE LICENSOR BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE LICENSED WORK OR THE
+USE OR OTHER DEALINGS IN THE LICENSED WORK.
+
+Contact:
+
+For commercial licensing inquiries, contact: https://the-ihor.com
+
+---
+
+SPDX-License-Identifier: BSL-1.1

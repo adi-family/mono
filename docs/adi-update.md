@@ -36,7 +36,7 @@ apps/macos/publish.sh                        family.adi.app.updater (launchd,
   `adi-mono up`/`enable`/`disable`, so it appears as an "Updates" row in the menu-bar
   app automatically.
 - Settings: `~/.adi/mono/update/config.toml` — `manifest_url` (default: the latest
-  GitHub release of `mgorunuch/adi-family`), `check_interval_hours` (default 6),
+  GitHub release of `adi-family/mono`), `check_interval_hours` (default 6),
   optional `auth_header` for private static hosting.
 - State: `~/.adi/mono/update/state.json` (what `update status` and the GUI row show);
   previous installs in `~/.adi/mono/update/backups` (last 2 kept).
