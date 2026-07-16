@@ -20,7 +20,7 @@ mod ui;
 
 use adi_webapp_api::types::{
     AgentsState, Health, HiveState, MeshState, PortsState, ProjectDetail, ProjectsState,
-    TasksState, TriggersState, UsedPorts,
+    TasksState, TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -29,13 +29,13 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_trigger_log, poll_watch,
-    ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
+    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_hook_log, poll_trigger_log,
+    poll_watch, ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
 };
 use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
 use state::{
-    AgentsForm, AgentsWatch, FilesState, Flash, Form, MeshForm, ProjectsForm, State, Status,
-    TasksForm, TriggersForm, TriggersLogView, load,
+    AgentsForm, AgentsWatch, FilesState, Flash, Form, HookLogView, MeshForm, ProjectsForm, State,
+    Status, TasksForm, TriggersForm, TriggersLogView, load,
 };
 use ui::{apply_saved_theme, nav_item, toggle_theme};
 
@@ -64,6 +64,7 @@ fn App() -> impl IntoView {
     let agents = RwSignal::new(None::<AgentsState>);
     let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
+    let workspaces = RwSignal::new(None::<WorkspacesState>);
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
     let current_project = RwSignal::new(project_id_from_path(&current_path()).unwrap_or_default());
@@ -83,6 +84,7 @@ fn App() -> impl IntoView {
         agents,
         triggers,
         hive,
+        workspaces,
         files,
     };
 
@@ -139,6 +141,9 @@ fn App() -> impl IntoView {
     // The Triggers page's fire-log view (re-polled each second while open).
     let triggers_log = TriggersLogView::new();
 
+    // The project detail page's hook-log view (re-polled each second while open).
+    let hook_log = HookLogView::new();
+
     // The Agents page's live view (a polled read-only capture of an agent's tmux pane).
     let agents_watch = AgentsWatch::new();
 
@@ -192,6 +197,7 @@ fn App() -> impl IntoView {
         secs_since.update(|s| *s = s.saturating_add(1));
         poll_watch(agents_watch);
         poll_trigger_log(triggers_log);
+        poll_hook_log(hook_log);
     })
     .forget();
 
@@ -222,6 +228,10 @@ fn App() -> impl IntoView {
         // on a project's detail page, whose Triggers panel shares the log actions).
         if !matches!(route.get(), Route::Triggers | Route::ProjectDetail) {
             triggers_log.close();
+        }
+        // The hook-log view only renders on a project's detail page.
+        if !matches!(route.get(), Route::ProjectDetail) {
+            hook_log.close();
         }
     });
 
@@ -290,7 +300,7 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Overview => overview_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
-                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch),
+                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, hook_log),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),

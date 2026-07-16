@@ -6,7 +6,8 @@ use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
     AgentPeek, AgentsState, DirListing, Health, HiveState, MeshState, PortsState, ProjectDetail,
-    ProjectsState, TasksState, TriggerLog, TriggersState, UsedPorts,
+    ProjectHookLog, ProjectsState, TasksState, TriggerLog, TriggersState, UsedPorts,
+    WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -34,6 +35,10 @@ pub(crate) struct State {
     /// Trigger definitions (`/api/triggers`), shown on the Triggers page.
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
+    /// The open project's workspaces + hooks snapshot (`/api/projects/workspaces`), shown in
+    /// the detail page's Workspaces panel. Refreshed by the 4s poll, so a `creating`
+    /// workspace flips to `ready` on its own once the hook finishes.
+    pub(crate) workspaces: RwSignal<Option<WorkspacesState>>,
     /// The project file browser/editor state (the Files panel on the detail page).
     pub(crate) files: FilesState,
 }
@@ -178,6 +183,33 @@ impl TriggersLogView {
     }
 }
 
+/// The project detail page's hook-log view: which hook's run log is open (`None` = closed) —
+/// keyed by (project id, hook name), since hook logs are project-scoped — and the latest
+/// snapshot. The shell re-polls it every second while open (a running hook may still be
+/// appending); leaving the page closes it. `Copy` so it threads into the poll closure.
+#[derive(Clone, Copy)]
+pub(crate) struct HookLogView {
+    /// The watched (project id, hook name), or `None` while the log view is closed.
+    pub(crate) watched: RwSignal<Option<(String, String)>>,
+    /// The last log snapshot received, or `None` before the first one lands.
+    pub(crate) log: RwSignal<Option<ProjectHookLog>>,
+}
+
+impl HookLogView {
+    pub(crate) fn new() -> Self {
+        Self {
+            watched: RwSignal::new(None),
+            log: RwSignal::new(None),
+        }
+    }
+
+    /// Close the log view (stops the polling; the poll no-ops while `watched` is `None`).
+    pub(crate) fn close(self) {
+        self.watched.set(None);
+        self.log.set(None);
+    }
+}
+
 /// The Agents page's live view: which agent's tmux pane is being watched (`None` = closed), the
 /// latest snapshot, and the send-bar input buffer. The shell polls a fresh peek every second
 /// while open; leaving the page closes it. `Copy` so it threads into the poll closure and
@@ -318,6 +350,10 @@ pub(crate) async fn load(s: State) {
         // And its Agents panel filters the shared agent list.
         if let Ok(a) = fetch::agents().await {
             s.agents.set(Some(a));
+        }
+        // The Workspaces panel's snapshot; polling it flips `creating` → `ready` live.
+        if let Ok(w) = fetch::workspaces(&id).await {
+            s.workspaces.set(Some(w));
         }
     }
     if path == Route::Tasks.path() {

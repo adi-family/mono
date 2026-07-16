@@ -12,8 +12,9 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use super::agents::{agent_actions, live_view as agent_live_view};
 use super::triggers::{log_view, trigger_actions};
+use super::workspaces::{NewHookForm, WorkspaceForm, hook_log_view, workspaces_panel};
 use crate::routing::{Route, go_projects, open_project};
-use crate::state::{AgentsWatch, Flash, State, TriggersLogView};
+use crate::state::{AgentsWatch, Flash, HookLogView, State, TriggersLogView};
 use crate::ui::{
     TextField, apply_mutation, dash, data_table, effective_label_title, flash_view, fmt_date,
     fmt_ports, placeholder_row, task_tree_rows, tile,
@@ -26,6 +27,7 @@ pub(crate) fn project_detail_view(
     route: RwSignal<Route>,
     triggers_log: TriggersLogView,
     agents_watch: AgentsWatch,
+    hook_log: HookLogView,
 ) -> AnyView {
     let State {
         project_detail,
@@ -71,6 +73,18 @@ pub(crate) fn project_detail_view(
         port: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
+    // The Workspaces panel's create forms (same lifetime rationale as the task form).
+    let workspace_form = WorkspaceForm {
+        name: RwSignal::new(String::new()),
+        path: RwSignal::new(String::new()),
+        local: RwSignal::new(false),
+        busy: RwSignal::new(false),
+    };
+    let new_hook_form = NewHookForm {
+        name: RwSignal::new(String::new()),
+        template: RwSignal::new("blank".to_string()),
+        busy: RwSignal::new(false),
+    };
     view! {
         <div class="adi-bar">
             <a class="adi-btn adi-btn--link" href=Route::Projects.path()
@@ -87,6 +101,10 @@ pub(crate) fn project_detail_view(
             }.into_any(),
             Some(d) => detail_body(state, route, confirm_delete, service_form, d),
         }}
+
+        {move || hook_log_view(hook_log)}
+
+        {workspaces_panel(state, workspace_form, new_hook_form, hook_log)}
 
         {subprojects_panel(state, route, subproject_form)}
 
@@ -1056,8 +1074,9 @@ fn open_dir(state: State, path: String) {
 }
 
 /// Open file `path` in the editor, loading its content into the buffer (and remembering it as
-/// the baseline so edits are detectable).
-fn open_file(state: State, path: String) {
+/// the baseline so edits are detectable). `pub(crate)` because the Workspaces panel's Edit
+/// action opens hook scripts (`.adi/hooks/<name>`) through it.
+pub(crate) fn open_file(state: State, path: String) {
     let id = state.current_project.get_untracked();
     if id.is_empty() {
         return;

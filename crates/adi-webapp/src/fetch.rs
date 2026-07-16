@@ -4,9 +4,11 @@ use adi_webapp_api::types::{
     AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError, DirListing, FileContent,
     FilesRef, Health, HiveState,
     LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
-    NewService, NewTask, PortsState, ProjectDetail, ProjectRef, ProjectsState, ReleaseResponse,
+    NewProjectHook, NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
+    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
     ReserveResponse, SaveAgent, SaveTrigger, StartResult, StartService, StopResult, TasksState,
-    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WriteFile,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
+    WorkspaceRef, WorkspacesRef, WorkspacesState, WriteFile,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -211,6 +213,37 @@ pub async fn write_file(id: &str, path: &str, content: &str) -> Result<FileConte
         },
     )
     .await
+}
+
+// Workspaces & project hooks: working copies created by the project's .adi/hooks scripts.
+// Every mutation returns (or carries) the fresh WorkspacesState for one-round-trip updates.
+
+pub async fn workspaces(id: &str) -> Result<WorkspacesState, String> {
+    post(
+        "/api/projects/workspaces",
+        &WorkspacesRef { id: id.to_string() },
+    )
+    .await
+}
+
+pub async fn create_workspace(body: NewWorkspace) -> Result<WorkspaceCreateResult, String> {
+    post("/api/projects/workspaces/create", &body).await
+}
+
+pub async fn remove_workspace(id: String, name: String) -> Result<WorkspacesState, String> {
+    post("/api/projects/workspaces/remove", &WorkspaceRef { id, name }).await
+}
+
+pub async fn run_project_hook(id: String, name: String) -> Result<ProjectHookRunResult, String> {
+    post("/api/projects/hook/run", &ProjectHookRef { id, name }).await
+}
+
+pub async fn project_hook_log(id: String, name: String) -> Result<ProjectHookLog, String> {
+    post("/api/projects/hook/log", &ProjectHookRef { id, name }).await
+}
+
+pub async fn create_project_hook(body: NewProjectHook) -> Result<WorkspacesState, String> {
+    post("/api/projects/hook/create", &body).await
 }
 
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {
