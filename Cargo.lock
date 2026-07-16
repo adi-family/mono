@@ -53,6 +53,7 @@ version = "0.1.0"
 dependencies = [
  "adi-agents",
  "adi-config",
+ "adi-hooks",
  "adi-ports-manager",
  "adi-projects",
  "adi-tasks",

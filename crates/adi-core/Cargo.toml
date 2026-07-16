@@ -26,6 +26,10 @@ adi-ports-manager = { workspace = true }
 # through this facade so `adi-mono projects …` stays a thin adapter over adi-core.
 adi-projects = { workspace = true }
 
+# Project hooks + workspaces: per-project-dir handles (no store to open), re-exported for
+# the CLI's `projects workspace/hook` subcommands.
+adi-hooks = { workspace = true }
+
 # The auto-update engine; adi-core wraps it as the `Update` facade + the periodic
 # `Updater` LaunchAgent and owns the post-swap service restarts.
 adi-update = { workspace = true }

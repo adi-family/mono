@@ -31,6 +31,15 @@ pub use adi_agents::{Agent, AgentManifest, Agents, Error as AgentsError, Launch}
 // Its error is re-exported as `ProjectsError` so it doesn't shadow other core error types.
 pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
 
+// Project hooks + workspaces are rooted at a project's directory rather than a global
+// store, so there is no `Adi` accessor: compose `projects().project_dir(id)` with
+// `ProjectHooks::new(dir)` / `Workspaces::new(dir)`.
+pub use adi_hooks::{
+    Error as HooksError, HOOK_INIT, HOOK_WORKSPACE, Hook, HookRun, HookRunStatus,
+    Hooks as ProjectHooks, WorkspaceEntry, WorkspaceKind, WorkspaceStatus, Workspaces,
+    hook_template,
+};
+
 // The task tree is the shared queue/plan state. The CLI is the write-oriented command surface;
 // the webapp can also create tasks but deeper mutations live in `adi-mono tasks ...`.
 pub use adi_tasks::{EffectiveStatus, Error as TasksError, TaskPatch, TaskStatus, TaskView, Tasks};
