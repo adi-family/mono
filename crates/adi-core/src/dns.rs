@@ -216,10 +216,20 @@ fn frontdoor_config_current() -> bool {
     std::fs::read_to_string(frontdoor_config_path()).is_ok_and(|on_disk| on_disk == rendered)
 }
 
+/// True when the installed root daemon plist is the standard one we manage — it runs
+/// the rendered front-door config. A dev machine may deliberately repoint the daemon
+/// at another binary/config (e.g. `target/release/adi-hive` with the full
+/// `hive/hive.yaml`); that plist is hand-managed and `up` must never overwrite it.
+fn frontdoor_plist_managed() -> bool {
+    let marker = frontdoor_config_path();
+    let marker = marker.to_string_lossy();
+    std::fs::read_to_string(FRONTDOOR_DAEMON_PLIST).is_ok_and(|p| p.contains(marker.as_ref()))
+}
+
 /// True when the installed root daemon plist already carries the self-watch env — the
 /// one-time migration that lets auto-updates restart the front door without a password.
 /// Deliberately a marker check, not a byte compare: the plist embeds the machine's
-/// binary path, which legitimately differs between bundle and dev installs.
+/// binary path, which legitimately differs between installs.
 fn frontdoor_plist_current() -> bool {
     std::fs::read_to_string(FRONTDOOR_DAEMON_PLIST).is_ok_and(|p| p.contains("ADI_WATCH_SELF"))
 }
@@ -335,11 +345,14 @@ impl Service for Dns {
     // Installed once and left in place, so toggling never re-prompts; removal is an explicit
     // action. The one exception is a stale front-door config or daemon plist (e.g. upgrading
     // from the old runner-based front door, or rolling out the self-watch env) — update it
-    // once here.
+    // once here. A hand-repointed daemon plist (dev machines) is never auto-migrated:
+    // `install-route` stays the explicit way to reclaim it.
     fn on_enable(&self) {
         if !self.route_installed() {
             self.install_route();
-        } else if !frontdoor_config_current() || !frontdoor_plist_current() {
+        } else if frontdoor_plist_managed()
+            && (!frontdoor_config_current() || !frontdoor_plist_current())
+        {
             self.update_frontdoor();
         }
     }
