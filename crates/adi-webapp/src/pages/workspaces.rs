@@ -65,6 +65,8 @@ pub(crate) fn workspaces_panel(
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Workspaces"</h2>
                 <span class="adi-updated">"working copies created by the project's hooks"</span>
+                <span class="adi-spacer"></span>
+                {move || initialize_button(state, form)}
             </div>
             {data_table(&["Name", "Path", "Kind", "Status", "Created", ""], move || workspace_rows(state, confirm_remove))}
             <form class="adi-form" on:submit=move |ev| {
@@ -131,9 +133,9 @@ fn workspace_rows(state: State, confirm_remove: RwSignal<Option<String>>) -> Any
     };
     if snapshot.workspaces.is_empty() {
         let hint = if snapshot.has_init_hook {
-            "No workspaces yet — the first one you add runs the init hook."
+            "Not initialized yet — press ⚡ Initialize to run the init hook (or add a workspace with a custom name below)."
         } else {
-            "No workspaces yet — create an init hook below first."
+            "No workspaces yet — create an init hook below first, then press ⚡ Initialize."
         };
         return placeholder_row("6", hint);
     }
@@ -298,6 +300,41 @@ fn next_hook_hint(state: State) -> AnyView {
     }
 }
 
+/// The one-click ⚡ Initialize button: creates the first workspace (named `main`) with the
+/// init hook. Rendered only while the project is uninitialized (no hook-created workspace
+/// yet) and an init hook file exists.
+fn initialize_button(state: State, form: WorkspaceForm) -> Option<AnyView> {
+    let snapshot = current_snapshot(state)?;
+    (snapshot.next_hook == "init" && snapshot.has_init_hook).then(|| {
+        view! {
+            <button class="adi-btn adi-btn--primary" type="button"
+                title="run the init hook — creates the first workspace, “main”"
+                prop:disabled=move || form.busy.get()
+                on:click=move |_| initialize_project(state, form)>"⚡ Initialize"</button>
+        }
+        .into_any()
+    })
+}
+
+/// Initialize the project: create the first workspace under the default name `main`, which
+/// runs the init hook (e.g. git clone).
+fn initialize_project(state: State, form: WorkspaceForm) {
+    let id = state.current_project.get_untracked();
+    if id.is_empty() {
+        return;
+    }
+    send_create_workspace(
+        state,
+        form,
+        NewWorkspace {
+            id,
+            name: "main".to_string(),
+            path: None,
+            local: false,
+        },
+    );
+}
+
 /// Submit the workspace create form.
 fn submit_workspace(state: State, form: WorkspaceForm) {
     let id = state.current_project.get_untracked();
@@ -312,12 +349,21 @@ fn submit_workspace(state: State, form: WorkspaceForm) {
         return;
     }
     let path = form.path.get_untracked().trim().to_string();
-    let body = NewWorkspace {
-        id,
-        name,
-        path: (!path.is_empty()).then_some(path),
-        local: form.local.get_untracked(),
-    };
+    send_create_workspace(
+        state,
+        form,
+        NewWorkspace {
+            id,
+            name,
+            path: (!path.is_empty()).then_some(path),
+            local: form.local.get_untracked(),
+        },
+    );
+}
+
+/// Fire a workspace-create request and fan the result into the signals (shared by the
+/// ⚡ Initialize button and the create form).
+fn send_create_workspace(state: State, form: WorkspaceForm, body: NewWorkspace) {
     form.busy.set(true);
     spawn_local(async move {
         match fetch::create_workspace(body).await {
