@@ -15,8 +15,11 @@ use crate::error::{Error, Result};
 /// Unknown fields are ignored so the manifest can gain fields without breaking older stores.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct AgentManifest {
-    /// Which engine runs the agent: `cli:claude` | `cli:codex` | `api:anthropic` | `api:openai`
-    /// (a `BackendRef`, stored as its `kind:engine` string).
+    /// How and what runs the agent, as an `executor:what` string. The executor is the run
+    /// mechanism, the suffix is the thing it runs: `tmux:claude` | `tmux:codex` (a vendor CLI in
+    /// a tmux session), `process:claude` | `process:codex` (a vendor CLI as a headless
+    /// subprocess), `harness:claude-sdk` | `harness:adi` (an agentic-loop harness; `harness:adi`
+    /// picks its model provider via the `provider` extra).
     pub backend: String,
     /// The system prompt seeding the agent (the resolved prompt body). May be empty.
     #[serde(default)]
@@ -28,10 +31,11 @@ pub struct AgentManifest {
     /// Backend-specific model alias, e.g. `opus`/`sonnet` (claude), `gpt-5-codex` (codex).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// CLI-backend permission mode, e.g. `default` | `acceptEdits` | `plan` | `bypassPermissions`.
+    /// Claude-engine permission mode, e.g. `default` | `acceptEdits` | `plan` |
+    /// `bypassPermissions` (applies to `*:claude` and `harness:claude-sdk`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
-    /// API-backend sampling temperature.
+    /// `harness:adi` sampling temperature (only meaningful for providers that accept it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
     /// Optional cap on the number of agent turns per run.
@@ -67,12 +71,12 @@ pub struct Agent {
 }
 
 impl AgentManifest {
-    /// The backend kind (`cli` or `api`) — the part before the `:` in [`Self::backend`]; empty
-    /// string if the backend has no `kind:` prefix. Drives which params (permission mode vs.
-    /// temperature) apply.
+    /// The executor (`tmux` / `process` / `harness`) — the part before the `:` in
+    /// [`Self::backend`]; empty string if the backend has no `executor:` prefix. Drives how the
+    /// agent runs and which params apply.
     #[must_use]
-    pub fn backend_kind(&self) -> &str {
-        self.backend.split_once(':').map_or("", |(kind, _)| kind)
+    pub fn executor(&self) -> &str {
+        self.backend.split_once(':').map_or("", |(executor, _)| executor)
     }
 }
 
@@ -107,14 +111,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_kind_is_the_prefix_before_the_colon() {
+    fn executor_is_the_prefix_before_the_colon() {
         let mut m = AgentManifest::default();
-        m.backend = "cli:claude".into();
-        assert_eq!(m.backend_kind(), "cli");
-        m.backend = "api:anthropic".into();
-        assert_eq!(m.backend_kind(), "api");
+        m.backend = "tmux:claude".into();
+        assert_eq!(m.executor(), "tmux");
+        m.backend = "process:codex".into();
+        assert_eq!(m.executor(), "process");
+        m.backend = "harness:claude-sdk".into();
+        assert_eq!(m.executor(), "harness");
         m.backend = "weird".into();
-        assert_eq!(m.backend_kind(), "");
+        assert_eq!(m.executor(), "");
     }
 
     #[test]

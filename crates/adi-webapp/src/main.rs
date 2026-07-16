@@ -29,12 +29,13 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, hive_view, load_dir, mesh_view, overview_view, ports_manager_view,
+    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_watch, ports_manager_view,
     project_detail_view, projects_view, tasks_view,
 };
 use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
 use state::{
-    AgentsForm, FilesState, Flash, Form, MeshForm, ProjectsForm, State, Status, TasksForm, load,
+    AgentsForm, AgentsWatch, FilesState, Flash, Form, MeshForm, ProjectsForm, State, Status,
+    TasksForm, load,
 };
 use ui::{apply_saved_theme, nav_item, toggle_theme};
 
@@ -119,6 +120,9 @@ fn App() -> impl IntoView {
         busy: RwSignal::new(false),
     };
 
+    // The Agents page's live view (a polled read-only capture of an agent's tmux pane).
+    let agents_watch = AgentsWatch::new();
+
     let form = Form {
         svc: RwSignal::new(String::new()),
         key: RwSignal::new(String::new()),
@@ -162,10 +166,12 @@ fn App() -> impl IntoView {
     on_pop.forget();
 
     // Load now, poll the backend every 4s, and tick the "updated Ns ago" label each second.
+    // The same 1s tick refreshes the agents live view while one is open (it no-ops otherwise).
     spawn_local(load(state));
     Interval::new(4_000, move || spawn_local(load(state))).forget();
     Interval::new(1_000, move || {
         secs_since.update(|s| *s = s.saturating_add(1));
+        poll_watch(agents_watch);
     })
     .forget();
 
@@ -185,6 +191,10 @@ fn App() -> impl IntoView {
                 | Route::Mesh
         ) {
             spawn_local(load(state));
+        }
+        // Leaving the Agents page closes the live view, so its 1s poll stops.
+        if !matches!(route.get(), Route::Agents) {
+            agents_watch.close();
         }
     });
 
@@ -254,7 +264,7 @@ fn App() -> impl IntoView {
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route),
                         Route::Tasks => tasks_view(state, tasks_form),
-                        Route::Agents => agents_view(state, agents_form),
+                        Route::Agents => agents_view(state, agents_form, agents_watch),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),

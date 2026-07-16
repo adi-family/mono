@@ -433,6 +433,24 @@
   font-size: var(--text-md);
 }
 
+// ---- term --------------------------------------------------------------------------
+// A read-only terminal snapshot (e.g. the agents live view): deliberately dark in both
+// themes, like the tmux pane it mirrors.
+.adi-term {
+  margin: 0;
+  padding: 14px 18px;
+  max-height: 440px;
+  overflow: auto;
+  background: #10151c;
+  color: #dde4ec;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-top: 1px solid var(--border);
+}
+
 // ---- chip --------------------------------------------------------------------------
 .adi-chip {
   display: inline-block;

@@ -18,7 +18,7 @@ pub use service::{Action, Service, ServiceReport};
 
 // Agent definitions are data/control-plane state, so adi-core exposes their store for the
 // CLI and app backend without owning execution/orchestration yet.
-pub use adi_agents::{Agent, AgentManifest, Agents, Error as AgentsError};
+pub use adi_agents::{Agent, AgentManifest, Agents, Error as AgentsError, Launch};
 
 // The projects registry is pure metadata CRUD (no launchd/route machinery), so adi-core
 // re-exports the [`adi_projects`] library as-is and hands out a store via [`Adi::projects`].

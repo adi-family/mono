@@ -1,12 +1,13 @@
 //! adi-agents — reusable agent definitions ([`AgentManifest`]) for the adi platform: a pure
-//! library (no CLI, no daemon, no spawn/run yet) over the shared [`adi_config`] store. Each agent
-//! is one `<name>.toml` file under `~/.adi/mono/agents/`, holding its backend, system prompt, tool
+//! library (no CLI, no daemon) over the shared [`adi_config`] store. Each agent is one
+//! `<name>.toml` file under `~/.adi/mono/agents/`, holding its backend, system prompt, tool
 //! command scope, model/params, and tags.
 //!
 //! This is the **definition/store layer** of the larger adi-agents orchestration spec
-//! (docs/adi-agents.md): it owns *what an agent is*, so the control panel can create and edit
-//! agents today. The backend contract, session/orchestrator, and lifecycle hooks from that spec
-//! are future work and live nowhere yet.
+//! (docs/adi-agents.md), plus the first slice of its run layer: [`Agents::run`] launches a
+//! tmux-backed agent (`tmux:claude` / `tmux:codex`) detached in a `adi-agent-<name>` tmux
+//! session (see [`run`](mod@crate::run) via the re-exports below). The full backend contract,
+//! session persistence, and lifecycle hooks from that spec are still future work.
 //!
 //! ```
 //! # let tmp = std::env::temp_dir().join(format!("adi-agents-doctest-{}", std::process::id()));
@@ -16,11 +17,11 @@
 //! # let store = Agents::with_config(adi_config::Config::with_root(&tmp));
 //! // In real code: let store = Agents::open();
 //! let mut spec = AgentManifest::default();
-//! spec.backend = "cli:claude".into();
+//! spec.backend = "tmux:claude".into();
 //! spec.model = Some("opus".into());
 //! let saved = store.save("athz-solver", spec)?;
 //! assert_eq!(saved.name, "athz-solver");
-//! assert_eq!(saved.manifest.backend_kind(), "cli");
+//! assert_eq!(saved.manifest.executor(), "tmux");
 //! assert!(saved.manifest.created_at > 0);
 //!
 //! assert_eq!(store.list()?.len(), 1);
@@ -31,6 +32,7 @@
 
 mod agent;
 mod error;
+mod run;
 
 use std::path::PathBuf;
 
@@ -38,6 +40,9 @@ use adi_config::{Config, ConfigFile};
 
 pub use agent::{Agent, AgentManifest};
 pub use error::{Error, Result};
+pub use run::{
+    Launch, capture_pane, is_runnable, launch, running_sessions, send_keys, session_name, stop,
+};
 
 use agent::{now_unix, validate_name};
 
@@ -167,6 +172,29 @@ impl Agents {
         })
     }
 
+    /// Launch a registered agent in its backend (see [`launch`]): the engine CLI starts detached
+    /// in a fresh `adi-agent-<name>` tmux session, and the returned [`Launch`] carries the attach
+    /// hint. Only tmux executors run today.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unregistered name, plus everything [`launch`] can return.
+    pub fn run(&self, name: &str) -> Result<Launch> {
+        let agent = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        launch(&agent)
+    }
+
+    /// Stop a running agent (see [`stop`]): kill its `adi-agent-<name>` tmux session. Returns
+    /// whether a live session was found and killed (idempotent).
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe name, or [`Error::Tmux`] if the kill fails.
+    pub fn stop(&self, name: &str) -> Result<bool> {
+        validate_name(name)?;
+        stop(name)
+    }
+
     /// Delete an agent definition. Returns `false` if it wasn't registered.
     ///
     /// # Errors
@@ -206,7 +234,7 @@ mod tests {
         let store = scratch("crud");
         assert!(store.list().expect("empty list").is_empty());
 
-        let mut m = spec("cli:claude");
+        let mut m = spec("tmux:claude");
         m.system_prompt = "You are a solver.".into();
         m.model = Some("opus".into());
         m.permission_mode = Some("default".into());
@@ -224,14 +252,14 @@ mod tests {
     #[test]
     fn save_is_an_upsert_that_preserves_created_at() {
         let store = scratch("upsert");
-        let first = store.save("a", spec("cli:codex")).expect("create");
+        let first = store.save("a", spec("process:codex")).expect("create");
         let created = first.manifest.created_at;
         assert!(created > 0);
 
-        let mut edited = spec("api:anthropic");
+        let mut edited = spec("harness:adi");
         edited.temperature = Some(0.2);
         let second = store.save("a", edited).expect("update");
-        assert_eq!(second.manifest.backend, "api:anthropic");
+        assert_eq!(second.manifest.backend, "harness:adi");
         assert_eq!(second.manifest.temperature, Some(0.2));
         // Editing keeps the original creation time.
         assert_eq!(second.manifest.created_at, created);
@@ -241,7 +269,7 @@ mod tests {
     #[test]
     fn delete_removes_the_agent() {
         let store = scratch("delete");
-        store.save("gone", spec("cli:claude")).expect("create");
+        store.save("gone", spec("tmux:claude")).expect("create");
         assert!(store.delete("gone").expect("delete"));
         assert!(store.get("gone").expect("get").is_none());
         assert!(!store.delete("gone").expect("delete missing"));
@@ -252,7 +280,7 @@ mod tests {
         let store = scratch("invalid");
         assert!(matches!(store.get("../escape"), Err(Error::InvalidName(_))));
         assert!(matches!(
-            store.save("a/b", spec("cli:claude")),
+            store.save("a/b", spec("tmux:claude")),
             Err(Error::InvalidName(_))
         ));
         assert!(matches!(store.delete(".."), Err(Error::InvalidName(_))));

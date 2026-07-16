@@ -209,6 +209,8 @@ enum AgentsCommand {
     /// Create or replace an agent definition.
     Save {
         name: String,
+        /// The `executor:what` backend, e.g. `tmux:claude`, `process:codex`,
+        /// `harness:claude-sdk`, `harness:adi`.
         #[arg(long)]
         backend: String,
         #[arg(long)]
@@ -235,6 +237,11 @@ enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Launch an agent in its backend: the engine CLI starts detached in an
+    /// `adi-agent-<name>` tmux session (tmux executors only for now).
+    Run { name: String },
+    /// Stop a running agent by killing its `adi-agent-<name>` tmux session.
+    Stop { name: String },
     /// Delete an agent definition.
     Rm { name: String },
     /// Delete an agent definition.
@@ -519,6 +526,19 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
                 print_agent(&agent);
             }
         }
+        AgentsCommand::Run { name } => {
+            let launch = store.run(&name).map_err(|e| e.to_string())?;
+            println!("Started agent {name} in tmux session {}.", launch.session);
+            println!("  command: {}", launch.command);
+            println!("  attach:  {}", launch.attach);
+        }
+        AgentsCommand::Stop { name } => {
+            if store.stop(&name).map_err(|e| e.to_string())? {
+                println!("Stopped agent {name}.");
+            } else {
+                println!("Agent {name} wasn't running.");
+            }
+        }
         AgentsCommand::Rm { name } | AgentsCommand::Delete { name } => {
             if store.delete(&name).map_err(|e| e.to_string())? {
                 println!("Deleted agent {name}.");
@@ -582,7 +602,7 @@ fn print_agent(agent: &Agent) {
         "{} — {} [{}]",
         agent.name,
         agent.manifest.backend,
-        agent.manifest.backend_kind()
+        agent.manifest.executor()
     );
     if let Some(model) = &agent.manifest.model {
         println!("  model: {model}");

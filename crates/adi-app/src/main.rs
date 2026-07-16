@@ -217,11 +217,18 @@ async fn handle(
         // command center; create returns the fresh tree so the panel refreshes.
         ("GET", "/api/tasks") => handlers::tasks(tasks),
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
-        // Agents: AgentDef definitions (~/.adi/mono/agents). Create/edit/delete only — no
-        // run/orchestration yet (see docs/adi-agents.md). Save is an upsert keyed by name.
+        // Agents: AgentDef definitions (~/.adi/mono/agents). Save is an upsert keyed by name;
+        // run launches tmux-backed agents in a detached adi-agent-<name> tmux session (the first
+        // slice of the orchestration layer — see docs/adi-agents.md).
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
+        ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body),
+        ("POST", "/api/agents/stop") => handlers::stop_agent(agents, &req.body),
+        // peek is the live view (a capture of the agent's tmux pane, polled by the UI);
+        // send-keys is its interactive half (type text / press a key in the session).
+        ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),
+        ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),
         // Every hive service across all projects + the global front-door, with live status.
         // The listening-port scan is platform I/O, so the host does it and passes the ports in.
         ("GET", "/api/hive") => {

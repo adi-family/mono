@@ -18,6 +18,18 @@ pub enum Error {
     NotFound(String),
     /// A directory operation (listing, removal) failed.
     Io(std::io::Error),
+    /// The agent's backend has no run adapter yet (only tmux executors launch today).
+    NotRunnable(String),
+    /// A live session for this agent already exists.
+    AlreadyRunning(String),
+    /// Spawning the agent failed (tmux missing, session refused, …).
+    Launch(String),
+    /// The agent has no live session to interact with.
+    NotRunning(String),
+    /// A key name isn't a single tmux key token (`Enter`, `Up`, `C-c`, …).
+    InvalidKey(String),
+    /// A tmux command against a live session failed.
+    Tmux(String),
 }
 
 impl fmt::Display for Error {
@@ -30,6 +42,18 @@ impl fmt::Display for Error {
             ),
             Self::NotFound(name) => write!(f, "no such agent: {name}"),
             Self::Io(e) => write!(f, "agent store I/O error: {e}"),
+            Self::NotRunnable(backend) => write!(
+                f,
+                "backend {backend:?} can't be run yet — only tmux-backed agents (tmux:claude, tmux:codex) launch today"
+            ),
+            Self::AlreadyRunning(name) => write!(f, "agent {name} is already running"),
+            Self::Launch(msg) => write!(f, "failed to launch agent: {msg}"),
+            Self::NotRunning(name) => write!(f, "agent {name} isn't running"),
+            Self::InvalidKey(key) => write!(
+                f,
+                "invalid key name {key:?}: use a single tmux key token like Enter, Escape, Up, or C-c"
+            ),
+            Self::Tmux(msg) => write!(f, "tmux error: {msg}"),
         }
     }
 }
@@ -39,7 +63,14 @@ impl std::error::Error for Error {
         match self {
             Self::Config(e) => Some(e),
             Self::Io(e) => Some(e),
-            Self::InvalidName(_) | Self::NotFound(_) => None,
+            Self::InvalidName(_)
+            | Self::NotFound(_)
+            | Self::NotRunnable(_)
+            | Self::AlreadyRunning(_)
+            | Self::Launch(_)
+            | Self::NotRunning(_)
+            | Self::InvalidKey(_)
+            | Self::Tmux(_) => None,
         }
     }
 }

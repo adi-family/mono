@@ -10,7 +10,7 @@ mod project_detail;
 mod projects;
 mod tasks;
 
-pub(crate) use agents::agents_view;
+pub(crate) use agents::{agents_view, poll_watch};
 pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use overview::overview_view;

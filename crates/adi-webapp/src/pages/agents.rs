@@ -1,6 +1,8 @@
-//! The Agents page: create, edit, and delete agent definitions (docs/adi-agents.md §5) — pick a
-//! backend, a system prompt, a CLI command scope, and backend-specific params. No run/orchestration here;
-//! this only edits the stored spec. The form adapts its params to the chosen backend kind.
+//! The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
+//! pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
+//! params. ▶ Run starts a tmux-backed agent detached in a tmux session (the server owns the
+//! launch); deeper orchestration is future work. The form adapts its params to the chosen
+//! backend, and for the `harness:adi` backend also to its chosen provider.
 
 use std::collections::BTreeMap;
 
@@ -9,16 +11,23 @@ use adi_webapp_api::types::{
     SaveAgent,
 };
 use leptos::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
-use crate::state::{AgentsForm, Flash, State};
+use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{apply_mutation, data_table, flash_view, placeholder_row, tile, updated_text};
 
-/// The Agents page: create, edit, and delete agent definitions (docs/adi-agents.md §5) — pick a
-/// backend, a system prompt, a CLI command scope, and backend-specific params. No run/orchestration here;
-/// this only edits the stored spec. The form adapts its params to the chosen backend kind.
-pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
+/// The `harness:adi` backend id — the one whose form fields are additionally scoped to the
+/// `provider` extra. Must match the id served by the API's form spec.
+const ADI_HARNESS: &str = "harness:adi";
+
+/// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
+/// pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
+/// params. ▶ Run starts a tmux-backed agent detached in a tmux session (the server owns the
+/// launch); deeper orchestration is future work. The form adapts its params to the chosen
+/// backend, and for the `harness:adi` backend also to its chosen provider.
+pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
     let agents = state.agents;
     let secs_since = state.secs_since;
     let flash = state.flash;
@@ -38,20 +47,9 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
         busy,
     } = form;
     view! {
-        <section class="adi-tiles">
-            {tile("Agents",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| a.agents.len().to_string()),
-                "defined")}
-            {tile("CLI",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "cli").to_string()),
-                "shell a vendor CLI")}
-            {tile("API",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_kind(&a, "api").to_string()),
-                "in-loop provider API")}
-            {tile("Starred",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_starred(&a).to_string()),
-                "pinned")}
-        </section>
+        {agent_tiles(state)}
+
+        {move || live_view(state, watch)}
 
         <section class="adi-panel">
             <div class="adi-panel__head">
@@ -59,7 +57,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
             </div>
 
-            {data_table(&["Name", "Backend", "Model", "Tags", ""], move || agent_rows(state, form))}
+            {data_table(&["Name", "Backend", "Model", "Tags", ""], move || agent_rows(state, form, watch))}
 
             <div class="adi-panel__head" style="border-top:1px solid var(--border)">
                 <h2 class="adi-panel__title">
@@ -86,11 +84,12 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
                     return;
                 }
                 let st = agents.get();
+                let prov = extra.get().get("provider").cloned().unwrap_or_default();
                 // Whether each backend-conditional first-class param applies is driven by the
                 // server schema (does a field of that name apply to this backend?), so rescoping a
                 // field in the API also stops its value being sent for backends it no longer fits.
-                let pm_applies = agent_param_applies(st.as_ref(), &be, "permission_mode");
-                let temp_applies = agent_param_applies(st.as_ref(), &be, "temperature");
+                let pm_applies = agent_param_applies(st.as_ref(), &be, &prov, "permission_mode");
+                let temp_applies = agent_param_applies(st.as_ref(), &be, &prov, "temperature");
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be.clone(),
@@ -114,22 +113,56 @@ pub(crate) fn agents_view(state: State, form: AgentsForm) -> AnyView {
             </form>
             {flash_view(flash)}
             <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
-                "Definitions only — spawning/running agents (backends, sessions, auto-start) is future
-                 work per " <code>"docs/adi-agents.md"</code> "."
+                "▶ Run launches a tmux-backed agent detached in an " <code>"adi-agent-<name>"</code>
+                " tmux session; ● View watches it from here and can type into it (or take it over
+                 with " <code>"tmux attach"</code> "). Other executors, session history, and
+                 auto-start are future work per " <code>"docs/adi-agents.md"</code> "."
             </div>
         </section>
     }
     .into_any()
 }
 
-/// Count agents whose backend kind (`cli`/`api`) matches.
-fn agent_count_kind(st: &AgentsState, kind: &str) -> usize {
-    st.agents.iter().filter(|a| a.backend_kind == kind).count()
+/// The stat-tile strip: totals, per-executor counts, starred, and live tmux sessions.
+fn agent_tiles(state: State) -> impl IntoView {
+    let agents = state.agents;
+    view! {
+        <section class="adi-tiles">
+            {tile("Agents",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| a.agents.len().to_string()),
+                "defined")}
+            {tile("tmux",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_executor(&a, "tmux").to_string()),
+                "vendor CLI in a session")}
+            {tile("process",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_executor(&a, "process").to_string()),
+                "headless vendor CLI")}
+            {tile("harness",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_executor(&a, "harness").to_string()),
+                "agentic loop (SDK / ADI)")}
+            {tile("Starred",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_starred(&a).to_string()),
+                "pinned")}
+            {tile("Running",
+                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_running(&a).to_string()),
+                "live tmux sessions")}
+        </section>
+    }
+}
+
+/// Count agents whose executor (`tmux`/`process`/`harness`) matches.
+fn agent_count_executor(st: &AgentsState, executor: &str) -> usize {
+    st.agents.iter().filter(|a| a.executor == executor).count()
 }
 
 /// Count starred agents.
 fn agent_starred(st: &AgentsState) -> usize {
     st.agents.iter().filter(|a| a.starred).count()
+}
+
+/// Count agents with a live tmux session.
+fn agent_running(st: &AgentsState) -> usize {
+    st.agents.iter().filter(|a| a.running).count()
 }
 
 /// Render the agent form from the server-provided schema.
@@ -141,11 +174,12 @@ fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
         .into_any();
     };
     let backend = form.backend.get();
+    let provider = form.extra.get().get("provider").cloned().unwrap_or_default();
     let backends = st.form.backends.clone();
     st.form
         .fields
         .into_iter()
-        .filter(|field| field_applies(field, &backend))
+        .filter(|field| field_applies(field, &backend, &provider))
         .map(|field| render_agent_field(field, backends.clone(), form))
         .collect::<Vec<_>>()
         .into_any()
@@ -298,8 +332,11 @@ fn option_view(opt: AgentFormOption) -> impl IntoView {
     view! { <option value=value>{label}</option> }
 }
 
-fn field_applies(field: &AgentFormField, backend: &str) -> bool {
-    if field.backend_ids.is_empty() && field.backend_kinds.is_empty() {
+/// Whether a schema field is visible for the chosen backend. A field with no filters is always
+/// visible; otherwise it shows on a backend-id match, an executor match, or — for the adi
+/// harness only — a match on its chosen provider.
+fn field_applies(field: &AgentFormField, backend: &str, provider: &str) -> bool {
+    if field.backend_ids.is_empty() && field.executors.is_empty() && field.providers.is_empty() {
         return true;
     }
     if backend.is_empty() {
@@ -307,9 +344,12 @@ fn field_applies(field: &AgentFormField, backend: &str) -> bool {
     }
     field.backend_ids.iter().any(|id| id == backend)
         || field
-            .backend_kinds
+            .executors
             .iter()
-            .any(|kind| kind == agent_backend_kind(backend))
+            .any(|executor| executor == agent_executor(backend))
+        || (backend == ADI_HARNESS
+            && !provider.is_empty()
+            && field.providers.iter().any(|p| p == provider))
 }
 
 fn field_id(name: &str) -> String {
@@ -356,15 +396,21 @@ fn selected_backend<'a>(
     backends.iter().find(|b| b.id == backend)
 }
 
-/// Whether the schema exposes a field named `name` for `backend`. The submit uses this to decide
-/// whether a backend-conditional first-class param (`permission_mode` / `temperature`) applies to
-/// the chosen backend, keeping the gating in sync with the server-owned field scoping.
-fn agent_param_applies(st: Option<&AgentsState>, backend: &str, name: &str) -> bool {
+/// Whether the schema exposes a field named `name` for `backend` (and provider). The submit uses
+/// this to decide whether a backend-conditional first-class param (`permission_mode` /
+/// `temperature`) applies to the chosen backend, keeping the gating in sync with the
+/// server-owned field scoping.
+fn agent_param_applies(
+    st: Option<&AgentsState>,
+    backend: &str,
+    provider: &str,
+    name: &str,
+) -> bool {
     st.is_some_and(|st| {
         st.form
             .fields
             .iter()
-            .any(|f| f.name == name && field_applies(f, backend))
+            .any(|f| f.name == name && field_applies(f, backend, provider))
     })
 }
 
@@ -431,6 +477,7 @@ fn agent_extra_values(
     backend: &str,
     values: BTreeMap<String, String>,
 ) -> BTreeMap<String, String> {
+    let provider = values.get("provider").cloned().unwrap_or_default();
     values
         .into_iter()
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
@@ -441,7 +488,7 @@ fn agent_extra_values(
                     st.form.fields.iter().any(|field| {
                         field.name == *k
                             && is_extra_field(&field.name)
-                            && field_applies(field, backend)
+                            && field_applies(field, backend, &provider)
                     })
                 })
         })
@@ -464,9 +511,9 @@ fn is_extra_field(name: &str) -> bool {
     )
 }
 
-/// Render the agents table body: a loading/empty placeholder, or one row per agent with Edit
-/// (loads it into the form) and Delete actions.
-fn agent_rows(state: State, form: AgentsForm) -> AnyView {
+/// Render the agents table body: a loading/empty placeholder, or one row per agent with Run or
+/// View (live session), Edit (loads it into the form), and Delete actions.
+fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
     let Some(st) = state.agents.get() else {
         return placeholder_row("5", "Loading…");
     };
@@ -484,7 +531,10 @@ fn agent_rows(state: State, form: AgentsForm) -> AnyView {
             let backend = a.backend.clone();
             let model = a.model.clone().unwrap_or_default();
             let tags = a.tags.join(", ");
+            let run_name = a.name.clone();
             let del_name = a.name.clone();
+            let show_run = a.runnable && !a.running;
+            let running = a.running;
             let a_edit = a.clone();
             view! {
                 <tr>
@@ -493,6 +543,23 @@ fn agent_rows(state: State, form: AgentsForm) -> AnyView {
                     <td class="adi-mono adi-muted">{model}</td>
                     <td class="adi-muted">{tags}</td>
                     <td style="text-align:right; white-space:nowrap">
+                        {running.then(|| {
+                            let watch_name = run_name.clone();
+                            let stop_name = run_name.clone();
+                            view! {
+                                <button class="adi-btn adi-btn--link" title="watch the live tmux session"
+                                    on:click=move |_| open_watch(watch, watch_name.clone())>"● View"</button>
+                                " "
+                                <button class="adi-btn adi-btn--link" title="kill the tmux session"
+                                    on:click=move |_| stop_agent(state, watch, stop_name.clone())>"■ Stop"</button>
+                                " "
+                            }
+                        })}
+                        {show_run.then(|| { let run_name = run_name.clone(); view! {
+                            <button class="adi-btn adi-btn--link"
+                                on:click=move |_| run_agent(state, run_name.clone())>"▶ Run"</button>
+                            " "
+                        }})}
                         <button class="adi-btn adi-btn--link"
                             on:click=move |_| load_agent_into_form(form, &a_edit)>"Edit"</button>
                         " "
@@ -515,6 +582,153 @@ where
     F: std::future::Future<Output = Result<AgentsState, String>> + 'static,
 {
     apply_mutation(state, busy, ok_msg, |s, a| s.agents.set(Some(a)), fut);
+}
+
+/// Launch an agent (the ▶ Run action). Unlike [`apply_agents`], the success flash comes from the
+/// server — its message carries the tmux attach hint, whose session-naming scheme the client
+/// doesn't know.
+fn run_agent(state: State, name: String) {
+    spawn_local(async move {
+        match fetch::run_agent(name).await {
+            Ok(res) => {
+                state.agents.set(Some(res.state));
+                state.flash.set(Some(Flash::ok(res.message)));
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
+}
+
+/// Stop a running agent (the ■ Stop action): kill its tmux session, then refresh the list (the
+/// row flips back to ▶ Run). If the live view is watching this agent, close it too.
+fn stop_agent(state: State, watch: AgentsWatch, name: String) {
+    if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
+        watch.close();
+    }
+    apply_agents(state, None, format!("Stopped {name}."), fetch::stop_agent(name));
+}
+
+/// Open the live view on an agent (the ● View action): show the panel, fetch the first snapshot
+/// immediately (the 1s poll takes over from there), and scroll up to where the panel renders.
+fn open_watch(watch: AgentsWatch, name: String) {
+    watch.peek.set(None);
+    watch.name.set(Some(name));
+    poll_watch(watch);
+    scroll_top();
+}
+
+/// Fetch a fresh pane snapshot for the watched agent, if any. The shell calls this every second;
+/// it no-ops while the live view is closed. A response landing after the view moved to another
+/// agent (or closed) is dropped instead of flashing the wrong pane.
+pub(crate) fn poll_watch(watch: AgentsWatch) {
+    let Some(name) = watch.name.get_untracked() else {
+        return;
+    };
+    spawn_local(async move {
+        if let Ok(peek) = fetch::peek_agent(name).await
+            && watch.name.get_untracked().as_deref() == Some(peek.name.as_str())
+        {
+            watch.peek.set(Some(peek));
+        }
+    });
+}
+
+/// The live-view panel: a 1s-refreshed capture of the watched agent's tmux pane, with a send
+/// bar to type into the session. Renders nothing while no agent is being watched.
+fn live_view(state: State, watch: AgentsWatch) -> Option<AnyView> {
+    let name = watch.name.get()?;
+    let peek = watch.peek.get();
+    let attach = peek.as_ref().map(|p| p.attach.clone()).unwrap_or_default();
+    let running = peek.as_ref().is_some_and(|p| p.running);
+    let body = match peek {
+        None => view! { <div class="adi-empty">"Connecting…"</div> }.into_any(),
+        Some(p) if !p.running => view! {
+            <div class="adi-empty">"The session has ended — run the agent again to restart it."</div>
+        }
+        .into_any(),
+        Some(p) => view! { <pre class="adi-term">{p.output}</pre> }.into_any(),
+    };
+    Some(
+        view! {
+            <section class="adi-panel">
+                <div class="adi-panel__head">
+                    <h2 class="adi-panel__title">{format!("Live view — {name}")}</h2>
+                    <span class="adi-spacer"></span>
+                    {(!attach.is_empty()).then(|| view! {
+                        <code class="adi-mono adi-muted" style="font-size:12px">{attach}</code>
+                    })}
+                    <button class="adi-btn adi-btn--link" on:click=move |_| watch.close()>"Close"</button>
+                </div>
+                {body}
+                {running.then(|| send_bar(state, watch))}
+            </section>
+        }
+        .into_any(),
+    )
+}
+
+/// The live view's input row: a text field (submit types it into the session, without a trailing
+/// Enter — the ⏎ quick key sends that) plus the special keys interactive TUIs need (Enter, arrows
+/// for menus, Esc, Ctrl-C).
+fn send_bar(state: State, watch: AgentsWatch) -> impl IntoView {
+    view! {
+        <form class="adi-form" style="padding:10px 18px 14px; border-top:1px solid var(--border)"
+            on:submit=move |ev| {
+                ev.prevent_default();
+                let text = watch.input.get();
+                watch.input.set(String::new());
+                send_to_agent(state, watch, text, "");
+            }>
+            <input class="adi-input adi-mono" style="flex:1 1 auto" autocomplete="off"
+                placeholder="type to the agent…"
+                prop:value=move || watch.input.get()
+                on:input=move |ev| watch.input.set(event_target_value(&ev)) />
+            <button class="adi-btn adi-btn--primary" type="submit">"Send"</button>
+            {quick_key(state, watch, "⏎", "Enter")}
+            {quick_key(state, watch, "↑", "Up")}
+            {quick_key(state, watch, "↓", "Down")}
+            {quick_key(state, watch, "Tab", "Tab")}
+            {quick_key(state, watch, "Esc", "Escape")}
+            {quick_key(state, watch, "^C", "C-c")}
+        </form>
+    }
+}
+
+/// One special-key button in the send bar, pressing a single tmux key in the session.
+fn quick_key(
+    state: State,
+    watch: AgentsWatch,
+    label: &'static str,
+    key: &'static str,
+) -> impl IntoView {
+    view! {
+        <button class="adi-btn adi-btn--ghost adi-mono" type="button" style="padding:8px 10px"
+            title=format!("send {key}")
+            on:click=move |_| send_to_agent(state, watch, String::new(), key)>{label}</button>
+    }
+}
+
+/// Type into the watched agent's session: send `text` literally, then press `key`. The reply is
+/// a fresh pane snapshot, applied immediately (unless the view moved on meanwhile) so the
+/// keystrokes show without waiting for the next poll; errors go to the flash line.
+fn send_to_agent(state: State, watch: AgentsWatch, text: String, key: &'static str) {
+    let Some(name) = watch.name.get_untracked() else {
+        return;
+    };
+    if text.is_empty() && key.is_empty() {
+        return;
+    }
+    let key = key.to_string();
+    spawn_local(async move {
+        match fetch::send_agent_keys(name, text, key).await {
+            Ok(peek) => {
+                if watch.name.get_untracked().as_deref() == Some(peek.name.as_str()) {
+                    watch.peek.set(Some(peek));
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
 }
 
 /// Load an existing agent into the create/edit form (the Edit action).
@@ -553,10 +767,11 @@ fn clear_agent_form(form: AgentsForm) {
     form.editing.set(None);
 }
 
-/// The backend kind (`cli`/`api`) — the part before the `:` in a backend id; `""` if none.
-fn agent_backend_kind(backend: &str) -> &str {
+/// The executor (`tmux`/`process`/`harness`) — the part before the `:` in a backend id; `""` if
+/// none.
+fn agent_executor(backend: &str) -> &str {
     match backend.split_once(':') {
-        Some((kind, _)) => kind,
+        Some((executor, _)) => executor,
         None => "",
     }
 }

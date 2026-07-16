@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
-    AgentsState, DirListing, Health, HiveState, MeshState, PortsState, ProjectDetail,
+    AgentPeek, AgentsState, DirListing, Health, HiveState, MeshState, PortsState, ProjectDetail,
     ProjectsState, TasksState, UsedPorts,
 };
 use leptos::prelude::*;
@@ -128,6 +128,37 @@ pub(crate) struct AgentsForm {
     pub(crate) extra: RwSignal<BTreeMap<String, String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
+}
+
+/// The Agents page's live view: which agent's tmux pane is being watched (`None` = closed), the
+/// latest snapshot, and the send-bar input buffer. The shell polls a fresh peek every second
+/// while open; leaving the page closes it. `Copy` so it threads into the poll closure and
+/// handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct AgentsWatch {
+    /// The watched agent's name, or `None` while the live view is closed.
+    pub(crate) name: RwSignal<Option<String>>,
+    /// The last snapshot received, or `None` before the first one lands.
+    pub(crate) peek: RwSignal<Option<AgentPeek>>,
+    /// The send bar's text buffer (typed into the session on submit).
+    pub(crate) input: RwSignal<String>,
+}
+
+impl AgentsWatch {
+    pub(crate) fn new() -> Self {
+        Self {
+            name: RwSignal::new(None),
+            peek: RwSignal::new(None),
+            input: RwSignal::new(String::new()),
+        }
+    }
+
+    /// Close the live view (stops the polling; `poll_watch` no-ops while `name` is `None`).
+    pub(crate) fn close(self) {
+        self.name.set(None);
+        self.peek.set(None);
+        self.input.set(String::new());
+    }
 }
 
 /// The reserve form's local signals; `Copy` so it threads into the page view and handlers.

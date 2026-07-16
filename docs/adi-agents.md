@@ -1,12 +1,14 @@
 # adi-agents
 
-`adi-agents` stores reusable agent definitions. It does not run agents yet.
+`adi-agents` stores reusable agent definitions and can launch the tmux-backed ones — the first
+slice of the run layer. Deeper orchestration (sessions, events, auto-start) does not exist yet.
 
 The command center for agent and task state is the `adi-mono` CLI:
 
 ```bash
 adi-mono agents list
-adi-mono agents save planner --backend cli:codex --command-scope tasks,projects
+adi-mono agents save planner --backend tmux:codex --command-scope tasks,projects
+adi-mono agents run planner        # detached tmux session adi-agent-planner
 adi-mono tasks add "Investigate auth flow" --project demo --tag planner
 adi-mono tasks complete DEMO-1
 ```
@@ -19,17 +21,23 @@ administration should stay in `adi-mono` so there is one scriptable control surf
 Implemented:
 
 - `adi-agents`: definition store under `~/.adi/mono/agents`, one TOML file per agent.
+- `adi-agents`: a minimal `tmux` launcher — `Agents::run` starts the engine CLI (honoring
+  model, Claude permission mode, Codex sandbox, and the system prompt) detached in an
+  `adi-agent-<name>` tmux session; attach with `tmux attach -t adi-agent-<name>`.
 - `adi-tasks`: task tree under `~/.adi/mono/tasks/tasks.json`.
-- `adi-mono agents ...`: list, show, save, and delete definitions.
+- `adi-mono agents ...`: list, show, save, run, stop, and delete definitions.
 - `adi-mono tasks ...`: list, add, show, edit, complete, archive, reopen, and delete tasks.
-- Web app pages for agent definitions and task visibility.
+- Web app pages for agent definitions and task visibility; ▶ Run on the Agents page launches
+  a tmux-backed agent and shows which agents have a live session, ● View opens a live view
+  of the session's pane (`tmux capture-pane`, polled every second) with a send bar that types
+  into it (`tmux send-keys`: literal text plus Enter/arrows/Esc/Ctrl-C), and ■ Stop kills the
+  session (`tmux kill-session`).
 
 Not implemented yet:
 
-- Running an agent process.
-- Session history and live event streaming.
+- Executor adapters for the `process` and `harness` backends (only `tmux:*` launches).
+- Session history and live event streaming (a launched session is fire-and-observe via tmux).
 - Auto-starting an agent from a tagged task.
-- Backend adapters for `cli:codex`, `cli:claude`, or API providers.
 - Permission enforcement for command scopes.
 
 ## Definition Model
@@ -38,7 +46,7 @@ An agent definition is stored as:
 
 ```rust
 pub struct AgentManifest {
-    pub backend: String,          // cli:codex, cli:claude, api:openai, ...
+    pub backend: String,          // executor:what — tmux:claude, process:codex, harness:adi, ...
     pub system_prompt: String,
     pub tools: String,            // historical field; now used as CLI command scope
     pub model: Option<String>,
@@ -71,11 +79,17 @@ tasks whose tag maps to an agent definition, and then launch the configured back
 
 ## Backend Direction
 
-Backends should be CLI-first:
+A backend id is an `executor:what` pair: the executor is the run mechanism, the suffix is the
+thing it runs. The executor decides *how* the loop executes; it never names a model provider.
 
-- `cli:codex` and `cli:claude` are subprocess adapters controlled by `adi-mono`.
-- API backends can be added later, but they should still be driven from the same command center.
-- The backend contract should emit a common event stream: started, stdout/stderr, tool/command
+- `tmux:claude` / `tmux:codex` — a vendor agent CLI driven inside a tmux session; the CLI owns
+  its own agentic loop, `adi-mono` attaches, observes, and reaps.
+- `process:claude` / `process:codex` — the same vendor CLI run headless as a plain subprocess
+  (print/exec mode), controlled by `adi-mono`.
+- `harness:claude-sdk` — an agentic loop embedded via the Claude Agent SDK.
+- `harness:adi` — ADI's own agentic loop; *which* model API it calls is the definition's
+  `provider` extra (anthropic, openai, gemini, monshoot, ollama), not part of the backend id.
+- Every executor should emit a common event stream: started, stdout/stderr, tool/command
   request, task update, completed, failed.
 
 The command scope in the manifest is the allow-list the runner uses before exposing or executing
@@ -84,9 +98,9 @@ high-level groups (`tasks`, `projects`, `agents`) before adding finer-grained co
 
 ## Recommended Next Steps
 
-1. Add an `adi-mono agents run <name> --task <id>` command.
-2. Define a small backend trait in a new orchestration crate or in `adi-agents` once execution
-   starts.
+1. Grow `adi-mono agents run <name>` a `--task <id>` handoff (seed the session with the task).
+2. Define a small backend trait in `adi-agents` and move the tmux launcher behind it, then add
+   the `process` and `harness` adapters.
 3. Persist sessions under `~/.adi/mono/sessions`.
 4. Add an auto-start loop that only claims `ready` tagged tasks.
 5. Enforce command scope in the runner before any command is invoked.

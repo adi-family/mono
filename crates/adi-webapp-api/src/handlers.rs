@@ -19,7 +19,8 @@ use serde::Deserialize;
 
 use crate::types::{
     AgentBackendOption, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption,
-    AgentFormSpec, AgentRef, AgentsState, ApiError, DirListing, FileContent, FileEntry, FilesRef,
+    AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError,
+    DirListing, FileContent, FileEntry, FilesRef,
     Health, HiveService, HiveState, Lease, LeaseRef, MeshForward, MeshForwardRef, MeshListenRef,
     MeshPeerRef, MeshPortRef, MeshState, NewProject, NewTask, PortsState, Project, ProjectDetail,
     ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse, ReserveResponse, SaveAgent,
@@ -882,10 +883,43 @@ fn bad_new_task() -> (u16, String) {
 /// fresh [`AgentsState`], so the client refreshes from one round-trip.
 #[must_use]
 pub fn agents(store: &Agents) -> (u16, String) {
-    match store.list() {
-        Ok(list) => ok_json(&AgentsState {
-            agents: list.into_iter().map(agent_dto).collect(),
-            form: agent_form_spec(),
+    match agents_state(store) {
+        Ok(state) => ok_json(&state),
+        Err(e) => agent_error(&e),
+    }
+}
+
+/// The full [`AgentsState`]: the stored definitions decorated with live run state (one tmux
+/// session listing per call), plus the form schema.
+fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
+    let sessions = adi_agents::running_sessions();
+    Ok(AgentsState {
+        agents: store
+            .list()?
+            .into_iter()
+            .map(|a| agent_dto(a, &sessions))
+            .collect(),
+        form: agent_form_spec(),
+    })
+}
+
+/// `POST /api/agents/run` — launch an agent in its backend (tmux executors only today): the
+/// engine CLI starts detached in an `adi-agent-<name>` tmux session. Replies with the attach
+/// hint plus fresh state (the new session shows as `running`).
+#[must_use]
+pub fn run_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_agent_ref(body) else {
+        return bad_agent_ref();
+    };
+    let name = req.name.trim();
+    let launch = match store.run(name) {
+        Ok(launch) => launch,
+        Err(e) => return agent_error(&e),
+    };
+    match agents_state(store) {
+        Ok(state) => ok_json(&AgentRunResult {
+            message: format!("Started “{name}” — attach: {}", launch.attach),
+            state,
         }),
         Err(e) => agent_error(&e),
     }
@@ -937,14 +971,87 @@ pub fn delete_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     }
 }
 
-/// Flatten a stored agent into its wire [`AgentDto`], computing the backend kind for the client.
-fn agent_dto(agent: adi_agents::Agent) -> AgentDto {
-    let backend_kind = agent.manifest.backend_kind().to_string();
+/// `POST /api/agents/peek` — a read-only snapshot of a running agent's tmux pane, for the live
+/// view. A registered agent without a live session answers `running: false` (200, not an error);
+/// only an unknown name is a 404.
+#[must_use]
+pub fn peek_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_agent_ref(body) else {
+        return bad_agent_ref();
+    };
+    match get_agent(store, req.name.trim()) {
+        Ok(agent) => peek_response(&agent),
+        Err(e) => agent_error(&e),
+    }
+}
+
+/// `POST /api/agents/send-keys` — type into a running agent's tmux session (the interactive
+/// half of the live view): `text` is sent literally, then `key` is pressed. Replies with a
+/// fresh pane snapshot after a short settle delay, so the sender sees the effect immediately.
+#[must_use]
+pub fn send_agent_keys(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_agent_keys(body) else {
+        return bad_agent_keys();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return agent_error(&e),
+    };
+    if let Err(e) = adi_agents::send_keys(&agent.name, &req.text, &req.key) {
+        return agent_error(&e);
+    }
+    // Give the TUI a beat to redraw, so the response snapshot already shows the keystrokes.
+    std::thread::sleep(std::time::Duration::from_millis(120));
+    peek_response(&agent)
+}
+
+/// `POST /api/agents/stop` — kill a running agent's tmux session, then report the fresh list
+/// (the agent flips back to stopped/runnable). Idempotent: stopping an already-stopped agent
+/// succeeds. Only an unknown name is an error (404).
+#[must_use]
+pub fn stop_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_agent_ref(body) else {
+        return bad_agent_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return agent_error(&e),
+    };
+    match adi_agents::stop(&agent.name) {
+        Ok(_) => agents(store),
+        Err(e) => agent_error(&e),
+    }
+}
+
+/// Look an agent up, folding "not registered" into [`AgentStoreError::NotFound`] (→ 404).
+fn get_agent(store: &Agents, name: &str) -> Result<adi_agents::Agent, AgentStoreError> {
+    store
+        .get(name)?
+        .ok_or_else(|| AgentStoreError::NotFound(name.to_string()))
+}
+
+/// The [`AgentPeek`] answer for an agent: its live pane capture, or `running: false` without one.
+fn peek_response(agent: &adi_agents::Agent) -> (u16, String) {
+    let pane = adi_agents::capture_pane(&agent.name);
+    ok_json(&AgentPeek {
+        running: pane.is_some(),
+        output: pane.unwrap_or_default(),
+        attach: format!("tmux attach -t {}", adi_agents::session_name(&agent.name)),
+        name: agent.name.clone(),
+    })
+}
+
+/// Flatten a stored agent into its wire [`AgentDto`], computing the executor and the run state
+/// (`runnable` from the backend adapter, `running` from the live tmux `sessions`) for the client.
+fn agent_dto(agent: adi_agents::Agent, sessions: &std::collections::BTreeSet<String>) -> AgentDto {
+    let executor = agent.manifest.executor().to_string();
+    let runnable = adi_agents::is_runnable(&agent.manifest);
+    let running = sessions.contains(&adi_agents::session_name(&agent.name));
     let m = agent.manifest;
     AgentDto {
         name: agent.name,
         backend: m.backend,
-        backend_kind,
+        executor,
         system_prompt: m.system_prompt,
         tools: m.tools,
         model: m.model,
@@ -956,11 +1063,25 @@ fn agent_dto(agent: adi_agents::Agent) -> AgentDto {
         extra: m.extra,
         created_at: m.created_at,
         updated_at: m.updated_at,
+        runnable,
+        running,
     }
 }
 
+/// The agentic-loop backend that picks its model provider at definition time (the `provider`
+/// extra); every other backend has its engine baked into the `executor:what` id.
+const ADI_HARNESS: &str = "harness:adi";
+
+/// The backends whose engine is the Claude CLI/SDK, whatever the executor.
+const CLAUDE_BACKENDS: &[&str] = &["tmux:claude", "process:claude", "harness:claude-sdk"];
+
+/// The backends whose engine is the Codex CLI.
+const CODEX_BACKENDS: &[&str] = &["tmux:codex", "process:codex"];
+
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
-/// both the selectable backends and the field shape the client renders.
+/// both the selectable backends and the field shape the client renders. Backends are
+/// `executor:what` pairs — the executor (`tmux` / `process` / `harness`) is the run mechanism,
+/// the suffix is what it runs.
 #[allow(clippy::too_many_lines)]
 fn agent_form_spec() -> AgentFormSpec {
     let mut fields = Vec::new();
@@ -976,14 +1097,29 @@ fn agent_form_spec() -> AgentFormSpec {
     backend.required = true;
     fields.push(backend);
 
+    // The adi harness runs its own agentic loop and needs to know which provider API to call;
+    // provider-specific knobs below are scoped to this choice via `providers`.
+    let mut provider =
+        field_ids("provider", "Provider", AgentFormFieldKind::Select, &[ADI_HARNESS]);
+    provider.options = opts(&[
+        ("", "— pick a provider —"),
+        ("anthropic", "Anthropic"),
+        ("openai", "OpenAI"),
+        ("gemini", "Gemini"),
+        ("monshoot", "Monshoot"),
+        ("ollama", "Ollama (local)"),
+    ]);
+    provider.hint = "model provider the adi loop calls".into();
+    fields.push(provider);
+
     let mut model = agent_field("model", "Model", AgentFormFieldKind::Text);
     model.placeholder = "model alias".into();
     model.mono = true;
     fields.push(model);
 
-    // ---- cli:claude ----
+    // ---- claude engines (any executor) ----
     let mut permission =
-        field_ids("permission_mode", "Permission mode", AgentFormFieldKind::Select, &["cli:claude"]);
+        field_ids("permission_mode", "Permission mode", AgentFormFieldKind::Select, CLAUDE_BACKENDS);
     permission.options = opts(&[
         ("", "— default —"),
         ("acceptEdits", "acceptEdits"),
@@ -995,25 +1131,28 @@ fn agent_form_spec() -> AgentFormSpec {
     ]);
     fields.push(permission);
 
-    fields.push(sel_field(
-        "effort",
-        "Effort",
-        &["cli:claude", "api:anthropic"],
-        opts(&[
-            ("", "— default —"),
-            ("low", "low"),
-            ("medium", "medium"),
-            ("high", "high"),
-            ("xhigh", "xhigh"),
-            ("max", "max"),
-        ]),
-        "thinking / reasoning depth",
+    fields.push(for_providers(
+        sel_field(
+            "effort",
+            "Effort",
+            CLAUDE_BACKENDS,
+            opts(&[
+                ("", "— default —"),
+                ("low", "low"),
+                ("medium", "medium"),
+                ("high", "high"),
+                ("xhigh", "xhigh"),
+                ("max", "max"),
+            ]),
+            "thinking / reasoning depth",
+        ),
+        &["anthropic"],
     ));
 
     fields.push(sel_field(
         "output_format",
         "Output format",
-        &["cli:claude"],
+        &["process:claude"],
         opts(&[("", "text (default)"), ("json", "json"), ("stream-json", "stream-json")]),
         "how the run result is emitted",
     ));
@@ -1021,7 +1160,7 @@ fn agent_form_spec() -> AgentFormSpec {
     let mut allowed = txt_field(
         "allowed_tools",
         "Allowed tools",
-        &["cli:claude"],
+        CLAUDE_BACKENDS,
         "Bash(git *) Edit Read",
         "built-in tools to allow",
     );
@@ -1031,7 +1170,7 @@ fn agent_form_spec() -> AgentFormSpec {
     let mut disallowed = txt_field(
         "disallowed_tools",
         "Disallowed tools",
-        &["cli:claude"],
+        CLAUDE_BACKENDS,
         "Bash(rm *) WebFetch",
         "built-in tools to deny",
     );
@@ -1041,7 +1180,7 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(num_field(
         "max_budget_usd",
         "Max budget (USD)",
-        &["cli:claude"],
+        &["process:claude"],
         "e.g. 5",
         "hard spend cap (print mode)",
     ));
@@ -1049,7 +1188,7 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(txt_field(
         "fallback_model",
         "Fallback model",
-        &["cli:claude"],
+        CLAUDE_BACKENDS,
         "sonnet",
         "used when the primary model is overloaded",
     ));
@@ -1058,17 +1197,17 @@ fn agent_form_spec() -> AgentFormSpec {
         "append_system_prompt",
         "Append system prompt",
         AgentFormFieldKind::Textarea,
-        &["cli:claude"],
+        CLAUDE_BACKENDS,
     );
     append.placeholder = "Appended after the default system prompt…".into();
     append.wide = true;
     fields.push(append);
 
-    // ---- cli:codex ----
+    // ---- codex engines (any executor) ----
     fields.push(sel_field(
         "sandbox",
         "Sandbox",
-        &["cli:codex"],
+        CODEX_BACKENDS,
         opts(&[
             ("", "— default —"),
             ("read-only", "read-only"),
@@ -1081,7 +1220,7 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(sel_field(
         "approval",
         "Approval",
-        &["cli:codex"],
+        CODEX_BACKENDS,
         opts(&[
             ("", "— default —"),
             ("untrusted", "untrusted"),
@@ -1092,124 +1231,134 @@ fn agent_form_spec() -> AgentFormSpec {
         "when to ask before running a command",
     ));
 
-    fields.push(sel_field(
-        "reasoning_effort",
-        "Reasoning effort",
-        &["cli:codex", "api:openai"],
-        opts(&[("", "— default —"), ("low", "low"), ("medium", "medium"), ("high", "high")]),
-        "reasoning depth",
+    fields.push(for_providers(
+        sel_field(
+            "reasoning_effort",
+            "Reasoning effort",
+            CODEX_BACKENDS,
+            opts(&[("", "— default —"), ("low", "low"), ("medium", "medium"), ("high", "high")]),
+            "reasoning depth",
+        ),
+        &["openai"],
     ));
 
     fields.push(txt_field(
         "working_dir",
         "Working dir",
-        &["cli:codex"],
+        CODEX_BACKENDS,
         "/path/to/repo",
         "agent working root (-C)",
     ));
 
-    fields.push(chk_field("skip_git_repo_check", "Skip git-repo check", &["cli:codex"]));
-    fields.push(chk_field("web_search", "Web search", &["cli:codex"]));
-    fields.push(chk_field("json_events", "JSONL events", &["cli:codex"]));
+    fields.push(chk_field("skip_git_repo_check", "Skip git-repo check", CODEX_BACKENDS));
+    fields.push(chk_field("web_search", "Web search", CODEX_BACKENDS));
+    fields.push(chk_field("json_events", "JSONL events", &["process:codex"]));
 
-    // ---- cli:* shared ----
-    let mut add_dir = field_kinds("add_dir", "Add dir", AgentFormFieldKind::Text, &["cli"]);
+    // ---- tmux/process shared (a vendor CLI runs either way) ----
+    let mut add_dir =
+        field_executors("add_dir", "Add dir", AgentFormFieldKind::Text, &["tmux", "process"]);
     add_dir.placeholder = "/extra/writable/dir".into();
     add_dir.hint = "additional writable directory".into();
     add_dir.mono = true;
     add_dir.wide = true;
     fields.push(add_dir);
 
-    // ---- api:anthropic ----
-    fields.push(sel_field(
-        "thinking",
-        "Thinking",
-        &["api:anthropic"],
-        opts(&[("", "— default —"), ("adaptive", "adaptive"), ("disabled", "disabled")]),
-        "extended-thinking mode",
+    // ---- harness:adi provider knobs (scoped to the `provider` extra) ----
+    fields.push(for_providers(
+        sel_field(
+            "thinking",
+            "Thinking",
+            &[],
+            opts(&[("", "— default —"), ("adaptive", "adaptive"), ("disabled", "disabled")]),
+            "extended-thinking mode",
+        ),
+        &["anthropic"],
     ));
 
-    // ---- api:openai ----
-    fields.push(num_field("frequency_penalty", "Frequency penalty", &["api:openai"], "-2.0 – 2.0", ""));
-    fields.push(num_field(
-        "presence_penalty",
-        "Presence penalty",
-        &["api:openai", "api:monshoot"],
-        "-2.0 – 2.0",
-        "",
+    fields.push(for_providers(
+        num_field("frequency_penalty", "Frequency penalty", &[], "-2.0 – 2.0", ""),
+        &["openai"],
     ));
-    fields.push(sel_field(
-        "response_format",
-        "Response format",
-        &["api:openai", "api:monshoot"],
-        opts(&[
-            ("", "— default —"),
-            ("text", "text"),
-            ("json_object", "json_object"),
-            ("json_schema", "json_schema"),
-        ]),
-        "structured output",
+    fields.push(for_providers(
+        num_field("presence_penalty", "Presence penalty", &[], "-2.0 – 2.0", ""),
+        &["openai", "monshoot"],
     ));
-
-    // ---- api:gemini ----
-    fields.push(num_field(
-        "thinking_budget",
-        "Thinking budget",
-        &["api:gemini"],
-        "tokens",
-        "thinkingConfig budget",
+    fields.push(for_providers(
+        sel_field(
+            "response_format",
+            "Response format",
+            &[],
+            opts(&[
+                ("", "— default —"),
+                ("text", "text"),
+                ("json_object", "json_object"),
+                ("json_schema", "json_schema"),
+            ]),
+            "structured output",
+        ),
+        &["openai", "monshoot"],
     ));
 
-    // ---- api:ollama ----
-    fields.push(num_field("num_ctx", "Context size", &["api:ollama"], "e.g. 8192", "context window (num_ctx)"));
-    fields.push(num_field("repeat_penalty", "Repeat penalty", &["api:ollama"], "e.g. 1.1", ""));
-    fields.push(num_field("min_p", "Min-p", &["api:ollama"], "0.0 – 1.0", ""));
-    fields.push(txt_field(
-        "keep_alive",
-        "Keep alive",
-        &["api:ollama"],
-        "5m / -1",
-        "how long to keep the model loaded",
-    ));
-    fields.push(chk_field("think", "Thinking", &["api:ollama"]));
-    fields.push(sel_field(
-        "format",
-        "Response format",
-        &["api:ollama"],
-        opts(&[("", "— default —"), ("json", "json")]),
-        "structured output",
+    fields.push(for_providers(
+        num_field("thinking_budget", "Thinking budget", &[], "tokens", "thinkingConfig budget"),
+        &["gemini"],
     ));
 
-    // ---- api sampling (backend-scoped) ----
-    // temperature is left OFF the backends where a non-default value 400s: Anthropic current
+    fields.push(for_providers(
+        num_field("num_ctx", "Context size", &[], "e.g. 8192", "context window (num_ctx)"),
+        &["ollama"],
+    ));
+    fields.push(for_providers(
+        num_field("repeat_penalty", "Repeat penalty", &[], "e.g. 1.1", ""),
+        &["ollama"],
+    ));
+    fields.push(for_providers(num_field("min_p", "Min-p", &[], "0.0 – 1.0", ""), &["ollama"]));
+    fields.push(for_providers(
+        txt_field("keep_alive", "Keep alive", &[], "5m / -1", "how long to keep the model loaded"),
+        &["ollama"],
+    ));
+    fields.push(for_providers(chk_field("think", "Thinking", &[]), &["ollama"]));
+    fields.push(for_providers(
+        sel_field(
+            "format",
+            "Response format",
+            &[],
+            opts(&[("", "— default —"), ("json", "json")]),
+            "structured output",
+        ),
+        &["ollama"],
+    ));
+
+    // ---- harness:adi sampling (provider-scoped) ----
+    // temperature is left OFF the providers where a non-default value 400s: Anthropic current
     // models, OpenAI o-series/gpt-5, and Monshoot kimi-k2.6 (verified). It stays only where it's
     // a normal knob — Gemini and Ollama.
-    fields.push(num_field("temperature", "Temperature", &["api:gemini", "api:ollama"], "0.0 – 2.0", ""));
-    fields.push(num_field(
-        "top_p",
-        "Top-p",
-        &["api:openai", "api:gemini", "api:monshoot", "api:ollama"],
-        "0.0 – 1.0",
-        "",
+    fields.push(for_providers(
+        num_field("temperature", "Temperature", &[], "0.0 – 2.0", ""),
+        &["gemini", "ollama"],
     ));
-    fields.push(num_field("top_k", "Top-k", &["api:gemini", "api:ollama"], "e.g. 40", ""));
-    fields.push(num_field(
-        "seed",
-        "Seed",
-        &["api:openai", "api:gemini", "api:ollama"],
-        "e.g. 42",
-        "deterministic sampling",
+    fields.push(for_providers(
+        num_field("top_p", "Top-p", &[], "0.0 – 1.0", ""),
+        &["openai", "gemini", "monshoot", "ollama"],
+    ));
+    fields.push(for_providers(
+        num_field("top_k", "Top-k", &[], "e.g. 40", ""),
+        &["gemini", "ollama"],
+    ));
+    fields.push(for_providers(
+        num_field("seed", "Seed", &[], "e.g. 42", "deterministic sampling"),
+        &["openai", "gemini", "ollama"],
     ));
 
-    // ---- api:* shared ----
+    // ---- harness:adi shared (whatever the provider) ----
     let mut max_tokens =
-        field_kinds("max_tokens", "Max output tokens", AgentFormFieldKind::Number, &["api"]);
+        field_ids("max_tokens", "Max output tokens", AgentFormFieldKind::Number, &[ADI_HARNESS]);
     max_tokens.placeholder = "e.g. 4096".into();
     max_tokens.hint = "maps to each provider's output-cap field".into();
     max_tokens.numeric = true;
     fields.push(max_tokens);
 
-    let mut stop = field_kinds("stop", "Stop sequences", AgentFormFieldKind::Text, &["api"]);
+    let mut stop = field_ids("stop", "Stop sequences", AgentFormFieldKind::Text, &[ADI_HARNESS]);
     stop.placeholder = "comma-separated".into();
     stop.hint = "stop generation on these strings".into();
     stop.mono = true;
@@ -1223,13 +1372,13 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(max_turns);
 
     let mut api_key_env =
-        field_kinds("api_key_env", "API key env", AgentFormFieldKind::Text, &["api"]);
+        field_ids("api_key_env", "API key env", AgentFormFieldKind::Text, &[ADI_HARNESS]);
     api_key_env.placeholder = "OPENAI_API_KEY".into();
-    api_key_env.hint = "environment variable read by this backend".into();
+    api_key_env.hint = "environment variable read for the chosen provider".into();
     api_key_env.mono = true;
     fields.push(api_key_env);
 
-    let mut base_url = field_kinds("base_url", "Base URL", AgentFormFieldKind::Text, &["api"]);
+    let mut base_url = field_ids("base_url", "Base URL", AgentFormFieldKind::Text, &[ADI_HARNESS]);
     base_url.placeholder = "provider endpoint override".into();
     base_url.hint = "e.g. https://api.moonshot.ai/v1 · http://localhost:11434".into();
     base_url.mono = true;
@@ -1263,42 +1412,41 @@ fn agent_form_spec() -> AgentFormSpec {
     AgentFormSpec {
         backends: vec![
             agent_backend(
-                "cli:claude",
-                "Claude (CLI)",
-                "cli",
+                "tmux:claude",
+                "tmux · Claude CLI",
+                "tmux",
                 "opus / sonnet / fable / haiku",
             ),
-            agent_backend("cli:codex", "Codex (CLI)", "cli", "gpt-5-codex"),
-            agent_backend("api:anthropic", "Anthropic (API)", "api", "claude-opus-4-8"),
-            agent_backend("api:openai", "OpenAI (API)", "api", "gpt-5-codex / o3"),
+            agent_backend("tmux:codex", "tmux · Codex CLI", "tmux", "gpt-5-codex"),
             agent_backend(
-                "api:gemini",
-                "Gemini (API)",
-                "api",
-                "gemini-2.5-pro / gemini-2.5-flash",
+                "process:claude",
+                "process · Claude CLI",
+                "process",
+                "opus / sonnet / fable / haiku",
+            ),
+            agent_backend("process:codex", "process · Codex CLI", "process", "gpt-5-codex"),
+            agent_backend(
+                "harness:claude-sdk",
+                "harness · Claude SDK",
+                "harness",
+                "claude-opus-4-8 / claude-sonnet-5",
             ),
             agent_backend(
-                "api:monshoot",
-                "Monshoot (API)",
-                "api",
-                "kimi-k2.6 / kimi-k2.5 / kimi-k2.7-code",
-            ),
-            agent_backend(
-                "api:ollama",
-                "Ollama (local)",
-                "api",
-                "llama3.1 / qwen2.5-coder",
+                ADI_HARNESS,
+                "harness · ADI loop",
+                "harness",
+                "provider model, e.g. kimi-k2.6 / gemini-2.5-pro",
             ),
         ],
         fields,
     }
 }
 
-fn agent_backend(id: &str, label: &str, kind: &str, model_placeholder: &str) -> AgentBackendOption {
+fn agent_backend(id: &str, label: &str, executor: &str, model_placeholder: &str) -> AgentBackendOption {
     AgentBackendOption {
         id: id.into(),
         label: label.into(),
-        kind: kind.into(),
+        executor: executor.into(),
         model_placeholder: model_placeholder.into(),
     }
 }
@@ -1312,7 +1460,8 @@ fn agent_field(name: &str, label: &str, kind: AgentFormFieldKind) -> AgentFormFi
         hint: String::new(),
         options: Vec::new(),
         backend_ids: Vec::new(),
-        backend_kinds: Vec::new(),
+        executors: Vec::new(),
+        providers: Vec::new(),
         mono: false,
         wide: false,
         numeric: false,
@@ -1331,17 +1480,29 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|v| (*v).to_string()).collect()
 }
 
-/// A field visible only for specific backend ids (e.g. `cli:claude`).
+/// A field visible only for specific backend ids (e.g. `tmux:claude`).
 fn field_ids(name: &str, label: &str, kind: AgentFormFieldKind, ids: &[&str]) -> AgentFormField {
     let mut f = agent_field(name, label, kind);
     f.backend_ids = strings(ids);
     f
 }
 
-/// A field visible for whole backend kinds (`cli` / `api`).
-fn field_kinds(name: &str, label: &str, kind: AgentFormFieldKind, kinds: &[&str]) -> AgentFormField {
+/// A field visible for whole executors (`tmux` / `process` / `harness`).
+fn field_executors(
+    name: &str,
+    label: &str,
+    kind: AgentFormFieldKind,
+    executors: &[&str],
+) -> AgentFormField {
     let mut f = agent_field(name, label, kind);
-    f.backend_kinds = strings(kinds);
+    f.executors = strings(executors);
+    f
+}
+
+/// Also show a field when `harness:adi` targets one of these providers (on top of whatever
+/// backend-id scoping the field already carries).
+fn for_providers(mut f: AgentFormField, providers: &[&str]) -> AgentFormField {
+    f.providers = strings(providers);
     f
 }
 
@@ -1387,12 +1548,19 @@ fn opts(pairs: &[(&str, &str)]) -> Vec<AgentFormOption> {
     pairs.iter().map(|&(v, l)| agent_option(v, l)).collect()
 }
 
-/// Map an agent-store error to an HTTP status: bad name → 400, missing → 404, else 500.
+/// Map an agent-store error to an HTTP status: bad name / unrunnable backend / bad key → 400,
+/// missing → 404, wrong run state (already / not running) → 409, else 500.
 fn agent_error(e: &AgentStoreError) -> (u16, String) {
     let status = match e {
-        AgentStoreError::InvalidName(_) => 400,
+        AgentStoreError::InvalidName(_)
+        | AgentStoreError::NotRunnable(_)
+        | AgentStoreError::InvalidKey(_) => 400,
         AgentStoreError::NotFound(_) => 404,
-        AgentStoreError::Config(_) | AgentStoreError::Io(_) => 500,
+        AgentStoreError::AlreadyRunning(_) | AgentStoreError::NotRunning(_) => 409,
+        AgentStoreError::Config(_)
+        | AgentStoreError::Io(_)
+        | AgentStoreError::Launch(_)
+        | AgentStoreError::Tmux(_) => 500,
     };
     error(status, &e.to_string())
 }
@@ -1416,6 +1584,18 @@ fn parse_agent_ref(body: &[u8]) -> Option<AgentRef> {
 
 fn bad_agent_ref() -> (u16, String) {
     error(400, "expected JSON body { \"name\": \"…\" }")
+}
+
+fn parse_agent_keys(body: &[u8]) -> Option<AgentKeys> {
+    let req: AgentKeys = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty() && (!req.text.is_empty() || !req.key.is_empty())).then_some(req)
+}
+
+fn bad_agent_keys() -> (u16, String) {
+    error(
+        400,
+        "expected JSON body { \"name\": \"…\", \"text\": \"…\", \"key\": \"…\" } with a non-empty name and at least one of text/key",
+    )
 }
 
 /// Trim a string, dropping it entirely when blank (so an empty optional field clears).
@@ -1760,33 +1940,119 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
 
         let backends = v["form"]["backends"].as_array().unwrap();
+        // Backend ids are executor:what pairs; the executor is the run mechanism.
         assert!(
-            backends.iter().any(|b| {
-                b["id"] == "api:openai" && b["model_placeholder"] == "gpt-5-codex / o3"
-            })
+            backends
+                .iter()
+                .any(|b| b["id"] == "tmux:claude" && b["executor"] == "tmux")
+        );
+        assert!(
+            backends
+                .iter()
+                .any(|b| b["id"] == "harness:adi" && b["executor"] == "harness")
         );
 
         let fields = v["form"]["fields"].as_array().unwrap();
         assert!(fields.iter().any(|f| f["name"] == "api_key_env"));
-        // permission_mode is now Claude-only (Codex uses sandbox / approval instead).
+        // permission_mode is Claude-only (Codex uses sandbox / approval instead).
         assert!(fields.iter().any(|f| {
             f["name"] == "permission_mode"
                 && f["backend_ids"]
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|id| id == "cli:claude")
+                    .any(|id| id == "tmux:claude")
         }));
-        // Newly exposed backend-specific params are present.
+        // Backend/provider-specific params are present.
         for name in ["effort", "sandbox", "approval", "thinking", "num_ctx", "max_tokens"] {
             assert!(fields.iter().any(|f| f["name"] == name), "missing field {name}");
         }
-        // Temperature now applies only where a non-default value is safe (Gemini, Ollama) — not
-        // the reasoning / current-model backends where it 400s.
+        // Temperature applies only where a non-default value is safe (the Gemini and Ollama
+        // providers) — not the reasoning / current-model providers where it 400s.
         let temperature = fields.iter().find(|f| f["name"] == "temperature").unwrap();
-        let temp_ids = temperature["backend_ids"].as_array().unwrap();
-        assert!(temp_ids.iter().any(|id| id == "api:ollama"));
-        assert!(!temp_ids.iter().any(|id| id == "api:anthropic"));
+        let providers = temperature["providers"].as_array().unwrap();
+        assert!(providers.iter().any(|p| p == "ollama"));
+        assert!(!providers.iter().any(|p| p == "anthropic"));
+    }
+
+    #[test]
+    fn agents_report_runnable_for_tmux_backends_only() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+
+        let (status, body) = agents(&store);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let list = v["agents"].as_array().unwrap();
+        let looper = list.iter().find(|a| a["name"] == "looper").unwrap();
+        let solver = list.iter().find(|a| a["name"] == "solver").unwrap();
+        assert_eq!(looper["runnable"], false);
+        assert_eq!(solver["runnable"], true);
+        assert_eq!(looper["running"], false);
+    }
+
+    #[test]
+    fn run_of_a_missing_agent_is_404() {
+        let store = temp_agents();
+        let (status, _) = run_agent(&store, br#"{"name":"ghost"}"#);
+        assert_eq!(status, 404);
+    }
+
+    #[test]
+    fn peek_reports_not_running_for_a_sessionless_agent() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+
+        let (status, body) = peek_agent(&store, br#"{"name":"solver"}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["running"], false);
+        assert_eq!(v["output"], "");
+        assert_eq!(v["attach"], "tmux attach -t adi-agent-solver");
+
+        // Only an unknown name is an error.
+        assert_eq!(peek_agent(&store, br#"{"name":"ghost"}"#).0, 404);
+    }
+
+    #[test]
+    fn send_keys_validates_body_and_run_state() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+
+        // Unknown agent → 404; a body with neither text nor key → 400.
+        assert_eq!(send_agent_keys(&store, br#"{"name":"ghost","key":"Enter"}"#).0, 404);
+        assert_eq!(send_agent_keys(&store, br#"{"name":"solver"}"#).0, 400);
+
+        // Registered but sessionless → 409 (nothing to type into).
+        let (status, body) = send_agent_keys(&store, br#"{"name":"solver","text":"hi"}"#);
+        assert_eq!(status, 409);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("isn't running"));
+    }
+
+    #[test]
+    fn stop_is_idempotent_and_404s_unknown() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+
+        // Stopping a registered agent with no session succeeds (idempotent no-op) and returns
+        // the fresh list; an unknown agent is a 404.
+        let (status, body) = stop_agent(&store, br#"{"name":"solver"}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["agents"].as_array().unwrap().iter().any(|a| a["name"] == "solver"));
+        assert_eq!(stop_agent(&store, br#"{"name":"ghost"}"#).0, 404);
+    }
+
+    #[test]
+    fn run_of_an_unrunnable_backend_is_400() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+        let (status, body) = run_agent(&store, br#"{"name":"looper"}"#);
+        assert_eq!(status, 400);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("can't be run yet"));
     }
 
     #[test]

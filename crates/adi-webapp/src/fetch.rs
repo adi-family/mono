@@ -1,7 +1,8 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentRef, AgentsState, ApiError, DirListing, FileContent, FilesRef, Health, HiveState,
+    AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError, DirListing, FileContent,
+    FilesRef, Health, HiveState,
     LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
     NewTask, PortsState, ProjectDetail, ProjectRef, ProjectsState, ReleaseResponse,
     ReserveResponse, SaveAgent, StartResult, StartService, StopResult, TasksState, UsedPorts,
@@ -115,6 +116,22 @@ pub async fn save_agent(body: SaveAgent) -> Result<AgentsState, String> {
 
 pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
     post("/api/agents/delete", &AgentRef { name }).await
+}
+
+pub async fn run_agent(name: String) -> Result<AgentRunResult, String> {
+    post("/api/agents/run", &AgentRef { name }).await
+}
+
+pub async fn stop_agent(name: String) -> Result<AgentsState, String> {
+    post("/api/agents/stop", &AgentRef { name }).await
+}
+
+pub async fn peek_agent(name: String) -> Result<AgentPeek, String> {
+    post("/api/agents/peek", &AgentRef { name }).await
+}
+
+pub async fn send_agent_keys(name: String, text: String, key: String) -> Result<AgentPeek, String> {
+    post("/api/agents/send-keys", &AgentKeys { name, text, key }).await
 }
 
 pub async fn hive() -> Result<HiveState, String> {

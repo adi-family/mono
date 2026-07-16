@@ -329,18 +329,20 @@ pub struct AgentFormSpec {
     pub fields: Vec<AgentFormField>,
 }
 
-/// One selectable agent backend in the form.
+/// One selectable agent backend in the form: an `executor:what` pair, where the executor is the
+/// run mechanism (`tmux` / `process` / `harness`) and the suffix is what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentBackendOption {
     pub id: String,
     pub label: String,
-    pub kind: String,
+    pub executor: String,
     #[serde(default)]
     pub model_placeholder: String,
 }
 
-/// One rendered form control. `backend_ids` and `backend_kinds` are visibility filters; an empty
-/// pair means the field is always visible.
+/// One rendered form control. `backend_ids`, `executors`, and `providers` are visibility
+/// filters (any match shows the field); all empty means the field is always visible.
+/// `providers` matches the `provider` extra of the `harness:adi` backend only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentFormField {
     pub name: String,
@@ -356,7 +358,9 @@ pub struct AgentFormField {
     #[serde(default)]
     pub backend_ids: Vec<String>,
     #[serde(default)]
-    pub backend_kinds: Vec<String>,
+    pub executors: Vec<String>,
+    #[serde(default)]
+    pub providers: Vec<String>,
     #[serde(default)]
     pub mono: bool,
     #[serde(default)]
@@ -385,14 +389,14 @@ pub enum AgentFormFieldKind {
     Textarea,
 }
 
-/// One agent definition, flattened for the wire. `backend` is a `kind:engine` string
-/// (`cli:claude`, `api:anthropic`, …); `backend_kind` is the `cli`/`api` prefix, which decides
-/// which params apply (permission mode for CLI, temperature for API).
+/// One agent definition, flattened for the wire. `backend` is an `executor:what` string
+/// (`tmux:claude`, `process:codex`, `harness:adi`, …); `executor` is the `tmux`/`process`/
+/// `harness` prefix, which decides how the agent runs and which params apply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentDto {
     pub name: String,
     pub backend: String,
-    pub backend_kind: String,
+    pub executor: String,
     #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]
@@ -413,6 +417,13 @@ pub struct AgentDto {
     pub extra: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// Whether this agent's backend has a run adapter (today: tmux executors only), i.e. whether
+    /// the ▶ Run action can work at all.
+    #[serde(default)]
+    pub runnable: bool,
+    /// Whether a live `adi-agent-<name>` tmux session for this agent exists right now.
+    #[serde(default)]
+    pub running: bool,
 }
 
 /// `GET /api/agents` — every registered agent definition, sorted by name. Each mutation endpoint
@@ -425,7 +436,7 @@ pub struct AgentsState {
 
 /// Request body for `POST /api/agents/save` — create or update an agent definition (an upsert
 /// keyed by `name`). `name` and `backend` are required; the rest are optional settings, some
-/// of which only apply to one backend kind. Timestamps are owned by the server.
+/// of which only apply to some backends. Timestamps are owned by the server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveAgent {
     pub name: String,
@@ -450,10 +461,46 @@ pub struct SaveAgent {
     pub extra: BTreeMap<String, String>,
 }
 
-/// Request body naming an agent — `POST /api/agents/delete`.
+/// Request body naming an agent — `POST /api/agents/delete` and `POST /api/agents/run`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRef {
     pub name: String,
+}
+
+/// `POST /api/agents/run` — the launch outcome: a human-readable message carrying the tmux
+/// attach hint (the server owns the session-naming scheme, so the hint is composed here), plus
+/// the fresh agents state so the client refreshes in the same round-trip.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentRunResult {
+    pub message: String,
+    pub state: AgentsState,
+}
+
+/// Request body for `POST /api/agents/send-keys` — type into a running agent's tmux session:
+/// `text` is sent literally, then `key` (a tmux key name: `Enter`, `Escape`, `Up`, `C-c`, …)
+/// is pressed. At least one of the two must be non-empty. Replies with a fresh [`AgentPeek`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentKeys {
+    pub name: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+/// `POST /api/agents/peek` — a read-only snapshot of a running agent's tmux pane (the text
+/// `tmux attach` would show), polled by the Agents page's live view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentPeek {
+    pub name: String,
+    /// Whether the agent's tmux session is live; `output` is empty when it isn't.
+    pub running: bool,
+    /// The visible pane text (trailing whitespace trimmed).
+    #[serde(default)]
+    pub output: String,
+    /// The command a human runs to take the session over: `tmux attach -t adi-agent-<name>`.
+    #[serde(default)]
+    pub attach: String,
 }
 
 // ---- files (a project's own directory, browsed through an isolated jail) --------------
