@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use adi_agents::{AgentManifest, Agents, Error as AgentStoreError};
 use adi_fs::{Error as FsError, Jail};
+use adi_hooks::{Error as HookStoreError, Hooks as ProjectHooks, Workspaces, hook_template};
 use adi_triggers::{Error as TriggerStoreError, TriggerManifest, Triggers};
 use adi_mesh::config::{Forward, MeshConfig};
 use adi_mesh::{identity, ticket};
@@ -23,12 +24,14 @@ use crate::types::{
     AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError,
     DirListing, FileContent, FileEntry, FilesRef,
     Health, HiveService, HiveState, HookAck, Lease, LeaseRef, MeshForward, MeshForwardRef,
-    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, NewService, NewTask,
-    PortsState, Project,
-    ProjectDetail, ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse,
+    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject, NewProjectHook, NewService,
+    NewTask, NewWorkspace, PortsState, Project,
+    ProjectDetail, ProjectHookDto, ProjectHookLog, ProjectHookRef, ProjectHookRunResult,
+    ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse,
     ReserveResponse, SaveAgent, SaveTrigger, ServicePort, StartResult, StartService, StopResult,
     TaskRow, TasksState, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog, TriggerRef,
-    TriggersState, UsedPort, UsedPorts, WriteFile,
+    TriggersState, UsedPort, UsedPorts, WorkspaceCreateResult, WorkspaceDto, WorkspaceRef,
+    WorkspacesRef, WorkspacesState, WriteFile,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -530,6 +533,312 @@ fn bad_files_ref() -> (u16, String) {
 fn parse_write_file(body: &[u8]) -> Option<WriteFile> {
     let req: WriteFile = serde_json::from_slice(body).ok()?;
     (!req.id.trim().is_empty() && !req.path.trim().is_empty()).then_some(req)
+}
+
+// MARK: workspaces & project hooks — working copies created by the script files under
+// <project>/.adi/hooks, registered in <project>/.adi/workspaces.toml. All routes live
+// under /api/projects/… (never /api/hooks/*, which is the triggers webhook URL space).
+
+/// `POST /api/projects/workspaces` — a project's workspaces and hooks in one snapshot. Every
+/// mutation in this family returns a fresh [`WorkspacesState`] for one-round-trip refreshes.
+#[must_use]
+pub fn workspaces_state(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_workspaces_ref(body) else {
+        return error(400, "expected JSON body { \"id\": \"…\" }");
+    };
+    match build_workspaces_state(store, req.id.trim()) {
+        Ok(state) => ok_json(&state),
+        Err(resp) => resp,
+    }
+}
+
+/// `POST /api/projects/workspaces/create` — create a workspace. The project's first
+/// hook-backed workspace runs the `init` hook (e.g. `git clone`), each additional one the
+/// `workspace` hook (e.g. `git worktree add`) — detached, so the response's state shows it
+/// `creating`; with `local`, an existing directory is linked as-is and no hook runs.
+#[must_use]
+pub fn create_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_new_workspace(body) else {
+        return error(
+            400,
+            "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"path\"?: \"…\", \"local\"?: bool }",
+        );
+    };
+    let id = req.id.trim();
+    let (dir, env) = match project_scope(store, id) {
+        Ok(scope) => scope,
+        Err(resp) => return resp,
+    };
+    let explicit = req
+        .path
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(PathBuf::from);
+    let name = req.name.trim();
+    let (entry, run) =
+        match Workspaces::new(&dir).create(name, explicit.as_deref(), req.local, &env) {
+            Ok(created) => created,
+            Err(e) => return hooks_error(&e),
+        };
+    let message = match &run {
+        Some(run) => format!(
+            "Creating workspace “{name}” via the {} hook (pid {}).",
+            entry.hook.as_deref().unwrap_or("?"),
+            run.pid
+        ),
+        None => format!("Linked local workspace “{name}”."),
+    };
+    match build_workspaces_state(store, id) {
+        Ok(state) => ok_json(&WorkspaceCreateResult { message, state }),
+        Err(resp) => resp,
+    }
+}
+
+/// `POST /api/projects/workspaces/remove` — unregister a workspace. Never touches its files;
+/// a clone/worktree on disk stays where it is. An unknown name is a 404.
+#[must_use]
+pub fn remove_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_workspace_ref(body) else {
+        return bad_project_hook_ref();
+    };
+    let id = req.id.trim();
+    let (dir, _) = match project_scope(store, id) {
+        Ok(scope) => scope,
+        Err(resp) => return resp,
+    };
+    let name = req.name.trim();
+    match Workspaces::new(&dir).remove(name) {
+        Ok(true) => {}
+        Ok(false) => return error(404, &format!("no such workspace: {name}")),
+        Err(e) => return hooks_error(&e),
+    }
+    match build_workspaces_state(store, id) {
+        Ok(state) => ok_json(&state),
+        Err(resp) => resp,
+    }
+}
+
+/// `POST /api/projects/hook/run` — run a hook by hand, detached, with the project env and
+/// cwd at the project directory. Replies with the spawned pid plus fresh state.
+#[must_use]
+pub fn run_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_project_hook_ref(body) else {
+        return bad_project_hook_ref();
+    };
+    let id = req.id.trim();
+    let (dir, mut env) = match project_scope(store, id) {
+        Ok(scope) => scope,
+        Err(resp) => return resp,
+    };
+    env.push(("ADI_PROJECT_DIR".to_string(), dir.display().to_string()));
+    let name = req.name.trim();
+    let hooks = ProjectHooks::new(&dir);
+    // A manual run of an unknown hook is a plain 404 (NoHook's 409 is for the lifecycle
+    // hooks a workspace create depends on).
+    if !hooks.exists(name) {
+        return error(404, &format!("no such hook: {name}"));
+    }
+    let run = match hooks.run(name, &env, &dir) {
+        Ok(run) => run,
+        Err(e) => return hooks_error(&e),
+    };
+    match build_workspaces_state(store, id) {
+        Ok(state) => ok_json(&ProjectHookRunResult {
+            message: format!("Running hook “{name}” (pid {}).", run.pid),
+            state,
+        }),
+        Err(resp) => resp,
+    }
+}
+
+/// `POST /api/projects/hook/log` — the tail of a hook's most recent run log. A hook that
+/// never ran answers `ran: false` (200, not an error); only an unknown hook file is a 404.
+#[must_use]
+pub fn project_hook_log(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_project_hook_ref(body) else {
+        return bad_project_hook_ref();
+    };
+    let id = req.id.trim();
+    let (dir, _) = match project_scope(store, id) {
+        Ok(scope) => scope,
+        Err(resp) => return resp,
+    };
+    let hooks = ProjectHooks::new(&dir);
+    let name = req.name.trim();
+    if !hooks.exists(name) {
+        return error(404, &format!("no such hook: {name}"));
+    }
+    let output = hooks.read_log(name);
+    let status = hooks.status(name);
+    ok_json(&ProjectHookLog {
+        id: id.to_string(),
+        name: name.to_string(),
+        ran: output.is_some(),
+        output: output.unwrap_or_default(),
+        status: status.as_str().to_string(),
+        exit_code: status.exit_code(),
+        ran_at: hooks.last_run(name),
+    })
+}
+
+/// `POST /api/projects/hook/create` — materialize a hook file from a template (`init` |
+/// `workspace` | `blank`, the default). Refuses to overwrite (409) — edits go through the
+/// project file browser, where the file lives at `.adi/hooks/<name>`.
+#[must_use]
+pub fn create_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_new_project_hook(body) else {
+        return error(
+            400,
+            "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"template\"?: \"init|workspace|blank\" }",
+        );
+    };
+    let id = req.id.trim();
+    let (dir, _) = match project_scope(store, id) {
+        Ok(scope) => scope,
+        Err(resp) => return resp,
+    };
+    let template = req
+        .template
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .unwrap_or("blank");
+    let Some(content) = hook_template(template) else {
+        return error(
+            400,
+            &format!("unknown template {template:?} (init | workspace | blank)"),
+        );
+    };
+    if let Err(e) = ProjectHooks::new(&dir).create(req.name.trim(), content) {
+        return hooks_error(&e);
+    }
+    match build_workspaces_state(store, id) {
+        Ok(state) => ok_json(&state),
+        Err(resp) => resp,
+    }
+}
+
+/// The full [`WorkspacesState`] for a registered project: entries decorated with live status,
+/// hooks with their last-run status, and which lifecycle hook the next create would run.
+fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState, (u16, String)> {
+    let (dir, _) = project_scope(store, id)?;
+    let ws = Workspaces::new(&dir);
+    let hooks = ProjectHooks::new(&dir);
+
+    let entries = ws.list().map_err(|e| hooks_error(&e))?;
+    let primary = entries
+        .iter()
+        .find(|w| w.kind != adi_hooks::WorkspaceKind::Local)
+        .map(|w| w.name.clone());
+    let workspaces = entries
+        .iter()
+        .map(|w| WorkspaceDto {
+            name: w.name.clone(),
+            path: w.path.display().to_string(),
+            kind: w.kind.as_str().to_string(),
+            status: ws.status(w).as_str().to_string(),
+            pid: w.pid,
+            hook: w.hook.clone(),
+            created_at: w.created_at,
+            primary: primary.as_deref() == Some(w.name.as_str()),
+        })
+        .collect();
+
+    let hook_dtos = hooks
+        .list()
+        .map_err(|e| hooks_error(&e))?
+        .into_iter()
+        .map(|h| {
+            let status = hooks.status(&h.name);
+            ProjectHookDto {
+                last_run_at: hooks.last_run(&h.name),
+                status: status.as_str().to_string(),
+                exit_code: status.exit_code(),
+                name: h.name,
+                size: h.size,
+                modified: h.modified,
+            }
+        })
+        .collect();
+
+    Ok(WorkspacesState {
+        id: id.to_string(),
+        next_hook: ws.next_hook().map_err(|e| hooks_error(&e))?.to_string(),
+        has_init_hook: hooks.exists(adi_hooks::HOOK_INIT),
+        has_workspace_hook: hooks.exists(adi_hooks::HOOK_WORKSPACE),
+        workspaces,
+        hooks: hook_dtos,
+    })
+}
+
+/// Resolve a *registered* project for the workspaces/hooks family: its directory plus the
+/// `ADI_PROJECT_*` env pairs the hook contract needs. Same gate as [`project_jail`].
+fn project_scope(
+    store: &Projects,
+    id: &str,
+) -> Result<(PathBuf, Vec<(String, String)>), (u16, String)> {
+    let project = match store.get(id) {
+        Ok(Some(project)) => project,
+        Ok(None) => return Err(error(404, &format!("no such project: {id}"))),
+        Err(e) => return Err(project_error(&e)),
+    };
+    let dir = store.project_dir(id).map_err(|e| project_error(&e))?;
+    let env = vec![
+        ("ADI_PROJECT_ID".to_string(), project.id.clone()),
+        (
+            "ADI_PROJECT_NAME".to_string(),
+            project.display_name().to_string(),
+        ),
+    ];
+    Ok((dir, env))
+}
+
+/// Map an adi-hooks error to an HTTP status. `Exists`/`NoHook`/`PrimaryMissing` are 409s —
+/// the request is well-formed but the project isn't in the right state, and the message
+/// says what to do about it.
+fn hooks_error(e: &HookStoreError) -> (u16, String) {
+    let status = match e {
+        HookStoreError::InvalidName(_)
+        | HookStoreError::EmptyHook(_)
+        | HookStoreError::NotAbsolute(_)
+        | HookStoreError::NotADir(_) => 400,
+        HookStoreError::Exists(_)
+        | HookStoreError::NoHook(_)
+        | HookStoreError::PrimaryMissing => 409,
+        HookStoreError::NotFound(_) => 404,
+        HookStoreError::Launch(_) | HookStoreError::Registry(_) | HookStoreError::Io(_) => 500,
+    };
+    error(status, &e.to_string())
+}
+
+fn parse_workspaces_ref(body: &[u8]) -> Option<WorkspacesRef> {
+    let req: WorkspacesRef = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty()).then_some(req)
+}
+
+fn parse_new_workspace(body: &[u8]) -> Option<NewWorkspace> {
+    let req: NewWorkspace = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+}
+
+fn parse_workspace_ref(body: &[u8]) -> Option<WorkspaceRef> {
+    let req: WorkspaceRef = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+}
+
+fn parse_project_hook_ref(body: &[u8]) -> Option<ProjectHookRef> {
+    let req: ProjectHookRef = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+}
+
+fn parse_new_project_hook(body: &[u8]) -> Option<NewProjectHook> {
+    let req: NewProjectHook = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+}
+
+fn bad_project_hook_ref() -> (u16, String) {
+    error(400, "expected JSON body { \"id\": \"…\", \"name\": \"…\" }")
 }
 
 // MARK: hive — every service across all projects + the global front-door hive
@@ -2747,6 +3056,177 @@ mod tests {
         let store = temp_projects();
         assert_eq!(
             read_file(&store, br#"{"id":"demo","path":"nope.txt"}"#).0,
+            404
+        );
+    }
+
+    // ---- workspaces & project hooks ----------------------------------------------------
+
+    /// Poll until `cond` holds (hook runs are detached), up to ~5s.
+    fn wait_until(cond: impl Fn() -> bool) -> bool {
+        for _ in 0..250 {
+            if cond() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn workspaces_state_starts_empty_with_init_next() {
+        let store = temp_projects();
+        let (status, body) = workspaces_state(&store, br#"{"id":"demo"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["id"], "demo");
+        assert_eq!(v["workspaces"].as_array().unwrap().len(), 0);
+        assert_eq!(v["hooks"].as_array().unwrap().len(), 0);
+        assert_eq!(v["next_hook"], "init");
+        assert_eq!(v["has_init_hook"], false);
+
+        assert_eq!(workspaces_state(&store, br#"{"id":"ghost"}"#).0, 404);
+        assert_eq!(workspaces_state(&store, br#"{"id":""}"#).0, 400);
+    }
+
+    #[test]
+    fn create_project_hook_materializes_a_template_once() {
+        let store = temp_projects();
+        let (status, body) =
+            create_project_hook(&store, br#"{"id":"demo","name":"init","template":"init"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["has_init_hook"], true);
+        assert_eq!(v["hooks"][0]["name"], "init");
+        assert_eq!(v["hooks"][0]["status"], "never");
+        let file = store
+            .project_dir("demo")
+            .unwrap()
+            .join(".adi/hooks/init");
+        assert!(file.is_file());
+
+        // Overwriting an existing hook is refused; edits go through the file browser.
+        assert_eq!(
+            create_project_hook(&store, br#"{"id":"demo","name":"init"}"#).0,
+            409
+        );
+        // Unknown templates are a 400.
+        assert_eq!(
+            create_project_hook(&store, br#"{"id":"demo","name":"x","template":"nope"}"#).0,
+            400
+        );
+    }
+
+    #[test]
+    fn create_workspace_without_an_init_hook_is_a_409() {
+        let store = temp_projects();
+        let (status, body) = create_workspace(&store, br#"{"id":"demo","name":"main"}"#);
+        assert_eq!(status, 409, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["error"].as_str().unwrap().contains("init"),
+            "message should point at the missing init hook: {body}"
+        );
+    }
+
+    #[test]
+    fn create_workspace_runs_the_init_hook_to_ready() {
+        let store = temp_projects();
+        let dir = store.project_dir("demo").unwrap();
+        std::fs::create_dir_all(dir.join(".adi/hooks")).unwrap();
+        std::fs::write(
+            dir.join(".adi/hooks/init"),
+            "mkdir \"$ADI_WORKSPACE_DIR\"\n",
+        )
+        .unwrap();
+
+        let (status, body) = create_workspace(&store, br#"{"id":"demo","name":"main"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["message"].as_str().unwrap().contains("init"));
+        let ws = &v["state"]["workspaces"][0];
+        assert_eq!(ws["name"], "main");
+        assert_eq!(ws["kind"], "init");
+        assert_eq!(ws["primary"], true);
+        assert!(ws["pid"].as_u64().is_some());
+
+        assert!(wait_until(|| dir.join("workspaces/main").is_dir()));
+        assert!(wait_until(|| {
+            let (_, body) = workspaces_state(&store, br#"{"id":"demo"}"#);
+            let v: Value = serde_json::from_str(&body).unwrap();
+            v["workspaces"][0]["status"] == "ready" && v["next_hook"] == "workspace"
+        }));
+        // The same name can't be registered twice.
+        assert_eq!(
+            create_workspace(&store, br#"{"id":"demo","name":"main"}"#).0,
+            409
+        );
+    }
+
+    #[test]
+    fn local_workspace_links_and_remove_leaves_files() {
+        let store = temp_projects();
+        let dir = store.project_dir("demo").unwrap();
+        let linked = dir.join("elsewhere");
+        std::fs::create_dir_all(&linked).unwrap();
+
+        let body = format!(
+            r#"{{"id":"demo","name":"home","path":{:?},"local":true}}"#,
+            linked.to_str().unwrap()
+        );
+        let (status, resp) = create_workspace(&store, body.as_bytes());
+        assert_eq!(status, 200, "{resp}");
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["state"]["workspaces"][0]["status"], "local");
+        // A local link is not the primary, so the next create still inits.
+        assert_eq!(v["state"]["next_hook"], "init");
+
+        let (status, resp) = remove_workspace(&store, br#"{"id":"demo","name":"home"}"#);
+        assert_eq!(status, 200, "{resp}");
+        let v: Value = serde_json::from_str(&resp).unwrap();
+        assert_eq!(v["workspaces"].as_array().unwrap().len(), 0);
+        assert!(linked.is_dir(), "remove must never delete files");
+
+        assert_eq!(
+            remove_workspace(&store, br#"{"id":"demo","name":"home"}"#).0,
+            404
+        );
+    }
+
+    #[test]
+    fn manual_hook_run_and_log_round_trip() {
+        let store = temp_projects();
+        let dir = store.project_dir("demo").unwrap();
+        std::fs::create_dir_all(dir.join(".adi/hooks")).unwrap();
+        std::fs::write(
+            dir.join(".adi/hooks/greet"),
+            "printf 'hi from %s\\n' \"$ADI_PROJECT_NAME\"\n",
+        )
+        .unwrap();
+
+        let (status, body) = run_project_hook(&store, br#"{"id":"demo","name":"greet"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["message"].as_str().unwrap().contains("pid"));
+
+        assert!(wait_until(|| {
+            let (_, body) = project_hook_log(&store, br#"{"id":"demo","name":"greet"}"#);
+            let v: Value = serde_json::from_str(&body).unwrap();
+            v["status"] == "ok"
+        }));
+        let (status, body) = project_hook_log(&store, br#"{"id":"demo","name":"greet"}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ran"], true);
+        assert_eq!(v["exit_code"], 0);
+        assert!(v["output"].as_str().unwrap().contains("hi from Demo"));
+
+        assert_eq!(
+            run_project_hook(&store, br#"{"id":"demo","name":"ghost"}"#).0,
+            404
+        );
+        assert_eq!(
+            project_hook_log(&store, br#"{"id":"demo","name":"ghost"}"#).0,
             404
         );
     }

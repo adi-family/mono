@@ -209,6 +209,21 @@ async fn handle(
         ("POST", "/api/projects/files") => handlers::list_files(projects, &req.body),
         ("POST", "/api/projects/file/read") => handlers::read_file(projects, &req.body),
         ("POST", "/api/projects/file/write") => handlers::write_file(projects, &req.body),
+        // Workspaces & project hooks: working copies created by the script files under a
+        // project's .adi/hooks, registered in its .adi/workspaces.toml. All POST under
+        // /api/projects/… — NOT /api/hooks/*, which is the triggers webhook URL space.
+        ("POST", "/api/projects/workspaces") => handlers::workspaces_state(projects, &req.body),
+        ("POST", "/api/projects/workspaces/create") => {
+            handlers::create_workspace(projects, &req.body)
+        }
+        ("POST", "/api/projects/workspaces/remove") => {
+            handlers::remove_workspace(projects, &req.body)
+        }
+        ("POST", "/api/projects/hook/run") => handlers::run_project_hook(projects, &req.body),
+        ("POST", "/api/projects/hook/log") => handlers::project_hook_log(projects, &req.body),
+        ("POST", "/api/projects/hook/create") => {
+            handlers::create_project_hook(projects, &req.body)
+        }
         // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
         // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
         ("GET", p) if p.starts_with("/api/projects/") => {

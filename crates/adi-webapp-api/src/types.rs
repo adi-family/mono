@@ -726,6 +726,148 @@ pub struct WriteFile {
     pub content: String,
 }
 
+// ---- project workspaces & hooks (script files under <project>/.adi/hooks + the
+// ---- .adi/workspaces.toml registry) ---------------------------------------------------
+
+/// One project hook file (`.adi/hooks/<name>`) decorated with its last-run status, which is
+/// derived from the exit marker its runner appends to `.adi/hooks/logs/<name>.log`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectHookDto {
+    /// The hook's name — its file name under `.adi/hooks/` (also its editable path in the
+    /// project file browser).
+    pub name: String,
+    /// The script's size in bytes.
+    pub size: u64,
+    /// The script's mtime as Unix epoch seconds.
+    #[serde(default)]
+    pub modified: Option<u64>,
+    /// The most recent run: `never` | `running` | `ok` | `failed`.
+    pub status: String,
+    /// The finished run's exit code (`0` for `ok`), or `None` while running / never ran.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    /// When the hook last ran, as Unix epoch seconds (the log's mtime).
+    #[serde(default)]
+    pub last_run_at: Option<u64>,
+}
+
+/// One registered workspace (a working copy the project owns) with its live status.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceDto {
+    pub name: String,
+    /// The workspace's absolute directory.
+    pub path: String,
+    /// How it came to be: `init` | `workspace` (hook-created) | `local` (linked as-is).
+    pub kind: String,
+    /// Live status: `local` | `creating` (hook run alive) | `ready` | `failed`.
+    pub status: String,
+    /// The creating hook run's pid (`None` for local links).
+    #[serde(default)]
+    pub pid: Option<u32>,
+    /// The hook that created it (`None` for local links).
+    #[serde(default)]
+    pub hook: Option<String>,
+    pub created_at: u64,
+    /// Whether this is the primary workspace — the first hook-created one, which later
+    /// `workspace`-hook runs use as their working directory.
+    #[serde(default)]
+    pub primary: bool,
+}
+
+/// `POST /api/projects/workspaces` — a project's workspaces and hooks in one snapshot. Every
+/// mutation endpoint in this family returns a fresh one, so the client refreshes from one
+/// round-trip. `next_hook` names the lifecycle hook the next hook-backed create would run
+/// (`init` while none exists, `workspace` afterwards).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacesState {
+    pub id: String,
+    pub workspaces: Vec<WorkspaceDto>,
+    pub hooks: Vec<ProjectHookDto>,
+    pub next_hook: String,
+    #[serde(default)]
+    pub has_init_hook: bool,
+    #[serde(default)]
+    pub has_workspace_hook: bool,
+}
+
+/// Request body naming a project — `POST /api/projects/workspaces`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspacesRef {
+    pub id: String,
+}
+
+/// Request body for `POST /api/projects/workspaces/create`. Without `path` the workspace is
+/// created at `<project>/workspaces/<name>`; with `local` the (absolute) path is linked
+/// as-is and no hook runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewWorkspace {
+    pub id: String,
+    pub name: String,
+    /// An absolute directory to use instead of the default location.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Link an existing directory as-is — run no hook.
+    #[serde(default)]
+    pub local: bool,
+}
+
+/// Request body naming a workspace — `POST /api/projects/workspaces/remove`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// Request body naming a project hook — `POST /api/projects/hook/run` and `/hook/log`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectHookRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// Request body for `POST /api/projects/hook/create` — materialize a hook file from a
+/// template (`init` | `workspace` | `blank`, the default). Refused when the file exists;
+/// edits go through the project file browser.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewProjectHook {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub template: Option<String>,
+}
+
+/// `POST /api/projects/workspaces/create` — a human-readable message (which hook ran, its
+/// pid) plus the fresh state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceCreateResult {
+    pub message: String,
+    pub state: WorkspacesState,
+}
+
+/// `POST /api/projects/hook/run` — the manual-run outcome: the spawned pid plus fresh state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectHookRunResult {
+    pub message: String,
+    pub state: WorkspacesState,
+}
+
+/// `POST /api/projects/hook/log` — the tail of a hook's most recent run log. `ran` is false
+/// (with an empty `output`) when the hook never ran.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectHookLog {
+    pub id: String,
+    pub name: String,
+    pub ran: bool,
+    #[serde(default)]
+    pub output: String,
+    /// The most recent run: `never` | `running` | `ok` | `failed`.
+    pub status: String,
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    #[serde(default)]
+    pub ran_at: Option<u64>,
+}
+
 // ---- hive (every service across all projects + the global front-door) ----------------
 
 /// One service in the aggregated Hive view: where it's declared, its config, and whether it's

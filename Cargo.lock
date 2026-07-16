@@ -199,6 +199,7 @@ dependencies = [
  "adi-agents",
  "adi-config",
  "adi-fs",
+ "adi-hooks",
  "adi-mesh",
  "adi-ports-manager",
  "adi-projects",
