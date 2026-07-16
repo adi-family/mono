@@ -44,7 +44,7 @@ impl fmt::Display for Error {
             Self::Io(e) => write!(f, "agent store I/O error: {e}"),
             Self::NotRunnable(backend) => write!(
                 f,
-                "backend {backend:?} can't be run yet — only tmux-backed agents (tmux:claude, tmux:codex) launch today"
+                "backend {backend:?} can't be run yet — only tmux-backed agents (tmux:claude, tmux:codex) and wasm agents (wasm:loop-script) launch today"
             ),
             Self::AlreadyRunning(name) => write!(f, "agent {name} is already running"),
             Self::Launch(msg) => write!(f, "failed to launch agent: {msg}"),

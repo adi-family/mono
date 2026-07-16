@@ -353,9 +353,19 @@ enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Launch an agent in its backend: the engine CLI starts detached in an
-    /// `adi-agent-<name>` tmux session (tmux executors only for now).
-    Run { name: String },
+    /// Launch an agent in its backend. Tmux executors start the engine CLI detached in an
+    /// `adi-agent-<name>` tmux session; `wasm:*` agents run a synchronous one-shot dispatch
+    /// of `--message` into the compiled component.
+    Run {
+        name: String,
+        /// The message dispatched into a wasm agent's handler (wasm backends only).
+        #[arg(short, long, default_value = "run")]
+        message: String,
+        /// The trigger handler to dispatch into (wasm backends only); defaults to the
+        /// agent's first subscription.
+        #[arg(long)]
+        handler: Option<String>,
+    },
     /// Stop a running agent by killing its `adi-agent-<name>` tmux session.
     Stop { name: String },
     /// Delete an agent definition.
@@ -1004,11 +1014,36 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
                 print_agent(&agent);
             }
         }
-        AgentsCommand::Run { name } => {
-            let launch = store.run(&name).map_err(|e| e.to_string())?;
-            println!("Started agent {name} in tmux session {}.", launch.session);
-            println!("  command: {}", launch.command);
-            println!("  attach:  {}", launch.attach);
+        AgentsCommand::Run {
+            name,
+            message,
+            handler,
+        } => {
+            let is_wasm = store
+                .get(&name)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("no such agent: {name}"))?
+                .manifest
+                .executor()
+                == "wasm";
+            if is_wasm {
+                let outcome = store
+                    .run_wasm(&name, handler.as_deref(), &message)
+                    .map_err(|e| e.to_string())?;
+                println!(
+                    "Dispatched to agent {} via {} (llm turns: {}, tokens: {}/{}).",
+                    outcome.employee,
+                    outcome.subscription,
+                    outcome.turns,
+                    outcome.input_tokens,
+                    outcome.output_tokens,
+                );
+            } else {
+                let launch = store.run(&name).map_err(|e| e.to_string())?;
+                println!("Started agent {name} in tmux session {}.", launch.session);
+                println!("  command: {}", launch.command);
+                println!("  attach:  {}", launch.attach);
+            }
         }
         AgentsCommand::Stop { name } => {
             if store.stop(&name).map_err(|e| e.to_string())? {

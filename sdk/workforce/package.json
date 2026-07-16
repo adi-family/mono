@@ -1,0 +1,30 @@
+{
+  "name": "@adi-family/workforce-sdk",
+  "version": "0.6.0",
+  "description": "Adi Workforce SDK — typed plugin system for WASM employee configs",
+  "type": "module",
+  "main": "./index.ts",
+  "types": "./index.d.ts",
+  "bin": {
+    "workforce-build": "./build.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.ts"
+    },
+    "./wit": "./workforce.wit"
+  },
+  "files": [
+    "index.ts",
+    "index.d.ts",
+    "host.d.ts",
+    "workforce.wit",
+    "build.mjs"
+  ],
+  "peerDependencies": {
+    "esbuild": ">=0.20.0",
+    "@bytecodealliance/jco": ">=1.0.0"
+  },
+  "license": "BSL-1.0"
+}

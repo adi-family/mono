@@ -13,6 +13,9 @@ repository.workspace = true
 # ~/.adi/mono) and does the atomic TOML (de)serialization of each agent's manifest.
 adi-config = { workspace = true }
 
+# The wasm-employee engine behind `wasm:*` backends (`Agents::run_wasm`).
+adi-workforce = { workspace = true }
+
 # The manifest is a plain serde/TOML document; `adi-config` does the actual TOML.
 serde = { workspace = true }
 

@@ -22,6 +22,7 @@ default-members = [
     "crates/adi-triggers",
     "crates/adi-update",
     "crates/adi-webapp-api",
+    "crates/adi-workforce",
 ]
 
 # Shared metadata inherited by member crates via `field.workspace = true`.
@@ -51,6 +52,7 @@ adi-tasks = { path = "crates/adi-tasks" }
 adi-triggers = { path = "crates/adi-triggers" }
 adi-update = { path = "crates/adi-update" }
 adi-webapp-api = { path = "crates/adi-webapp-api" }
+adi-workforce = { path = "crates/adi-workforce" }
 
 # External crates (add as needed)
 clap = { version = "4", features = ["derive"] }

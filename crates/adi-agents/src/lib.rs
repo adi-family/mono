@@ -33,6 +33,7 @@
 mod agent;
 mod error;
 mod run;
+pub mod wasm;
 
 use std::path::PathBuf;
 
@@ -43,11 +44,14 @@ pub use error::{Error, Result};
 pub use run::{
     Launch, capture_pane, is_runnable, launch, running_sessions, send_keys, session_name, stop,
 };
+pub use wasm::DispatchOutcome;
 
 use agent::{now_unix, validate_name};
 
 /// The store module agents live under, and each agent file's extension.
 const AGENTS_MODULE: &str = "agents";
+/// The module dir wasm employees are installed under (`~/.adi/mono/workforce`).
+const WORKFORCE_MODULE: &str = "workforce";
 const MANIFEST_EXT: &str = "toml";
 
 /// The agents registry: lists, reads, and mutates the per-agent manifests under the `agents`
@@ -183,6 +187,29 @@ impl Agents {
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         launch(&agent)
+    }
+
+    /// Run a `wasm:*` agent: a synchronous one-shot dispatch of `message` into the compiled
+    /// component named by the manifest's `extra.wasm` (see [`wasm::dispatch`]). Employees are
+    /// installed — and their logs live — under the `workforce` module dir.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unregistered name, [`Error::NotRunnable`] for a non-wasm
+    /// backend, plus everything [`wasm::dispatch`] can return.
+    pub fn run_wasm(
+        &self,
+        name: &str,
+        handler: Option<&str>,
+        message: &str,
+    ) -> Result<DispatchOutcome> {
+        let agent = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        if !wasm::is_wasm(&agent) {
+            return Err(Error::NotRunnable(agent.manifest.backend));
+        }
+        let workforce_dir = self.config.module(WORKFORCE_MODULE).dir().to_path_buf();
+        wasm::dispatch(&agent, &workforce_dir, handler, message)
     }
 
     /// Stop a running agent (see [`stop`]): kill its `adi-agent-<name>` tmux session. Returns

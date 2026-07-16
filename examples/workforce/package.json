@@ -1,0 +1,15 @@
+{
+  "private": true,
+  "name": "workforce-examples",
+  "version": "0.0.1",
+  "dependencies": {
+    "@adi-family/workforce-sdk": "file:../../sdk/workforce"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "@bytecodealliance/jco": "^1.8.0"
+  },
+  "scripts": {
+    "build": "node ../../sdk/workforce/build.mjs *.ts -o build"
+  }
+}
