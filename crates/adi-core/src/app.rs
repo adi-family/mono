@@ -15,7 +15,7 @@ use crate::paths;
 use crate::service::Service;
 use crate::status::DaemonStatus;
 
-const LABEL: &str = "family.adi.app.control-panel";
+pub(crate) const LABEL: &str = "family.adi.app.control-panel";
 
 /// The ports-manager lease the agent binds and the front door proxies to.
 const PORT_SERVICE: &str = "app";

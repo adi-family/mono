@@ -57,6 +57,7 @@ dependencies = [
  "adi-projects",
  "adi-tasks",
  "adi-triggers",
+ "adi-update",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -154,6 +155,15 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "serde",
+]
+
+[[package]]
+name = "adi-update"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

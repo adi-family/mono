@@ -26,6 +26,10 @@ adi-ports-manager = { workspace = true }
 # through this facade so `adi-mono projects …` stays a thin adapter over adi-core.
 adi-projects = { workspace = true }
 
+# The auto-update engine; adi-core wraps it as the `Update` facade + the periodic
+# `Updater` LaunchAgent and owns the post-swap service restarts.
+adi-update = { workspace = true }
+
 # Read adi-dns's JSON status file and serialize the status report the GUI consumes.
 serde = { workspace = true }
 serde_json = { workspace = true }

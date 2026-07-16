@@ -38,10 +38,29 @@ pub fn plist_path(label: &str) -> PathBuf {
 
 /// Install and start the `LaunchAgent`: write the plist, boot out any stale instance (so `bootstrap` can't dupe-fail), bootstrap, then enable.
 pub fn enable(label: &str, program: &[String], log: &str, env: &[(String, String)]) {
+    install(label, &plist_xml(label, program, log, env));
+}
+
+/// Like [`enable`] but for a periodic one-shot job: runs at load and then every
+/// `interval_secs`, with no `KeepAlive` (the job exits between runs).
+pub fn enable_periodic(
+    label: &str,
+    program: &[String],
+    log: &str,
+    env: &[(String, String)],
+    interval_secs: u32,
+) {
+    install(
+        label,
+        &plist_xml_periodic(label, program, log, env, interval_secs),
+    );
+}
+
+fn install(label: &str, plist: &str) {
     let dir = paths::launch_agents_dir();
     let _ = std::fs::create_dir_all(&dir);
     let path = plist_path(label);
-    let _ = std::fs::write(&path, plist_xml(label, program, log, env));
+    let _ = std::fs::write(&path, plist);
 
     let target = target(label);
     let _ = proc::run(&["/bin/launchctl", "bootout", &target]);
@@ -72,9 +91,46 @@ pub fn is_loaded(label: &str) -> bool {
     plist_path(label).exists() && proc::run(&["/bin/launchctl", "print", &target(label)]).ok()
 }
 
+/// Atomically kill-and-restart a loaded `LaunchAgent` so it picks up a replaced binary
+/// (`kickstart -k` — no bootout/bootstrap race). A no-op if the service isn't loaded.
+pub fn kickstart(label: &str) {
+    let _ = proc::run(&["/bin/launchctl", "kickstart", "-k", &target(label)]);
+}
+
 /// Identical XML for a per-user `LaunchAgent` and a root `LaunchDaemon`; only the install location differs.
 #[must_use]
 pub fn plist_xml(label: &str, program: &[String], log: &str, env: &[(String, String)]) -> String {
+    render_plist(
+        label,
+        program,
+        log,
+        env,
+        "    <key>RunAtLoad</key>\n    <true/>\n    <key>KeepAlive</key>\n    <true/>",
+    )
+}
+
+/// Plist for a periodic one-shot job: fires at load and every `interval_secs`; no `KeepAlive`.
+#[must_use]
+pub fn plist_xml_periodic(
+    label: &str,
+    program: &[String],
+    log: &str,
+    env: &[(String, String)],
+    interval_secs: u32,
+) -> String {
+    let lifecycle = format!(
+        "    <key>RunAtLoad</key>\n    <true/>\n    <key>StartInterval</key>\n    <integer>{interval_secs}</integer>"
+    );
+    render_plist(label, program, log, env, &lifecycle)
+}
+
+fn render_plist(
+    label: &str,
+    program: &[String],
+    log: &str,
+    env: &[(String, String)],
+    lifecycle: &str,
+) -> String {
     let args_xml = program
         .iter()
         .map(|a| format!("        <string>{}</string>", xml_escape(a)))
@@ -107,10 +163,7 @@ pub fn plist_xml(label: &str, program: &[String], log: &str, env: &[(String, Str
     <array>
 {args_xml}
     </array>
-{env_xml}    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
+{env_xml}{lifecycle}
     <key>ProcessType</key>
     <string>Background</string>
     <key>StandardOutPath</key>
@@ -153,6 +206,21 @@ mod tests {
     fn plist_omits_env_dict_when_empty() {
         let xml = plist_xml("l", &["/bin/x".to_string()], "/tmp/log", &[]);
         assert!(!xml.contains("EnvironmentVariables"));
+    }
+
+    #[test]
+    fn periodic_plist_swaps_keepalive_for_a_start_interval() {
+        let xml = plist_xml_periodic(
+            "family.adi.app.updater",
+            &["/opt/adi-mono".to_string(), "update".to_string()],
+            "/tmp/log",
+            &[],
+            21600,
+        );
+        assert!(xml.contains("<key>StartInterval</key>"));
+        assert!(xml.contains("<integer>21600</integer>"));
+        assert!(xml.contains("<key>RunAtLoad</key>"));
+        assert!(!xml.contains("KeepAlive"));
     }
 
     #[test]

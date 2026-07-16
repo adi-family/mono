@@ -6,6 +6,7 @@ use serde::Serialize;
 use crate::app::App;
 use crate::dns::Dns;
 use crate::service::{Service, ServiceReport};
+use crate::update::{Update, Updater};
 
 /// Aggregate live state across every managed service — the JSON the GUI polls.
 #[derive(Debug, Serialize)]
@@ -29,6 +30,12 @@ impl Adi {
     #[must_use]
     pub fn dns(self) -> Dns {
         Dns::new()
+    }
+
+    /// The auto-update facade — check/install releases (`adi.update().run(…)`).
+    #[must_use]
+    pub fn update(self) -> Update {
+        Update::new()
     }
 
     /// The projects registry backed by the standard store — `Adi::new().projects().list()`.
@@ -60,7 +67,11 @@ impl Adi {
     /// binds the shared port — otherwise the old runner-supervised adi-app would collide
     /// with the new agent on it.
     fn services(self) -> Vec<Box<dyn Service>> {
-        vec![Box::new(Dns::new()), Box::new(App::new())]
+        vec![
+            Box::new(Dns::new()),
+            Box::new(App::new()),
+            Box::new(Updater::new()),
+        ]
     }
 
     /// Enable every service (`adi.enable()`).

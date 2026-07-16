@@ -2454,7 +2454,7 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let store = Projects::with_config(adi_config::Config::with_root(&root));
-        store.create("demo", Some("Demo".into()), None).unwrap();
+        store.create("demo", Some("Demo".into()), None, None).unwrap();
         let hive = store.hive_path("demo").unwrap();
         std::fs::create_dir_all(hive.parent().unwrap()).unwrap();
         std::fs::write(&hive, b"version: \"1\"\n").unwrap();

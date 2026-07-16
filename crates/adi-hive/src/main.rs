@@ -101,8 +101,12 @@ async fn main() -> anyhow::Result<()> {
 
     info!("adi-hive ready");
 
-    shutdown_signal().await;
-    info!("shutdown signal received; stopping");
+    tokio::select! {
+        () = shutdown_signal() => info!("shutdown signal received; stopping"),
+        () = binary_replaced() => {
+            info!("binary replaced on disk; exiting so launchd respawns the new build");
+        }
+    }
     // Stop the runners first (bounded, so a stuck child can't hang shutdown), then the listeners.
     if tokio::time::timeout(TERM_TIMEOUT, supervisor.shutdown())
         .await
@@ -119,6 +123,53 @@ async fn main() -> anyhow::Result<()> {
 
 /// Upper bound on how long shutdown waits for all runners to stop.
 const TERM_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How often the self-watch re-checks the binary on disk.
+const WATCH_SELF_PERIOD: Duration = Duration::from_secs(30);
+
+/// With `ADI_WATCH_SELF=1` (set in the launchd plists adi-core generates), resolve the
+/// running binary's inode at startup and complete once the file at that path has been
+/// *replaced* — the app updater swaps the whole bundle, and this clean exit lets
+/// launchd's `KeepAlive` respawn the new build. Root daemons (the :80 front door)
+/// can't be kickstarted by the unprivileged updater, so they restart themselves.
+/// Without the env var (or when the exe can't be resolved) this never completes.
+async fn binary_replaced() {
+    let watching = std::env::var_os("ADI_WATCH_SELF").is_some_and(|v| v == "1");
+    let exe = std::env::current_exe().ok();
+    let (Some(exe), true) = (exe, watching) else {
+        std::future::pending::<()>().await;
+        return;
+    };
+    let Some(original) = inode(&exe) else {
+        std::future::pending::<()>().await;
+        return;
+    };
+
+    let mut ticker = tokio::time::interval(WATCH_SELF_PERIOD);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Require the same *new* inode on two consecutive ticks so a copy still in flight
+    // (a non-atomic install) isn't caught halfway. The updater's rename is atomic, but
+    // dev builds writing target/release aren't.
+    let mut pending: Option<u64> = None;
+    loop {
+        ticker.tick().await;
+        match inode(&exe) {
+            Some(now) if now != original => {
+                if pending == Some(now) {
+                    return;
+                }
+                pending = Some(now);
+            }
+            _ => pending = None,
+        }
+    }
+}
+
+/// The inode of the file at `path`, if it exists.
+fn inode(path: &Path) -> Option<u64> {
+    use std::os::unix::fs::MetadataExt as _;
+    std::fs::metadata(path).ok().map(|m| m.ino())
+}
 
 /// On macOS a non-`127.0.0.1` loopback address must be aliased onto `lo0` before it can be bound; elsewhere `127.0.0.0/8` already routes to loopback. Best-effort.
 fn ensure_loopback_alias(ip: IpAddr) {

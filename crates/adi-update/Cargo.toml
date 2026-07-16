@@ -1,0 +1,21 @@
+[package]
+name = "adi-update"
+description = "Auto-update engine for the adi platform: fetch the release manifest, download and verify the DMG, and atomically swap the installed app bundle."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Settings (`update/config.toml`) and the state/staging directories live in the
+# standard ~/.adi/mono store.
+adi-config = { workspace = true }
+
+# The release manifest and the persisted updater state are JSON.
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

@@ -14,7 +14,7 @@ use crate::status::DaemonStatus;
 
 const DOMAIN: &str = "adi";
 const PORT: u16 = 10053;
-const LABEL: &str = "family.adi.app.dns";
+pub(crate) const LABEL: &str = "family.adi.app.dns";
 
 /// Kept off `127.0.0.1` so `:80` never collides with anything else serving there.
 const FRONTDOOR_ADDR: &str = "127.0.0.53";
@@ -191,6 +191,10 @@ fn write_frontdoor_artifacts() {
             std::env::var("HOME").unwrap_or_default(),
         ),
         ("ADI_DIR".to_string(), paths::dir_name()),
+        // The front door is the one root piece the updater can't kickstart without a
+        // password, so it watches its own binary and exits when the bundle is swapped —
+        // launchd's KeepAlive then respawns the new build (see adi-hive's self-watch).
+        ("ADI_WATCH_SELF".to_string(), "1".to_string()),
     ];
     let plist = launchd::plist_xml(
         FRONTDOOR_LABEL,
@@ -210,6 +214,14 @@ fn write_frontdoor_artifacts() {
 fn frontdoor_config_current() -> bool {
     let rendered = render_frontdoor_hive(&frontdoor_hosts(), crate::app::port());
     std::fs::read_to_string(frontdoor_config_path()).is_ok_and(|on_disk| on_disk == rendered)
+}
+
+/// True when the installed root daemon plist already carries the self-watch env — the
+/// one-time migration that lets auto-updates restart the front door without a password.
+/// Deliberately a marker check, not a byte compare: the plist embeds the machine's
+/// binary path, which legitimately differs between bundle and dev installs.
+fn frontdoor_plist_current() -> bool {
+    std::fs::read_to_string(FRONTDOOR_DAEMON_PLIST).is_ok_and(|p| p.contains("ADI_WATCH_SELF"))
 }
 
 /// The DNS command surface (`adi.dns.*`) — a zero-sized facade; all state lives on disk / in launchd.
@@ -257,19 +269,27 @@ impl Dns {
         proc::run_admin(&shell);
     }
 
-    /// Update the installed front door to the current config and restart it — the one
-    /// privileged step of an upgrade (a single admin prompt). Needed when the on-disk
-    /// front-door config is stale; after this the front door is proxy-only and the on/off
-    /// toggle never touches it again.
+    /// Update the installed front door to the current config **and plist** and restart
+    /// it — the one privileged step of an upgrade (a single admin prompt). Needed when
+    /// the on-disk front-door config or the daemon plist is stale; after this the front
+    /// door is proxy-only and the on/off toggle never touches it again.
     pub fn update_frontdoor(self) {
         write_frontdoor_artifacts();
-        // Reload the front door with the new config. `kickstart -k` atomically kills and
-        // restarts an already-loaded job, so it re-reads the config without the
-        // bootout→bootstrap race (bootout is async; a racing bootstrap can't rebind :80).
-        // If it isn't loaded, bootstrap it instead.
+        let plist_stage = frontdoor_plist_stage();
+        let plist_stage = plist_stage.to_string_lossy();
+        // A plist change (env, args) only takes effect through bootout → bootstrap;
+        // `kickstart -k` restarts the job but never re-reads the plist. bootout is
+        // async, so the bootstrap is retried until the old job has fully unloaded and
+        // :80 can be rebound.
         let shell = format!(
-            "launchctl kickstart -k system/{FRONTDOOR_LABEL} 2>/dev/null\
-             || (launchctl bootstrap system '{FRONTDOOR_DAEMON_PLIST}' && launchctl enable system/{FRONTDOOR_LABEL})"
+            "set -e\
+             ; cp '{plist_stage}' '{FRONTDOOR_DAEMON_PLIST}'\
+             ; chown root:wheel '{FRONTDOOR_DAEMON_PLIST}'\
+             ; chmod 644 '{FRONTDOOR_DAEMON_PLIST}'\
+             ; launchctl bootout system/{FRONTDOOR_LABEL} 2>/dev/null || true\
+             ; n=0\
+             ; until launchctl bootstrap system '{FRONTDOOR_DAEMON_PLIST}' 2>/dev/null; do n=$((n+1)); if [ \"$n\" -ge 25 ]; then exit 1; fi; sleep 0.2; done\
+             ; launchctl enable system/{FRONTDOOR_LABEL}"
         );
         proc::run_admin(&shell);
     }
@@ -313,12 +333,13 @@ impl Service for Dns {
     }
 
     // Installed once and left in place, so toggling never re-prompts; removal is an explicit
-    // action. The one exception is a stale front-door config (e.g. upgrading from the old
-    // runner-based front door to the proxy-only one) — update it once here.
+    // action. The one exception is a stale front-door config or daemon plist (e.g. upgrading
+    // from the old runner-based front door, or rolling out the self-watch env) — update it
+    // once here.
     fn on_enable(&self) {
         if !self.route_installed() {
             self.install_route();
-        } else if !frontdoor_config_current() {
+        } else if !frontdoor_config_current() || !frontdoor_plist_current() {
             self.update_frontdoor();
         }
     }

@@ -10,11 +10,17 @@ pub mod paths;
 mod proc;
 pub mod service;
 pub mod status;
+pub mod update;
 
 pub use app::App;
 pub use commands::{Adi, Report};
 pub use dns::Dns;
 pub use service::{Action, Service, ServiceReport};
+pub use update::{RunOutcome, Update, Updater};
+
+// The update engine's result/error types surface through the CLI (`adi-mono update …`),
+// so re-export them like the other subsystem types.
+pub use adi_update::{Check as UpdateCheck, Error as UpdateError, State as UpdateState};
 
 // Agent definitions are data/control-plane state, so adi-core exposes their store for the
 // CLI and app backend without owning execution/orchestration yet.
@@ -32,9 +38,7 @@ pub use adi_tasks::{EffectiveStatus, Error as TasksError, TaskPatch, TaskStatus,
 // Trigger definitions (background code blocks fired by webhooks & co.) are data/control-plane
 // state like agents: adi-core exposes their store — including the fire slice — for the CLI and
 // app backend; live listeners (Telegram, cron) are future work.
-pub use adi_triggers::{
-    Error as TriggersError, Firing, Trigger, TriggerManifest, Triggers,
-};
+pub use adi_triggers::{Error as TriggersError, Firing, Trigger, TriggerManifest, Triggers};
 
 /// The CLI binary name — the single Rust-side source of truth for user-facing messages.
 pub const BIN_NAME: &str = "adi-mono";
