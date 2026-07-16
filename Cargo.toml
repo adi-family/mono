@@ -14,6 +14,7 @@ default-members = [
     "crates/adi-dns",
     "crates/adi-fs",
     "crates/adi-hive",
+    "crates/adi-hooks",
     "crates/adi-mesh",
     "crates/adi-ports-manager",
     "crates/adi-projects",
@@ -42,6 +43,7 @@ adi-config = { path = "crates/adi-config" }
 adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }
 adi-fs = { path = "crates/adi-fs" }
+adi-hooks = { path = "crates/adi-hooks" }
 adi-mesh = { path = "crates/adi-mesh" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }

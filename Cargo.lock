@@ -107,6 +107,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-hooks"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "adi-mesh"
 version = "0.1.0"
 dependencies = [

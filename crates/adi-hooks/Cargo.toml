@@ -1,0 +1,18 @@
+[package]
+name = "adi-hooks"
+description = "Project hooks and workspaces: script files under a project's `.adi/hooks` run detached (git-hooks style) to create the project's working copies, which are registered in its `.adi/workspaces.toml`."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# Constructed from a project directory path (like adi-fs's Jail), so it needs no
+# adi-projects/adi-config dependency; serde+toml only for the workspaces registry.
+[dependencies]
+serde = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true
