@@ -188,6 +188,9 @@ enum WorkspaceCommand {
     },
     /// Unregister a workspace (never deletes its files).
     Rm { name: String },
+    /// Open (or reuse) a tmux terminal session in the workspace's directory and print the
+    /// attach command.
+    Terminal { name: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -705,6 +708,18 @@ fn run_workspace(
             } else {
                 println!("No such workspace: {name}.");
             }
+        }
+        WorkspaceCommand::Terminal { name } => {
+            let entry = ws
+                .list()
+                .map_err(|e| e.to_string())?
+                .into_iter()
+                .find(|w| w.name == name)
+                .ok_or_else(|| format!("no such workspace: {name}"))?;
+            let session = adi_core::workspace_terminal::open(project, &name, &entry.path)
+                .map_err(|e| e.to_string())?;
+            println!("Terminal ready in {}.", entry.path.display());
+            println!("  {}", session.attach);
         }
     }
     Ok(())

@@ -21,9 +21,13 @@
 //! Runs are detached (`sh -c`, own process group, output to the log) — the same execution
 //! shape as adi-triggers' fire — with an `[adi:hook-exit <code>]` marker appended so a
 //! finished run's status is readable from the log alone.
+//!
+//! Each workspace can also host an interactive tmux terminal rooted at its directory (the
+//! [`terminal`] module), observed and driven like agent sessions.
 
 mod error;
 mod hook;
+pub mod terminal;
 mod workspace;
 
 pub use error::{Error, Result};

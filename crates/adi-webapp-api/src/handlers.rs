@@ -12,6 +12,7 @@ use adi_agents::{AgentManifest, Agents, Error as AgentStoreError};
 use adi_fs::{Error as FsError, Jail};
 use adi_hooks::{
     Error as HookStoreError, Hooks as ProjectHooks, Workspaces, hook_template, is_lifecycle,
+    terminal,
 };
 use adi_triggers::{Error as TriggerStoreError, TriggerManifest, Triggers};
 use adi_mesh::config::{Forward, MeshConfig};
@@ -33,7 +34,8 @@ use crate::types::{
     ReserveResponse, SaveAgent, SaveTrigger, ServicePort, StartResult, StartService, StopResult,
     TaskRow, TasksState, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog, TriggerRef,
     TriggersState, UsedPort, UsedPorts, WorkspaceCreateResult, WorkspaceDto, WorkspaceRef,
-    WorkspacesRef, WorkspacesState, WriteFile,
+    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
+    WriteFile,
 };
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
@@ -730,6 +732,116 @@ pub fn create_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
     }
 }
 
+/// `POST /api/projects/workspaces/terminal/open` — ensure a tmux terminal session exists for
+/// the workspace, started in its directory (idempotent — reopening attaches the view to the
+/// live session), and reply with the first pane snapshot.
+#[must_use]
+pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_workspace_term_ref(body) else {
+        return bad_project_hook_ref();
+    };
+    let (id, name) = (req.id.trim(), req.name.trim());
+    let entry = match resolve_workspace(store, id, name) {
+        Ok(entry) => entry,
+        Err(resp) => return resp,
+    };
+    if let Err(e) = terminal::open(id, name, &entry.path) {
+        return hooks_error(&e);
+    }
+    ok_json(&workspace_term(id, name))
+}
+
+/// `POST /api/projects/workspaces/terminal/peek` — a read-only snapshot of the workspace
+/// terminal's pane, polled by the live view. A workspace without a live session answers
+/// `running: false` (200, not an error).
+#[must_use]
+pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_workspace_term_ref(body) else {
+        return bad_project_hook_ref();
+    };
+    let (id, name) = (req.id.trim(), req.name.trim());
+    if let Err(resp) = resolve_workspace(store, id, name) {
+        return resp;
+    }
+    ok_json(&workspace_term(id, name))
+}
+
+/// `POST /api/projects/workspaces/terminal/send` — type into the workspace terminal (`text`
+/// literally, then the `key` tmux key name), replying with a fresh pane snapshot so the
+/// keystrokes show without waiting for the next poll.
+#[must_use]
+pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_workspace_term_keys(body) else {
+        return error(
+            400,
+            "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"text\"?: \"…\", \"key\"?: \"…\" }",
+        );
+    };
+    let (id, name) = (req.id.trim(), req.name.trim());
+    if let Err(resp) = resolve_workspace(store, id, name) {
+        return resp;
+    }
+    if let Err(e) = terminal::send_keys(id, name, &req.text, &req.key) {
+        return hooks_error(&e);
+    }
+    ok_json(&workspace_term(id, name))
+}
+
+/// `POST /api/projects/workspaces/terminal/kill` — kill the workspace's terminal session.
+/// Idempotent: killing an already-gone terminal still answers the (now not-running) snapshot.
+#[must_use]
+pub fn kill_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_workspace_term_ref(body) else {
+        return bad_project_hook_ref();
+    };
+    let (id, name) = (req.id.trim(), req.name.trim());
+    if let Err(resp) = resolve_workspace(store, id, name) {
+        return resp;
+    }
+    if let Err(e) = terminal::kill(id, name) {
+        return hooks_error(&e);
+    }
+    ok_json(&workspace_term(id, name))
+}
+
+/// The current [`WorkspaceTerm`] snapshot for a workspace (live-session flag, pane text,
+/// attach command).
+fn workspace_term(id: &str, name: &str) -> WorkspaceTerm {
+    let running = terminal::is_running(id, name);
+    WorkspaceTerm {
+        id: id.to_string(),
+        name: name.to_string(),
+        running,
+        output: terminal::capture(id, name).unwrap_or_default(),
+        attach: format!("tmux attach -t {}", terminal::session_name(id, name)),
+    }
+}
+
+/// Resolve a registered workspace entry by (project id, workspace name): the project gate
+/// first (400/404 like everywhere else), then a 404 for an unknown workspace name.
+fn resolve_workspace(
+    store: &Projects,
+    id: &str,
+    name: &str,
+) -> Result<adi_hooks::WorkspaceEntry, (u16, String)> {
+    let (dir, _) = project_scope(store, id)?;
+    let entries = Workspaces::new(&dir).list().map_err(|e| hooks_error(&e))?;
+    entries
+        .into_iter()
+        .find(|w| w.name == name)
+        .ok_or_else(|| error(404, &format!("no such workspace: {name}")))
+}
+
+fn parse_workspace_term_ref(body: &[u8]) -> Option<WorkspaceTermRef> {
+    let req: WorkspaceTermRef = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+}
+
+fn parse_workspace_term_keys(body: &[u8]) -> Option<WorkspaceTermKeys> {
+    let req: WorkspaceTermKeys = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+}
+
 /// The full [`WorkspacesState`] for a registered project: entries decorated with live status,
 /// hooks with their last-run status, and which lifecycle hook the next create would run.
 fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState, (u16, String)> {
@@ -814,11 +926,16 @@ fn hooks_error(e: &HookStoreError) -> (u16, String) {
         | HookStoreError::EmptyHook(_)
         | HookStoreError::NotAbsolute(_)
         | HookStoreError::NotADir(_) => 400,
+        HookStoreError::InvalidKey(_) => 400,
         HookStoreError::Exists(_)
         | HookStoreError::NoHook(_)
-        | HookStoreError::PrimaryMissing => 409,
+        | HookStoreError::PrimaryMissing
+        | HookStoreError::NotRunning(_) => 409,
         HookStoreError::NotFound(_) => 404,
-        HookStoreError::Launch(_) | HookStoreError::Registry(_) | HookStoreError::Io(_) => 500,
+        HookStoreError::Launch(_)
+        | HookStoreError::Tmux(_)
+        | HookStoreError::Registry(_)
+        | HookStoreError::Io(_) => 500,
     };
     error(status, &e.to_string())
 }
@@ -3201,6 +3318,48 @@ mod tests {
         assert_eq!(
             remove_workspace(&store, br#"{"id":"demo","name":"home"}"#).0,
             404
+        );
+    }
+
+    #[test]
+    fn workspace_terminal_endpoints_gate_on_the_registry() {
+        let store = temp_projects();
+        // Unknown workspace → 404 on every terminal endpoint; unknown project → 404 too.
+        assert_eq!(
+            peek_workspace_terminal(&store, br#"{"id":"demo","name":"main"}"#).0,
+            404
+        );
+        assert_eq!(
+            open_workspace_terminal(&store, br#"{"id":"demo","name":"main"}"#).0,
+            404
+        );
+        assert_eq!(
+            kill_workspace_terminal(&store, br#"{"id":"ghost","name":"main"}"#).0,
+            404
+        );
+
+        // A registered workspace whose directory is gone can't host a terminal (400 from
+        // the NotADir guard), but peek still answers a not-running snapshot.
+        let dir = store.project_dir("demo").unwrap();
+        let linked = dir.join("linked");
+        std::fs::create_dir_all(&linked).unwrap();
+        let body = format!(
+            r#"{{"id":"demo","name":"gone","path":{:?},"local":true}}"#,
+            linked.to_str().unwrap()
+        );
+        assert_eq!(create_workspace(&store, body.as_bytes()).0, 200);
+        std::fs::remove_dir_all(&linked).unwrap();
+        assert_eq!(
+            open_workspace_terminal(&store, br#"{"id":"demo","name":"gone"}"#).0,
+            400
+        );
+        let (status, body) = peek_workspace_terminal(&store, br#"{"id":"demo","name":"gone"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["running"], false);
+        assert!(
+            v["attach"].as_str().unwrap().starts_with("tmux attach -t adi-ws-"),
+            "{body}"
         );
     }
 

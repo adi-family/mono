@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use adi_webapp_api::types::{
     AgentPeek, AgentsState, DirListing, Health, HiveState, MeshState, PortsState, ProjectDetail,
     ProjectHookLog, ProjectsState, TasksState, TriggerLog, TriggersState, UsedPorts,
-    WorkspacesState,
+    WorkspaceTerm, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -207,6 +207,39 @@ impl HookLogView {
     pub(crate) fn close(self) {
         self.watched.set(None);
         self.log.set(None);
+    }
+}
+
+/// The project detail page's workspace terminal view: which workspace's tmux terminal is
+/// being watched (`None` = closed) — keyed by (project id, workspace name) — the latest pane
+/// snapshot, and the send-bar input buffer. The shell polls a fresh peek every second while
+/// open; leaving the page closes it. The workspace twin of [`AgentsWatch`]. `Copy` so it
+/// threads into the poll closure and handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct TermWatch {
+    /// The watched (project id, workspace name), or `None` while the terminal view is closed.
+    pub(crate) watched: RwSignal<Option<(String, String)>>,
+    /// The last snapshot received, or `None` before the first one lands.
+    pub(crate) peek: RwSignal<Option<WorkspaceTerm>>,
+    /// The send bar's text buffer (typed into the session on submit).
+    pub(crate) input: RwSignal<String>,
+}
+
+impl TermWatch {
+    pub(crate) fn new() -> Self {
+        Self {
+            watched: RwSignal::new(None),
+            peek: RwSignal::new(None),
+            input: RwSignal::new(String::new()),
+        }
+    }
+
+    /// Close the terminal view (stops the polling; the poll no-ops while `watched` is
+    /// `None`). The tmux session itself keeps running — closing the view never kills it.
+    pub(crate) fn close(self) {
+        self.watched.set(None);
+        self.peek.set(None);
+        self.input.set(String::new());
     }
 }
 

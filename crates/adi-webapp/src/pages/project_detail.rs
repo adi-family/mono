@@ -13,10 +13,12 @@ use crate::fetch;
 use super::agents::{agent_actions, live_view as agent_live_view};
 use super::triggers::{log_view, trigger_actions};
 use super::workspaces::{
-    NewHookForm, WorkspaceForm, hook_editor_view, hook_log_view, workspaces_panel,
+    NewHookForm, WorkspaceForm, hook_editor_view, hook_log_view, term_view, workspaces_panel,
 };
 use crate::routing::{Route, go_projects, open_project};
-use crate::state::{AgentsWatch, Flash, HookEditor, HookLogView, State, TriggersLogView};
+use crate::state::{
+    AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, TriggersLogView,
+};
 use crate::ui::{
     TextField, apply_mutation, dash, data_table, effective_label_title, flash_view, fmt_date,
     fmt_ports, placeholder_row, task_tree_rows, tile,
@@ -30,6 +32,7 @@ pub(crate) fn project_detail_view(
     triggers_log: TriggersLogView,
     agents_watch: AgentsWatch,
     hook_log: HookLogView,
+    term: TermWatch,
 ) -> AnyView {
     let State {
         project_detail,
@@ -107,11 +110,13 @@ pub(crate) fn project_detail_view(
             Some(d) => detail_body(state, route, confirm_delete, service_form, d),
         }}
 
+        {move || term_view(state, term)}
+
         {move || hook_log_view(hook_log)}
 
         {move || hook_editor_view(state, hook_editor)}
 
-        {workspaces_panel(state, workspace_form, new_hook_form, hook_log, hook_editor)}
+        {workspaces_panel(state, workspace_form, new_hook_form, hook_log, hook_editor, term)}
 
         {subprojects_panel(state, route, subproject_form)}
 

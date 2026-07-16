@@ -851,6 +851,42 @@ pub struct ProjectHookRunResult {
     pub state: WorkspacesState,
 }
 
+/// Request body naming a workspace terminal — `POST /api/projects/workspaces/terminal/open`,
+/// `/peek`, and `/kill`. `name` is the workspace name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceTermRef {
+    pub id: String,
+    pub name: String,
+}
+
+/// Request body for `POST /api/projects/workspaces/terminal/send` — type `text` literally
+/// into the terminal, then press `key` (a tmux key name). Either part may be empty.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceTermKeys {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+/// A workspace terminal snapshot: whether its tmux session is live, the visible pane text,
+/// and the takeover command — the workspace twin of `AgentPeek`, polled by the live view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceTerm {
+    pub id: String,
+    pub name: String,
+    /// Whether the terminal's tmux session is live; `output` is empty when it isn't.
+    pub running: bool,
+    /// The visible pane text (trailing whitespace trimmed).
+    #[serde(default)]
+    pub output: String,
+    /// The command a human runs to take the session over: `tmux attach -t adi-ws-…`.
+    #[serde(default)]
+    pub attach: String,
+}
+
 /// `POST /api/projects/hook/log` — the tail of a hook's most recent run log. `ran` is false
 /// (with an empty `output`) when the hook never ran.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

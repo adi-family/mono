@@ -21,4 +21,4 @@ pub(crate) use project_detail::{load_dir, project_detail_view};
 pub(crate) use projects::projects_view;
 pub(crate) use tasks::tasks_view;
 pub(crate) use triggers::{poll_trigger_log, triggers_view};
-pub(crate) use workspaces::poll_hook_log;
+pub(crate) use workspaces::{poll_hook_log, poll_term};

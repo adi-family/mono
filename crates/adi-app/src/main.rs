@@ -219,6 +219,20 @@ async fn handle(
         ("POST", "/api/projects/workspaces/remove") => {
             handlers::remove_workspace(projects, &req.body)
         }
+        // Workspace terminals: an interactive tmux session per workspace, rooted at its
+        // directory — observed/driven exactly like agent sessions (peek + send-keys).
+        ("POST", "/api/projects/workspaces/terminal/open") => {
+            handlers::open_workspace_terminal(projects, &req.body)
+        }
+        ("POST", "/api/projects/workspaces/terminal/peek") => {
+            handlers::peek_workspace_terminal(projects, &req.body)
+        }
+        ("POST", "/api/projects/workspaces/terminal/send") => {
+            handlers::send_workspace_terminal_keys(projects, &req.body)
+        }
+        ("POST", "/api/projects/workspaces/terminal/kill") => {
+            handlers::kill_workspace_terminal(projects, &req.body)
+        }
         ("POST", "/api/projects/hook/run") => handlers::run_project_hook(projects, &req.body),
         ("POST", "/api/projects/hook/log") => handlers::project_hook_log(projects, &req.body),
         ("POST", "/api/projects/hook/create") => {

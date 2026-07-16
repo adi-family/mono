@@ -29,13 +29,14 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_hook_log, poll_trigger_log,
-    poll_watch, ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
+    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_hook_log, poll_term,
+    poll_trigger_log, poll_watch, ports_manager_view, project_detail_view, projects_view,
+    tasks_view, triggers_view,
 };
 use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
 use state::{
     AgentsForm, AgentsWatch, FilesState, Flash, Form, HookLogView, MeshForm, ProjectsForm, State,
-    Status, TasksForm, TriggersForm, TriggersLogView, load,
+    Status, TasksForm, TermWatch, TriggersForm, TriggersLogView, load,
 };
 use ui::{apply_saved_theme, nav_item, toggle_theme};
 
@@ -144,6 +145,9 @@ fn App() -> impl IntoView {
     // The project detail page's hook-log view (re-polled each second while open).
     let hook_log = HookLogView::new();
 
+    // The project detail page's workspace terminal view (re-polled each second while open).
+    let term_watch = TermWatch::new();
+
     // The Agents page's live view (a polled read-only capture of an agent's tmux pane).
     let agents_watch = AgentsWatch::new();
 
@@ -198,6 +202,7 @@ fn App() -> impl IntoView {
         poll_watch(agents_watch);
         poll_trigger_log(triggers_log);
         poll_hook_log(hook_log);
+        poll_term(term_watch);
     })
     .forget();
 
@@ -229,9 +234,11 @@ fn App() -> impl IntoView {
         if !matches!(route.get(), Route::Triggers | Route::ProjectDetail) {
             triggers_log.close();
         }
-        // The hook-log view only renders on a project's detail page.
+        // The hook-log and workspace-terminal views only render on a project's detail page.
+        // Closing the terminal view never kills the tmux session — it just stops the poll.
         if !matches!(route.get(), Route::ProjectDetail) {
             hook_log.close();
+            term_watch.close();
         }
     });
 
@@ -300,7 +307,7 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Overview => overview_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
-                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, hook_log),
+                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, hook_log, term_watch),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),

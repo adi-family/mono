@@ -8,7 +8,8 @@ use adi_webapp_api::types::{
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
     ReserveResponse, SaveAgent, SaveTrigger, StartResult, StartService, StopResult, TasksState,
     TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
-    WorkspaceRef, WorkspacesRef, WorkspacesState, WriteFile,
+    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
+    WorkspacesState, WriteFile,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -244,6 +245,43 @@ pub async fn project_hook_log(id: String, name: String) -> Result<ProjectHookLog
 
 pub async fn create_project_hook(body: NewProjectHook) -> Result<WorkspacesState, String> {
     post("/api/projects/hook/create", &body).await
+}
+
+pub async fn open_workspace_terminal(id: String, name: String) -> Result<WorkspaceTerm, String> {
+    post(
+        "/api/projects/workspaces/terminal/open",
+        &WorkspaceTermRef { id, name },
+    )
+    .await
+}
+
+pub async fn peek_workspace_terminal(id: String, name: String) -> Result<WorkspaceTerm, String> {
+    post(
+        "/api/projects/workspaces/terminal/peek",
+        &WorkspaceTermRef { id, name },
+    )
+    .await
+}
+
+pub async fn send_workspace_terminal(
+    id: String,
+    name: String,
+    text: String,
+    key: String,
+) -> Result<WorkspaceTerm, String> {
+    post(
+        "/api/projects/workspaces/terminal/send",
+        &WorkspaceTermKeys { id, name, text, key },
+    )
+    .await
+}
+
+pub async fn kill_workspace_terminal(id: String, name: String) -> Result<WorkspaceTerm, String> {
+    post(
+        "/api/projects/workspaces/terminal/kill",
+        &WorkspaceTermRef { id, name },
+    )
+    .await
 }
 
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {

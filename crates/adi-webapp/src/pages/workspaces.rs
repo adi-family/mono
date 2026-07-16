@@ -9,7 +9,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
-use crate::state::{Flash, HookEditor, HookLogView, State};
+use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
 use crate::ui::{TextField, data_table, fmt_date, placeholder_row};
 
 /// A hook's path inside the project, as the file API sees it.
@@ -51,6 +51,7 @@ pub(crate) fn workspaces_panel(
     hook_form: NewHookForm,
     log: HookLogView,
     editor: HookEditor,
+    term: TermWatch,
 ) -> AnyView {
     let WorkspaceForm {
         name,
@@ -68,7 +69,7 @@ pub(crate) fn workspaces_panel(
                 <span class="adi-spacer"></span>
                 {move || initialize_button(state, form)}
             </div>
-            {data_table(&["Name", "Path", "Kind", "Status", "Created", ""], move || workspace_rows(state, confirm_remove))}
+            {data_table(&["Name", "Path", "Kind", "Status", "Created", ""], move || workspace_rows(state, confirm_remove, term))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_workspace(state, form);
@@ -126,8 +127,12 @@ pub(crate) fn workspaces_panel(
     .into_any()
 }
 
-/// Rows for the workspaces table, with a two-step Unregister action.
-fn workspace_rows(state: State, confirm_remove: RwSignal<Option<String>>) -> AnyView {
+/// Rows for the workspaces table, with Terminal and a two-step Unregister action.
+fn workspace_rows(
+    state: State,
+    confirm_remove: RwSignal<Option<String>>,
+    term: TermWatch,
+) -> AnyView {
     let Some(snapshot) = current_snapshot(state) else {
         return placeholder_row("6", "Loading…");
     };
@@ -165,6 +170,10 @@ fn workspace_rows(state: State, confirm_remove: RwSignal<Option<String>>) -> Any
             };
             let label_name = w.name.clone();
             let click_name = w.name.clone();
+            let term_name = w.name.clone();
+            // A terminal needs the directory on disk: ready always has it, local links do
+            // by definition; a creating/failed workspace has nothing to open a shell in.
+            let can_term = matches!(w.status.as_str(), "ready" | "local");
             view! {
                 <tr>
                     <td>
@@ -183,6 +192,11 @@ fn workspace_rows(state: State, confirm_remove: RwSignal<Option<String>>) -> Any
                     </td>
                     <td class="adi-mono adi-muted">{created}</td>
                     <td style="text-align:right; white-space:nowrap">
+                        {can_term.then(|| view! {
+                            <button class="adi-btn adi-btn--link" title="open a tmux terminal in this directory"
+                                on:click=move |_| open_terminal(state, term, term_name.clone())>"⌨ Terminal"</button>
+                            " "
+                        })}
                         <button class="adi-btn adi-btn--link"
                             title="unregister only — files stay on disk"
                             on:click=move |_| {
@@ -567,6 +581,185 @@ pub(crate) fn hook_editor_view(state: State, editor: HookEditor) -> Option<AnyVi
     }
     .into_any()
     .into()
+}
+
+/// Open the terminal view on a workspace (the ⌨ Terminal action): ensure the tmux session
+/// exists (started in the workspace directory), show the panel with the first snapshot, and
+/// scroll up to where it renders. Reopening an open terminal just reattaches the view.
+fn open_terminal(state: State, term: TermWatch, name: String) {
+    let id = state.current_project.get_untracked();
+    if id.is_empty() {
+        return;
+    }
+    term.peek.set(None);
+    term.watched.set(Some((id.clone(), name.clone())));
+    scroll_top();
+    spawn_local(async move {
+        match fetch::open_workspace_terminal(id, name).await {
+            Ok(peek) => {
+                if term
+                    .watched
+                    .get_untracked()
+                    .is_some_and(|(wid, wname)| wid == peek.id && wname == peek.name)
+                {
+                    term.peek.set(Some(peek));
+                }
+            }
+            Err(e) => {
+                term.close();
+                state.flash.set(Some(Flash::err(e)));
+            }
+        }
+    });
+}
+
+/// Fetch a fresh pane snapshot for the watched terminal, if any. The shell calls this every
+/// second; it no-ops while the view is closed. A response landing after the view moved to
+/// another workspace (or closed) is dropped instead of flashing the wrong pane.
+pub(crate) fn poll_term(term: TermWatch) {
+    let Some((id, name)) = term.watched.get_untracked() else {
+        return;
+    };
+    spawn_local(async move {
+        if let Ok(peek) = fetch::peek_workspace_terminal(id, name).await
+            && term
+                .watched
+                .get_untracked()
+                .is_some_and(|(wid, wname)| wid == peek.id && wname == peek.name)
+        {
+            term.peek.set(Some(peek));
+        }
+    });
+}
+
+/// The terminal panel: a 1s-refreshed capture of the workspace's tmux pane, with a send bar
+/// to type into the session. Renders nothing while no terminal is being watched. Close only
+/// hides the view (the session lives on); Kill ends the session itself.
+pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
+    let (_, name) = term.watched.get()?;
+    let peek = term.peek.get();
+    let attach = peek.as_ref().map(|p| p.attach.clone()).unwrap_or_default();
+    let running = peek.as_ref().is_some_and(|p| p.running);
+    let body = match peek {
+        None => view! { <div class="adi-empty">"Connecting…"</div> }.into_any(),
+        Some(p) if !p.running => view! {
+            <div class="adi-empty">"The session has ended — open the terminal again to restart it."</div>
+        }
+        .into_any(),
+        Some(p) => view! { <pre class="adi-term">{p.output}</pre> }.into_any(),
+    };
+    Some(
+        view! {
+            <section class="adi-panel">
+                <div class="adi-panel__head">
+                    <h2 class="adi-panel__title">{format!("Terminal — {name}")}</h2>
+                    <span class="adi-spacer"></span>
+                    {(!attach.is_empty()).then(|| view! {
+                        <code class="adi-mono adi-muted" style="font-size:12px">{attach}</code>
+                    })}
+                    {running.then(|| view! {
+                        <button class="adi-btn adi-btn--link" title="kill the tmux session"
+                            on:click=move |_| kill_terminal(state, term)>"Kill"</button>
+                    })}
+                    <button class="adi-btn adi-btn--link" title="hide the view — the session keeps running"
+                        on:click=move |_| term.close()>"Close"</button>
+                </div>
+                {body}
+                {running.then(|| term_send_bar(state, term))}
+            </section>
+        }
+        .into_any(),
+    )
+}
+
+/// The terminal's input row: a text field (submit types it into the session, without a
+/// trailing Enter — the ⏎ quick key sends that) plus the special keys interactive programs
+/// need.
+fn term_send_bar(state: State, term: TermWatch) -> impl IntoView {
+    view! {
+        <form class="adi-form" style="padding:10px 18px 14px; border-top:1px solid var(--border)"
+            on:submit=move |ev| {
+                ev.prevent_default();
+                let text = term.input.get();
+                term.input.set(String::new());
+                send_to_terminal(state, term, text, "");
+            }>
+            <input class="adi-input adi-mono" style="flex:1 1 auto" autocomplete="off"
+                placeholder="type into the terminal…"
+                prop:value=move || term.input.get()
+                on:input=move |ev| term.input.set(event_target_value(&ev)) />
+            <button class="adi-btn adi-btn--primary" type="submit">"Send"</button>
+            {term_quick_key(state, term, "⏎", "Enter")}
+            {term_quick_key(state, term, "↑", "Up")}
+            {term_quick_key(state, term, "↓", "Down")}
+            {term_quick_key(state, term, "Tab", "Tab")}
+            {term_quick_key(state, term, "Esc", "Escape")}
+            {term_quick_key(state, term, "^C", "C-c")}
+        </form>
+    }
+}
+
+/// One special-key button in the terminal send bar, pressing a single tmux key.
+fn term_quick_key(
+    state: State,
+    term: TermWatch,
+    label: &'static str,
+    key: &'static str,
+) -> impl IntoView {
+    view! {
+        <button class="adi-btn adi-btn--ghost adi-mono" type="button" style="padding:8px 10px"
+            title=format!("send {key}")
+            on:click=move |_| send_to_terminal(state, term, String::new(), key)>{label}</button>
+    }
+}
+
+/// Type into the watched terminal: send `text` literally, then press `key`. The reply is a
+/// fresh pane snapshot, applied immediately (unless the view moved on meanwhile) so the
+/// keystrokes show without waiting for the next poll; errors go to the flash line.
+fn send_to_terminal(state: State, term: TermWatch, text: String, key: &'static str) {
+    let Some((id, name)) = term.watched.get_untracked() else {
+        return;
+    };
+    if text.is_empty() && key.is_empty() {
+        return;
+    }
+    let key = key.to_string();
+    spawn_local(async move {
+        match fetch::send_workspace_terminal(id, name, text, key).await {
+            Ok(peek) => {
+                if term
+                    .watched
+                    .get_untracked()
+                    .is_some_and(|(wid, wname)| wid == peek.id && wname == peek.name)
+                {
+                    term.peek.set(Some(peek));
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
+}
+
+/// Kill the watched terminal's tmux session (the Kill action). The view stays open showing
+/// the not-running snapshot, so the kill is visibly confirmed.
+fn kill_terminal(state: State, term: TermWatch) {
+    let Some((id, name)) = term.watched.get_untracked() else {
+        return;
+    };
+    spawn_local(async move {
+        match fetch::kill_workspace_terminal(id, name).await {
+            Ok(peek) => {
+                if term
+                    .watched
+                    .get_untracked()
+                    .is_some_and(|(wid, wname)| wid == peek.id && wname == peek.name)
+                {
+                    term.peek.set(Some(peek));
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
 }
 
 /// Fetch a fresh log snapshot for the watched hook, if any. The shell calls this every
