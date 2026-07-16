@@ -175,14 +175,12 @@ pub struct ProjectsState {
     pub projects: Vec<Project>,
 }
 
-/// Request body registering a project — `POST /api/projects/create`. `name` defaults to the
-/// id server-side when omitted or blank.
+/// Request body registering a project — `POST /api/projects/create`. The server generates the
+/// project id (a UUID); callers supply only the display name.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewProject {
-    /// The project id — its directory name (letters, digits, '.', '-', '_').
-    pub id: String,
-    #[serde(default)]
-    pub name: Option<String>,
+    /// The human-facing display name (required, non-blank).
+    pub name: String,
     #[serde(default)]
     pub description: Option<String>,
     /// The id of the project to nest the new one under (a sub-project); blank/omitted

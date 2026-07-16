@@ -124,13 +124,10 @@ enum ProjectsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Register a new project (writes projects/<id>/config.toml).
+    /// Register a new project under a generated UUID id (writes projects/<uuid>/config.toml).
     Add {
-        /// The project id — its directory name (letters, digits, '.', '-', '_').
-        id: String,
-        /// A display name; defaults to the id.
-        #[arg(long)]
-        name: Option<String>,
+        /// The display name; the id is generated, so this is all a new project needs.
+        name: String,
         /// An optional one-line description.
         #[arg(long)]
         description: Option<String>,
@@ -499,13 +496,12 @@ fn run_projects(adi: Adi, command: ProjectsCommand) -> Result<(), adi_core::Proj
             }
         }
         ProjectsCommand::Add {
-            id,
             name,
             description,
             parent,
             json,
         } => {
-            let project = store.create(&id, name, description, parent)?;
+            let project = store.create(&name, description, parent)?;
             if json {
                 print_json(&project);
             } else {

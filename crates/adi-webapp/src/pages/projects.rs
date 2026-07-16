@@ -23,7 +23,6 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
         ..
     } = state;
     let ProjectsForm {
-        id,
         name,
         description,
         parent,
@@ -55,29 +54,26 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
 
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
-                let pid = id.get().trim().to_string();
-                if pid.is_empty() {
-                    flash.set(Some(Flash::err("A project id is required.".to_string())));
+                let display = name.get().trim().to_string();
+                if display.is_empty() {
+                    flash.set(Some(Flash::err("A project name is required.".to_string())));
                     return;
                 }
-                let display = name.get().trim().to_string();
                 let desc = description.get().trim().to_string();
                 let par = parent.get().trim().to_string();
+                // The server generates the project id (a UUID); the form sends only the name.
                 let body = NewProject {
-                    id: pid.clone(),
-                    name: (!display.is_empty()).then_some(display),
+                    name: display.clone(),
                     description: (!desc.is_empty()).then_some(desc),
                     parent: (!par.is_empty()).then_some(par),
                 };
-                id.set(String::new());
                 name.set(String::new());
                 description.set(String::new());
                 parent.set(String::new());
-                apply_projects(state, Some(busy), format!("Registered project {pid}."),
+                apply_projects(state, Some(busy), format!("Registered project {display}."),
                     fetch::create_project(body));
             }>
-                <TextField id="proj-id" label="Project id" placeholder="my-app" mono=true value=id />
-                <TextField id="proj-name" label="Name" placeholder="My App (defaults to the id)" value=name />
+                <TextField id="proj-name" label="Name" placeholder="My App" value=name />
                 <div class="adi-field">
                     <label class="adi-field__label" for="proj-parent">"Parent (sub-project of)"</label>
                     <select class="adi-input" id="proj-parent"
@@ -90,7 +86,8 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                                 // Non-breaking spaces so the depth indent survives inside <option> text.
                                 let indent = "\u{00a0}\u{00a0}".repeat(depth);
                                 let value = proj.id.clone();
-                                let label = format!("{indent}{}", proj.id);
+                                // Ids are UUIDs — label the option with the display name instead.
+                                let label = format!("{indent}{}", proj.name);
                                 view! { <option value=value>{label}</option> }
                             }).collect::<Vec<_>>()).unwrap_or_default()}
                     </select>

@@ -18,5 +18,8 @@ adi-config = { workspace = true }
 # actual TOML (de)serialization, so no direct `toml` dependency is needed here.
 serde = { workspace = true }
 
+# `create` mints each new project's id as a random v4 UUID (its directory name).
+uuid = { workspace = true }
+
 [lints]
 workspace = true

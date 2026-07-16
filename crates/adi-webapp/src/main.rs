@@ -88,7 +88,6 @@ fn App() -> impl IntoView {
 
     // The Projects page's local form: the create inputs, a busy flag, and the active/archived filter.
     let projects_form = ProjectsForm {
-        id: RwSignal::new(String::new()),
         name: RwSignal::new(String::new()),
         description: RwSignal::new(String::new()),
         parent: RwSignal::new(String::new()),

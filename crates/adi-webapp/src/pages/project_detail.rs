@@ -60,7 +60,6 @@ pub(crate) fn project_detail_view(
     };
     // The sub-project quick create form (same lifetime rationale as the task form).
     let subproject_form = QuickSubprojectForm {
-        id: RwSignal::new(String::new()),
         name: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
@@ -509,12 +508,11 @@ fn reload_project(state: State, id: String) {
 
 // ---- sub-projects (registered projects nested under this one) -------------------------
 
-/// The project detail page's quick sub-project create form (id and optional name; the parent is
-/// fixed to the open project). Descriptions and deeper nesting live on the Projects page.
-/// `Copy` so it threads into the panel view and its submit handler.
+/// The project detail page's quick sub-project create form (just a name — the id is generated
+/// server-side and the parent is fixed to the open project). Descriptions and deeper nesting
+/// live on the Projects page. `Copy` so it threads into the panel view and its submit handler.
 #[derive(Clone, Copy)]
 struct QuickSubprojectForm {
-    id: RwSignal<String>,
     name: RwSignal<String>,
     busy: RwSignal<bool>,
 }
@@ -523,7 +521,7 @@ struct QuickSubprojectForm {
 /// one (served in the detail payload), each opening its own detail page, plus a quick create
 /// form pre-scoped to the open project as the parent.
 fn subprojects_panel(state: State, route: RwSignal<Route>, form: QuickSubprojectForm) -> AnyView {
-    let QuickSubprojectForm { id, name, busy } = form;
+    let QuickSubprojectForm { name, busy } = form;
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
@@ -537,27 +535,24 @@ fn subprojects_panel(state: State, route: RwSignal<Route>, form: QuickSubproject
                 if parent.is_empty() {
                     return;
                 }
-                let pid = id.get().trim().to_string();
-                if pid.is_empty() {
-                    state.flash.set(Some(Flash::err("A project id is required.".to_string())));
+                let display = name.get().trim().to_string();
+                if display.is_empty() {
+                    state.flash.set(Some(Flash::err("A project name is required.".to_string())));
                     return;
                 }
-                let display = name.get().trim().to_string();
+                // The server generates the sub-project's id (a UUID); only the name is sent.
                 let body = NewProject {
-                    id: pid.clone(),
-                    name: (!display.is_empty()).then_some(display),
+                    name: display.clone(),
                     description: None,
                     parent: Some(parent.clone()),
                 };
-                id.set(String::new());
                 name.set(String::new());
                 // The mutation returns the fresh project list; re-fetching the detail then pulls
                 // the new sub-project into this panel.
-                apply_detail_mutation(state, parent, Some(busy), format!("Registered sub-project {pid}."),
+                apply_detail_mutation(state, parent, Some(busy), format!("Registered sub-project {display}."),
                     fetch::create_project(body));
             }>
-                <TextField id="psub-id" label="Project id" placeholder="my-app-sub" mono=true value=id />
-                <TextField id="psub-name" label="Name" placeholder="defaults to the id" wide=true
+                <TextField id="psub-name" label="Name" placeholder="My Sub-project" wide=true
                     field_style="flex:1 1 220px; min-width:0" value=name />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add sub-project"

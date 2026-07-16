@@ -87,7 +87,8 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                             .filter(|proj| !proj.is_archived())
                             .map(|proj| {
                                 let id = proj.id.clone();
-                                let label = if proj.name == proj.id { proj.id.clone() } else { format!("{} · {}", proj.id, proj.name) };
+                                // Ids are UUIDs — label the option with the display name instead.
+                                let label = proj.name.clone();
                                 view! { <option value=id>{label}</option> }
                             }).collect::<Vec<_>>()).unwrap_or_default()}
                     </select>

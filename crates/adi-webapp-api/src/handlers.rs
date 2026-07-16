@@ -139,7 +139,7 @@ pub fn create_project(store: &Projects, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_new_project(body) else {
         return bad_new_project();
     };
-    match store.create(req.id.trim(), req.name, req.description, req.parent) {
+    match store.create(req.name.trim(), req.description, req.parent) {
         Ok(_) => projects(store),
         Err(e) => project_error(&e),
     }
@@ -1773,13 +1773,13 @@ fn safe_extra_key(key: &str) -> bool {
 
 fn parse_new_project(body: &[u8]) -> Option<NewProject> {
     let req: NewProject = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty()).then_some(req)
+    (!req.name.trim().is_empty()).then_some(req)
 }
 
 fn bad_new_project() -> (u16, String) {
     error(
         400,
-        "expected JSON body { \"id\": \"…\", \"name\"?: \"…\", \"description\"?: \"…\" }",
+        "expected JSON body { \"name\": \"…\", \"description\"?: \"…\", \"parent\"?: \"…\" }",
     )
 }
 
@@ -2665,7 +2665,9 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         let store = Projects::with_config(adi_config::Config::with_root(&root));
-        store.create("demo", Some("Demo".into()), None, None).unwrap();
+        store
+            .create_with_id("demo", Some("Demo".into()), None, None)
+            .unwrap();
         let hive = store.hive_path("demo").unwrap();
         std::fs::create_dir_all(hive.parent().unwrap()).unwrap();
         std::fs::write(&hive, b"version: \"1\"\n").unwrap();

@@ -90,7 +90,6 @@ impl FilesState {
 /// active/archived filter. `Copy` so it threads into the page view and handlers.
 #[derive(Clone, Copy)]
 pub(crate) struct ProjectsForm {
-    pub(crate) id: RwSignal<String>,
     pub(crate) name: RwSignal<String>,
     pub(crate) description: RwSignal<String>,
     /// The project to nest the new one under (its id), or empty for a top-level project.

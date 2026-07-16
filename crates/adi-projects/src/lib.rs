@@ -11,12 +11,13 @@
 //!
 //! # let store = Projects::with_config(adi_config::Config::with_root(&tmp));
 //! // In real code: let store = Projects::open();
-//! let created = store.create("demo", Some("Demo".into()), None, None)?;
-//! assert_eq!(created.id, "demo");
+//! let created = store.create("Demo", None, None)?;
+//! assert_eq!(created.manifest.name, "Demo");
 //! assert!(!created.is_archived());
 //!
-//! store.archive("demo")?;
-//! assert!(store.get("demo")?.unwrap().is_archived());
+//! // The id is a generated UUID — the project's directory name under `projects/`.
+//! store.archive(&created.id)?;
+//! assert!(store.get(&created.id)?.unwrap().is_archived());
 //! # std::fs::remove_dir_all(&tmp).ok();
 //! # Ok::<(), adi_projects::Error>(())
 //! ```
@@ -160,16 +161,35 @@ impl Projects {
         }))
     }
 
-    /// Register a new project, writing its `config.toml`. `name` defaults to the id when
-    /// omitted or blank; a blank `description` or `parent` is dropped. A non-blank `parent`
-    /// makes this a sub-project and must name a registered project — and since a parent can
-    /// only be set here (there is no re-parent operation) a fresh id can never be its own
-    /// ancestor, so the links always form a tree.
+    /// Register a new project under a freshly generated UUID id (its directory name), writing
+    /// its `config.toml`. Callers supply only the human-facing `name`; a blank name falls back
+    /// to the generated id.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unregistered parent, or [`Error::Config`] on a write failure.
+    pub fn create(
+        &self,
+        name: &str,
+        description: Option<String>,
+        parent: Option<String>,
+    ) -> Result<Project> {
+        let id = uuid::Uuid::new_v4().to_string();
+        self.create_with_id(&id, Some(name.to_string()), description, parent)
+    }
+
+    /// Register a new project under an explicit id, writing its `config.toml`. `name` defaults
+    /// to the id when omitted or blank; a blank `description` or `parent` is dropped. A
+    /// non-blank `parent` makes this a sub-project and must name a registered project — and
+    /// since a parent can only be set here (there is no re-parent operation) a fresh id can
+    /// never be its own ancestor, so the links always form a tree.
+    ///
+    /// Prefer [`create`](Self::create), which generates the id; this is the escape hatch for
+    /// callers that must control the directory name (tests, imports of existing dirs).
     ///
     /// # Errors
     /// [`Error::InvalidId`] for an unsafe id, [`Error::Exists`] if one is already registered,
     /// [`Error::NotFound`] for an unregistered parent, or [`Error::Config`] on a write failure.
-    pub fn create(
+    pub fn create_with_id(
         &self,
         id: &str,
         name: Option<String>,
@@ -296,7 +316,7 @@ mod tests {
         assert!(store.list().expect("empty list").is_empty());
 
         let created = store
-            .create("demo", Some("Demo App".into()), Some("a test".into()), None)
+            .create_with_id("demo", Some("Demo App".into()), Some("a test".into()), None)
             .expect("create");
         assert_eq!(created.id, "demo");
         assert_eq!(created.manifest.name, "Demo App");
@@ -313,10 +333,30 @@ mod tests {
     }
 
     #[test]
+    fn create_generates_a_unique_uuid_id() {
+        let store = scratch("uuid");
+        let a = store.create("My App", None, None).expect("create");
+        // A canonical hyphenated UUID: filesystem-safe, so it passes id validation.
+        assert_eq!(a.id.len(), 36);
+        assert!(validate_id(&a.id).is_ok());
+        assert_eq!(a.manifest.name, "My App");
+        assert_eq!(store.get(&a.id).expect("get").expect("present"), a);
+
+        // The same name registers again under a fresh id — names don't collide.
+        let b = store.create("My App", None, None).expect("second create");
+        assert_ne!(a.id, b.id);
+        assert_eq!(store.list().expect("list").len(), 2);
+
+        // A blank name falls back to the generated id.
+        let bare = store.create("   ", None, None).expect("blank name");
+        assert_eq!(bare.manifest.name, bare.id);
+    }
+
+    #[test]
     fn create_defaults_name_to_id_and_drops_blank_description() {
         let store = scratch("defaults");
         let p = store
-            .create("bare", None, Some("   ".into()), Some("  ".into()))
+            .create_with_id("bare", None, Some("   ".into()), Some("  ".into()))
             .expect("create");
         assert_eq!(p.manifest.name, "bare");
         assert_eq!(p.manifest.description, None);
@@ -326,9 +366,9 @@ mod tests {
     #[test]
     fn subprojects_nest_under_a_registered_parent() {
         let store = scratch("subprojects");
-        store.create("root", None, None, None).expect("root");
+        store.create_with_id("root", None, None, None).expect("root");
         let child = store
-            .create("child", None, None, Some("root".into()))
+            .create_with_id("child", None, None, Some("root".into()))
             .expect("child");
         assert_eq!(child.manifest.parent.as_deref(), Some("root"));
         // The link round-trips through the manifest on disk.
@@ -345,7 +385,7 @@ mod tests {
     fn creating_under_an_unregistered_parent_is_not_found() {
         let store = scratch("badparent");
         assert!(matches!(
-            store.create("kid", None, None, Some("ghost".into())),
+            store.create_with_id("kid", None, None, Some("ghost".into())),
             Err(Error::NotFound(_))
         ));
         // The failed create must not leave a manifest behind.
@@ -355,12 +395,12 @@ mod tests {
     #[test]
     fn remove_reparents_children_to_the_removed_projects_parent() {
         let store = scratch("reparent");
-        store.create("root", None, None, None).expect("root");
+        store.create_with_id("root", None, None, None).expect("root");
         store
-            .create("mid", None, None, Some("root".into()))
+            .create_with_id("mid", None, None, Some("root".into()))
             .expect("mid");
         store
-            .create("leaf", None, None, Some("mid".into()))
+            .create_with_id("leaf", None, None, Some("mid".into()))
             .expect("leaf");
 
         assert!(store.remove("mid").expect("remove"));
@@ -377,9 +417,9 @@ mod tests {
     #[test]
     fn duplicate_create_is_an_error() {
         let store = scratch("dup");
-        store.create("x", None, None, None).expect("first");
+        store.create_with_id("x", None, None, None).expect("first");
         assert!(matches!(
-            store.create("x", None, None, None),
+            store.create_with_id("x", None, None, None),
             Err(Error::Exists(_))
         ));
     }
@@ -387,7 +427,7 @@ mod tests {
     #[test]
     fn archive_and_unarchive_toggle_state() {
         let store = scratch("archive");
-        store.create("p", None, None, None).expect("create");
+        store.create_with_id("p", None, None, None).expect("create");
 
         let archived = store.archive("p").expect("archive");
         assert!(archived.is_archived());
@@ -413,7 +453,9 @@ mod tests {
     #[test]
     fn remove_deletes_the_directory() {
         let store = scratch("remove");
-        store.create("gone", None, None, None).expect("create");
+        store
+            .create_with_id("gone", None, None, None)
+            .expect("create");
         assert!(store.remove("gone").expect("remove"));
         assert!(store.get("gone").expect("get").is_none());
         assert!(!store.remove("gone").expect("remove missing"));
@@ -424,7 +466,7 @@ mod tests {
         let store = scratch("invalid");
         assert!(matches!(store.get("../escape"), Err(Error::InvalidId(_))));
         assert!(matches!(
-            store.create("a/b", None, None, None),
+            store.create_with_id("a/b", None, None, None),
             Err(Error::InvalidId(_))
         ));
         assert!(matches!(store.remove(".."), Err(Error::InvalidId(_))));
@@ -456,7 +498,9 @@ mod tests {
     #[test]
     fn list_skips_dirs_without_a_manifest() {
         let store = scratch("skip");
-        store.create("real", None, None, None).expect("create");
+        store
+            .create_with_id("real", None, None, None)
+            .expect("create");
         // A bare directory (like the demo project's `.adi/hive.yaml`-only dir) isn't registered.
         std::fs::create_dir_all(store.dir().join("bare")).expect("mkdir");
         let all = store.list().expect("list");
