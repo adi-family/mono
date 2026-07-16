@@ -21,6 +21,7 @@ use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
 use adi_tasks::Tasks;
+use adi_triggers::Triggers;
 use adi_webapp_api::handlers;
 use include_dir::{Dir, include_dir};
 use tokio::net::{TcpListener, TcpStream};
@@ -88,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
     let projects = Arc::new(Projects::open());
     let tasks = Arc::new(Tasks::open());
     let agents = Arc::new(Agents::open());
+    let triggers = Arc::new(Triggers::open());
     let webapp_dist = Arc::new(webapp_dist_override());
     // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
     // (non-blocking, best-effort) so the whole stack is up once the app is — the control
@@ -116,6 +118,7 @@ async fn main() -> anyhow::Result<()> {
                     let projects = Arc::clone(&projects);
                     let tasks = Arc::clone(&tasks);
                     let agents = Arc::clone(&agents);
+                    let triggers = Arc::clone(&triggers);
                     let webapp_dist = Arc::clone(&webapp_dist);
                     let mesh = Arc::clone(&mesh);
                     tokio::spawn(async move {
@@ -125,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
                             &projects,
                             &tasks,
                             &agents,
+                            &triggers,
                             &mesh,
                             start,
                             webapp_dist.as_deref(),
@@ -176,6 +180,7 @@ async fn handle(
     projects: &Projects,
     tasks: &Tasks,
     agents: &Agents,
+    triggers: &Triggers,
     mesh: &MeshCtl,
     start: Instant,
     dist: Option<&Path>,
@@ -229,6 +234,21 @@ async fn handle(
         // send-keys is its interactive half (type text / press a key in the session).
         ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),
         ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),
+        // Triggers: background code blocks fired by an event source (~/.adi/mono/triggers).
+        // Save is an upsert keyed by name; fire spawns the code block detached (manual fire).
+        ("GET", "/api/triggers") => handlers::triggers(triggers),
+        ("POST", "/api/triggers/save") => handlers::save_trigger(triggers, &req.body),
+        ("POST", "/api/triggers/delete") => handlers::delete_trigger(triggers, &req.body),
+        ("POST", "/api/triggers/fire") => handlers::fire_trigger(triggers, &req.body),
+        ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
+        // The public webhook endpoint: fire an enabled `webhook` trigger with the request body
+        // as its payload. GET is accepted too — some webhook providers ping with it. The secret
+        // (when the trigger requires one) rides in the query, which route_path() strips.
+        (m, p) if p.starts_with("/api/hooks/") && matches!(m, "POST" | "GET") => {
+            let name = &p["/api/hooks/".len()..];
+            let query = req.path.split_once('?').map_or("", |(_, q)| q);
+            handlers::hook_trigger(triggers, name, query, &req.body)
+        }
         // Every hive service across all projects + the global front-door, with live status.
         // The listening-port scan is platform I/O, so the host does it and passes the ports in.
         ("GET", "/api/hive") => {

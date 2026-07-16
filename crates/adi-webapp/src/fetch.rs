@@ -5,8 +5,8 @@ use adi_webapp_api::types::{
     FilesRef, Health, HiveState,
     LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
     NewTask, PortsState, ProjectDetail, ProjectRef, ProjectsState, ReleaseResponse,
-    ReserveResponse, SaveAgent, StartResult, StartService, StopResult, TasksState, UsedPorts,
-    WriteFile,
+    ReserveResponse, SaveAgent, SaveTrigger, StartResult, StartService, StopResult, TasksState,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WriteFile,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -132,6 +132,28 @@ pub async fn peek_agent(name: String) -> Result<AgentPeek, String> {
 
 pub async fn send_agent_keys(name: String, text: String, key: String) -> Result<AgentPeek, String> {
     post("/api/agents/send-keys", &AgentKeys { name, text, key }).await
+}
+
+// Triggers: every endpoint returns the fresh TriggersState so the page updates in one round-trip.
+
+pub async fn triggers() -> Result<TriggersState, String> {
+    get("/api/triggers").await
+}
+
+pub async fn save_trigger(body: SaveTrigger) -> Result<TriggersState, String> {
+    post("/api/triggers/save", &body).await
+}
+
+pub async fn delete_trigger(name: String) -> Result<TriggersState, String> {
+    post("/api/triggers/delete", &TriggerRef { name }).await
+}
+
+pub async fn fire_trigger(name: String) -> Result<TriggerFireResult, String> {
+    post("/api/triggers/fire", &TriggerRef { name }).await
+}
+
+pub async fn trigger_log(name: String) -> Result<TriggerLog, String> {
+    post("/api/triggers/log", &TriggerRef { name }).await
 }
 
 pub async fn hive() -> Result<HiveState, String> {

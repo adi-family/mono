@@ -1,0 +1,20 @@
+[package]
+name = "adi-triggers"
+description = "Trigger definitions for the adi platform: named background code blocks fired by an external event source — a webhook call, a Telegram bot, a cron schedule, or a manual fire. Each trigger is one TOML file (kind, shell code block, enabled flag, kind-specific extras) under ~/.adi/mono/triggers. Pure library: the definition/store layer plus the first run slice — firing a trigger spawns its code block detached, with the event payload handed over via ADI_PAYLOAD_FILE and output captured to a per-trigger log."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The shared configurator decides where state lives (the `triggers` module dir under
+# ~/.adi/mono) and does the atomic TOML (de)serialization of each trigger's manifest.
+adi-config = { workspace = true }
+
+# The manifest is a plain serde/TOML document; `adi-config` does the actual TOML.
+serde = { workspace = true }
+
+[lints]
+workspace = true

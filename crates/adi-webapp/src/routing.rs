@@ -16,6 +16,8 @@ pub(crate) enum Route {
     Tasks,
     /// Agent definitions (`/agents`).
     Agents,
+    /// Trigger definitions (`/triggers`).
+    Triggers,
     Hive,
     PortsManager,
     Mesh,
@@ -31,6 +33,7 @@ impl Route {
             "/projects" => Route::Projects,
             "/tasks" => Route::Tasks,
             "/agents" => Route::Agents,
+            "/triggers" => Route::Triggers,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
@@ -46,6 +49,7 @@ impl Route {
             Route::Projects | Route::ProjectDetail => "/projects",
             Route::Tasks => "/tasks",
             Route::Agents => "/agents",
+            Route::Triggers => "/triggers",
             Route::Hive => "/settings/hive",
             Route::PortsManager => "/settings/ports-manager",
             Route::Mesh => "/settings/mesh",
@@ -60,6 +64,7 @@ impl Route {
             Route::ProjectDetail => "Project",
             Route::Tasks => "Tasks",
             Route::Agents => "Agents",
+            Route::Triggers => "Triggers",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",

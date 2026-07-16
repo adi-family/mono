@@ -503,6 +503,109 @@ pub struct AgentPeek {
     pub attach: String,
 }
 
+// ---- triggers (background code blocks fired by webhooks & co., under ~/.adi/mono/triggers) ----
+
+/// One selectable trigger kind: its id (`webhook` / `telegram` / `cron` / `manual`), a display
+/// label, and a hint about how (or whether, yet) that source fires. Server-owned so adding a
+/// kind doesn't require a webapp rebuild.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerKindOption {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub hint: String,
+}
+
+/// One trigger definition, flattened for the wire. `kind` names the event source; `code` is the
+/// shell block spawned detached on fire; `last_fired_at` is derived from the fire log's mtime
+/// (`None` if it never fired).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerDto {
+    pub name: String,
+    pub kind: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub enabled: bool,
+    /// The project this trigger is filed under (its id), or `None` for a global trigger.
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub extra: BTreeMap<String, String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    #[serde(default)]
+    pub last_fired_at: Option<u64>,
+}
+
+/// `GET /api/triggers` — every registered trigger, sorted by name, plus the selectable kinds.
+/// Each mutation endpoint returns a fresh one, so the client refreshes from one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggersState {
+    pub triggers: Vec<TriggerDto>,
+    pub kinds: Vec<TriggerKindOption>,
+}
+
+/// Request body for `POST /api/triggers/save` — create or update a trigger definition (an
+/// upsert keyed by `name`). `name` and `kind` are required. Timestamps are owned by the server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveTrigger {
+    pub name: String,
+    pub kind: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default = "trigger_enabled_default")]
+    pub enabled: bool,
+    /// The project to file the trigger under (its id); blank/omitted saves a global trigger.
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub extra: BTreeMap<String, String>,
+}
+
+/// serde default for [`SaveTrigger::enabled`] — an omitted flag saves an enabled trigger.
+fn trigger_enabled_default() -> bool {
+    true
+}
+
+/// Request body naming a trigger — `POST /api/triggers/delete`, `/fire`, and `/log`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerRef {
+    pub name: String,
+}
+
+/// `POST /api/triggers/fire` — the manual-fire outcome: a human-readable message (the spawned
+/// pid), plus the fresh triggers state so the client refreshes in the same round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerFireResult {
+    pub message: String,
+    pub state: TriggersState,
+}
+
+/// `POST /api/triggers/log` — the tail of a trigger's most recent fire log. `fired` is false
+/// (with an empty `output`) when the trigger never fired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerLog {
+    pub name: String,
+    pub fired: bool,
+    #[serde(default)]
+    pub output: String,
+    #[serde(default)]
+    pub fired_at: Option<u64>,
+}
+
+/// The response an external webhook caller gets from `/api/hooks/<name>`: an acknowledgement
+/// that the named trigger's code block was spawned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookAck {
+    pub ok: bool,
+    pub trigger: String,
+}
+
 // ---- files (a project's own directory, browsed through an isolated jail) --------------
 
 /// One entry in a project directory [`DirListing`]: a file or subdirectory with lightweight

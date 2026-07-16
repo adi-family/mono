@@ -20,7 +20,7 @@ mod ui;
 
 use adi_webapp_api::types::{
     AgentsState, Health, HiveState, MeshState, PortsState, ProjectDetail, ProjectsState,
-    TasksState, UsedPorts,
+    TasksState, TriggersState, UsedPorts,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -29,13 +29,13 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_watch, ports_manager_view,
-    project_detail_view, projects_view, tasks_view,
+    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_trigger_log, poll_watch,
+    ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
 };
 use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
 use state::{
     AgentsForm, AgentsWatch, FilesState, Flash, Form, MeshForm, ProjectsForm, State, Status,
-    TasksForm, load,
+    TasksForm, TriggersForm, TriggersLogView, load,
 };
 use ui::{apply_saved_theme, nav_item, toggle_theme};
 
@@ -62,6 +62,7 @@ fn App() -> impl IntoView {
     let project_detail = RwSignal::new(None::<ProjectDetail>);
     let tasks = RwSignal::new(None::<TasksState>);
     let agents = RwSignal::new(None::<AgentsState>);
+    let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
@@ -80,6 +81,7 @@ fn App() -> impl IntoView {
         current_project,
         tasks,
         agents,
+        triggers,
         hive,
         files,
     };
@@ -119,6 +121,22 @@ fn App() -> impl IntoView {
         editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
     };
+
+    // The Triggers page's local create/edit form.
+    let triggers_form = TriggersForm {
+        name: RwSignal::new(String::new()),
+        kind: RwSignal::new(String::new()),
+        project: RwSignal::new(String::new()),
+        description: RwSignal::new(String::new()),
+        code: RwSignal::new(String::new()),
+        enabled: RwSignal::new(true),
+        extra: RwSignal::new(BTreeMap::new()),
+        editing: RwSignal::new(None::<String>),
+        busy: RwSignal::new(false),
+    };
+
+    // The Triggers page's fire-log view (re-polled each second while open).
+    let triggers_log = TriggersLogView::new();
 
     // The Agents page's live view (a polled read-only capture of an agent's tmux pane).
     let agents_watch = AgentsWatch::new();
@@ -172,6 +190,7 @@ fn App() -> impl IntoView {
     Interval::new(1_000, move || {
         secs_since.update(|s| *s = s.saturating_add(1));
         poll_watch(agents_watch);
+        poll_trigger_log(triggers_log);
     })
     .forget();
 
@@ -186,6 +205,7 @@ fn App() -> impl IntoView {
                 | Route::ProjectDetail
                 | Route::Tasks
                 | Route::Agents
+                | Route::Triggers
                 | Route::Hive
                 | Route::PortsManager
                 | Route::Mesh
@@ -195,6 +215,11 @@ fn App() -> impl IntoView {
         // Leaving the Agents page closes the live view, so its 1s poll stops.
         if !matches!(route.get(), Route::Agents) {
             agents_watch.close();
+        }
+        // Likewise, leaving the pages that show the fire-log view closes it (it also renders
+        // on a project's detail page, whose Triggers panel shares the log actions).
+        if !matches!(route.get(), Route::Triggers | Route::ProjectDetail) {
+            triggers_log.close();
         }
     });
 
@@ -229,6 +254,7 @@ fn App() -> impl IntoView {
                     </a>
                     {nav_item(route, Route::Tasks, "Tasks")}
                     {nav_item(route, Route::Agents, "Agents")}
+                    {nav_item(route, Route::Triggers, "Triggers")}
                     <div class="adi-nav__group">
                         <div class="adi-nav__heading">"Settings"</div>
                         {nav_item(route, Route::Hive, "Hive")}
@@ -262,9 +288,10 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Overview => overview_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
-                        Route::ProjectDetail => project_detail_view(state, route),
+                        Route::ProjectDetail => project_detail_view(state, route, triggers_log),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch),
+                        Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),

@@ -2,13 +2,16 @@
 //! the project's `.adi/hive.yaml`, and an in-place file browser/editor scoped to the project's own
 //! directory (via the isolated `adi-fs` jail).
 
-use adi_webapp_api::types::{NewTask, ProjectDetail, ProjectService, ProjectsState, TasksState};
+use adi_webapp_api::types::{
+    NewTask, ProjectDetail, ProjectService, ProjectsState, SaveTrigger, TasksState, TriggersState,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
+use super::triggers::{log_view, trigger_actions};
 use crate::routing::{Route, go_projects};
-use crate::state::{Flash, State};
+use crate::state::{Flash, State, TriggersLogView};
 use crate::ui::{
     TextField, apply_mutation, dash, data_table, effective_label_title, flash_view, fmt_date,
     fmt_ports, placeholder_row, task_tree_rows, tile,
@@ -16,7 +19,11 @@ use crate::ui::{
 
 /// The project detail page (`/projects/<id>`): the manifest, its actions, and the services
 /// read from the project's `.adi/hive.yaml` — what's "inside" the project.
-pub(crate) fn project_detail_view(state: State, route: RwSignal<Route>) -> AnyView {
+pub(crate) fn project_detail_view(
+    state: State,
+    route: RwSignal<Route>,
+    triggers_log: TriggersLogView,
+) -> AnyView {
     let State {
         project_detail,
         flash,
@@ -32,6 +39,13 @@ pub(crate) fn project_detail_view(state: State, route: RwSignal<Route>) -> AnyVi
         parent: RwSignal::new(String::new()),
         tag: RwSignal::new(String::new()),
         details: RwSignal::new(String::new()),
+        busy: RwSignal::new(false),
+    };
+    // The project-scoped quick trigger create form (same lifetime rationale as the task form).
+    let trigger_form = QuickTriggerForm {
+        name: RwSignal::new(String::new()),
+        kind: RwSignal::new(String::new()),
+        code: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
     view! {
@@ -52,6 +66,10 @@ pub(crate) fn project_detail_view(state: State, route: RwSignal<Route>) -> AnyVi
         }}
 
         {tasks_panel(state, task_form)}
+
+        {move || log_view(triggers_log)}
+
+        {triggers_panel(state, trigger_form, triggers_log)}
 
         {files_view(state)}
 
@@ -479,6 +497,142 @@ fn project_task_options(state: State) -> AnyView {
             let value = t.id.clone();
             let label = format!("{indent}{} · {}", t.id, t.title);
             view! { <option value=value>{label}</option> }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+// ---- project triggers (the shared trigger list, filtered to this project) -------------
+
+/// The project detail page's quick trigger create form (name, kind, code; the project is fixed
+/// to the open project). Full editing — description, secrets, enable/disable — lives on the
+/// Triggers page. `Copy` so it threads into the panel view and its submit handler.
+#[derive(Clone, Copy)]
+struct QuickTriggerForm {
+    name: RwSignal<String>,
+    kind: RwSignal<String>,
+    code: RwSignal<String>,
+    busy: RwSignal<bool>,
+}
+
+/// The Triggers panel on a project's detail page: the triggers filed under this project (from
+/// the shared list at `/api/triggers`) with live Fire/Log/Enable actions, plus a quick create
+/// form pre-scoped to it.
+fn triggers_panel(state: State, form: QuickTriggerForm, log: TriggersLogView) -> AnyView {
+    let QuickTriggerForm {
+        name,
+        kind,
+        code,
+        busy,
+    } = form;
+    let triggers = state.triggers;
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Triggers"</h2>
+                <span class="adi-updated">"filed under this project"</span>
+            </div>
+            {data_table(&["Name", "Kind", "Status", "Last fired", ""], move || project_trigger_rows(state, log))}
+            <form class="adi-form" on:submit=move |ev| {
+                ev.prevent_default();
+                let id = state.current_project.get_untracked();
+                if id.is_empty() {
+                    return;
+                }
+                let nm = name.get().trim().to_string();
+                if nm.is_empty() {
+                    state.flash.set(Some(Flash::err("A trigger name is required.".to_string())));
+                    return;
+                }
+                let kd = kind.get().trim().to_string();
+                if kd.is_empty() {
+                    state.flash.set(Some(Flash::err("Pick a kind.".to_string())));
+                    return;
+                }
+                let body = SaveTrigger {
+                    name: nm.clone(),
+                    kind: kd,
+                    code: code.get(),
+                    description: String::new(),
+                    enabled: true,
+                    project: Some(id),
+                    extra: std::collections::BTreeMap::new(),
+                };
+                name.set(String::new());
+                code.set(String::new());
+                apply_mutation(state, Some(busy), format!("Created trigger “{nm}”."),
+                    |s: State, ts: TriggersState| s.triggers.set(Some(ts)), fetch::save_trigger(body));
+            }>
+                <TextField id="ptrigger-name" label="Name" placeholder="deploy-hook" mono=true
+                    hint="also the webhook URL segment" value=name />
+                <div class="adi-field">
+                    <label class="adi-field__label" for="ptrigger-kind">"Kind"</label>
+                    <select class="adi-input" id="ptrigger-kind"
+                        prop:value=move || kind.get()
+                        on:change=move |ev| kind.set(event_target_value(&ev))>
+                        <option value="">"— pick a kind —"</option>
+                        {move || triggers.get().map(|t| t.kinds.into_iter().map(|k| {
+                            let id = k.id.clone();
+                            view! { <option value=id>{k.label}</option> }
+                        }).collect::<Vec<_>>()).unwrap_or_default()}
+                    </select>
+                </div>
+                <TextField id="ptrigger-code" label="Code block" placeholder="echo deployed" mono=true wide=true
+                    field_style="flex:1 1 260px; min-width:0"
+                    hint="runs as sh -c, detached" value=code />
+                <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
+                    "Add trigger"
+                </button>
+            </form>
+            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+                "These appear in the global " <code>"Triggers"</code> " list too. Webhook triggers are "
+                "live at " <code>"/api/hooks/<name>"</code> "; secrets, descriptions, and editing live "
+                "on the Triggers page."
+            </div>
+        </section>
+    }
+    .into_any()
+}
+
+/// Rows for the project's trigger table: this project's triggers with the shared
+/// Fire/Log/Enable-Disable actions. Loading/empty placeholders otherwise.
+fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
+    let id = state.current_project.get();
+    let Some(st) = state.triggers.get() else {
+        return placeholder_row("5", "Loading…");
+    };
+    let mine: Vec<_> = st
+        .triggers
+        .into_iter()
+        .filter(|t| t.project.as_deref() == Some(id.as_str()))
+        .collect();
+    if mine.is_empty() {
+        return placeholder_row("5", "No triggers in this project yet — add one below.");
+    }
+    mine.into_iter()
+        .map(|t| {
+            let kind = t.kind.clone();
+            let hook_hint = (t.kind == "webhook").then(|| format!("/api/hooks/{}", t.name));
+            let status = if t.enabled { "Enabled" } else { "Disabled" };
+            let status_data = if t.enabled { "ready" } else { "archived" };
+            let fired = t.last_fired_at.map_or_else(|| "—".to_string(), fmt_date);
+            let description = t.description.clone();
+            view! {
+                <tr>
+                    <td title=description>
+                        <span>{t.name.clone()}</span>
+                        {hook_hint.map(|h| view! {
+                            <span class="adi-muted adi-mono" style="font-size:11.5px; display:block">{h}</span>
+                        })}
+                    </td>
+                    <td class="adi-mono">{kind}</td>
+                    <td><span class="adi-tstatus" data-status=status_data>{status}</span></td>
+                    <td class="adi-mono adi-muted">{fired}</td>
+                    <td style="text-align:right; white-space:nowrap">
+                        {trigger_actions(state, log, &t)}
+                    </td>
+                </tr>
+            }
         })
         .collect::<Vec<_>>()
         .into_any()

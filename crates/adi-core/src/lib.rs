@@ -29,5 +29,12 @@ pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
 // the webapp can also create tasks but deeper mutations live in `adi-mono tasks ...`.
 pub use adi_tasks::{EffectiveStatus, Error as TasksError, TaskPatch, TaskStatus, TaskView, Tasks};
 
+// Trigger definitions (background code blocks fired by webhooks & co.) are data/control-plane
+// state like agents: adi-core exposes their store — including the fire slice — for the CLI and
+// app backend; live listeners (Telegram, cron) are future work.
+pub use adi_triggers::{
+    Error as TriggersError, Firing, Trigger, TriggerManifest, Triggers,
+};
+
 /// The CLI binary name — the single Rust-side source of truth for user-facing messages.
 pub const BIN_NAME: &str = "adi-mono";

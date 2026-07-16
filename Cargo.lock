@@ -20,6 +20,7 @@ dependencies = [
  "adi-ports-manager",
  "adi-projects",
  "adi-tasks",
+ "adi-triggers",
  "adi-webapp-api",
  "anyhow",
  "include_dir",
@@ -55,6 +56,7 @@ dependencies = [
  "adi-ports-manager",
  "adi-projects",
  "adi-tasks",
+ "adi-triggers",
  "serde",
  "serde_json",
  "serde_yaml_ng",
@@ -147,6 +149,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-triggers"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "serde",
+]
+
+[[package]]
 name = "adi-webapp"
 version = "0.1.0"
 dependencies = [
@@ -173,6 +183,7 @@ dependencies = [
  "adi-ports-manager",
  "adi-projects",
  "adi-tasks",
+ "adi-triggers",
  "serde",
  "serde_json",
  "serde_yaml_ng",

@@ -16,6 +16,7 @@ adi-config = { workspace = true }
 # `adi-mono` CLI drives them through this facade.
 adi-agents = { workspace = true }
 adi-tasks = { workspace = true }
+adi-triggers = { workspace = true }
 
 # The control-panel (adi-app) runs as a user LaunchAgent on a stable port taken from the
 # ports manager; the front door proxies app.adi to that same reserved port.

@@ -28,6 +28,10 @@ adi-tasks = { workspace = true }
 # The agent-definition store the /api/agents handlers read and write.
 adi-agents = { workspace = true }
 
+# The trigger-definition store the /api/triggers handlers and the /api/hooks/<name>
+# webhook endpoint read, write, and fire.
+adi-triggers = { workspace = true }
+
 # The mesh runtime, started/stopped in-process behind the control panel's "Start mesh"
 # button — so the daemon lives only as long as this app process.
 adi-mesh = { workspace = true }

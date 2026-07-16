@@ -21,6 +21,7 @@ server = [
     "dep:adi-projects",
     "dep:adi-tasks",
     "dep:adi-agents",
+    "dep:adi-triggers",
     "dep:adi-fs",
     "dep:serde_json",
     "dep:serde_yaml_ng",
@@ -41,6 +42,9 @@ adi-projects = { workspace = true, optional = true }
 adi-tasks = { workspace = true, optional = true }
 # The agent-definition store backing the Agents tab (/api/agents*).
 adi-agents = { workspace = true, optional = true }
+# The trigger-definition store backing the Triggers tab (/api/triggers*) and the public
+# webhook endpoint (/api/hooks/<name>).
+adi-triggers = { workspace = true, optional = true }
 # The base-directory-jailed filesystem backing the project file browser/editor endpoints.
 adi-fs = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

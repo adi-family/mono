@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
     AgentPeek, AgentsState, DirListing, Health, HiveState, MeshState, PortsState, ProjectDetail,
-    ProjectsState, TasksState, UsedPorts,
+    ProjectsState, TasksState, TriggerLog, TriggersState, UsedPorts,
 };
 use leptos::prelude::*;
 
@@ -31,6 +31,8 @@ pub(crate) struct State {
     pub(crate) tasks: RwSignal<Option<TasksState>>,
     /// Agent definitions (`/api/agents`), shown on the Agents page.
     pub(crate) agents: RwSignal<Option<AgentsState>>,
+    /// Trigger definitions (`/api/triggers`), shown on the Triggers page.
+    pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
     /// The project file browser/editor state (the Files panel on the detail page).
     pub(crate) files: FilesState,
@@ -128,6 +130,49 @@ pub(crate) struct AgentsForm {
     pub(crate) extra: RwSignal<BTreeMap<String, String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
+}
+
+/// The Triggers page's local create/edit form. `editing` is `Some(name)` while an existing
+/// trigger is loaded into the form (drives the header + a "New trigger" reset); `extra` holds
+/// the kind-specific settings (secret, schedule, …). `Copy` so it threads into handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct TriggersForm {
+    pub(crate) name: RwSignal<String>,
+    pub(crate) kind: RwSignal<String>,
+    /// The project to file the trigger under (its id), or empty for a global trigger.
+    pub(crate) project: RwSignal<String>,
+    pub(crate) description: RwSignal<String>,
+    pub(crate) code: RwSignal<String>,
+    pub(crate) enabled: RwSignal<bool>,
+    pub(crate) extra: RwSignal<BTreeMap<String, String>>,
+    pub(crate) editing: RwSignal<Option<String>>,
+    pub(crate) busy: RwSignal<bool>,
+}
+
+/// The Triggers page's log view: which trigger's fire log is open (`None` = closed) and the
+/// latest snapshot. The shell re-polls it every second while open (a fired code block may still
+/// be appending); leaving the page closes it. `Copy` so it threads into the poll closure.
+#[derive(Clone, Copy)]
+pub(crate) struct TriggersLogView {
+    /// The watched trigger's name, or `None` while the log view is closed.
+    pub(crate) name: RwSignal<Option<String>>,
+    /// The last log snapshot received, or `None` before the first one lands.
+    pub(crate) log: RwSignal<Option<TriggerLog>>,
+}
+
+impl TriggersLogView {
+    pub(crate) fn new() -> Self {
+        Self {
+            name: RwSignal::new(None),
+            log: RwSignal::new(None),
+        }
+    }
+
+    /// Close the log view (stops the polling; the poll no-ops while `name` is `None`).
+    pub(crate) fn close(self) {
+        self.name.set(None);
+        self.log.set(None);
+    }
 }
 
 /// The Agents page's live view: which agent's tmux pane is being watched (`None` = closed), the
@@ -263,6 +308,10 @@ pub(crate) async fn load(s: State) {
         if let Ok(t) = fetch::tasks().await {
             s.tasks.set(Some(t));
         }
+        // Likewise its Triggers panel filters the shared trigger list.
+        if let Ok(t) = fetch::triggers().await {
+            s.triggers.set(Some(t));
+        }
     }
     if path == Route::Tasks.path() {
         if let Ok(t) = fetch::tasks().await {
@@ -277,6 +326,15 @@ pub(crate) async fn load(s: State) {
         && let Ok(a) = fetch::agents().await
     {
         s.agents.set(Some(a));
+    }
+    if path == Route::Triggers.path() {
+        if let Ok(t) = fetch::triggers().await {
+            s.triggers.set(Some(t));
+        }
+        // The create form's project picker is populated from the registered projects.
+        if let Ok(p) = fetch::projects().await {
+            s.projects.set(Some(p));
+        }
     }
     if path == Route::Hive.path()
         && let Ok(h) = fetch::hive().await

@@ -49,6 +49,12 @@ impl Adi {
         adi_agents::Agents::open()
     }
 
+    /// The trigger-definition registry backed by the standard store.
+    #[must_use]
+    pub fn triggers(self) -> adi_triggers::Triggers {
+        adi_triggers::Triggers::open()
+    }
+
     /// Every managed service, in display + apply order. DNS is first so, when enabling, its
     /// `on_enable` migrates the front door (proxy-only) before the control-panel agent
     /// binds the shared port — otherwise the old runner-supervised adi-app would collide
