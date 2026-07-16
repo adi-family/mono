@@ -233,6 +233,9 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
             let run_name = h.name.clone();
             let log_name = h.name.clone();
             let edit_name = h.name.clone();
+            // init/workspace only make sense with the ADI_WORKSPACE_* env a workspace
+            // create provides — no manual Run for them (the API refuses it anyway).
+            let lifecycle = h.name == "init" || h.name == "workspace";
             view! {
                 <tr>
                     <td>
@@ -244,8 +247,19 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
                     <td><span class="adi-tstatus" data-status=status_data>{status_label}</span></td>
                     <td class="adi-mono adi-muted">{ran}</td>
                     <td style="text-align:right; white-space:nowrap">
-                        <button class="adi-btn adi-btn--link" title="run the hook now, detached"
-                            on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
+                        {if lifecycle {
+                            view! {
+                                <span class="adi-muted" style="font-size:12px"
+                                    title="lifecycle hooks run when a workspace is created — use Add workspace">
+                                    "via Add workspace"
+                                </span>
+                            }.into_any()
+                        } else {
+                            view! {
+                                <button class="adi-btn adi-btn--link" title="run the hook now, detached"
+                                    on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
+                            }.into_any()
+                        }}
                         " "
                         <button class="adi-btn adi-btn--link" title="show the last run's output"
                             on:click=move |_| open_hook_log(state, log, log_name.clone())>"Log"</button>

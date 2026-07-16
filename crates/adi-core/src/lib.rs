@@ -37,7 +37,7 @@ pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
 pub use adi_hooks::{
     Error as HooksError, HOOK_INIT, HOOK_WORKSPACE, Hook, HookRun, HookRunStatus,
     Hooks as ProjectHooks, WorkspaceEntry, WorkspaceKind, WorkspaceStatus, Workspaces,
-    hook_template,
+    hook_template, is_lifecycle,
 };
 
 // The task tree is the shared queue/plan state. The CLI is the write-oriented command surface;

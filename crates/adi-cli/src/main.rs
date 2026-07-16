@@ -764,6 +764,11 @@ fn run_hook(store: &adi_core::Projects, project: &str, command: HookCommand) -> 
             println!("Created hook {name} at {} — edit it there.", path.display());
         }
         HookCommand::Run { name, json } => {
+            if adi_core::is_lifecycle(&name) {
+                return Err(format!(
+                    "the {name} hook runs when a workspace is created — use `projects workspace {project} add <name>`"
+                ));
+            }
             env.push(("ADI_PROJECT_DIR".to_string(), dir.display().to_string()));
             let run = hooks.run(&name, &env, &dir).map_err(|e| e.to_string())?;
             if json {

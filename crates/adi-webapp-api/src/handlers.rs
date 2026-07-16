@@ -10,7 +10,9 @@ use std::time::Instant;
 
 use adi_agents::{AgentManifest, Agents, Error as AgentStoreError};
 use adi_fs::{Error as FsError, Jail};
-use adi_hooks::{Error as HookStoreError, Hooks as ProjectHooks, Workspaces, hook_template};
+use adi_hooks::{
+    Error as HookStoreError, Hooks as ProjectHooks, Workspaces, hook_template, is_lifecycle,
+};
 use adi_triggers::{Error as TriggerStoreError, TriggerManifest, Triggers};
 use adi_mesh::config::{Forward, MeshConfig};
 use adi_mesh::{identity, ticket};
@@ -633,6 +635,15 @@ pub fn run_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
     };
     env.push(("ADI_PROJECT_DIR".to_string(), dir.display().to_string()));
     let name = req.name.trim();
+    // The lifecycle hooks get their ADI_WORKSPACE_* env only from a workspace create; a
+    // bare run would see an empty $ADI_WORKSPACE_DIR and fail confusingly, so refuse it
+    // with the actionable path instead.
+    if is_lifecycle(name) {
+        return error(
+            409,
+            &format!("the {name} hook runs when a workspace is created — use “Add workspace”"),
+        );
+    }
     let hooks = ProjectHooks::new(&dir);
     // A manual run of an unknown hook is a plain 404 (NoHook's 409 is for the lifecycle
     // hooks a workspace create depends on).
@@ -3225,6 +3236,11 @@ mod tests {
             run_project_hook(&store, br#"{"id":"demo","name":"ghost"}"#).0,
             404
         );
+        // Lifecycle hooks are refused with a pointer at the workspace-create path — a bare
+        // run would see an empty $ADI_WORKSPACE_DIR and fail confusingly inside git.
+        let (status, body) = run_project_hook(&store, br#"{"id":"demo","name":"init"}"#);
+        assert_eq!(status, 409, "{body}");
+        assert!(body.contains("Add workspace"), "{body}");
         assert_eq!(
             project_hook_log(&store, br#"{"id":"demo","name":"ghost"}"#).0,
             404

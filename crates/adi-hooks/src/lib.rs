@@ -29,7 +29,7 @@ mod workspace;
 pub use error::{Error, Result};
 pub use hook::{
     EXIT_MARKER_PREFIX, HOOK_INIT, HOOK_WORKSPACE, Hook, HookRun, HookRunStatus, Hooks,
-    hook_template,
+    hook_template, is_lifecycle,
 };
 pub use workspace::{
     WORKSPACES_DIR, WorkspaceEntry, WorkspaceKind, WorkspaceStatus, Workspaces,

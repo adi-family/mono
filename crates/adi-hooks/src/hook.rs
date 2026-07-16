@@ -20,6 +20,14 @@ pub const HOOK_WORKSPACE: &str = "workspace";
 /// The marker line the run wrapper appends to the log: `[adi:hook-exit <code>]`.
 pub const EXIT_MARKER_PREFIX: &str = "[adi:hook-exit ";
 
+/// Whether `name` is one of the lifecycle hooks (`init` / `workspace`). These receive the
+/// `ADI_WORKSPACE_*` env only from a workspace create, so manual-run surfaces refuse them
+/// (a bare run would see an empty `$ADI_WORKSPACE_DIR` and fail confusingly).
+#[must_use]
+pub fn is_lifecycle(name: &str) -> bool {
+    name == HOOK_INIT || name == HOOK_WORKSPACE
+}
+
 /// The hooks directory inside a project, relative to the project dir.
 pub(crate) const ADI_DIR: &str = ".adi";
 pub(crate) const HOOKS_DIR: &str = "hooks";
@@ -327,6 +335,8 @@ pub fn hook_template(kind: &str) -> Option<&'static str> {
 #   ADI_WORKSPACE_NAME    the new workspace's name
 #   ADI_WORKSPACE_DIR     absolute target directory (this script creates it)
 #   ADI_WORKSPACE_COUNT   workspaces existing before this one (0 here)
+# Fail fast when run without a workspace context (use "Add workspace" instead):
+[ -n "$ADI_WORKSPACE_DIR" ] || { echo "ADI_WORKSPACE_DIR is empty — this hook runs via 'Add workspace'"; exit 2; }
 # Replace <REPO_URL> and edit as needed:
 git clone <REPO_URL> "$ADI_WORKSPACE_DIR"
 "#,
@@ -336,6 +346,8 @@ git clone <REPO_URL> "$ADI_WORKSPACE_DIR"
 # cwd: the primary (first) workspace directory.
 # Environment: same as init, plus
 #   ADI_PRIMARY_WORKSPACE_DIR   the first workspace's directory
+# Fail fast when run without a workspace context (use "Add workspace" instead):
+[ -n "$ADI_WORKSPACE_DIR" ] || { echo "ADI_WORKSPACE_DIR is empty — this hook runs via 'Add workspace'"; exit 2; }
 # A fresh branch per workspace sidesteps git's one-checkout-per-branch rule:
 git worktree add "$ADI_WORKSPACE_DIR" -b "ws-$ADI_WORKSPACE_NAME"
 "#,
