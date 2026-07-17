@@ -376,52 +376,91 @@ fn resolve_auth(
 }
 
 fn read_keychain_oauth(keychain_service: &str) -> Result<Auth, PluginError> {
+    // The exact configured entry first. Claude Code ≥2.x keeps tokens in
+    // per-config-dir entries (`Claude Code-credentials-<hash>`) and blanks
+    // the legacy bare-name entry into a stub, so when the configured entry
+    // is missing or a stub, scan its suffixed siblings and take the
+    // freshest — the one a live Claude Code session keeps refreshed.
+    if let Some(tokens) = keychain_entry_tokens(keychain_service)? {
+        return Ok(Auth::OAuth(tokens));
+    }
+
+    let mut best: Option<OAuthTokens> = None;
+    for svc in list_credential_services(keychain_service) {
+        if let Ok(Some(tokens)) = keychain_entry_tokens(&svc) {
+            if best.as_ref().is_none_or(|b| tokens.expires_at > b.expires_at) {
+                best = Some(tokens);
+            }
+        }
+    }
+    best.map(Auth::OAuth).ok_or_else(|| {
+        PluginError::new(
+            "claude-code-api: no API key and no OAuth tokens found in keychain. \
+             Set 'apiKey' in config or log in via `claude` CLI first.",
+        )
+    })
+}
+
+/// The OAuth tokens stored under one keychain service, or `None` when the
+/// entry is missing, unparsable, or a stub with an empty access token.
+fn keychain_entry_tokens(service: &str) -> Result<Option<OAuthTokens>, PluginError> {
     let user = std::env::var("USER").unwrap_or_else(|_| "claude-code-user".to_string());
 
     let output = Command::new("security")
-        .args([
-            "find-generic-password",
-            "-a",
-            &user,
-            "-s",
-            keychain_service,
-            "-w",
-        ])
+        .args(["find-generic-password", "-a", &user, "-s", service, "-w"])
         .output()
         .map_err(|e| PluginError::new(format!("keychain read failed: {e}")))?;
-
     if !output.status.success() {
-        return Err(PluginError::new(
-            "claude-code-api: no API key and no OAuth tokens found in keychain. \
-             Set 'apiKey' in config or log in via `claude` CLI first.",
-        ));
+        return Ok(None);
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let creds: serde_json::Value = serde_json::from_str(json_str.trim())
-        .map_err(|e| PluginError::new(format!("keychain JSON parse: {e}")))?;
+    let Ok(creds) = serde_json::from_str::<serde_json::Value>(json_str.trim()) else {
+        return Ok(None);
+    };
+    let Some(oauth) = creds.get("claudeAiOauth") else {
+        return Ok(None);
+    };
 
-    let oauth = creds
-        .get("claudeAiOauth")
-        .ok_or_else(|| PluginError::new("keychain: missing claudeAiOauth"))?;
-
-    let access_token = oauth
-        .get("accessToken")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| PluginError::new("keychain: missing accessToken"))?
-        .to_string();
-    let refresh_token = oauth
-        .get("refreshToken")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| PluginError::new("keychain: missing refreshToken"))?
-        .to_string();
-    let expires_at = oauth.get("expiresAt").and_then(serde_json::Value::as_u64).unwrap_or(0);
-
-    Ok(Auth::OAuth(OAuthTokens {
+    let token = |key: &str| {
+        oauth
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToString::to_string)
+    };
+    let Some(access_token) = token("accessToken") else {
+        return Ok(None);
+    };
+    Ok(Some(OAuthTokens {
         access_token,
-        refresh_token,
-        expires_at,
+        refresh_token: token("refreshToken").unwrap_or_default(),
+        expires_at: oauth.get("expiresAt").and_then(serde_json::Value::as_u64).unwrap_or(0),
     }))
+}
+
+/// Suffixed sibling entries of `base` in the keychain (`<base>-<hex>`),
+/// found by scanning `security dump-keychain` attribute lines. Errors and
+/// odd output read as "none" — the caller falls through to its own error.
+fn list_credential_services(base: &str) -> Vec<String> {
+    let Ok(output) = Command::new("security").arg("dump-keychain").output() else {
+        return Vec::new();
+    };
+    let text = String::from_utf8_lossy(&output.stdout);
+    let prefix = format!("\"svce\"<blob>=\"{base}-");
+    let mut services: Vec<String> = text
+        .lines()
+        .filter_map(|line| {
+            let rest = line.trim().strip_prefix(&prefix)?;
+            let suffix = rest.strip_suffix('"')?;
+            (!suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_hexdigit()))
+                .then(|| format!("{base}-{suffix}"))
+        })
+        .collect();
+    services.sort();
+    services.dedup();
+    services
 }
 
 fn refresh_oauth(
@@ -430,6 +469,12 @@ fn refresh_oauth(
     token_url: &str,
     oauth_scopes: &str,
 ) -> Result<OAuthTokens, PluginError> {
+    if tokens.refresh_token.is_empty() {
+        return Err(PluginError::new(
+            "claude-code-api: OAuth token expired and no refresh token available — \
+             log in via `claude` first",
+        ));
+    }
     eprintln!("[claude-code-api] refreshing OAuth token");
 
     let rt = tokio::runtime::Builder::new_current_thread()
