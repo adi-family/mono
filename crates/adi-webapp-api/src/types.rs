@@ -458,11 +458,10 @@ pub struct AgentDto {
     pub extra: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
-    /// Whether this agent's backend has a run adapter (today: tmux executors only), i.e. whether
-    /// the ▶ Run action can work at all.
+    /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
     #[serde(default)]
     pub runnable: bool,
-    /// Whether a live `adi-agent-<name>` tmux session for this agent exists right now.
+    /// Whether this agent has a live tmux session or detached process right now.
     #[serde(default)]
     pub running: bool,
 }
@@ -511,9 +510,7 @@ pub struct AgentRef {
     pub name: String,
 }
 
-/// `POST /api/agents/run` — the launch outcome: a human-readable message carrying the tmux
-/// attach hint (the server owns the session-naming scheme, so the hint is composed here), plus
-/// the fresh agents state so the client refreshes in the same round-trip.
+/// `POST /api/agents/run` — a human-readable launch outcome plus fresh agent state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentRunResult {
     pub message: String,

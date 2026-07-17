@@ -1,8 +1,8 @@
 //! The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
 //! pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
-//! params. ▶ Run starts a tmux-backed agent detached in a tmux session (the server owns the
-//! launch); deeper orchestration is future work. The form adapts its params to the chosen
-//! backend, and for the `harness:adi` backend also to its chosen provider.
+//! params. ▶ Run starts either an interactive tmux session or a headless background process;
+//! deeper orchestration is future work. The form adapts its params to the chosen backend, and
+//! for the `harness:adi` backend also to its chosen provider.
 
 use std::collections::BTreeMap;
 
@@ -24,9 +24,9 @@ const ADI_HARNESS: &str = "harness:adi";
 
 /// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
 /// pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
-/// params. ▶ Run starts a tmux-backed agent detached in a tmux session (the server owns the
-/// launch); deeper orchestration is future work. The form adapts its params to the chosen
-/// backend, and for the `harness:adi` backend also to its chosen provider.
+/// params. ▶ Run starts either an interactive tmux session or a headless background process;
+/// deeper orchestration is future work. The form adapts its params to the chosen backend, and
+/// for the `harness:adi` backend also to its chosen provider.
 pub(crate) fn agents_view(
     state: State,
     form: AgentsForm,
@@ -122,17 +122,17 @@ pub(crate) fn agents_view(
             </form>
             {flash_view(flash)}
             <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
-                "▶ Run launches a tmux-backed agent detached in an " <code>"adi-agent-<name>"</code>
-                " tmux session; ● View watches it from here and can type into it (or take it over
-                 with " <code>"tmux attach"</code> "). Other executors, session history, and
-                 auto-start are future work per " <code>"docs/adi-agents.md"</code> "."
+                "▶ Run launches tmux backends in an interactive " <code>"adi-agent-<name>"</code>
+                " session, or process backends as headless Claude/Codex CLI jobs. ● View is tmux
+                 only; background-process output is written under "
+                <code>"~/.adi/mono/sessions/process"</code> "."
             </div>
         </section>
     }
     .into_any()
 }
 
-/// The stat-tile strip: totals, per-executor counts, starred, and live tmux sessions.
+/// The stat-tile strip: totals, per-executor counts, starred, and live runs.
 fn agent_tiles(state: State) -> impl IntoView {
     let agents = state.agents;
     view! {
@@ -157,7 +157,7 @@ fn agent_tiles(state: State) -> impl IntoView {
                 "pinned")}
             {tile("Running",
                 move || agents.get().map_or_else(|| "—".to_string(), |a| agent_running(&a).to_string()),
-                "live tmux sessions")}
+                "live sessions / processes")}
         </section>
     }
 }
@@ -172,7 +172,7 @@ fn agent_starred(st: &AgentsState) -> usize {
     st.agents.iter().filter(|a| a.starred).count()
 }
 
-/// Count agents with a live tmux session.
+/// Count agents with a live tmux session or detached process.
 fn agent_running(st: &AgentsState) -> usize {
     st.agents.iter().filter(|a| a.running).count()
 }
@@ -742,22 +742,29 @@ fn build_code(state: State, code: AgentCodeEditor, name: String) {
     });
 }
 
-/// The Run / View / Stop action buttons for one agent row — shared between the global Agents
-/// table and a project's Agents panel. Run shows only for a runnable, stopped agent; View/Stop
-/// only while its tmux session is live.
+/// The Run / View / Stop action buttons for one agent row. Process runs are deliberately
+/// non-interactive, so only tmux runs expose View; both kinds can be stopped.
 pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> AnyView {
     let run_name = a.name.clone();
     let show_run = a.runnable && !a.running;
     let running = a.running;
+    let interactive = a.executor == "tmux";
+    let stop_title = if interactive {
+        "kill the tmux session"
+    } else {
+        "stop the background process"
+    };
     view! {
         {running.then(|| {
             let watch_name = run_name.clone();
             let stop_name = run_name.clone();
             view! {
-                <button class="adi-btn adi-btn--link" title="watch the live tmux session"
-                    on:click=move |_| open_watch(watch, watch_name.clone())>"● View"</button>
-                " "
-                <button class="adi-btn adi-btn--link" title="kill the tmux session"
+                {interactive.then(|| view! {
+                    <button class="adi-btn adi-btn--link" title="watch the live tmux session"
+                        on:click=move |_| open_watch(watch, watch_name.clone())>"● View"</button>
+                    " "
+                })}
+                <button class="adi-btn adi-btn--link" title=stop_title
                     on:click=move |_| stop_agent(state, watch, stop_name.clone())>"■ Stop"</button>
                 " "
             }
@@ -780,9 +787,7 @@ where
     apply_mutation(state, busy, ok_msg, |s, a| s.agents.set(Some(a)), fut);
 }
 
-/// Launch an agent (the ▶ Run action). Unlike [`apply_agents`], the success flash comes from the
-/// server — its message carries the tmux attach hint, whose session-naming scheme the client
-/// doesn't know.
+/// Launch an agent (the ▶ Run action). The server supplies an executor-specific success message.
 fn run_agent(state: State, name: String) {
     spawn_local(async move {
         match fetch::run_agent(name).await {
@@ -795,8 +800,7 @@ fn run_agent(state: State, name: String) {
     });
 }
 
-/// Stop a running agent (the ■ Stop action): kill its tmux session, then refresh the list (the
-/// row flips back to ▶ Run). If the live view is watching this agent, close it too.
+/// Stop a running agent, refresh the list, and close its live view if one is open.
 fn stop_agent(state: State, watch: AgentsWatch, name: String) {
     if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
         watch.close();

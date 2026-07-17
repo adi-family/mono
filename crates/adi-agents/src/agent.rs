@@ -17,7 +17,7 @@ use crate::error::{Error, Result};
 pub struct AgentManifest {
     /// How and what runs the agent, as an `executor:what` string. The executor is the run
     /// mechanism, the suffix is the thing it runs: `tmux:claude` | `tmux:codex` (a vendor CLI in
-    /// a tmux session), `process:claude` | `process:codex` (a vendor CLI as a headless
+    /// a tmux session), `process:claude` | `process:codex` (a vendor CLI as a detached headless
     /// subprocess), `harness:claude-sdk` | `harness:adi` (an agentic-loop harness; `harness:adi`
     /// picks its model provider via the `provider` extra).
     pub backend: String,

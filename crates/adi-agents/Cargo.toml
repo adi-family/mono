@@ -1,6 +1,6 @@
 [package]
 name = "adi-agents"
-description = "Agent definitions (AgentDef) for the adi platform: a reusable, backend-agnostic spec — backend as executor:what (tmux:claude/process:codex/harness:claude-sdk/harness:adi), system prompt, CLI command scope, model/params, tags — stored one TOML file per agent under ~/.adi/mono/agents. Pure library: the definition/store layer of the adi-agents orchestration spec (docs/adi-agents.md), plus its first run slice — launching tmux-backed agents detached in an adi-agent-<name> tmux session."
+description = "Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

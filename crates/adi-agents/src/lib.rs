@@ -5,9 +5,9 @@
 //!
 //! This is the **definition/store layer** of the larger adi-agents orchestration spec
 //! (docs/adi-agents.md), plus the first slice of its run layer: [`Agents::run`] launches a
-//! tmux-backed agent (`tmux:claude` / `tmux:codex`) detached in a `adi-agent-<name>` tmux
-//! session (see [`run`](mod@crate::run) via the re-exports below). The full backend contract,
-//! session persistence, and lifecycle hooks from that spec are still future work.
+//! tmux-backed agent in an `adi-agent-<name>` session or a headless `process:*` agent in the
+//! background (see [`run`](mod@crate::run) via the re-exports below). The full backend contract
+//! and lifecycle hooks from that spec are still future work.
 //!
 //! ```
 //! # let tmp = std::env::temp_dir().join(format!("adi-agents-doctest-{}", std::process::id()));
@@ -31,6 +31,7 @@
 //! ```
 
 mod agent;
+mod backends;
 mod error;
 mod run;
 pub mod wasm;
@@ -47,11 +48,14 @@ pub use run::{
 pub use wasm::DispatchOutcome;
 
 use agent::{now_unix, validate_name};
+use run::{is_running_in, launch_in, stop_in};
 
 /// The store module agents live under, and each agent file's extension.
 const AGENTS_MODULE: &str = "agents";
 /// The module dir wasm employees are installed under (`~/.adi/mono/workforce`).
 const WORKFORCE_MODULE: &str = "workforce";
+/// Runtime state for launched agents (`~/.adi/mono/sessions`).
+const SESSIONS_MODULE: &str = "sessions";
 const MANIFEST_EXT: &str = "toml";
 
 /// The agents registry: lists, reads, and mutates the per-agent manifests under the `agents`
@@ -176,17 +180,25 @@ impl Agents {
         })
     }
 
-    /// Launch a registered agent in its backend (see [`launch`]): the engine CLI starts detached
-    /// in a fresh `adi-agent-<name>` tmux session, and the returned [`Launch`] carries the attach
-    /// hint. Only tmux executors run today.
+    /// Launch a registered agent in its backend with the default `run` message.
     ///
     /// # Errors
     /// [`Error::NotFound`] for an unregistered name, plus everything [`launch`] can return.
     pub fn run(&self, name: &str) -> Result<Launch> {
+        self.run_with_message(name, "run")
+    }
+
+    /// Launch a registered agent, passing `message` to headless process backends. Interactive
+    /// tmux backends start without consuming it.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unregistered name, plus everything [`launch`] can return.
+    pub fn run_with_message(&self, name: &str, message: &str) -> Result<Launch> {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        launch(&agent)
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        launch_in(&agent, &sessions_dir, message)
     }
 
     /// Run a `wasm:*` agent: a synchronous one-shot dispatch of `message` into the compiled
@@ -212,14 +224,25 @@ impl Agents {
         wasm::dispatch(&agent, &workforce_dir, handler, message)
     }
 
-    /// Stop a running agent (see [`stop`]): kill its `adi-agent-<name>` tmux session. Returns
-    /// whether a live session was found and killed (idempotent).
+    /// Whether an agent currently has a live tmux session or detached process.
+    #[must_use]
+    pub fn is_running(&self, agent: &Agent) -> bool {
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        is_running_in(agent, &sessions_dir)
+    }
+
+    /// Stop a running agent using its executor's lifecycle. Returns whether a live run was found
+    /// and asked to stop (idempotent).
     ///
     /// # Errors
-    /// [`Error::InvalidName`] for an unsafe name, or [`Error::Tmux`] if the kill fails.
+    /// [`Error::InvalidName`] for an unsafe name, or an executor-specific lifecycle error.
     pub fn stop(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
-        stop(name)
+        let Some(agent) = self.get(name)? else {
+            return Ok(false);
+        };
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        stop_in(&agent, &sessions_dir)
     }
 
     /// Delete an agent definition. Returns `false` if it wasn't registered.

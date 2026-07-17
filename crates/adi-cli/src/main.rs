@@ -353,12 +353,12 @@ enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Launch an agent in its backend. Tmux executors start the engine CLI detached in an
-    /// `adi-agent-<name>` tmux session; `wasm:*` agents run a synchronous one-shot dispatch
-    /// of `--message` into the compiled component.
+    /// Launch an agent in its backend. Tmux executors open a detached interactive session,
+    /// process executors run a headless CLI in the background, and `wasm:*` agents dispatch
+    /// synchronously.
     Run {
         name: String,
-        /// The message dispatched into a wasm agent's handler (wasm backends only).
+        /// The task sent to a process backend or wasm handler (ignored by tmux backends).
         #[arg(short, long, default_value = "run")]
         message: String,
         /// The trigger handler to dispatch into (wasm backends only); defaults to the
@@ -366,7 +366,7 @@ enum AgentsCommand {
         #[arg(long)]
         handler: Option<String>,
     },
-    /// Stop a running agent by killing its `adi-agent-<name>` tmux session.
+    /// Stop a running agent using its executor's lifecycle.
     Stop { name: String },
     /// Delete an agent definition.
     Rm { name: String },
@@ -1039,10 +1039,23 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
                     outcome.output_tokens,
                 );
             } else {
-                let launch = store.run(&name).map_err(|e| e.to_string())?;
-                println!("Started agent {name} in tmux session {}.", launch.session);
+                let launch = store
+                    .run_with_message(&name, &message)
+                    .map_err(|e| e.to_string())?;
+                if let Some(session) = &launch.session {
+                    println!("Started agent {name} in tmux session {session}.");
+                } else if let Some(pid) = launch.pid {
+                    println!("Started agent {name} as background process {pid}.");
+                } else {
+                    println!("Started agent {name}.");
+                }
                 println!("  command: {}", launch.command);
-                println!("  attach:  {}", launch.attach);
+                if let Some(attach) = &launch.attach {
+                    println!("  attach:  {attach}");
+                }
+                if let Some(log) = &launch.log {
+                    println!("  log:     {}", log.display());
+                }
             }
         }
         AgentsCommand::Stop { name } => {

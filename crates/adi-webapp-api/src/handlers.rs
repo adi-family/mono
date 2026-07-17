@@ -1467,23 +1467,22 @@ pub fn agents(store: &Agents) -> (u16, String) {
     }
 }
 
-/// The full [`AgentsState`]: the stored definitions decorated with live run state (one tmux
-/// session listing per call), plus the form schema.
+/// The full [`AgentsState`]: the stored definitions decorated with live run state, plus the form
+/// schema. Tmux sessions are listed once; process agents consult their recorded PID.
 fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
     let sessions = adi_agents::running_sessions();
     Ok(AgentsState {
         agents: store
             .list()?
             .into_iter()
-            .map(|a| agent_dto(a, &sessions))
+            .map(|a| agent_dto(store, a, &sessions))
             .collect(),
         form: agent_form_spec(),
     })
 }
 
-/// `POST /api/agents/run` — launch an agent in its backend (tmux executors only today): the
-/// engine CLI starts detached in an `adi-agent-<name>` tmux session. Replies with the attach
-/// hint plus fresh state (the new session shows as `running`).
+/// `POST /api/agents/run` — launch an agent in its backend. Tmux engines start an interactive
+/// session; process engines start a headless background CLI with a PID and log.
 #[must_use]
 pub fn run_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_agent_ref(body) else {
@@ -1494,11 +1493,19 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> (u16, String) {
         Ok(launch) => launch,
         Err(e) => return agent_error(&e),
     };
+    let message = match (&launch.session, launch.pid, &launch.log) {
+        (Some(_), _, _) => format!(
+            "Started “{name}” — attach: {}",
+            launch.attach.as_deref().unwrap_or_default()
+        ),
+        (_, Some(pid), Some(log)) => format!(
+            "Started “{name}” as process {pid} — output: {}",
+            log.display()
+        ),
+        _ => format!("Started “{name}”."),
+    };
     match agents_state(store) {
-        Ok(state) => ok_json(&AgentRunResult {
-            message: format!("Started “{name}” — attach: {}", launch.attach),
-            state,
-        }),
+        Ok(state) => ok_json(&AgentRunResult { message, state }),
         Err(e) => agent_error(&e),
     }
 }
@@ -1584,9 +1591,8 @@ pub fn send_agent_keys(store: &Agents, body: &[u8]) -> (u16, String) {
     peek_response(&agent)
 }
 
-/// `POST /api/agents/stop` — kill a running agent's tmux session, then report the fresh list
-/// (the agent flips back to stopped/runnable). Idempotent: stopping an already-stopped agent
-/// succeeds. Only an unknown name is an error (404).
+/// `POST /api/agents/stop` — stop a live tmux session or detached process, then report the fresh
+/// list. Idempotent for an already-stopped agent; only an unknown definition is a 404.
 #[must_use]
 pub fn stop_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_agent_ref(body) else {
@@ -1596,7 +1602,7 @@ pub fn stop_agent(store: &Agents, body: &[u8]) -> (u16, String) {
         Ok(agent) => agent,
         Err(e) => return agent_error(&e),
     };
-    match adi_agents::stop(&agent.name) {
+    match store.stop(&agent.name) {
         Ok(_) => agents(store),
         Err(e) => agent_error(&e),
     }
@@ -1819,12 +1825,19 @@ fn peek_response(agent: &adi_agents::Agent) -> (u16, String) {
     })
 }
 
-/// Flatten a stored agent into its wire [`AgentDto`], computing the executor and the run state
-/// (`runnable` from the backend adapter, `running` from the live tmux `sessions`) for the client.
-fn agent_dto(agent: adi_agents::Agent, sessions: &std::collections::BTreeSet<String>) -> AgentDto {
+/// Flatten a stored agent into its wire [`AgentDto`], computing adapter and live run state.
+fn agent_dto(
+    store: &Agents,
+    agent: adi_agents::Agent,
+    sessions: &std::collections::BTreeSet<String>,
+) -> AgentDto {
     let executor = agent.manifest.executor().to_string();
     let runnable = adi_agents::is_runnable(&agent.manifest);
-    let running = sessions.contains(&adi_agents::session_name(&agent.name));
+    let running = if executor == "tmux" {
+        sessions.contains(&adi_agents::session_name(&agent.name))
+    } else {
+        store.is_running(&agent)
+    };
     let m = agent.manifest;
     AgentDto {
         name: agent.name,
@@ -2377,7 +2390,8 @@ fn agent_error(e: &AgentStoreError) -> (u16, String) {
         AgentStoreError::Config(_)
         | AgentStoreError::Io(_)
         | AgentStoreError::Launch(_)
-        | AgentStoreError::Tmux(_) => 500,
+        | AgentStoreError::Tmux(_)
+        | AgentStoreError::Process(_) => 500,
     };
     error(status, &e.to_string())
 }
@@ -3111,9 +3125,10 @@ mod tests {
     }
 
     #[test]
-    fn agents_report_runnable_for_tmux_backends_only() {
+    fn agents_report_runnable_for_tmux_and_process_backends() {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"reviewer","backend":"process:codex"}"#);
         let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
 
         let (status, body) = agents(&store);
@@ -3121,10 +3136,13 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
         let list = v["agents"].as_array().unwrap();
         let looper = list.iter().find(|a| a["name"] == "looper").unwrap();
+        let reviewer = list.iter().find(|a| a["name"] == "reviewer").unwrap();
         let solver = list.iter().find(|a| a["name"] == "solver").unwrap();
         assert_eq!(looper["runnable"], false);
+        assert_eq!(reviewer["runnable"], true);
         assert_eq!(solver["runnable"], true);
         assert_eq!(looper["running"], false);
+        assert_eq!(reviewer["running"], false);
     }
 
     #[test]

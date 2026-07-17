@@ -1,7 +1,7 @@
 # adi-agents
 
-`adi-agents` stores reusable agent definitions and can launch the tmux-backed ones — the first
-slice of the run layer. Deeper orchestration (sessions, events, auto-start) does not exist yet.
+`adi-agents` stores reusable agent definitions and launches interactive tmux or detached headless
+process backends. Deeper orchestration (session history, events, auto-start) does not exist yet.
 
 The command center for agent and task state is the `adi-mono` CLI:
 
@@ -9,6 +9,8 @@ The command center for agent and task state is the `adi-mono` CLI:
 adi-mono agents list
 adi-mono agents save planner --backend tmux:codex --command-scope tasks,projects
 adi-mono agents run planner        # detached tmux session adi-agent-planner
+adi-mono agents save reviewer --backend process:codex --extra sandbox=read-only
+adi-mono agents run reviewer --message "Review the current branch" # background codex exec
 adi-mono tasks add "Investigate auth flow" --project demo --tag planner
 adi-mono tasks complete DEMO-1
 ```
@@ -21,22 +23,22 @@ administration should stay in `adi-mono` so there is one scriptable control surf
 Implemented:
 
 - `adi-agents`: definition store under `~/.adi/mono/agents`, one TOML file per agent.
-- `adi-agents`: a minimal `tmux` launcher — `Agents::run` starts the engine CLI (honoring
-  model, Claude permission mode, Codex sandbox, and the system prompt) detached in an
+- `adi-agents`: a `tmux` launcher — `Agents::run` starts an interactive engine CLI detached in an
   `adi-agent-<name>` tmux session; attach with `tmux attach -t adi-agent-<name>`.
+- `adi-agents`: a `process` launcher — `Agents::run_with_message` starts `claude --print` or
+  `codex exec` detached in its own process group, recording a PID and combined log under
+  `~/.adi/mono/sessions/process/`.
 - `adi-tasks`: task tree under `~/.adi/mono/tasks/tasks.json`.
 - `adi-mono agents ...`: list, show, save, run, stop, and delete definitions.
 - `adi-mono tasks ...`: list, add, show, edit, complete, archive, reopen, and delete tasks.
-- Web app pages for agent definitions and task visibility; ▶ Run on the Agents page launches
-  a tmux-backed agent and shows which agents have a live session, ● View opens a live view
-  of the session's pane (`tmux capture-pane`, polled every second) with a send bar that types
-  into it (`tmux send-keys`: literal text plus Enter/arrows/Esc/Ctrl-C), and ■ Stop kills the
-  session (`tmux kill-session`).
+- Web app pages for agent definitions and task visibility; ▶ Run launches a supported backend
+  and shows live sessions/processes. Tmux runs additionally expose ● View (`tmux capture-pane`
+  plus `tmux send-keys`); process runs remain non-interactive. ■ Stop uses the executor lifecycle.
 
 Not implemented yet:
 
-- Executor adapters for the `process` and `harness` backends (only `tmux:*` launches).
-- Session history and live event streaming (a launched session is fire-and-observe via tmux).
+- Executor adapters for the `harness` backends.
+- Structured session history and live event streaming (process output is currently a flat log).
 - Auto-starting an agent from a tagged task.
 - Permission enforcement for command scopes.
 
@@ -99,8 +101,7 @@ high-level groups (`tasks`, `projects`, `agents`) before adding finer-grained co
 ## Recommended Next Steps
 
 1. Grow `adi-mono agents run <name>` a `--task <id>` handoff (seed the session with the task).
-2. Define a small backend trait in `adi-agents` and move the tmux launcher behind it, then add
-   the `process` and `harness` adapters.
-3. Persist sessions under `~/.adi/mono/sessions`.
+2. Define a small backend trait over the executor modules, then add the `harness` adapters.
+3. Grow `~/.adi/mono/sessions` from process PID/log files into structured session records.
 4. Add an auto-start loop that only claims `ready` tagged tasks.
 5. Enforce command scope in the runner before any command is invoked.

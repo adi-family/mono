@@ -18,7 +18,7 @@ pub enum Error {
     NotFound(String),
     /// A directory operation (listing, removal) failed.
     Io(std::io::Error),
-    /// The agent's backend has no run adapter yet (only tmux executors launch today).
+    /// The agent's backend has no run adapter yet.
     NotRunnable(String),
     /// A live session for this agent already exists.
     AlreadyRunning(String),
@@ -30,6 +30,8 @@ pub enum Error {
     InvalidKey(String),
     /// A tmux command against a live session failed.
     Tmux(String),
+    /// Signalling or otherwise managing a detached process failed.
+    Process(String),
 }
 
 impl fmt::Display for Error {
@@ -44,7 +46,7 @@ impl fmt::Display for Error {
             Self::Io(e) => write!(f, "agent store I/O error: {e}"),
             Self::NotRunnable(backend) => write!(
                 f,
-                "backend {backend:?} can't be run yet — only tmux-backed agents (tmux:claude, tmux:codex) and wasm agents (wasm:loop-script) launch today"
+                "backend {backend:?} can't be run yet — tmux/process Claude and Codex agents plus wasm agents launch today"
             ),
             Self::AlreadyRunning(name) => write!(f, "agent {name} is already running"),
             Self::Launch(msg) => write!(f, "failed to launch agent: {msg}"),
@@ -54,6 +56,7 @@ impl fmt::Display for Error {
                 "invalid key name {key:?}: use a single tmux key token like Enter, Escape, Up, or C-c"
             ),
             Self::Tmux(msg) => write!(f, "tmux error: {msg}"),
+            Self::Process(msg) => write!(f, "process error: {msg}"),
         }
     }
 }
@@ -70,7 +73,8 @@ impl std::error::Error for Error {
             | Self::Launch(_)
             | Self::NotRunning(_)
             | Self::InvalidKey(_)
-            | Self::Tmux(_) => None,
+            | Self::Tmux(_)
+            | Self::Process(_) => None,
         }
     }
 }
