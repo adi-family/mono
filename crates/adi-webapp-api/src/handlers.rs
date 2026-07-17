@@ -9,7 +9,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 use adi_agents::arguments::WasmArguments;
-use adi_agents::{AgentManifest, Agents, Error as AgentStoreError, StoredAgent};
+use adi_agents::{AgentManifest, Agents, Backend, Error as AgentStoreError, StoredAgent};
 use adi_fs::{Error as FsError, Jail};
 use adi_hooks::{
     Error as HookStoreError, Hooks as ProjectHooks, Workspaces, hook_template, is_lifecycle,
@@ -1524,7 +1524,7 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     }
     let name = req.name.trim().to_string();
     let manifest = AgentManifest {
-        backend: req.backend.trim().to_string(),
+        backend: Backend::from(req.backend.trim()),
         arguments: clean_arguments(req.arguments),
         tags: req
             .tags
@@ -1846,7 +1846,7 @@ fn agent_dto(
     let m = agent.manifest;
     AgentDto {
         name: agent.name,
-        backend: m.backend,
+        backend: m.backend.to_string(),
         arguments: m.arguments,
         executor,
         tags: m.tags,

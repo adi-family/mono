@@ -46,7 +46,8 @@ pub fn dispatch(
             Error::Launch(format!(
                 "agent {} has backend {:?} but no `arguments.wasm` path to a compiled component \
                  (save it with --argument wasm=/path/to/agent.wasm)",
-                agent.name, agent.manifest.backend
+                agent.name,
+                agent.manifest.backend.as_str()
             ))
         })?;
 

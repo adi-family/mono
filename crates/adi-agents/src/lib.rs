@@ -40,6 +40,7 @@ use std::path::PathBuf;
 use adi_config::{Config, ConfigFile};
 
 pub use agent::{Agent, AgentManifest, RawAgentArguments, StoredAgent, StoredAgentManifest};
+pub use backend::Backend;
 pub use error::{Error, Result};
 pub use run::{Launch, capture_pane, is_runnable, running_sessions, send_keys, session_name};
 pub use wasm::DispatchOutcome;
@@ -208,7 +209,7 @@ impl Agents {
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         if !wasm::is_wasm(&agent) {
-            return Err(Error::NotRunnable(agent.manifest.backend));
+            return Err(Error::NotRunnable(agent.manifest.backend.to_string()));
         }
         let workforce_dir = self.config.module(WORKFORCE_MODULE).dir().to_path_buf();
         wasm::dispatch(&agent, &workforce_dir, handler, message)
@@ -355,7 +356,7 @@ mod tests {
         let mut edited = spec("harness:adi");
         edited.arguments.temperature = Some(0.2);
         let second = store.save("a", edited).expect("update");
-        assert_eq!(second.manifest.backend, "harness:adi");
+        assert_eq!(second.manifest.backend, Backend::from("harness:adi"));
         assert_eq!(second.manifest.arguments.temperature, Some(0.2));
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
@@ -377,7 +378,7 @@ mod tests {
             .expect("present")
             .manifest;
         assert!(manifest.starred);
-        assert_eq!(manifest.backend, "");
+        assert_eq!(manifest.backend, Backend::default());
         let typed = manifest
             .clone()
             .into_typed::<LegacyPartialArguments>()

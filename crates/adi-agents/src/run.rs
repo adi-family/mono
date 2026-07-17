@@ -23,27 +23,27 @@ pub enum Launch {
 
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
-    match Backend::parse(&manifest.backend) {
-        Some(Backend::TmuxClaude | Backend::TmuxCodex) => tmux::is_runnable(manifest),
-        Some(Backend::ProcessClaude | Backend::ProcessCodex) => process::is_runnable(manifest),
+    match &manifest.backend {
+        Backend::TmuxClaude | Backend::TmuxCodex => tmux::is_runnable(manifest),
+        Backend::ProcessClaude | Backend::ProcessCodex => process::is_runnable(manifest),
         _ => false,
     }
 }
 
 pub(crate) fn launch_in(agent: &StoredAgent, sessions_dir: &Path, message: &str) -> Result<Launch> {
-    match Backend::parse(&agent.manifest.backend) {
-        Some(Backend::TmuxClaude | Backend::TmuxCodex) => tmux::launch(agent),
-        Some(Backend::ProcessClaude | Backend::ProcessCodex) => {
+    match &agent.manifest.backend {
+        Backend::TmuxClaude | Backend::TmuxCodex => tmux::launch(agent),
+        Backend::ProcessClaude | Backend::ProcessCodex => {
             process::launch(agent, sessions_dir, message)
         }
-        _ => Err(Error::NotRunnable(agent.manifest.backend.clone())),
+        other => Err(Error::NotRunnable(other.to_string())),
     }
 }
 
 pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
-    match Backend::parse(&agent.manifest.backend) {
-        Some(Backend::TmuxClaude | Backend::TmuxCodex) => tmux::is_running(&agent.name),
-        Some(Backend::ProcessClaude | Backend::ProcessCodex) => {
+    match &agent.manifest.backend {
+        Backend::TmuxClaude | Backend::TmuxCodex => tmux::is_running(&agent.name),
+        Backend::ProcessClaude | Backend::ProcessCodex => {
             process::is_running(sessions_dir, &agent.name)
         }
         _ => false,
@@ -51,9 +51,9 @@ pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
 }
 
 pub(crate) fn stop_in(agent: &StoredAgent, sessions_dir: &Path) -> Result<bool> {
-    match Backend::parse(&agent.manifest.backend) {
-        Some(Backend::TmuxClaude | Backend::TmuxCodex) => tmux::stop(&agent.name),
-        Some(Backend::ProcessClaude | Backend::ProcessCodex) => {
+    match &agent.manifest.backend {
+        Backend::TmuxClaude | Backend::TmuxCodex => tmux::stop(&agent.name),
+        Backend::ProcessClaude | Backend::ProcessCodex => {
             process::stop(sessions_dir, &agent.name)
         }
         _ => Ok(false),
@@ -66,7 +66,7 @@ mod tests {
 
     fn manifest(backend: &str) -> StoredAgentManifest {
         StoredAgentManifest {
-            backend: backend.into(),
+            backend: Backend::from(backend),
             ..StoredAgentManifest::default()
         }
     }

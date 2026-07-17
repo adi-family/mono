@@ -16,7 +16,7 @@ pub type StoredAgent = Agent<RawAgentArguments>;
 /// An agent definition with backend-specific arguments.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct AgentManifest<Args> {
-    pub backend: String,
+    pub backend: Backend,
     pub arguments: Args,
     pub tags: Vec<String>,
     pub starred: bool,
@@ -39,13 +39,7 @@ impl<Args> AgentManifest<Args> {
     /// agent runs and which params apply.
     #[must_use]
     pub fn executor(&self) -> &str {
-        if let Some(backend) = Backend::parse(&self.backend) {
-            backend.executor()
-        } else {
-            self.backend
-                .split_once(':')
-                .map_or("", |(executor, _)| executor)
-        }
+        self.backend.executor()
     }
 }
 
@@ -185,7 +179,7 @@ impl<'de, Args: DeserializeOwned> Deserialize<'de> for AgentManifest<Args> {
         let arguments = decode_arguments(arguments).map_err(serde::de::Error::custom)?;
 
         Ok(Self {
-            backend: stored.backend,
+            backend: Backend::from(stored.backend),
             arguments,
             tags: stored.tags,
             starred: stored.starred,

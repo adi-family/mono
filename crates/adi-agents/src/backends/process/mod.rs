@@ -60,18 +60,18 @@ fn engine_run(
     manifest: &StoredAgentManifest,
     message: &str,
 ) -> Result<(Vec<String>, Option<String>)> {
-    match Backend::parse(&manifest.backend) {
-        Some(Backend::ProcessClaude) => {
+    match &manifest.backend {
+        Backend::ProcessClaude => {
             let arguments = manifest.typed_arguments::<ProcessClaudeArguments>()?;
             let working_dir = arguments.working_dir.clone();
             Ok((claude::argv(&arguments, message), working_dir))
         }
-        Some(Backend::ProcessCodex) => {
+        Backend::ProcessCodex => {
             let arguments = manifest.typed_arguments::<ProcessCodexArguments>()?;
             let working_dir = arguments.working_dir.clone();
             Ok((codex::argv(&arguments, message), working_dir))
         }
-        _ => Err(Error::NotRunnable(manifest.backend.clone())),
+        other => Err(Error::NotRunnable(other.to_string())),
     }
 }
 

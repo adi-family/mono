@@ -1012,7 +1012,7 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
                 arguments.insert("max_turns".into(), value.into());
             }
             let manifest = AgentManifest {
-                backend,
+                backend: backend.into(),
                 arguments,
                 tags: clean_tags(tags),
                 starred,

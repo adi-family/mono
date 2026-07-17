@@ -22,8 +22,8 @@ pub use adi_update::{Check as UpdateCheck, Error as UpdateError, State as Update
 
 pub use adi_agents::arguments::AgentSummaryArguments;
 pub use adi_agents::{
-    Agent, AgentManifest, Agents, Error as AgentsError, Launch, RawAgentArguments, StoredAgent,
-    StoredAgentManifest,
+    Agent, AgentManifest, Agents, Backend, Error as AgentsError, Launch, RawAgentArguments,
+    StoredAgent, StoredAgentManifest,
 };
 
 pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};

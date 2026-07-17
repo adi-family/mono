@@ -123,16 +123,16 @@ pub fn launch(agent: &StoredAgent) -> Result<Launch> {
 }
 
 fn engine_argv(manifest: &StoredAgentManifest) -> Result<Vec<String>> {
-    match Backend::parse(&manifest.backend) {
-        Some(Backend::TmuxClaude) => {
+    match &manifest.backend {
+        Backend::TmuxClaude => {
             let arguments = manifest.typed_arguments::<TmuxClaudeArguments>()?;
             Ok(claude::argv(&arguments))
         }
-        Some(Backend::TmuxCodex) => {
+        Backend::TmuxCodex => {
             let arguments = manifest.typed_arguments::<TmuxCodexArguments>()?;
             Ok(codex::argv(&arguments))
         }
-        _ => Err(Error::NotRunnable(manifest.backend.clone())),
+        other => Err(Error::NotRunnable(other.to_string())),
     }
 }
 

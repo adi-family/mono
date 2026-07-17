@@ -92,17 +92,17 @@ string_enum! {
 /// backends own their argument type and are validated when they convert or call
 /// [`crate::Agents::get_typed`].
 pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()> {
-    match Backend::parse(&manifest.backend) {
-        Some(Backend::TmuxClaude) => manifest.typed_arguments::<TmuxClaudeArguments>().map(drop),
-        Some(Backend::ProcessClaude) => manifest
+    match &manifest.backend {
+        Backend::TmuxClaude => manifest.typed_arguments::<TmuxClaudeArguments>().map(drop),
+        Backend::ProcessClaude => manifest
             .typed_arguments::<ProcessClaudeArguments>()
             .map(drop),
-        Some(Backend::TmuxCodex) => manifest.typed_arguments::<TmuxCodexArguments>().map(drop),
-        Some(Backend::ProcessCodex) => manifest
+        Backend::TmuxCodex => manifest.typed_arguments::<TmuxCodexArguments>().map(drop),
+        Backend::ProcessCodex => manifest
             .typed_arguments::<ProcessCodexArguments>()
             .map(drop),
-        Some(Backend::Wasm) => manifest.typed_arguments::<WasmArguments>().map(drop),
-        None => Ok(()),
+        Backend::Wasm => manifest.typed_arguments::<WasmArguments>().map(drop),
+        Backend::Other(_) => Ok(()),
     }
 }
 
