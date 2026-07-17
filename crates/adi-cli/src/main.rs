@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use adi_core::{
     Adi, AgentManifest, AgentSummaryArguments, EffectiveStatus, Launch, Project, Report, RunOutcome,
     Service, ServiceReport, StoredAgent, TaskPatch, TaskStatus, TaskView, Trigger, TriggerManifest,
-    Updater,
+    Updater, contains_json_null,
 };
 use clap::{Parser, Subcommand};
 
@@ -1445,15 +1445,6 @@ fn parse_arguments(values: Vec<String>) -> Result<BTreeMap<String, serde_json::V
 fn safe_extra_key(key: &str) -> bool {
     key.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
-}
-
-fn contains_json_null(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => true,
-        serde_json::Value::Array(values) => values.iter().any(contains_json_null),
-        serde_json::Value::Object(values) => values.values().any(contains_json_null),
-        _ => false,
-    }
 }
 
 fn parse_extra(values: Vec<String>) -> Result<BTreeMap<String, String>, String> {

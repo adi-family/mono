@@ -113,7 +113,11 @@ fn decode_arguments<Args: DeserializeOwned>(arguments: RawAgentArguments) -> Res
         .map_err(|e| Error::Arguments(e.to_string()))
 }
 
-fn contains_json_null(value: &serde_json::Value) -> bool {
+/// Whether `value` contains a JSON `null` anywhere in its tree. Callers use this to reject
+/// arguments before they reach the manifest store, because TOML has no `null` and the value
+/// would be silently dropped on serialization.
+#[must_use]
+pub fn contains_json_null(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Null => true,
         serde_json::Value::Array(values) => values.iter().any(contains_json_null),

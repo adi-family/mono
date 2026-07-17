@@ -9,7 +9,9 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
 use adi_agents::arguments::WasmArguments;
-use adi_agents::{AgentManifest, Agents, Backend, Error as AgentStoreError, StoredAgent};
+use adi_agents::{
+    AgentManifest, Agents, Backend, Error as AgentStoreError, StoredAgent, contains_json_null,
+};
 use adi_fs::{Error as FsError, Jail};
 use adi_hooks::{
     Error as HookStoreError, Hooks as ProjectHooks, Workspaces, hook_template, is_lifecycle,
@@ -2473,15 +2475,6 @@ fn clean_arguments(
             Some((key, value))
         })
         .collect()
-}
-
-fn contains_json_null(value: &serde_json::Value) -> bool {
-    match value {
-        serde_json::Value::Null => true,
-        serde_json::Value::Array(values) => values.iter().any(contains_json_null),
-        serde_json::Value::Object(values) => values.values().any(contains_json_null),
-        _ => false,
-    }
 }
 
 fn safe_extra_key(key: &str) -> bool {

@@ -39,7 +39,9 @@ use std::path::PathBuf;
 
 use adi_config::{Config, ConfigFile};
 
-pub use agent::{Agent, AgentManifest, RawAgentArguments, StoredAgent, StoredAgentManifest};
+pub use agent::{
+    Agent, AgentManifest, RawAgentArguments, StoredAgent, StoredAgentManifest, contains_json_null,
+};
 pub use backend::Backend;
 pub use error::{Error, Result};
 pub use run::{Launch, capture_pane, is_runnable, running_sessions, send_keys, session_name};
