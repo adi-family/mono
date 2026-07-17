@@ -1,0 +1,16 @@
+{
+  "private": true,
+  "name": "adi-employees",
+  "version": "0.0.1",
+  "description": "Our real workforce employees: one TypeScript file per employee, compiled to WASM components.",
+  "dependencies": {
+    "@adi-family/workforce-sdk": "file:../sdk/workforce"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0",
+    "@bytecodealliance/jco": "^1.8.0"
+  },
+  "scripts": {
+    "build": "node ../sdk/workforce/build.mjs *.ts -o build"
+  }
+}
