@@ -383,7 +383,6 @@ mod tests {
         assert!(run.is_none());
         assert_eq!(entry.kind, WorkspaceKind::Local);
         assert_eq!(ws.status(&entry), WorkspaceStatus::Local);
-        // A local link never counts as the primary, so the next create still inits.
         assert_eq!(ws.next_hook().unwrap(), HOOK_INIT);
 
         assert!(ws.remove("home").unwrap());
@@ -439,7 +438,6 @@ mod tests {
         assert!(run.is_some());
         assert!(wait_until(|| first.path.join("cwd").is_file()));
         assert!(wait_until(|| ws.status(&first) == WorkspaceStatus::Ready));
-        // init's cwd is the workspaces/ parent.
         let cwd = fs::read_to_string(first.path.join("cwd")).unwrap();
         assert!(
             cwd.trim().ends_with(WORKSPACES_DIR),
@@ -449,7 +447,6 @@ mod tests {
         let (second, _) = ws.create("feature", None, false, &env()).unwrap();
         assert_eq!(second.kind, WorkspaceKind::Workspace);
         assert!(wait_until(|| second.path.join("cwd").is_file()));
-        // The workspace hook's cwd is the primary workspace's directory.
         let cwd = fs::read_to_string(second.path.join("cwd")).unwrap();
         let primary = first.path.canonicalize().unwrap();
         assert_eq!(cwd.trim(), primary.to_str().unwrap());
@@ -479,7 +476,6 @@ mod tests {
         let dir = scratch_dir("ws-primary-missing");
         let ws = Workspaces::new(&dir);
         let hooks = Hooks::new(&dir);
-        // An init hook that never creates the target: the clone "failed".
         hooks.create(HOOK_INIT, "true").unwrap();
         hooks.create(HOOK_WORKSPACE, "true").unwrap();
         let (first, _) = ws.create("main", None, false, &env()).unwrap();

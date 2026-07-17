@@ -180,7 +180,6 @@ mod tests {
             session_name("3f9c77b9-f83f-4377-97fd-493db66dca70", "main"),
             "adi-ws-3f9c77b9-main"
         );
-        // tmux forbids '.' in session names; it must be mangled, not passed through.
         assert_eq!(session_name("short.id", "a.b"), "adi-ws-short-id-a-b");
     }
 
@@ -189,7 +188,6 @@ mod tests {
         for key in ["Enter", "Escape", "Up", "Down", "Tab", "C-c", "F5", "1"] {
             assert!(validate_key(key).is_ok(), "{key} should be valid");
         }
-        // A key can never start like a flag or carry extra tmux arguments.
         for key in ["", "-l", "--", "Enter Escape", "C c", "'"] {
             assert!(
                 matches!(validate_key(key), Err(Error::InvalidKey(_))),

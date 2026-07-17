@@ -8,8 +8,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# Pure std — no dependencies. The wire DTOs that surface a jail over HTTP live in
-# adi-webapp-api; this crate stays a reusable, dependency-free primitive.
 [dependencies]
 
 [lints]

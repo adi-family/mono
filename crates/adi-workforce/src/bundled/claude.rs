@@ -201,7 +201,6 @@ struct ReasoningConfig {
 fn build_reasoning_config(
     settings: &ClaudeCodeApiSettings,
 ) -> Result<ReasoningConfig, PluginError> {
-    // Effort: accept only the documented values
     if let Some(e) = settings.effort.as_deref() {
         let valid = ["max", "high", "medium", "low"];
         if !valid.contains(&e) {
@@ -212,7 +211,6 @@ fn build_reasoning_config(
         }
     }
 
-    // Thinking mode: accept only the documented values
     if let Some(m) = settings.thinking_mode.as_deref() {
         let valid = ["enabled", "disabled", "adaptive"];
         if !valid.contains(&m) {
@@ -244,7 +242,6 @@ fn build_reasoning_config(
     #[allow(clippy::cast_sign_loss)]
     let max_tokens_override = settings.max_tokens.filter(|&m| m > 0).map(|m| m as usize);
 
-    // Thinking budget must be < max_tokens (only enforce if both set)
     if let (Some(budget), Some(max_t)) = (thinking_budget, max_tokens_override) {
         if budget >= max_t {
             return Err(PluginError::new(format!(
@@ -981,7 +978,6 @@ impl LlmBackend for ClaudeCodeApiBackend {
         };
         let auth_headers = self.get_auth_headers()?;
 
-        // Build request body with cache breakpoints.
         let mut api_tools = convert_tools(&request.tools);
         let mut system = vec![
             SystemBlock {
@@ -999,14 +995,11 @@ impl LlmBackend for ClaudeCodeApiBackend {
 
         apply_cache_breakpoints(&mut api_tools, &mut system, &mut messages);
 
-        // Honor the settings-level max_tokens override if set.
         let max_tokens = self
             .reasoning
             .max_tokens_override
             .unwrap_or(request.max_tokens);
 
-        // Assemble thinking config from settings. Only emit the JSON
-        // field if the user actually asked for a specific mode.
         let thinking = self
             .reasoning
             .thinking_mode

@@ -167,7 +167,6 @@ mod tests {
             peer: "peer-a".into(),
             port: 3000,
         }));
-        // Same listen port -> replace, report true.
         assert!(cfg.add_forward(Forward {
             name: "b".into(),
             listen: 5000,

@@ -85,7 +85,6 @@
     }
   }
 
-  // A labelled section, e.g. a "Settings" group with its pages listed beneath.
   &__group {
     display: flex;
     flex-direction: column;
@@ -210,7 +209,6 @@
 }
 
 // ---- buttons -----------------------------------------------------------------------
-// Base button; variants layer on colour/shape.
 .adi-btn {
   font: inherit;
   font-weight: 600;
@@ -229,7 +227,6 @@
     &:disabled { opacity: .55; cursor: progress; }
   }
 
-  // Square icon button.
   &--icon {
     display: inline-grid;
     place-items: center;
@@ -244,7 +241,6 @@
     &:hover { color: var(--ink); border-color: var(--accent); }
   }
 
-  // Low-emphasis text button (e.g. row actions); tinted danger on hover.
   &--link {
     padding: 4px 6px;
     background: none;
@@ -260,7 +256,6 @@
     }
   }
 
-  // Neutral outlined button (e.g. the Copy buttons beside the id/ticket).
   &--ghost {
     padding: 8px 14px;
     background: var(--surface);
@@ -349,7 +344,6 @@
   @include card;
   overflow: hidden;
 
-  // Stacked panels get clear breathing room between the cards.
   & + & {
     margin-top: var(--space-6);
   }
@@ -368,7 +362,6 @@
     font-weight: 650;
   }
 
-  // A plain padded body for panels that aren't a table/form (e.g. the id/ticket block).
   &__body {
     display: flex;
     flex-direction: column;
@@ -377,7 +370,6 @@
   }
 }
 
-// A read-only value next to its Copy button (the shareable id / ticket).
 .adi-copyrow {
   display: flex;
   align-items: center;
@@ -419,7 +411,6 @@
 
   tbody tr:hover td { background: var(--surface-2); }
 
-  // A port/number cell: accent-tinted and monospaced.
   .adi-table__port {
     font-weight: 650;
     color: var(--accent-ink);
@@ -482,7 +473,6 @@
     @include eyebrow(10px);
   }
 
-  // A muted one-liner under a field explaining what it is / how to share it.
   &__hint {
     font-size: var(--text-sm);
     color: var(--muted);
@@ -508,7 +498,6 @@
     border-color: var(--accent);
   }
 
-  // Fill the available width (the id/ticket fields, and the peer inputs in a flex form).
   &--wide {
     width: 100%;
     flex: 1;
@@ -516,8 +505,6 @@
   }
 }
 
-// A code-editor textarea: full-width, monospace, vertically resizable. Used by the project
-// file editor to edit `.adi/hive.yaml` (and any other text file) in place.
 .adi-textarea {
   font-family: var(--font-mono);
   font-size: 13px;
@@ -541,7 +528,6 @@
   }
 }
 
-// A breadcrumb trail for the file browser: clickable path segments separated by a slash.
 .adi-crumbs {
   display: flex;
   align-items: center;
@@ -555,11 +541,9 @@
     padding: 0 2px;
   }
 
-  // The current (last) segment isn't a link.
   &__here { color: var(--ink); font-weight: 600; }
 }
 
-// A file-browser row name: an icon glyph plus the entry name. Directories get the accent.
 .adi-filerow {
   display: inline-flex;
   align-items: center;
@@ -580,8 +564,6 @@
   &[data-kind="err"] { color: var(--down); }
   &[data-kind="ok"]  { color: var(--online); }
 
-  // A standalone card variant (a page-level toast, not a panel footer): the tinted
-  // border/background makes it read as its own element between sections.
   &--card {
     min-height: 0;
     padding: 10px 14px;

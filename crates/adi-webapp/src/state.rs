@@ -448,15 +448,12 @@ pub(crate) async fn load(s: State) {
         if let Ok(d) = fetch::project_detail(&id).await {
             s.project_detail.set(Some(d));
         }
-        // The detail page's Tasks panel filters the shared task tree to this project.
         if let Ok(t) = fetch::tasks().await {
             s.tasks.set(Some(t));
         }
-        // Likewise its Triggers panel filters the shared trigger list.
         if let Ok(t) = fetch::triggers().await {
             s.triggers.set(Some(t));
         }
-        // And its Agents panel filters the shared agent list.
         if let Ok(a) = fetch::agents().await {
             s.agents.set(Some(a));
         }
@@ -469,7 +466,6 @@ pub(crate) async fn load(s: State) {
         if let Ok(t) = fetch::tasks().await {
             s.tasks.set(Some(t));
         }
-        // The create form's project picker is populated from the registered projects.
         if let Ok(p) = fetch::projects().await {
             s.projects.set(Some(p));
         }
@@ -478,7 +474,6 @@ pub(crate) async fn load(s: State) {
         if let Ok(a) = fetch::agents().await {
             s.agents.set(Some(a));
         }
-        // The create form's project picker is populated from the registered projects.
         if let Ok(p) = fetch::projects().await {
             s.projects.set(Some(p));
         }
@@ -487,7 +482,6 @@ pub(crate) async fn load(s: State) {
         if let Ok(t) = fetch::triggers().await {
             s.triggers.set(Some(t));
         }
-        // The create form's project picker is populated from the registered projects.
         if let Ok(p) = fetch::projects().await {
             s.projects.set(Some(p));
         }

@@ -542,7 +542,6 @@ impl adi::workforce::host::Host for HostState {
         let workforce_dir = self.workforce_dir.clone();
         let employee_registry = self.core.employee_registry.clone();
 
-        // Tools
         let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
         if let Some(tool_defs) = &wasm_config.tools {
             for td in tool_defs {
@@ -577,7 +576,6 @@ impl adi::workforce::host::Host for HostState {
             name
         });
 
-        // Runner + backend
         let runner = match &wasm_config.runner {
             Some(rd) => {
                 let config = json_to_config(&rd.config);
@@ -715,9 +713,6 @@ impl adi::workforce::host::Host for HostState {
                     "[{}][loop_llm] {} no decision tool call — nudging once",
                     session.ctx.employee, session.loop_id,
                 );
-                // Preserve the assistant's non-compliant turn in the
-                // retry context so the model sees what it just did
-                // and why the nudge follows.
                 turns.push(Turn::Assistant(response.turn.clone()));
                 turns.push(Turn::user_text(format!(
                     "Your answer must be recorded via the `{decision_tool}` tool, not as plain text. Call `{decision_tool}` now with your structured decision. No further reasoning — just the tool call."
@@ -729,8 +724,6 @@ impl adi::workforce::host::Host for HostState {
                     tools: session.tool_defs.clone(),
                     max_tokens: session.max_tokens,
                 };
-                // If the retry itself errors, surface it. Either way
-                // we don't loop again — one nudge is the contract.
                 response = session.llm.call(&retry_request).map_err(|e| e.message)?;
             }
         }

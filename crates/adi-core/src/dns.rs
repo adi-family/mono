@@ -400,12 +400,9 @@ mod tests {
         let cfg = render_frontdoor_hive(&hosts, 8091);
         assert!(cfg.contains("- \"127.0.0.53:80\""));
 
-        // It must parse as YAML with the expected shape (catches indentation bugs).
         let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&cfg).expect("valid YAML");
         assert_eq!(v["proxy"]["bind"][0].as_str(), Some("127.0.0.53:80"));
 
-        // Every host becomes a service keyed by its first label, all pointing at the same port
-        // (different names for one adi-app upstream). Proxy-only: no runner.
         for (name, host) in [("app", "app.adi"), ("api", "api.adi")] {
             let svc = &v["services"][name];
             assert_eq!(svc["proxy"]["host"].as_str(), Some(host));

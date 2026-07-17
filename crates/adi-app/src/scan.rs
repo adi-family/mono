@@ -67,11 +67,9 @@ mod tests {
 
     #[test]
     fn parses_pid_command_and_ports_deduped_and_sorted() {
-        // nginx listens on v4:8080 and v6:8080 (one port), sshd on 22.
         let out = "p1234\ncnginx\nn127.0.0.1:8080\nn[::1]:8080\np22\ncsshd\nn*:22\n";
         let ports = parse_lsof(out);
         assert_eq!(ports.len(), 2);
-        // Sorted by port: 22 then 8080.
         assert_eq!(ports[0].port, 22);
         assert_eq!(ports[0].process.as_deref(), Some("sshd"));
         assert_eq!(ports[0].pid, Some(22));

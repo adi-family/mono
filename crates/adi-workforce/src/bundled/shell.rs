@@ -182,14 +182,12 @@ impl ShellTool {
         // escapes, and token-level checks produced false positives
         // (e.g. Go's `./...`) that blocked legit commands.
 
-        // 1. Regex denied rules
         if let Some(ref denied) = self.settings.denied {
             if let Some(rule) = find_matching_rule(denied, command) {
                 return Err(PluginError::new(format!("command denied: {}", rule.reason)));
             }
         }
 
-        // 2. Regex allowed rules
         if let Some(ref allowed) = self.settings.allowed {
             if find_matching_rule(allowed, command).is_none() {
                 let reasons: Vec<&str> = allowed.iter().map(|r| r.reason.as_str()).collect();

@@ -175,7 +175,6 @@ mod tests {
         assert_eq!(created, Settings::default());
         assert!(file.exists(), "load_or_create must persist the default");
 
-        // A second call reads the existing file rather than overwriting it.
         assert_eq!(file.load_or_create().expect("reload"), Settings::default());
         let _ = std::fs::remove_dir_all(&dir);
     }

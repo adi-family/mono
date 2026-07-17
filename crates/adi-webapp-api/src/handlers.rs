@@ -998,7 +998,6 @@ pub fn hive(store: &Projects, listening: &[u16]) -> (u16, String) {
     let global = store.config().module("hive").raw_path("hive.yaml");
     collect_hive_services(None, &global, listening, &mut services);
 
-    // Each project's own hive.yaml (skips archived? no — show every registered project).
     match store.list() {
         Ok(projects) => {
             for project in projects {
@@ -1048,7 +1047,6 @@ pub fn start_service(store: &Projects, body: &[u8]) -> (u16, String) {
         return error(400, "expected JSON body { project?, service }");
     };
 
-    // Resolve the hive.yaml and the default working directory for this target.
     let (hive_path, default_dir) = match &req.project {
         Some(id) => match (store.hive_path(id), store.project_dir(id)) {
             (Ok(hive), Ok(dir)) => (hive, Some(dir)),
@@ -1202,7 +1200,6 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> (u16,
         ),
     };
 
-    // Build the new `services.<name>` entry.
     let mut svc = Mapping::new();
     if let Some(host) = given(req.host.as_deref()) {
         let mut proxy = Mapping::new();
@@ -1232,7 +1229,6 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> (u16,
         svc.insert(ystr("restart"), ystr(restart));
     }
 
-    // Insert it under `services:`, refusing to overwrite an existing entry.
     let Yaml::Mapping(root) = &mut doc else {
         unreachable!("doc was matched to a mapping above");
     };
@@ -3069,7 +3065,6 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
 
         let backends = v["form"]["backends"].as_array().unwrap();
-        // Backend ids are executor:what pairs; the executor is the run mechanism.
         assert!(
             backends
                 .iter()
@@ -3088,7 +3083,6 @@ mod tests {
 
         let fields = v["form"]["fields"].as_array().unwrap();
         assert!(fields.iter().any(|f| f["name"] == "api_key_env"));
-        // The component path is wasm-only — it lands in `extra.wasm`, which the dispatch reads.
         assert!(fields.iter().any(|f| {
             f["name"] == "wasm"
                 && f["backend_ids"]
@@ -3097,7 +3091,6 @@ mod tests {
                     .iter()
                     .any(|id| id == "wasm:loop-script")
         }));
-        // permission_mode is Claude-only (Codex uses sandbox / approval instead).
         assert!(fields.iter().any(|f| {
             f["name"] == "permission_mode"
                 && f["backend_ids"]
@@ -3106,7 +3099,6 @@ mod tests {
                     .iter()
                     .any(|id| id == "tmux:claude")
         }));
-        // Backend/provider-specific params are present.
         for name in ["effort", "sandbox", "approval", "thinking", "num_ctx", "max_tokens"] {
             assert!(fields.iter().any(|f| f["name"] == name), "missing field {name}");
         }
@@ -3146,7 +3138,6 @@ mod tests {
     fn agent_code_reads_and_writes_the_src_extra_file() {
         let store = temp_agents();
 
-        // Without a `src` extra the code endpoints refuse with a hint.
         let _ = save_agent(&store, br#"{"name":"emp","backend":"wasm:loop-script"}"#);
         assert_eq!(agent_code(&store, br#"{"name":"emp"}"#).0, 400);
         assert_eq!(agent_code(&store, br#"{"name":"ghost"}"#).0, 404);
@@ -3187,7 +3178,6 @@ mod tests {
         assert_eq!(v["output"], "");
         assert_eq!(v["attach"], "tmux attach -t adi-agent-solver");
 
-        // Only an unknown name is an error.
         assert_eq!(peek_agent(&store, br#"{"name":"ghost"}"#).0, 404);
     }
 
@@ -3196,11 +3186,9 @@ mod tests {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
 
-        // Unknown agent → 404; a body with neither text nor key → 400.
         assert_eq!(send_agent_keys(&store, br#"{"name":"ghost","key":"Enter"}"#).0, 404);
         assert_eq!(send_agent_keys(&store, br#"{"name":"solver"}"#).0, 400);
 
-        // Registered but sessionless → 409 (nothing to type into).
         let (status, body) = send_agent_keys(&store, br#"{"name":"solver","text":"hi"}"#);
         assert_eq!(status, 409);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -3212,8 +3200,6 @@ mod tests {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
 
-        // Stopping a registered agent with no session succeeds (idempotent no-op) and returns
-        // the fresh list; an unknown agent is a 404.
         let (status, body) = stop_agent(&store, br#"{"name":"solver"}"#);
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -3311,7 +3297,6 @@ mod tests {
         assert!(t["extra"]["empty"].is_null());
         assert!(t["last_fired_at"].is_null());
 
-        // Name and kind are both required.
         assert_eq!(save_trigger(&store, br#"{"name":"x","kind":""}"#).0, 400);
         assert_eq!(save_trigger(&store, b"not json").0, 400);
     }
@@ -3319,7 +3304,6 @@ mod tests {
     #[test]
     fn fire_validates_the_target() {
         let store = temp_triggers();
-        // Unknown trigger → 404; a codeless one → 400.
         assert_eq!(fire_trigger(&store, br#"{"name":"ghost"}"#).0, 404);
         let _ = save_trigger(&store, br#"{"name":"idle","kind":"manual"}"#);
         assert_eq!(fire_trigger(&store, br#"{"name":"idle"}"#).0, 400);
@@ -3357,11 +3341,9 @@ mod tests {
         assert_eq!(hook_trigger(&store, "ghost", "", b"").0, 404);
         assert_eq!(hook_trigger(&store, "../etc", "", b"").0, 404);
         assert_eq!(hook_trigger(&store, "manual-only", "", b"").0, 404);
-        // Disabled and bad-secret hooks are refused.
         assert_eq!(hook_trigger(&store, "paused", "", b"").0, 403);
         assert_eq!(hook_trigger(&store, "locked", "", b"").0, 403);
         assert_eq!(hook_trigger(&store, "locked", "secret=wrong", b"").0, 403);
-        // The right secret fires it and acks.
         let (status, body) = hook_trigger(&store, "locked", "x=1&secret=s3", b"{\"ref\":\"main\"}");
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -3407,7 +3389,6 @@ mod tests {
         assert!(names.contains(&".adi"));
         assert!(names.contains(&"config.toml"));
 
-        // Descend into `.adi`; its parent is the root.
         let (_, body) = list_files(&store, br#"{"id":"demo","path":".adi"}"#);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["path"], ".adi");
@@ -3430,7 +3411,6 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["content"], "version: \"2\"\n");
 
-        // The write actually hit disk.
         let (_, body) = read_file(&store, br#"{"id":"demo","path":".adi/hive.yaml"}"#);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["content"], "version: \"2\"\n");
@@ -3454,7 +3434,6 @@ mod tests {
     fn unregistered_project_is_a_404() {
         let store = temp_projects();
         assert_eq!(list_files(&store, br#"{"id":"ghost","path":""}"#).0, 404);
-        // An unsafe id is rejected before any disk access, as a 400.
         assert_eq!(list_files(&store, br#"{"id":"../x","path":""}"#).0, 400);
     }
 
@@ -3512,12 +3491,10 @@ mod tests {
             .join(".adi/hooks/init");
         assert!(file.is_file());
 
-        // Overwriting an existing hook is refused; edits go through the file browser.
         assert_eq!(
             create_project_hook(&store, br#"{"id":"demo","name":"init"}"#).0,
             409
         );
-        // Unknown templates are a 400.
         assert_eq!(
             create_project_hook(&store, br#"{"id":"demo","name":"x","template":"nope"}"#).0,
             400
@@ -3563,7 +3540,6 @@ mod tests {
             let v: Value = serde_json::from_str(&body).unwrap();
             v["workspaces"][0]["status"] == "ready" && v["next_hook"] == "workspace"
         }));
-        // The same name can't be registered twice.
         assert_eq!(
             create_workspace(&store, br#"{"id":"demo","name":"main"}"#).0,
             409
@@ -3585,7 +3561,6 @@ mod tests {
         assert_eq!(status, 200, "{resp}");
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["state"]["workspaces"][0]["status"], "local");
-        // A local link is not the primary, so the next create still inits.
         assert_eq!(v["state"]["next_hook"], "init");
 
         let (status, resp) = remove_workspace(&store, br#"{"id":"demo","name":"home"}"#);
@@ -3603,7 +3578,6 @@ mod tests {
     #[test]
     fn workspace_terminal_endpoints_gate_on_the_registry() {
         let store = temp_projects();
-        // Unknown workspace → 404 on every terminal endpoint; unknown project → 404 too.
         assert_eq!(
             peek_workspace_terminal(&store, br#"{"id":"demo","name":"main"}"#).0,
             404

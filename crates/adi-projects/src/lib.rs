@@ -336,18 +336,15 @@ mod tests {
     fn create_generates_a_unique_uuid_id() {
         let store = scratch("uuid");
         let a = store.create("My App", None, None).expect("create");
-        // A canonical hyphenated UUID: filesystem-safe, so it passes id validation.
         assert_eq!(a.id.len(), 36);
         assert!(validate_id(&a.id).is_ok());
         assert_eq!(a.manifest.name, "My App");
         assert_eq!(store.get(&a.id).expect("get").expect("present"), a);
 
-        // The same name registers again under a fresh id — names don't collide.
         let b = store.create("My App", None, None).expect("second create");
         assert_ne!(a.id, b.id);
         assert_eq!(store.list().expect("list").len(), 2);
 
-        // A blank name falls back to the generated id.
         let bare = store.create("   ", None, None).expect("blank name");
         assert_eq!(bare.manifest.name, bare.id);
     }
@@ -371,7 +368,6 @@ mod tests {
             .create_with_id("child", None, None, Some("root".into()))
             .expect("child");
         assert_eq!(child.manifest.parent.as_deref(), Some("root"));
-        // The link round-trips through the manifest on disk.
         let got = store.get("child").expect("get").expect("present");
         assert_eq!(got.manifest.parent.as_deref(), Some("root"));
 
@@ -388,7 +384,6 @@ mod tests {
             store.create_with_id("kid", None, None, Some("ghost".into())),
             Err(Error::NotFound(_))
         ));
-        // The failed create must not leave a manifest behind.
         assert!(store.get("kid").expect("get").is_none());
     }
 
@@ -404,11 +399,9 @@ mod tests {
             .expect("leaf");
 
         assert!(store.remove("mid").expect("remove"));
-        // The leaf climbed up to the removed project's parent.
         let leaf = store.get("leaf").expect("get").expect("present");
         assert_eq!(leaf.manifest.parent.as_deref(), Some("root"));
 
-        // Removing a top-level parent leaves its children top-level.
         assert!(store.remove("root").expect("remove root"));
         let leaf = store.get("leaf").expect("get").expect("present");
         assert_eq!(leaf.manifest.parent, None);
@@ -433,7 +426,6 @@ mod tests {
         assert!(archived.is_archived());
         let stamp = archived.manifest.archived_at.expect("stamp");
 
-        // Re-archiving keeps the original timestamp.
         let again = store.archive("p").expect("re-archive");
         assert_eq!(again.manifest.archived_at, Some(stamp));
 
@@ -501,7 +493,6 @@ mod tests {
         store
             .create_with_id("real", None, None, None)
             .expect("create");
-        // A bare directory (like the demo project's `.adi/hive.yaml`-only dir) isn't registered.
         std::fs::create_dir_all(store.dir().join("bare")).expect("mkdir");
         let all = store.list().expect("list");
         assert_eq!(all.len(), 1);

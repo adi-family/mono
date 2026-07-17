@@ -421,7 +421,7 @@ impl Hive {
         for pattern in patterns {
             for file in find_imports(&expand_vars(&pattern)) {
                 if same_file(&file, base) {
-                    continue; // never import ourselves
+                    continue;
                 }
                 match Self::parse_file(&file) {
                     Ok(child) => {
@@ -659,8 +659,6 @@ services:
 
     #[test]
     fn imports_fan_in_project_services_namespaced_and_proxy_only() {
-        // A temp tree: <base>/proj/.adi/hive.yaml with a proxied service that has a runner and an
-        // integer port (no ports-manager command, so the test touches no registry).
         let base = std::env::temp_dir().join(format!(
             "adi-hive-imports-{}-{:?}",
             std::process::id(),
@@ -673,7 +671,6 @@ services:
             "services:\n  app:\n    proxy: { host: proj.adi }\n    rollout: { recreate: { ports: { http: 9123 } } }\n    runner: { type: script, script: { run: \"echo hi\" } }\n",
         )
         .unwrap();
-        // A parent hive that imports the temp tree via a `<base>/**/hive.yaml` glob.
         let parent = base.join("parent.yaml");
         std::fs::write(
             &parent,
@@ -682,12 +679,10 @@ services:
         .unwrap();
 
         let hive = Hive::load(&parent).expect("load with imports");
-        // Fanned in under `<project>/<service>`, proxy kept, runner stripped (proxy-only).
         let svc = hive.services.get("proj/app").expect("imported service present");
         assert_eq!(svc.proxy.as_ref().expect("proxy").host, "proj.adi");
         assert_eq!(svc.http_port(), Some(9123));
         assert!(svc.runner.is_none(), "imported services are proxy-only");
-        // resolve() routes the imported host to the imported port.
         let routes = hive.resolve().routes;
         assert!(
             routes
@@ -710,7 +705,6 @@ services:
 
     #[test]
     fn allocates_a_missing_port_from_the_manager_for_both_route_and_runner() {
-        // A proxied service with a runner but NO declared port.
         let mut hive: Hive = serde_yaml_ng::from_str(
             r"
 services:
@@ -748,7 +742,6 @@ services:
                 .contains(&("PORT".to_string(), port.to_string()))
         );
 
-        // Idempotent: a second pass allocates nothing (the port is already set).
         assert!(hive.allocate_missing_ports(&manager).is_empty());
         let _ = std::fs::remove_dir_all(registry.parent().unwrap());
     }
@@ -814,7 +807,6 @@ services:
             hive.resolve().binds,
             vec![SocketAddr::new(UPSTREAM_IP, port)]
         );
-        // Idempotent (same lease) and a no-op once bound.
         assert_eq!(hive.allocate_bind_port(&manager), None);
 
         let mut explicit: Hive =

@@ -9,16 +9,11 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The shared configurator decides where state lives (the `tasks` module dir under ~/.adi/mono)
-# and does the atomic temp-then-rename writes. A pure-library dep — no runtime, no net.
 adi-config = { workspace = true }
 
-# The task document is a plain serde/JSON structure. `serde` derives it; `serde_json` reads
-# and writes it.
 serde = { workspace = true }
 serde_json = { workspace = true }
 
-# Store load/save unify `adi-config` and `serde_json` failures behind one boxed error.
 anyhow = "1"
 
 [lints]

@@ -8,8 +8,6 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
-# Constructed from a project directory path (like adi-fs's Jail), so it needs no
-# adi-projects/adi-config dependency; serde+toml only for the workspaces registry.
 [dependencies]
 serde = { workspace = true }
 toml = { workspace = true }

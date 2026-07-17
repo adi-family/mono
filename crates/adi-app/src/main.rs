@@ -147,7 +147,6 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
-    // Stop the in-process mesh daemon (if the panel started it) before exiting.
     mesh.stop().await;
     Ok(())
 }
@@ -197,15 +196,11 @@ async fn handle(
         ("GET", "/api/ports/used") => handlers::used_ports(scan::listening_ports()),
         ("POST", "/api/ports/reserve") => handlers::reserve(ports, &req.body),
         ("POST", "/api/ports/release") => handlers::release(ports, &req.body),
-        // Projects: metadata CRUD over ~/.adi/mono/projects. Each mutation returns the
-        // fresh list so the panel refreshes in one round-trip.
         ("GET", "/api/projects") => handlers::projects(projects),
         ("POST", "/api/projects/create") => handlers::create_project(projects, &req.body),
         ("POST", "/api/projects/archive") => handlers::archive_project(projects, &req.body),
         ("POST", "/api/projects/unarchive") => handlers::unarchive_project(projects, &req.body),
         ("POST", "/api/projects/remove") => handlers::remove_project(projects, &req.body),
-        // Project files: browse/read/edit the files under a project's own directory, confined
-        // to it by the adi-fs jail (no climbing out). Body carries { id, path } (+ content on write).
         ("POST", "/api/projects/files") => handlers::list_files(projects, &req.body),
         ("POST", "/api/projects/file/read") => handlers::read_file(projects, &req.body),
         ("POST", "/api/projects/file/write") => handlers::write_file(projects, &req.body),
@@ -219,8 +214,6 @@ async fn handle(
         ("POST", "/api/projects/workspaces/remove") => {
             handlers::remove_workspace(projects, &req.body)
         }
-        // Workspace terminals: an interactive tmux session per workspace, rooted at its
-        // directory — observed/driven exactly like agent sessions (peek + send-keys).
         ("POST", "/api/projects/workspaces/terminal/open") => {
             handlers::open_workspace_terminal(projects, &req.body)
         }
@@ -247,29 +240,18 @@ async fn handle(
                 .collect();
             handlers::project_detail(projects, &p["/api/projects/".len()..], &listening)
         }
-        // Tasks: the task tree (~/.adi/mono/tasks/tasks.json). The CLI is the write-oriented
-        // command center; create returns the fresh tree so the panel refreshes.
         ("GET", "/api/tasks") => handlers::tasks(tasks),
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
-        // Agents: AgentDef definitions (~/.adi/mono/agents). Save is an upsert keyed by name;
-        // run launches tmux-backed agents in a detached adi-agent-<name> tmux session (the first
-        // slice of the orchestration layer — see docs/adi-agents.md).
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
         ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body),
         ("POST", "/api/agents/stop") => handlers::stop_agent(agents, &req.body),
-        // Wasm employees: read/write the TS source named by the `src` extra, and compile it
-        // to the component (blocking for the few seconds the build takes).
         ("POST", "/api/agents/code") => handlers::agent_code(agents, &req.body),
         ("POST", "/api/agents/code/save") => handlers::save_agent_code(agents, &req.body),
         ("POST", "/api/agents/build") => handlers::build_agent(agents, &req.body),
-        // peek is the live view (a capture of the agent's tmux pane, polled by the UI);
-        // send-keys is its interactive half (type text / press a key in the session).
         ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),
         ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),
-        // Triggers: background code blocks fired by an event source (~/.adi/mono/triggers).
-        // Save is an upsert keyed by name; fire spawns the code block detached (manual fire).
         ("GET", "/api/triggers") => handlers::triggers(triggers),
         ("POST", "/api/triggers/save") => handlers::save_trigger(triggers, &req.body),
         ("POST", "/api/triggers/delete") => handlers::delete_trigger(triggers, &req.body),
@@ -283,8 +265,6 @@ async fn handle(
             let query = req.path.split_once('?').map_or("", |(_, q)| q);
             handlers::hook_trigger(triggers, name, query, &req.body)
         }
-        // Every hive service across all projects + the global front-door, with live status.
-        // The listening-port scan is platform I/O, so the host does it and passes the ports in.
         ("GET", "/api/hive") => {
             let listening: Vec<u16> = scan::listening_ports()
                 .into_iter()
@@ -292,12 +272,8 @@ async fn handle(
                 .collect();
             handlers::hive(projects, &listening)
         }
-        // Launch a service's runner (its `run` command) with the ports-manager PORT injected.
         ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
-        // Stop a running service (kill whatever listens on its resolved port).
         ("POST", "/api/hive/stop") => handlers::stop_service(projects, &req.body),
-        // Add a service to a project's .adi/hive.yaml, then return the fresh project detail
-        // (which needs the listening-port scan for the running flags).
         ("POST", "/api/hive/create") => {
             let listening: Vec<u16> = scan::listening_ports()
                 .into_iter()
@@ -305,8 +281,6 @@ async fn handle(
                 .collect();
             handlers::create_service(projects, &req.body, &listening)
         }
-        // Mesh: config CRUD (reads/writes ~/.adi/mono/mesh) plus starting/stopping the
-        // in-process daemon. The daemon's run state is this app's, so it's passed in.
         ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),
         ("POST", "/api/mesh/start") => mesh_start(mesh).await,
         ("POST", "/api/mesh/stop") => mesh_stop(mesh).await,

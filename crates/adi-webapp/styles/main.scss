@@ -3,8 +3,6 @@
 @use "../../adi-css/scss/adi";
 
 // ---- task effective-status badge ---------------------------------------------------
-// A pill whose colour encodes a task's computed status (ready / blocked / done / archived),
-// leading with a small status dot. Used on the read-only Tasks page.
 .adi-tstatus {
   display: inline-flex;
   align-items: center;
@@ -36,6 +34,5 @@
     &::before { background: var(--down); }
   }
 
-  // Done and archived stay muted (they're "settled"); archived reads as dimmer still.
   &[data-status="archived"] { opacity: 0.7; }
 }

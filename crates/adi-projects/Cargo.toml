@@ -9,16 +9,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The shared configurator decides where state lives (the `projects` module dir under
-# ~/.adi/mono); this crate owns each project's config.toml and stores it there as a typed
-# TOML config file. A pure-library dep — no runtime, no net.
 adi-config = { workspace = true }
 
-# The manifest is a plain serde/TOML document. `serde` derives it; `adi-config` does the
-# actual TOML (de)serialization, so no direct `toml` dependency is needed here.
 serde = { workspace = true }
 
-# `create` mints each new project's id as a random v4 UUID (its directory name).
 uuid = { workspace = true }
 
 [lints]

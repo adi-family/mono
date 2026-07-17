@@ -9,7 +9,6 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WIT_DIR = resolve(__dirname);
 
-// Parse args
 const args = process.argv.slice(2);
 
 if (args.length === 0 || args.includes('--help')) {
@@ -36,7 +35,6 @@ if (files.length === 0) {
 
 mkdirSync(outDir, { recursive: true });
 
-// Resolve deps from the input file's directory
 const inputDir = dirname(resolve(files[0]));
 const req = createRequire(resolve(inputDir, 'node_modules', '_'));
 const { build } = await import(req.resolve('esbuild'));
@@ -47,7 +45,6 @@ const jcoCandidates = [
 ];
 const jcoCmd = jcoCandidates.find(existsSync) || 'jco';
 
-// Build each file
 for (const file of files) {
   const name = basename(file, '.ts');
   const jsOut = resolve(outDir, `${name}.js`);

@@ -13,7 +13,6 @@ repository.workspace = true
 # adi-ports-manager, no filesystem I/O reaches this crate.
 adi-webapp-api = { workspace = true }
 
-# The reactive UI framework, client-side-rendered to wasm.
 leptos = { version = "0.8", features = ["csr"] }
 
 # Browser plumbing: fetch (gloo-net), interval timers (gloo-timers), panics routed to the
@@ -38,7 +37,6 @@ web-sys = { version = "0.3", features = [
     "HtmlInputElement",  # select() the id/ticket text for the Copy button
 ] }
 
-# (De)serialize the shared DTOs on the client side.
 serde = { workspace = true }
 serde_json = { workspace = true }
 

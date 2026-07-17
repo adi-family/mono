@@ -42,8 +42,7 @@ pub(crate) fn project_detail_view(
     // Two-step delete confirmation, so a hard delete needs a deliberate second click (no
     // native confirm dialog, which would need an extra web-sys feature).
     let confirm_delete = RwSignal::new(false);
-    // The project-scoped task create form. Created here (once per navigation) so its inputs
-    // survive the reactive re-renders of the detail body and task list.
+    // Page-scoped form signals survive reactive re-renders without leaking across navigation.
     let task_form = TaskForm {
         title: RwSignal::new(String::new()),
         parent: RwSignal::new(String::new()),
@@ -51,26 +50,22 @@ pub(crate) fn project_detail_view(
         details: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
-    // The project-scoped quick trigger create form (same lifetime rationale as the task form).
     let trigger_form = QuickTriggerForm {
         name: RwSignal::new(String::new()),
         kind: RwSignal::new(String::new()),
         code: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
-    // The project-scoped quick agent create form (same lifetime rationale as the task form).
     let agent_form = QuickAgentForm {
         name: RwSignal::new(String::new()),
         backend: RwSignal::new(String::new()),
         system_prompt: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
-    // The sub-project quick create form (same lifetime rationale as the task form).
     let subproject_form = QuickSubprojectForm {
         name: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
-    // The quick service create form (same lifetime rationale as the task form).
     let service_form = QuickServiceForm {
         name: RwSignal::new(String::new()),
         run: RwSignal::new(String::new()),
@@ -78,7 +73,6 @@ pub(crate) fn project_detail_view(
         port: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
-    // The Workspaces panel's create forms (same lifetime rationale as the task form).
     let workspace_form = WorkspaceForm {
         name: RwSignal::new(String::new()),
         path: RwSignal::new(String::new()),
@@ -90,8 +84,6 @@ pub(crate) fn project_detail_view(
         template: RwSignal::new("blank".to_string()),
         busy: RwSignal::new(false),
     };
-    // The hook editor (opened by the hooks table's Edit action). Created here, per
-    // navigation, so a fresh project page starts with it closed.
     let hook_editor = HookEditor::new();
     view! {
         <div class="adi-bar">
@@ -189,7 +181,6 @@ fn detail_body(
     let reload_id = id.clone();
     let rows_id = id.clone();
 
-    // Archive / restore action.
     let toggle_id = id.clone();
     let archive_btn = if archived {
         view! {
@@ -208,7 +199,6 @@ fn detail_body(
         .into_any()
     };
 
-    // Two-step delete control (reactive on `confirm_delete`).
     let del_id = id.clone();
     let delete_ctrl = move || {
         if confirm_delete.get() {
@@ -330,12 +320,10 @@ fn service_rows(
             let name = s.name.clone();
             let host = dash(s.host);
             let ports = fmt_ports(&s.ports);
-            // Only a service with a `run` command has a runner to start/stop.
             let has_runner = s.run.is_some();
             let running = s.running;
             let run = dash(s.run);
             let restart = dash(s.restart);
-            // Action reflects live state: Stop (+ a running dot) when up, Start when down.
             let action = if !has_runner {
                 view! { <span class="adi-muted">"—"</span> }.into_any()
             } else if running {
@@ -570,15 +558,12 @@ fn subprojects_panel(state: State, route: RwSignal<Route>, form: QuickSubproject
                     state.flash.set(Some(Flash::err("A project name is required.".to_string())));
                     return;
                 }
-                // The server generates the sub-project's id (a UUID); only the name is sent.
                 let body = NewProject {
                     name: display.clone(),
                     description: None,
                     parent: Some(parent.clone()),
                 };
                 name.set(String::new());
-                // The mutation returns the fresh project list; re-fetching the detail then pulls
-                // the new sub-project into this panel.
                 apply_detail_mutation(state, parent, Some(busy), format!("Registered sub-project {display}."),
                     fetch::create_project(body));
             }>
@@ -1224,7 +1209,6 @@ fn file_rows(state: State) -> AnyView {
     let dir = listing.path.clone();
     let mut rows: Vec<AnyView> = Vec::new();
 
-    // An "up" row to the parent directory, when there is one.
     if let Some(parent) = listing.parent.clone() {
         rows.push(
             view! {

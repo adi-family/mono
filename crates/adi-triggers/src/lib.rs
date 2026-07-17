@@ -276,7 +276,6 @@ mod tests {
         let second = store.save("a", edited).expect("update");
         assert_eq!(second.manifest.kind, KIND_CRON);
         assert!(!second.manifest.enabled);
-        // Editing keeps the original creation time.
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
     }
@@ -317,7 +316,6 @@ mod tests {
             .expect("create");
         let firing = store.fire("pinger", None).expect("fire");
         assert!(firing.pid > 0);
-        // The process is detached; poll until its output lands.
         for _ in 0..100 {
             if store.read_log("pinger").as_deref() == Some("fired") {
                 break;

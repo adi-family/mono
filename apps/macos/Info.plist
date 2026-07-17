@@ -20,7 +20,6 @@
     <string>1</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
-    <!-- Standard windowed app: Dock icon + a main control window. -->
     <key>NSHumanReadableCopyright</key>
     <string>adi-family</string>
 </dict>

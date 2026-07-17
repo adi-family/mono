@@ -276,7 +276,6 @@ mod tests {
     #[test]
     fn session_names_are_prefixed_and_tmux_safe() {
         assert_eq!(session_name("athz-solver"), "adi-agent-athz-solver");
-        // tmux forbids '.' in session names; it must be mangled, not passed through.
         assert_eq!(session_name("a.b"), "adi-agent-a-b");
     }
 
@@ -329,7 +328,6 @@ mod tests {
         for key in ["Enter", "Escape", "Up", "Down", "Tab", "C-c", "F5", "1"] {
             assert!(validate_key(key).is_ok(), "{key} should be valid");
         }
-        // A key can never start like a flag or carry extra tmux arguments.
         for key in ["", "-l", "--", "Enter Escape", "C c", "'"] {
             assert!(
                 matches!(validate_key(key), Err(Error::InvalidKey(_))),
@@ -342,7 +340,7 @@ mod tests {
     fn shell_command_quotes_arguments_for_sh() {
         let cmd = shell_command(&["claude".into(), "--append-system-prompt".into(), "don't".into()]);
         assert!(cmd.contains("'claude' '--append-system-prompt' 'don'\\''t'"), "{cmd}");
-        // The pane must survive a failed start so the error is readable.
+        // Keep the pane open after a failed start so its error remains readable.
         assert!(cmd.contains("read _"));
     }
 }

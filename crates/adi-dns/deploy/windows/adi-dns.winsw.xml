@@ -23,7 +23,6 @@
   <executable>C:\adi-dns\adi-dns.exe</executable>
   <arguments>C:\adi-dns\adi-dns.toml</arguments>
 
-  <!-- Restart on crash, matching supervisord's autorestart. -->
   <onfailure action="restart" delay="5 sec"/>
   <resetfailure>1 hour</resetfailure>
 

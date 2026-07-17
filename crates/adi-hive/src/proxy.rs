@@ -137,7 +137,7 @@ fn extract_host(head: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(head);
     for line in text.split("\r\n") {
         if line.is_empty() {
-            break; // end of head
+            break;
         }
         if let Some((name, value)) = line.split_once(':')
             && name.trim().eq_ignore_ascii_case("host")

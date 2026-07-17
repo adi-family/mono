@@ -213,7 +213,6 @@ mod tests {
         assert!(firing.pid > 0);
         let text = wait_for_log(&firing.log, |s| !s.is_empty());
         assert_eq!(text, "greeter/manual");
-        // The log's mtime doubles as the last-fired timestamp.
         assert!(last_fired(&dir, "greeter").is_some());
         assert_eq!(read_log(&dir, "greeter").as_deref(), Some("greeter/manual"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -224,7 +223,6 @@ mod tests {
         let dir = scratch_dir("payload");
         let t = trigger("hook", "printf '%s|' \"$ADI_PAYLOAD\"; cat \"$ADI_PAYLOAD_FILE\"");
         let firing = fire(&dir, &t, Some(b"{\"x\":1}")).expect("fire");
-        // The payload file is written synchronously before the spawn.
         assert_eq!(
             std::fs::read(payload_path(&dir, "hook")).expect("payload file"),
             b"{\"x\":1}"

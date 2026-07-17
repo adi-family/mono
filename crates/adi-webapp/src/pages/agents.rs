@@ -273,7 +273,6 @@ fn render_project_select(field: AgentFormField, state: State, form: AgentsForm) 
                     .filter(|proj| !proj.is_archived())
                     .map(|proj| {
                         let id = proj.id.clone();
-                        // Ids are UUIDs — label the option with the display name instead.
                         let label = proj.name.clone();
                         view! { <option value=id>{label}</option> }
                     }).collect::<Vec<_>>()).unwrap_or_default()}

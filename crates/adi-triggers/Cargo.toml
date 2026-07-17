@@ -9,11 +9,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The shared configurator decides where state lives (the `triggers` module dir under
-# ~/.adi/mono) and does the atomic TOML (de)serialization of each trigger's manifest.
 adi-config = { workspace = true }
 
-# The manifest is a plain serde/TOML document; `adi-config` does the actual TOML.
 serde = { workspace = true }
 
 [lints]

@@ -9,14 +9,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The shared configurator decides where state lives (the `ports` module dir under
-# ~/.adi/mono); this crate owns the registry's JSON format and stores it there as a
-# raw file. A pure-library dep — no runtime, no net.
 adi-config = { workspace = true }
 
-# The static-lease registry is a small JSON ledger persisted under
-# ~/.adi/mono/ports/registry.json. Only serde is needed — no runtime, no net crate
-# (availability probing uses std's TcpListener directly).
 serde = { workspace = true }
 serde_json = { workspace = true }
 

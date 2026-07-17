@@ -61,7 +61,6 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                 }
                 let desc = description.get().trim().to_string();
                 let par = parent.get().trim().to_string();
-                // The server generates the project id (a UUID); the form sends only the name.
                 let body = NewProject {
                     name: display.clone(),
                     description: (!desc.is_empty()).then_some(desc),
@@ -83,10 +82,9 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                         {move || projects.get().map(|p| project_tree_rows(p.projects.into_iter()
                             .filter(|proj| !proj.is_archived()).collect()).into_iter()
                             .map(|(depth, proj)| {
-                                // Non-breaking spaces so the depth indent survives inside <option> text.
+                                // Non-breaking spaces preserve indentation inside option text.
                                 let indent = "\u{00a0}\u{00a0}".repeat(depth);
                                 let value = proj.id.clone();
-                                // Ids are UUIDs — label the option with the display name instead.
                                 let label = format!("{indent}{}", proj.name);
                                 view! { <option value=value>{label}</option> }
                             }).collect::<Vec<_>>()).unwrap_or_default()}

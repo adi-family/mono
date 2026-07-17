@@ -9,8 +9,6 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The crate exposes only a compiled-CSS string const — no runtime dependencies.
-
 [build-dependencies]
 # Pure-Rust Sass compiler: turns scss/adi.scss into CSS at build time, no external binary.
 grass = "0.13"

@@ -248,7 +248,6 @@ mod tests {
 
     #[test]
     fn dynamic_allocation_avoids_a_static_lease() {
-        // Range of two ports; reserve one statically, then dynamic must pick the other.
         let (ports, path) = ports_with(8100..=8101);
         let reserved = ports.reserve("svc", "http").expect("reserve");
         let dynamic = ports.allocate_dynamic().expect("dynamic");

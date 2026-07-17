@@ -29,27 +29,16 @@ server = [
 ]
 
 [dependencies]
-# The wire types are pure serde — this is the only dependency that reaches wasm.
 serde = { workspace = true }
 
-# Server-only: the config store (to locate the global hive.yaml), the live port registry, the
-# mesh config/identity/ticket library, the projects registry, JSON, and YAML (to read each
-# .adi/hive.yaml for the detail + aggregated-hive views).
 adi-config = { workspace = true, optional = true }
 adi-ports-manager = { workspace = true, optional = true }
 adi-mesh = { workspace = true, optional = true }
 adi-projects = { workspace = true, optional = true }
-# The task tree store backing the read-only Tasks tab (GET /api/tasks).
 adi-tasks = { workspace = true, optional = true }
-# The agent-definition store backing the Agents tab (/api/agents*).
 adi-agents = { workspace = true, optional = true }
-# Project hooks + workspaces backing the project detail's Workspaces panel
-# (/api/projects/workspaces*, /api/projects/hook/*).
 adi-hooks = { workspace = true, optional = true }
-# The trigger-definition store backing the Triggers tab (/api/triggers*) and the public
-# webhook endpoint (/api/hooks/<name>).
 adi-triggers = { workspace = true, optional = true }
-# The base-directory-jailed filesystem backing the project file browser/editor endpoints.
 adi-fs = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 serde_yaml_ng = { version = "0.10", optional = true }

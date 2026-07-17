@@ -420,7 +420,6 @@ mod tests {
             let second = run("bash`ports-manager.get('demo/app')`").expect("second");
             (first, second)
         });
-        // Same name → same stable, persisted port on re-read.
         assert_eq!(first, second);
         assert_eq!(
             manager.get("demo/app", "port").expect("lookup"),
@@ -478,9 +477,7 @@ mod tests {
         assert!(run("bash`ports-manager.take('x')`").is_err());
         assert!(run("bash`mystery.get('x')`").is_err());
         assert!(run("bash`ports-manager.get(unquoted)`").is_err());
-        // A datacommand placeholder with no registered command (config not preprocessed).
         assert!(resolve("datacommand:deadbeef").is_err());
-        // A bare string that is neither an int nor a placeholder.
         assert!(resolve("nonsense").is_err());
     }
 }

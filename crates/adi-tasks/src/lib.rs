@@ -426,15 +426,12 @@ mod tests {
         let b = store
             .create("b".into(), None, Some("demo".into()), None, None)
             .expect("create");
-        // Uppercased project id is the key; the counter is per key.
         assert_eq!(a.task.id, "DEMO-1");
         assert_eq!(b.task.id, "DEMO-2");
-        // A different project starts its own sequence.
         let c = store
             .create("c".into(), None, Some("my-app".into()), None, None)
             .expect("create");
         assert_eq!(c.task.id, "MY-APP-1");
-        // Project-less tasks still use the legacy global scheme.
         let d = store
             .create("d".into(), None, None, None, None)
             .expect("create");
@@ -448,7 +445,6 @@ mod tests {
             .create("root".into(), None, Some("demo".into()), None, None)
             .expect("create");
         assert_eq!(root.task.id, "DEMO-1");
-        // No project given, but the parent is in `demo` — the child lands under DEMO too.
         let child = store
             .create("child".into(), None, None, None, Some("DEMO-1".into()))
             .expect("create");
@@ -466,7 +462,6 @@ mod tests {
             .create("b".into(), None, Some("demo".into()), None, None)
             .expect("create");
         store.delete("DEMO-2").expect("delete");
-        // The counter persists, so the next id is DEMO-3, not a reused DEMO-2.
         let c = store
             .create("c".into(), None, Some("demo".into()), None, None)
             .expect("create");
@@ -515,13 +510,11 @@ mod tests {
         let store = scratch("effective");
         mk(&store, "root", None);
         mk(&store, "child", Some("t1"));
-        // The parent is blocked while its child is open.
         assert_eq!(
             store.get("t1").expect("get").effective,
             EffectiveStatus::Blocked
         );
         store.complete("t2").expect("complete child");
-        // With no open child, the parent is ready again.
         assert_eq!(
             store.get("t1").expect("get").effective,
             EffectiveStatus::Ready
@@ -568,7 +561,6 @@ mod tests {
             store.get("t2").expect("get").task.status,
             TaskStatus::Archived
         );
-        // A `done` descendant is left as-is.
         assert_eq!(store.get("t3").expect("get").task.status, TaskStatus::Done);
     }
 
@@ -591,7 +583,6 @@ mod tests {
         mk(&store, "mid", Some("t1"));
         mk(&store, "leaf", Some("t2"));
         store.delete("t2").expect("delete mid");
-        // The leaf's parent is now the deleted task's parent (the root).
         assert_eq!(
             store.get("t3").expect("get").task.parent.as_deref(),
             Some("t1")

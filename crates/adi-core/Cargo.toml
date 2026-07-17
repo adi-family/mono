@@ -9,11 +9,8 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# The shared configurator owns the ~/.adi/mono namespace `paths` resolves against.
 adi-config = { workspace = true }
 
-# Agent definitions and the task tree are part of the platform command surface; the
-# `adi-mono` CLI drives them through this facade.
 adi-agents = { workspace = true }
 adi-tasks = { workspace = true }
 adi-triggers = { workspace = true }
@@ -22,25 +19,16 @@ adi-triggers = { workspace = true }
 # ports manager; the front door proxies app.adi to that same reserved port.
 adi-ports-manager = { workspace = true }
 
-# The projects registry (metadata manifests under ~/.adi/mono/projects). The CLI drives it
-# through this facade so `adi-mono projects …` stays a thin adapter over adi-core.
 adi-projects = { workspace = true }
 
-# Project hooks + workspaces: per-project-dir handles (no store to open), re-exported for
-# the CLI's `projects workspace/hook` subcommands.
 adi-hooks = { workspace = true }
 
-# The auto-update engine; adi-core wraps it as the `Update` facade + the periodic
-# `Updater` LaunchAgent and owns the post-swap service restarts.
 adi-update = { workspace = true }
 
-# Read adi-dns's JSON status file and serialize the status report the GUI consumes.
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-# Validate that the generated front-door hive.yaml is well-formed YAML with the
-# expected shape (catches indentation bugs in render_frontdoor_hive).
 serde_yaml_ng = "0.10"
 
 [lints]

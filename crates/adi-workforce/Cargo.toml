@@ -15,11 +15,8 @@ serde_json = { workspace = true }
 # The WASM component host. Pinned to the same major the engine was written
 # against — the component-model API shifts between majors.
 wasmtime = "29"
-# Anthropic API calls from the bundled claude runner.
 reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
-# Shell tool allow/deny rule matching.
 regex = "1"
-# Persistent on-disk inter-employee message queues.
 yaque = "0.6"
 tokio = { version = "1", features = ["rt", "time"] }
 

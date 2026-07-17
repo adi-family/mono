@@ -314,8 +314,6 @@ mod tests {
                 "{rel:?} should be rejected"
             );
         }
-        // A single interior `..` that still lands inside is *also* rejected — the check is
-        // purely lexical, so any `..` component fails.
         assert!(matches!(
             jail.resolve("sub/../config.toml"),
             Err(Error::Escape(_))
@@ -327,7 +325,6 @@ mod tests {
     fn list_sorts_dirs_first_then_by_name() {
         let (base, jail) = scratch("list");
         let names: Vec<_> = jail.list("").unwrap().into_iter().map(|e| e.name).collect();
-        // Directories `.adi` and `sub` come before the file `config.toml`.
         assert_eq!(names, vec![".adi", "sub", "config.toml"]);
 
         let entries = jail.list("").unwrap();
@@ -372,7 +369,6 @@ mod tests {
             Err(Error::Escape(_))
         ));
         assert!(matches!(jail.list(".."), Err(Error::Escape(_))));
-        // The sibling file next to the base must not have been created.
         assert!(!base.parent().unwrap().join("evil.txt").exists());
         let _ = std::fs::remove_dir_all(base);
     }
@@ -393,7 +389,6 @@ mod tests {
             jail.read_to_string("blob.bin"),
             Err(Error::NotText(_))
         ));
-        // The raw bytes are still readable.
         assert_eq!(jail.read("blob.bin").unwrap(), vec![0xff, 0xfe, 0x00]);
         let _ = std::fs::remove_dir_all(base);
     }
@@ -402,7 +397,6 @@ mod tests {
     #[cfg(unix)]
     fn symlink_escaping_the_base_is_refused() {
         let (base, jail) = scratch("symlink");
-        // A link inside the jail pointing at a file outside it.
         let outside = base.parent().unwrap().join(format!(
             "adi-fs-outside-{}-{:?}",
             std::process::id(),
@@ -410,7 +404,6 @@ mod tests {
         ));
         std::fs::write(&outside, b"secret").unwrap();
         std::os::unix::fs::symlink(&outside, base.join("link.txt")).unwrap();
-        // Lexically in-bounds, but canonicalization catches the escape.
         assert!(matches!(jail.read("link.txt"), Err(Error::Escape(_))));
         let _ = std::fs::remove_file(outside);
         let _ = std::fs::remove_dir_all(base);
@@ -423,7 +416,6 @@ mod tests {
         assert!(meta.is_file && !meta.is_dir);
         assert!(jail.exists(".adi/hive.yaml"));
         assert!(!jail.exists("missing"));
-        // An escaping path can never exist inside the jail.
         assert!(!jail.exists("../config.toml"));
         let _ = std::fs::remove_dir_all(base);
     }

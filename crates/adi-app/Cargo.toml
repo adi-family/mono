@@ -16,39 +16,26 @@ path = "src/main.rs"
 # The /api contract + server handlers; the `server` feature pulls in the port registry.
 adi-webapp-api = { workspace = true, features = ["server"] }
 
-# Constructing the live port registry the handlers operate on.
 adi-ports-manager = { workspace = true }
 
-# The projects registry the /api/projects handlers operate on.
 adi-projects = { workspace = true }
 
-# The task tree store the read-only /api/tasks handler reads.
 adi-tasks = { workspace = true }
 
-# The agent-definition store the /api/agents handlers read and write.
 adi-agents = { workspace = true }
 
-# The trigger-definition store the /api/triggers handlers and the /api/hooks/<name>
-# webhook endpoint read, write, and fire.
 adi-triggers = { workspace = true }
 
-# The mesh runtime, started/stopped in-process behind the control panel's "Start mesh"
-# button — so the daemon lives only as long as this app process.
 adi-mesh = { workspace = true }
 
-# The shared design system, inlined into server-rendered pages (the placeholder / any
-# future front-door page) so they match the webapp.
 adi-css = { workspace = true }
 
 # The webapp's Trunk build output (`crates/adi-webapp/dist`), embedded at compile time so
 # the binary is self-contained — no runtime asset paths.
 include_dir = "0.7"
 
-# Async runtime for the hand-rolled HTTP/1.1 server (same lightweight approach as
-# adi-hive — no web framework). `fs` powers the ADI_WEBAPP_DIST disk-serve dev mode.
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util", "fs", "sync"] }
 
-# Logging to stdout/stderr (captured by the supervisor).
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"

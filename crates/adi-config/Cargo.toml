@@ -9,8 +9,6 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-# serde derives the config types callers persist; toml is the on-disk format for the
-# typed config-file helper. Raw-file storage is just bytes via std::fs — no extra deps.
 serde = { workspace = true }
 toml = { workspace = true }
 

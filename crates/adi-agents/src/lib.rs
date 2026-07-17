@@ -290,7 +290,6 @@ mod tests {
         let second = store.save("a", edited).expect("update");
         assert_eq!(second.manifest.backend, "harness:adi");
         assert_eq!(second.manifest.temperature, Some(0.2));
-        // Editing keeps the original creation time.
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
     }

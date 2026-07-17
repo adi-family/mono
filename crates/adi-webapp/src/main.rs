@@ -51,8 +51,6 @@ fn main() {
 /// data (status, ports, health) is polled here regardless of which page is showing.
 #[component]
 fn App() -> impl IntoView {
-    // Reactive state the whole UI reads from. `State` bundles the signals a data refresh
-    // writes; `Form` bundles the reserve form's local signals.
     let status = RwSignal::new(Status::Connecting);
     let ports = RwSignal::new(None::<PortsState>);
     let health = RwSignal::new(None::<Health>);
@@ -90,7 +88,6 @@ fn App() -> impl IntoView {
         files,
     };
 
-    // The Projects page's local form: the create inputs, a busy flag, and the active/archived filter.
     let projects_form = ProjectsForm {
         name: RwSignal::new(String::new()),
         description: RwSignal::new(String::new()),
@@ -99,7 +96,6 @@ fn App() -> impl IntoView {
         show_archived: RwSignal::new(false),
     };
 
-    // The Tasks page's local create form.
     let tasks_form = TasksForm {
         title: RwSignal::new(String::new()),
         project: RwSignal::new(String::new()),
@@ -109,7 +105,6 @@ fn App() -> impl IntoView {
         busy: RwSignal::new(false),
     };
 
-    // The Agents page's local create/edit form.
     let agents_form = AgentsForm {
         name: RwSignal::new(String::new()),
         backend: RwSignal::new(String::new()),
@@ -127,7 +122,6 @@ fn App() -> impl IntoView {
         busy: RwSignal::new(false),
     };
 
-    // The Triggers page's local create/edit form.
     let triggers_form = TriggersForm {
         name: RwSignal::new(String::new()),
         kind: RwSignal::new(String::new()),
@@ -140,19 +134,10 @@ fn App() -> impl IntoView {
         busy: RwSignal::new(false),
     };
 
-    // The Triggers page's fire-log view (re-polled each second while open).
     let triggers_log = TriggersLogView::new();
-
-    // The project detail page's hook-log view (re-polled each second while open).
     let hook_log = HookLogView::new();
-
-    // The project detail page's workspace terminal view (re-polled each second while open).
     let term_watch = TermWatch::new();
-
-    // The Agents page's live view (a polled read-only capture of an agent's tmux pane).
     let agents_watch = AgentsWatch::new();
-
-    // The Agents page's employee-code editor (a wasm agent's TypeScript source + build).
     let agents_code = AgentCodeEditor::new();
 
     let form = Form {
@@ -162,7 +147,6 @@ fn App() -> impl IntoView {
         reserved: RwSignal::new(String::new()),
     };
 
-    // The Mesh page's local form + copy-field signals.
     let mesh_form = MeshForm {
         allow_port: RwSignal::new(String::new()),
         peer: RwSignal::new(String::new()),
@@ -174,7 +158,6 @@ fn App() -> impl IntoView {
         ticket_ref: NodeRef::new(),
     };
 
-    // "Ports in use" filter: defaults to ADI-managed only; toggle shows all listening ports.
     let managed_only = RwSignal::new(true);
 
     // The active page, derived from the URL path. Unknown paths (including `/`) resolve to

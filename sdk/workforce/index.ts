@@ -631,7 +631,6 @@ const driveLoop = (
     }
   };
 
-  // onLoopStart / init middleware
   if (mws.init?.length) {
     const action = runInitChain(mws.init, { tools: config.tools, systemMessage });
     if (action.startsWith('stop:')) {
@@ -667,7 +666,6 @@ const driveLoop = (
   let lastAssistantMessage = '';
 
   outer: for (let turn = 0; turn < session.maxTurns; turn++) {
-    // onTurnStart middleware
     if (mws.turn?.length) {
       const action = runTurnChain(mws.turn, { loopId: config.name, turnIndex: turn });
       if (action.startsWith('stop:')) {
@@ -705,7 +703,6 @@ const driveLoop = (
       break outer;
     }
 
-    // Capture assistant text for lastAssistantMessage
     const assistantText = response.blocks
       .filter((b): b is { type: 'text'; text: string } => b.type === 'text')
       .map(b => b.text)
@@ -735,18 +732,15 @@ const driveLoop = (
     if (!turnToolCalls.length) {
       reason = 'done';
       reasonDetail = '';
-      break outer; // final answer
+      break outer;
     }
 
-    // Execute each tool, running beforeToolCall / afterToolCall middleware
     const toolResults: Array<{ type: 'tool_result'; tool_use_id: string; content: string }> = [];
     for (const tc of turnToolCalls) {
       let args: unknown = tc.input;
 
       if (mws.toolCall?.length) {
         const ref: ToolRef = { pluginId: '', toolId: tc.name, config: {} };
-        // runToolCallChain mutates `args` via updateArguments and returns a
-        // control string — keep its contract intact.
         const { action, finalArgs } = runToolCallChainWithArgs(mws.toolCall, ref, args);
         args = finalArgs;
         if (action.startsWith('stop:')) {
