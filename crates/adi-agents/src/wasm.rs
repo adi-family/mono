@@ -1,14 +1,16 @@
 //! Running `wasm:*` agents — the adi-workforce engine slice.
 //!
 //! A wasm agent's manifest points at a compiled WASM component (TS →
-//! esbuild → jco) via `extra.wasm`; running it is a synchronous one-shot
+//! esbuild → jco) via `arguments.wasm`; running it is a synchronous one-shot
 //! dispatch: the engine installs the component under the `workforce`
 //! module dir, instantiates it, runs `main()` to collect subscriptions,
 //! and delivers one message into the chosen handler. Loops the agent
 //! starts (`sdk.loop(...).run()`) execute inside the dispatch with the
 //! engine's bundled tools/runners.
 
-use crate::agent::Agent;
+use crate::Agent;
+use crate::StoredAgent;
+use crate::arguments::WasmArguments;
 use crate::error::{Error, Result};
 
 /// What a completed wasm dispatch did — re-exported shape from the engine.
@@ -16,7 +18,7 @@ pub use adi_workforce::DispatchOutcome;
 
 /// Whether this agent runs through the wasm engine (backend `wasm:*`).
 #[must_use]
-pub fn is_wasm(agent: &Agent) -> bool {
+pub fn is_wasm<Args>(agent: &Agent<Args>) -> bool {
     agent.manifest.executor() == "wasm"
 }
 
@@ -27,23 +29,23 @@ pub fn is_wasm(agent: &Agent) -> bool {
 /// `None` falls back to the agent's first subscription.
 ///
 /// # Errors
-/// [`Error::Launch`] when the manifest has no `extra.wasm` path or the
+/// [`Error::Launch`] when the manifest has no `arguments.wasm` path or the
 /// engine fails to load/dispatch.
 pub fn dispatch(
-    agent: &Agent,
+    agent: &StoredAgent,
     workforce_dir: &std::path::Path,
     handler: Option<&str>,
     message: &str,
 ) -> Result<DispatchOutcome> {
-    let wasm_path = agent
-        .manifest
-        .extra
-        .get("wasm")
+    let arguments = agent.manifest.typed_arguments::<WasmArguments>()?;
+    let wasm_path = arguments
+        .wasm
+        .as_deref()
         .filter(|p| !p.is_empty())
         .ok_or_else(|| {
             Error::Launch(format!(
-                "agent {} has backend {:?} but no `extra.wasm` path to a compiled component \
-                 (save it with --extra wasm=/path/to/agent.wasm)",
+                "agent {} has backend {:?} but no `arguments.wasm` path to a compiled component \
+                 (save it with --argument wasm=/path/to/agent.wasm)",
                 agent.name, agent.manifest.backend
             ))
         })?;

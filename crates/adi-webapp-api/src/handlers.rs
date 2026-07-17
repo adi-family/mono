@@ -8,7 +8,8 @@ use std::os::unix::process::CommandExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
-use adi_agents::{AgentManifest, Agents, Error as AgentStoreError};
+use adi_agents::arguments::WasmArguments;
+use adi_agents::{AgentManifest, Agents, Error as AgentStoreError, StoredAgent};
 use adi_fs::{Error as FsError, Jail};
 use adi_hooks::{
     Error as HookStoreError, Hooks as ProjectHooks, Workspaces, hook_template, is_lifecycle,
@@ -1517,16 +1518,16 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_save_agent(body) else {
         return bad_save_agent();
     };
+    if req.arguments.values().any(contains_json_null) {
+        return error(
+            400,
+            "agent arguments cannot contain null (the manifest store is TOML)",
+        );
+    }
     let name = req.name.trim().to_string();
     let manifest = AgentManifest {
         backend: req.backend.trim().to_string(),
-        arguments: req.arguments,
-        system_prompt: req.system_prompt,
-        tools: req.tools.trim().to_string(),
-        model: clean(req.model),
-        permission_mode: clean(req.permission_mode),
-        temperature: req.temperature,
-        max_turns: req.max_turns,
+        arguments: clean_arguments(req.arguments),
         tags: req
             .tags
             .into_iter()
@@ -1535,7 +1536,6 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
             .collect(),
         starred: req.starred,
         project: clean(req.project),
-        extra: clean_extra(req.extra),
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -1609,7 +1609,7 @@ pub fn stop_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     }
 }
 
-/// `POST /api/agents/code` — read the employee source file a wasm agent's `src` extra points
+/// `POST /api/agents/code` — read the employee source file a wasm agent's `src` argument points
 /// at, for the code editor on the Agents page.
 #[must_use]
 pub fn agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
@@ -1677,7 +1677,7 @@ pub fn save_agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
 /// `POST /api/agents/build` — compile a wasm agent's `src` TypeScript into its component:
 /// `node <src dir>/node_modules/@adi-family/workforce-sdk/build.mjs <src> -o <src dir>/build`.
 /// Blocks for the build (a few seconds), replies with its combined output. A successful build
-/// fills in an empty `wasm` extra with the compiled path, making the agent dispatchable.
+/// fills in an empty `wasm` argument with the compiled path, making the agent dispatchable.
 #[must_use]
 pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     let Some(req) = parse_agent_ref(body) else {
@@ -1692,7 +1692,7 @@ pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
         Err(resp) => return resp,
     };
     let Some(dir) = src.parent().map(Path::to_path_buf) else {
-        return error(400, "the src extra has no parent directory");
+        return error(400, "the src argument has no parent directory");
     };
     let build_mjs = dir.join("node_modules/@adi-family/workforce-sdk/build.mjs");
     if !build_mjs.exists() {
@@ -1748,10 +1748,18 @@ pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     let wasm = out_dir.join(format!("{stem}.wasm")).display().to_string();
-    // First successful build wires the component up; an explicit `wasm` extra is respected.
-    if ok && agent.manifest.extra.get("wasm").is_none_or(String::is_empty) {
-        let mut manifest = agent.manifest.clone();
-        manifest.extra.insert("wasm".to_string(), wasm.clone());
+    // First successful build wires the component up; an explicit `wasm` argument is respected.
+    let typed_manifest = agent.manifest.clone().into_typed::<WasmArguments>();
+    if ok
+        && typed_manifest
+            .as_ref()
+            .is_ok_and(|manifest| manifest.arguments.wasm.as_deref().is_none_or(str::is_empty))
+    {
+        let mut manifest = match typed_manifest {
+            Ok(manifest) => manifest,
+            Err(error) => return agent_error(&error),
+        };
+        manifest.arguments.wasm = Some(wasm.clone());
         if let Err(e) = store.save(&agent.name, manifest) {
             return agent_error(&e);
         }
@@ -1768,24 +1776,22 @@ pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     }
 }
 
-/// The employee source path from an agent's `src` extra, or the 400 explaining how to set it.
-fn agent_src(agent: &adi_agents::Agent) -> Result<String, (u16, String)> {
-    agent
+/// The employee source path from an agent's `src` argument, or the 400 explaining how to set it.
+fn agent_src(agent: &StoredAgent) -> Result<String, (u16, String)> {
+    let arguments = agent
         .manifest
-        .extra
-        .get("src")
-        .filter(|s| !s.is_empty())
-        .cloned()
-        .ok_or_else(|| {
-            error(
-                400,
-                &format!(
-                    "agent {} has no `src` extra pointing at its TypeScript source — \
-                     set the Source path in the form (or --extra src=/path/to/employee.ts)",
-                    agent.name
-                ),
-            )
-        })
+        .typed_arguments::<WasmArguments>()
+        .map_err(|error| agent_error(&error))?;
+    arguments.src.filter(|s| !s.is_empty()).ok_or_else(|| {
+        error(
+            400,
+            &format!(
+                "agent {} has no `src` argument pointing at its TypeScript source — \
+                     set the Source path in the form (or --argument src=/path/to/employee.ts)",
+                agent.name
+            ),
+        )
+    })
 }
 
 /// The node binary the build runs with: `$ADI_NODE`, then PATH, then the usual install spots.
@@ -1809,14 +1815,14 @@ fn node_bin() -> Option<String> {
 }
 
 /// Look an agent up, folding "not registered" into [`AgentStoreError::NotFound`] (→ 404).
-fn get_agent(store: &Agents, name: &str) -> Result<adi_agents::Agent, AgentStoreError> {
+fn get_agent(store: &Agents, name: &str) -> Result<StoredAgent, AgentStoreError> {
     store
         .get(name)?
         .ok_or_else(|| AgentStoreError::NotFound(name.to_string()))
 }
 
 /// The [`AgentPeek`] answer for an agent: its live pane capture, or `running: false` without one.
-fn peek_response(agent: &adi_agents::Agent) -> (u16, String) {
+fn peek_response(agent: &StoredAgent) -> (u16, String) {
     let pane = adi_agents::capture_pane(&agent.name);
     ok_json(&AgentPeek {
         running: pane.is_some(),
@@ -1829,7 +1835,7 @@ fn peek_response(agent: &adi_agents::Agent) -> (u16, String) {
 /// Flatten a stored agent into its wire [`AgentDto`], computing adapter and live run state.
 fn agent_dto(
     store: &Agents,
-    agent: adi_agents::Agent,
+    agent: StoredAgent,
     sessions: &std::collections::BTreeSet<String>,
 ) -> AgentDto {
     let executor = agent.manifest.executor().to_string();
@@ -1845,16 +1851,9 @@ fn agent_dto(
         backend: m.backend,
         arguments: m.arguments,
         executor,
-        system_prompt: m.system_prompt,
-        tools: m.tools,
-        model: m.model,
-        permission_mode: m.permission_mode,
-        temperature: m.temperature,
-        max_turns: m.max_turns,
         tags: m.tags,
         starred: m.starred,
         project: m.project,
-        extra: m.extra,
         created_at: m.created_at,
         updated_at: m.updated_at,
         runnable,
@@ -1863,11 +1862,11 @@ fn agent_dto(
 }
 
 /// The agentic-loop backend that picks its model provider at definition time (the `provider`
-/// extra); every other backend has its engine baked into the `executor:what` id.
+/// argument); every other backend has its engine baked into the `executor:what` id.
 const ADI_HARNESS: &str = "harness:adi";
 
 /// The adi-workforce employee backend: a compiled WASM component (TS → jco) the bundled engine
-/// dispatches messages into. The component is named by the `wasm` extra.
+/// dispatches messages into. The component is named by the `wasm` argument.
 const WASM_LOOP: &str = "wasm:loop-script";
 
 /// The backends whose engine is the Claude CLI/SDK, whatever the executor.
@@ -2089,7 +2088,7 @@ fn agent_form_spec() -> AgentFormSpec {
     add_dir.wide = true;
     fields.push(add_dir);
 
-    // ---- harness:adi provider knobs (scoped to the `provider` extra) ----
+    // ---- harness:adi provider knobs (scoped to the `provider` argument) ----
     fields.push(for_providers(
         sel_field(
             "thinking",
@@ -2370,7 +2369,7 @@ fn txt_field(name: &str, label: &str, ids: &[&str], placeholder: &str, hint: &st
     f
 }
 
-/// A checkbox scoped to backend ids (stored as a `"true"` string in `extra`).
+/// A checkbox scoped to backend ids (stored as a boolean backend argument).
 fn chk_field(name: &str, label: &str, ids: &[&str]) -> AgentFormField {
     field_ids(name, label, AgentFormFieldKind::Checkbox, ids)
 }
@@ -2384,7 +2383,8 @@ fn opts(pairs: &[(&str, &str)]) -> Vec<AgentFormOption> {
 /// missing → 404, wrong run state (already / not running) → 409, else 500.
 fn agent_error(e: &AgentStoreError) -> (u16, String) {
     let status = match e {
-        AgentStoreError::InvalidName(_)
+        AgentStoreError::Arguments(_)
+        | AgentStoreError::InvalidName(_)
         | AgentStoreError::NotRunnable(_)
         | AgentStoreError::InvalidKey(_) => 400,
         AgentStoreError::NotFound(_) => 404,
@@ -2445,6 +2445,32 @@ fn clean_extra(extra: BTreeMap<String, String>) -> BTreeMap<String, String> {
         .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
         .filter(|(k, v)| !k.is_empty() && !v.is_empty() && safe_extra_key(k))
         .collect()
+}
+
+/// Normalize only the key at the shared top-level boundary. Argument values and nested manifests
+/// are preserved exactly because their shape belongs to the selected backend.
+fn clean_arguments(
+    arguments: BTreeMap<String, serde_json::Value>,
+) -> BTreeMap<String, serde_json::Value> {
+    arguments
+        .into_iter()
+        .filter_map(|(key, value)| {
+            let key = key.trim().to_string();
+            if key.is_empty() {
+                return None;
+            }
+            Some((key, value))
+        })
+        .collect()
+}
+
+fn contains_json_null(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Array(values) => values.iter().any(contains_json_null),
+        serde_json::Value::Object(values) => values.values().any(contains_json_null),
+        _ => false,
+    }
 }
 
 fn safe_extra_key(key: &str) -> bool {
@@ -3155,7 +3181,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_code_reads_and_writes_the_src_extra_file() {
+    fn agent_code_reads_and_writes_the_src_argument_file() {
         let store = temp_agents();
 
         let _ = save_agent(&store, br#"{"name":"emp","backend":"wasm:loop-script"}"#);
@@ -3168,7 +3194,7 @@ mod tests {
         ));
         std::fs::write(&src, "export const main = () => {};\n").unwrap();
         let body = format!(
-            r#"{{"name":"emp","backend":"wasm:loop-script","extra":{{"src":{}}}}}"#,
+            r#"{{"name":"emp","backend":"wasm:loop-script","arguments":{{"src":{}}}}}"#,
             serde_json::to_string(&src.display().to_string()).unwrap()
         );
         let _ = save_agent(&store, body.as_bytes());
@@ -3246,34 +3272,73 @@ mod tests {
                 "name":"api-solver",
                 "backend":"api:openai",
                 "arguments":{
+                    "system_prompt":"Solve carefully",
+                    "tools":"tasks,projects",
+                    "model":"gpt-5-codex",
+                    "permission_mode":"plan",
+                    "temperature":0.2,
+                    "max_turns":12,
                     "resume":true,
+                    "api_key_env":"OPENAI_API_KEY",
+                    "base_url":"http://localhost:11434",
+                    "bad key":"drop",
+                    "empty":"",
                     "cloud_manifest":{
                         "region":"eu-west-1",
                         "replicas":2,
                         "capabilities":["files", "tasks"]
                     }
-                },
-                "extra":{
-                    "api_key_env":" OPENAI_API_KEY ",
-                    "base_url":" http://localhost:11434 ",
-                    "bad key":"drop",
-                    "empty":""
                 }
             }"#,
         );
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
         let agent = &v["agents"].as_array().unwrap()[0];
+        assert_eq!(agent["arguments"]["system_prompt"], "Solve carefully");
+        assert_eq!(agent["arguments"]["tools"], "tasks,projects");
+        assert_eq!(agent["arguments"]["model"], "gpt-5-codex");
+        assert_eq!(agent["arguments"]["permission_mode"], "plan");
+        assert_eq!(agent["arguments"]["temperature"], 0.2);
+        assert_eq!(agent["arguments"]["max_turns"], 12);
         assert_eq!(agent["arguments"]["resume"], true);
         assert_eq!(agent["arguments"]["cloud_manifest"]["replicas"], 2);
         assert_eq!(
             agent["arguments"]["cloud_manifest"]["capabilities"][1],
             "tasks"
         );
-        assert_eq!(agent["extra"]["api_key_env"], "OPENAI_API_KEY");
-        assert_eq!(agent["extra"]["base_url"], "http://localhost:11434");
-        assert!(agent["extra"]["bad key"].is_null());
-        assert!(agent["extra"]["empty"].is_null());
+        assert_eq!(agent["arguments"]["api_key_env"], "OPENAI_API_KEY");
+        assert_eq!(agent["arguments"]["base_url"], "http://localhost:11434");
+        assert_eq!(agent["arguments"]["bad key"], "drop");
+        assert_eq!(agent["arguments"]["empty"], "");
+        for flattened in [
+            "system_prompt",
+            "tools",
+            "model",
+            "permission_mode",
+            "temperature",
+            "max_turns",
+            "extra",
+        ] {
+            assert!(
+                agent.get(flattened).is_none(),
+                "flattened field {flattened}"
+            );
+        }
+    }
+
+    #[test]
+    fn save_agent_rejects_unknown_arguments_for_built_in_backends() {
+        let store = temp_agents();
+        let (status, body) = save_agent(
+            &store,
+            br#"{
+                "name":"typo",
+                "backend":"process:codex",
+                "arguments":{"max_truns":12}
+            }"#,
+        );
+        assert_eq!(status, 400);
+        assert!(body.contains("max_truns"), "{body}");
     }
 
     // ---- triggers ----------------------------------------------------------------------

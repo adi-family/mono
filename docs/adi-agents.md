@@ -9,7 +9,7 @@ The command center for agent and task state is the `adi-mono` CLI:
 adi-mono agents list
 adi-mono agents save planner --backend tmux:codex --command-scope tasks,projects
 adi-mono agents run planner        # detached tmux session adi-agent-planner
-adi-mono agents save reviewer --backend process:codex --extra sandbox=read-only
+adi-mono agents save reviewer --backend process:codex --argument sandbox=read-only
 adi-mono agents run reviewer --message "Review the current branch" # background codex exec
 adi-mono tasks add "Investigate auth flow" --project demo --tag planner
 adi-mono tasks complete DEMO-1
@@ -47,32 +47,38 @@ Not implemented yet:
 An agent definition is stored as:
 
 ```rust
-pub struct AgentManifest {
+pub struct AgentManifest<Args> {
     pub backend: String,          // executor:what — tmux:claude, process:codex, harness:adi, ...
-    pub arguments: BTreeMap<String, serde_json::Value>, // structured backend-owned settings
-    pub system_prompt: String,
-    pub tools: String,            // historical field; now used as CLI command scope
-    pub model: Option<String>,
-    pub permission_mode: Option<String>,
-    pub temperature: Option<f64>,
-    pub max_turns: Option<u32>,
+    pub arguments: Args,          // the backend's strict argument type
     pub tags: Vec<String>,
     pub starred: bool,
     pub project: Option<String>,
-    pub extra: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
 ```
 
-`AgentManifest` uses its `Default` implementation whenever a field is omitted while
-deserializing. This keeps older and partial manifests readable as the common model grows.
-`arguments` is the structured backend-owned extension point; unlike the legacy string-only
-`extra` map, it can hold booleans, numbers, lists, and nested backend manifests.
+For example, a cloud backend defines `CloudAgentArguments` and uses
+`AgentManifest<CloudAgentArguments>`. Misspelled fields and wrong value types are then compiler or
+deserialization errors, not string-key lookups. `AgentManifest<Args>` implements `Default` whenever
+`Args` does.
 
-The `tools` field name is retained for manifest compatibility, but its meaning is CLI command
-scope: for example `tasks`, `projects`, `agents`, or a comma-separated subset. Future execution
-code should treat this as the set of `adi-mono` command groups an agent may use.
+`arguments` owns every setting interpreted by the selected backend: `system_prompt`, `tools`,
+`model`, `permission_mode`, `temperature`, `max_turns`, executor flags, and nested backend
+manifests. `AgentManifest` itself contains only fields ADI uses to file, dispatch, and timestamp
+the definition. The built-in Claude, Codex, and WASM executors expose strict argument structs with
+unknown-field rejection.
+
+The registry uses `StoredAgentManifest` only at its heterogeneous storage/listing boundary because
+one directory can contain unrelated backend argument types. `Agents::save` accepts and returns the
+same typed manifest, while encoding a storage copy; `Agents::get_typed::<Args>` restores that type
+when reading it later.
+Legacy top-level backend fields and the old string-only `extra` map migrate into `arguments` when
+read.
+
+The `tools` argument is the CLI command scope: for example `tasks`, `projects`, `agents`, or a
+comma-separated subset. Future execution code should treat it as the set of `adi-mono` command
+groups an agent may use.
 
 ## Task Dispatch Direction
 
@@ -97,7 +103,7 @@ thing it runs. The executor decides *how* the loop executes; it never names a mo
   (print/exec mode), controlled by `adi-mono`.
 - `harness:claude-sdk` — an agentic loop embedded via the Claude Agent SDK.
 - `harness:adi` — ADI's own agentic loop; *which* model API it calls is the definition's
-  `provider` extra (anthropic, openai, gemini, monshoot, ollama), not part of the backend id.
+  `provider` argument (anthropic, openai, gemini, monshoot, ollama), not part of the backend id.
 - Every executor should emit a common event stream: started, stdout/stderr, tool/command
   request, task update, completed, failed.
 

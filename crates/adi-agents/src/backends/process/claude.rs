@@ -1,36 +1,54 @@
 //! `process:claude` command construction (`claude --print`).
 
 use crate::AgentManifest;
+use crate::arguments::{
+    ClaudeEffort, ClaudeOutputFormat, ClaudePermissionMode, ProcessClaudeArguments,
+};
 
 pub(super) const BACKEND_ID: &str = "process:claude";
 
-pub(super) fn argv(manifest: &AgentManifest, message: &str) -> Vec<String> {
+pub(super) fn argv(manifest: &AgentManifest<ProcessClaudeArguments>, message: &str) -> Vec<String> {
+    let config = &manifest.arguments;
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
-    push_option(&mut argv, "--model", manifest.model.as_deref());
+    push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
         &mut argv,
         "--permission-mode",
-        manifest.permission_mode.as_deref(),
+        config.permission_mode.map(ClaudePermissionMode::as_str),
     );
-    push_extra(&mut argv, manifest, "effort", "--effort");
-    push_extra(&mut argv, manifest, "output_format", "--output-format");
-    push_extra(&mut argv, manifest, "allowed_tools", "--allowed-tools");
-    push_extra(
+    push_option(
         &mut argv,
-        manifest,
-        "disallowed_tools",
-        "--disallowed-tools",
+        "--effort",
+        config.effort.map(ClaudeEffort::as_str),
     );
-    push_extra(&mut argv, manifest, "max_budget_usd", "--max-budget-usd");
-    push_extra(&mut argv, manifest, "fallback_model", "--fallback-model");
-    push_extra(&mut argv, manifest, "add_dir", "--add-dir");
+    push_option(
+        &mut argv,
+        "--output-format",
+        config.output_format.map(ClaudeOutputFormat::as_str),
+    );
+    push_option(
+        &mut argv,
+        "--allowed-tools",
+        config.allowed_tools.as_deref(),
+    );
+    push_option(
+        &mut argv,
+        "--disallowed-tools",
+        config.disallowed_tools.as_deref(),
+    );
+    if let Some(value) = config.max_budget_usd {
+        push_option(&mut argv, "--max-budget-usd", Some(&value.to_string()));
+    }
+    push_option(
+        &mut argv,
+        "--fallback-model",
+        config.fallback_model.as_deref(),
+    );
+    push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
 
     let prompts = [
-        Some(manifest.system_prompt.as_str()),
-        manifest
-            .extra
-            .get("append_system_prompt")
-            .map(String::as_str),
+        config.system_prompt.as_deref(),
+        config.append_system_prompt.as_deref(),
     ]
     .into_iter()
     .flatten()
@@ -42,10 +60,6 @@ pub(super) fn argv(manifest: &AgentManifest, message: &str) -> Vec<String> {
     }
     argv.push(run_message(message));
     argv
-}
-
-fn push_extra(argv: &mut Vec<String>, manifest: &AgentManifest, key: &str, flag: &str) {
-    push_option(argv, flag, manifest.extra.get(key).map(String::as_str));
 }
 
 fn push_option(argv: &mut Vec<String>, flag: &str, value: Option<&str>) {
@@ -69,18 +83,19 @@ mod tests {
 
     #[test]
     fn argv_uses_print_mode_and_process_options() {
-        let mut manifest = AgentManifest {
+        let manifest = AgentManifest {
             backend: BACKEND_ID.into(),
-            model: Some("sonnet".into()),
-            permission_mode: Some("dontAsk".into()),
-            system_prompt: "You are a release agent.".into(),
+            arguments: ProcessClaudeArguments {
+                model: Some("sonnet".into()),
+                permission_mode: Some(ClaudePermissionMode::DontAsk),
+                system_prompt: Some("You are a release agent.".into()),
+                output_format: Some(ClaudeOutputFormat::Json),
+                max_budget_usd: Some(2.5),
+                effort: Some(ClaudeEffort::High),
+                ..ProcessClaudeArguments::default()
+            },
             ..AgentManifest::default()
         };
-        manifest.extra.extend([
-            ("output_format".into(), "json".into()),
-            ("max_budget_usd".into(), "2.5".into()),
-            ("effort".into(), "high".into()),
-        ]);
         assert_eq!(
             argv(&manifest, "prepare the release"),
             [

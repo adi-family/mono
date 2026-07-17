@@ -13,20 +13,17 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use crate::AgentManifest;
-use crate::agent::Agent;
+use crate::arguments::{ProcessClaudeArguments, ProcessCodexArguments};
 use crate::error::{Error, Result};
 use crate::run::Launch;
+use crate::{StoredAgent, StoredAgentManifest};
 
 const PROCESS_DIR: &str = "process";
 
 /// Whether this manifest names one of the headless process engines implemented here.
 #[must_use]
-pub fn is_runnable(manifest: &AgentManifest) -> bool {
-    matches!(
-        manifest.backend.as_str(),
-        claude::BACKEND_ID | codex::BACKEND_ID
-    )
+pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
+    engine_run(manifest, "").is_ok()
 }
 
 /// Launch a vendor CLI non-interactively in the background.
@@ -34,9 +31,9 @@ pub fn is_runnable(manifest: &AgentManifest) -> bool {
 /// # Errors
 /// [`Error::NotRunnable`] for an unknown process engine, [`Error::AlreadyRunning`] when the
 /// recorded process is still live, or an I/O/launch error while preparing or spawning it.
-pub fn launch(agent: &Agent, sessions_dir: &Path, message: &str) -> Result<Launch> {
-    let argv = engine_argv(&agent.manifest, message)?;
-    spawn_detached(agent, sessions_dir, argv)
+pub fn launch(agent: &StoredAgent, sessions_dir: &Path, message: &str) -> Result<Launch> {
+    let (argv, working_dir) = engine_run(&agent.manifest, message)?;
+    spawn_detached(agent, sessions_dir, &argv, working_dir)
 }
 
 /// Whether the PID recorded for `agent_name` is currently live.
@@ -73,15 +70,31 @@ pub fn stop(sessions_dir: &Path, agent_name: &str) -> Result<bool> {
     Ok(true)
 }
 
-fn engine_argv(manifest: &AgentManifest, message: &str) -> Result<Vec<String>> {
+fn engine_run(
+    manifest: &StoredAgentManifest,
+    message: &str,
+) -> Result<(Vec<String>, Option<String>)> {
     match manifest.backend.as_str() {
-        claude::BACKEND_ID => Ok(claude::argv(manifest, message)),
-        codex::BACKEND_ID => Ok(codex::argv(manifest, message)),
+        claude::BACKEND_ID => {
+            let manifest = manifest.clone().into_typed::<ProcessClaudeArguments>()?;
+            let working_dir = manifest.arguments.working_dir.clone();
+            Ok((claude::argv(&manifest, message), working_dir))
+        }
+        codex::BACKEND_ID => {
+            let manifest = manifest.clone().into_typed::<ProcessCodexArguments>()?;
+            let working_dir = manifest.arguments.working_dir.clone();
+            Ok((codex::argv(&manifest, message), working_dir))
+        }
         other => Err(Error::NotRunnable(other.to_string())),
     }
 }
 
-fn spawn_detached(agent: &Agent, sessions_dir: &Path, argv: Vec<String>) -> Result<Launch> {
+fn spawn_detached(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    argv: &[String],
+    working_dir: Option<String>,
+) -> Result<Launch> {
     let runtime_dir = sessions_dir.join(PROCESS_DIR);
     std::fs::create_dir_all(&runtime_dir)?;
     let pid_file = pid_path(sessions_dir, &agent.name);
@@ -95,24 +108,19 @@ fn spawn_detached(agent: &Agent, sessions_dir: &Path, argv: Vec<String>) -> Resu
     let log = log_path(sessions_dir, &agent.name);
     let log_file = File::create(&log)?;
     let errlog = log_file.try_clone()?;
-    let (program, args) = argv
+    let (program, command_args) = argv
         .split_first()
         .ok_or_else(|| Error::Launch("process backend built an empty command".into()))?;
 
     let mut command = Command::new(program);
     command
-        .args(args)
+        .args(command_args)
         .env("PATH", augmented_path())
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(errlog));
-    if let Some(dir) = agent
-        .manifest
-        .extra
-        .get("working_dir")
-        .filter(|dir| !dir.trim().is_empty())
-    {
+    if let Some(dir) = working_dir.filter(|dir| !dir.trim().is_empty()) {
         command.current_dir(dir);
     } else if let Ok(home) = std::env::var("HOME") {
         command.current_dir(home);
@@ -138,7 +146,7 @@ fn spawn_detached(agent: &Agent, sessions_dir: &Path, argv: Vec<String>) -> Resu
     });
 
     Ok(Launch {
-        command: display_command(&argv),
+        command: display_command(argv),
         session: None,
         attach: None,
         pid: Some(pid),
@@ -238,12 +246,12 @@ mod tests {
 
     #[test]
     fn unknown_process_engines_are_not_runnable() {
-        let manifest = AgentManifest {
+        let manifest = StoredAgentManifest {
             backend: "process:unknown".into(),
-            ..AgentManifest::default()
+            ..StoredAgentManifest::default()
         };
         assert!(matches!(
-            engine_argv(&manifest, "run"),
+            engine_run(&manifest, "run"),
             Err(Error::NotRunnable(_))
         ));
     }
@@ -251,14 +259,14 @@ mod tests {
     #[test]
     fn detached_process_is_recorded_and_stoppable() {
         let sessions = scratch_dir("lifecycle");
-        let agent = Agent {
+        let agent = StoredAgent {
             name: "sleeper".into(),
-            manifest: AgentManifest {
+            manifest: StoredAgentManifest {
                 backend: "process:test".into(),
-                ..AgentManifest::default()
+                ..StoredAgentManifest::default()
             },
         };
-        let launch = spawn_detached(&agent, &sessions, vec!["/bin/sleep".into(), "10".into()])
+        let launch = spawn_detached(&agent, &sessions, &["/bin/sleep".into(), "10".into()], None)
             .expect("launch");
         assert!(launch.pid.is_some());
         assert!(launch.session.is_none());

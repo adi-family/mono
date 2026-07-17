@@ -19,7 +19,7 @@ use crate::state::{AgentCodeEditor, AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{apply_mutation, data_table, flash_view, placeholder_row, tile, updated_text};
 
 /// The `harness:adi` backend id — the one whose form fields are additionally scoped to the
-/// `provider` extra. Must match the id served by the API's form spec.
+/// `provider` argument. Must match the id served by the API's form spec.
 const ADI_HARNESS: &str = "harness:adi";
 
 /// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
@@ -40,17 +40,13 @@ pub(crate) fn agents_view(
         name,
         backend,
         project,
-        model,
-        permission_mode,
-        temperature,
-        max_turns,
         tags,
-        tools,
-        system_prompt,
         starred,
-        extra,
+        arguments,
+        argument_values,
         editing,
         busy,
+        ..
     } = form;
     view! {
         {agent_tiles(state)}
@@ -92,7 +88,7 @@ pub(crate) fn agents_view(
                     return;
                 }
                 let st = agents.get();
-                let prov = extra.get().get("provider").cloned().unwrap_or_default();
+                let prov = argument_values.get().get("provider").cloned().unwrap_or_default();
                 // Whether each backend-conditional first-class param applies is driven by the
                 // server schema (does a field of that name apply to this backend?), so rescoping a
                 // field in the API also stops its value being sent for backends it no longer fits.
@@ -101,21 +97,18 @@ pub(crate) fn agents_view(
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be.clone(),
-                    arguments: editing
-                        .get()
-                        .and_then(|name| st.as_ref()?.agents.iter().find(|agent| agent.name == name))
-                        .map(|agent| agent.arguments.clone())
-                        .unwrap_or_default(),
-                    system_prompt: system_prompt.get(),
-                    tools: tools.get().trim().to_string(),
-                    model: opt_str(model.get()),
-                    permission_mode: if pm_applies { opt_str(permission_mode.get()) } else { None },
-                    temperature: if temp_applies { temperature.get().trim().parse::<f64>().ok() } else { None },
-                    max_turns: max_turns.get().trim().parse::<u32>().ok(),
+                    arguments: agent_argument_values(
+                        st.as_ref(),
+                        &be,
+                        arguments.get(),
+                        argument_values.get(),
+                        form,
+                        pm_applies,
+                        temp_applies,
+                    ),
                     tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                     starred: starred.get(),
                     project: opt_str(project.get()),
-                    extra: agent_extra_values(st.as_ref(), &be, extra.get()),
                 };
                 editing.set(Some(nm.clone()));
                 apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
@@ -191,7 +184,12 @@ fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
         .into_any();
     };
     let backend = form.backend.get();
-    let provider = form.extra.get().get("provider").cloned().unwrap_or_default();
+    let provider = form
+        .argument_values
+        .get()
+        .get("provider")
+        .cloned()
+        .unwrap_or_default();
     let backends = st.form.backends.clone();
     st.form
         .fields
@@ -288,7 +286,7 @@ fn render_project_select(field: AgentFormField, state: State, form: AgentsForm) 
     .into_any()
 }
 
-/// Render a server-described select bound to either a first-class form signal or `extra`.
+/// Render a server-described select bound to a backend argument form value.
 fn render_agent_select(field: AgentFormField, form: AgentsForm) -> AnyView {
     let id = field_id(&field.name);
     let label_for = id.clone();
@@ -309,7 +307,7 @@ fn render_agent_select(field: AgentFormField, form: AgentsForm) -> AnyView {
     .into_any()
 }
 
-/// Render a text/number input bound to either a first-class form signal or `extra`.
+/// Render a text/number input bound to a backend argument form value.
 fn render_agent_input(
     field: AgentFormField,
     backends: Vec<AgentBackendOption>,
@@ -342,7 +340,7 @@ fn render_agent_input(
     .into_any()
 }
 
-/// Render a checkbox. `starred` is first-class; any other checkbox is stored as an extra bool.
+/// Render a checkbox. `starred` is ADI metadata; every other checkbox is a backend argument.
 fn render_agent_checkbox(field: AgentFormField, form: AgentsForm) -> AnyView {
     let label = field.label.clone();
     let name_for_value = field.name.clone();
@@ -358,7 +356,7 @@ fn render_agent_checkbox(field: AgentFormField, form: AgentsForm) -> AnyView {
     .into_any()
 }
 
-/// Render a textarea bound to either a first-class form signal or `extra`.
+/// Render a textarea bound to a backend argument form value.
 fn render_agent_textarea(field: AgentFormField, form: AgentsForm) -> AnyView {
     let id = field_id(&field.name);
     let label_for = id.clone();
@@ -478,7 +476,12 @@ fn agent_field_value(form: AgentsForm, name: &str) -> String {
         "tags" => form.tags.get(),
         "tools" => form.tools.get(),
         "system_prompt" => form.system_prompt.get(),
-        other => form.extra.get().get(other).cloned().unwrap_or_default(),
+        other => form
+            .argument_values
+            .get()
+            .get(other)
+            .cloned()
+            .unwrap_or_default(),
     }
 }
 
@@ -494,30 +497,38 @@ fn set_agent_field_value(form: AgentsForm, name: &str, value: String) {
         "tags" => form.tags.set(value),
         "tools" => form.tools.set(value),
         "system_prompt" => form.system_prompt.set(value),
-        other => set_agent_extra(form.extra, other, value),
+        other => set_agent_argument_value(form.argument_values, other, value),
     }
 }
 
 fn agent_field_bool(form: AgentsForm, name: &str) -> bool {
     match name {
         "starred" => form.starred.get(),
-        other => form.extra.get().get(other).is_some_and(|v| v == "true"),
+        other => form
+            .argument_values
+            .get()
+            .get(other)
+            .is_some_and(|v| v == "true"),
     }
 }
 
 fn set_agent_field_bool(form: AgentsForm, name: &str, value: bool) {
     match name {
         "starred" => form.starred.set(value),
-        other => set_agent_extra(
-            form.extra,
+        other => set_agent_argument_value(
+            form.argument_values,
             other,
             if value { "true".into() } else { String::new() },
         ),
     }
 }
 
-fn set_agent_extra(extra: RwSignal<BTreeMap<String, String>>, name: &str, value: String) {
-    extra.update(|values| {
+fn set_agent_argument_value(
+    argument_values: RwSignal<BTreeMap<String, String>>,
+    name: &str,
+    value: String,
+) {
+    argument_values.update(|values| {
         if value.is_empty() {
             values.remove(name);
         } else {
@@ -526,30 +537,111 @@ fn set_agent_extra(extra: RwSignal<BTreeMap<String, String>>, name: &str, value:
     });
 }
 
-fn agent_extra_values(
+fn agent_argument_values(
     st: Option<&AgentsState>,
     backend: &str,
-    values: BTreeMap<String, String>,
-) -> BTreeMap<String, String> {
-    let provider = values.get("provider").cloned().unwrap_or_default();
-    values
-        .into_iter()
-        .map(|(k, v)| (k.trim().to_string(), v.trim().to_string()))
-        .filter(|(k, v)| {
-            !k.is_empty()
-                && !v.is_empty()
-                && st.is_none_or(|st| {
-                    st.form.fields.iter().any(|field| {
-                        field.name == *k
-                            && is_extra_field(&field.name)
-                            && field_applies(field, backend, &provider)
-                    })
-                })
-        })
-        .collect()
+    mut arguments: BTreeMap<String, serde_json::Value>,
+    scalar_values: BTreeMap<String, String>,
+    form: AgentsForm,
+    permission_mode_applies: bool,
+    temperature_applies: bool,
+) -> BTreeMap<String, serde_json::Value> {
+    let provider = scalar_values.get("provider").cloned().unwrap_or_default();
+
+    // Remove every form-owned argument before rebuilding the values that apply to this backend.
+    // Unknown structured arguments remain untouched so editing does not flatten backend manifests.
+    for name in [
+        "system_prompt",
+        "tools",
+        "model",
+        "permission_mode",
+        "temperature",
+        "max_turns",
+    ] {
+        arguments.remove(name);
+    }
+    for name in scalar_values.keys() {
+        arguments.remove(name);
+    }
+    if let Some(st) = st {
+        for field in &st.form.fields {
+            if is_argument_field(&field.name) {
+                arguments.remove(&field.name);
+            }
+        }
+    }
+
+    insert_text_argument(
+        &mut arguments,
+        "system_prompt",
+        form.system_prompt.get(),
+        false,
+    );
+    insert_text_argument(&mut arguments, "tools", form.tools.get(), true);
+    insert_text_argument(&mut arguments, "model", form.model.get(), true);
+    if permission_mode_applies {
+        insert_text_argument(
+            &mut arguments,
+            "permission_mode",
+            form.permission_mode.get(),
+            true,
+        );
+    }
+    if temperature_applies && let Ok(value) = form.temperature.get().trim().parse::<f64>() {
+        arguments.insert("temperature".into(), value.into());
+    }
+    if let Ok(value) = form.max_turns.get().trim().parse::<u64>() {
+        arguments.insert("max_turns".into(), value.into());
+    }
+
+    for (name, value) in scalar_values {
+        let name = name.trim().to_string();
+        let value = value.trim().to_string();
+        if name.is_empty() || value.is_empty() {
+            continue;
+        }
+        let field = st.and_then(|st| {
+            st.form.fields.iter().find(|field| {
+                field.name == name
+                    && is_scalar_argument_field(&field.name)
+                    && field_applies(field, backend, &provider)
+            })
+        });
+        let Some(field) = field else {
+            continue;
+        };
+        let value = match field.kind {
+            AgentFormFieldKind::Checkbox => serde_json::Value::Bool(value == "true"),
+            AgentFormFieldKind::Number => match value.parse::<f64>() {
+                Ok(value) => value.into(),
+                Err(_) => continue,
+            },
+            _ => value.into(),
+        };
+        arguments.insert(name, value);
+    }
+    arguments
 }
 
-fn is_extra_field(name: &str) -> bool {
+fn insert_text_argument(
+    arguments: &mut BTreeMap<String, serde_json::Value>,
+    name: &str,
+    mut value: String,
+    trim: bool,
+) {
+    if trim {
+        value = value.trim().to_string();
+    }
+    if !value.is_empty() {
+        arguments.insert(name.to_string(), value.into());
+    }
+}
+
+fn is_argument_field(name: &str) -> bool {
+    !matches!(name, "name" | "backend" | "project" | "tags" | "starred")
+}
+
+fn is_scalar_argument_field(name: &str) -> bool {
     !matches!(
         name,
         "name"
@@ -584,7 +676,7 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, code: AgentCod
                 a.name.clone()
             };
             let backend = a.backend.clone();
-            let model = a.model.clone().unwrap_or_default();
+            let model = argument_text(&a.arguments, "model");
             let project_cell = match &a.project {
                 Some(p) if !p.trim().is_empty() => {
                     let p = p.clone();
@@ -715,7 +807,7 @@ fn save_code(state: State, code: AgentCodeEditor, name: String) {
 
 /// Compile the source to its component (the ⚙ Build action): save the buffer first when dirty,
 /// then run the server-side build and show its output under the editor. A successful first
-/// build fills the agent's `wasm` extra, so the fresh state lands in the list too.
+/// build fills the agent's `wasm` argument, so the fresh state lands in the list too.
 fn build_code(state: State, code: AgentCodeEditor, name: String) {
     let content = code.buffer.get_untracked();
     let dirty = content != code.original.get_untracked();
@@ -942,18 +1034,27 @@ fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.name.set(a.name.clone());
     form.backend.set(a.backend.clone());
     form.project.set(a.project.clone().unwrap_or_default());
-    form.model.set(a.model.clone().unwrap_or_default());
+    form.model.set(argument_text(&a.arguments, "model"));
     form.permission_mode
-        .set(a.permission_mode.clone().unwrap_or_default());
+        .set(argument_text(&a.arguments, "permission_mode"));
     form.temperature
-        .set(a.temperature.map(|t| t.to_string()).unwrap_or_default());
-    form.max_turns
-        .set(a.max_turns.map(|n| n.to_string()).unwrap_or_default());
+        .set(argument_text(&a.arguments, "temperature"));
+    form.max_turns.set(argument_text(&a.arguments, "max_turns"));
     form.tags.set(a.tags.join(", "));
-    form.tools.set(a.tools.clone());
-    form.system_prompt.set(a.system_prompt.clone());
+    form.tools.set(argument_text(&a.arguments, "tools"));
+    form.system_prompt
+        .set(argument_text(&a.arguments, "system_prompt"));
     form.starred.set(a.starred);
-    form.extra.set(a.extra.clone());
+    form.arguments.set(a.arguments.clone());
+    form.argument_values.set(
+        a.arguments
+            .iter()
+            .filter(|(name, _)| is_scalar_argument_field(name))
+            .filter_map(|(name, value)| {
+                scalar_argument_text(value).map(|value| (name.clone(), value))
+            })
+            .collect(),
+    );
     form.editing.set(Some(a.name.clone()));
     scroll_top();
 }
@@ -971,7 +1072,8 @@ fn clear_agent_form(form: AgentsForm) {
     form.tools.set(String::new());
     form.system_prompt.set(String::new());
     form.starred.set(false);
-    form.extra.set(BTreeMap::new());
+    form.arguments.set(BTreeMap::new());
+    form.argument_values.set(BTreeMap::new());
     form.editing.set(None);
 }
 
@@ -988,4 +1090,20 @@ fn agent_executor(backend: &str) -> &str {
 fn opt_str(value: String) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn argument_text(arguments: &BTreeMap<String, serde_json::Value>, name: &str) -> String {
+    arguments
+        .get(name)
+        .and_then(scalar_argument_text)
+        .unwrap_or_default()
+}
+
+fn scalar_argument_text(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Bool(value) => Some(value.to_string()),
+        serde_json::Value::Number(value) => Some(value.to_string()),
+        _ => None,
+    }
 }

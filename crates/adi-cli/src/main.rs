@@ -5,8 +5,9 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, Agent, AgentManifest, EffectiveStatus, Project, Report, RunOutcome, Service,
-    ServiceReport, TaskPatch, TaskStatus, TaskView, Trigger, TriggerManifest, Updater,
+    Adi, AgentManifest, AgentSummaryArguments, EffectiveStatus, Project, Report, RunOutcome,
+    Service, ServiceReport, StoredAgent, TaskPatch, TaskStatus, TaskView, Trigger, TriggerManifest,
+    Updater,
 };
 use clap::{Parser, Subcommand};
 
@@ -347,9 +348,9 @@ enum AgentsCommand {
         /// The project to file the agent under (its id); omit for a global agent.
         #[arg(long)]
         project: Option<String>,
-        /// Repeatable key=value backend-specific parameter.
-        #[arg(long = "extra")]
-        extra: Vec<String>,
+        /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
+        #[arg(long = "argument", visible_alias = "extra")]
+        arguments: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -987,23 +988,35 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
             tags,
             starred,
             project,
-            extra,
+            arguments,
             json,
         } => {
             let backend = clean_required("backend", backend)?;
+            let mut arguments = parse_arguments(arguments)?;
+            if let Some(value) = clean(system_prompt) {
+                arguments.insert("system_prompt".into(), value.into());
+            }
+            if let Some(value) = clean(command_scope) {
+                arguments.insert("tools".into(), value.into());
+            }
+            if let Some(value) = clean(model) {
+                arguments.insert("model".into(), value.into());
+            }
+            if let Some(value) = clean(permission_mode) {
+                arguments.insert("permission_mode".into(), value.into());
+            }
+            if let Some(value) = temperature {
+                arguments.insert("temperature".into(), value.into());
+            }
+            if let Some(value) = max_turns {
+                arguments.insert("max_turns".into(), value.into());
+            }
             let manifest = AgentManifest {
                 backend,
-                arguments: BTreeMap::new(),
-                system_prompt: system_prompt.unwrap_or_default(),
-                tools: clean(command_scope).unwrap_or_default(),
-                model: clean(model),
-                permission_mode: clean(permission_mode),
-                temperature,
-                max_turns,
+                arguments,
                 tags: clean_tags(tags),
                 starred,
                 project: clean(project),
-                extra: parse_extra(extra)?,
                 created_at: 0,
                 updated_at: 0,
             };
@@ -1264,21 +1277,25 @@ fn print_task(task: &TaskView) {
 }
 
 /// Print an agent definition in the compact human CLI format.
-fn print_agent(agent: &Agent) {
+fn print_agent(agent: &StoredAgent) {
+    let arguments = agent
+        .manifest
+        .typed_arguments::<AgentSummaryArguments>()
+        .unwrap_or_default();
     println!(
         "{} — {} [{}]",
         agent.name,
         agent.manifest.backend,
         agent.manifest.executor()
     );
-    if let Some(model) = &agent.manifest.model {
+    if let Some(model) = arguments.model {
         println!("  model: {model}");
     }
     if let Some(project) = &agent.manifest.project {
         println!("  project: {project}");
     }
-    if !agent.manifest.tools.trim().is_empty() {
-        println!("  commands: {}", agent.manifest.tools);
+    if let Some(tools) = arguments.tools.filter(|tools| !tools.trim().is_empty()) {
+        println!("  commands: {tools}");
     }
     if !agent.manifest.tags.is_empty() {
         println!("  tags: {}", agent.manifest.tags.join(", "));
@@ -1398,6 +1415,49 @@ fn clean_tags(values: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+fn parse_arguments(values: Vec<String>) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let mut out = BTreeMap::new();
+    for raw in values {
+        let (key, value) = raw
+            .split_once('=')
+            .ok_or_else(|| format!("argument {raw:?} must be key=value"))?;
+        let key = key.trim();
+        let value = value.trim();
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        let structured = value.starts_with('{') || value.starts_with('[');
+        let value = match serde_json::from_str(value) {
+            Ok(value) => value,
+            Err(error) if structured => {
+                return Err(format!("argument {key:?} is invalid JSON: {error}"));
+            }
+            Err(_) => value.into(),
+        };
+        if contains_json_null(&value) {
+            return Err(format!(
+                "argument {key:?} cannot contain null (the manifest store is TOML)"
+            ));
+        }
+        out.insert(key.to_string(), value);
+    }
+    Ok(out)
+}
+
+fn safe_extra_key(key: &str) -> bool {
+    key.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+fn contains_json_null(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Null => true,
+        serde_json::Value::Array(values) => values.iter().any(contains_json_null),
+        serde_json::Value::Object(values) => values.values().any(contains_json_null),
+        _ => false,
+    }
+}
+
 fn parse_extra(values: Vec<String>) -> Result<BTreeMap<String, String>, String> {
     let mut out = BTreeMap::new();
     for raw in values {
@@ -1417,11 +1477,6 @@ fn parse_extra(values: Vec<String>) -> Result<BTreeMap<String, String>, String> 
         out.insert(key.to_string(), value.to_string());
     }
     Ok(out)
-}
-
-fn safe_extra_key(key: &str) -> bool {
-    key.chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
 fn print_human(svc: &ServiceReport) {

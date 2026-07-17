@@ -4,10 +4,9 @@
 //! `backends/<executor>/`. Only the tmux executor is interactive today; future process and
 //! harness executors can be added without putting their lifecycle code in this module.
 
-use crate::AgentManifest;
-use crate::agent::Agent;
 use crate::backends::{process, tmux};
 use crate::error::{Error, Result};
+use crate::{StoredAgent, StoredAgentManifest};
 use std::path::{Path, PathBuf};
 
 pub use tmux::{capture_pane, running_sessions, send_keys, session_name};
@@ -29,7 +28,7 @@ pub struct Launch {
 
 /// Whether this manifest has a run adapter today.
 #[must_use]
-pub fn is_runnable(manifest: &AgentManifest) -> bool {
+pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     match manifest.executor() {
         "tmux" => tmux::is_runnable(manifest),
         "process" => process::is_runnable(manifest),
@@ -42,7 +41,7 @@ pub fn is_runnable(manifest: &AgentManifest) -> bool {
 /// # Errors
 /// [`Error::NotRunnable`] for a backend without an adapter, plus errors from the selected
 /// executor.
-pub fn launch(agent: &Agent) -> Result<Launch> {
+pub fn launch(agent: &StoredAgent) -> Result<Launch> {
     let sessions_dir = adi_config::Config::open()
         .module("sessions")
         .dir()
@@ -58,7 +57,7 @@ pub fn stop(name: &str) -> Result<bool> {
     crate::Agents::open().stop(name)
 }
 
-pub(crate) fn launch_in(agent: &Agent, sessions_dir: &Path, message: &str) -> Result<Launch> {
+pub(crate) fn launch_in(agent: &StoredAgent, sessions_dir: &Path, message: &str) -> Result<Launch> {
     match agent.manifest.executor() {
         "tmux" => tmux::launch(agent),
         "process" => process::launch(agent, sessions_dir, message),
@@ -66,7 +65,7 @@ pub(crate) fn launch_in(agent: &Agent, sessions_dir: &Path, message: &str) -> Re
     }
 }
 
-pub(crate) fn is_running_in(agent: &Agent, sessions_dir: &Path) -> bool {
+pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
     match agent.manifest.executor() {
         "tmux" => tmux::is_running(&agent.name),
         "process" => process::is_running(sessions_dir, &agent.name),
@@ -74,7 +73,7 @@ pub(crate) fn is_running_in(agent: &Agent, sessions_dir: &Path) -> bool {
     }
 }
 
-pub(crate) fn stop_in(agent: &Agent, sessions_dir: &Path) -> Result<bool> {
+pub(crate) fn stop_in(agent: &StoredAgent, sessions_dir: &Path) -> Result<bool> {
     match agent.manifest.executor() {
         "tmux" => tmux::stop(&agent.name),
         "process" => process::stop(sessions_dir, &agent.name),
@@ -86,10 +85,10 @@ pub(crate) fn stop_in(agent: &Agent, sessions_dir: &Path) -> Result<bool> {
 mod tests {
     use super::*;
 
-    fn manifest(backend: &str) -> AgentManifest {
-        AgentManifest {
+    fn manifest(backend: &str) -> StoredAgentManifest {
+        StoredAgentManifest {
             backend: backend.into(),
-            ..AgentManifest::default()
+            ..StoredAgentManifest::default()
         }
     }
 
@@ -115,7 +114,7 @@ mod tests {
 
     #[test]
     fn an_unimplemented_executor_is_rejected_before_launch() {
-        let agent = Agent {
+        let agent = StoredAgent {
             name: "planner".into(),
             manifest: manifest("harness:adi"),
         };

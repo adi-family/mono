@@ -819,20 +819,18 @@ fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatch) -> AnyVi
                     state.flash.set(Some(Flash::err("Pick a backend.".to_string())));
                     return;
                 }
+                let mut arguments = std::collections::BTreeMap::new();
+                let prompt = system_prompt.get();
+                if !prompt.is_empty() {
+                    arguments.insert("system_prompt".to_string(), prompt.into());
+                }
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be,
-                    arguments: std::collections::BTreeMap::new(),
-                    system_prompt: system_prompt.get(),
-                    tools: String::new(),
-                    model: None,
-                    permission_mode: None,
-                    temperature: None,
-                    max_turns: None,
+                    arguments,
                     tags: Vec::new(),
                     starred: false,
                     project: Some(id),
-                    extra: std::collections::BTreeMap::new(),
                 };
                 name.set(String::new());
                 system_prompt.set(String::new());
@@ -891,7 +889,12 @@ fn project_agent_rows(state: State, watch: AgentsWatch) -> AnyView {
                 a.name.clone()
             };
             let backend = a.backend.clone();
-            let model = a.model.clone().unwrap_or_default();
+            let model = a
+                .arguments
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
             let status = if a.running {
                 view! { <span class="adi-tstatus" data-status="ready">"Running"</span> }.into_any()
             } else {

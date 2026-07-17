@@ -39,7 +39,7 @@ Register the compiled component as an agent (once):
 ```bash
 adi-mono agents save hello \
   --backend wasm:loop-script \
-  --extra wasm=$PWD/build/hello.wasm
+  --argument wasm=$PWD/build/hello.wasm
 ```
 
 or in the web UI (app.adi → Agents): backend **wasm · Workforce employee**,
@@ -48,7 +48,7 @@ or in the web UI (app.adi → Agents): backend **wasm · Workforce employee**,
 ## Edit in the web UI
 
 On app.adi → Agents, every wasm agent row has a **{ } Code** action: it opens the
-`.ts` source (the agent's `src` extra) in an editor panel with **Save**, **⚙ Build**
+`.ts` source (the agent's `src` argument) in an editor panel with **Save**, **⚙ Build**
 (saves first when dirty, then compiles server-side and shows the build output), and
 **Reload**. The first successful Build fills in an empty Component path automatically.
 

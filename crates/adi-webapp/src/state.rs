@@ -135,7 +135,11 @@ pub(crate) struct AgentsForm {
     pub(crate) tools: RwSignal<String>,
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
-    pub(crate) extra: RwSignal<BTreeMap<String, String>>,
+    /// The complete backend argument map loaded for editing, including structured values the
+    /// schema-driven form does not render directly.
+    pub(crate) arguments: RwSignal<BTreeMap<String, serde_json::Value>>,
+    /// String representations for schema-rendered scalar backend arguments.
+    pub(crate) argument_values: RwSignal<BTreeMap<String, String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
 }
@@ -285,7 +289,7 @@ impl HookEditor {
 pub(crate) struct AgentCodeEditor {
     /// The open agent's name, or `None` while the editor is closed.
     pub(crate) open: RwSignal<Option<String>>,
-    /// The source file path the server resolved from the agent's `src` extra.
+    /// The source file path the server resolved from the agent's `src` argument.
     pub(crate) path: RwSignal<String>,
     /// The last-loaded/saved content — compared against `buffer` to detect edits.
     pub(crate) original: RwSignal<String>,

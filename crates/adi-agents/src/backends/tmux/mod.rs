@@ -10,10 +10,10 @@ mod codex;
 use std::collections::BTreeSet;
 use std::process::Command;
 
-use crate::AgentManifest;
-use crate::agent::Agent;
+use crate::arguments::{TmuxClaudeArguments, TmuxCodexArguments};
 use crate::error::{Error, Result};
 use crate::run::Launch;
+use crate::{StoredAgent, StoredAgentManifest};
 
 /// Prefix of every tmux session this launcher owns.
 const SESSION_PREFIX: &str = "adi-agent-";
@@ -27,7 +27,7 @@ pub fn session_name(agent_name: &str) -> String {
 
 /// Whether this manifest names one of the tmux engines implemented here.
 #[must_use]
-pub fn is_runnable(manifest: &AgentManifest) -> bool {
+pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     engine_argv(manifest).is_ok()
 }
 
@@ -110,7 +110,7 @@ pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
 /// # Errors
 /// [`Error::NotRunnable`] for an unknown tmux engine, [`Error::AlreadyRunning`] when its session
 /// exists, or [`Error::Launch`] when tmux cannot create the session.
-pub fn launch(agent: &Agent) -> Result<Launch> {
+pub fn launch(agent: &StoredAgent) -> Result<Launch> {
     let argv = engine_argv(&agent.manifest)?;
     let session = session_name(&agent.name);
     if session_exists(&session) {
@@ -148,10 +148,16 @@ pub fn launch(agent: &Agent) -> Result<Launch> {
 }
 
 /// Resolve the engine-specific command for a tmux backend.
-fn engine_argv(manifest: &AgentManifest) -> Result<Vec<String>> {
+fn engine_argv(manifest: &StoredAgentManifest) -> Result<Vec<String>> {
     match manifest.backend.as_str() {
-        claude::BACKEND_ID => Ok(claude::argv(manifest)),
-        codex::BACKEND_ID => Ok(codex::argv(manifest)),
+        claude::BACKEND_ID => {
+            let manifest = manifest.clone().into_typed::<TmuxClaudeArguments>()?;
+            Ok(claude::argv(&manifest))
+        }
+        codex::BACKEND_ID => {
+            let manifest = manifest.clone().into_typed::<TmuxCodexArguments>()?;
+            Ok(codex::argv(&manifest))
+        }
         other => Err(Error::NotRunnable(other.to_string())),
     }
 }
@@ -234,9 +240,9 @@ mod tests {
 
     #[test]
     fn unknown_tmux_engines_are_not_runnable() {
-        let manifest = AgentManifest {
+        let manifest = StoredAgentManifest {
             backend: "tmux:unknown".into(),
-            ..AgentManifest::default()
+            ..StoredAgentManifest::default()
         };
         assert!(matches!(engine_argv(&manifest), Err(Error::NotRunnable(_))));
     }

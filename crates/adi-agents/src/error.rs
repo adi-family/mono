@@ -11,6 +11,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub enum Error {
     /// The underlying config store failed (I/O, TOML parse, or TOML encode).
     Config(adi_config::Error),
+    /// Backend arguments do not match their strict type or cannot be represented in TOML.
+    Arguments(String),
     /// An agent name is empty, contains a path separator, or is `.`/`..` — anything that
     /// wouldn't be a safe single file name under `agents/`.
     InvalidName(String),
@@ -38,6 +40,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(e) => write!(f, "agent store error: {e}"),
+            Self::Arguments(message) => write!(f, "invalid agent arguments: {message}"),
             Self::InvalidName(name) => write!(
                 f,
                 "invalid agent name {name:?}: use a single segment of letters, digits, '.', '-', or '_'"
@@ -66,7 +69,8 @@ impl std::error::Error for Error {
         match self {
             Self::Config(e) => Some(e),
             Self::Io(e) => Some(e),
-            Self::InvalidName(_)
+            Self::Arguments(_)
+            | Self::InvalidName(_)
             | Self::NotFound(_)
             | Self::NotRunnable(_)
             | Self::AlreadyRunning(_)

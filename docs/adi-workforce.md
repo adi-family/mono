@@ -51,9 +51,9 @@ tool that ends the loop with structured output.
 # 1. Compile the TS agent to a wasm component
 cd examples/workforce && npm run build
 
-# 2. Register it as an agent (backend wasm:loop-script + extra.wasm path)
+# 2. Register it as an agent (backend wasm:loop-script + arguments.wasm path)
 adi-mono agents save probe --backend wasm:loop-script \
-  --extra wasm=$PWD/build/probe.wasm
+  --argument wasm=$PWD/build/probe.wasm
 
 # 3. One-shot dispatch a message into its handler
 adi-mono agents run probe -m "hello"

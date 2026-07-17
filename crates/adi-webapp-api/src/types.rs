@@ -380,7 +380,7 @@ pub struct AgentBackendOption {
 
 /// One rendered form control. `backend_ids`, `executors`, and `providers` are visibility
 /// filters (any match shows the field); all empty means the field is always visible.
-/// `providers` matches the `provider` extra of the `harness:adi` backend only.
+/// `providers` matches the `provider` argument of the `harness:adi` backend only.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentFormField {
     pub name: String,
@@ -427,9 +427,8 @@ pub enum AgentFormFieldKind {
     Textarea,
 }
 
-/// One agent definition, flattened for the wire. `backend` is an `executor:what` string
-/// (`tmux:claude`, `process:codex`, `harness:adi`, …); `executor` is the `tmux`/`process`/
-/// `harness` prefix, which decides how the agent runs and which params apply.
+/// One agent definition on the wire. ADI-owned metadata remains top-level; everything interpreted
+/// by the selected backend is nested under `arguments`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentDto {
     pub name: String,
@@ -438,26 +437,12 @@ pub struct AgentDto {
     pub arguments: BTreeMap<String, serde_json::Value>,
     pub executor: String,
     #[serde(default)]
-    pub system_prompt: String,
-    #[serde(default)]
-    pub tools: String,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub permission_mode: Option<String>,
-    #[serde(default)]
-    pub temperature: Option<f64>,
-    #[serde(default)]
-    pub max_turns: Option<u32>,
-    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub starred: bool,
     /// The project this agent is filed under (its id), or `None` for a global agent.
     #[serde(default)]
     pub project: Option<String>,
-    #[serde(default)]
-    pub extra: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
@@ -477,8 +462,8 @@ pub struct AgentsState {
 }
 
 /// Request body for `POST /api/agents/save` — create or update an agent definition (an upsert
-/// keyed by `name`). `name` and `backend` are required; the rest are optional settings, some
-/// of which only apply to some backends. Timestamps are owned by the server.
+/// keyed by `name`). `name` and `backend` are required; backend settings live in `arguments`.
+/// Timestamps are owned by the server.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SaveAgent {
     pub name: String,
@@ -486,26 +471,12 @@ pub struct SaveAgent {
     #[serde(default)]
     pub arguments: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
-    pub system_prompt: String,
-    #[serde(default)]
-    pub tools: String,
-    #[serde(default)]
-    pub model: Option<String>,
-    #[serde(default)]
-    pub permission_mode: Option<String>,
-    #[serde(default)]
-    pub temperature: Option<f64>,
-    #[serde(default)]
-    pub max_turns: Option<u32>,
-    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub starred: bool,
     /// The project to file the agent under (its id); blank/omitted saves a global agent.
     #[serde(default)]
     pub project: Option<String>,
-    #[serde(default)]
-    pub extra: BTreeMap<String, String>,
 }
 
 /// Request body naming an agent — `POST /api/agents/delete` and `POST /api/agents/run`.
@@ -534,7 +505,7 @@ pub struct AgentKeys {
 }
 
 /// Request body writing a wasm agent's employee source — `POST /api/agents/code/save`. The
-/// target file is the agent's `src` extra; replies with the fresh [`AgentCode`].
+/// target file is the agent's `src` argument; replies with the fresh [`AgentCode`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SaveAgentCode {
     pub name: String,
@@ -543,7 +514,7 @@ pub struct SaveAgentCode {
 }
 
 /// A wasm agent's employee source file — the answer to `POST /api/agents/code` and
-/// `/api/agents/code/save`. `path` is the manifest's `src` extra, resolved server-side.
+/// `/api/agents/code/save`. `path` is the manifest's `src` argument, resolved server-side.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentCode {
     pub name: String,
@@ -552,7 +523,7 @@ pub struct AgentCode {
 }
 
 /// The answer to `POST /api/agents/build` — the TS→WASM build's combined output plus the fresh
-/// agents state (a successful build fills in an empty `wasm` extra, changing the list).
+/// agents state (a successful build fills in an empty `wasm` argument, changing the list).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentBuildResult {
     pub ok: bool,
