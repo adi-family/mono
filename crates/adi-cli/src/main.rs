@@ -993,6 +993,7 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
             let backend = clean_required("backend", backend)?;
             let manifest = AgentManifest {
                 backend,
+                arguments: BTreeMap::new(),
                 system_prompt: system_prompt.unwrap_or_default(),
                 tools: clean(command_scope).unwrap_or_default(),
                 model: clean(model),

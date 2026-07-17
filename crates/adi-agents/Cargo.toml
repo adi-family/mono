@@ -14,6 +14,7 @@ adi-config = { workspace = true }
 adi-workforce = { workspace = true }
 
 serde = { workspace = true }
+serde_json = { workspace = true }
 
 [lints]
 workspace = true

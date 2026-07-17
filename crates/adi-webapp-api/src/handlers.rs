@@ -1520,6 +1520,7 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     let name = req.name.trim().to_string();
     let manifest = AgentManifest {
         backend: req.backend.trim().to_string(),
+        arguments: req.arguments,
         system_prompt: req.system_prompt,
         tools: req.tools.trim().to_string(),
         model: clean(req.model),
@@ -1842,6 +1843,7 @@ fn agent_dto(
     AgentDto {
         name: agent.name,
         backend: m.backend,
+        arguments: m.arguments,
         executor,
         system_prompt: m.system_prompt,
         tools: m.tools,
@@ -3236,13 +3238,21 @@ mod tests {
     }
 
     #[test]
-    fn save_agent_round_trips_extra_params() {
+    fn save_agent_round_trips_backend_settings() {
         let store = temp_agents();
         let (status, body) = save_agent(
             &store,
             br#"{
                 "name":"api-solver",
                 "backend":"api:openai",
+                "arguments":{
+                    "resume":true,
+                    "cloud_manifest":{
+                        "region":"eu-west-1",
+                        "replicas":2,
+                        "capabilities":["files", "tasks"]
+                    }
+                },
                 "extra":{
                     "api_key_env":" OPENAI_API_KEY ",
                     "base_url":" http://localhost:11434 ",
@@ -3254,6 +3264,12 @@ mod tests {
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
         let agent = &v["agents"].as_array().unwrap()[0];
+        assert_eq!(agent["arguments"]["resume"], true);
+        assert_eq!(agent["arguments"]["cloud_manifest"]["replicas"], 2);
+        assert_eq!(
+            agent["arguments"]["cloud_manifest"]["capabilities"][1],
+            "tasks"
+        );
         assert_eq!(agent["extra"]["api_key_env"], "OPENAI_API_KEY");
         assert_eq!(agent["extra"]["base_url"], "http://localhost:11434");
         assert!(agent["extra"]["bad key"].is_null());

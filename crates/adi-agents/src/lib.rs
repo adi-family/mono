@@ -290,10 +290,16 @@ mod tests {
         m.permission_mode = Some("default".into());
         m.tags = vec!["athz".into()];
         m.project = Some("demo".into());
+        m.arguments.insert("resume".into(), true.into());
+        m.arguments.insert(
+            "cloud_manifest".into(),
+            serde_json::json!({ "region": "eu-west-1", "replicas": 2 }),
+        );
         let saved = store.save("athz-solver", m).expect("save");
         assert_eq!(saved.name, "athz-solver");
         assert_eq!(saved.manifest.model.as_deref(), Some("opus"));
         assert_eq!(saved.manifest.project.as_deref(), Some("demo"));
+        assert_eq!(saved.manifest.arguments["resume"], true);
         assert!(saved.manifest.created_at > 0);
 
         let got = store.get("athz-solver").expect("get").expect("present");
@@ -315,6 +321,27 @@ mod tests {
         assert_eq!(second.manifest.temperature, Some(0.2));
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
+    }
+
+    #[test]
+    fn partial_toml_manifest_uses_struct_defaults() {
+        let store = scratch("partial-default");
+        std::fs::create_dir_all(store.dir()).expect("agents dir");
+        std::fs::write(store.dir().join("partial.toml"), "starred = true\n")
+            .expect("partial manifest");
+
+        let manifest = store
+            .get("partial")
+            .expect("get")
+            .expect("present")
+            .manifest;
+        assert!(manifest.starred);
+        assert_eq!(manifest.backend, "");
+        assert!(manifest.arguments.is_empty());
+        assert!(manifest.tags.is_empty());
+        assert_eq!(manifest.project, None);
+        assert_eq!(manifest.created_at, 0);
+        assert_eq!(manifest.updated_at, 0);
     }
 
     #[test]

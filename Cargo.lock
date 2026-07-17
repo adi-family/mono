@@ -18,6 +18,7 @@ dependencies = [
  "adi-config",
  "adi-workforce",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

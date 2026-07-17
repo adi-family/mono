@@ -434,6 +434,8 @@ pub enum AgentFormFieldKind {
 pub struct AgentDto {
     pub name: String,
     pub backend: String,
+    #[serde(default)]
+    pub arguments: BTreeMap<String, serde_json::Value>,
     pub executor: String,
     #[serde(default)]
     pub system_prompt: String,
@@ -481,6 +483,8 @@ pub struct AgentsState {
 pub struct SaveAgent {
     pub name: String,
     pub backend: String,
+    #[serde(default)]
+    pub arguments: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
     pub system_prompt: String,
     #[serde(default)]

@@ -24,7 +24,6 @@ server = [
     "dep:adi-triggers",
     "dep:adi-fs",
     "dep:adi-hooks",
-    "dep:serde_json",
     "dep:serde_yaml_ng",
 ]
 
@@ -40,7 +39,7 @@ adi-agents = { workspace = true, optional = true }
 adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }
-serde_json = { workspace = true, optional = true }
+serde_json = { workspace = true }
 serde_yaml_ng = { version = "0.10", optional = true }
 
 [lints]

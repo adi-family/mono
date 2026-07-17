@@ -101,6 +101,11 @@ pub(crate) fn agents_view(
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be.clone(),
+                    arguments: editing
+                        .get()
+                        .and_then(|name| st.as_ref()?.agents.iter().find(|agent| agent.name == name))
+                        .map(|agent| agent.arguments.clone())
+                        .unwrap_or_default(),
                     system_prompt: system_prompt.get(),
                     tools: tools.get().trim().to_string(),
                     model: opt_str(model.get()),

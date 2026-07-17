@@ -49,6 +49,7 @@ An agent definition is stored as:
 ```rust
 pub struct AgentManifest {
     pub backend: String,          // executor:what — tmux:claude, process:codex, harness:adi, ...
+    pub arguments: BTreeMap<String, serde_json::Value>, // structured backend-owned settings
     pub system_prompt: String,
     pub tools: String,            // historical field; now used as CLI command scope
     pub model: Option<String>,
@@ -57,11 +58,17 @@ pub struct AgentManifest {
     pub max_turns: Option<u32>,
     pub tags: Vec<String>,
     pub starred: bool,
+    pub project: Option<String>,
     pub extra: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
 ```
+
+`AgentManifest` uses its `Default` implementation whenever a field is omitted while
+deserializing. This keeps older and partial manifests readable as the common model grows.
+`arguments` is the structured backend-owned extension point; unlike the legacy string-only
+`extra` map, it can hold booleans, numbers, lists, and nested backend manifests.
 
 The `tools` field name is retained for manifest compatibility, but its meaning is CLI command
 scope: for example `tasks`, `projects`, `agents`, or a comma-separated subset. Future execution

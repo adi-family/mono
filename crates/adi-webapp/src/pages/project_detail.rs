@@ -822,6 +822,7 @@ fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatch) -> AnyVi
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be,
+                    arguments: std::collections::BTreeMap::new(),
                     system_prompt: system_prompt.get(),
                     tools: String::new(),
                     model: None,

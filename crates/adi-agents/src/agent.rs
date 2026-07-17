@@ -14,6 +14,7 @@ use crate::error::{Error, Result};
 ///
 /// Unknown fields are ignored so the manifest can gain fields without breaking older stores.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AgentManifest {
     /// How and what runs the agent, as an `executor:what` string. The executor is the run
     /// mechanism, the suffix is the thing it runs: `tmux:claude` | `tmux:codex` (a vendor CLI in
@@ -21,46 +22,45 @@ pub struct AgentManifest {
     /// subprocess), `harness:claude-sdk` | `harness:adi` (an agentic-loop harness; `harness:adi`
     /// picks its model provider via the `provider` extra).
     pub backend: String,
+    /// Structured arguments interpreted by the selected backend. Values may be strings,
+    /// numbers, booleans, arrays, or nested objects, allowing a backend to embed its own
+    /// manifest/configuration without promoting every setting to this common model.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub arguments: BTreeMap<String, serde_json::Value>,
     /// The system prompt seeding the agent (the resolved prompt body). May be empty.
-    #[serde(default)]
     pub system_prompt: String,
     /// The CLI command scope this agent may use, e.g. `tasks,projects`. This is stored in the
     /// historical `tools` field for compatibility with existing manifests.
-    #[serde(default)]
     pub tools: String,
     /// Backend-specific model alias, e.g. `opus`/`sonnet` (claude), `gpt-5-codex` (codex).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Claude-engine permission mode, e.g. `default` | `acceptEdits` | `plan` |
     /// `bypassPermissions` (applies to `*:claude` and `harness:claude-sdk`).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<String>,
     /// `harness:adi` sampling temperature (only meaningful for providers that accept it).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f64>,
     /// Optional cap on the number of agent turns per run.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
     /// Free-form tags. A tag equal to an agent name is what auto-assigns/auto-starts a task
     /// (docs/adi-agents.md §9) — the dispatch hook, once orchestration exists.
-    #[serde(default)]
     pub tags: Vec<String>,
     /// Pinned in the UI / preferred for quick-dispatch.
-    #[serde(default)]
     pub starred: bool,
     /// The project this agent is filed under (its [`adi-projects`] id), or `None` for a
     /// global agent. Pure metadata: it scopes where the agent shows up (a project's detail
     /// page), not what it may do.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Backend-specific fields not yet promoted to first-class manifest properties.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,
     /// When the definition was created, as Unix epoch seconds.
-    #[serde(default)]
     pub created_at: u64,
     /// When the definition was last saved, as Unix epoch seconds.
-    #[serde(default)]
     pub updated_at: u64,
 }
 
@@ -126,6 +126,12 @@ mod tests {
         assert_eq!(m.executor(), "harness");
         m.backend = "weird".into();
         assert_eq!(m.executor(), "");
+    }
+
+    #[test]
+    fn missing_fields_deserialize_from_the_manifest_default() {
+        let manifest: AgentManifest = serde_json::from_str("{}").expect("empty manifest");
+        assert_eq!(manifest, AgentManifest::default());
     }
 
     #[test]
