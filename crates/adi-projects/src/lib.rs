@@ -113,10 +113,8 @@ impl Projects {
     /// # Errors
     /// [`Error::Io`] on a directory read failure, or [`Error::Config`] if a manifest is invalid TOML.
     pub fn list(&self) -> Result<Vec<Project>> {
-        let entries = match std::fs::read_dir(self.dir()) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(Error::Io(e)),
+        let Some(entries) = optional(std::fs::read_dir(self.dir()))? else {
+            return Ok(Vec::new());
         };
 
         let mut projects = Vec::new();
@@ -269,11 +267,7 @@ impl Projects {
         // Capture the parent before the manifest is gone, to hand it down to the children.
         let orphan_parent = self.get(id)?.and_then(|p| p.manifest.parent);
         let dir = self.dir().join(id);
-        let removed = match std::fs::remove_dir_all(&dir) {
-            Ok(()) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => return Err(Error::Io(e)),
-        };
+        let removed = optional(std::fs::remove_dir_all(&dir))?.is_some();
         if removed {
             for mut child in self.children(id)? {
                 child.manifest.parent.clone_from(&orphan_parent);
@@ -286,6 +280,16 @@ impl Projects {
     /// Load a project, turning absence into [`Error::NotFound`].
     fn require(&self, id: &str) -> Result<Project> {
         self.get(id)?.ok_or_else(|| Error::NotFound(id.to_string()))
+    }
+}
+
+/// Fold a "not found" I/O error into `Ok(None)`, propagating any other failure as [`Error::Io`].
+/// Lets a missing `projects/` dir or project dir read as a normal absent outcome rather than an error.
+fn optional<T>(result: std::io::Result<T>) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::Io(e)),
     }
 }
 
