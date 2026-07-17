@@ -127,14 +127,10 @@ pub fn contains_json_null(value: &serde_json::Value) -> bool {
     }
 }
 
-/// Validate an agent name before it is joined onto the store path as `<name>.toml`. Delegates the
-/// filesystem-safety rule to [`adi_config::valid_name`] and maps a rejection onto [`Error`].
+/// Validate an agent name before it is joined onto the store path as `<name>.toml`, mapping a
+/// rejection onto [`Error::InvalidName`].
 pub(crate) fn validate_name(name: &str) -> Result<()> {
-    if adi_config::valid_name(name) {
-        Ok(())
-    } else {
-        Err(Error::InvalidName(name.to_string()))
-    }
+    adi_config::validate_name(name, Error::InvalidName)
 }
 
 #[cfg(test)]

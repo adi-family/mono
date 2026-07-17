@@ -100,6 +100,20 @@ pub fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
+/// Check `name` with [`valid_name`], mapping a rejection through `err` into the caller's own error
+/// type. Every store owns an `InvalidName(String)` variant but a distinct `Error` enum, so pass
+/// the variant itself as the constructor: `validate_name(name, Error::InvalidName)`.
+///
+/// # Errors
+/// Returns `err(name)` when [`valid_name`] rejects `name`.
+pub fn validate_name<E>(name: &str, err: impl FnOnce(String) -> E) -> std::result::Result<(), E> {
+    if valid_name(name) {
+        Ok(())
+    } else {
+        Err(err(name.to_string()))
+    }
+}
+
 /// Seconds since the Unix epoch, saturating to 0 if the clock is somehow before it. Stores stamp
 /// this onto their manifests (`created_at` / `updated_at`).
 #[must_use]
@@ -139,5 +153,11 @@ mod tests {
     #[test]
     fn now_unix_is_after_the_epoch() {
         assert!(now_unix() > 0);
+    }
+
+    #[test]
+    fn validate_name_maps_rejections_through_the_constructor() {
+        assert_eq!(validate_name("ok", |n| n), Ok(()));
+        assert_eq!(validate_name("a/b", |n| n), Err("a/b".to_string()));
     }
 }

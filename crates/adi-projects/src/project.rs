@@ -59,21 +59,11 @@ impl Project {
     }
 }
 
-/// Validate a project id: a single, filesystem-safe path segment. This is a security
-/// boundary — ids arrive from the CLI and the HTTP API and are joined onto the store path,
-/// so anything with a separator or `.`/`..` must be rejected to prevent path traversal.
+/// Validate a project id: a single, filesystem-safe path segment (same rule as a store name; see
+/// [`adi_config::valid_name`]). This is a security boundary — ids arrive from the CLI and the HTTP
+/// API and are joined onto the store path, so path traversal must be rejected.
 pub(crate) fn validate_id(id: &str) -> Result<()> {
-    let ok = !id.is_empty()
-        && id != "."
-        && id != ".."
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
-    if ok {
-        Ok(())
-    } else {
-        Err(Error::InvalidId(id.to_string()))
-    }
+    adi_config::validate_name(id, Error::InvalidId)
 }
 
 #[cfg(test)]

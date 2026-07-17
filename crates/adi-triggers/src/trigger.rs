@@ -96,15 +96,11 @@ pub struct Trigger {
     pub manifest: TriggerManifest,
 }
 
-/// Validate a trigger name before it is joined onto the store path as `<name>.toml`. The rule
-/// matters here because names also appear in the *public webhook URL path*. Delegates the
-/// filesystem-safety check to [`adi_config::valid_name`] and maps a rejection onto [`Error`].
+/// Validate a trigger name before it is joined onto the store path as `<name>.toml`, mapping a
+/// rejection onto [`Error::InvalidName`]. The rule matters here because names also appear in the
+/// *public webhook URL path*.
 pub(crate) fn validate_name(name: &str) -> Result<()> {
-    if adi_config::valid_name(name) {
-        Ok(())
-    } else {
-        Err(Error::InvalidName(name.to_string()))
-    }
+    adi_config::validate_name(name, Error::InvalidName)
 }
 
 #[cfg(test)]
