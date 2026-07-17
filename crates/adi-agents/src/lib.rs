@@ -1,13 +1,4 @@
-//! adi-agents — reusable agent definitions ([`AgentManifest`]) for the adi platform: a pure
-//! library (no CLI, no daemon) over the shared [`adi_config`] store. Each agent is one
-//! `<name>.toml` file under `~/.adi/mono/agents/`, holding ADI control metadata plus a strictly
-//! typed backend argument object.
-//!
-//! This is the **definition/store layer** of the larger adi-agents orchestration spec
-//! (docs/adi-agents.md), plus the first slice of its run layer: [`Agents::run`] launches a
-//! tmux-backed agent in an `adi-agent-<name>` session or a headless `process:*` agent in the
-//! background (see [`run`](mod@crate::run) via the re-exports below). The full backend contract
-//! and lifecycle hooks from that spec are still future work.
+//! Agent manifests, storage, and execution adapters for ADI.
 //!
 //! ```
 //! # let tmp = std::env::temp_dir().join(format!("adi-agents-doctest-{}", std::process::id()));
@@ -38,6 +29,7 @@
 
 mod agent;
 pub mod arguments;
+mod backend;
 mod backends;
 mod error;
 mod run;
@@ -49,24 +41,18 @@ use adi_config::{Config, ConfigFile};
 
 pub use agent::{Agent, AgentManifest, RawAgentArguments, StoredAgent, StoredAgentManifest};
 pub use error::{Error, Result};
-pub use run::{
-    Launch, capture_pane, is_runnable, launch, running_sessions, send_keys, session_name, stop,
-};
+pub use run::{Launch, capture_pane, is_runnable, running_sessions, send_keys, session_name};
 pub use wasm::DispatchOutcome;
 
 use agent::{now_unix, validate_name};
 use run::{is_running_in, launch_in, stop_in};
 
-/// The store module agents live under, and each agent file's extension.
 const AGENTS_MODULE: &str = "agents";
-/// The module dir wasm employees are installed under (`~/.adi/mono/workforce`).
 const WORKFORCE_MODULE: &str = "workforce";
-/// Runtime state for launched agents (`~/.adi/mono/sessions`).
 const SESSIONS_MODULE: &str = "sessions";
 const MANIFEST_EXT: &str = "toml";
 
-/// The agents registry: lists, reads, and mutates the per-agent manifests under the `agents`
-/// module dir. Cheap to clone; all state is on disk.
+/// An on-disk agent registry.
 #[derive(Debug, Clone)]
 pub struct Agents {
     config: Config,
@@ -79,7 +65,6 @@ impl Default for Agents {
 }
 
 impl Agents {
-    /// Open the registry backed by the standard store (`~/.adi/mono`, honoring `$ADI_DIR`).
     #[must_use]
     pub fn open() -> Self {
         Self {
@@ -87,36 +72,31 @@ impl Agents {
         }
     }
 
-    /// Open the registry backed by a caller-supplied [`Config`] — for tests or alternate installs.
     #[must_use]
     pub fn with_config(config: Config) -> Self {
         Self { config }
     }
 
-    /// The store this registry reads from.
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
     }
 
-    /// The `agents` directory: `~/.adi/mono/agents`.
     #[must_use]
     pub fn dir(&self) -> PathBuf {
         self.config.module(AGENTS_MODULE).dir().to_path_buf()
     }
 
-    /// The manifest file handle for `name`, at `agents/<name>.toml` (touches no disk).
     fn agent_file(&self, name: &str) -> ConfigFile<StoredAgentManifest> {
         self.config
             .module(AGENTS_MODULE)
             .file(&format!("{name}.{MANIFEST_EXT}"))
     }
 
-    /// Every registered agent, sorted by name. A file without a `.toml` extension is skipped; a
-    /// missing `agents/` dir yields an empty list.
+    /// Returns registered agents sorted by name.
     ///
     /// # Errors
-    /// [`Error::Io`] on a directory read failure, or [`Error::Config`] if a manifest is invalid TOML.
+    /// Returns store I/O or manifest decoding errors.
     pub fn list(&self) -> Result<Vec<StoredAgent>> {
         let entries = match std::fs::read_dir(self.dir()) {
             Ok(entries) => entries,
@@ -148,10 +128,8 @@ impl Agents {
         Ok(agents)
     }
 
-    /// The agent with this name, or `None` if it isn't registered.
-    ///
     /// # Errors
-    /// [`Error::InvalidName`] for an unsafe name, or [`Error::Config`] if the manifest is invalid TOML.
+    /// Returns name validation or manifest decoding errors.
     pub fn get(&self, name: &str) -> Result<Option<StoredAgent>> {
         validate_name(name)?;
         let file = self.agent_file(name);
@@ -164,11 +142,8 @@ impl Agents {
         }))
     }
 
-    /// The agent with this name decoded using a backend's strict argument type.
-    ///
     /// # Errors
-    /// Returns the same errors as [`Self::get`], plus [`Error::Arguments`] when the stored
-    /// argument object does not match `Args`.
+    /// Returns errors from [`Self::get`] or argument decoding.
     pub fn get_typed<Args: serde::de::DeserializeOwned>(
         &self,
         name: &str,
@@ -176,12 +151,10 @@ impl Agents {
         self.get(name)?.map(StoredAgent::into_typed).transpose()
     }
 
-    /// Create or overwrite an agent definition (an upsert), writing its `<name>.toml`. The store
-    /// owns the timestamps: `created_at` is preserved across edits (set once on first save),
-    /// `updated_at` is stamped every save — any values in `manifest` are ignored.
+    /// Upserts an agent, preserving `created_at` and stamping `updated_at`.
     ///
     /// # Errors
-    /// [`Error::InvalidName`] for an unsafe name, or [`Error::Config`] on a write failure.
+    /// Returns name, argument, or store errors.
     pub fn save<Args: serde::Serialize>(
         &self,
         name: &str,
@@ -205,19 +178,14 @@ impl Agents {
         })
     }
 
-    /// Launch a registered agent in its backend with the default `run` message.
-    ///
     /// # Errors
-    /// [`Error::NotFound`] for an unregistered name, plus everything [`launch`] can return.
+    /// Returns [`Error::NotFound`] or backend launch errors.
     pub fn run(&self, name: &str) -> Result<Launch> {
         self.run_with_message(name, "run")
     }
 
-    /// Launch a registered agent, passing `message` to headless process backends. Interactive
-    /// tmux backends start without consuming it.
-    ///
     /// # Errors
-    /// [`Error::NotFound`] for an unregistered name, plus everything [`launch`] can return.
+    /// Returns [`Error::NotFound`] or backend launch errors.
     pub fn run_with_message(&self, name: &str, message: &str) -> Result<Launch> {
         let agent = self
             .get(name)?
@@ -226,13 +194,10 @@ impl Agents {
         launch_in(&agent, &sessions_dir, message)
     }
 
-    /// Run a `wasm:*` agent: a synchronous one-shot dispatch of `message` into the compiled
-    /// component named by the manifest's `arguments.wasm` (see [`wasm::dispatch`]). Employees are
-    /// installed — and their logs live — under the `workforce` module dir.
+    /// Dispatches a message synchronously to a `wasm:*` agent.
     ///
     /// # Errors
-    /// [`Error::NotFound`] for an unregistered name, [`Error::NotRunnable`] for a non-wasm
-    /// backend, plus everything [`wasm::dispatch`] can return.
+    /// Returns lookup, backend, component loading, or dispatch errors.
     pub fn run_wasm(
         &self,
         name: &str,
@@ -249,18 +214,16 @@ impl Agents {
         wasm::dispatch(&agent, &workforce_dir, handler, message)
     }
 
-    /// Whether an agent currently has a live tmux session or detached process.
     #[must_use]
     pub fn is_running(&self, agent: &StoredAgent) -> bool {
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         is_running_in(agent, &sessions_dir)
     }
 
-    /// Stop a running agent using its executor's lifecycle. Returns whether a live run was found
-    /// and asked to stop (idempotent).
+    /// Stops a run, returning whether one was found.
     ///
     /// # Errors
-    /// [`Error::InvalidName`] for an unsafe name, or an executor-specific lifecycle error.
+    /// Returns name validation or backend lifecycle errors.
     pub fn stop(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
         let Some(agent) = self.get(name)? else {
@@ -270,10 +233,8 @@ impl Agents {
         stop_in(&agent, &sessions_dir)
     }
 
-    /// Delete an agent definition. Returns `false` if it wasn't registered.
-    ///
     /// # Errors
-    /// [`Error::InvalidName`] for an unsafe name, or [`Error::Config`] on a removal failure.
+    /// Returns name validation or store errors.
     pub fn delete(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
         Ok(self

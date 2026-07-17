@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, AgentSummaryArguments, EffectiveStatus, Project, Report, RunOutcome,
+    Adi, AgentManifest, AgentSummaryArguments, EffectiveStatus, Launch, Project, Report, RunOutcome,
     Service, ServiceReport, StoredAgent, TaskPatch, TaskStatus, TaskView, Trigger, TriggerManifest,
     Updater,
 };
@@ -1056,19 +1056,17 @@ fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String> {
                 let launch = store
                     .run_with_message(&name, &message)
                     .map_err(|e| e.to_string())?;
-                if let Some(session) = &launch.session {
-                    println!("Started agent {name} in tmux session {session}.");
-                } else if let Some(pid) = launch.pid {
-                    println!("Started agent {name} as background process {pid}.");
-                } else {
-                    println!("Started agent {name}.");
-                }
-                println!("  command: {}", launch.command);
-                if let Some(attach) = &launch.attach {
-                    println!("  attach:  {attach}");
-                }
-                if let Some(log) = &launch.log {
-                    println!("  log:     {}", log.display());
+                match launch {
+                    Launch::Tmux { command, session } => {
+                        println!("Started agent {name} in tmux session {session}.");
+                        println!("  command: {command}");
+                        println!("  attach:  tmux attach -t {session}");
+                    }
+                    Launch::Process { command, pid, log } => {
+                        println!("Started agent {name} as background process {pid}.");
+                        println!("  command: {command}");
+                        println!("  log:     {}", log.display());
+                    }
                 }
             }
         }

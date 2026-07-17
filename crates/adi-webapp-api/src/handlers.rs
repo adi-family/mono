@@ -1494,16 +1494,14 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> (u16, String) {
         Ok(launch) => launch,
         Err(e) => return agent_error(&e),
     };
-    let message = match (&launch.session, launch.pid, &launch.log) {
-        (Some(_), _, _) => format!(
-            "Started “{name}” — attach: {}",
-            launch.attach.as_deref().unwrap_or_default()
-        ),
-        (_, Some(pid), Some(log)) => format!(
+    let message = match launch {
+        adi_agents::Launch::Tmux { session, .. } => {
+            format!("Started “{name}” — attach: tmux attach -t {session}")
+        }
+        adi_agents::Launch::Process { pid, log, .. } => format!(
             "Started “{name}” as process {pid} — output: {}",
             log.display()
         ),
-        _ => format!("Started “{name}”."),
     };
     match agents_state(store) {
         Ok(state) => ok_json(&AgentRunResult { message, state }),
@@ -2013,7 +2011,7 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(txt_field(
         "fallback_model",
         "Fallback model",
-        CLAUDE_BACKENDS,
+        &["process:claude", "harness:claude-sdk"],
         "sonnet",
         "used when the primary model is overloaded",
     ));
@@ -2050,7 +2048,6 @@ fn agent_form_spec() -> AgentFormSpec {
             ("", "— default —"),
             ("untrusted", "untrusted"),
             ("on-request", "on-request"),
-            ("on-failure", "on-failure"),
             ("never", "never"),
         ]),
         "when to ask before running a command",
@@ -2075,7 +2072,11 @@ fn agent_form_spec() -> AgentFormSpec {
         "agent working root (-C)",
     ));
 
-    fields.push(chk_field("skip_git_repo_check", "Skip git-repo check", CODEX_BACKENDS));
+    fields.push(chk_field(
+        "skip_git_repo_check",
+        "Skip git-repo check",
+        &["process:codex"],
+    ));
     fields.push(chk_field("web_search", "Web search", CODEX_BACKENDS));
     fields.push(chk_field("json_events", "JSONL events", &["process:codex"]));
 
@@ -2190,7 +2191,12 @@ fn agent_form_spec() -> AgentFormSpec {
     stop.wide = true;
     fields.push(stop);
 
-    let mut max_turns = agent_field("max_turns", "Max turns", AgentFormFieldKind::Number);
+    let mut max_turns = field_ids(
+        "max_turns",
+        "Max turns",
+        AgentFormFieldKind::Number,
+        &[ADI_HARNESS, "harness:claude-sdk", WASM_LOOP],
+    );
     max_turns.placeholder = "optional".into();
     max_turns.hint = "harness cap on agent turns per run".into();
     max_turns.numeric = true;
@@ -2218,7 +2224,12 @@ fn agent_form_spec() -> AgentFormSpec {
     tags.wide = true;
     fields.push(tags);
 
-    let mut tools = agent_field("tools", "CLI commands", AgentFormFieldKind::Text);
+    let mut tools = field_ids(
+        "tools",
+        "CLI commands",
+        AgentFormFieldKind::Text,
+        &[ADI_HARNESS, "harness:claude-sdk", WASM_LOOP],
+    );
     tools.placeholder = "tasks,projects,agents".into();
     tools.hint = "which adi-mono command groups this agent may use".into();
     tools.mono = true;
@@ -3143,6 +3154,20 @@ mod tests {
         }));
         for name in ["effort", "sandbox", "approval", "thinking", "num_ctx", "max_tokens"] {
             assert!(fields.iter().any(|f| f["name"] == name), "missing field {name}");
+        }
+        for (field, excluded_backend) in [
+            ("tools", "tmux:codex"),
+            ("max_turns", "process:claude"),
+            ("fallback_model", "tmux:claude"),
+            ("skip_git_repo_check", "tmux:codex"),
+        ] {
+            let ids = fields
+                .iter()
+                .find(|f| f["name"] == field)
+                .unwrap()["backend_ids"]
+                .as_array()
+                .unwrap();
+            assert!(!ids.iter().any(|id| id == excluded_backend));
         }
         // Temperature applies only where a non-default value is safe (the Gemini and Ollama
         // providers) — not the reasoning / current-model providers where it 400s.

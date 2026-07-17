@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Deserializer, Serialize};
 
+use crate::backend::Backend;
 use crate::{Result as AgentResult, StoredAgentManifest};
 
 macro_rules! string_enum {
@@ -31,7 +32,6 @@ macro_rules! string_enum {
 string_enum! {
     /// Claude's permission handling mode.
     ClaudePermissionMode {
-        Default => "default",
         AcceptEdits => "acceptEdits",
         Auto => "auto",
         BypassPermissions => "bypassPermissions",
@@ -75,7 +75,6 @@ string_enum! {
     CodexApproval {
         Untrusted => "untrusted",
         OnRequest => "on-request",
-        OnFailure => "on-failure",
         Never => "never",
     }
 }
@@ -93,17 +92,17 @@ string_enum! {
 /// backends own their argument type and are validated when they convert or call
 /// [`crate::Agents::get_typed`].
 pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()> {
-    match manifest.backend.as_str() {
-        "tmux:claude" => manifest.typed_arguments::<TmuxClaudeArguments>().map(drop),
-        "process:claude" => manifest
+    match Backend::parse(&manifest.backend) {
+        Some(Backend::TmuxClaude) => manifest.typed_arguments::<TmuxClaudeArguments>().map(drop),
+        Some(Backend::ProcessClaude) => manifest
             .typed_arguments::<ProcessClaudeArguments>()
             .map(drop),
-        "tmux:codex" => manifest.typed_arguments::<TmuxCodexArguments>().map(drop),
-        "process:codex" => manifest
+        Some(Backend::TmuxCodex) => manifest.typed_arguments::<TmuxCodexArguments>().map(drop),
+        Some(Backend::ProcessCodex) => manifest
             .typed_arguments::<ProcessCodexArguments>()
             .map(drop),
-        "wasm:loop-script" => manifest.typed_arguments::<WasmArguments>().map(drop),
-        _ => Ok(()),
+        Some(Backend::Wasm) => manifest.typed_arguments::<WasmArguments>().map(drop),
+        None => Ok(()),
     }
 }
 
@@ -114,25 +113,15 @@ pub struct TmuxClaudeArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<ClaudePermissionMode>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "option_u64"
-    )]
-    pub max_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ClaudeEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub disallowed_tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fallback_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub append_system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -146,17 +135,9 @@ pub struct ProcessClaudeArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission_mode: Option<ClaudePermissionMode>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "option_u64"
-    )]
-    pub max_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ClaudeEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -188,15 +169,7 @@ pub struct TmuxCodexArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "option_u64"
-    )]
-    pub max_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<CodexSandbox>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -208,8 +181,6 @@ pub struct TmuxCodexArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub add_dir: Option<String>,
     #[serde(default, deserialize_with = "boolish")]
-    pub skip_git_repo_check: bool,
-    #[serde(default, deserialize_with = "boolish")]
     pub web_search: bool,
 }
 
@@ -220,15 +191,7 @@ pub struct ProcessCodexArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "option_u64"
-    )]
-    pub max_turns: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox: Option<CodexSandbox>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

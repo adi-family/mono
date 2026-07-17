@@ -1,8 +1,4 @@
-//! Shared tmux executor.
-//!
-//! This module owns tmux session lifecycle, observation, and input. Engine-specific command
-//! construction lives in sibling files so Claude and Codex do not grow into one match-heavy
-//! launcher.
+//! Tmux session lifecycle.
 
 mod claude;
 mod codex;
@@ -11,11 +7,11 @@ use std::collections::BTreeSet;
 use std::process::Command;
 
 use crate::arguments::{TmuxClaudeArguments, TmuxCodexArguments};
+use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::run::Launch;
 use crate::{StoredAgent, StoredAgentManifest};
 
-/// Prefix of every tmux session this launcher owns.
 const SESSION_PREFIX: &str = "adi-agent-";
 
 /// The tmux session name for an agent. Agent names may contain `.` (valid on disk), which tmux
@@ -25,13 +21,11 @@ pub fn session_name(agent_name: &str) -> String {
     format!("{SESSION_PREFIX}{}", agent_name.replace('.', "-"))
 }
 
-/// Whether this manifest names one of the tmux engines implemented here.
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     engine_argv(manifest).is_ok()
 }
 
-/// Whether this agent's tmux session exists.
 #[must_use]
 pub fn is_running(agent_name: &str) -> bool {
     session_exists(&session_name(agent_name))
@@ -57,7 +51,6 @@ pub fn running_sessions() -> BTreeSet<String> {
         .collect()
 }
 
-/// A read-only snapshot of a running agent's visible tmux pane.
 #[must_use]
 pub fn capture_pane(agent_name: &str) -> Option<String> {
     let session = session_name(agent_name);
@@ -71,10 +64,6 @@ pub fn capture_pane(agent_name: &str) -> Option<String> {
         .then(|| String::from_utf8_lossy(&out.stdout).trim_end().to_string())
 }
 
-/// Stop a running agent by killing its tmux session. Returns whether a session was found.
-///
-/// # Errors
-/// [`Error::Tmux`] when the kill itself fails on an existing session.
 pub fn stop(agent_name: &str) -> Result<bool> {
     let session = session_name(agent_name);
     if !session_exists(&session) {
@@ -84,11 +73,8 @@ pub fn stop(agent_name: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// Send literal input and/or one key token to a running agent's tmux session.
-///
 /// # Errors
-/// [`Error::NotRunning`] when the session is absent, [`Error::InvalidKey`] for an invalid key,
-/// or [`Error::Tmux`] when tmux fails.
+/// Returns validation, missing-session, or tmux errors.
 pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
     let session = session_name(agent_name);
     if !session_exists(&session) {
@@ -105,11 +91,6 @@ pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Launch `agent` in a detached tmux session.
-///
-/// # Errors
-/// [`Error::NotRunnable`] for an unknown tmux engine, [`Error::AlreadyRunning`] when its session
-/// exists, or [`Error::Launch`] when tmux cannot create the session.
 pub fn launch(agent: &StoredAgent) -> Result<Launch> {
     let argv = engine_argv(&agent.manifest)?;
     let session = session_name(&agent.name);
@@ -138,27 +119,20 @@ pub fn launch(agent: &StoredAgent) -> Result<Launch> {
         }));
     }
 
-    Ok(Launch {
-        command,
-        session: Some(session.clone()),
-        attach: Some(format!("tmux attach -t {session}")),
-        pid: None,
-        log: None,
-    })
+    Ok(Launch::Tmux { command, session })
 }
 
-/// Resolve the engine-specific command for a tmux backend.
 fn engine_argv(manifest: &StoredAgentManifest) -> Result<Vec<String>> {
-    match manifest.backend.as_str() {
-        claude::BACKEND_ID => {
-            let manifest = manifest.clone().into_typed::<TmuxClaudeArguments>()?;
-            Ok(claude::argv(&manifest))
+    match Backend::parse(&manifest.backend) {
+        Some(Backend::TmuxClaude) => {
+            let arguments = manifest.typed_arguments::<TmuxClaudeArguments>()?;
+            Ok(claude::argv(&arguments))
         }
-        codex::BACKEND_ID => {
-            let manifest = manifest.clone().into_typed::<TmuxCodexArguments>()?;
-            Ok(codex::argv(&manifest))
+        Some(Backend::TmuxCodex) => {
+            let arguments = manifest.typed_arguments::<TmuxCodexArguments>()?;
+            Ok(codex::argv(&arguments))
         }
-        other => Err(Error::NotRunnable(other.to_string())),
+        _ => Err(Error::NotRunnable(manifest.backend.clone())),
     }
 }
 
@@ -189,7 +163,6 @@ fn run_tmux(args: &[&str]) -> Result<()> {
     }))
 }
 
-/// Wrap an engine argv into the single `sh -c` command tmux runs.
 fn shell_command(argv: &[String]) -> String {
     let engine = argv
         .iter()

@@ -7,7 +7,7 @@ The command center for agent and task state is the `adi-mono` CLI:
 
 ```bash
 adi-mono agents list
-adi-mono agents save planner --backend tmux:codex --command-scope tasks,projects
+adi-mono agents save planner --backend tmux:codex --argument sandbox=workspace-write
 adi-mono agents run planner        # detached tmux session adi-agent-planner
 adi-mono agents save reviewer --backend process:codex --argument sandbox=read-only
 adi-mono agents run reviewer --message "Review the current branch" # background codex exec
@@ -63,11 +63,10 @@ For example, a cloud backend defines `CloudAgentArguments` and uses
 deserialization errors, not string-key lookups. `AgentManifest<Args>` implements `Default` whenever
 `Args` does.
 
-`arguments` owns every setting interpreted by the selected backend: `system_prompt`, `tools`,
-`model`, `permission_mode`, `temperature`, `max_turns`, executor flags, and nested backend
-manifests. `AgentManifest` itself contains only fields ADI uses to file, dispatch, and timestamp
-the definition. The built-in Claude, Codex, and WASM executors expose strict argument structs with
-unknown-field rejection.
+`arguments` owns the settings interpreted by the selected backend. Vendor CLI schemas contain only
+options their command builders use; harness and WASM schemas may also carry `tools`, `max_turns`,
+provider settings, and source paths. `AgentManifest` itself contains only fields ADI uses to file,
+dispatch, and timestamp the definition. Built-in executors reject unknown fields.
 
 The registry uses `StoredAgentManifest` only at its heterogeneous storage/listing boundary because
 one directory can contain unrelated backend argument types. `Agents::save` accepts and returns the
@@ -76,9 +75,9 @@ when reading it later.
 Legacy top-level backend fields and the old string-only `extra` map migrate into `arguments` when
 read.
 
-The `tools` argument is the CLI command scope: for example `tasks`, `projects`, `agents`, or a
-comma-separated subset. Future execution code should treat it as the set of `adi-mono` command
-groups an agent may use.
+For harness and WASM backends, `tools` is the CLI command scope: for example `tasks`, `projects`,
+`agents`, or a comma-separated subset. It is not accepted by vendor CLI backends, whose native
+tool controls use fields such as `allowed_tools` and `disallowed_tools`.
 
 ## Task Dispatch Direction
 

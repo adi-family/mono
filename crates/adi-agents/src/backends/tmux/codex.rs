@@ -1,19 +1,40 @@
 //! `tmux:codex` command construction.
 
-use crate::AgentManifest;
-use crate::arguments::TmuxCodexArguments;
-
-pub(super) const BACKEND_ID: &str = "tmux:codex";
+use crate::arguments::{CodexApproval, CodexSandbox, TmuxCodexArguments};
+use crate::backends::push_option;
 
 /// Build the Codex CLI command run by the shared tmux executor.
-pub(super) fn argv(manifest: &AgentManifest<TmuxCodexArguments>) -> Vec<String> {
-    let config = &manifest.arguments;
+pub(super) fn argv(config: &TmuxCodexArguments) -> Vec<String> {
     let mut argv = vec!["codex".to_string()];
-    if let Some(sandbox) = config.sandbox {
-        argv.extend(["--sandbox".to_string(), sandbox.as_str().to_string()]);
+    push_option(&mut argv, "--model", config.model.as_deref());
+    push_option(
+        &mut argv,
+        "--sandbox",
+        config.sandbox.map(CodexSandbox::as_str),
+    );
+    push_option(
+        &mut argv,
+        "--ask-for-approval",
+        config.approval.map(CodexApproval::as_str),
+    );
+    push_option(&mut argv, "--cd", config.working_dir.as_deref());
+    push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
+    if config.web_search {
+        argv.push("--search".into());
     }
-    if let Some(model) = &config.model {
-        argv.extend(["--model".to_string(), model.clone()]);
+    if let Some(effort) = config.reasoning_effort {
+        argv.extend([
+            "--config".into(),
+            format!("model_reasoning_effort={}", effort.as_str()),
+        ]);
+    }
+    if let Some(prompt) = config
+        .system_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+    {
+        argv.push(prompt.into());
     }
     argv
 }
@@ -21,27 +42,43 @@ pub(super) fn argv(manifest: &AgentManifest<TmuxCodexArguments>) -> Vec<String> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::arguments::CodexSandbox;
+    use crate::AgentManifest;
+    use crate::arguments::{CodexReasoningEffort, CodexSandbox};
 
     #[test]
     fn argv_honors_model_and_sandbox() {
         let manifest = AgentManifest {
-            backend: BACKEND_ID.into(),
+            backend: "tmux:codex".into(),
             arguments: TmuxCodexArguments {
                 model: Some("gpt-5-codex".into()),
                 sandbox: Some(CodexSandbox::WorkspaceWrite),
-                ..TmuxCodexArguments::default()
+                approval: Some(CodexApproval::Never),
+                reasoning_effort: Some(CodexReasoningEffort::High),
+                working_dir: Some("/repo".into()),
+                add_dir: Some("/shared".into()),
+                web_search: true,
+                system_prompt: Some("Fix the tests.".into()),
             },
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest),
+            argv(&manifest.arguments),
             [
                 "codex",
+                "--model",
+                "gpt-5-codex",
                 "--sandbox",
                 "workspace-write",
-                "--model",
-                "gpt-5-codex"
+                "--ask-for-approval",
+                "never",
+                "--cd",
+                "/repo",
+                "--add-dir",
+                "/shared",
+                "--search",
+                "--config",
+                "model_reasoning_effort=high",
+                "Fix the tests."
             ]
         );
     }

@@ -1,14 +1,11 @@
 //! `process:claude` command construction (`claude --print`).
 
-use crate::AgentManifest;
 use crate::arguments::{
     ClaudeEffort, ClaudeOutputFormat, ClaudePermissionMode, ProcessClaudeArguments,
 };
+use crate::backends::push_option;
 
-pub(super) const BACKEND_ID: &str = "process:claude";
-
-pub(super) fn argv(manifest: &AgentManifest<ProcessClaudeArguments>, message: &str) -> Vec<String> {
-    let config = &manifest.arguments;
+pub(super) fn argv(config: &ProcessClaudeArguments, message: &str) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -62,12 +59,6 @@ pub(super) fn argv(manifest: &AgentManifest<ProcessClaudeArguments>, message: &s
     argv
 }
 
-fn push_option(argv: &mut Vec<String>, flag: &str, value: Option<&str>) {
-    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-        argv.extend([flag.to_string(), value.to_string()]);
-    }
-}
-
 fn run_message(message: &str) -> String {
     let message = message.trim();
     if message.is_empty() {
@@ -80,11 +71,12 @@ fn run_message(message: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AgentManifest;
 
     #[test]
     fn argv_uses_print_mode_and_process_options() {
         let manifest = AgentManifest {
-            backend: BACKEND_ID.into(),
+            backend: "process:claude".into(),
             arguments: ProcessClaudeArguments {
                 model: Some("sonnet".into()),
                 permission_mode: Some(ClaudePermissionMode::DontAsk),
@@ -97,7 +89,7 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest, "prepare the release"),
+            argv(&manifest.arguments, "prepare the release"),
             [
                 "claude",
                 "--print",

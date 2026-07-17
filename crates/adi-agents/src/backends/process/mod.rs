@@ -1,8 +1,4 @@
-//! Shared detached-process executor.
-//!
-//! Process backends run vendor CLIs in their non-interactive modes with stdin disconnected and
-//! combined output redirected to a log. ADI starts each child in its own process group, records
-//! its PID, and keeps just enough state to report and stop a background run without a terminal UI.
+//! Detached process lifecycle.
 
 mod claude;
 mod codex;
@@ -14,38 +10,28 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use crate::arguments::{ProcessClaudeArguments, ProcessCodexArguments};
+use crate::backend::Backend;
 use crate::error::{Error, Result};
 use crate::run::Launch;
 use crate::{StoredAgent, StoredAgentManifest};
 
 const PROCESS_DIR: &str = "process";
 
-/// Whether this manifest names one of the headless process engines implemented here.
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     engine_run(manifest, "").is_ok()
 }
 
-/// Launch a vendor CLI non-interactively in the background.
-///
-/// # Errors
-/// [`Error::NotRunnable`] for an unknown process engine, [`Error::AlreadyRunning`] when the
-/// recorded process is still live, or an I/O/launch error while preparing or spawning it.
 pub fn launch(agent: &StoredAgent, sessions_dir: &Path, message: &str) -> Result<Launch> {
     let (argv, working_dir) = engine_run(&agent.manifest, message)?;
     spawn_detached(agent, sessions_dir, &argv, working_dir)
 }
 
-/// Whether the PID recorded for `agent_name` is currently live.
 #[must_use]
 pub fn is_running(sessions_dir: &Path, agent_name: &str) -> bool {
     read_pid(&pid_path(sessions_dir, agent_name)).is_some_and(pid_alive)
 }
 
-/// Ask the recorded process group to terminate. Missing and stale PID files are idempotent.
-///
-/// # Errors
-/// [`Error::Process`] if the live process group cannot be signalled.
 pub fn stop(sessions_dir: &Path, agent_name: &str) -> Result<bool> {
     let pid_file = pid_path(sessions_dir, agent_name);
     let Some(pid) = read_pid(&pid_file) else {
@@ -74,18 +60,18 @@ fn engine_run(
     manifest: &StoredAgentManifest,
     message: &str,
 ) -> Result<(Vec<String>, Option<String>)> {
-    match manifest.backend.as_str() {
-        claude::BACKEND_ID => {
-            let manifest = manifest.clone().into_typed::<ProcessClaudeArguments>()?;
-            let working_dir = manifest.arguments.working_dir.clone();
-            Ok((claude::argv(&manifest, message), working_dir))
+    match Backend::parse(&manifest.backend) {
+        Some(Backend::ProcessClaude) => {
+            let arguments = manifest.typed_arguments::<ProcessClaudeArguments>()?;
+            let working_dir = arguments.working_dir.clone();
+            Ok((claude::argv(&arguments, message), working_dir))
         }
-        codex::BACKEND_ID => {
-            let manifest = manifest.clone().into_typed::<ProcessCodexArguments>()?;
-            let working_dir = manifest.arguments.working_dir.clone();
-            Ok((codex::argv(&manifest, message), working_dir))
+        Some(Backend::ProcessCodex) => {
+            let arguments = manifest.typed_arguments::<ProcessCodexArguments>()?;
+            let working_dir = arguments.working_dir.clone();
+            Ok((codex::argv(&arguments, message), working_dir))
         }
-        other => Err(Error::NotRunnable(other.to_string())),
+        _ => Err(Error::NotRunnable(manifest.backend.clone())),
     }
 }
 
@@ -145,12 +131,10 @@ fn spawn_detached(
         }
     });
 
-    Ok(Launch {
+    Ok(Launch::Process {
         command: display_command(argv),
-        session: None,
-        attach: None,
-        pid: Some(pid),
-        log: Some(log),
+        pid,
+        log,
     })
 }
 
@@ -268,9 +252,10 @@ mod tests {
         };
         let launch = spawn_detached(&agent, &sessions, &["/bin/sleep".into(), "10".into()], None)
             .expect("launch");
-        assert!(launch.pid.is_some());
-        assert!(launch.session.is_none());
-        assert!(launch.log.as_ref().is_some_and(|path| path.is_file()));
+        assert!(matches!(
+            launch,
+            Launch::Process { pid, ref log, .. } if pid > 0 && log.is_file()
+        ));
         assert!(is_running(&sessions, "sleeper"));
         assert!(stop(&sessions, "sleeper").expect("stop"));
         for _ in 0..20 {

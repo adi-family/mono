@@ -1,38 +1,20 @@
-//! The crate's error type, hand-rolled to keep the dependency set minimal (mirroring
-//! [`adi_config::Error`], which it wraps).
-
 use std::fmt;
 
-/// The result type every fallible `adi-agents` operation returns.
 pub type Result<T> = std::result::Result<T, Error>;
 
-/// Everything that can go wrong reading or mutating an agent definition.
 #[derive(Debug)]
 pub enum Error {
-    /// The underlying config store failed (I/O, TOML parse, or TOML encode).
     Config(adi_config::Error),
-    /// Backend arguments do not match their strict type or cannot be represented in TOML.
     Arguments(String),
-    /// An agent name is empty, contains a path separator, or is `.`/`..` — anything that
-    /// wouldn't be a safe single file name under `agents/`.
     InvalidName(String),
-    /// No agent with this name is registered.
     NotFound(String),
-    /// A directory operation (listing, removal) failed.
     Io(std::io::Error),
-    /// The agent's backend has no run adapter yet.
     NotRunnable(String),
-    /// A live session for this agent already exists.
     AlreadyRunning(String),
-    /// Spawning the agent failed (tmux missing, session refused, …).
     Launch(String),
-    /// The agent has no live session to interact with.
     NotRunning(String),
-    /// A key name isn't a single tmux key token (`Enter`, `Up`, `C-c`, …).
     InvalidKey(String),
-    /// A tmux command against a live session failed.
     Tmux(String),
-    /// Signalling or otherwise managing a detached process failed.
     Process(String),
 }
 

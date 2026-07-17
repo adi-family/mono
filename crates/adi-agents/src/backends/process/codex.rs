@@ -1,12 +1,9 @@
 //! `process:codex` command construction (`codex exec`).
 
-use crate::AgentManifest;
 use crate::arguments::{CodexApproval, CodexSandbox, ProcessCodexArguments};
+use crate::backends::push_option;
 
-pub(super) const BACKEND_ID: &str = "process:codex";
-
-pub(super) fn argv(manifest: &AgentManifest<ProcessCodexArguments>, message: &str) -> Vec<String> {
-    let config = &manifest.arguments;
+pub(super) fn argv(config: &ProcessCodexArguments, message: &str) -> Vec<String> {
     let mut argv = vec!["codex".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -39,23 +36,12 @@ pub(super) fn argv(manifest: &AgentManifest<ProcessCodexArguments>, message: &st
     if config.json_events {
         argv.push("--json".into());
     }
-    argv.push(run_prompt(manifest, message));
+    argv.push(run_prompt(config, message));
     argv
 }
 
-fn push_option(argv: &mut Vec<String>, flag: &str, value: Option<&str>) {
-    if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
-        argv.extend([flag.to_string(), value.to_string()]);
-    }
-}
-
-fn run_prompt(manifest: &AgentManifest<ProcessCodexArguments>, message: &str) -> String {
-    let system = manifest
-        .arguments
-        .system_prompt
-        .as_deref()
-        .unwrap_or("")
-        .trim();
+fn run_prompt(config: &ProcessCodexArguments, message: &str) -> String {
+    let system = config.system_prompt.as_deref().unwrap_or("").trim();
     let message = message.trim();
     match (system.is_empty(), message.is_empty()) {
         (true, true) => "run".into(),
@@ -68,12 +54,13 @@ fn run_prompt(manifest: &AgentManifest<ProcessCodexArguments>, message: &str) ->
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::AgentManifest;
     use crate::arguments::CodexReasoningEffort;
 
     #[test]
     fn argv_puts_global_options_before_exec_and_never_opens_a_tui() {
         let manifest = AgentManifest {
-            backend: BACKEND_ID.into(),
+            backend: "process:codex".into(),
             arguments: ProcessCodexArguments {
                 model: Some("gpt-5-codex".into()),
                 system_prompt: Some("Work carefully.".into()),
@@ -87,7 +74,7 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest, "fix the tests"),
+            argv(&manifest.arguments, "fix the tests"),
             [
                 "codex",
                 "--model",

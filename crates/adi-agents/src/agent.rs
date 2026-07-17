@@ -1,63 +1,35 @@
-//! The on-disk agent definition ([`AgentManifest`], serialized as `<name>.toml`) and the
-//! name-attached view of a loaded agent ([`Agent`]).
-
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::backend::Backend;
 use crate::error::{Error, Result};
 
-/// The dynamic argument object used only when ADI has to hold manifests for heterogeneous
-/// backends at once (for example, when listing the registry).
 pub type RawAgentArguments = BTreeMap<String, serde_json::Value>;
 
-/// The registry's heterogeneous storage representation.
 pub type StoredAgentManifest = AgentManifest<RawAgentArguments>;
 
-/// A registered agent loaded from the heterogeneous registry.
 pub type StoredAgent = Agent<RawAgentArguments>;
 
-/// A reusable agent definition parameterized by the selected backend's argument type.
-///
-/// `AgentManifest<CloudAgentArguments>` gives cloud backends a compile-time schema without
-/// promoting any cloud setting into ADI's control model. Backend settings such as the system
-/// prompt, tools, model, and turn limit belong to `Args`, never to this struct.
+/// An agent definition with backend-specific arguments.
 #[derive(Debug, Clone, PartialEq, Default, Serialize)]
 pub struct AgentManifest<Args> {
-    /// How and what runs the agent, as an `executor:what` string. The executor is the run
-    /// mechanism, the suffix is the thing it runs: `tmux:claude` | `tmux:codex` (a vendor CLI in
-    /// a tmux session), `process:claude` | `process:codex` (a vendor CLI as a detached headless
-    /// subprocess), `harness:claude-sdk` | `harness:adi` (an agentic-loop harness; `harness:adi`
-    /// picks its model provider via the `provider` argument).
     pub backend: String,
-    /// Strictly typed arguments interpreted by the selected backend.
     pub arguments: Args,
-    /// Free-form tags. A tag equal to an agent name is what auto-assigns/auto-starts a task
-    /// (docs/adi-agents.md §9) — the dispatch hook, once orchestration exists.
     pub tags: Vec<String>,
-    /// Pinned in the UI / preferred for quick-dispatch.
     pub starred: bool,
-    /// The project this agent is filed under (its [`adi-projects`] id), or `None` for a
-    /// global agent. Pure metadata: it scopes where the agent shows up (a project's detail
-    /// page), not what it may do.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// When the definition was created, as Unix epoch seconds.
     pub created_at: u64,
-    /// When the definition was last saved, as Unix epoch seconds.
     pub updated_at: u64,
 }
 
-/// A registered agent: its name (the file stem under `agents/`) plus its loaded
-/// [`AgentManifest`]. The name is not stored in the file — it *is* the file. `Serialize` so the
-/// CLI/API can emit it; built from disk, never deserialized, so no `Deserialize`.
+/// A manifest paired with its filename-derived name.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Agent<Args> {
-    /// The agent name — its `<name>.toml` file stem under `~/.adi/mono/agents/`.
     pub name: String,
-    /// The parsed manifest.
     pub manifest: AgentManifest<Args>,
 }
 
@@ -67,32 +39,19 @@ impl<Args> AgentManifest<Args> {
     /// agent runs and which params apply.
     #[must_use]
     pub fn executor(&self) -> &str {
-        self.backend
-            .split_once(':')
-            .map_or("", |(executor, _)| executor)
-    }
-
-    /// Replace the argument value without changing ADI-owned control metadata.
-    #[must_use]
-    pub fn with_arguments<Next>(self, arguments: Next) -> AgentManifest<Next> {
-        AgentManifest {
-            backend: self.backend,
-            arguments,
-            tags: self.tags,
-            starred: self.starred,
-            project: self.project,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
+        if let Some(backend) = Backend::parse(&self.backend) {
+            backend.executor()
+        } else {
+            self.backend
+                .split_once(':')
+                .map_or("", |(executor, _)| executor)
         }
     }
 }
 
 impl<Args: Serialize> AgentManifest<Args> {
-    /// Borrow a typed manifest and encode a copy for the heterogeneous registry.
-    ///
     /// # Errors
-    /// Returns [`Error::Arguments`] when `Args` does not serialize as an object or contains a
-    /// null value that TOML cannot represent.
+    /// Returns [`Error::Arguments`] when `Args` cannot be stored as a TOML object.
     pub fn to_stored(&self) -> Result<StoredAgentManifest> {
         Ok(AgentManifest {
             backend: self.backend.clone(),
@@ -104,40 +63,31 @@ impl<Args: Serialize> AgentManifest<Args> {
             updated_at: self.updated_at,
         })
     }
-
-    /// Convert a typed manifest into the heterogeneous registry representation.
-    ///
-    /// # Errors
-    /// Returns [`Error::Arguments`] when `Args` does not serialize as an object or contains a
-    /// null value that TOML cannot represent.
-    pub fn into_stored(self) -> Result<StoredAgentManifest> {
-        let arguments = encode_arguments(&self.arguments)?;
-        Ok(self.with_arguments(arguments))
-    }
 }
 
 impl AgentManifest<RawAgentArguments> {
-    /// Decode the storage boundary into a backend's strict argument type.
-    ///
     /// # Errors
     /// Returns [`Error::Arguments`] when the stored object does not match `Args`.
     pub fn typed_arguments<Args: DeserializeOwned>(&self) -> Result<Args> {
         decode_arguments(self.arguments.clone())
     }
 
-    /// Consume the storage representation and recover a strictly typed manifest.
-    ///
     /// # Errors
     /// Returns [`Error::Arguments`] when the stored object does not match `Args`.
     pub fn into_typed<Args: DeserializeOwned>(self) -> Result<AgentManifest<Args>> {
-        let arguments = decode_arguments(self.arguments.clone())?;
-        Ok(self.with_arguments(arguments))
+        Ok(AgentManifest {
+            backend: self.backend,
+            arguments: decode_arguments(self.arguments)?,
+            tags: self.tags,
+            starred: self.starred,
+            project: self.project,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        })
     }
 }
 
 impl Agent<RawAgentArguments> {
-    /// Consume a stored agent and recover a strictly typed backend manifest.
-    ///
     /// # Errors
     /// Returns [`Error::Arguments`] when the stored object does not match `Args`.
     pub fn into_typed<Args: DeserializeOwned>(self) -> Result<Agent<Args>> {
@@ -246,7 +196,6 @@ impl<'de, Args: DeserializeOwned> Deserialize<'de> for AgentManifest<Args> {
     }
 }
 
-/// The current time as Unix epoch seconds (0 if the clock predates the epoch).
 #[must_use]
 pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
@@ -289,15 +238,18 @@ mod tests {
 
     #[test]
     fn executor_is_the_prefix_before_the_colon() {
-        let mut m = AgentManifest::<()>::default();
-        m.backend = "tmux:claude".into();
-        assert_eq!(m.executor(), "tmux");
-        m.backend = "process:codex".into();
-        assert_eq!(m.executor(), "process");
-        m.backend = "harness:claude-sdk".into();
-        assert_eq!(m.executor(), "harness");
-        m.backend = "weird".into();
-        assert_eq!(m.executor(), "");
+        for (backend, executor) in [
+            ("tmux:claude", "tmux"),
+            ("process:codex", "process"),
+            ("harness:claude-sdk", "harness"),
+            ("weird", ""),
+        ] {
+            let manifest = AgentManifest::<()> {
+                backend: backend.into(),
+                ..Default::default()
+            };
+            assert_eq!(manifest.executor(), executor);
+        }
     }
 
     #[test]
@@ -330,7 +282,7 @@ mod tests {
         assert_eq!(typed.arguments.tools, "tasks,projects");
         assert_eq!(typed.arguments.model, "opus");
         assert_eq!(typed.arguments.permission_mode, "plan");
-        assert_eq!(typed.arguments.temperature, 0.2);
+        assert!((typed.arguments.temperature - 0.2).abs() < f64::EPSILON);
         assert_eq!(typed.arguments.max_turns, 12);
         assert_eq!(typed.arguments.provider, "anthropic");
 
