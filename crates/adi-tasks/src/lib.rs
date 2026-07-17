@@ -32,14 +32,12 @@ mod task;
 
 use std::path::PathBuf;
 
-use adi_config::{Config, Module};
+use adi_config::{Config, Module, now_unix};
 
 pub use error::{Error, Result};
 pub use task::{EffectiveStatus, Task, TaskPatch, TaskStatus, TaskView};
 
-use task::{
-    ParentChange, TasksDoc, clean, descendants, max_num_for_key, now_unix, project_key, would_cycle,
-};
+use task::{ParentChange, TasksDoc, clean, descendants, max_num_for_key, project_key, would_cycle};
 
 /// The config module (`~/.adi/mono/tasks`) the tracker persists under.
 const MODULE: &str = "tasks";

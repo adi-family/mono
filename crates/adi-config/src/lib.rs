@@ -85,6 +85,30 @@ impl Config {
     }
 }
 
+/// Whether `name` is a single, filesystem-safe path segment — the rule every store applies
+/// before joining `<name>.toml` onto a [`Module`] directory. This is a security boundary: names
+/// arrive from CLIs, HTTP APIs, and webhook URL paths. A name must be non-empty, must not be
+/// `.` or `..`, and may contain only ASCII alphanumerics, `.`, `-`, or `_`. Callers map a
+/// `false` onto their own `InvalidName` error.
+#[must_use]
+pub fn valid_name(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+}
+
+/// Seconds since the Unix epoch, saturating to 0 if the clock is somehow before it. Stores stamp
+/// this onto their manifests (`created_at` / `updated_at`).
+#[must_use]
+pub fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,5 +124,20 @@ mod tests {
     #[test]
     fn open_roots_the_store_under_the_mono_namespace() {
         assert!(Config::open().root().ends_with("mono"));
+    }
+
+    #[test]
+    fn valid_name_accepts_safe_segments_and_rejects_traversal() {
+        for name in ["athz-solver", "planner", "agent_2", "a.b"] {
+            assert!(valid_name(name), "{name} should be valid");
+        }
+        for name in ["", ".", "..", "a/b", "a\\b", "with space"] {
+            assert!(!valid_name(name), "{name:?} should be rejected");
+        }
+    }
+
+    #[test]
+    fn now_unix_is_after_the_epoch() {
+        assert!(now_unix() > 0);
     }
 }

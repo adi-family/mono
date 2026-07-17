@@ -1,8 +1,6 @@
 //! The on-disk project manifest ([`Manifest`], serialized as `config.toml`) and the
 //! id-attached view of a loaded project ([`Project`]).
 
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
@@ -59,15 +57,6 @@ impl Project {
             &self.manifest.name
         }
     }
-}
-
-/// The current time as Unix epoch seconds (0 if the clock predates the epoch).
-#[must_use]
-pub(crate) fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 /// Validate a project id: a single, filesystem-safe path segment. This is a security

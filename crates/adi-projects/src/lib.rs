@@ -27,12 +27,12 @@ mod project;
 
 use std::path::PathBuf;
 
-use adi_config::{Config, ConfigFile};
+use adi_config::{Config, ConfigFile, now_unix};
 
 pub use error::{Error, Result};
 pub use project::{Manifest, Project};
 
-use project::{now_unix, validate_id};
+use project::validate_id;
 
 /// The store module projects live under, and the manifest file within each project dir.
 const PROJECTS_MODULE: &str = "projects";

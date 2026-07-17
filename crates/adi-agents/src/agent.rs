@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -128,25 +127,10 @@ pub fn contains_json_null(value: &serde_json::Value) -> bool {
     }
 }
 
-#[must_use]
-pub(crate) fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// Validate an agent name: a single, filesystem-safe path segment. This is a security boundary —
-/// names arrive from the CLI and the HTTP API and are joined onto the store path as
-/// `<name>.toml`, so anything with a separator or `.`/`..` must be rejected.
+/// Validate an agent name before it is joined onto the store path as `<name>.toml`. Delegates the
+/// filesystem-safety rule to [`adi_config::valid_name`] and maps a rejection onto [`Error`].
 pub(crate) fn validate_name(name: &str) -> Result<()> {
-    let ok = !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
-    if ok {
+    if adi_config::valid_name(name) {
         Ok(())
     } else {
         Err(Error::InvalidName(name.to_string()))

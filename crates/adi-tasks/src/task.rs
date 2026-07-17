@@ -4,7 +4,6 @@
 //! store in [`crate`] owns I/O.
 
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -223,14 +222,6 @@ pub(crate) fn max_num_for_key(tasks: &[Task], key: &str) -> u64 {
         .iter()
         .filter_map(|t| id_num(&t.id, key))
         .max()
-        .unwrap_or(0)
-}
-
-/// The current time as Unix epoch seconds (0 if the clock predates the epoch).
-pub(crate) fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
         .unwrap_or(0)
 }
 

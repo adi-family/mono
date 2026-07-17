@@ -37,7 +37,7 @@ pub mod wasm;
 
 use std::path::PathBuf;
 
-use adi_config::{Config, ConfigFile};
+use adi_config::{Config, ConfigFile, now_unix};
 
 pub use agent::{
     Agent, AgentManifest, RawAgentArguments, StoredAgent, StoredAgentManifest, contains_json_null,
@@ -47,7 +47,7 @@ pub use error::{Error, Result};
 pub use run::{Launch, capture_pane, is_runnable, running_sessions, send_keys, session_name};
 pub use wasm::DispatchOutcome;
 
-use agent::{now_unix, validate_name};
+use agent::validate_name;
 use run::{is_running_in, launch_in, stop_in};
 
 const AGENTS_MODULE: &str = "agents";

@@ -2,7 +2,6 @@
 //! name-attached view of a loaded trigger ([`Trigger`]).
 
 use std::collections::BTreeMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
@@ -97,27 +96,11 @@ pub struct Trigger {
     pub manifest: TriggerManifest,
 }
 
-/// The current time as Unix epoch seconds (0 if the clock predates the epoch).
-#[must_use]
-pub(crate) fn now_unix() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// Validate a trigger name: a single, filesystem-safe path segment. This is a security boundary —
-/// names arrive from the CLI, the HTTP API, *and the public webhook URL path*, and are joined
-/// onto the store path as `<name>.toml`, so anything with a separator or `.`/`..` must be
-/// rejected.
+/// Validate a trigger name before it is joined onto the store path as `<name>.toml`. The rule
+/// matters here because names also appear in the *public webhook URL path*. Delegates the
+/// filesystem-safety check to [`adi_config::valid_name`] and maps a rejection onto [`Error`].
 pub(crate) fn validate_name(name: &str) -> Result<()> {
-    let ok = !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'));
-    if ok {
+    if adi_config::valid_name(name) {
         Ok(())
     } else {
         Err(Error::InvalidName(name.to_string()))

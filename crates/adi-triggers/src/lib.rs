@@ -38,7 +38,7 @@ mod trigger;
 
 use std::path::PathBuf;
 
-use adi_config::{Config, ConfigFile};
+use adi_config::{Config, ConfigFile, now_unix};
 
 pub use error::{Error, Result};
 pub use fire::Firing;
@@ -46,7 +46,7 @@ pub use trigger::{
     KIND_CRON, KIND_MANUAL, KIND_TELEGRAM, KIND_WEBHOOK, Trigger, TriggerManifest,
 };
 
-use trigger::{now_unix, validate_name};
+use trigger::validate_name;
 
 /// The store module triggers live under, and each trigger file's extension.
 const TRIGGERS_MODULE: &str = "triggers";
