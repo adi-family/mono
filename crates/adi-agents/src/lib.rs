@@ -274,7 +274,7 @@ mod tests {
     }
 
     #[derive(Debug, PartialEq, serde::Deserialize)]
-    struct LegacyPartialArguments {
+    struct PartialArguments {
         system_prompt: String,
         max_turns: u64,
         provider: String,
@@ -370,7 +370,7 @@ mod tests {
         std::fs::create_dir_all(store.dir()).expect("agents dir");
         std::fs::write(
             store.dir().join("partial.toml"),
-            "starred = true\nsystem_prompt = \"Legacy prompt\"\nmax_turns = 4\n\n[extra]\nprovider = \"anthropic\"\n",
+            "starred = true\n\n[arguments]\nsystem_prompt = \"A prompt\"\nmax_turns = 4\nprovider = \"anthropic\"\n",
         )
         .expect("partial manifest");
 
@@ -383,9 +383,9 @@ mod tests {
         assert_eq!(manifest.backend, Backend::default());
         let typed = manifest
             .clone()
-            .into_typed::<LegacyPartialArguments>()
-            .expect("typed legacy manifest");
-        assert_eq!(typed.arguments.system_prompt, "Legacy prompt");
+            .into_typed::<PartialArguments>()
+            .expect("typed manifest");
+        assert_eq!(typed.arguments.system_prompt, "A prompt");
         assert_eq!(typed.arguments.max_turns, 4);
         assert_eq!(typed.arguments.provider, "anthropic");
         assert!(manifest.tags.is_empty());

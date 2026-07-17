@@ -14,7 +14,8 @@ pub type StoredAgentManifest = AgentManifest<RawAgentArguments>;
 pub type StoredAgent = Agent<RawAgentArguments>;
 
 /// An agent definition with backend-specific arguments.
-#[derive(Debug, Clone, PartialEq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, bound(deserialize = "Args: Deserialize<'de> + Default"))]
 pub struct AgentManifest<Args> {
     pub backend: Backend,
     pub arguments: Args,
@@ -126,74 +127,6 @@ pub fn contains_json_null(value: &serde_json::Value) -> bool {
     }
 }
 
-/// The pre-`arguments` storage shape. Deserialization folds these legacy backend fields into
-/// `arguments`, while serialization only ever writes the compact ADI-owned manifest shape.
-#[derive(Default, Deserialize)]
-#[serde(default)]
-struct SerializedAgentManifest {
-    backend: String,
-    arguments: BTreeMap<String, serde_json::Value>,
-    tags: Vec<String>,
-    starred: bool,
-    project: Option<String>,
-    created_at: u64,
-    updated_at: u64,
-    system_prompt: String,
-    tools: String,
-    model: Option<String>,
-    permission_mode: Option<String>,
-    temperature: Option<f64>,
-    max_turns: Option<u32>,
-    extra: BTreeMap<String, String>,
-}
-
-impl<'de, Args: DeserializeOwned> Deserialize<'de> for AgentManifest<Args> {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let stored = SerializedAgentManifest::deserialize(deserializer)?;
-        let mut arguments = stored.arguments;
-
-        let mut insert = |name: &str, value: serde_json::Value| {
-            arguments.entry(name.to_string()).or_insert(value);
-        };
-        if !stored.system_prompt.is_empty() {
-            insert("system_prompt", stored.system_prompt.into());
-        }
-        if !stored.tools.is_empty() {
-            insert("tools", stored.tools.into());
-        }
-        if let Some(value) = stored.model {
-            insert("model", value.into());
-        }
-        if let Some(value) = stored.permission_mode {
-            insert("permission_mode", value.into());
-        }
-        if let Some(value) = stored.temperature.and_then(serde_json::Number::from_f64) {
-            insert("temperature", value.into());
-        }
-        if let Some(value) = stored.max_turns {
-            insert("max_turns", value.into());
-        }
-        for (name, value) in stored.extra {
-            insert(&name, value.into());
-        }
-
-        let arguments = decode_arguments(arguments).map_err(serde::de::Error::custom)?;
-
-        Ok(Self {
-            backend: Backend::from(stored.backend),
-            arguments,
-            tags: stored.tags,
-            starred: stored.starred,
-            project: stored.project,
-            created_at: stored.created_at,
-            updated_at: stored.updated_at,
-        })
-    }
-}
-
 #[must_use]
 pub(crate) fn now_unix() -> u64 {
     SystemTime::now()
@@ -224,7 +157,7 @@ mod tests {
     use super::*;
 
     #[derive(Debug, PartialEq, Deserialize)]
-    struct LegacyArguments {
+    struct SampleArguments {
         system_prompt: String,
         tools: String,
         model: String,
@@ -257,25 +190,27 @@ mod tests {
     }
 
     #[test]
-    fn legacy_backend_fields_migrate_into_arguments() {
+    fn arguments_object_decodes_into_typed_and_round_trips() {
         let manifest: StoredAgentManifest = serde_json::from_str(
             r#"{
                 "backend":"process:claude",
-                "system_prompt":"Solve it",
-                "tools":"tasks,projects",
-                "model":"opus",
-                "permission_mode":"plan",
-                "temperature":0.2,
-                "max_turns":12,
-                "extra":{"provider":"anthropic"}
+                "arguments":{
+                    "system_prompt":"Solve it",
+                    "tools":"tasks,projects",
+                    "model":"opus",
+                    "permission_mode":"plan",
+                    "temperature":0.2,
+                    "max_turns":12,
+                    "provider":"anthropic"
+                }
             }"#,
         )
-        .expect("legacy manifest");
+        .expect("manifest");
 
         let typed = manifest
             .clone()
-            .into_typed::<LegacyArguments>()
-            .expect("typed legacy arguments");
+            .into_typed::<SampleArguments>()
+            .expect("typed arguments");
         assert_eq!(typed.arguments.system_prompt, "Solve it");
         assert_eq!(typed.arguments.tools, "tasks,projects");
         assert_eq!(typed.arguments.model, "opus");
@@ -284,17 +219,11 @@ mod tests {
         assert_eq!(typed.arguments.max_turns, 12);
         assert_eq!(typed.arguments.provider, "anthropic");
 
-        let serialized = serde_json::to_value(manifest).expect("serialize");
-        for legacy in [
-            "system_prompt",
-            "tools",
-            "model",
-            "permission_mode",
-            "temperature",
-            "max_turns",
-            "extra",
-        ] {
-            assert!(serialized.get(legacy).is_none(), "legacy field {legacy}");
+        // The stored shape keeps every backend param under `arguments`, never at the top level.
+        let serialized = serde_json::to_value(&manifest).expect("serialize");
+        assert_eq!(serialized["arguments"]["system_prompt"], "Solve it");
+        for top_level in ["system_prompt", "tools", "model", "max_turns"] {
+            assert!(serialized.get(top_level).is_none(), "top-level {top_level}");
         }
     }
 

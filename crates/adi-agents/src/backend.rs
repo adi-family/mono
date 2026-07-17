@@ -4,7 +4,7 @@
 
 use std::fmt;
 
-use serde::{Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Backend {
@@ -97,6 +97,13 @@ impl fmt::Display for Backend {
 impl Serialize for Backend {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(self.as_str())
+    }
+}
+
+/// Deserialize from the bare wire string, mapping known values onto named variants.
+impl<'de> Deserialize<'de> for Backend {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(Self::from(String::deserialize(deserializer)?))
     }
 }
 
