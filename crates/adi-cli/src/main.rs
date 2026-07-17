@@ -323,7 +323,7 @@ enum AgentsCommand {
     Save {
         name: String,
         /// The `executor:what` backend, e.g. `tmux:claude`, `process:codex`,
-        /// `harness:claude-sdk`, `harness:adi`.
+        /// `harness:claude-sdk`, `harness:adi`, `wasm:loop-script`.
         #[arg(long)]
         backend: String,
         #[arg(long)]

@@ -23,7 +23,8 @@ use adi_tasks::{EffectiveStatus, Error as TaskStoreError, TaskStatus, TaskView, 
 use serde::Deserialize;
 
 use crate::types::{
-    AgentBackendOption, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption,
+    AgentBackendOption, AgentBuildResult, AgentCode, AgentDto, AgentFormField,
+    AgentFormFieldKind, AgentFormOption,
     AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError,
     DirListing, FileContent, FileEntry, FilesRef,
     Health, HiveService, HiveState, HookAck, Lease, LeaseRef, MeshForward, MeshForwardRef,
@@ -31,7 +32,8 @@ use crate::types::{
     NewTask, NewWorkspace, PortsState, Project,
     ProjectDetail, ProjectHookDto, ProjectHookLog, ProjectHookRef, ProjectHookRunResult,
     ProjectRef, ProjectService, ProjectsState, Range, ReleaseResponse,
-    ReserveResponse, SaveAgent, SaveTrigger, ServicePort, StartResult, StartService, StopResult,
+    ReserveResponse, SaveAgent, SaveAgentCode, SaveTrigger, ServicePort, StartResult,
+    StartService, StopResult,
     TaskRow, TasksState, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog, TriggerRef,
     TriggersState, UsedPort, UsedPorts, WorkspaceCreateResult, WorkspaceDto, WorkspaceRef,
     WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
@@ -1604,6 +1606,205 @@ pub fn stop_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     }
 }
 
+/// `POST /api/agents/code` — read the employee source file a wasm agent's `src` extra points
+/// at, for the code editor on the Agents page.
+#[must_use]
+pub fn agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_agent_ref(body) else {
+        return bad_agent_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return agent_error(&e),
+    };
+    let src = match agent_src(&agent) {
+        Ok(src) => src,
+        Err(resp) => return resp,
+    };
+    match std::fs::metadata(&src) {
+        Ok(meta) if meta.len() > MAX_TEXT_BYTES => {
+            return error(
+                400,
+                &format!("{src} is too large to edit ({} bytes, max {MAX_TEXT_BYTES})", meta.len()),
+            );
+        }
+        _ => {}
+    }
+    match std::fs::read_to_string(&src) {
+        Ok(code) => ok_json(&AgentCode {
+            name: agent.name,
+            path: src,
+            code,
+        }),
+        Err(e) => error(400, &format!("couldn't read {src}: {e}")),
+    }
+}
+
+/// `POST /api/agents/code/save` — write the code editor's buffer back to the wasm agent's
+/// `src` file, replying with the fresh [`AgentCode`].
+#[must_use]
+pub fn save_agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Ok(req) = serde_json::from_slice::<SaveAgentCode>(body) else {
+        return error(400, "expected JSON body { \"name\": \"…\", \"code\": \"…\" }");
+    };
+    if req.name.trim().is_empty() {
+        return error(400, "expected JSON body { \"name\": \"…\", \"code\": \"…\" }");
+    }
+    if req.code.len() as u64 > MAX_TEXT_BYTES {
+        return error(400, &format!("source too large to save (max {MAX_TEXT_BYTES} bytes)"));
+    }
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return agent_error(&e),
+    };
+    let src = match agent_src(&agent) {
+        Ok(src) => src,
+        Err(resp) => return resp,
+    };
+    match std::fs::write(&src, req.code.as_bytes()) {
+        Ok(()) => ok_json(&AgentCode {
+            name: agent.name,
+            path: src,
+            code: req.code,
+        }),
+        Err(e) => error(500, &format!("couldn't write {src}: {e}")),
+    }
+}
+
+/// `POST /api/agents/build` — compile a wasm agent's `src` TypeScript into its component:
+/// `node <src dir>/node_modules/@adi-family/workforce-sdk/build.mjs <src> -o <src dir>/build`.
+/// Blocks for the build (a few seconds), replies with its combined output. A successful build
+/// fills in an empty `wasm` extra with the compiled path, making the agent dispatchable.
+#[must_use]
+pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+    let Some(req) = parse_agent_ref(body) else {
+        return bad_agent_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return agent_error(&e),
+    };
+    let src = match agent_src(&agent) {
+        Ok(src) => PathBuf::from(src),
+        Err(resp) => return resp,
+    };
+    let Some(dir) = src.parent().map(Path::to_path_buf) else {
+        return error(400, "the src extra has no parent directory");
+    };
+    let build_mjs = dir.join("node_modules/@adi-family/workforce-sdk/build.mjs");
+    if !build_mjs.exists() {
+        return error(
+            400,
+            &format!(
+                "no workforce SDK next to the source ({} missing) — run `npm install` in {} first",
+                build_mjs.display(),
+                dir.display()
+            ),
+        );
+    }
+    let Some(node) = node_bin() else {
+        return error(
+            500,
+            "no node binary found (tried $ADI_NODE, PATH, /opt/homebrew/bin, /usr/local/bin)",
+        );
+    };
+    let out_dir = dir.join("build");
+
+    // jco runs via a `#!/usr/bin/env node` shebang, so the child's PATH must reach node even
+    // when this server was launched with a minimal LaunchAgent environment.
+    let mut path_env = std::env::var("PATH").unwrap_or_default();
+    if let Some(node_dir) = Path::new(&node).parent().filter(|d| !d.as_os_str().is_empty()) {
+        path_env = format!("{}:{path_env}", node_dir.display());
+    }
+
+    let output = std::process::Command::new(&node)
+        .arg(&build_mjs)
+        .arg(&src)
+        .arg("-o")
+        .arg(&out_dir)
+        .current_dir(&dir)
+        .env("PATH", path_env)
+        .output();
+    let out = match output {
+        Ok(out) => out,
+        Err(e) => return error(500, &format!("couldn't spawn {node}: {e}")),
+    };
+
+    let mut text = String::from_utf8_lossy(&out.stdout).trim_end().to_string();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !stderr.trim().is_empty() {
+        if !text.is_empty() {
+            text.push('\n');
+        }
+        text.push_str(stderr.trim_end());
+    }
+    let ok = out.status.success();
+
+    let stem = src
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let wasm = out_dir.join(format!("{stem}.wasm")).display().to_string();
+    // First successful build wires the component up; an explicit `wasm` extra is respected.
+    if ok && agent.manifest.extra.get("wasm").is_none_or(String::is_empty) {
+        let mut manifest = agent.manifest.clone();
+        manifest.extra.insert("wasm".to_string(), wasm.clone());
+        if let Err(e) = store.save(&agent.name, manifest) {
+            return agent_error(&e);
+        }
+    }
+
+    match agents_state(store) {
+        Ok(state) => ok_json(&AgentBuildResult {
+            ok,
+            output: text,
+            wasm,
+            state,
+        }),
+        Err(e) => agent_error(&e),
+    }
+}
+
+/// The employee source path from an agent's `src` extra, or the 400 explaining how to set it.
+fn agent_src(agent: &adi_agents::Agent) -> Result<String, (u16, String)> {
+    agent
+        .manifest
+        .extra
+        .get("src")
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .ok_or_else(|| {
+            error(
+                400,
+                &format!(
+                    "agent {} has no `src` extra pointing at its TypeScript source — \
+                     set the Source path in the form (or --extra src=/path/to/employee.ts)",
+                    agent.name
+                ),
+            )
+        })
+}
+
+/// The node binary the build runs with: `$ADI_NODE`, then PATH, then the usual install spots.
+fn node_bin() -> Option<String> {
+    if let Ok(node) = std::env::var("ADI_NODE")
+        && !node.is_empty()
+    {
+        return Some(node);
+    }
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_ok_and(|o| o.status.success())
+    {
+        return Some("node".to_string());
+    }
+    ["/opt/homebrew/bin/node", "/usr/local/bin/node"]
+        .into_iter()
+        .find(|p| Path::new(p).exists())
+        .map(ToString::to_string)
+}
+
 /// Look an agent up, folding "not registered" into [`AgentStoreError::NotFound`] (→ 404).
 fn get_agent(store: &Agents, name: &str) -> Result<adi_agents::Agent, AgentStoreError> {
     store
@@ -1654,6 +1855,10 @@ fn agent_dto(agent: adi_agents::Agent, sessions: &std::collections::BTreeSet<Str
 /// extra); every other backend has its engine baked into the `executor:what` id.
 const ADI_HARNESS: &str = "harness:adi";
 
+/// The adi-workforce employee backend: a compiled WASM component (TS → jco) the bundled engine
+/// dispatches messages into. The component is named by the `wasm` extra.
+const WASM_LOOP: &str = "wasm:loop-script";
+
 /// The backends whose engine is the Claude CLI/SDK, whatever the executor.
 const CLAUDE_BACKENDS: &[&str] = &["tmux:claude", "process:claude", "harness:claude-sdk"];
 
@@ -1662,8 +1867,8 @@ const CODEX_BACKENDS: &[&str] = &["tmux:codex", "process:codex"];
 
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
 /// both the selectable backends and the field shape the client renders. Backends are
-/// `executor:what` pairs — the executor (`tmux` / `process` / `harness`) is the run mechanism,
-/// the suffix is what it runs.
+/// `executor:what` pairs — the executor (`tmux` / `process` / `harness` / `wasm`) is the run
+/// mechanism, the suffix is what it runs.
 #[allow(clippy::too_many_lines)]
 fn agent_form_spec() -> AgentFormSpec {
     let mut fields = Vec::new();
@@ -1705,6 +1910,27 @@ fn agent_form_spec() -> AgentFormSpec {
     model.placeholder = "model alias".into();
     model.mono = true;
     fields.push(model);
+
+    // ---- wasm employees (adi-workforce) ----
+    let mut src = txt_field(
+        "src",
+        "Source path",
+        &[WASM_LOOP],
+        "/path/to/employee.ts",
+        "TypeScript source the Code editor edits and builds",
+    );
+    src.wide = true;
+    fields.push(src);
+
+    let mut wasm = txt_field(
+        "wasm",
+        "Component path",
+        &[WASM_LOOP],
+        "/path/to/agent.wasm",
+        "compiled component; a successful Build fills this in",
+    );
+    wasm.wide = true;
+    fields.push(wasm);
 
     // ---- claude engines (any executor) ----
     let mut permission =
@@ -2025,6 +2251,12 @@ fn agent_form_spec() -> AgentFormSpec {
                 "harness · ADI loop",
                 "harness",
                 "provider model, e.g. kimi-k2.6 / gemini-2.5-pro",
+            ),
+            agent_backend(
+                WASM_LOOP,
+                "wasm · Workforce employee",
+                "wasm",
+                "set by the employee's loop config",
             ),
         ],
         fields,
@@ -2848,9 +3080,23 @@ mod tests {
                 .iter()
                 .any(|b| b["id"] == "harness:adi" && b["executor"] == "harness")
         );
+        assert!(
+            backends
+                .iter()
+                .any(|b| b["id"] == "wasm:loop-script" && b["executor"] == "wasm")
+        );
 
         let fields = v["form"]["fields"].as_array().unwrap();
         assert!(fields.iter().any(|f| f["name"] == "api_key_env"));
+        // The component path is wasm-only — it lands in `extra.wasm`, which the dispatch reads.
+        assert!(fields.iter().any(|f| {
+            f["name"] == "wasm"
+                && f["backend_ids"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|id| id == "wasm:loop-script")
+        }));
         // permission_mode is Claude-only (Codex uses sandbox / approval instead).
         assert!(fields.iter().any(|f| {
             f["name"] == "permission_mode"
@@ -2894,6 +3140,39 @@ mod tests {
         let store = temp_agents();
         let (status, _) = run_agent(&store, br#"{"name":"ghost"}"#);
         assert_eq!(status, 404);
+    }
+
+    #[test]
+    fn agent_code_reads_and_writes_the_src_extra_file() {
+        let store = temp_agents();
+
+        // Without a `src` extra the code endpoints refuse with a hint.
+        let _ = save_agent(&store, br#"{"name":"emp","backend":"wasm:loop-script"}"#);
+        assert_eq!(agent_code(&store, br#"{"name":"emp"}"#).0, 400);
+        assert_eq!(agent_code(&store, br#"{"name":"ghost"}"#).0, 404);
+
+        let src = std::env::temp_dir().join(format!(
+            "adi-webapp-api-agent-code-{}.ts",
+            std::process::id()
+        ));
+        std::fs::write(&src, "export const main = () => {};\n").unwrap();
+        let body = format!(
+            r#"{{"name":"emp","backend":"wasm:loop-script","extra":{{"src":{}}}}}"#,
+            serde_json::to_string(&src.display().to_string()).unwrap()
+        );
+        let _ = save_agent(&store, body.as_bytes());
+
+        let (status, body) = agent_code(&store, br#"{"name":"emp"}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["code"], "export const main = () => {};\n");
+        assert_eq!(v["path"], src.display().to_string());
+
+        let save = serde_json::json!({"name": "emp", "code": "// edited\n"}).to_string();
+        let (status, _) = save_agent_code(&store, save.as_bytes());
+        assert_eq!(status, 200);
+        assert_eq!(std::fs::read_to_string(&src).unwrap(), "// edited\n");
+        let _ = std::fs::remove_file(&src);
     }
 
     #[test]

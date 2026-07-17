@@ -259,6 +259,11 @@ async fn handle(
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
         ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body),
         ("POST", "/api/agents/stop") => handlers::stop_agent(agents, &req.body),
+        // Wasm employees: read/write the TS source named by the `src` extra, and compile it
+        // to the component (blocking for the few seconds the build takes).
+        ("POST", "/api/agents/code") => handlers::agent_code(agents, &req.body),
+        ("POST", "/api/agents/code/save") => handlers::save_agent_code(agents, &req.body),
+        ("POST", "/api/agents/build") => handlers::build_agent(agents, &req.body),
         // peek is the live view (a capture of the agent's tmux pane, polled by the UI);
         // send-keys is its interactive half (type text / press a key in the session).
         ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),

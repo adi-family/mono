@@ -1,12 +1,14 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, ApiError, DirListing, FileContent,
+    AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
+    ApiError, DirListing, FileContent,
     FilesRef, Health, HiveState,
     LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
     NewProjectHook, NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
-    ReserveResponse, SaveAgent, SaveTrigger, StartResult, StartService, StopResult, TasksState,
+    ReserveResponse, SaveAgent, SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult,
+    TasksState,
     TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
     WorkspacesState, WriteFile,
@@ -135,6 +137,18 @@ pub async fn peek_agent(name: String) -> Result<AgentPeek, String> {
 
 pub async fn send_agent_keys(name: String, text: String, key: String) -> Result<AgentPeek, String> {
     post("/api/agents/send-keys", &AgentKeys { name, text, key }).await
+}
+
+pub async fn agent_code(name: String) -> Result<AgentCode, String> {
+    post("/api/agents/code", &AgentRef { name }).await
+}
+
+pub async fn save_agent_code(name: String, code: String) -> Result<AgentCode, String> {
+    post("/api/agents/code/save", &SaveAgentCode { name, code }).await
+}
+
+pub async fn build_agent(name: String) -> Result<AgentBuildResult, String> {
+    post("/api/agents/build", &AgentRef { name }).await
 }
 
 // Triggers: every endpoint returns the fresh TriggersState so the page updates in one round-trip.

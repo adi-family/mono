@@ -368,7 +368,7 @@ pub struct AgentFormSpec {
 }
 
 /// One selectable agent backend in the form: an `executor:what` pair, where the executor is the
-/// run mechanism (`tmux` / `process` / `harness`) and the suffix is what it runs.
+/// run mechanism (`tmux` / `process` / `harness` / `wasm`) and the suffix is what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentBackendOption {
     pub id: String,
@@ -530,6 +530,35 @@ pub struct AgentKeys {
     pub text: String,
     #[serde(default)]
     pub key: String,
+}
+
+/// Request body writing a wasm agent's employee source — `POST /api/agents/code/save`. The
+/// target file is the agent's `src` extra; replies with the fresh [`AgentCode`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SaveAgentCode {
+    pub name: String,
+    #[serde(default)]
+    pub code: String,
+}
+
+/// A wasm agent's employee source file — the answer to `POST /api/agents/code` and
+/// `/api/agents/code/save`. `path` is the manifest's `src` extra, resolved server-side.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCode {
+    pub name: String,
+    pub path: String,
+    pub code: String,
+}
+
+/// The answer to `POST /api/agents/build` — the TS→WASM build's combined output plus the fresh
+/// agents state (a successful build fills in an empty `wasm` extra, changing the list).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentBuildResult {
+    pub ok: bool,
+    pub output: String,
+    /// The compiled component path the build targets (`<src dir>/build/<name>.wasm`).
+    pub wasm: String,
+    pub state: AgentsState,
 }
 
 /// `POST /api/agents/peek` — a read-only snapshot of a running agent's tmux pane (the text

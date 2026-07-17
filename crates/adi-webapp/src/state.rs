@@ -278,6 +278,47 @@ impl HookEditor {
     }
 }
 
+/// The Agents page's employee-code editor: which wasm agent's TypeScript source is open
+/// (`None` = closed), the file path it was read from, the edit buffer with its saved baseline,
+/// and the last build's outcome. `Copy` so it threads into the view and async handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct AgentCodeEditor {
+    /// The open agent's name, or `None` while the editor is closed.
+    pub(crate) open: RwSignal<Option<String>>,
+    /// The source file path the server resolved from the agent's `src` extra.
+    pub(crate) path: RwSignal<String>,
+    /// The last-loaded/saved content — compared against `buffer` to detect edits.
+    pub(crate) original: RwSignal<String>,
+    /// The editable textarea buffer.
+    pub(crate) buffer: RwSignal<String>,
+    /// Whether a read/write/build is in flight (disables the editor's buttons).
+    pub(crate) busy: RwSignal<bool>,
+    /// The last build's (succeeded, combined output), or `None` before the first build.
+    pub(crate) build: RwSignal<Option<(bool, String)>>,
+}
+
+impl AgentCodeEditor {
+    pub(crate) fn new() -> Self {
+        Self {
+            open: RwSignal::new(None),
+            path: RwSignal::new(String::new()),
+            original: RwSignal::new(String::new()),
+            buffer: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+            build: RwSignal::new(None),
+        }
+    }
+
+    /// Close the editor and drop its buffers.
+    pub(crate) fn close(self) {
+        self.open.set(None);
+        self.path.set(String::new());
+        self.original.set(String::new());
+        self.buffer.set(String::new());
+        self.build.set(None);
+    }
+}
+
 /// The Agents page's live view: which agent's tmux pane is being watched (`None` = closed), the
 /// latest snapshot, and the send-bar input buffer. The shell polls a fresh peek every second
 /// while open; leaving the page closes it. `Copy` so it threads into the poll closure and

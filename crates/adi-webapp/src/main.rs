@@ -35,7 +35,8 @@ use pages::{
 };
 use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
 use state::{
-    AgentsForm, AgentsWatch, FilesState, Flash, Form, HookLogView, MeshForm, ProjectsForm, State,
+    AgentCodeEditor, AgentsForm, AgentsWatch, FilesState, Flash, Form, HookLogView, MeshForm,
+    ProjectsForm, State,
     Status, TasksForm, TermWatch, TriggersForm, TriggersLogView, load,
 };
 use ui::{apply_saved_theme, nav_item, toggle_theme};
@@ -150,6 +151,9 @@ fn App() -> impl IntoView {
 
     // The Agents page's live view (a polled read-only capture of an agent's tmux pane).
     let agents_watch = AgentsWatch::new();
+
+    // The Agents page's employee-code editor (a wasm agent's TypeScript source + build).
+    let agents_code = AgentCodeEditor::new();
 
     let form = Form {
         svc: RwSignal::new(String::new()),
@@ -309,7 +313,7 @@ fn App() -> impl IntoView {
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, hook_log, term_watch),
                         Route::Tasks => tasks_view(state, tasks_form),
-                        Route::Agents => agents_view(state, agents_form, agents_watch),
+                        Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
