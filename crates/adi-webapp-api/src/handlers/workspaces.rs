@@ -10,13 +10,12 @@ use adi_projects::Projects;
 
 use crate::types::{NewProjectHook, NewWorkspace, ProjectHookDto, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, WorkspaceCreateResult, WorkspaceDto, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState};
 
-use super::response::{error, ok_json};
-use super::projects::project_error;
+use super::response::{error, ok_json, Response};
 
 /// `POST /api/projects/workspaces` — a project's workspaces and hooks in one snapshot. Every
 /// mutation in this family returns a fresh [`WorkspacesState`] for one-round-trip refreshes.
 #[must_use]
-pub fn workspaces_state(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn workspaces_state(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_workspaces_ref(body) else {
         return error(400, "expected JSON body { \"id\": \"…\" }");
     };
@@ -31,7 +30,7 @@ pub fn workspaces_state(store: &Projects, body: &[u8]) -> (u16, String) {
 /// `workspace` hook (e.g. `git worktree add`) — detached, so the response's state shows it
 /// `creating`; with `local`, an existing directory is linked as-is and no hook runs.
 #[must_use]
-pub fn create_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn create_workspace(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_new_workspace(body) else {
         return error(
             400,
@@ -53,7 +52,7 @@ pub fn create_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
     let (entry, run) =
         match Workspaces::new(&dir).create(name, explicit.as_deref(), req.local, &env) {
             Ok(created) => created,
-            Err(e) => return hooks_error(&e),
+            Err(e) => return Response::from(&e),
         };
     let message = match &run {
         Some(run) => format!(
@@ -72,7 +71,7 @@ pub fn create_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
 /// `POST /api/projects/workspaces/remove` — unregister a workspace. Never touches its files;
 /// a clone/worktree on disk stays where it is. An unknown name is a 404.
 #[must_use]
-pub fn remove_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn remove_workspace(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_workspace_ref(body) else {
         return bad_project_hook_ref();
     };
@@ -85,7 +84,7 @@ pub fn remove_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
     match Workspaces::new(&dir).remove(name) {
         Ok(true) => {}
         Ok(false) => return error(404, &format!("no such workspace: {name}")),
-        Err(e) => return hooks_error(&e),
+        Err(e) => return Response::from(&e),
     }
     match build_workspaces_state(store, id) {
         Ok(state) => ok_json(&state),
@@ -96,7 +95,7 @@ pub fn remove_workspace(store: &Projects, body: &[u8]) -> (u16, String) {
 /// `POST /api/projects/hook/run` — run a hook by hand, detached, with the project env and
 /// cwd at the project directory. Replies with the spawned pid plus fresh state.
 #[must_use]
-pub fn run_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn run_project_hook(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_project_hook_ref(body) else {
         return bad_project_hook_ref();
     };
@@ -124,7 +123,7 @@ pub fn run_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
     }
     let run = match hooks.run(name, &env, &dir) {
         Ok(run) => run,
-        Err(e) => return hooks_error(&e),
+        Err(e) => return Response::from(&e),
     };
     match build_workspaces_state(store, id) {
         Ok(state) => ok_json(&ProjectHookRunResult {
@@ -138,7 +137,7 @@ pub fn run_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
 /// `POST /api/projects/hook/log` — the tail of a hook's most recent run log. A hook that
 /// never ran answers `ran: false` (200, not an error); only an unknown hook file is a 404.
 #[must_use]
-pub fn project_hook_log(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn project_hook_log(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_project_hook_ref(body) else {
         return bad_project_hook_ref();
     };
@@ -169,7 +168,7 @@ pub fn project_hook_log(store: &Projects, body: &[u8]) -> (u16, String) {
 /// `workspace` | `blank`, the default). Refuses to overwrite (409) — edits go through the
 /// project file browser, where the file lives at `.adi/hooks/<name>`.
 #[must_use]
-pub fn create_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn create_project_hook(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_new_project_hook(body) else {
         return error(
             400,
@@ -194,7 +193,7 @@ pub fn create_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
         );
     };
     if let Err(e) = ProjectHooks::new(&dir).create(req.name.trim(), content) {
-        return hooks_error(&e);
+        return Response::from(&e);
     }
     match build_workspaces_state(store, id) {
         Ok(state) => ok_json(&state),
@@ -206,7 +205,7 @@ pub fn create_project_hook(store: &Projects, body: &[u8]) -> (u16, String) {
 /// the workspace, started in its directory (idempotent — reopening attaches the view to the
 /// live session), and reply with the first pane snapshot.
 #[must_use]
-pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_workspace_term_ref(body) else {
         return bad_project_hook_ref();
     };
@@ -216,7 +215,7 @@ pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
         Err(resp) => return resp,
     };
     if let Err(e) = terminal::open(id, name, &entry.path) {
-        return hooks_error(&e);
+        return Response::from(&e);
     }
     ok_json(&workspace_term(id, name))
 }
@@ -225,7 +224,7 @@ pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
 /// terminal's pane, polled by the live view. A workspace without a live session answers
 /// `running: false` (200, not an error).
 #[must_use]
-pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_workspace_term_ref(body) else {
         return bad_project_hook_ref();
     };
@@ -240,7 +239,7 @@ pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
 /// literally, then the `key` tmux key name), replying with a fresh pane snapshot so the
 /// keystrokes show without waiting for the next poll.
 #[must_use]
-pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_workspace_term_keys(body) else {
         return error(
             400,
@@ -252,7 +251,7 @@ pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> (u16, Stri
         return resp;
     }
     if let Err(e) = terminal::send_keys(id, name, &req.text, &req.key) {
-        return hooks_error(&e);
+        return Response::from(&e);
     }
     ok_json(&workspace_term(id, name))
 }
@@ -260,7 +259,7 @@ pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> (u16, Stri
 /// `POST /api/projects/workspaces/terminal/kill` — kill the workspace's terminal session.
 /// Idempotent: killing an already-gone terminal still answers the (now not-running) snapshot.
 #[must_use]
-pub fn kill_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn kill_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
     let Some(req) = parse_workspace_term_ref(body) else {
         return bad_project_hook_ref();
     };
@@ -269,7 +268,7 @@ pub fn kill_workspace_terminal(store: &Projects, body: &[u8]) -> (u16, String) {
         return resp;
     }
     if let Err(e) = terminal::kill(id, name) {
-        return hooks_error(&e);
+        return Response::from(&e);
     }
     ok_json(&workspace_term(id, name))
 }
@@ -293,9 +292,9 @@ fn resolve_workspace(
     store: &Projects,
     id: &str,
     name: &str,
-) -> Result<adi_hooks::WorkspaceEntry, (u16, String)> {
+) -> Result<adi_hooks::WorkspaceEntry, Response> {
     let (dir, _) = project_scope(store, id)?;
-    let entries = Workspaces::new(&dir).list().map_err(|e| hooks_error(&e))?;
+    let entries = Workspaces::new(&dir).list().map_err(|e| Response::from(&e))?;
     entries
         .into_iter()
         .find(|w| w.name == name)
@@ -314,12 +313,12 @@ fn parse_workspace_term_keys(body: &[u8]) -> Option<WorkspaceTermKeys> {
 
 /// The full [`WorkspacesState`] for a registered project: entries decorated with live status,
 /// hooks with their last-run status, and which lifecycle hook the next create would run.
-fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState, (u16, String)> {
+fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState, Response> {
     let (dir, _) = project_scope(store, id)?;
     let ws = Workspaces::new(&dir);
     let hooks = ProjectHooks::new(&dir);
 
-    let entries = ws.list().map_err(|e| hooks_error(&e))?;
+    let entries = ws.list().map_err(|e| Response::from(&e))?;
     let primary = entries
         .iter()
         .find(|w| w.kind != adi_hooks::WorkspaceKind::Local)
@@ -340,7 +339,7 @@ fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState,
 
     let hook_dtos = hooks
         .list()
-        .map_err(|e| hooks_error(&e))?
+        .map_err(|e| Response::from(&e))?
         .into_iter()
         .map(|h| {
             let status = hooks.status(&h.name);
@@ -357,7 +356,7 @@ fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState,
 
     Ok(WorkspacesState {
         id: id.to_string(),
-        next_hook: ws.next_hook().map_err(|e| hooks_error(&e))?.to_string(),
+        next_hook: ws.next_hook().map_err(|e| Response::from(&e))?.to_string(),
         has_init_hook: hooks.exists(adi_hooks::HOOK_INIT),
         has_workspace_hook: hooks.exists(adi_hooks::HOOK_WORKSPACE),
         workspaces,
@@ -370,13 +369,13 @@ fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState,
 fn project_scope(
     store: &Projects,
     id: &str,
-) -> Result<(PathBuf, Vec<(String, String)>), (u16, String)> {
+) -> Result<(PathBuf, Vec<(String, String)>), Response> {
     let project = match store.get(id) {
         Ok(Some(project)) => project,
         Ok(None) => return Err(error(404, &format!("no such project: {id}"))),
-        Err(e) => return Err(project_error(&e)),
+        Err(e) => return Err(Response::from(&e)),
     };
-    let dir = store.project_dir(id).map_err(|e| project_error(&e))?;
+    let dir = store.project_dir(id).map_err(|e| Response::from(&e))?;
     let env = vec![
         ("ADI_PROJECT_ID".to_string(), project.id.clone()),
         (
@@ -387,27 +386,29 @@ fn project_scope(
     Ok((dir, env))
 }
 
-/// Map an adi-hooks error to an HTTP status. `Exists`/`NoHook`/`PrimaryMissing` are 409s —
-/// the request is well-formed but the project isn't in the right state, and the message
-/// says what to do about it.
-fn hooks_error(e: &HookStoreError) -> (u16, String) {
-    let status = match e {
-        HookStoreError::InvalidName(_)
-        | HookStoreError::EmptyHook(_)
-        | HookStoreError::NotAbsolute(_)
-        | HookStoreError::NotADir(_) => 400,
-        HookStoreError::InvalidKey(_) => 400,
-        HookStoreError::Exists(_)
-        | HookStoreError::NoHook(_)
-        | HookStoreError::PrimaryMissing
-        | HookStoreError::NotRunning(_) => 409,
-        HookStoreError::NotFound(_) => 404,
-        HookStoreError::Launch(_)
-        | HookStoreError::Tmux(_)
-        | HookStoreError::Registry(_)
-        | HookStoreError::Io(_) => 500,
-    };
-    error(status, &e.to_string())
+// Map an adi-hooks error to an HTTP status. `Exists`/`NoHook`/`PrimaryMissing` are 409s —
+// the request is well-formed but the project isn't in the right state, and the message
+// says what to do about it.
+impl From<&HookStoreError> for Response {
+    fn from(e: &HookStoreError) -> Self {
+        let status = match e {
+            HookStoreError::InvalidName(_)
+            | HookStoreError::EmptyHook(_)
+            | HookStoreError::NotAbsolute(_)
+            | HookStoreError::NotADir(_) => 400,
+            HookStoreError::InvalidKey(_) => 400,
+            HookStoreError::Exists(_)
+            | HookStoreError::NoHook(_)
+            | HookStoreError::PrimaryMissing
+            | HookStoreError::NotRunning(_) => 409,
+            HookStoreError::NotFound(_) => 404,
+            HookStoreError::Launch(_)
+            | HookStoreError::Tmux(_)
+            | HookStoreError::Registry(_)
+            | HookStoreError::Io(_) => 500,
+        };
+        error(status, &e.to_string())
+    }
 }
 
 fn parse_workspaces_ref(body: &[u8]) -> Option<WorkspacesRef> {
@@ -435,7 +436,7 @@ fn parse_new_project_hook(body: &[u8]) -> Option<NewProjectHook> {
     (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
 }
 
-fn bad_project_hook_ref() -> (u16, String) {
+fn bad_project_hook_ref() -> Response {
     error(400, "expected JSON body { \"id\": \"…\", \"name\": \"…\" }")
 }
 

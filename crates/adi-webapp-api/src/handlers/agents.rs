@@ -11,16 +11,16 @@ use adi_agents::contains_json_null;
 
 use crate::types::{AgentBackendOption, AgentBuildResult, AgentCode, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, SaveAgent, SaveAgentCode};
 
-use super::response::{error, ok_json, clean};
+use super::response::{error, ok_json, clean, Response};
 use super::files::MAX_TEXT_BYTES;
 
 /// `GET /api/agents` — every registered agent definition. Each mutation endpoint below returns a
 /// fresh [`AgentsState`], so the client refreshes from one round-trip.
 #[must_use]
-pub fn agents(store: &Agents) -> (u16, String) {
+pub fn agents(store: &Agents) -> Response {
     match agents_state(store) {
         Ok(state) => ok_json(&state),
-        Err(e) => agent_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -41,14 +41,14 @@ fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
 /// `POST /api/agents/run` — launch an agent in its backend. Tmux engines start an interactive
 /// session; process engines start a headless background CLI with a PID and log.
 #[must_use]
-pub fn run_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_ref(body) else {
         return bad_agent_ref();
     };
     let name = req.name.trim();
     let launch = match store.run(name) {
         Ok(launch) => launch,
-        Err(e) => return agent_error(&e),
+        Err(e) => return Response::from(&e),
     };
     let message = match launch {
         adi_agents::Launch::Tmux { session, .. } => {
@@ -61,14 +61,14 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     };
     match agents_state(store) {
         Ok(state) => ok_json(&AgentRunResult { message, state }),
-        Err(e) => agent_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
 /// `POST /api/agents/save` — create or update an agent definition (an upsert keyed by `name`),
 /// then report the fresh list. `name` and `backend` are required.
 #[must_use]
-pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_save_agent(body) else {
         return bad_save_agent();
     };
@@ -96,19 +96,19 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     };
     match store.save(&name, manifest) {
         Ok(_) => agents(store),
-        Err(e) => agent_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
 /// `POST /api/agents/delete` — delete an agent definition, then report the fresh list.
 #[must_use]
-pub fn delete_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn delete_agent(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_ref(body) else {
         return bad_agent_ref();
     };
     match store.delete(req.name.trim()) {
         Ok(_) => agents(store),
-        Err(e) => agent_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -116,13 +116,13 @@ pub fn delete_agent(store: &Agents, body: &[u8]) -> (u16, String) {
 /// view. A registered agent without a live session answers `running: false` (200, not an error);
 /// only an unknown name is a 404.
 #[must_use]
-pub fn peek_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn peek_agent(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_ref(body) else {
         return bad_agent_ref();
     };
     match get_agent(store, req.name.trim()) {
         Ok(agent) => peek_response(&agent),
-        Err(e) => agent_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -130,16 +130,16 @@ pub fn peek_agent(store: &Agents, body: &[u8]) -> (u16, String) {
 /// half of the live view): `text` is sent literally, then `key` is pressed. Replies with a
 /// fresh pane snapshot after a short settle delay, so the sender sees the effect immediately.
 #[must_use]
-pub fn send_agent_keys(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_keys(body) else {
         return bad_agent_keys();
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
-        Err(e) => return agent_error(&e),
+        Err(e) => return Response::from(&e),
     };
     if let Err(e) = adi_agents::send_keys(&agent.name, &req.text, &req.key) {
-        return agent_error(&e);
+        return Response::from(&e);
     }
     // Give the TUI a beat to redraw, so the response snapshot already shows the keystrokes.
     std::thread::sleep(std::time::Duration::from_millis(120));
@@ -149,30 +149,30 @@ pub fn send_agent_keys(store: &Agents, body: &[u8]) -> (u16, String) {
 /// `POST /api/agents/stop` — stop a live tmux session or detached process, then report the fresh
 /// list. Idempotent for an already-stopped agent; only an unknown definition is a 404.
 #[must_use]
-pub fn stop_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn stop_agent(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_ref(body) else {
         return bad_agent_ref();
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
-        Err(e) => return agent_error(&e),
+        Err(e) => return Response::from(&e),
     };
     match store.stop(&agent.name) {
         Ok(_) => agents(store),
-        Err(e) => agent_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
 /// `POST /api/agents/code` — read the employee source file a wasm agent's `src` argument points
 /// at, for the code editor on the Agents page.
 #[must_use]
-pub fn agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn agent_code(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_ref(body) else {
         return bad_agent_ref();
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
-        Err(e) => return agent_error(&e),
+        Err(e) => return Response::from(&e),
     };
     let src = match agent_src(&agent) {
         Ok(src) => src,
@@ -200,7 +200,7 @@ pub fn agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
 /// `POST /api/agents/code/save` — write the code editor's buffer back to the wasm agent's
 /// `src` file, replying with the fresh [`AgentCode`].
 #[must_use]
-pub fn save_agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn save_agent_code(store: &Agents, body: &[u8]) -> Response {
     let Ok(req) = serde_json::from_slice::<SaveAgentCode>(body) else {
         return error(400, "expected JSON body { \"name\": \"…\", \"code\": \"…\" }");
     };
@@ -212,7 +212,7 @@ pub fn save_agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
     }
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
-        Err(e) => return agent_error(&e),
+        Err(e) => return Response::from(&e),
     };
     let src = match agent_src(&agent) {
         Ok(src) => src,
@@ -233,13 +233,13 @@ pub fn save_agent_code(store: &Agents, body: &[u8]) -> (u16, String) {
 /// Blocks for the build (a few seconds), replies with its combined output. A successful build
 /// fills in an empty `wasm` argument with the compiled path, making the agent dispatchable.
 #[must_use]
-pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
+pub fn build_agent(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_ref(body) else {
         return bad_agent_ref();
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
-        Err(e) => return agent_error(&e),
+        Err(e) => return Response::from(&e),
     };
     let src = match agent_src(&agent) {
         Ok(src) => PathBuf::from(src),
@@ -311,11 +311,11 @@ pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
     {
         let mut manifest = match typed_manifest {
             Ok(manifest) => manifest,
-            Err(error) => return agent_error(&error),
+            Err(error) => return Response::from(&error),
         };
         manifest.arguments.wasm = Some(wasm.clone());
         if let Err(e) = store.save(&agent.name, manifest) {
-            return agent_error(&e);
+            return Response::from(&e);
         }
     }
 
@@ -326,16 +326,16 @@ pub fn build_agent(store: &Agents, body: &[u8]) -> (u16, String) {
             wasm,
             state,
         }),
-        Err(e) => agent_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
 /// The employee source path from an agent's `src` argument, or the 400 explaining how to set it.
-fn agent_src(agent: &StoredAgent) -> Result<String, (u16, String)> {
+fn agent_src(agent: &StoredAgent) -> Result<String, Response> {
     let arguments = agent
         .manifest
         .typed_arguments::<WasmArguments>()
-        .map_err(|error| agent_error(&error))?;
+        .map_err(|error| Response::from(&error))?;
     arguments.src.filter(|s| !s.is_empty()).ok_or_else(|| {
         error(
             400,
@@ -376,7 +376,7 @@ fn get_agent(store: &Agents, name: &str) -> Result<StoredAgent, AgentStoreError>
 }
 
 /// The [`AgentPeek`] answer for an agent: its live pane capture, or `running: false` without one.
-fn peek_response(agent: &StoredAgent) -> (u16, String) {
+fn peek_response(agent: &StoredAgent) -> Response {
     let pane = adi_agents::capture_pane(&agent.name);
     ok_json(&AgentPeek {
         running: pane.is_some(),
@@ -946,23 +946,25 @@ fn opts(pairs: &[(&str, &str)]) -> Vec<AgentFormOption> {
     pairs.iter().map(|&(v, l)| agent_option(v, l)).collect()
 }
 
-/// Map an agent-store error to an HTTP status: bad name / unrunnable backend / bad key → 400,
-/// missing → 404, wrong run state (already / not running) → 409, else 500.
-fn agent_error(e: &AgentStoreError) -> (u16, String) {
-    let status = match e {
-        AgentStoreError::Arguments(_)
-        | AgentStoreError::InvalidName(_)
-        | AgentStoreError::NotRunnable(_)
-        | AgentStoreError::InvalidKey(_) => 400,
-        AgentStoreError::NotFound(_) => 404,
-        AgentStoreError::AlreadyRunning(_) | AgentStoreError::NotRunning(_) => 409,
-        AgentStoreError::Config(_)
-        | AgentStoreError::Io(_)
-        | AgentStoreError::Launch(_)
-        | AgentStoreError::Tmux(_)
-        | AgentStoreError::Process(_) => 500,
-    };
-    error(status, &e.to_string())
+// Map an agent-store error to an HTTP status: bad name / unrunnable backend / bad key → 400,
+// missing → 404, wrong run state (already / not running) → 409, else 500.
+impl From<&AgentStoreError> for Response {
+    fn from(e: &AgentStoreError) -> Self {
+        let status = match e {
+            AgentStoreError::Arguments(_)
+            | AgentStoreError::InvalidName(_)
+            | AgentStoreError::NotRunnable(_)
+            | AgentStoreError::InvalidKey(_) => 400,
+            AgentStoreError::NotFound(_) => 404,
+            AgentStoreError::AlreadyRunning(_) | AgentStoreError::NotRunning(_) => 409,
+            AgentStoreError::Config(_)
+            | AgentStoreError::Io(_)
+            | AgentStoreError::Launch(_)
+            | AgentStoreError::Tmux(_)
+            | AgentStoreError::Process(_) => 500,
+        };
+        error(status, &e.to_string())
+    }
 }
 
 fn parse_save_agent(body: &[u8]) -> Option<SaveAgent> {
@@ -970,7 +972,7 @@ fn parse_save_agent(body: &[u8]) -> Option<SaveAgent> {
     (!req.name.trim().is_empty() && !req.backend.trim().is_empty()).then_some(req)
 }
 
-fn bad_save_agent() -> (u16, String) {
+fn bad_save_agent() -> Response {
     error(
         400,
         "expected JSON body { \"name\": \"…\", \"backend\": \"…\", … } with a non-empty name and backend",
@@ -982,7 +984,7 @@ fn parse_agent_ref(body: &[u8]) -> Option<AgentRef> {
     (!req.name.trim().is_empty()).then_some(req)
 }
 
-fn bad_agent_ref() -> (u16, String) {
+fn bad_agent_ref() -> Response {
     error(400, "expected JSON body { \"name\": \"…\" }")
 }
 
@@ -991,7 +993,7 @@ fn parse_agent_keys(body: &[u8]) -> Option<AgentKeys> {
     (!req.name.trim().is_empty() && (!req.text.is_empty() || !req.key.is_empty())).then_some(req)
 }
 
-fn bad_agent_keys() -> (u16, String) {
+fn bad_agent_keys() -> Response {
     error(
         400,
         "expected JSON body { \"name\": \"…\", \"text\": \"…\", \"key\": \"…\" } with a non-empty name and at least one of text/key",

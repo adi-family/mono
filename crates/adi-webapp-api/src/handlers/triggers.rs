@@ -6,7 +6,7 @@ use adi_triggers::Triggers;
 
 use crate::types::{HookAck, SaveTrigger, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog, TriggerRef, TriggersState};
 
-use super::response::{error, ok_json, clean};
+use super::response::{error, ok_json, clean, Response};
 
 /// Trim dynamic backend parameters and drop empty or unsafe keys.
 fn clean_extra(extra: BTreeMap<String, String>) -> BTreeMap<String, String> {
@@ -25,10 +25,10 @@ fn safe_extra_key(key: &str) -> bool {
 /// `GET /api/triggers` — every registered trigger plus the selectable kinds. Each mutation
 /// endpoint below returns a fresh [`TriggersState`], so the client refreshes from one round-trip.
 #[must_use]
-pub fn triggers(store: &Triggers) -> (u16, String) {
+pub fn triggers(store: &Triggers) -> Response {
     match triggers_state(store) {
         Ok(state) => ok_json(&state),
-        Err(e) => trigger_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -48,7 +48,7 @@ fn triggers_state(store: &Triggers) -> Result<TriggersState, TriggerStoreError> 
 /// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
 /// `name`), then report the fresh list. `name` and `kind` are required.
 #[must_use]
-pub fn save_trigger(store: &Triggers, body: &[u8]) -> (u16, String) {
+pub fn save_trigger(store: &Triggers, body: &[u8]) -> Response {
     let Some(req) = parse_save_trigger(body) else {
         return bad_save_trigger();
     };
@@ -66,19 +66,19 @@ pub fn save_trigger(store: &Triggers, body: &[u8]) -> (u16, String) {
     };
     match store.save(&name, manifest) {
         Ok(_) => triggers(store),
-        Err(e) => trigger_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
 /// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list.
 #[must_use]
-pub fn delete_trigger(store: &Triggers, body: &[u8]) -> (u16, String) {
+pub fn delete_trigger(store: &Triggers, body: &[u8]) -> Response {
     let Some(req) = parse_trigger_ref(body) else {
         return bad_trigger_ref();
     };
     match store.delete(req.name.trim()) {
         Ok(_) => triggers(store),
-        Err(e) => trigger_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -86,21 +86,21 @@ pub fn delete_trigger(store: &Triggers, body: &[u8]) -> (u16, String) {
 /// it works even on a disabled trigger — only the *external* sources are gated by `enabled`.
 /// Replies with the spawned pid plus fresh state.
 #[must_use]
-pub fn fire_trigger(store: &Triggers, body: &[u8]) -> (u16, String) {
+pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
     let Some(req) = parse_trigger_ref(body) else {
         return bad_trigger_ref();
     };
     let name = req.name.trim();
     let firing = match store.fire(name, None) {
         Ok(firing) => firing,
-        Err(e) => return trigger_error(&e),
+        Err(e) => return Response::from(&e),
     };
     match triggers_state(store) {
         Ok(state) => ok_json(&TriggerFireResult {
             message: format!("Fired “{name}” (pid {}).", firing.pid),
             state,
         }),
-        Err(e) => trigger_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -108,7 +108,7 @@ pub fn fire_trigger(store: &Triggers, body: &[u8]) -> (u16, String) {
 /// trigger that never fired answers `fired: false` (200, not an error); only an unknown name
 /// is a 404.
 #[must_use]
-pub fn trigger_log(store: &Triggers, body: &[u8]) -> (u16, String) {
+pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
     let Some(req) = parse_trigger_ref(body) else {
         return bad_trigger_ref();
     };
@@ -123,8 +123,8 @@ pub fn trigger_log(store: &Triggers, body: &[u8]) -> (u16, String) {
                 name: trigger.name,
             })
         }
-        Ok(None) => trigger_error(&TriggerStoreError::NotFound(name.to_string())),
-        Err(e) => trigger_error(&e),
+        Ok(None) => Response::from(&TriggerStoreError::NotFound(name.to_string())),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -134,14 +134,14 @@ pub fn trigger_log(store: &Triggers, body: &[u8]) -> (u16, String) {
 /// An unknown name and a non-webhook trigger answer the same 404, so the endpoint doesn't
 /// reveal which internal names exist.
 #[must_use]
-pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -> (u16, String) {
+pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -> Response {
     let trigger = match store.get(name) {
         Ok(Some(t)) => t,
         // An unregistered and an unsafely-named hook answer identically, revealing nothing.
         Ok(None) | Err(TriggerStoreError::InvalidName(_)) => {
             return error(404, &format!("no such hook: {name}"));
         }
-        Err(e) => return trigger_error(&e),
+        Err(e) => return Response::from(&e),
     };
     if trigger.manifest.kind != adi_triggers::KIND_WEBHOOK {
         return error(404, &format!("no such hook: {name}"));
@@ -159,7 +159,7 @@ pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -
             ok: true,
             trigger: trigger.name,
         }),
-        Err(e) => trigger_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -218,16 +218,18 @@ fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
     }
 }
 
-/// Map a trigger-store error to an HTTP status: bad name / no code → 400, missing → 404, else 500.
-fn trigger_error(e: &TriggerStoreError) -> (u16, String) {
-    let status = match e {
-        TriggerStoreError::InvalidName(_) | TriggerStoreError::NoCode(_) => 400,
-        TriggerStoreError::NotFound(_) => 404,
-        TriggerStoreError::Config(_) | TriggerStoreError::Io(_) | TriggerStoreError::Launch(_) => {
-            500
-        }
-    };
-    error(status, &e.to_string())
+// Map a trigger-store error to an HTTP status: bad name / no code → 400, missing → 404, else 500.
+impl From<&TriggerStoreError> for Response {
+    fn from(e: &TriggerStoreError) -> Self {
+        let status = match e {
+            TriggerStoreError::InvalidName(_) | TriggerStoreError::NoCode(_) => 400,
+            TriggerStoreError::NotFound(_) => 404,
+            TriggerStoreError::Config(_) | TriggerStoreError::Io(_) | TriggerStoreError::Launch(_) => {
+                500
+            }
+        };
+        error(status, &e.to_string())
+    }
 }
 
 fn parse_save_trigger(body: &[u8]) -> Option<SaveTrigger> {
@@ -235,7 +237,7 @@ fn parse_save_trigger(body: &[u8]) -> Option<SaveTrigger> {
     (!req.name.trim().is_empty() && !req.kind.trim().is_empty()).then_some(req)
 }
 
-fn bad_save_trigger() -> (u16, String) {
+fn bad_save_trigger() -> Response {
     error(
         400,
         "expected JSON body { \"name\": \"…\", \"kind\": \"…\", … } with a non-empty name and kind",
@@ -247,7 +249,7 @@ fn parse_trigger_ref(body: &[u8]) -> Option<TriggerRef> {
     (!req.name.trim().is_empty()).then_some(req)
 }
 
-fn bad_trigger_ref() -> (u16, String) {
+fn bad_trigger_ref() -> Response {
     error(400, "expected JSON body { \"name\": \"…\" }")
 }
 

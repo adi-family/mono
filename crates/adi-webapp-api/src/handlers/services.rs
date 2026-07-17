@@ -7,8 +7,8 @@ use serde::Deserialize;
 
 use crate::types::{HiveService, HiveState, NewService, ProjectService, ServicePort, StartResult, StartService, StopResult};
 
-use super::response::{error, ok_json};
-use super::projects::{project_detail, project_error};
+use super::response::{error, ok_json, Response};
+use super::projects::project_detail;
 
 // A read-only view of the subset of adi-hive's `hive.yaml` schema the detail page shows.
 // adi-hive owns the authoritative schema (`crates/adi-hive/src/config.rs`); it's a binary
@@ -129,7 +129,7 @@ fn primary_port(ports: &[ServicePort]) -> Option<u16> {
 /// plus the global `~/.adi/mono/hive/hive.yaml`, tagged with a live running flag. `listening`
 /// is the set of currently-listening TCP ports (the host does the platform scan and passes it).
 #[must_use]
-pub fn hive(store: &Projects, listening: &[u16]) -> (u16, String) {
+pub fn hive(store: &Projects, listening: &[u16]) -> Response {
     let mut services = Vec::new();
 
     // The global front-door hive lives in the `hive` module of the same store the projects use.
@@ -144,7 +144,7 @@ pub fn hive(store: &Projects, listening: &[u16]) -> (u16, String) {
                 }
             }
         }
-        Err(e) => return project_error(&e),
+        Err(e) => return Response::from(&e),
     }
 
     ok_json(&HiveState { services })
@@ -180,7 +180,7 @@ fn collect_hive_services(
 /// own process group) and its output goes to `<workdir>/server.log`; status then reflects the
 /// service's primary port listening.
 #[must_use]
-pub fn start_service(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn start_service(store: &Projects, body: &[u8]) -> Response {
     let Ok(req) = serde_json::from_slice::<StartService>(body) else {
         return error(400, "expected JSON body { project?, service }");
     };
@@ -188,7 +188,7 @@ pub fn start_service(store: &Projects, body: &[u8]) -> (u16, String) {
     let (hive_path, default_dir) = match &req.project {
         Some(id) => match (store.hive_path(id), store.project_dir(id)) {
             (Ok(hive), Ok(dir)) => (hive, Some(dir)),
-            (Err(e), _) | (_, Err(e)) => return project_error(&e),
+            (Err(e), _) | (_, Err(e)) => return Response::from(&e),
         },
         None => (store.config().module("hive").raw_path("hive.yaml"), None),
     };
@@ -239,14 +239,14 @@ pub fn start_service(store: &Projects, body: &[u8]) -> (u16, String) {
 /// on its resolved port (the runner was spawned in its own process group; a plain kill on the
 /// listener stops it).
 #[must_use]
-pub fn stop_service(store: &Projects, body: &[u8]) -> (u16, String) {
+pub fn stop_service(store: &Projects, body: &[u8]) -> Response {
     let Ok(req) = serde_json::from_slice::<StartService>(body) else {
         return error(400, "expected JSON body { project?, service }");
     };
     let hive_path = match &req.project {
         Some(id) => match store.hive_path(id) {
             Ok(hive) => hive,
-            Err(e) => return project_error(&e),
+            Err(e) => return Response::from(&e),
         },
         None => store.config().module("hive").raw_path("hive.yaml"),
     };
@@ -285,7 +285,7 @@ pub fn stop_service(store: &Projects, body: &[u8]) -> (u16, String) {
 /// `` ports-manager.get('<project>/<name>', 'http') `` command — the same lease the hive
 /// daemon resolves for the imported service, so both sides agree on the port.
 #[must_use]
-pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> (u16, String) {
+pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Response {
     use serde_yaml_ng::{Mapping, Value as Yaml};
 
     fn ystr(s: &str) -> Yaml {
@@ -317,11 +317,11 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> (u16,
     match store.get(project) {
         Ok(Some(_)) => {}
         Ok(None) => return error(404, &format!("no such project: {project}")),
-        Err(e) => return project_error(&e),
+        Err(e) => return Response::from(&e),
     }
     let path = match store.hive_path(project) {
         Ok(path) => path,
-        Err(e) => return project_error(&e),
+        Err(e) => return Response::from(&e),
     };
 
     // Load the existing document (a missing/empty file is an empty mapping). A file we can't

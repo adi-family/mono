@@ -5,13 +5,13 @@ use adi_mesh::ticket;
 
 use crate::types::{MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState};
 
-use super::response::{error, ok_json};
+use super::response::{error, ok_json, Response};
 
 /// `GET /api/mesh` — this machine's mesh identity, published ticket, and config. `running`
 /// is the host's authoritative view of whether the in-process daemon is up (the host owns
 /// the daemon's lifecycle, so it passes this in — the same way `health` takes its identity).
 #[must_use]
-pub fn mesh(running: bool) -> (u16, String) {
+pub fn mesh(running: bool) -> Response {
     match mesh_snapshot(running) {
         Ok(state) => ok_json(&state),
         Err(e) => error(500, &e),
@@ -20,7 +20,7 @@ pub fn mesh(running: bool) -> (u16, String) {
 
 /// `POST /api/mesh/allow` — expose a local TCP port to peers.
 #[must_use]
-pub fn mesh_allow(running: bool, body: &[u8]) -> (u16, String) {
+pub fn mesh_allow(running: bool, body: &[u8]) -> Response {
     let Some(req) = parse_port_ref(body) else {
         return bad_port_ref();
     };
@@ -31,7 +31,7 @@ pub fn mesh_allow(running: bool, body: &[u8]) -> (u16, String) {
 
 /// `POST /api/mesh/deny` — stop exposing a local TCP port.
 #[must_use]
-pub fn mesh_deny(running: bool, body: &[u8]) -> (u16, String) {
+pub fn mesh_deny(running: bool, body: &[u8]) -> Response {
     let Some(req) = parse_port_ref(body) else {
         return bad_port_ref();
     };
@@ -43,7 +43,7 @@ pub fn mesh_deny(running: bool, body: &[u8]) -> (u16, String) {
 /// `POST /api/mesh/peers/allow` — authorize a peer (ticket or id) for the exposed ports;
 /// the canonical id is what gets stored.
 #[must_use]
-pub fn mesh_allow_peer(running: bool, body: &[u8]) -> (u16, String) {
+pub fn mesh_allow_peer(running: bool, body: &[u8]) -> Response {
     let Some(req) = parse_peer_ref(body) else {
         return bad_peer_ref();
     };
@@ -58,7 +58,7 @@ pub fn mesh_allow_peer(running: bool, body: &[u8]) -> (u16, String) {
 
 /// `POST /api/mesh/peers/deny` — revoke a peer's authorization.
 #[must_use]
-pub fn mesh_deny_peer(running: bool, body: &[u8]) -> (u16, String) {
+pub fn mesh_deny_peer(running: bool, body: &[u8]) -> Response {
     let Some(req) = parse_peer_ref(body) else {
         return bad_peer_ref();
     };
@@ -69,7 +69,7 @@ pub fn mesh_deny_peer(running: bool, body: &[u8]) -> (u16, String) {
 
 /// `POST /api/mesh/forwards/add` — forward a local port to a peer's port.
 #[must_use]
-pub fn mesh_add_forward(running: bool, body: &[u8]) -> (u16, String) {
+pub fn mesh_add_forward(running: bool, body: &[u8]) -> Response {
     let Some(req) = parse_forward_ref(body) else {
         return error(400, "expected JSON body { listen, peer, port, name? }");
     };
@@ -94,7 +94,7 @@ pub fn mesh_add_forward(running: bool, body: &[u8]) -> (u16, String) {
 
 /// `POST /api/mesh/forwards/remove` — remove the forward bound to a local port.
 #[must_use]
-pub fn mesh_remove_forward(running: bool, body: &[u8]) -> (u16, String) {
+pub fn mesh_remove_forward(running: bool, body: &[u8]) -> Response {
     let Some(req) = parse_listen_ref(body) else {
         return error(400, "expected JSON body { \"listen\": <port> }");
     };
@@ -131,7 +131,7 @@ fn mesh_snapshot(running: bool) -> Result<MeshState, String> {
 
 /// Load the config, apply `mutate`, save it, and return the fresh [`MeshState`] so the
 /// client updates from one round-trip.
-fn mesh_edit(running: bool, mutate: impl FnOnce(&mut MeshConfig)) -> (u16, String) {
+fn mesh_edit(running: bool, mutate: impl FnOnce(&mut MeshConfig)) -> Response {
     let mut cfg = match MeshConfig::load() {
         Ok(cfg) => cfg,
         Err(e) => return error(500, &format!("reading mesh config: {e}")),
@@ -148,7 +148,7 @@ fn parse_port_ref(body: &[u8]) -> Option<MeshPortRef> {
     (req.port != 0).then_some(req)
 }
 
-fn bad_port_ref() -> (u16, String) {
+fn bad_port_ref() -> Response {
     error(400, "expected JSON body { \"port\": <1-65535> }")
 }
 
@@ -157,7 +157,7 @@ fn parse_peer_ref(body: &[u8]) -> Option<MeshPeerRef> {
     (!req.peer.trim().is_empty()).then_some(req)
 }
 
-fn bad_peer_ref() -> (u16, String) {
+fn bad_peer_ref() -> Response {
     error(400, "expected JSON body { \"peer\": \"<id-or-ticket>\" }")
 }
 

@@ -2,11 +2,11 @@ use adi_ports_manager::Ports;
 
 use crate::types::{Lease, LeaseRef, PortsState, Range, ReleaseResponse, ReserveResponse, UsedPort, UsedPorts};
 
-use super::response::{error, ok_json};
+use super::response::{error, ok_json, Response};
 
 /// `GET /api/ports` — the allocator's configuration and current static leases.
 #[must_use]
-pub fn ports(manager: &Ports) -> (u16, String) {
+pub fn ports(manager: &Ports) -> Response {
     let config = manager.config();
     let range = Range {
         start: *config.range.start(),
@@ -44,13 +44,13 @@ pub fn ports(manager: &Ports) -> (u16, String) {
 /// `GET /api/ports/used` — the machine's listening TCP ports. The system scan is done by
 /// the host (it's platform I/O); this just shapes the response.
 #[must_use]
-pub fn used_ports(ports: Vec<UsedPort>) -> (u16, String) {
+pub fn used_ports(ports: Vec<UsedPort>) -> Response {
     ok_json(&UsedPorts { ports })
 }
 
 /// `POST /api/ports/reserve` — reserve (or return the existing) static port for a pair.
 #[must_use]
-pub fn reserve(manager: &Ports, body: &[u8]) -> (u16, String) {
+pub fn reserve(manager: &Ports, body: &[u8]) -> Response {
     let Some(req) = parse_lease_ref(body) else {
         return bad_lease_ref();
     };
@@ -66,7 +66,7 @@ pub fn reserve(manager: &Ports, body: &[u8]) -> (u16, String) {
 
 /// `POST /api/ports/release` — release a static lease, reporting the freed port.
 #[must_use]
-pub fn release(manager: &Ports, body: &[u8]) -> (u16, String) {
+pub fn release(manager: &Ports, body: &[u8]) -> Response {
     let Some(req) = parse_lease_ref(body) else {
         return bad_lease_ref();
     };
@@ -82,7 +82,7 @@ pub fn release(manager: &Ports, body: &[u8]) -> (u16, String) {
 
 // MARK: projects — metadata manifests under ~/.adi/mono/projects
 
-fn bad_lease_ref() -> (u16, String) {
+fn bad_lease_ref() -> Response {
     error(
         400,
         "expected JSON body { \"service\": \"…\", \"key\": \"…\" }",

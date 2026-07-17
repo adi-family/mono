@@ -23,6 +23,7 @@ use adi_projects::Projects;
 use adi_tasks::Tasks;
 use adi_triggers::Triggers;
 use adi_webapp_api::handlers;
+use adi_webapp_api::handlers::Response;
 use include_dir::{Dir, include_dir};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex;
@@ -190,7 +191,7 @@ async fn handle(
     debug!(method = %req.method, path = %req.path, "request");
 
     let path = req.route_path();
-    let (status, body) = match (req.method.as_str(), path) {
+    let Response { status, body } = match (req.method.as_str(), path) {
         ("GET", "/api/health") => handlers::health(SERVICE, VERSION, start),
         ("GET", "/api/ports") => handlers::ports(ports),
         ("GET", "/api/ports/used") => handlers::used_ports(scan::listening_ports()),
@@ -307,7 +308,7 @@ async fn handle(
 }
 
 /// `POST /api/mesh/start` — bring the in-process mesh daemon up, then report fresh state.
-async fn mesh_start(mesh: &MeshCtl) -> (u16, String) {
+async fn mesh_start(mesh: &MeshCtl) -> Response {
     match mesh.start().await {
         Ok(()) => handlers::mesh(true),
         Err(e) => handlers::error(500, &format!("starting mesh: {e}")),
@@ -315,7 +316,7 @@ async fn mesh_start(mesh: &MeshCtl) -> (u16, String) {
 }
 
 /// `POST /api/mesh/stop` — stop the in-process mesh daemon, then report fresh state.
-async fn mesh_stop(mesh: &MeshCtl) -> (u16, String) {
+async fn mesh_stop(mesh: &MeshCtl) -> Response {
     mesh.stop().await;
     handlers::mesh(false)
 }

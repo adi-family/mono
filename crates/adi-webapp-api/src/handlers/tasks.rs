@@ -4,12 +4,12 @@ use adi_tasks::Tasks;
 
 use crate::types::{NewTask, TaskRow, TasksState};
 
-use super::response::{error, ok_json};
+use super::response::{error, ok_json, Response};
 
 /// `GET /api/tasks` — the whole task tree as a flat list, ordered by task number so a parent
 /// precedes the children created after it. The client nests them into a tree by `parent`.
 #[must_use]
-pub fn tasks(store: &Tasks) -> (u16, String) {
+pub fn tasks(store: &Tasks) -> Response {
     match store.list(None, None, None, None) {
         Ok(mut views) => {
             views.sort_by(|a, b| a.order(b));
@@ -17,14 +17,14 @@ pub fn tasks(store: &Tasks) -> (u16, String) {
                 tasks: views.iter().map(task_row).collect(),
             })
         }
-        Err(e) => task_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
 /// `POST /api/tasks/create` — create a task (stored status `open`), then report the fresh tree.
 /// Only `title` is required; a given `parent` must be an existing task id.
 #[must_use]
-pub fn create_task(store: &Tasks, body: &[u8]) -> (u16, String) {
+pub fn create_task(store: &Tasks, body: &[u8]) -> Response {
     let Some(req) = parse_new_task(body) else {
         return bad_new_task();
     };
@@ -36,7 +36,7 @@ pub fn create_task(store: &Tasks, body: &[u8]) -> (u16, String) {
         req.parent,
     ) {
         Ok(_) => tasks(store),
-        Err(e) => task_error(&e),
+        Err(e) => Response::from(&e),
     }
 }
 
@@ -60,15 +60,17 @@ fn task_row(view: &TaskView) -> TaskRow {
     }
 }
 
-/// Map a task-store error to an HTTP status: missing → 404, bad edit → 400, archived → 409, else 500.
-fn task_error(e: &TaskStoreError) -> (u16, String) {
-    let status = match e {
-        TaskStoreError::NotFound(_) => 404,
-        TaskStoreError::ParentMissing(_) | TaskStoreError::Cycle => 400,
-        TaskStoreError::ReopenFirst => 409,
-        TaskStoreError::Store(_) => 500,
-    };
-    error(status, &e.to_string())
+// Map a task-store error to an HTTP status: missing → 404, bad edit → 400, archived → 409, else 500.
+impl From<&TaskStoreError> for Response {
+    fn from(e: &TaskStoreError) -> Self {
+        let status = match e {
+            TaskStoreError::NotFound(_) => 404,
+            TaskStoreError::ParentMissing(_) | TaskStoreError::Cycle => 400,
+            TaskStoreError::ReopenFirst => 409,
+            TaskStoreError::Store(_) => 500,
+        };
+        error(status, &e.to_string())
+    }
 }
 
 fn parse_new_task(body: &[u8]) -> Option<NewTask> {
@@ -76,7 +78,7 @@ fn parse_new_task(body: &[u8]) -> Option<NewTask> {
     (!req.title.trim().is_empty()).then_some(req)
 }
 
-fn bad_new_task() -> (u16, String) {
+fn bad_new_task() -> Response {
     error(
         400,
         "expected JSON body { \"title\": \"…\" } with a non-empty title",
