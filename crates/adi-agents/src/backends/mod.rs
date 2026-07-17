@@ -1,3 +1,5 @@
+pub(crate) mod detached;
+pub(crate) mod harness;
 pub(crate) mod process;
 pub(crate) mod tmux;
 

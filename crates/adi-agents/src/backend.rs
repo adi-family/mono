@@ -12,8 +12,13 @@ pub enum Backend {
     TmuxCodex,
     ProcessClaude,
     ProcessCodex,
+    /// The `claude` CLI driven headless by ADI's harness (a turn-capped, adi-scoped print run).
+    HarnessClaudeSdk,
+    /// ADI's own agentic loop; the model provider is the manifest's `provider` argument. Typed and
+    /// stored today, but not yet runnable — its loop engine doesn't exist.
+    HarnessAdi,
     Wasm,
-    /// A backend this crate doesn't run itself — a plugin/harness backend, or the empty default.
+    /// A backend this crate doesn't run itself — a plugin backend, or the empty default.
     Other(String),
 }
 
@@ -25,17 +30,20 @@ impl Backend {
             Self::TmuxCodex => "tmux:codex",
             Self::ProcessClaude => "process:claude",
             Self::ProcessCodex => "process:codex",
+            Self::HarnessClaudeSdk => "harness:claude-sdk",
+            Self::HarnessAdi => "harness:adi",
             Self::Wasm => "wasm:loop-script",
             Self::Other(value) => value,
         }
     }
 
-    /// The executor (`tmux` / `process` / `wasm` / `harness`) — the part before the `:`. An
+    /// The executor (`tmux` / `process` / `harness` / `wasm`) — the part before the `:`. An
     /// [`Other`](Self::Other) backend with no `:` (or the empty default) has no executor: `""`.
     pub(crate) fn executor(&self) -> &str {
         match self {
             Self::TmuxClaude | Self::TmuxCodex => "tmux",
             Self::ProcessClaude | Self::ProcessCodex => "process",
+            Self::HarnessClaudeSdk | Self::HarnessAdi => "harness",
             Self::Wasm => "wasm",
             Self::Other(value) => value.split_once(':').map_or("", |(executor, _)| executor),
         }
@@ -55,6 +63,8 @@ impl From<&str> for Backend {
             "tmux:codex" => Self::TmuxCodex,
             "process:claude" => Self::ProcessClaude,
             "process:codex" => Self::ProcessCodex,
+            "harness:claude-sdk" => Self::HarnessClaudeSdk,
+            "harness:adi" => Self::HarnessAdi,
             "wasm:loop-script" => Self::Wasm,
             other => Self::Other(other.to_string()),
         }
@@ -68,6 +78,8 @@ impl From<String> for Backend {
             "tmux:codex" => Self::TmuxCodex,
             "process:claude" => Self::ProcessClaude,
             "process:codex" => Self::ProcessCodex,
+            "harness:claude-sdk" => Self::HarnessClaudeSdk,
+            "harness:adi" => Self::HarnessAdi,
             "wasm:loop-script" => Self::Wasm,
             // Reuse the already-owned string instead of re-allocating.
             _ => Self::Other(value),
@@ -99,6 +111,8 @@ mod tests {
             "tmux:codex",
             "process:claude",
             "process:codex",
+            "harness:claude-sdk",
+            "harness:adi",
             "wasm:loop-script",
         ] {
             let backend = Backend::from(wire);
@@ -110,7 +124,7 @@ mod tests {
 
     #[test]
     fn unknown_and_empty_backends_are_kept_verbatim() {
-        for wire in ["harness:adi", "cloud:worker", "tmux:unknown", "weird", ""] {
+        for wire in ["cloud:worker", "harness:unknown", "tmux:unknown", "weird", ""] {
             let backend = Backend::from(wire);
             assert_eq!(backend, Backend::Other(wire.to_string()));
             assert_eq!(backend.as_str(), wire);
@@ -121,8 +135,10 @@ mod tests {
     fn executor_is_the_prefix_before_the_colon() {
         assert_eq!(Backend::TmuxClaude.executor(), "tmux");
         assert_eq!(Backend::ProcessCodex.executor(), "process");
+        assert_eq!(Backend::HarnessClaudeSdk.executor(), "harness");
+        assert_eq!(Backend::HarnessAdi.executor(), "harness");
         assert_eq!(Backend::Wasm.executor(), "wasm");
-        assert_eq!(Backend::from("harness:adi").executor(), "harness");
+        assert_eq!(Backend::from("harness:plugin").executor(), "harness");
         assert_eq!(Backend::from("weird").executor(), "");
         assert_eq!(Backend::default().executor(), "");
     }

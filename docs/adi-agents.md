@@ -28,6 +28,10 @@ Implemented:
 - `adi-agents`: a `process` launcher — `Agents::run_with_message` starts `claude --print` or
   `codex exec` detached in its own process group, recording a PID and combined log under
   `~/.adi/mono/sessions/process/`.
+- `adi-agents`: a `harness` launcher — `harness:claude-sdk` runs the `claude` CLI headless
+  through the same detached machinery (recording a PID/log under `~/.adi/mono/sessions/harness/`),
+  adding a turn cap (`--max-turns`) and folding the agent's adi-mono command scope into its system
+  prompt. `harness:adi` is typed and stored but not yet runnable.
 - `adi-tasks`: task tree under `~/.adi/mono/tasks/tasks.json`.
 - `adi-mono agents ...`: list, show, save, run, stop, and delete definitions.
 - `adi-mono tasks ...`: list, add, show, edit, complete, archive, reopen, and delete tasks.
@@ -37,7 +41,7 @@ Implemented:
 
 Not implemented yet:
 
-- Executor adapters for the `harness` backends.
+- The `harness:adi` loop engine (the backend is typed and stored, but not runnable).
 - Structured session history and live event streaming (process output is currently a flat log).
 - Auto-starting an agent from a tagged task.
 - Permission enforcement for command scopes.
@@ -100,9 +104,12 @@ thing it runs. The executor decides *how* the loop executes; it never names a mo
   its own agentic loop, `adi-mono` attaches, observes, and reaps.
 - `process:claude` / `process:codex` — the same vendor CLI run headless as a plain subprocess
   (print/exec mode), controlled by `adi-mono`.
-- `harness:claude-sdk` — an agentic loop embedded via the Claude Agent SDK.
+- `harness:claude-sdk` — the `claude` CLI run headless by ADI's harness: a turn-capped
+  (`--max-turns`), adi-scoped `--print` run, spawned detached like the `process` executor. (A
+  fully embedded Claude Agent SDK loop is future work; today it drives the CLI.)
 - `harness:adi` — ADI's own agentic loop; *which* model API it calls is the definition's
   `provider` argument (anthropic, openai, gemini, monshoot, ollama), not part of the backend id.
+  Typed and stored today, but its loop engine does not exist yet, so it is not runnable.
 - Every executor should emit a common event stream: started, stdout/stderr, tool/command
   request, task update, completed, failed.
 
@@ -113,7 +120,7 @@ high-level groups (`tasks`, `projects`, `agents`) before adding finer-grained co
 ## Recommended Next Steps
 
 1. Grow `adi-mono agents run <name>` a `--task <id>` handoff (seed the session with the task).
-2. Define a small backend trait over the executor modules, then add the `harness` adapters.
+2. Build the `harness:adi` loop engine (provider clients + turn loop) behind its typed arguments.
 3. Grow `~/.adi/mono/sessions` from process PID/log files into structured session records.
 4. Add an auto-start loop that only claims `ready` tagged tasks.
 5. Enforce command scope in the runner before any command is invoked.

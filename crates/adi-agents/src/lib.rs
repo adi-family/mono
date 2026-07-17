@@ -402,6 +402,63 @@ mod tests {
     }
 
     #[test]
+    fn harness_claude_sdk_saves_via_the_raw_ui_path_and_is_runnable() {
+        // Mirror what the web app / CLI submit: a raw argument map, with numeric knobs encoded as
+        // floats (the form runs every number through `parse::<f64>()`).
+        let store = scratch("harness-raw");
+        let mut arguments = RawAgentArguments::new();
+        arguments.insert("model".into(), "claude-opus-4-8".into());
+        arguments.insert("permission_mode".into(), "plan".into());
+        arguments.insert("max_turns".into(), serde_json::json!(20.0));
+        arguments.insert("tools".into(), "tasks,projects".into());
+        let manifest = AgentManifest {
+            backend: "harness:claude-sdk".into(),
+            arguments,
+            ..StoredAgentManifest::default()
+        };
+
+        let saved = store.save("planner", manifest).expect("save harness agent");
+        assert_eq!(saved.manifest.backend, Backend::HarnessClaudeSdk);
+
+        let stored = store
+            .get("planner")
+            .expect("get")
+            .expect("present")
+            .manifest;
+        assert!(is_runnable(&stored), "harness:claude-sdk must be runnable");
+
+        let typed = store
+            .get_typed::<crate::arguments::HarnessClaudeSdkArguments>("planner")
+            .expect("typed get")
+            .expect("present");
+        assert_eq!(typed.manifest.arguments.max_turns, Some(20));
+        assert_eq!(typed.manifest.arguments.tools.as_deref(), Some("tasks,projects"));
+    }
+
+    #[test]
+    fn harness_adi_is_typed_and_stored_but_not_runnable() {
+        let store = scratch("harness-adi-raw");
+        let mut arguments = RawAgentArguments::new();
+        arguments.insert("provider".into(), "gemini".into());
+        arguments.insert("temperature".into(), serde_json::json!(0.7));
+        arguments.insert("max_tokens".into(), serde_json::json!(4096.0));
+        let manifest = AgentManifest {
+            backend: "harness:adi".into(),
+            arguments,
+            ..StoredAgentManifest::default()
+        };
+
+        store.save("adi-agent", manifest).expect("save adi harness agent");
+        let stored = store
+            .get("adi-agent")
+            .expect("get")
+            .expect("present")
+            .manifest;
+        assert_eq!(stored.backend, Backend::HarnessAdi);
+        assert!(!is_runnable(&stored), "harness:adi is not runnable yet");
+    }
+
+    #[test]
     fn built_in_backends_reject_unknown_arguments_on_save() {
         #[derive(Default, serde::Serialize)]
         struct MisspelledCodexArguments {

@@ -31,7 +31,7 @@ impl fmt::Display for Error {
             Self::Io(e) => write!(f, "agent store I/O error: {e}"),
             Self::NotRunnable(backend) => write!(
                 f,
-                "backend {backend:?} can't be run yet — tmux/process Claude and Codex agents plus wasm agents launch today"
+                "backend {backend:?} can't be run yet — tmux/process Claude and Codex agents, harness:claude-sdk, and wasm agents launch today"
             ),
             Self::AlreadyRunning(name) => write!(f, "agent {name} is already running"),
             Self::Launch(msg) => write!(f, "failed to launch agent: {msg}"),

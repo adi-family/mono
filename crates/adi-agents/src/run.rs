@@ -1,7 +1,7 @@
 //! Backend-agnostic run dispatch.
 
 use crate::backend::Backend;
-use crate::backends::{process, tmux};
+use crate::backends::{harness, process, tmux};
 use crate::error::{Error, Result};
 use crate::{StoredAgent, StoredAgentManifest};
 use std::path::{Path, PathBuf};
@@ -26,6 +26,7 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     match &manifest.backend {
         Backend::TmuxClaude | Backend::TmuxCodex => tmux::is_runnable(manifest),
         Backend::ProcessClaude | Backend::ProcessCodex => process::is_runnable(manifest),
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => harness::is_runnable(manifest),
         _ => false,
     }
 }
@@ -35,6 +36,9 @@ pub(crate) fn launch_in(agent: &StoredAgent, sessions_dir: &Path, message: &str)
         Backend::TmuxClaude | Backend::TmuxCodex => tmux::launch(agent),
         Backend::ProcessClaude | Backend::ProcessCodex => {
             process::launch(agent, sessions_dir, message)
+        }
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::launch(agent, sessions_dir, message)
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -46,6 +50,9 @@ pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
         Backend::ProcessClaude | Backend::ProcessCodex => {
             process::is_running(sessions_dir, &agent.name)
         }
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::is_running(sessions_dir, &agent.name)
+        }
         _ => false,
     }
 }
@@ -55,6 +62,9 @@ pub(crate) fn stop_in(agent: &StoredAgent, sessions_dir: &Path) -> Result<bool> 
         Backend::TmuxClaude | Backend::TmuxCodex => tmux::stop(&agent.name),
         Backend::ProcessClaude | Backend::ProcessCodex => {
             process::stop(sessions_dir, &agent.name)
+        }
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::stop(sessions_dir, &agent.name)
         }
         _ => Ok(false),
     }
@@ -77,11 +87,13 @@ mod tests {
         assert!(is_runnable(&manifest("tmux:codex")));
         assert!(is_runnable(&manifest("process:claude")));
         assert!(is_runnable(&manifest("process:codex")));
+        assert!(is_runnable(&manifest("harness:claude-sdk")));
         for backend in [
             "tmux:unknown",
             "process:unknown",
-            "harness:claude-sdk",
             "harness:adi",
+            "harness:unknown",
+            "wasm:loop-script",
             "",
         ] {
             assert!(
