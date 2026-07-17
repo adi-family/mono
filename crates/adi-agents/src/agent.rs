@@ -42,21 +42,29 @@ impl<Args> AgentManifest<Args> {
     pub fn executor(&self) -> &str {
         self.backend.executor()
     }
+
+    /// Build a manifest that carries this one's metadata — `backend`, `tags`, `starred`,
+    /// `project`, and both timestamps — but swaps in a freshly derived `arguments` payload. The
+    /// single place that field list lives, so the encode/decode paths below don't each respell it.
+    /// Clones the carried fields (all cheap) and leaves `self`'s own `arguments` untouched.
+    fn rewrap<T>(&self, arguments: T) -> AgentManifest<T> {
+        AgentManifest {
+            backend: self.backend.clone(),
+            arguments,
+            tags: self.tags.clone(),
+            starred: self.starred,
+            project: self.project.clone(),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
 }
 
 impl<Args: Serialize> AgentManifest<Args> {
     /// # Errors
     /// Returns [`Error::Arguments`] when `Args` cannot be stored as a TOML object.
     pub fn to_stored(&self) -> Result<StoredAgentManifest> {
-        Ok(AgentManifest {
-            backend: self.backend.clone(),
-            arguments: encode_arguments(&self.arguments)?,
-            tags: self.tags.clone(),
-            starred: self.starred,
-            project: self.project.clone(),
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        })
+        Ok(self.rewrap(encode_arguments(&self.arguments)?))
     }
 }
 
@@ -70,15 +78,8 @@ impl AgentManifest<RawAgentArguments> {
     /// # Errors
     /// Returns [`Error::Arguments`] when the stored object does not match `Args`.
     pub fn into_typed<Args: DeserializeOwned>(self) -> Result<AgentManifest<Args>> {
-        Ok(AgentManifest {
-            backend: self.backend,
-            arguments: decode_arguments(self.arguments)?,
-            tags: self.tags,
-            starred: self.starred,
-            project: self.project,
-            created_at: self.created_at,
-            updated_at: self.updated_at,
-        })
+        let arguments = self.typed_arguments()?;
+        Ok(self.rewrap(arguments))
     }
 }
 
