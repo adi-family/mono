@@ -22,6 +22,18 @@ pub enum TaskStatus {
     Archived,
 }
 
+impl TaskStatus {
+    /// The stable wire/CLI label for this stored status (matches the serde representation).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TaskStatus::Open => "open",
+            TaskStatus::Done => "done",
+            TaskStatus::Archived => "archived",
+        }
+    }
+}
+
 /// A task's *computed* status, derived from its stored status and direct children. Never stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -34,6 +46,19 @@ pub enum EffectiveStatus {
     Done,
     /// Stored status is `archived`.
     Archived,
+}
+
+impl EffectiveStatus {
+    /// The stable wire/CLI label for this computed status (matches the serde representation).
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EffectiveStatus::Ready => "ready",
+            EffectiveStatus::Blocked => "blocked",
+            EffectiveStatus::Done => "done",
+            EffectiveStatus::Archived => "archived",
+        }
+    }
 }
 
 /// One tracked unit of work (a node in the task tree).
@@ -99,6 +124,16 @@ impl TaskView {
             children_total,
             children_open,
         }
+    }
+
+    /// Stable task ordering: by creation time (so a parent precedes children created after it),
+    /// with the id as a tiebreak. Works across both id schemes (`t<N>` and Jira `<KEY>-<N>`).
+    #[must_use]
+    pub fn order(&self, other: &TaskView) -> std::cmp::Ordering {
+        self.task
+            .created_at
+            .cmp(&other.task.created_at)
+            .then_with(|| self.task.id.cmp(&other.task.id))
     }
 }
 

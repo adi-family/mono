@@ -849,7 +849,7 @@ fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
             let mut tasks = store
                 .list(project, tag, status, effective)
                 .map_err(|e| e.to_string())?;
-            tasks.sort_by(task_order);
+            tasks.sort_by(|a, b| a.order(b));
             if json {
                 print_json(&tasks);
             } else if tasks.is_empty() {
@@ -1247,9 +1247,9 @@ fn print_task(task: &TaskView) {
         "{} — {} [{}]",
         task.task.id,
         task.task.title,
-        effective_name(task.effective)
+        task.effective.as_str()
     );
-    let mut meta = vec![format!("status: {}", status_name(task.task.status))];
+    let mut meta = vec![format!("status: {}", task.task.status.as_str())];
     if let Some(project) = &task.task.project {
         meta.push(format!("project: {project}"));
     }
@@ -1364,30 +1364,6 @@ fn parse_effective_status(value: &str) -> Result<EffectiveStatus, String> {
             "unknown effective status {value:?}; expected ready, blocked, done, or archived"
         )),
     }
-}
-
-fn status_name(status: TaskStatus) -> &'static str {
-    match status {
-        TaskStatus::Open => "open",
-        TaskStatus::Done => "done",
-        TaskStatus::Archived => "archived",
-    }
-}
-
-fn effective_name(status: EffectiveStatus) -> &'static str {
-    match status {
-        EffectiveStatus::Ready => "ready",
-        EffectiveStatus::Blocked => "blocked",
-        EffectiveStatus::Done => "done",
-        EffectiveStatus::Archived => "archived",
-    }
-}
-
-fn task_order(a: &TaskView, b: &TaskView) -> std::cmp::Ordering {
-    a.task
-        .created_at
-        .cmp(&b.task.created_at)
-        .then_with(|| a.task.id.cmp(&b.task.id))
 }
 
 fn clean(value: Option<String>) -> Option<String> {

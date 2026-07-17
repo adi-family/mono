@@ -22,7 +22,7 @@ use adi_mesh::config::{Forward, MeshConfig};
 use adi_mesh::{identity, ticket};
 use adi_ports_manager::Ports;
 use adi_projects::{Error as ProjectStoreError, Projects};
-use adi_tasks::{EffectiveStatus, Error as TaskStoreError, TaskStatus, TaskView, Tasks};
+use adi_tasks::{Error as TaskStoreError, TaskView, Tasks};
 use serde::Deserialize;
 
 use crate::types::{
@@ -232,7 +232,7 @@ pub fn remove_project(store: &Projects, body: &[u8]) -> (u16, String) {
 pub fn tasks(store: &Tasks) -> (u16, String) {
     match store.list(None, None, None, None) {
         Ok(mut views) => {
-            views.sort_by(task_order);
+            views.sort_by(|a, b| a.order(b));
             ok_json(&TasksState {
                 tasks: views.iter().map(task_row).collect(),
             })
@@ -1394,8 +1394,8 @@ fn task_row(view: &TaskView) -> TaskRow {
         id: task.id.clone(),
         title: task.title.clone(),
         details: task.details.clone(),
-        status: task_status_label(task.status).to_string(),
-        effective: effective_status_label(view.effective).to_string(),
+        status: task.status.as_str().to_string(),
+        effective: view.effective.as_str().to_string(),
         project: task.project.clone(),
         parent: task.parent.clone(),
         tag: task.tag.clone(),
@@ -1405,34 +1405,6 @@ fn task_row(view: &TaskView) -> TaskRow {
         created_at: task.created_at,
         updated_at: task.updated_at,
     }
-}
-
-/// The wire label for a stored task status.
-fn task_status_label(s: TaskStatus) -> &'static str {
-    match s {
-        TaskStatus::Open => "open",
-        TaskStatus::Done => "done",
-        TaskStatus::Archived => "archived",
-    }
-}
-
-/// The wire label for a computed effective status.
-fn effective_status_label(e: EffectiveStatus) -> &'static str {
-    match e {
-        EffectiveStatus::Ready => "ready",
-        EffectiveStatus::Blocked => "blocked",
-        EffectiveStatus::Done => "done",
-        EffectiveStatus::Archived => "archived",
-    }
-}
-
-/// Stable task ordering: by creation time (so a parent precedes children created after it),
-/// with the id as a tiebreak. Works across both id schemes (`t<N>` and Jira `<KEY>-<N>`).
-fn task_order(a: &TaskView, b: &TaskView) -> std::cmp::Ordering {
-    a.task
-        .created_at
-        .cmp(&b.task.created_at)
-        .then_with(|| a.task.id.cmp(&b.task.id))
 }
 
 /// Map a task-store error to an HTTP status: missing → 404, bad edit → 400, archived → 409, else 500.
