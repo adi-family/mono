@@ -19,9 +19,9 @@
 }
 
 // ---- workbench (the IDE frame) ------------------------------------------------------
-// The app is laid out like an editor: the viewport is the frame, a status bar is pinned to
-// its foot, and each pane inside scrolls independently rather than the page scrolling as a
-// whole. Left to right: the nav rail, the explorer, the content pane.
+// The app is laid out like an editor: a title bar lids the frame, a status bar is pinned to
+// its foot, and the panes between them scroll independently rather than the page scrolling
+// as a whole. Left to right: the explorer, then the content pane.
 .adi-workbench {
   display: flex;
   flex-direction: column;
@@ -46,33 +46,6 @@
   align-items: stretch;
   flex: 1;
   min-height: 0; // required, or the panes below grow instead of scrolling
-}
-
-// The nav rail sits one step *back* from the panels beside it — recessed, so the eye reads
-// three distinct layers (rail → explorer → content) rather than two identical columns.
-.adi-sidebar {
-  flex: 0 0 168px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-4);
-  padding: 10px 8px;
-  overflow-y: auto;
-  background: var(--surface-2);
-  border-right: 1px solid var(--border);
-
-  &__brand {
-    display: flex;
-    align-items: baseline;
-    gap: var(--space-2);
-    padding: 0 6px 2px;
-  }
-
-  &__foot {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 0 6px;
-  }
 }
 
 // ---- explorer (the persistent project tree) -----------------------------------------
@@ -140,82 +113,19 @@
   }
 }
 
-// ---- sidebar nav -------------------------------------------------------------------
-.adi-nav {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-
-  &__item {
-    display: flex;
-    align-items: center;
-    gap: var(--space-2);
-    padding: 4px 8px;
-    border-radius: var(--radius-sm);
-    color: var(--muted);
-    text-decoration: none;
-    font-size: var(--text-md);
-    font-weight: 500;
-    transition: background var(--transition), color var(--transition);
-
-    &:hover {
-      background: color-mix(in srgb, var(--ink) 5%, transparent);
-      color: var(--ink);
-    }
-
-    // The active item lifts to the panel surface and takes an accent edge — the same move
-    // an editor makes for the open tab, and quieter than a filled pill.
-    &[aria-current="page"] {
-      background: var(--surface);
-      color: var(--ink);
-      font-weight: 600;
-      box-shadow: inset 2px 0 0 var(--accent);
-    }
-  }
-
-  &__group {
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-    margin-top: var(--space-4);
-  }
-
-  &__heading {
-    @include eyebrow(var(--text-xs));
-    padding: 0 9px;
-    margin-bottom: var(--space-1);
-  }
-}
-
-// Stack the rail into a top bar when there isn't room for the full workbench, and drop the
-// explorer entirely — a 232px tree is the first thing to go when width is scarce.
+// Below this width the workbench stacks: the explorer becomes a capped, scrolling strip
+// above the content instead of a column beside it.
 @media (max-width: 860px) {
   .adi-workbench { height: auto; min-height: 100vh; }
 
   .adi-shell { flex-direction: column; }
 
-  .adi-sidebar {
-    flex-basis: auto;
-    overflow-y: visible;
-    flex-direction: row;
-    align-items: center;
-    gap: var(--space-3);
-    padding: 8px 12px;
+  .adi-explorer {
+    flex: none;
+    max-height: 38vh;
     border-right: none;
     border-bottom: 1px solid var(--border);
-
-    .adi-spacer { display: none; }
   }
-
-  .adi-nav {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-  }
-
-  .adi-nav__group { margin-top: 0; }
-
-  .adi-sidebar__foot { margin-left: auto; }
 }
 
 // ---- top bar -----------------------------------------------------------------------
@@ -562,6 +472,21 @@
 
       .adi-tree__icon { color: var(--accent); }
     }
+
+    // A project among its own section pages: full-strength ink and a coloured folder, so
+    // the thing that holds the pages doesn't read as one of them.
+    &[data-emphasis="true"] {
+      font-weight: 550;
+
+      .adi-tree__icon { color: var(--accent); }
+    }
+
+    // The boundary between a project's pages and the projects nested under it.
+    &[data-separated="true"] {
+      margin-top: 5px;
+      padding-top: 5px;
+      border-top: 1px solid var(--border);
+    }
   }
 
   // One per level of depth. Bordered and stretched, so consecutive rows draw the
@@ -593,12 +518,26 @@
     &:hover { color: var(--ink); }
   }
 
+  // A fixed-width slot so every label starts on the same left edge, whether the row has an
+  // icon or the fallback dot.
   &__icon {
     flex: none;
-    width: 14px;
-    text-align: center;
+    display: inline-grid;
+    place-items: center;
+    width: 18px;
+    height: 16px;
     color: var(--muted);
+
+    svg {
+      width: 13px;
+      height: 13px;
+      display: block;
+    }
+  }
+
+  &__dot {
     font-size: 11px;
+    line-height: 1;
   }
 
   &__label {

@@ -29,6 +29,14 @@ pub(crate) struct TreeNode {
     /// A grouping row that is not itself a destination (a scope header). Clicking it opens
     /// or closes it, the way clicking a folder name does, rather than selecting nothing.
     pub(crate) container: bool,
+    /// The row's glyph — the inner markup of an `<svg>` (see the `icons` module). Rows
+    /// without one fall back to a dot, so the icon column always aligns.
+    pub(crate) icon: Option<&'static str>,
+    /// Draw a rule above this row. Marks the boundary between kinds of children — a
+    /// project's section pages and the sub-projects nested under it.
+    pub(crate) separated: bool,
+    /// Give the row more presence than its siblings (a project among its own pages).
+    pub(crate) emphasis: bool,
 }
 
 impl TreeNode {
@@ -42,6 +50,9 @@ impl TreeNode {
             badge: None,
             title: None,
             container: false,
+            icon: None,
+            separated: false,
+            emphasis: false,
         }
     }
 
@@ -63,6 +74,24 @@ impl TreeNode {
     /// Mark this row as a pure grouping row (see [`TreeNode::container`]).
     pub(crate) fn container(mut self, container: bool) -> Self {
         self.container = container;
+        self
+    }
+
+    /// The row's glyph, as the inner markup of an `<svg>` on a 16x16 grid.
+    pub(crate) fn icon(mut self, icon: &'static str) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    /// Draw a rule above this row (see [`TreeNode::separated`]).
+    pub(crate) fn separated(mut self, separated: bool) -> Self {
+        self.separated = separated;
+        self
+    }
+
+    /// Give this row more presence than its siblings (see [`TreeNode::emphasis`]).
+    pub(crate) fn emphasis(mut self, emphasis: bool) -> Self {
+        self.emphasis = emphasis;
         self
     }
 }
@@ -183,9 +212,17 @@ fn row_view(node: TreeNode, expanded: bool, selected: Option<&str>, tree: TreeSt
         view! { <span class="adi-tree__twisty"></span> }.into_any()
     };
 
-    // Branches are already marked by their twisty, so only leaves carry a glyph — two
-    // near-identical marks per row read as noise rather than as structure.
-    let icon = if node.has_children { "" } else { "·" };
+    // An icon when the row has one, else a dot — either way the column keeps its width, so
+    // labels stay on a single left edge down the whole tree.
+    let icon = match node.icon {
+        Some(path) => view! {
+            <svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                inner_html=path></svg>
+        }
+        .into_any(),
+        None => view! { <span class="adi-tree__dot">"\u{b7}"</span> }.into_any(),
+    };
     let container = node.container;
     let click_id = node.id.clone();
     let key_id = node.id.clone();
@@ -200,6 +237,8 @@ fn row_view(node: TreeNode, expanded: bool, selected: Option<&str>, tree: TreeSt
         <div class="adi-tree__row" role="treeitem" tabindex="0"
             title=node.title
             data-selected=is_selected.to_string()
+            data-separated=node.separated.to_string()
+            data-emphasis=node.emphasis.to_string()
             aria-selected=is_selected.to_string()
             aria-expanded=node.has_children.then(|| expanded.to_string())
             on:click=move |_| activate(click_id.clone(), tree)

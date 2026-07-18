@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 mod fetch;
+mod icons;
 mod pages;
 mod routing;
 mod state;
@@ -395,6 +396,14 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
     ),
 ];
 
+/// The glyph for a top-level scope header.
+fn scope_icon(label: &str) -> icons::Icon {
+    match label {
+        "Settings" => icons::Icon::Gear,
+        _ => icons::Icon::Globe,
+    }
+}
+
 /// A tree node's id doubles as its navigation target. Global sections are `route:<path>`;
 /// a project is `proj:<id>`, and one of its sections `proj:<id>:<slug>`.
 fn node_target(id: &str) -> Option<Nav> {
@@ -427,14 +436,14 @@ fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>
         nodes.push(
             tree::TreeNode::new(format!("scope:{label}"), 0, label)
                 .children(true)
-                .container(true),
+                .container(true)
+                .icon(scope_icon(label).path()),
         );
         for r in routes {
-            nodes.push(tree::TreeNode::new(
-                format!("route:{}", r.path()),
-                1,
-                r.title(),
-            ));
+            nodes.push(
+                tree::TreeNode::new(format!("route:{}", r.path()), 1, r.title())
+                    .icon(icons::route_icon(*r).path()),
+            );
         }
     }
 
@@ -449,7 +458,10 @@ fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>
             .collect(),
     );
     let tasks = state.tasks.get();
-    for (depth, p) in &rows {
+    for (i, (depth, p)) in rows.iter().enumerate() {
+        // `project_tree_rows` emits a parent immediately followed by its children, so a row
+        // one level deeper than the previous one is the first sub-project of that parent.
+        let first_child = *depth > 0 && rows.get(i.wrapping_sub(1)).is_some_and(|(prev, _)| *prev == depth - 1);
         // Badge each project with its open task count — the one number worth carrying in
         // the rail, so the tree shows where the work is without opening anything.
         let open = tasks.as_ref().map(|t| {
@@ -463,15 +475,21 @@ fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>
             tree::TreeNode::new(format!("proj:{}", p.id), *depth, p.name.clone())
                 // Always a branch: even a project with no sub-projects holds its sections.
                 .children(true)
+                .icon(icons::Icon::Folder.path())
+                .emphasis(true)
+                .separated(first_child)
                 .badge(open.filter(|n| *n > 0).map(|n| n.to_string()))
                 .title(p.description.clone()),
         );
         for section in ProjectSection::ALL {
-            nodes.push(tree::TreeNode::new(
-                format!("proj:{}:{}", p.id, section.slug()),
-                depth + 1,
-                section.title(),
-            ));
+            nodes.push(
+                tree::TreeNode::new(
+                    format!("proj:{}:{}", p.id, section.slug()),
+                    depth + 1,
+                    section.title(),
+                )
+                .icon(icons::section_icon(section).path()),
+            );
         }
     }
 
