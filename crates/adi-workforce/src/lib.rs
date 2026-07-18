@@ -1,5 +1,5 @@
 //! adi-workforce — the WASM-employee agent engine, ported from the old
-//! adi-family repo's `workforce-core` (see docs/adi-workforce.md).
+//! adi-family repo's `workforce-core`.
 //!
 //! An agent ("employee") is written in TypeScript against the workforce SDK,
 //! compiled to a WebAssembly *component* (esbuild → jco, WIT world
