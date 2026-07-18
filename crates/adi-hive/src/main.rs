@@ -97,14 +97,37 @@ async fn main() -> anyhow::Result<()> {
     } else {
         info!(count = runners.len(), "supervising service runners");
     }
-    let supervisor = runner::Supervisor::start(runners);
+    let mut supervisor = runner::Supervisor::start(runners);
 
     info!("adi-hive ready");
 
-    tokio::select! {
-        () = shutdown_signal() => info!("shutdown signal received; stopping"),
-        () = binary_replaced() => {
-            info!("binary replaced on disk; exiting so launchd respawns the new build");
+    // Watch the config (and everything it imports) so a service added on disk starts without a
+    // restart — the supervisor reconciles, touching only what actually changed. Routes are still
+    // resolved once at startup: changing a `proxy.host` needs a restart, adding a runner does not.
+    let mut reload = tokio::time::interval(RELOAD_INTERVAL);
+    reload.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Pinned outside the loop so a signal arriving between ticks is never missed.
+    let shutdown = shutdown_signal();
+    let replaced = binary_replaced();
+    tokio::pin!(shutdown, replaced);
+    loop {
+        tokio::select! {
+            () = &mut shutdown => {
+                info!("shutdown signal received; stopping");
+                break;
+            }
+            () = &mut replaced => {
+                info!("binary replaced on disk; exiting so launchd respawns the new build");
+                break;
+            }
+            _ = reload.tick() => {
+                if let Some(specs) = reload_runners(&path, &ports_manager, &base_dir) {
+                    let (started, stopped) = supervisor.reconcile(specs);
+                    if started > 0 || stopped > 0 {
+                        info!(started, stopped, total = supervisor.len(), "reloaded config");
+                    }
+                }
+            }
         }
     }
     // Stop the runners first (bounded, so a stuck child can't hang shutdown), then the listeners.
@@ -123,6 +146,35 @@ async fn main() -> anyhow::Result<()> {
 
 /// Upper bound on how long shutdown waits for all runners to stop.
 const TERM_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// How often the config (and its imports) is re-read to pick up added/removed services.
+/// Polling rather than an fs-watch: the files are tiny, a few are involved, and this keeps
+/// adi-hive dependency-free.
+const RELOAD_INTERVAL: Duration = Duration::from_secs(3);
+
+/// Re-read the config and resolve it to the runner set it now describes, or `None` if it could
+/// not be read (a half-written file mid-edit, say) — in which case the caller keeps what it has
+/// rather than tearing every service down over a transient parse error.
+fn reload_runners(
+    path: &Path,
+    ports_manager: &adi_ports_manager::Ports,
+    base_dir: &Path,
+) -> Option<Vec<config::RunnerSpec>> {
+    if !path.exists() {
+        return None;
+    }
+    let mut hive = match Hive::load(path) {
+        Ok(hive) => hive,
+        Err(e) => {
+            warn!(error = %e, "could not reload config; keeping the running services");
+            return None;
+        }
+    };
+    // A service added since startup has no port yet; leases are idempotent, so re-running this
+    // over unchanged services is a no-op that returns their existing ports.
+    hive.allocate_missing_ports(ports_manager);
+    Some(hive.runners(base_dir))
+}
 
 /// How often the self-watch re-checks the binary on disk.
 const WATCH_SELF_PERIOD: Duration = Duration::from_secs(30);

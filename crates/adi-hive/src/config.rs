@@ -178,7 +178,10 @@ impl RestartPolicy {
 }
 
 /// A service resolved to a launchable runner: command, working dir, env, and restart policy.
-#[derive(Debug, Clone)]
+///
+/// `PartialEq` is what makes hot reload safe: the supervisor compares a freshly-read spec against
+/// the running one and only restarts a service whose definition actually changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunnerSpec {
     pub name: String,
     pub run: String,
@@ -311,12 +314,15 @@ fn expand_templates(input: &str, ports: &BTreeMap<String, u16>) -> String {
 
 // MARK: imports — fan every project's hive.yaml into one front door
 
-/// Substitute config variables in an import pattern: `$ADI_PROJECTS_DIR` (the projects module
-/// dir, honoring `$ADI_DIR`) and `$HOME`.
+/// Substitute config variables in an import pattern: `$ADI_PROJECTS_DIR` and
+/// `$ADI_DASHBOARDS_DIR` (the projects / dashboards module dirs, honoring `$ADI_DIR`), and `$HOME`.
 fn expand_vars(pattern: &str) -> String {
     let cfg = adi_config::Config::open();
     let projects = cfg.module("projects").dir().to_string_lossy().into_owned();
-    let mut out = pattern.replace("$ADI_PROJECTS_DIR", &projects);
+    let dashboards = cfg.module("dashboards").dir().to_string_lossy().into_owned();
+    let mut out = pattern
+        .replace("$ADI_PROJECTS_DIR", &projects)
+        .replace("$ADI_DASHBOARDS_DIR", &dashboards);
     if let Some(home) = std::env::var_os("HOME") {
         out = out.replace("$HOME", &home.to_string_lossy());
     }
@@ -362,6 +368,24 @@ fn import_namespace(file: &Path) -> String {
         parent.and_then(Path::file_name)
     };
     ns.map_or_else(|| "import".to_string(), |n| n.to_string_lossy().into_owned())
+}
+
+/// Whether this hive runs as root — i.e. is the machine front door, which routes imported
+/// services but must never spawn their (user-owned) processes.
+///
+/// Deliberately an effective-uid check rather than `$USER`/`$HOME`: the front-door `LaunchDaemon`
+/// runs as root while still setting `HOME` to the login user, so the environment does not
+/// distinguish the two.
+fn running_as_root() -> bool {
+    // SAFETY: POSIX `geteuid` takes no arguments, cannot fail, and reads no caller memory.
+    // Declared inline to keep adi-hive free of a `libc` dependency for this single call.
+    #[allow(unsafe_code)]
+    unsafe {
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        geteuid() == 0
+    }
 }
 
 /// Whether two paths point at the same file (canonicalized), so a hive never imports itself.
@@ -412,11 +436,17 @@ impl Hive {
         Ok(hive)
     }
 
-    /// Expand each `imports` glob and merge the matched hive.yaml files' services in as
-    /// **proxy-only** routes — keyed `<project>/<service>`, with runners stripped (the front door
-    /// routes them; it does not run them, so a root front door never spawns user processes).
+    /// Expand each `imports` glob and merge the matched hive.yaml files' services in, keyed
+    /// `<project>/<service>`.
+    ///
+    /// A **root** hive keeps only the routes and drops every imported runner, so the machine
+    /// front door never spawns user processes. An **unprivileged** hive keeps them, so a
+    /// per-user supervisor can import the same files and actually run those services. Both
+    /// resolve identical service keys, so the ports manager hands each side the same port.
+    ///
     /// Best-effort: an unreadable or unparsable import is logged and skipped, never fatal.
     fn apply_imports(&mut self, base: &Path) {
+        let strip_runners = running_as_root();
         let patterns = std::mem::take(&mut self.imports);
         for pattern in patterns {
             for file in find_imports(&expand_vars(&pattern)) {
@@ -425,15 +455,22 @@ impl Hive {
                 }
                 match Self::parse_file(&file) {
                     Ok(child) => {
-                        let ns = import_namespace(&file);
-                        for (name, mut svc) in child.services {
-                            svc.runner = None;
-                            self.services.entry(format!("{ns}/{name}")).or_insert(svc);
-                        }
+                        self.merge_import(child, &import_namespace(&file), strip_runners);
                     }
                     Err(e) => warn!(file = %file.display(), error = %e, "skipping unreadable import"),
                 }
             }
+        }
+    }
+
+    /// Merge one imported hive's services under `ns`, dropping their runners when
+    /// `strip_runners`. An already-present key wins, so a local service is never overridden.
+    fn merge_import(&mut self, child: Self, ns: &str, strip_runners: bool) {
+        for (name, mut svc) in child.services {
+            if strip_runners {
+                svc.runner = None;
+            }
+            self.services.entry(format!("{ns}/{name}")).or_insert(svc);
         }
     }
 
@@ -658,7 +695,7 @@ services:
     }
 
     #[test]
-    fn imports_fan_in_project_services_namespaced_and_proxy_only() {
+    fn imports_fan_in_project_services_namespaced_and_runnable() {
         let base = std::env::temp_dir().join(format!(
             "adi-hive-imports-{}-{:?}",
             std::process::id(),
@@ -682,7 +719,18 @@ services:
         let svc = hive.services.get("proj/app").expect("imported service present");
         assert_eq!(svc.proxy.as_ref().expect("proxy").host, "proj.adi");
         assert_eq!(svc.http_port(), Some(9123));
-        assert!(svc.runner.is_none(), "imported services are proxy-only");
+        // Runners survive an import here because the test process is unprivileged — that is
+        // what lets a per-user supervisor run the services a root front door only routes.
+        // The root-strips-runners half of the contract is asserted in
+        // `a_root_hive_keeps_only_routes_from_imports`.
+        assert!(
+            !running_as_root(),
+            "this test asserts the unprivileged import path; run it as a normal user"
+        );
+        assert!(
+            svc.runner.is_some(),
+            "an unprivileged hive keeps imported runners so it can supervise them"
+        );
         let routes = hive.resolve().routes;
         assert!(
             routes
@@ -690,6 +738,37 @@ services:
                 .any(|r| r.host == "proj.adi" && r.upstream.port() == 9123)
         );
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The root front door's half of the import contract: keep the route, drop the runner, so
+    /// a root hive never spawns a user process. Exercised through [`Hive::merge_import`]
+    /// directly — the branch is uid-gated, and the suite does not run as root.
+    #[test]
+    fn a_root_hive_keeps_only_routes_from_imports() {
+        let child: Hive = serde_yaml_ng::from_str(
+            "services:\n  app:\n    proxy: { host: proj.adi }\n    rollout: { recreate: { ports: { http: 9123 } } }\n    runner: { type: script, script: { run: \"echo hi\" } }\n",
+        )
+        .expect("parse child hive");
+
+        let mut root = Hive::default();
+        root.merge_import(child.clone(), "proj", true);
+        let svc = root.services.get("proj/app").expect("service imported");
+        assert!(
+            svc.runner.is_none(),
+            "a root hive must not carry an imported runner"
+        );
+        assert_eq!(
+            svc.http_port(),
+            Some(9123),
+            "dropping the runner must not drop the route"
+        );
+
+        let mut user = Hive::default();
+        user.merge_import(child, "proj", false);
+        assert!(
+            user.services["proj/app"].runner.is_some(),
+            "an unprivileged hive keeps the runner so it can supervise it"
+        );
     }
 
     #[test]
