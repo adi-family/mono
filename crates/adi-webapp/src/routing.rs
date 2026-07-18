@@ -73,12 +73,71 @@ impl Route {
     }
 }
 
-/// `aria-current` for a nav link: `"page"` when it points at the active route.
-pub(crate) fn aria_current(route: RwSignal<Route>, target: Route) -> &'static str {
-    if route.get() == target {
-        "page"
-    } else {
-        "false"
+/// One section of a project — a sub-page under `/projects/<id>/<slug>`. The explorer nests
+/// these under each project, so a project is browsed the way a directory is rather than as
+/// one long page of stacked panels.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProjectSection {
+    Overview,
+    Tasks,
+    Agents,
+    Triggers,
+    Services,
+    Workspaces,
+    Files,
+}
+
+impl ProjectSection {
+    /// Every section, in the order the explorer lists them.
+    pub(crate) const ALL: [ProjectSection; 7] = [
+        ProjectSection::Overview,
+        ProjectSection::Tasks,
+        ProjectSection::Agents,
+        ProjectSection::Triggers,
+        ProjectSection::Services,
+        ProjectSection::Workspaces,
+        ProjectSection::Files,
+    ];
+
+    /// The URL segment for this section. Overview is the project's own root, so it has none.
+    pub(crate) fn slug(self) -> &'static str {
+        match self {
+            ProjectSection::Overview => "",
+            ProjectSection::Tasks => "tasks",
+            ProjectSection::Agents => "agents",
+            ProjectSection::Triggers => "triggers",
+            ProjectSection::Services => "services",
+            ProjectSection::Workspaces => "workspaces",
+            ProjectSection::Files => "files",
+        }
+    }
+
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            ProjectSection::Overview => "Overview",
+            ProjectSection::Tasks => "Tasks",
+            ProjectSection::Agents => "Agents",
+            ProjectSection::Triggers => "Triggers",
+            ProjectSection::Services => "Services",
+            ProjectSection::Workspaces => "Workspaces",
+            ProjectSection::Files => "Files",
+        }
+    }
+
+    /// The section for a URL segment; an unknown or empty segment is the overview.
+    pub(crate) fn from_slug(slug: &str) -> Self {
+        ProjectSection::ALL
+            .into_iter()
+            .find(|s| s.slug() == slug)
+            .unwrap_or(ProjectSection::Overview)
+    }
+
+    /// This section's path within a project.
+    pub(crate) fn path(self, project: &str) -> String {
+        match self.slug() {
+            "" => format!("/projects/{project}"),
+            slug => format!("/projects/{project}/{slug}"),
+        }
     }
 }
 
@@ -130,24 +189,42 @@ pub(crate) fn current_path() -> String {
         .unwrap_or_default()
 }
 
-/// The project id in a `/projects/<id>` detail path, or `None` for any other path (including
-/// the bare `/projects` list). The trailing segment must be non-empty and slash-free.
+/// The project id in a `/projects/<id>` or `/projects/<id>/<section>` path, or `None` for any
+/// other path (including the bare `/projects` list). The id segment must be non-empty.
 pub(crate) fn project_id_from_path(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/projects/")?;
-    if rest.is_empty() || rest.contains('/') {
-        None
-    } else {
-        Some(rest.to_string())
-    }
+    let id = rest.split('/').next().unwrap_or_default();
+    (!id.is_empty()).then(|| id.to_string())
+}
+
+/// The section in a `/projects/<id>/<section>` path; the bare project path is its overview.
+pub(crate) fn project_section_from_path(path: &str) -> ProjectSection {
+    let Some(rest) = path.strip_prefix("/projects/") else {
+        return ProjectSection::Overview;
+    };
+    ProjectSection::from_slug(rest.split('/').nth(1).unwrap_or_default())
 }
 
 /// Navigate to a project's detail page, clearing any stale detail so it shows a loading state.
 pub(crate) fn open_project(state: State, route: RwSignal<Route>, id: String) {
-    state.project_detail.set(None);
-    // Clear the file browser so the load effect re-fetches from this project's root.
-    state.files.reset();
-    state.current_project.set(id.clone());
-    push_state(&format!("/projects/{id}"));
+    open_project_section(state, route, id, ProjectSection::Overview);
+}
+
+/// Navigate to one section of a project. Re-entering a different project clears the file
+/// browser so it re-fetches from the new root; switching sections within one project does not.
+pub(crate) fn open_project_section(
+    state: State,
+    route: RwSignal<Route>,
+    id: String,
+    section: ProjectSection,
+) {
+    if state.current_project.get_untracked() != id {
+        state.project_detail.set(None);
+        state.files.reset();
+        state.current_project.set(id.clone());
+    }
+    state.current_section.set(section);
+    push_state(&section.path(&id));
     route.set(Route::ProjectDetail);
     scroll_top();
 }

@@ -26,6 +26,9 @@ pub(crate) struct TreeNode {
     pub(crate) badge: Option<String>,
     /// Native tooltip for the row.
     pub(crate) title: Option<String>,
+    /// A grouping row that is not itself a destination (a scope header). Clicking it opens
+    /// or closes it, the way clicking a folder name does, rather than selecting nothing.
+    pub(crate) container: bool,
 }
 
 impl TreeNode {
@@ -38,6 +41,7 @@ impl TreeNode {
             has_children: false,
             badge: None,
             title: None,
+            container: false,
         }
     }
 
@@ -55,11 +59,22 @@ impl TreeNode {
         self.title = title;
         self
     }
+
+    /// Mark this row as a pure grouping row (see [`TreeNode::container`]).
+    pub(crate) fn container(mut self, container: bool) -> Self {
+        self.container = container;
+        self
+    }
 }
 
 /// The interaction state of one tree: the row the user last activated, and which branches
-/// are closed. `Copy`, so it threads into the page view and its event handlers like the page
-/// state does.
+/// the user has opened. `Copy`, so it threads into the page view and its event handlers like
+/// the page state does.
+///
+/// Branches are closed by default — a tree that lists every section of every project is
+/// unreadable fully expanded — and [`tree_view`] additionally opens the ancestors of the
+/// selected row, so whatever is currently open is always revealed without the user hunting
+/// for it.
 ///
 /// Note that `selected` is what was *clicked*, not what is highlighted — the caller passes
 /// the highlighted id into [`tree_view`] separately. Keeping the two apart lets a tree drive
@@ -68,21 +83,21 @@ impl TreeNode {
 #[derive(Clone, Copy)]
 pub(crate) struct TreeState {
     pub(crate) selected: RwSignal<Option<String>>,
-    pub(crate) collapsed: RwSignal<HashSet<String>>,
+    pub(crate) expanded: RwSignal<HashSet<String>>,
 }
 
 impl TreeState {
-    /// Everything expanded, nothing selected.
+    /// Everything closed, nothing selected.
     pub(crate) fn new() -> Self {
         Self {
             selected: RwSignal::new(None),
-            collapsed: RwSignal::new(HashSet::new()),
+            expanded: RwSignal::new(HashSet::new()),
         }
     }
 
     /// Open a closed branch, or close an open one.
     pub(crate) fn toggle(&self, id: &str) {
-        self.collapsed.update(|set| {
+        self.expanded.update(|set| {
             if !set.remove(id) {
                 set.insert(id.to_string());
             }
@@ -103,10 +118,11 @@ pub(crate) fn tree_view(
         return view! { <div class="adi-empty">{empty.to_string()}</div> }.into_any();
     }
 
-    let collapsed = tree.collapsed.get();
+    let expanded = tree.expanded.get();
+    let revealed = ancestors_of(&nodes, selected.as_deref());
 
-    // `hidden_below` holds the depth of the collapsed branch we are currently inside; every
-    // row deeper than it belongs to that subtree and is skipped.
+    // `hidden_below` holds the depth of the closed branch we are currently inside; every row
+    // deeper than it belongs to that subtree and is skipped.
     let mut hidden_below: Option<usize> = None;
     let mut rows = Vec::new();
     for node in nodes {
@@ -116,14 +132,29 @@ pub(crate) fn tree_view(
             }
             hidden_below = None;
         }
-        let expanded = !collapsed.contains(&node.id);
-        if node.has_children && !expanded {
+        let open = expanded.contains(&node.id) || revealed.contains(&node.id);
+        if node.has_children && !open {
             hidden_below = Some(node.depth);
         }
-        rows.push(row_view(node, expanded, selected.as_deref(), tree));
+        rows.push(row_view(node, open, selected.as_deref(), tree));
     }
 
     view! { <div class="adi-tree" role="tree">{rows}</div> }.into_any()
+}
+
+/// The ids of every branch enclosing `selected` — the path that has to be open for the
+/// selection to be on screen at all. Depth ordering is enough to find them: walking the rows
+/// while keeping the last id seen at each shallower depth yields the ancestor chain.
+fn ancestors_of(nodes: &[TreeNode], selected: Option<&str>) -> HashSet<String> {
+    let mut chain: Vec<&str> = Vec::new();
+    for node in nodes {
+        chain.truncate(node.depth);
+        if Some(node.id.as_str()) == selected {
+            return chain.into_iter().map(str::to_string).collect();
+        }
+        chain.push(node.id.as_str());
+    }
+    HashSet::new()
 }
 
 /// One tree row: `depth` indent rails, a twisty (branches only), the kind glyph, the label,
@@ -155,19 +186,27 @@ fn row_view(node: TreeNode, expanded: bool, selected: Option<&str>, tree: TreeSt
     // Branches are already marked by their twisty, so only leaves carry a glyph — two
     // near-identical marks per row read as noise rather than as structure.
     let icon = if node.has_children { "" } else { "·" };
+    let container = node.container;
     let click_id = node.id.clone();
     let key_id = node.id.clone();
+    let activate = move |id: String, tree: TreeState| {
+        if container {
+            tree.toggle(&id);
+        } else {
+            tree.selected.set(Some(id));
+        }
+    };
     view! {
         <div class="adi-tree__row" role="treeitem" tabindex="0"
             title=node.title
             data-selected=is_selected.to_string()
             aria-selected=is_selected.to_string()
             aria-expanded=node.has_children.then(|| expanded.to_string())
-            on:click=move |_| tree.selected.set(Some(click_id.clone()))
+            on:click=move |_| activate(click_id.clone(), tree)
             on:keydown=move |ev: web_sys::KeyboardEvent| {
                 if ev.key() == "Enter" || ev.key() == " " {
                     ev.prevent_default();
-                    tree.selected.set(Some(key_id.clone()));
+                    activate(key_id.clone(), tree);
                 }
             }>
             {rails}

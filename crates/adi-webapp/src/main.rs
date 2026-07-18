@@ -35,13 +35,16 @@ use pages::{
     poll_trigger_log,
     poll_watch, ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
 };
-use routing::{Route, current_path, open_project, project_id_from_path, replace_state, spa_click};
+use routing::{
+    ProjectSection, Route, current_path, open_project_section, project_id_from_path,
+    project_section_from_path, replace_state, spa_click,
+};
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
     MeshForm, ProjectsForm, State,
     Status, TasksForm, TermWatch, TriggersForm, TriggersLogView, load,
 };
-use ui::{apply_saved_theme, fmt_uptime, nav_item, toggle_theme};
+use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -71,6 +74,8 @@ fn App() -> impl IntoView {
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
     let current_project = RwSignal::new(project_id_from_path(&current_path()).unwrap_or_default());
+    // Which section of that project is showing; the bare project path is its overview.
+    let current_section = RwSignal::new(project_section_from_path(&current_path()));
     let files = FilesState::new();
     let state = State {
         status,
@@ -83,6 +88,7 @@ fn App() -> impl IntoView {
         projects,
         project_detail,
         current_project,
+        current_section,
         tasks,
         agents,
         triggers,
@@ -185,17 +191,32 @@ fn App() -> impl IntoView {
         replace_state(route.get_untracked().path());
     }
 
-    // Selecting in the explorer opens that project — the tree navigates. Guarded on `Some`,
-    // so the initial (empty) selection never navigates on load.
+    // The explorer navigates: a node's id encodes its destination. Guarded on `Some`, so the
+    // initial (empty) selection never navigates on load.
     Effect::new(move |_| {
-        if let Some(id) = explorer.selected.get() {
-            open_project(state, route, id);
+        let Some(id) = explorer.selected.get() else {
+            return;
+        };
+        match node_target(&id) {
+            Some(Nav::Global(target)) => {
+                state.current_project.set(String::new());
+                state.files.reset();
+                routing::push_state(target.path());
+                route.set(target);
+                routing::scroll_top();
+            }
+            Some(Nav::Project(project, section)) => {
+                open_project_section(state, route, project, section);
+            }
+            // A scope header (`scope:Global`) is a container, not a destination.
+            None => {}
         }
     });
     // Follow the browser's back/forward buttons (keeping the active project id in sync).
     let on_pop = Closure::<dyn FnMut()>::new(move || {
         let path = current_path();
         current_project.set(project_id_from_path(&path).unwrap_or_default());
+        current_section.set(project_section_from_path(&path));
         route.set(Route::from_path(&path));
     });
     if let Some(w) = web_sys::window() {
@@ -291,43 +312,20 @@ fn App() -> impl IntoView {
         </header>
 
         <div class="adi-shell">
-            <aside class="adi-sidebar">
-                <nav class="adi-nav">
-                    <a class="adi-nav__item" href=Route::Projects.path()
-                        aria-current=move || if matches!(route.get(), Route::Projects | Route::ProjectDetail) { "page" } else { "false" }
-                        on:click=move |ev| spa_click(&ev, route, Route::Projects)>
-                        <span>"Projects"</span>
-                    </a>
-                    {nav_item(route, Route::Tasks, "Tasks")}
-                    {nav_item(route, Route::Agents, "Agents")}
-                    {nav_item(route, Route::Triggers, "Triggers")}
-                    {nav_item(route, Route::Dashboards, "Dashboards")}
-                    <div class="adi-nav__group">
-                        <div class="adi-nav__heading">"Settings"</div>
-                        {nav_item(route, Route::Hive, "Hive")}
-                        {nav_item(route, Route::PortsManager, "Ports Manager")}
-                        {nav_item(route, Route::Mesh, "Mesh")}
-                    </div>
-                </nav>
-            </aside>
 
-            // The explorer: the project hierarchy, always on screen, on every route.
-            // Selecting a project opens it — the tree is how you navigate, not a widget on
-            // one page.
+            // The explorer: every scope in one tree — Global, Settings, and the project
+            // hierarchy — each expanding into its own sections. This is the app's only
+            // navigator; selecting a node routes to it.
             <aside class="adi-explorer">
                 <div class="adi-explorer__head">
-                    <span class="adi-explorer__title">"Projects"</span>
-                    <span class="adi-explorer__count">
-                        {move || projects.get().map(|p|
-                            p.projects.iter().filter(|x| !x.is_archived()).count().to_string())}
-                    </span>
+                    <span class="adi-explorer__title">"Explorer"</span>
                     <span class="adi-spacer"></span>
                     <a class="adi-btn adi-btn--icon-sm" href=Route::Projects.path()
                         title="Manage projects" aria-label="Manage projects"
                         on:click=move |ev| spa_click(&ev, route, Route::Projects)>"+"</a>
                 </div>
                 <div class="adi-explorer__body">
-                    {move || explorer_tree(state, explorer)}
+                    {move || explorer_tree(state, explorer, route)}
                 </div>
             </aside>
 
@@ -377,11 +375,71 @@ fn App() -> impl IntoView {
     }
 }
 
-/// The explorer's project tree: active projects only, nested by their sub-project links.
-/// Selecting one opens its page, so the tree navigates rather than just highlighting.
-fn explorer_tree(state: State, explorer: tree::TreeState) -> AnyView {
+/// The global scopes, each with the sections that live inside it. Kept beside the project
+/// scopes in one tree so "where am I working" and "what am I looking at" are the same
+/// question, asked once.
+const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
+    (
+        "Global",
+        &[
+            Route::Projects,
+            Route::Tasks,
+            Route::Agents,
+            Route::Triggers,
+            Route::Dashboards,
+        ],
+    ),
+    (
+        "Settings",
+        &[Route::Hive, Route::PortsManager, Route::Mesh],
+    ),
+];
+
+/// A tree node's id doubles as its navigation target. Global sections are `route:<path>`;
+/// a project is `proj:<id>`, and one of its sections `proj:<id>:<slug>`.
+fn node_target(id: &str) -> Option<Nav> {
+    if let Some(path) = id.strip_prefix("route:") {
+        return Some(Nav::Global(Route::from_path(path)));
+    }
+    let rest = id.strip_prefix("proj:")?;
+    match rest.split_once(':') {
+        Some((project, slug)) => Some(Nav::Project(
+            project.to_string(),
+            ProjectSection::from_slug(slug),
+        )),
+        None => Some(Nav::Project(rest.to_string(), ProjectSection::Overview)),
+    }
+}
+
+/// Where a tree selection points.
+enum Nav {
+    Global(Route),
+    Project(String, ProjectSection),
+}
+
+/// The explorer: one tree holding every scope. Global and Settings come first, then the
+/// project hierarchy — and every scope expands into its own sections, so a project is
+/// browsed like a directory rather than as one page of stacked panels.
+fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>) -> AnyView {
+    let mut nodes: Vec<tree::TreeNode> = Vec::new();
+
+    for (label, routes) in GLOBAL_SCOPES {
+        nodes.push(
+            tree::TreeNode::new(format!("scope:{label}"), 0, label)
+                .children(true)
+                .container(true),
+        );
+        for r in routes {
+            nodes.push(tree::TreeNode::new(
+                format!("route:{}", r.path()),
+                1,
+                r.title(),
+            ));
+        }
+    }
+
     let Some(projects) = state.projects.get() else {
-        return view! { <div class="adi-empty">"Loading…"</div> }.into_any();
+        return tree::tree_view(nodes, explorer, None, "Loading…");
     };
     let rows = pages::project_tree_rows(
         projects
@@ -390,30 +448,42 @@ fn explorer_tree(state: State, explorer: tree::TreeState) -> AnyView {
             .filter(|p| !p.is_archived())
             .collect(),
     );
-    // Badge each project with its open task count — the one number worth carrying in the
-    // rail, so the tree shows where the work is without opening anything.
     let tasks = state.tasks.get();
-    let nodes: Vec<tree::TreeNode> = rows
-        .iter()
-        .enumerate()
-        .map(|(i, (depth, p))| {
-            let has_children = rows.get(i + 1).is_some_and(|(next, _)| next > depth);
-            let open = tasks.as_ref().map(|t| {
-                t.tasks
-                    .iter()
-                    .filter(|task| task.project.as_deref() == Some(p.id.as_str()))
-                    .filter(|task| task.status == "open")
-                    .count()
-            });
-            tree::TreeNode::new(p.id.clone(), *depth, p.name.clone())
-                .children(has_children)
+    for (depth, p) in &rows {
+        // Badge each project with its open task count — the one number worth carrying in
+        // the rail, so the tree shows where the work is without opening anything.
+        let open = tasks.as_ref().map(|t| {
+            t.tasks
+                .iter()
+                .filter(|task| task.project.as_deref() == Some(p.id.as_str()))
+                .filter(|task| task.status == "open")
+                .count()
+        });
+        nodes.push(
+            tree::TreeNode::new(format!("proj:{}", p.id), *depth, p.name.clone())
+                // Always a branch: even a project with no sub-projects holds its sections.
+                .children(true)
                 .badge(open.filter(|n| *n > 0).map(|n| n.to_string()))
-                .title(p.description.clone())
-        })
-        .collect();
-    // Highlight the project that is actually open, so the rail agrees with the address bar
-    // however you got there — a click, a bookmark, or the back button.
-    let current = state.current_project.get();
-    let selected = (!current.is_empty()).then_some(current);
-    tree::tree_view(nodes, explorer, selected, "No projects yet.")
+                .title(p.description.clone()),
+        );
+        for section in ProjectSection::ALL {
+            nodes.push(tree::TreeNode::new(
+                format!("proj:{}:{}", p.id, section.slug()),
+                depth + 1,
+                section.title(),
+            ));
+        }
+    }
+
+    // Highlight what is actually open, so the rail agrees with the address bar however you
+    // got there — a click, a bookmark, or the back button.
+    let selected = match state.current_project.get() {
+        id if id.is_empty() => Some(format!("route:{}", route.get().path())),
+        id => Some(format!(
+            "proj:{}:{}",
+            id,
+            state.current_section.get().slug()
+        )),
+    };
+    tree::tree_view(nodes, explorer, selected, "Nothing here yet.")
 }

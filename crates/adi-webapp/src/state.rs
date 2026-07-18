@@ -13,7 +13,7 @@ use adi_webapp_api::types::{
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::routing::{Route, current_path, project_id_from_path};
+use crate::routing::{ProjectSection, Route, current_path, project_id_from_path};
 
 /// Signals a data refresh writes to; `Copy` (each field is an arena handle) so it threads
 /// cheaply through async tasks and event handlers.
@@ -29,6 +29,8 @@ pub(crate) struct State {
     pub(crate) projects: RwSignal<Option<ProjectsState>>,
     pub(crate) project_detail: RwSignal<Option<ProjectDetail>>,
     pub(crate) current_project: RwSignal<String>,
+    /// Which section of the open project is showing (`/projects/<id>/<section>`).
+    pub(crate) current_section: RwSignal<ProjectSection>,
     /// The read-only task tree (`/api/tasks`), shown on the Tasks page.
     pub(crate) tasks: RwSignal<Option<TasksState>>,
     /// Agent definitions (`/api/agents`), shown on the Agents page.

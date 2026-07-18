@@ -12,7 +12,7 @@ use super::workspaces::{
     NewHookForm, WorkspaceForm, hook_editor_view, hook_log_view, term_view, workspaces_panel,
 };
 use crate::fetch;
-use crate::routing::{Route, go_projects, open_project};
+use crate::routing::{ProjectSection, Route, go_projects, open_project};
 use crate::state::{
     AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, TriggersLogView,
 };
@@ -94,57 +94,73 @@ pub(crate) fn project_detail_view(
     };
     let hook_editor = HookEditor::new();
     view! {
-        <div class="adi-bar">
-            <a class="adi-btn adi-btn--link" href=Route::Projects.path()
-                on:click=move |ev: web_sys::MouseEvent| {
-                    if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
-                    ev.prevent_default();
-                    go_projects(state, route);
-                }>"← Projects"</a>
-        </div>
-
-        {move || match project_detail.get() {
-            None => view! {
-                <section class="adi-panel"><div class="adi-empty">"Loading…"</div></section>
-            }.into_any(),
-            Some(d) => detail_body(state, route, confirm_delete, service_form, d),
+        // Only the selected section renders. The explorer nests these under each project,
+        // so the page is one thing at a time instead of every panel stacked at once.
+        {move || {
+            let section = state.current_section.get();
+            let loading = project_detail.with(Option::is_none);
+            if loading {
+                return view! {
+                    <section class="adi-panel"><div class="adi-empty">"Loading…"</div></section>
+                }
+                .into_any();
+            }
+            match section {
+                ProjectSection::Overview => view! {
+                    {move || project_detail.get().map(|d|
+                        detail_body(state, route, confirm_delete, service_form, d, false))}
+                    {subprojects_panel(state, route, subproject_form)}
+                }
+                .into_any(),
+                ProjectSection::Services => view! {
+                    {move || project_detail.get().map(|d|
+                        detail_body(state, route, confirm_delete, service_form, d, true))}
+                }
+                .into_any(),
+                ProjectSection::Tasks => view! {
+                    {tasks_panel(state, task_form)}
+                }
+                .into_any(),
+                ProjectSection::Agents => view! {
+                    {move || agent_live_view(state, agents_watch)}
+                    {agents_panel(state, agent_form, agents_watch)}
+                }
+                .into_any(),
+                ProjectSection::Triggers => view! {
+                    {move || log_view(triggers_log)}
+                    {triggers_panel(state, trigger_form, triggers_log)}
+                }
+                .into_any(),
+                ProjectSection::Workspaces => view! {
+                    {move || term_view(state, term)}
+                    {move || hook_log_view(hook_log)}
+                    {move || hook_editor_view(state, hook_editor)}
+                    {workspaces_panel(state, workspace_form, new_hook_form, hook_log,
+                        hook_editor, term)}
+                }
+                .into_any(),
+                ProjectSection::Files => view! {
+                    {files_view(state)}
+                }
+                .into_any(),
+            }
         }}
-
-        {move || term_view(state, term)}
-
-        {move || hook_log_view(hook_log)}
-
-        {move || hook_editor_view(state, hook_editor)}
-
-        {workspaces_panel(state, workspace_form, new_hook_form, hook_log, hook_editor, term)}
-
-        {subprojects_panel(state, route, subproject_form)}
-
-        {tasks_panel(state, task_form)}
-
-        {move || agent_live_view(state, agents_watch)}
-
-        {agents_panel(state, agent_form, agents_watch)}
-
-        {move || log_view(triggers_log)}
-
-        {triggers_panel(state, trigger_form, triggers_log)}
-
-        {files_view(state)}
 
         {flash_view(flash)}
     }
     .into_any()
 }
 
-/// Render one loaded [`ProjectDetail`]: header + actions, key facts, description, and the
-/// services table. Rebuilt whenever the `project_detail` signal changes.
+/// Render one loaded [`ProjectDetail`]. The header — name, status, archive/delete — is the
+/// project's identity and shows on every section; `services` picks which body follows it,
+/// since Overview and Services are the two sections drawn from this payload.
 fn detail_body(
     state: State,
     route: RwSignal<Route>,
     confirm_delete: RwSignal<bool>,
     service_form: QuickServiceForm,
     d: ProjectDetail,
+    services_section: bool,
 ) -> AnyView {
     let archived = d.is_archived();
     let id = d.id.clone();
@@ -221,23 +237,26 @@ fn detail_body(
             {delete_ctrl}
         </div>
 
-        <section class="adi-tiles">
-            <div class="adi-tile">
-                <div class="adi-tile__label">"ID"</div>
-                <div class="adi-tile__value adi-mono" style="font-size:var(--text-lg)">{id}</div>
-                <div class="adi-tile__note">"directory under ~/.adi/mono/projects"</div>
-            </div>
-            {tile("Created", created, archived_note)}
-            {tile("Services", service_count.to_string(), "from .adi/hive.yaml")}
-        </section>
-
-        {description.map(|text| view! {
-            <section class="adi-panel">
-                <div class="adi-panel__head"><h2 class="adi-panel__title">"Description"</h2></div>
-                <p class="adi-muted">{text}</p>
+        {(!services_section).then(|| view! {
+            <section class="adi-tiles">
+                <div class="adi-tile">
+                    <div class="adi-tile__label">"ID"</div>
+                    <div class="adi-tile__value adi-mono" style="font-size:var(--text-lg)">{id}</div>
+                    <div class="adi-tile__note">"directory under ~/.adi/mono/projects"</div>
+                </div>
+                {tile("Created", created, archived_note)}
+                {tile("Services", service_count.to_string(), "from .adi/hive.yaml")}
             </section>
+
+            {description.map(|text| view! {
+                <section class="adi-panel">
+                    <div class="adi-panel__head"><h2 class="adi-panel__title">"Description"</h2></div>
+                    <p class="adi-muted">{text}</p>
+                </section>
+            })}
         })}
 
+        {services_section.then(|| view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Services"</h2>
@@ -255,6 +274,7 @@ fn detail_body(
                 "service up from there. Edit or remove services by editing that file in the Files panel."
             </div>
         </section>
+        })}
     }
     .into_any()
 }

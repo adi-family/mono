@@ -7,7 +7,6 @@ use adi_webapp_api::types::{ServicePort, TaskRow};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::routing::{Route, aria_current, spa_click};
 use crate::state::{Flash, State};
 
 /// A single full-width placeholder row spanning `colspan` columns — the
@@ -89,22 +88,6 @@ pub(crate) fn segmented(
                 aria-pressed=move || signal.get().to_string()
                 on:click=move |_| signal.set(true)>{right}</button>
         </div>
-    }
-}
-
-/// One sidebar nav link that navigates client-side and marks itself `aria-current` when active.
-/// (The Projects link stays inline — it is also current on the project-detail route.)
-pub(crate) fn nav_item(
-    route: RwSignal<Route>,
-    target: Route,
-    label: &'static str,
-) -> impl IntoView {
-    view! {
-        <a class="adi-nav__item" href=target.path()
-            aria-current=move || aria_current(route, target)
-            on:click=move |ev| spa_click(&ev, route, target)>
-            <span>{label}</span>
-        </a>
     }
 }
 
