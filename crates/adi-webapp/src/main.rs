@@ -19,7 +19,8 @@ mod state;
 mod ui;
 
 use adi_webapp_api::types::{
-    AgentsState, Health, HiveState, MeshState, PortsState, ProjectDetail, ProjectsState,
+    AgentsState, DashboardsState, Health, HiveState, MeshState, PortsState, ProjectDetail,
+    ProjectsState,
     TasksState, TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
@@ -29,13 +30,14 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, hive_view, load_dir, mesh_view, poll_hook_log, poll_term, poll_trigger_log,
+    agents_view, dashboards_view, hive_view, load_dir, mesh_view, poll_hook_log, poll_term,
+    poll_trigger_log,
     poll_watch, ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
 };
 use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
 use state::{
-    AgentCodeEditor, AgentsForm, AgentsWatch, FilesState, Flash, Form, HookLogView, MeshForm,
-    ProjectsForm, State,
+    AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
+    MeshForm, ProjectsForm, State,
     Status, TasksForm, TermWatch, TriggersForm, TriggersLogView, load,
 };
 use ui::{apply_saved_theme, fmt_uptime, nav_item, toggle_theme};
@@ -63,6 +65,7 @@ fn App() -> impl IntoView {
     let agents = RwSignal::new(None::<AgentsState>);
     let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
+    let dashboards = RwSignal::new(None::<DashboardsState>);
     let workspaces = RwSignal::new(None::<WorkspacesState>);
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
@@ -83,6 +86,7 @@ fn App() -> impl IntoView {
         agents,
         triggers,
         hive,
+        dashboards,
         workspaces,
         files,
     };
@@ -93,6 +97,12 @@ fn App() -> impl IntoView {
         parent: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
         show_archived: RwSignal::new(false),
+    };
+
+    let dashboards_form = DashboardsForm {
+        name: RwSignal::new(String::new()),
+        description: RwSignal::new(String::new()),
+        busy: RwSignal::new(false),
     };
 
     let tasks_form = TasksForm {
@@ -260,6 +270,7 @@ fn App() -> impl IntoView {
                     {nav_item(route, Route::Tasks, "Tasks")}
                     {nav_item(route, Route::Agents, "Agents")}
                     {nav_item(route, Route::Triggers, "Triggers")}
+                    {nav_item(route, Route::Dashboards, "Dashboards")}
                     <div class="adi-nav__group">
                         <div class="adi-nav__heading">"Settings"</div>
                         {nav_item(route, Route::Hive, "Hive")}
@@ -301,6 +312,7 @@ fn App() -> impl IntoView {
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
+                        Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),

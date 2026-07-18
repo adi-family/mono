@@ -17,6 +17,8 @@ pub(crate) enum Route {
     Agents,
     /// Trigger definitions (`/triggers`).
     Triggers,
+    /// Agent-authored dashboards (`/dashboards`).
+    Dashboards,
     Hive,
     PortsManager,
     Mesh,
@@ -32,6 +34,7 @@ impl Route {
             "/tasks" => Route::Tasks,
             "/agents" => Route::Agents,
             "/triggers" => Route::Triggers,
+            "/dashboards" => Route::Dashboards,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
@@ -47,6 +50,7 @@ impl Route {
             Route::Tasks => "/tasks",
             Route::Agents => "/agents",
             Route::Triggers => "/triggers",
+            Route::Dashboards => "/dashboards",
             Route::Hive => "/settings/hive",
             Route::PortsManager => "/settings/ports-manager",
             Route::Mesh => "/settings/mesh",
@@ -61,6 +65,7 @@ impl Route {
             Route::Tasks => "Tasks",
             Route::Agents => "Agents",
             Route::Triggers => "Triggers",
+            Route::Dashboards => "Dashboards",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",

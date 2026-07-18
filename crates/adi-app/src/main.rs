@@ -271,7 +271,17 @@ async fn handle(
                 .into_iter()
                 .map(|u| u.port)
                 .collect();
-            handlers::hive(projects, &listening)
+            handlers::hive(projects, ports, &listening)
+        }
+        ("GET", "/api/dashboards") => {
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
+            handlers::dashboards(projects.config(), ports, &listening)
+        }
+        ("POST", "/api/dashboards/create") => {
+            handlers::create_dashboard(projects.config(), ports, &req.body)
         }
         ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
         ("POST", "/api/hive/stop") => handlers::stop_service(projects, &req.body),

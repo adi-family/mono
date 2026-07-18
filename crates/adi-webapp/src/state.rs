@@ -5,7 +5,8 @@
 use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
-    AgentPeek, AgentsState, DirListing, Health, HiveState, MeshState, PortsState, ProjectDetail,
+    AgentPeek, AgentsState, DashboardsState, DirListing, Health, HiveState, MeshState, PortsState,
+    ProjectDetail,
     ProjectHookLog, ProjectsState, TasksState, TriggerLog, TriggersState, UsedPorts,
     WorkspaceTerm, WorkspacesState,
 };
@@ -35,6 +36,8 @@ pub(crate) struct State {
     /// Trigger definitions (`/api/triggers`), shown on the Triggers page.
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
+    /// The dashboards listing (`/dashboards`).
+    pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
     /// The open project's workspaces + hooks snapshot (`/api/projects/workspaces`), shown in
     /// the detail page's Workspaces panel. Refreshed by the 4s poll, so a `creating`
     /// workspace flips to `ready` on its own once the hook finishes.
@@ -119,6 +122,14 @@ pub(crate) struct TasksForm {
 }
 
 /// The Agents page's local create/edit form. Numeric fields (`temperature`, `max_turns`) are held
+/// The Dashboards page's create form.
+#[derive(Clone, Copy)]
+pub(crate) struct DashboardsForm {
+    pub(crate) name: RwSignal<String>,
+    pub(crate) description: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+}
+
 /// as strings and parsed on submit; `editing` is `Some(name)` while an existing agent is loaded
 /// into the form (drives the header + a "New agent" reset). `Copy` so it threads into handlers.
 #[derive(Clone, Copy)]
@@ -494,6 +505,11 @@ pub(crate) async fn load(s: State) {
         && let Ok(h) = fetch::hive().await
     {
         s.hive.set(Some(h));
+    }
+    if path == Route::Dashboards.path()
+        && let Ok(d) = fetch::dashboards().await
+    {
+        s.dashboards.set(Some(d));
     }
     if path == Route::PortsManager.path()
         && let Ok(u) = fetch::used().await

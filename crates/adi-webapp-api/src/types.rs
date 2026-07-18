@@ -911,9 +911,15 @@ pub struct ProjectHookLog {
 /// currently up. Collected from each project's `.adi/hive.yaml` and the global front-door hive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HiveService {
-    /// The project id this service belongs to, or `None` for the global `~/.adi/mono/hive/hive.yaml`.
+    /// The project id this service belongs to, or `None` when it comes from the global
+    /// `~/.adi/mono/hive/hive.yaml` or from a dashboard (see `dashboard`).
     #[serde(default)]
     pub project: Option<String>,
+    /// The dashboard id this service belongs to, for services supervised out of
+    /// `~/.adi/mono/dashboards/<id>/.adi/hive.yaml`. Mutually exclusive with `project`; both
+    /// `None` means the front-door hive.
+    #[serde(default)]
+    pub dashboard: Option<String>,
     pub name: String,
     #[serde(default)]
     pub host: Option<String>,
@@ -934,6 +940,46 @@ pub struct HiveService {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HiveState {
     pub services: Vec<HiveService>,
+}
+
+/// One dashboard under `~/.adi/mono/dashboards/<id>/` — a bun-served frontend + backend pair
+/// whose UI is authored as loose `.ts` files by agents.
+///
+/// Deliberately hostname-free: both services are reached on `127.0.0.1:<port>`, so a dashboard
+/// depends on nothing but its own supervisor — not on the root front door or DNS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Dashboard {
+    /// The directory name, which is also how its hive services are keyed (`<id>/frontend`).
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Ports leased from the ports manager; `None` until the supervisor has allocated them.
+    #[serde(default)]
+    pub frontend_port: Option<u16>,
+    #[serde(default)]
+    pub backend_port: Option<u16>,
+    pub frontend_running: bool,
+    pub backend_running: bool,
+    /// Agent-authored UI panels (`frontend/modules/*.ts`), by module id.
+    pub modules: Vec<String>,
+    /// Agent-authored endpoints (`backend/routes/*.ts`), by route id.
+    pub routes: Vec<String>,
+}
+
+/// `POST /api/dashboards/create` — scaffold a new dashboard. The id is generated, so a name is
+/// all a new dashboard needs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewDashboard {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// `GET /api/dashboards` — every dashboard, each with live port and running state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardsState {
+    pub dashboards: Vec<Dashboard>,
 }
 
 /// A JSON error body: `{ "ok": false, "error": "…" }`.

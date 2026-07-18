@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ADI Dashboard</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbfbfd;
+        --panel: #fff;
+        --ink: #16161a;
+        --muted: #6b6b76;
+        --line: #e4e4ea;
+        --accent: #3b5bdb;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0e0e11;
+          --panel: #17171c;
+          --ink: #f2f2f5;
+          --muted: #9a9aa6;
+          --line: #2a2a33;
+          --accent: #748ffc;
+        }
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.5 ui-sans-serif, -apple-system, "SF Pro Text", system-ui, sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        flex-wrap: wrap;
+        padding: 20px 24px;
+        border-bottom: 1px solid var(--line);
+      }
+      h1 { font-size: 16px; margin: 0; letter-spacing: -0.01em; }
+      .meta { color: var(--muted); font-size: 12px; font-family: ui-monospace, SFMono-Regular, monospace; }
+      .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #40c057; margin-right: 5px; }
+      .dot.off { background: #fa5252; }
+      main {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+        gap: 16px;
+        padding: 24px;
+        align-items: start;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 16px 18px;
+        overflow-x: auto;
+      }
+      .panel > h2 {
+        margin: 0 0 10px;
+        font-size: 12px;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      .empty { padding: 24px; color: var(--muted); }
+      code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
+      a { color: var(--accent); }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>ADI Dashboard</h1>
+      <span class="meta" id="status"></span>
+    </header>
+    <main id="app"></main>
+
+    <script type="module">
+      // Runtime config injected by frontend/index.ts.
+      const config = __ADI_CONFIG__;
+
+      const app = document.getElementById("app");
+      const status = document.getElementById("status");
+
+      // The backend is a sibling hive service with no proxy host — reached directly by port.
+      const api = config.backendPort
+        ? `http://127.0.0.1:${config.backendPort}`
+        : null;
+
+      /**
+       * What every module receives. `api.get`/`api.post` are pre-bound to the backend, so a
+       * module never has to know the port; `panel()` gives it a titled card to render into.
+       */
+      function context(id) {
+        return {
+          dashboard: config.dashboard,
+          api: {
+            base: api,
+            async get(path) {
+              if (!api) throw new Error("backend offline");
+              const r = await fetch(api + path);
+              if (!r.ok) throw new Error(`${path}: ${r.status}`);
+              return r.json();
+            },
+            async post(path, body) {
+              if (!api) throw new Error("backend offline");
+              const r = await fetch(api + path, {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(body),
+              });
+              if (!r.ok) throw new Error(`${path}: ${r.status}`);
+              return r.json();
+            },
+          },
+          panel(title) {
+            const el = document.createElement("section");
+            el.className = "panel";
+            el.innerHTML = `<h2></h2>`;
+            el.querySelector("h2").textContent = title ?? id;
+            app.append(el);
+            const body = document.createElement("div");
+            el.append(body);
+            return body;
+          },
+        };
+      }
+
+      async function boot() {
+        // Report backend reachability up front — a dead backend should be visible, not silent.
+        let online = false;
+        if (api) {
+          try {
+            const r = await fetch(api + "/health");
+            online = r.ok;
+          } catch {}
+        }
+        status.innerHTML = `<span class="dot ${online ? "" : "off"}"></span>` +
+          `${config.dashboard.slice(0, 8)} · ${config.modules.length} module(s) · ` +
+          (api ? `backend ${online ? "up" : "down"} :${config.backendPort}` : "no backend");
+
+        if (!config.modules.length) {
+          app.innerHTML =
+            `<div class="empty">No modules yet. Drop a <code>.ts</code> file into ` +
+            `<code>frontend/modules/</code> and reload.</div>`;
+          return;
+        }
+
+        // Each module is independent: one that throws must not stop the others from mounting.
+        for (const id of config.modules) {
+          try {
+            const mod = await import(`/modules/${id}.js`);
+            const mount = mod.default ?? mod.mount;
+            if (typeof mount !== "function") {
+              throw new Error("module has no default export function");
+            }
+            await mount(context(id));
+          } catch (err) {
+            const el = document.createElement("section");
+            el.className = "panel";
+            el.innerHTML = `<h2></h2><code></code>`;
+            el.querySelector("h2").textContent = `${id} — failed`;
+            el.querySelector("code").textContent = String(err);
+            app.append(el);
+          }
+        }
+      }
+
+      boot();
+    </script>
+  </body>
+</html>

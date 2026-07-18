@@ -3,7 +3,7 @@
 use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
     ApiError, DirListing, FileContent,
-    FilesRef, Health, HiveState,
+    Dashboard, DashboardsState, FilesRef, Health, HiveState, NewDashboard,
     LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
     NewProjectHook, NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
@@ -173,6 +173,16 @@ pub async fn trigger_log(name: String) -> Result<TriggerLog, String> {
     post("/api/triggers/log", &TriggerRef { name }).await
 }
 
+pub async fn dashboards() -> Result<DashboardsState, String> {
+    get("/api/dashboards").await
+}
+
+/// Scaffold a new dashboard; the supervisor starts it within a few seconds.
+pub async fn create_dashboard(body: NewDashboard) -> Result<Dashboard, String> {
+    post("/api/dashboards/create", &body).await
+}
+
+/// Every Hive service across all projects, with live running flags.
 pub async fn hive() -> Result<HiveState, String> {
     get("/api/hive").await
 }

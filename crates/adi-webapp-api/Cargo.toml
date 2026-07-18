@@ -25,6 +25,8 @@ server = [
     "dep:adi-fs",
     "dep:adi-hooks",
     "dep:serde_yaml_ng",
+    "dep:toml",
+    "dep:uuid",
 ]
 
 [dependencies]
@@ -41,6 +43,8 @@ adi-triggers = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { version = "0.10", optional = true }
+toml = { workspace = true, optional = true }
+uuid = { workspace = true, optional = true }
 
 [lints]
 workspace = true

@@ -2,6 +2,7 @@
 //! point the [`App`](crate::App) shell routes to; page-local helpers stay private to their module.
 
 mod agents;
+mod dashboards;
 mod hive;
 mod mesh;
 mod ports;
@@ -12,6 +13,7 @@ mod triggers;
 mod workspaces;
 
 pub(crate) use agents::{agents_view, poll_watch};
+pub(crate) use dashboards::dashboards_view;
 pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use ports::ports_manager_view;

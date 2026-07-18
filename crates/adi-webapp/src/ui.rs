@@ -3,7 +3,7 @@
 //! the generic mutation runner, and the theme toggle live in one place instead of at every call
 //! site.
 
-use adi_webapp_api::types::{PortsState, ServicePort, TaskRow};
+use adi_webapp_api::types::{ServicePort, TaskRow};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -176,12 +176,14 @@ pub(crate) fn apply_mutation<T, S, F>(
     });
 }
 
-/// The "updated Ns ago" label; empty until the first successful load.
-pub(crate) fn updated_text(
-    ports: RwSignal<Option<PortsState>>,
-    secs_since: RwSignal<u32>,
-) -> String {
-    if ports.get().is_none() {
+/// The "updated Ns ago" label; empty until the first successful load. Generic over the loaded
+/// payload — every page has its own state type and only emptiness matters here.
+pub(crate) fn updated_text<T>(loaded: RwSignal<Option<T>>, secs_since: RwSignal<u32>) -> String
+where
+    T: Send + Sync + 'static,
+{
+    // `with` rather than `get`, so testing emptiness never clones the payload.
+    if loaded.with(Option::is_none) {
         return String::new();
     }
     match secs_since.get() {

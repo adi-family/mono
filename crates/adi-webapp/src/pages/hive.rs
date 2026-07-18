@@ -1,11 +1,13 @@
-//! The Hive settings page: every service declared across all projects' `.adi/hive.yaml` plus
-//! the global front-door hive, each with a live running/stopped indicator.
+//! The Hive settings page: every service declared across all projects' and dashboards'
+//! `.adi/hive.yaml` plus the global front-door hive, each with a live running/stopped indicator.
+//! This view is meant to be the one place every hive service is visible, whichever adi-hive
+//! instance actually supervises it.
 
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::routing::{Route, open_project};
+use crate::routing::{Route, open_project, push_state};
 use crate::state::{Flash, State};
 use crate::ui::{dash, data_table, fmt_ports, placeholder_row, tile};
 
@@ -33,7 +35,7 @@ pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
         <section class="adi-tiles">
             {tile("Services",
                 move || hive.get().map_or_else(|| "—".to_string(), |h| h.services.len().to_string()),
-                "across all projects + front-door")}
+                "projects, dashboards + front-door")}
             {tile("Running",
                 move || hive.get().map_or_else(|| "—".to_string(),
                     |h| h.services.iter().filter(|s| s.running).count().to_string()),
@@ -63,8 +65,9 @@ pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
             {data_table(&["Source", "Service", "Host", "Ports", "Command", "Restart", "Status"],
                 move || hive_rows(state, route))}
             <footer class="adi-footer">
-                "Read from each project's " <code>".adi/hive.yaml"</code> " and the global "
-                <code>"~/.adi/mono/hive/hive.yaml"</code> ". Status = the service's primary port is listening."
+                "Read from each project's and dashboard's " <code>".adi/hive.yaml"</code> " and the global "
+                <code>"~/.adi/mono/hive/hive.yaml"</code> ". Dashboard services are supervised by the "
+                "per-user dashboards hive. Status = the service's primary port is listening."
             </footer>
         </section>
     }
@@ -84,14 +87,34 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
         );
     }
     let mut services = h.services;
-    // Global (project == None) sorts first (None < Some), then by project id, then service name.
-    services.sort_by(|a, b| a.project.cmp(&b.project).then_with(|| a.name.cmp(&b.name)));
+    // Front-door first (both ids None), then projects by id, then dashboards — each group's
+    // services by name.
+    services.sort_by(|a, b| {
+        a.project
+            .cmp(&b.project)
+            .then_with(|| a.dashboard.cmp(&b.dashboard))
+            .then_with(|| a.name.cmp(&b.name))
+    });
     services
         .into_iter()
         .map(|s| {
-            let source = match &s.project {
-                None => view! { <span class="adi-chip">"front-door"</span> }.into_any(),
-                Some(id) => {
+            let source = match (&s.project, &s.dashboard) {
+                // Supervised by the per-user dashboards hive, not the front door.
+                (_, Some(id)) => {
+                    let short = id.split('-').next().unwrap_or(id).to_string();
+                    view! {
+                        <a class="adi-btn adi-btn--link adi-mono" href="/dashboards"
+                            title=format!("dashboard {id}")
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                                ev.prevent_default();
+                                push_state(Route::Dashboards.path());
+                                route.set(Route::Dashboards);
+                            }>{short}</a>
+                    }.into_any()
+                }
+                (None, None) => view! { <span class="adi-chip">"front-door"</span> }.into_any(),
+                (Some(id), None) => {
                     let open_id = id.clone();
                     let href = format!("/projects/{id}");
                     view! {
