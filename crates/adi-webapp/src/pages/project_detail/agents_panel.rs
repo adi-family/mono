@@ -86,12 +86,12 @@ pub(crate) fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatc
                     </select>
                 </div>
                 <TextField id="pagent-prompt" label="System prompt" placeholder="optional seed prompt" wide=true
-                    field_style="flex:1 1 260px; min-width:0" value=system_prompt />
+                    field_class="adi-field--grow" value=system_prompt />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add agent"
                 </button>
             </form>
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "These appear in the global " <code>"Agents"</code> " list too. Models, permission
                  modes, and other backend params live on the Agents page."
             </div>
@@ -140,7 +140,7 @@ fn project_agent_rows(state: State, watch: AgentsWatch) -> AnyView {
                     <td class="adi-mono">{backend}</td>
                     <td class="adi-mono adi-muted">{model}</td>
                     <td>{status}</td>
-                    <td style="text-align:right; white-space:nowrap">
+                    <td class="adi-table__actions">
                         {agent_actions(state, watch, &a)}
                     </td>
                 </tr>

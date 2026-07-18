@@ -203,23 +203,33 @@ fn error_page(code: u16, reason: &str, message: &str) -> String {
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
          <title>{code} {reason}</title>\n\
          <style>\n\
-           :root {{ --bg:#ffffff; --fg:#14181d; --muted:#7b828c; --accent:#d64545; }}\n\
+           :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; }}\n\
+           @media (prefers-color-scheme: dark) {{\n\
+             :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; }}\n\
+           }}\n\
            html,body {{ height:100%; }}\n\
-           body {{ margin:0; min-height:100vh; display:flex; flex-direction:column;\n\
-             align-items:center; justify-content:center; gap:10px; padding:40px 24px;\n\
-             background:var(--bg); color:var(--fg); text-align:center;\n\
-             font:15px/1.55 -apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; }}\n\
-           .code {{ font:800 clamp(56px,14vw,104px)/.92 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;\n\
-             letter-spacing:2px; color:var(--accent); }}\n\
-           .reason {{ font-size:clamp(15px,3vw,20px); font-weight:600; letter-spacing:.32em;\n\
-             text-transform:uppercase; color:var(--muted); }}\n\
-           .msg {{ margin-top:6px; color:var(--fg); max-width:36rem; }}\n\
+           body {{ margin:0; min-height:100vh; display:flex; align-items:center;\n\
+             justify-content:center; padding:40px 24px;\n\
+             background:var(--bg); color:var(--fg); letter-spacing:-.006em;\n\
+             -webkit-font-smoothing:antialiased;\n\
+             font:13.5px/1.45 ui-sans-serif, system-ui, -apple-system, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif; }}\n\
+           .wrap {{ display:flex; flex-direction:column; align-items:center; gap:12px; text-align:center; }}\n\
+           .line {{ display:flex; align-items:center; }}\n\
+           .code {{ font-size:20px; font-weight:600; letter-spacing:-.02em;\n\
+             font-variant-numeric:tabular-nums; }}\n\
+           .reason {{ margin-left:14px; padding-left:14px; border-left:1px solid var(--line);\n\
+             color:var(--muted); }}\n\
+           .msg {{ margin:0; color:var(--muted); max-width:34rem; }}\n\
          </style>\n\
          </head>\n\
          <body>\n\
-           <div class=\"code\">{code}</div>\n\
-           <div class=\"reason\">{reason}</div>\n\
-           <p class=\"msg\">{message}</p>\n\
+           <div class=\"wrap\">\n\
+             <div class=\"line\">\n\
+               <span class=\"code\">{code}</span>\n\
+               <span class=\"reason\">{reason}</span>\n\
+             </div>\n\
+             <p class=\"msg\">{message}</p>\n\
+           </div>\n\
          </body>\n\
          </html>\n"
     )

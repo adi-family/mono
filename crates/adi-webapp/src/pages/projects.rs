@@ -91,7 +91,7 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                     </select>
                 </div>
                 <TextField id="proj-desc" label="Description" placeholder="optional one-liner" wide=true
-                    field_style="flex:1 1 240px; min-width:0" value=description />
+                    field_class="adi-field--grow" value=description />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add project"
                 </button>
@@ -102,65 +102,82 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
     .into_any()
 }
 
-/// Render the projects table body: a loading/empty placeholder, or one row per project
-/// (filtered to active-only unless `show_archived`). The name opens the project's detail
-/// page; the trailing action archives/restores it.
-fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Route>) -> AnyView {
-    let Some(state_projects) = state.projects.get() else {
-        return placeholder_row("6", "Loading…");
-    };
-    let tasks = state.tasks.get();
+/// The projects currently in view: filtered by the archived toggle, then flattened into
+/// tree order. `None` while the first load is still in flight. Shared by the tree and the
+/// detail pane, so the two can never disagree about what is on screen.
+fn visible_projects(state: State, show_archived: RwSignal<bool>) -> Option<Vec<(usize, Project)>> {
     let show_all = show_archived.get();
-    let rows: Vec<Project> = state_projects
+    let rows: Vec<Project> = state
+        .projects
+        .get()?
         .projects
         .into_iter()
         .filter(|p| show_all || !p.is_archived())
         .collect();
+    Some(project_tree_rows(rows))
+}
 
+/// Render the projects table body: a loading/empty placeholder, or one row per project
+/// (filtered to active-only unless `show_archived`), indented by its depth in the tree.
+/// The name opens the project's page; the trailing action archives or restores it. The
+/// hierarchy itself is the explorer's job — this table is the registry.
+fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Route>) -> AnyView {
+    let Some(rows) = visible_projects(state, show_archived) else {
+        return placeholder_row("6", "Loading\u{2026}");
+    };
     if rows.is_empty() {
-        let msg = if show_all {
-            "No projects yet — register one below."
+        let msg = if show_archived.get() {
+            "No projects yet \u{2014} register one below."
         } else {
             "No active projects. Add one below, or switch to All to see archived ones."
         };
         return placeholder_row("6", msg);
     }
+    let tasks = state.tasks.get();
 
-    project_tree_rows(rows)
-        .into_iter()
+    rows.into_iter()
         .map(|(depth, p)| {
             let archived = p.is_archived();
             let id = p.id.clone();
-            let action = if archived {
+            let action = {
                 let id = id.clone();
-                view! {
-                    <button class="adi-btn adi-btn--link" on:click=move |_| {
-                        apply_projects(state, None, format!("Restored {id}."),
-                            fetch::unarchive_project(id.clone()));
-                    }>"Restore"</button>
+                if archived {
+                    view! {
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_projects(state, None, format!("Restored {id}."),
+                                fetch::unarchive_project(id.clone()));
+                        }>"Restore"</button>
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_projects(state, None, format!("Archived {id}."),
+                                fetch::archive_project(id.clone()));
+                        }>"Archive"</button>
+                    }
+                    .into_any()
                 }
-                .into_any()
-            } else {
-                let id = id.clone();
-                view! {
-                    <button class="adi-btn adi-btn--link" on:click=move |_| {
-                        apply_projects(state, None, format!("Archived {id}."),
-                            fetch::archive_project(id.clone()));
-                    }>"Archive"</button>
-                }
-                .into_any()
             };
             let status = if archived {
                 view! { <span class="adi-chip">"Archived"</span> }.into_any()
             } else {
                 view! { <span class="adi-muted">"Active"</span> }.into_any()
             };
+            let tasks_cell = match open_tasks(tasks.as_ref(), &p.id) {
+                Some((open, total)) => {
+                    let tip = format!("{open} open \u{b7} {total} total");
+                    view! { <span class="adi-chip adi-mono" title=tip>{format!("{open} open")}</span> }
+                        .into_any()
+                }
+                None => view! { <span class="adi-muted">"\u{2014}"</span> }.into_any(),
+            };
             let created = fmt_date(p.created_at);
             let title = p.description.clone().unwrap_or_default();
             let open_id = id.clone();
             let href = format!("/projects/{id}");
-            let tasks_cell = task_count_cell(tasks.as_ref(), &p.id);
-            let indent = format!("padding-left:{}px", depth * 20);
+            // A computed per-row indent — the one thing here that genuinely varies per row.
+            let indent = format!("padding-left:{}px", depth * 16);
             view! {
                 <tr>
                     <td title=title>
@@ -177,7 +194,7 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
                     <td>{tasks_cell}</td>
                     <td class="adi-mono adi-muted">{created}</td>
                     <td>{status}</td>
-                    <td style="text-align:right">{action}</td>
+                    <td class="adi-table__actions">{action}</td>
                 </tr>
             }
         })
@@ -224,29 +241,23 @@ pub(crate) fn project_tree_rows(rows: Vec<Project>) -> Vec<(usize, Project)> {
     out
 }
 
-/// The Tasks-column cell for a project: `<open> open` (with the total in the tooltip) when it has
-/// tasks, else a muted em dash. `None` tasks (still loading) also renders the dash.
-fn task_count_cell(tasks: Option<&TasksState>, project_id: &str) -> AnyView {
-    let Some(tasks) = tasks else {
-        return view! { <span class="adi-muted">"—"</span> }.into_any();
-    };
-    let mine = tasks
-        .tasks
-        .iter()
-        .filter(|t| t.project.as_deref() == Some(project_id));
+/// A project's `(open, total)` task counts, or `None` when tasks are still loading or the
+/// project has none — both of which render as a dash rather than a zero.
+fn open_tasks(tasks: Option<&TasksState>, project_id: &str) -> Option<(usize, usize)> {
+    let tasks = tasks?;
     let mut open = 0usize;
     let mut total = 0usize;
-    for t in mine {
+    for t in tasks
+        .tasks
+        .iter()
+        .filter(|t| t.project.as_deref() == Some(project_id))
+    {
         total += 1;
         if t.status == "open" {
             open += 1;
         }
     }
-    if total == 0 {
-        return view! { <span class="adi-muted">"—"</span> }.into_any();
-    }
-    let tip = format!("{open} open · {total} total");
-    view! { <span class="adi-chip adi-mono" title=tip>{format!("{open} open")}</span> }.into_any()
+    (total > 0).then_some((open, total))
 }
 
 /// Run a projects mutation: set the returned state and a success flash, or an error flash;

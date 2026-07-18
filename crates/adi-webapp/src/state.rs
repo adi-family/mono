@@ -96,6 +96,7 @@ impl FilesState {
 
 /// The Projects page's local signals: the create-form inputs, a busy flag, and the
 /// active/archived filter. `Copy` so it threads into the page view and handlers.
+/// (The project *hierarchy* lives in the workbench explorer, not on this page.)
 #[derive(Clone, Copy)]
 pub(crate) struct ProjectsForm {
     pub(crate) name: RwSignal<String>,
@@ -448,12 +449,15 @@ pub(crate) async fn load(s: State) {
                 .set(Some(Flash::err(format!("Couldn't reach the backend: {e}"))));
         }
     }
+    // The explorer renders the project tree on every route, so the project list is shell
+    // data rather than something an individual page opts into.
+    if let Ok(p) = fetch::projects().await {
+        s.projects.set(Some(p));
+    }
+
     // Page-specific data, fetched only where it's shown.
     let path = current_path();
     if path == Route::Projects.path() {
-        if let Ok(p) = fetch::projects().await {
-            s.projects.set(Some(p));
-        }
         // The list shows a per-project open-task count, so it needs the task tree too.
         if let Ok(t) = fetch::tasks().await {
             s.tasks.set(Some(t));
@@ -481,24 +485,15 @@ pub(crate) async fn load(s: State) {
         if let Ok(t) = fetch::tasks().await {
             s.tasks.set(Some(t));
         }
-        if let Ok(p) = fetch::projects().await {
-            s.projects.set(Some(p));
-        }
     }
     if path == Route::Agents.path() {
         if let Ok(a) = fetch::agents().await {
             s.agents.set(Some(a));
         }
-        if let Ok(p) = fetch::projects().await {
-            s.projects.set(Some(p));
-        }
     }
     if path == Route::Triggers.path() {
         if let Ok(t) = fetch::triggers().await {
             s.triggers.set(Some(t));
-        }
-        if let Ok(p) = fetch::projects().await {
-            s.projects.set(Some(p));
         }
     }
     if path == Route::Hive.path()

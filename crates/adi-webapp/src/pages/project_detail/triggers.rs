@@ -82,13 +82,13 @@ pub(crate) fn triggers_panel(state: State, form: QuickTriggerForm, log: Triggers
                     </select>
                 </div>
                 <TextField id="ptrigger-code" label="Code block" placeholder="echo deployed" mono=true wide=true
-                    field_style="flex:1 1 260px; min-width:0"
+                    field_class="adi-field--grow"
                     hint="runs as sh -c, detached" value=code />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add trigger"
                 </button>
             </form>
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "These appear in the global " <code>"Triggers"</code> " list too. Webhook triggers are "
                 "live at " <code>"/api/hooks/<name>"</code> "; secrets, descriptions, and editing live "
                 "on the Triggers page."
@@ -126,13 +126,13 @@ fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
                     <td title=description>
                         <span>{t.name.clone()}</span>
                         {hook_hint.map(|h| view! {
-                            <span class="adi-muted adi-mono" style="font-size:11.5px; display:block">{h}</span>
+                            <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{h}</span>
                         })}
                     </td>
                     <td class="adi-mono">{kind}</td>
                     <td><span class="adi-tstatus" data-status=status_data>{status}</span></td>
                     <td class="adi-mono adi-muted">{fired}</td>
-                    <td style="text-align:right; white-space:nowrap">
+                    <td class="adi-table__actions">
                         {trigger_actions(state, log, &t)}
                     </td>
                 </tr>

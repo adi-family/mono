@@ -52,12 +52,12 @@ pub(crate) fn subprojects_panel(state: State, route: RwSignal<Route>, form: Quic
                     fetch::create_project(body));
             }>
                 <TextField id="psub-name" label="Name" placeholder="My Sub-project" wide=true
-                    field_style="flex:1 1 220px; min-width:0" value=name />
+                    field_class="adi-field--grow" value=name />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add sub-project"
                 </button>
             </form>
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "These are full projects (each with its own directory, tasks, agents, and triggers),
                  nested here. They appear in the global " <code>"Projects"</code> " list too."
             </div>

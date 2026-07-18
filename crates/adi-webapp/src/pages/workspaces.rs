@@ -76,19 +76,19 @@ pub(crate) fn workspaces_panel(
             }>
                 <TextField id="ws-name" label="Name" placeholder="main" mono=true value=name />
                 <TextField id="ws-path" label="Path" placeholder="(default: workspaces/<name>)" mono=true
-                    wide=true field_style="flex:1 1 260px; min-width:0"
+                    wide=true field_class="adi-field--grow"
                     hint="absolute; empty = inside the project" value=path />
-                <label class="adi-field" style="flex-direction:row; align-items:center; gap:7px; align-self:center">
+                <label class="adi-field adi-field--check">
                     <input type="checkbox"
                         prop:checked=move || local.get()
                         on:change=move |ev| local.set(event_target_checked(&ev)) />
-                    <span class="adi-field__label" style="margin:0">"Link existing dir (no hook)"</span>
+                    <span class="adi-field__label">"Link existing dir (no hook)"</span>
                 </label>
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add workspace"
                 </button>
             </form>
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 {move || next_hook_hint(state)}
             </div>
 
@@ -117,7 +117,7 @@ pub(crate) fn workspaces_panel(
                     "Add hook"
                 </button>
             </form>
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "The first workspace runs the " <code>"init"</code> " hook (e.g. git clone); every "
                 "further one runs " <code>"workspace"</code> " (e.g. git worktree add). Other hooks "
                 "run manually. Edit opens the script right here, in the hook editor."
@@ -179,10 +179,10 @@ fn workspace_rows(
                     <td>
                         <span class="adi-mono">{w.name.clone()}</span>
                         {w.primary.then(|| view! {
-                            <span class="adi-muted" style="font-size:11.5px; display:block">"★ primary"</span>
+                            <span class="adi-muted" style="font-size:var(--text-sm); display:block">"★ primary"</span>
                         })}
                     </td>
-                    <td class="adi-mono adi-muted" style="font-size:12px; word-break:break-all">{w.path.clone()}</td>
+                    <td class="adi-mono adi-muted" style="font-size:var(--text-sm); word-break:break-all">{w.path.clone()}</td>
                     <td class="adi-mono">{w.kind.clone()}</td>
                     <td>
                         <span class="adi-tstatus" data-status=status_data
@@ -191,7 +191,7 @@ fn workspace_rows(
                         </span>
                     </td>
                     <td class="adi-mono adi-muted">{created}</td>
-                    <td style="text-align:right; white-space:nowrap">
+                    <td class="adi-table__actions">
                         {can_term.then(|| view! {
                             <button class="adi-btn adi-btn--link" title="open a tmux terminal in this directory"
                                 on:click=move |_| open_terminal(state, term, term_name.clone())>"⌨ Terminal"</button>
@@ -256,16 +256,16 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
                 <tr>
                     <td>
                         <span class="adi-mono">{h.name.clone()}</span>
-                        <span class="adi-muted adi-mono" style="font-size:11.5px; display:block">
+                        <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">
                             {format!(".adi/hooks/{}", h.name)}
                         </span>
                     </td>
                     <td><span class="adi-tstatus" data-status=status_data>{status_label}</span></td>
                     <td class="adi-mono adi-muted">{ran}</td>
-                    <td style="text-align:right; white-space:nowrap">
+                    <td class="adi-table__actions">
                         {if lifecycle {
                             view! {
-                                <span class="adi-muted" style="font-size:12px"
+                                <span class="adi-muted" style="font-size:var(--text-sm)"
                                     title="lifecycle hooks run when a workspace is created — use Add workspace">
                                     "via Add workspace"
                                 </span>
@@ -557,12 +557,12 @@ pub(crate) fn hook_editor_view(state: State, editor: HookEditor) -> Option<AnyVi
                 <h2 class="adi-panel__title">{format!("Edit hook — {name}")}</h2>
                 <span class="adi-updated">"runs as sh -c, detached"</span>
             </div>
-            <div class="adi-form" style="justify-content:flex-start; align-items:center">
+            <div class="adi-form adi-form--toolbar">
                 <span class="adi-chip adi-mono">{hook_rel_path(&name)}</span>
-                <span class="adi-muted" style="font-size:13px">
+                <span class="adi-muted" style="font-size:var(--text-md)">
                     {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
                 </span>
-                <span class="adi-spacer" style="flex:1"></span>
+                <span class="adi-spacer"></span>
                 <button class="adi-btn adi-btn--primary" type="button"
                     prop:disabled=move || editor.busy.get() || !dirty()
                     on:click=move |_| save_hook(state, editor)>"Save"</button>
@@ -655,7 +655,7 @@ pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
                     <h2 class="adi-panel__title">{format!("Terminal — {name}")}</h2>
                     <span class="adi-spacer"></span>
                     {(!attach.is_empty()).then(|| view! {
-                        <code class="adi-mono adi-muted" style="font-size:12px">{attach}</code>
+                        <code class="adi-mono adi-muted" style="font-size:var(--text-sm)">{attach}</code>
                     })}
                     {running.then(|| view! {
                         <button class="adi-btn adi-btn--link" title="kill the tmux session"
@@ -677,14 +677,14 @@ pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
 /// need.
 fn term_send_bar(state: State, term: TermWatch) -> impl IntoView {
     view! {
-        <form class="adi-form" style="padding:10px 18px 14px; border-top:1px solid var(--border)"
+        <form class="adi-form"
             on:submit=move |ev| {
                 ev.prevent_default();
                 let text = term.input.get();
                 term.input.set(String::new());
                 send_to_terminal(state, term, text, "");
             }>
-            <input class="adi-input adi-mono" style="flex:1 1 auto" autocomplete="off"
+            <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
                 placeholder="type into the terminal…"
                 prop:value=move || term.input.get()
                 on:input=move |ev| term.input.set(event_target_value(&ev)) />
@@ -707,7 +707,7 @@ fn term_quick_key(
     key: &'static str,
 ) -> impl IntoView {
     view! {
-        <button class="adi-btn adi-btn--ghost adi-mono" type="button" style="padding:8px 10px"
+        <button class="adi-btn adi-btn--ghost adi-mono" type="button"
             title=format!("send {key}")
             on:click=move |_| send_to_terminal(state, term, String::new(), key)>{label}</button>
     }
@@ -810,7 +810,7 @@ pub(crate) fn hook_log_view(log: HookLogView) -> Option<AnyView> {
                     <h2 class="adi-panel__title">{format!("Hook log — {name}")}</h2>
                     <span class="adi-spacer"></span>
                     {(!status_line.is_empty()).then(|| view! {
-                        <span class="adi-muted" style="font-size:12px">{status_line}</span>
+                        <span class="adi-muted" style="font-size:var(--text-sm)">{status_line}</span>
                     })}
                     <button class="adi-btn adi-btn--link" on:click=move |_| log.close()>"Close"</button>
                 </div>

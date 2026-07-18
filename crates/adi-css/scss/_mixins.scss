@@ -6,12 +6,13 @@
   outline-offset: 2px;
 }
 
-// An uppercase, letter-spaced label (tile/field/table headings).
+// An uppercase, letter-spaced label (tile/field/table headings). Restrained on purpose:
+// heavy tracking at small sizes reads as shouting, so weight does the work instead.
 @mixin eyebrow($size: var(--text-xs)) {
   text-transform: uppercase;
-  letter-spacing: .12em;
+  letter-spacing: .06em;
   font-size: $size;
-  font-weight: 700;
+  font-weight: 600;
   color: var(--muted);
 }
 

@@ -19,8 +19,20 @@ body {
   color: var(--ink);
   font-family: var(--font-sans);
   font-size: var(--text-base);
-  line-height: 1.5;
+  line-height: 1.45;
+  letter-spacing: -.006em; // takes the slack out of system sans at small sizes
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+// Links carry their meaning through colour, not a permanent underline — a dense UI full of
+// underlined text reads as unstyled. The underline comes back on hover, where it confirms
+// the target rather than decorating the page.
+a {
+  color: var(--accent-ink);
+  text-decoration: none;
+
+  &:hover { text-decoration: underline; }
 }
 
 // One consistent focus ring across every focusable element.

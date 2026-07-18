@@ -86,7 +86,7 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
             }>
                 <TextField id="dash-name" label="Name" placeholder="Metrics" value=form.name />
                 <TextField id="dash-desc" label="Description" placeholder="What it is for"
-                    value=form.description wide=true field_style="flex:1" />
+                    value=form.description wide=true field_class="adi-field--grow" />
                 <button class="adi-btn adi-btn--primary" type="submit"
                     prop:disabled=move || form.busy.get()>
                     "New dashboard"

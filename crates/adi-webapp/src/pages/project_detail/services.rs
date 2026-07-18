@@ -56,7 +56,7 @@ pub(crate) fn service_rows(
             } else if running {
                 let (p, n) = (project.clone(), name.clone());
                 view! {
-                    <span style="color:var(--ok,#3fb950);margin-right:.5rem" title="Primary port is listening">"● Running"</span>
+                    <span style="color:var(--online); margin-right:var(--space-2)" title="Primary port is listening">"● Running"</span>
                     <button class="adi-btn adi-btn--ghost" type="button" title="Stop this service"
                         on:click=move |_| stop_service(state, Some(p.clone()), n.clone())>
                         "Stop"
@@ -152,7 +152,7 @@ pub(crate) fn service_create_form(state: State, form: QuickServiceForm) -> AnyVi
             <TextField id="pservice-name" label="Name" placeholder="api" mono=true
                 hint="the key under services:" value=name />
             <TextField id="pservice-run" label="Command" placeholder="bun run start" mono=true wide=true
-                field_style="flex:1 1 260px; min-width:0"
+                field_class="adi-field--grow"
                 hint="runs as sh -c with PORT injected" value=run />
             <TextField id="pservice-host" label="Host" placeholder="myapp.adi" mono=true
                 hint="optional — routed by the front door" value=host />

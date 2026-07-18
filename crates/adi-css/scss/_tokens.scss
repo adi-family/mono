@@ -6,47 +6,54 @@
 @use "sass:map";
 
 // ---- colour themes -----------------------------------------------------------------
+// Near-neutral greys carry the UI; the accent is reserved for the few things that are
+// genuinely interactive or selected. Surfaces are separated by borders rather than
+// elevation, so `shadow` stays a hairline — depth is a last resort, not the house style.
 $light: (
-  bg:         #f6f8fa,
+  bg:         #f5f6f8,
   surface:    #ffffff,
-  surface-2:  #f0f3f6,
-  border:     #e4e8ee,
-  ink:        #151a21,
-  muted:      #69727f,
-  accent:     #0e9c92,
-  accent-ink: #0b7d75,
+  surface-2:  #edeff3,
+  border:     #e3e6eb,
+  ink:        #0d0f12,
+  muted:      #6b7280,
+  accent:     #0d9488,
+  accent-ink: #0f766e,
   on-accent:  #ffffff,
   online:     #16a34a,
   warn:       #d97706,
   down:       #dc2626,
-  shadow:     (0 1px 2px rgba(16, 24, 32, .05), 0 6px 20px rgba(16, 24, 32, .05)),
+  shadow:     0 1px 2px rgba(9, 11, 15, .04),
 );
 
 $dark: (
-  bg:         #0e1217,
-  surface:    #161c23,
-  surface-2:  #1c232c,
-  border:     #262f3a,
-  ink:        #e6ebf1,
-  muted:      #8b94a2,
+  bg:         #0a0b0d,
+  surface:    #101215,
+  surface-2:  #17191d,
+  border:     #23262b,
+  ink:        #e9ecf1,
+  muted:      #8b919c,
   accent:     #2dd4bf,
   accent-ink: #5eead4,
-  on-accent:  #06231f,
+  on-accent:  #04211d,
   online:     #34d399,
   warn:       #fbbf24,
   down:       #f87171,
-  shadow:     (0 1px 2px rgba(0, 0, 0, .4), 0 8px 26px rgba(0, 0, 0, .35)),
+  shadow:     0 1px 2px rgba(0, 0, 0, .3),
 );
 
-// Emit `--name: value` for every entry of a theme map.
-@mixin theme($map) {
+// Emit `--name: value` for every entry of a theme map, plus the `color-scheme` that goes
+// with it — that is what makes the platform's own chrome (select menus, checkboxes,
+// scrollbars) follow the theme instead of staying stubbornly light.
+@mixin theme($map, $scheme) {
+  color-scheme: $scheme;
+
   @each $name, $value in $map {
     --#{$name}: #{$value};
   }
 }
 
 :root {
-  @include theme($light);
+  @include theme($light, light);
 
   // ---- theme-independent scales ----------------------------------------------------
   // Spacing (4px base) — used for padding/gap so rhythm stays consistent.
@@ -58,32 +65,33 @@ $dark: (
   --space-6: 32px;
   --space-7: 48px;
 
-  // Radii.
-  --radius-sm: 6px;
-  --radius:    12px;
+  // Radii — small and consistent; nothing reads as a rounded "card" from across the room.
+  --radius-sm: 5px;
+  --radius:    8px;
   --radius-pill: 999px;
 
-  // Type scale.
+  // Type scale. A dense-UI scale: body sits at 13.5px and headings stay close to it, so
+  // hierarchy comes from weight and colour rather than size jumps.
   --text-xs:  10.5px;
-  --text-sm:  12.5px;
-  --text-md:  14px;
-  --text-base: 15px;
-  --text-lg:  22px;
-  --text-xl:  27px;
+  --text-sm:  12px;
+  --text-md:  13px;
+  --text-base: 13.5px;
+  --text-lg:  18px;
+  --text-xl:  22px;
 
   // Font families.
   --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 
   // Motion.
-  --transition: 140ms ease;
+  --transition: 120ms ease;
 }
 
 // OS preference (only when the user hasn't pinned a theme).
 @media (prefers-color-scheme: dark) {
-  :root { @include theme($dark); }
+  :root { @include theme($dark, dark); }
 }
 
 // Explicit toggle wins over the OS preference, both directions.
-:root[data-theme="light"] { @include theme($light); }
-:root[data-theme="dark"]  { @include theme($dark); }
+:root[data-theme="light"] { @include theme($light, light); }
+:root[data-theme="dark"]  { @include theme($dark, dark); }

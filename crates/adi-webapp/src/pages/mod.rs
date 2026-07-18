@@ -18,7 +18,7 @@ pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use ports::ports_manager_view;
 pub(crate) use project_detail::{load_dir, project_detail_view};
-pub(crate) use projects::projects_view;
+pub(crate) use projects::{project_tree_rows, projects_view};
 pub(crate) use tasks::tasks_view;
 pub(crate) use triggers::{poll_trigger_log, triggers_view};
 pub(crate) use workspaces::{poll_hook_log, poll_term};

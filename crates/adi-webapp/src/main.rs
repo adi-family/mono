@@ -16,6 +16,7 @@ mod fetch;
 mod pages;
 mod routing;
 mod state;
+mod tree;
 mod ui;
 
 use adi_webapp_api::types::{
@@ -34,7 +35,7 @@ use pages::{
     poll_trigger_log,
     poll_watch, ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
 };
-use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
+use routing::{Route, current_path, open_project, project_id_from_path, replace_state, spa_click};
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
     MeshForm, ProjectsForm, State,
@@ -98,6 +99,10 @@ fn App() -> impl IntoView {
         busy: RwSignal::new(false),
         show_archived: RwSignal::new(false),
     };
+
+    // The explorer's own tree state, separate from the Projects page's: the two rails are
+    // on screen at once and must not fight over the selection.
+    let explorer = tree::TreeState::new();
 
     let dashboards_form = DashboardsForm {
         name: RwSignal::new(String::new()),
@@ -179,6 +184,14 @@ fn App() -> impl IntoView {
     {
         replace_state(route.get_untracked().path());
     }
+
+    // Selecting in the explorer opens that project — the tree navigates. Guarded on `Some`,
+    // so the initial (empty) selection never navigates on load.
+    Effect::new(move |_| {
+        if let Some(id) = explorer.selected.get() {
+            open_project(state, route, id);
+        }
+    });
     // Follow the browser's back/forward buttons (keeping the active project id in sync).
     let on_pop = Closure::<dyn FnMut()>::new(move || {
         let path = current_path();
@@ -255,12 +268,30 @@ fn App() -> impl IntoView {
     });
 
     view! {
+        <div class="adi-workbench">
+        // The frame's lid: identity on the left, where you are on the right.
+        <header class="adi-titlebar">
+            <span class="adi-logo">"adi"<span class="adi-logo__dot">"."</span></span>
+            // Where you are, read left to right from the brand — the natural reading order,
+            // and it keeps the bar from being two islands with a void between them.
+            <nav class="adi-crumbs" aria-label="Breadcrumb">
+                <span class="adi-crumbs__sep">"/"</span>
+                <span class="adi-crumbs__here">{move || route.get().title()}</span>
+                {move || {
+                    let id = state.current_project.get();
+                    (matches!(route.get(), Route::ProjectDetail) && !id.is_empty()).then(|| view! {
+                        <span class="adi-crumbs__sep">"/"</span>
+                        <span class="adi-crumbs__here">{id}</span>
+                    })
+                }}
+            </nav>
+            <span class="adi-spacer"></span>
+            <button class="adi-btn adi-btn--icon-sm" title="Toggle theme" aria-label="Toggle theme"
+                on:click=move |_| toggle_theme()>"◐"</button>
+        </header>
+
         <div class="adi-shell">
             <aside class="adi-sidebar">
-                <div class="adi-sidebar__brand">
-                    <span class="adi-logo">"adi"<span class="adi-logo__dot">"."</span></span>
-                    <span class="adi-bar__sub">"control panel"</span>
-                </div>
                 <nav class="adi-nav">
                     <a class="adi-nav__item" href=Route::Projects.path()
                         aria-current=move || if matches!(route.get(), Route::Projects | Route::ProjectDetail) { "page" } else { "false" }
@@ -278,19 +309,25 @@ fn App() -> impl IntoView {
                         {nav_item(route, Route::Mesh, "Mesh")}
                     </div>
                 </nav>
-                <span class="adi-spacer"></span>
-                <div class="adi-sidebar__foot">
-                    <span class="adi-status" data-state=move || status.get().data()
-                        title=move || health.get().map(|h| format!("{} v{}", h.service, h.version))>
-                        <span class="adi-status__led"></span>
-                        <span>{move || status.get().label()}</span>
-                        // The backend's uptime, shown only once a health response has landed.
-                        {move || health.get().map(|h| view! {
-                            <span class="adi-status__uptime">{fmt_uptime(h.uptime_secs)}</span>
-                        })}
+            </aside>
+
+            // The explorer: the project hierarchy, always on screen, on every route.
+            // Selecting a project opens it — the tree is how you navigate, not a widget on
+            // one page.
+            <aside class="adi-explorer">
+                <div class="adi-explorer__head">
+                    <span class="adi-explorer__title">"Projects"</span>
+                    <span class="adi-explorer__count">
+                        {move || projects.get().map(|p|
+                            p.projects.iter().filter(|x| !x.is_archived()).count().to_string())}
                     </span>
-                    <button class="adi-btn adi-btn--icon" title="Toggle theme" aria-label="Toggle theme"
-                        on:click=move |_| toggle_theme()>"◐"</button>
+                    <span class="adi-spacer"></span>
+                    <a class="adi-btn adi-btn--icon-sm" href=Route::Projects.path()
+                        title="Manage projects" aria-label="Manage projects"
+                        on:click=move |ev| spa_click(&ev, route, Route::Projects)>"+"</a>
+                </div>
+                <div class="adi-explorer__body">
+                    {move || explorer_tree(state, explorer)}
                 </div>
             </aside>
 
@@ -318,12 +355,65 @@ fn App() -> impl IntoView {
                         Route::Mesh => mesh_view(state, mesh_form),
                     }}
 
-                    <footer class="adi-footer">
-                        "The Rust backend serves " <code>"/api"</code> "; this page is what "
-                        <code>"app.adi"</code> " shows."
-                    </footer>
                 </div>
             </main>
         </div>
+
+        // The status bar, pinned to the foot of the workbench on every route.
+        <footer class="adi-statusbar">
+            <span class="adi-status" data-state=move || status.get().data()
+                title=move || health.get().map(|h| format!("{} v{}", h.service, h.version))>
+                <span class="adi-status__led"></span>
+                <span>{move || status.get().label()}</span>
+                // The backend's uptime, shown only once a health response has landed.
+                {move || health.get().map(|h| view! {
+                    <span class="adi-status__uptime">{fmt_uptime(h.uptime_secs)}</span>
+                })}
+            </span>
+            <span class="adi-spacer"></span>
+            <span>{move || route.get().title()}</span>
+        </footer>
+        </div>
     }
+}
+
+/// The explorer's project tree: active projects only, nested by their sub-project links.
+/// Selecting one opens its page, so the tree navigates rather than just highlighting.
+fn explorer_tree(state: State, explorer: tree::TreeState) -> AnyView {
+    let Some(projects) = state.projects.get() else {
+        return view! { <div class="adi-empty">"Loading…"</div> }.into_any();
+    };
+    let rows = pages::project_tree_rows(
+        projects
+            .projects
+            .into_iter()
+            .filter(|p| !p.is_archived())
+            .collect(),
+    );
+    // Badge each project with its open task count — the one number worth carrying in the
+    // rail, so the tree shows where the work is without opening anything.
+    let tasks = state.tasks.get();
+    let nodes: Vec<tree::TreeNode> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (depth, p))| {
+            let has_children = rows.get(i + 1).is_some_and(|(next, _)| next > depth);
+            let open = tasks.as_ref().map(|t| {
+                t.tasks
+                    .iter()
+                    .filter(|task| task.project.as_deref() == Some(p.id.as_str()))
+                    .filter(|task| task.status == "open")
+                    .count()
+            });
+            tree::TreeNode::new(p.id.clone(), *depth, p.name.clone())
+                .children(has_children)
+                .badge(open.filter(|n| *n > 0).map(|n| n.to_string()))
+                .title(p.description.clone())
+        })
+        .collect();
+    // Highlight the project that is actually open, so the rail agrees with the address bar
+    // however you got there — a click, a bookmark, or the back button.
+    let current = state.current_project.get();
+    let selected = (!current.is_empty()).then_some(current);
+    tree::tree_view(nodes, explorer, selected, "No projects yet.")
 }

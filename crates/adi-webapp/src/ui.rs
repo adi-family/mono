@@ -110,7 +110,7 @@ pub(crate) fn nav_item(
 
 /// A labeled text input bound to a `String` signal — the `adi-field` wrapper the forms repeat.
 /// Optional props toggle the mono/wide input classes, a numeric input mode, a trailing hint line,
-/// and the field wrapper's flex style.
+/// and extra classes on the field wrapper (e.g. `adi-field--grow`).
 #[component]
 pub(crate) fn TextField(
     /// The input's `id` (also the label's `for`).
@@ -124,7 +124,7 @@ pub(crate) fn TextField(
     #[prop(optional)] mono: bool,
     #[prop(optional)] wide: bool,
     #[prop(optional)] numeric: bool,
-    #[prop(optional)] field_style: &'static str,
+    #[prop(optional)] field_class: &'static str,
 ) -> impl IntoView {
     let mut class = String::from("adi-input");
     if wide {
@@ -133,9 +133,14 @@ pub(crate) fn TextField(
     if mono {
         class.push_str(" adi-mono");
     }
+    let mut field = String::from("adi-field");
+    if !field_class.is_empty() {
+        field.push(' ');
+        field.push_str(field_class);
+    }
     let inputmode = if numeric { "numeric" } else { "text" };
     view! {
-        <div class="adi-field" style=field_style>
+        <div class=field>
             <label class="adi-field__label" for=id>{label}</label>
             <input class=class id=id placeholder=placeholder autocomplete="off" inputmode=inputmode
                 prop:value=move || value.get()

@@ -6,22 +6,23 @@
 .adi-tstatus {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 9px;
-  border-radius: var(--radius-pill);
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: 1px solid var(--border);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 500;
   color: var(--muted);
   white-space: nowrap;
 
   &::before {
     content: "";
-    width: 7px;
-    height: 7px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--muted);
+    flex: none;
   }
 
   &[data-status="ready"] {

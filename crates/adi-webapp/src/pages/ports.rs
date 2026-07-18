@@ -81,7 +81,7 @@ pub(crate) fn ports_manager_view(
                     prop:disabled=move || reserving.get()>
                     "Reserve port"
                 </button>
-                <span class="adi-spacer" style="flex:1"></span>
+                <span class="adi-spacer"></span>
                 <span class="adi-chip adi-mono">{move || reserved.get()}</span>
             </form>
             {flash_view(flash)}
@@ -123,7 +123,7 @@ fn rows_view(state: State) -> AnyView {
                             <td class="adi-mono">{l.service}</td>
                             <td class="adi-mono">{l.key}</td>
                             <td class="adi-mono adi-table__port">{l.port.to_string()}</td>
-                            <td style="text-align:right">
+                            <td class="adi-table__actions">
                                 <button class="adi-btn adi-btn--link" on:click=move |_| {
                                     let service = service.clone();
                                     let key = key.clone();

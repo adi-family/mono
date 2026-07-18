@@ -70,7 +70,7 @@ pub(crate) fn tasks_panel(state: State, form: TaskForm) -> AnyView {
                     |s: State, ts: TasksState| s.tasks.set(Some(ts)), fetch::create_task(body));
             }>
                 <TextField id="ptask-title" label="Title" placeholder="What needs doing?" wide=true
-                    field_style="flex:1 1 220px; min-width:0" value=title />
+                    field_class="adi-field--grow" value=title />
                 <div class="adi-field">
                     <label class="adi-field__label" for="ptask-parent">"Parent (subtask of)"</label>
                     <select class="adi-input" id="ptask-parent"
@@ -83,12 +83,12 @@ pub(crate) fn tasks_panel(state: State, form: TaskForm) -> AnyView {
                 <TextField id="ptask-tag" label="Tag" placeholder="agent name" mono=true
                     hint="= an agent name auto-starts it" value=tag />
                 <TextField id="ptask-details" label="Details" placeholder="optional notes" wide=true
-                    field_style="flex:1 1 200px; min-width:0" value=details />
+                    field_class="adi-field--grow" value=details />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     "Add task"
                 </button>
             </form>
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "These appear in the global " <code>"Tasks"</code> " list too. Completing, editing, "
                 "and subtasks stay in the " <code>"adi-mono tasks"</code> " CLI."
             </div>

@@ -22,12 +22,12 @@ pub(crate) fn code_editor_view(state: State, code: AgentCodeEditor) -> Option<An
                 <h2 class="adi-panel__title">{format!("Employee code — {name}")}</h2>
                 <span class="adi-updated">"TypeScript → esbuild → jco → WASM component"</span>
             </div>
-            <div class="adi-form" style="justify-content:flex-start; align-items:center">
+            <div class="adi-form adi-form--toolbar">
                 <span class="adi-chip adi-mono">{move || code.path.get()}</span>
-                <span class="adi-muted" style="font-size:13px">
+                <span class="adi-muted" style="font-size:var(--text-md)">
                     {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
                 </span>
-                <span class="adi-spacer" style="flex:1"></span>
+                <span class="adi-spacer"></span>
                 <button class="adi-btn adi-btn--primary" type="button"
                     prop:disabled=move || code.busy.get() || !dirty()
                     on:click=move |_| save_code(state, code, save_name.clone())>"Save"</button>
@@ -46,7 +46,7 @@ pub(crate) fn code_editor_view(state: State, code: AgentCodeEditor) -> Option<An
                     prop:value=move || code.buffer.get()
                     on:input=move |ev| code.buffer.set(event_target_value(&ev))></textarea>
                 {move || code.build.get().map(|(ok, output)| view! {
-                    <div class="adi-muted" style="font-size:13px; padding:8px 0 4px">
+                    <div class="adi-muted" style="font-size:var(--text-md); padding:var(--space-2) 0 var(--space-1)">
                         {if ok { "build succeeded" } else { "build failed" }}
                     </div>
                     <pre class="adi-term">{output}</pre>

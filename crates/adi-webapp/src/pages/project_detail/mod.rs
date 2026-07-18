@@ -185,7 +185,7 @@ fn detail_body(
             let yes_id = del_id.clone();
             view! {
                 <span class="adi-muted">"Delete permanently?"</span>
-                <button class="adi-btn" style="color:var(--danger,#c0392b)" on:click=move |_| {
+                <button class="adi-btn adi-btn--link" style="color:var(--down)" on:click=move |_| {
                     let yes_id = yes_id.clone();
                     spawn_local(async move {
                         match fetch::remove_project(yes_id.clone()).await {
@@ -216,7 +216,7 @@ fn detail_body(
             <h1 class="adi-bar__title">{name}</h1>
             <span class="adi-chip">{status_label}</span>
             {parent_link(state, route, d.parent.clone())}
-            <span class="adi-spacer" style="flex:1"></span>
+            <span class="adi-spacer"></span>
             {archive_btn}
             {delete_ctrl}
         </div>
@@ -224,7 +224,7 @@ fn detail_body(
         <section class="adi-tiles">
             <div class="adi-tile">
                 <div class="adi-tile__label">"ID"</div>
-                <div class="adi-tile__value adi-mono" style="font-size:1.1rem">{id}</div>
+                <div class="adi-tile__value adi-mono" style="font-size:var(--text-lg)">{id}</div>
                 <div class="adi-tile__note">"directory under ~/.adi/mono/projects"</div>
             </div>
             {tile("Created", created, archived_note)}
@@ -250,7 +250,7 @@ fn detail_body(
             {data_table(&["Service", "Host", "Ports", "Command", "Restart", ""],
                 service_rows(state, rows_id, services, has_hive))}
             {service_create_form(state, service_form)}
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "Written to the project's " <code>".adi/hive.yaml"</code> " — the front door picks the "
                 "service up from there. Edit or remove services by editing that file in the Files panel."
             </div>

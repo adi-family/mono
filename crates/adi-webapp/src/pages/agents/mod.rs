@@ -67,7 +67,7 @@ pub(crate) fn agents_view(
 
             {data_table(&["Name", "Backend", "Model", "Project", "Tags", ""], move || agent_rows(state, form, watch, code))}
 
-            <div class="adi-panel__head" style="border-top:1px solid var(--border)">
+            <div class="adi-panel__head adi-panel__head--divided">
                 <h2 class="adi-panel__title">
                     {move || match editing.get() {
                         Some(n) => format!("Editing “{n}”"),
@@ -123,7 +123,7 @@ pub(crate) fn agents_view(
                 </button>
             </form>
             {flash_view(flash)}
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "▶ Run launches tmux backends in an interactive " <code>"adi-agent-<name>"</code>
                 " session, or process backends as headless Claude/Codex CLI jobs. ● View is tmux
                  only; background-process output is written under "
@@ -217,7 +217,7 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, code: AgentCod
                     <td class="adi-mono adi-muted">{model}</td>
                     <td>{project_cell}</td>
                     <td class="adi-muted">{tags}</td>
-                    <td style="text-align:right; white-space:nowrap">
+                    <td class="adi-table__actions">
                         {agent_actions(state, watch, &a)}
                         {is_wasm.then(|| view! {
                             <button class="adi-btn adi-btn--link" title="edit the employee's TypeScript source"
@@ -244,14 +244,14 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, code: AgentCod
 /// for menus, Esc, Ctrl-C).
 fn send_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     view! {
-        <form class="adi-form" style="padding:10px 18px 14px; border-top:1px solid var(--border)"
+        <form class="adi-form"
             on:submit=move |ev| {
                 ev.prevent_default();
                 let text = watch.input.get();
                 watch.input.set(String::new());
                 send_to_agent(state, watch, text, "");
             }>
-            <input class="adi-input adi-mono" style="flex:1 1 auto" autocomplete="off"
+            <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
                 placeholder="type to the agent…"
                 prop:value=move || watch.input.get()
                 on:input=move |ev| watch.input.set(event_target_value(&ev)) />
@@ -274,7 +274,7 @@ fn quick_key(
     key: &'static str,
 ) -> impl IntoView {
     view! {
-        <button class="adi-btn adi-btn--ghost adi-mono" type="button" style="padding:8px 10px"
+        <button class="adi-btn adi-btn--ghost adi-mono" type="button"
             title=format!("send {key}")
             on:click=move |_| send_to_agent(state, watch, String::new(), key)>{label}</button>
     }

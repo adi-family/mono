@@ -123,7 +123,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 }
             }>
                 <TextField id="mesh-peer" label="Peer id or ticket" placeholder="an EndpointId or adimesh: ticket"
-                    wide=true mono=true field_style="flex:1 1 240px; min-width:0" value=form.peer />
+                    wide=true mono=true field_class="adi-field--grow" value=form.peer />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || form.busy.get()>
                     "Authorize peer"
                 </button>
@@ -154,7 +154,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
             }>
                 <TextField id="fwd-listen" label="Local port" placeholder="5000" numeric=true value=form.fwd_listen />
                 <TextField id="fwd-peer" label="Peer id or ticket" placeholder="peer to reach" wide=true mono=true
-                    field_style="flex:1 1 220px; min-width:0" value=form.fwd_peer />
+                    field_class="adi-field--grow" value=form.fwd_peer />
                 <TextField id="fwd-port" label="Remote port" placeholder="3000" numeric=true value=form.fwd_port />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || form.busy.get()>
                     "Add forward"
@@ -194,7 +194,7 @@ fn mesh_allow_rows(state: State) -> AnyView {
             view! {
                 <tr>
                     <td class="adi-mono adi-table__port">{port.to_string()}</td>
-                    <td style="text-align:right">
+                    <td class="adi-table__actions">
                         <button class="adi-btn adi-btn--link" on:click=move |_| {
                             apply_mesh(state, None, format!("Stopped exposing port {port}."),
                                 fetch::mesh_deny(port));
@@ -225,7 +225,7 @@ fn mesh_peer_rows(state: State) -> AnyView {
             view! {
                 <tr>
                     <td class="adi-mono" title=full.clone()>{short_id(&peer)}</td>
-                    <td style="text-align:right">
+                    <td class="adi-table__actions">
                         <button class="adi-btn adi-btn--link" on:click=move |_| {
                             apply_mesh(state, None, "Revoked the peer.".to_string(),
                                 fetch::mesh_deny_peer(full.clone()));
@@ -259,7 +259,7 @@ fn mesh_forward_rows(state: State) -> AnyView {
                     <td class="adi-mono adi-table__port">{format!("127.0.0.1:{}", f.listen)}</td>
                     <td class="adi-mono" title=f.peer.clone()>{short_id(&f.peer)}</td>
                     <td class="adi-mono">{format!(":{}", f.port)}</td>
-                    <td style="text-align:right">
+                    <td class="adi-table__actions">
                         <button class="adi-btn adi-btn--link" on:click=move |_| {
                             apply_mesh(state, None, format!("Removed the forward on 127.0.0.1:{listen}."),
                                 fetch::mesh_remove_forward(listen));

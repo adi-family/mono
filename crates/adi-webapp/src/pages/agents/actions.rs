@@ -125,7 +125,7 @@ pub(crate) fn live_view(state: State, watch: AgentsWatch) -> Option<AnyView> {
                     <h2 class="adi-panel__title">{format!("Live view — {name}")}</h2>
                     <span class="adi-spacer"></span>
                     {(!attach.is_empty()).then(|| view! {
-                        <code class="adi-mono adi-muted" style="font-size:12px">{attach}</code>
+                        <code class="adi-mono adi-muted" style="font-size:var(--text-sm)">{attach}</code>
                     })}
                     <button class="adi-btn adi-btn--link" on:click=move |_| watch.close()>"Close"</button>
                 </div>

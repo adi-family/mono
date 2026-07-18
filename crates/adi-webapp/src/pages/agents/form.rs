@@ -20,7 +20,7 @@ const ADI_HARNESS: &str = "harness:adi";
 pub(crate) fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
     let Some(st) = state.agents.get() else {
         return view! {
-            <div class="adi-muted" style="padding:0 0 8px">"Loading agent form..."</div>
+            <div class="adi-muted" style="padding:0 0 var(--space-2)">"Loading agent form..."</div>
         }
         .into_any();
     };
@@ -187,11 +187,11 @@ fn render_agent_checkbox(field: AgentFormField, form: AgentsForm) -> AnyView {
     let name_for_value = field.name.clone();
     let name_for_change = field.name.clone();
     view! {
-        <label class="adi-field" style="flex-direction:row; align-items:center; gap:7px; align-self:center">
+        <label class="adi-field adi-field--check">
             <input type="checkbox"
                 prop:checked=move || agent_field_bool(form, &name_for_value)
                 on:change=move |ev| set_agent_field_bool(form, &name_for_change, event_target_checked(&ev)) />
-            <span class="adi-field__label" style="margin:0">{label}</span>
+            <span class="adi-field__label">{label}</span>
         </label>
     }
     .into_any()

@@ -235,12 +235,12 @@ fn editor_view(state: State, path: String) -> AnyView {
     let dirty = move || files.buffer.get() != files.original.get();
     let reload_path = path.clone();
     view! {
-        <div class="adi-form" style="justify-content:flex-start; align-items:center">
+        <div class="adi-form adi-form--toolbar">
             <span class="adi-chip adi-mono">{path}</span>
-            <span class="adi-muted" style="font-size:13px">
+            <span class="adi-muted" style="font-size:var(--text-md)">
                 {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
             </span>
-            <span class="adi-spacer" style="flex:1"></span>
+            <span class="adi-spacer"></span>
             <button class="adi-btn adi-btn--primary" type="button"
                 prop:disabled=move || files.busy.get() || !dirty()
                 on:click=move |_| save_file(state)>"Save"</button>

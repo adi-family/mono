@@ -67,7 +67,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
 
             {data_table(&["Name", "Kind", "Project", "Status", "Last fired", ""], move || trigger_rows(state, form, log))}
 
-            <div class="adi-panel__head" style="border-top:1px solid var(--border)">
+            <div class="adi-panel__head adi-panel__head--divided">
                 <h2 class="adi-panel__title">
                     {move || match editing.get() {
                         Some(n) => format!("Editing “{n}”"),
@@ -137,12 +137,12 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     <span class="adi-field__hint">"shows on that project's page"</span>
                 </div>
                 <TextField id="trigger-description" label="Description" placeholder="what this trigger does"
-                    wide=true field_style="flex:1 1 220px; min-width:0" value=description />
-                <label class="adi-field" style="flex-direction:row; align-items:center; gap:7px; align-self:center">
+                    wide=true field_class="adi-field--grow" value=description />
+                <label class="adi-field adi-field--check">
                     <input type="checkbox"
                         prop:checked=move || enabled.get()
                         on:change=move |ev| enabled.set(event_target_checked(&ev)) />
-                    <span class="adi-field__label" style="margin:0">"Enabled"</span>
+                    <span class="adi-field__label">"Enabled"</span>
                 </label>
                 {move || extra_fields(form)}
                 <div class="adi-field" style="flex:1 1 100%; min-width:0">
@@ -160,7 +160,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                 </button>
             </form>
             {flash_view(flash)}
-            <div class="adi-muted" style="padding:0 18px 14px; font-size:12.5px">
+            <div class="adi-hint">
                 "A webhook trigger is live at " <code>"/api/hooks/<name>"</code>
                 " (POST or GET; add " <code>"?secret=…"</code> " when one is set). ▶ Fire runs the
                  code block by hand; its output lands in the per-trigger log. Telegram and cron
@@ -279,14 +279,14 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
                     <td title=description>
                         <span>{t.name.clone()}</span>
                         {hook_hint.map(|h| view! {
-                            <span class="adi-muted adi-mono" style="font-size:11.5px; display:block">{h}</span>
+                            <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{h}</span>
                         })}
                     </td>
                     <td class="adi-mono">{kind}</td>
                     <td>{project_cell}</td>
                     <td><span class="adi-tstatus" data-status=status_data>{status}</span></td>
                     <td class="adi-mono adi-muted">{fired}</td>
-                    <td style="text-align:right; white-space:nowrap">
+                    <td class="adi-table__actions">
                         {trigger_actions(state, log, &t)}
                         <button class="adi-btn adi-btn--link"
                             on:click=move |_| load_trigger_into_form(form, &t_edit)>"Edit"</button>
@@ -413,7 +413,7 @@ pub(crate) fn log_view(log: TriggersLogView) -> Option<AnyView> {
                     <h2 class="adi-panel__title">{format!("Fire log — {name}")}</h2>
                     <span class="adi-spacer"></span>
                     {(!fired_at.is_empty()).then(|| view! {
-                        <span class="adi-muted" style="font-size:12px">{format!("last fired {fired_at}")}</span>
+                        <span class="adi-muted" style="font-size:var(--text-sm)">{format!("last fired {fired_at}")}</span>
                     })}
                     <button class="adi-btn adi-btn--link" on:click=move |_| log.close()>"Close"</button>
                 </div>

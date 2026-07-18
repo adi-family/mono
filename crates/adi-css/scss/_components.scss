@@ -1,116 +1,208 @@
 // Component layer: the adi design system. Every class is `adi-` prefixed and follows
 // BEM (`block__element--modifier`) so it composes without colliding with a host page.
+//
+// House style: dense but not cramped, separated by hairline borders rather than
+// elevation, and near-monochrome — the accent marks what is interactive or selected and
+// nothing else. When in doubt, take padding out.
 
 @use "mixins" as *;
 
 // ---- layout ------------------------------------------------------------------------
 .adi-container {
-  max-width: 960px;
+  max-width: 1080px;
   margin: 0 auto;
-  padding: 28px 24px 72px;
+  padding: 20px 20px 48px;
 }
 
 .adi-spacer {
   flex: 1;
 }
 
-// ---- app shell + sidebar -----------------------------------------------------------
-// A full-height two-column layout: a sticky nav rail on the left, scrolling content on
-// the right. Collapses to a stacked top bar on narrow viewports.
-.adi-shell {
-  display: flex;
-  align-items: flex-start;
-  min-height: 100vh;
-}
-
-.adi-sidebar {
-  position: sticky;
-  top: 0;
-  height: 100vh;
-  flex: 0 0 232px;
+// ---- workbench (the IDE frame) ------------------------------------------------------
+// The app is laid out like an editor: the viewport is the frame, a status bar is pinned to
+// its foot, and each pane inside scrolls independently rather than the page scrolling as a
+// whole. Left to right: the nav rail, the explorer, the content pane.
+.adi-workbench {
   display: flex;
   flex-direction: column;
-  gap: var(--space-5);
-  padding: 26px 16px;
+  height: 100vh;
+}
+
+// The frame's top edge: identity on the left, the current location on the right. Having a
+// lid on the layout is most of what stops three side-by-side columns reading as unstyled.
+.adi-titlebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 38px;
+  padding: 0 12px;
   background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.adi-shell {
+  display: flex;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0; // required, or the panes below grow instead of scrolling
+}
+
+// The nav rail sits one step *back* from the panels beside it — recessed, so the eye reads
+// three distinct layers (rail → explorer → content) rather than two identical columns.
+.adi-sidebar {
+  flex: 0 0 168px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: 10px 8px;
+  overflow-y: auto;
+  background: var(--surface-2);
   border-right: 1px solid var(--border);
 
   &__brand {
     display: flex;
     align-items: baseline;
-    gap: var(--space-3);
-    padding: 0 8px;
+    gap: var(--space-2);
+    padding: 0 6px 2px;
   }
 
   &__foot {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: 0 8px;
+    gap: var(--space-2);
+    padding: 0 6px;
+  }
+}
+
+// ---- explorer (the persistent project tree) -----------------------------------------
+.adi-explorer {
+  flex: 0 0 214px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+
+  &__head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: none;
+    height: 30px;
+    padding: 0 6px 0 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  &__title {
+    @include eyebrow(var(--text-xs));
+  }
+
+  &__count {
+    color: var(--muted);
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+  }
+
+  &__body {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding-top: var(--space-1);
   }
 }
 
 .adi-main {
   flex: 1;
   min-width: 0; // let wide children (tables) scroll instead of stretching the layout
+  overflow-y: auto;
+}
+
+// ---- status bar ---------------------------------------------------------------------
+.adi-statusbar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0 10px;
+  height: 28px;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  font-size: var(--text-sm);
+  color: var(--muted);
+
+  // Inside the bar the status reads as text, not as a raised pill.
+  .adi-status {
+    padding: 0;
+    border: none;
+    background: none;
+    font-size: inherit;
+  }
 }
 
 // ---- sidebar nav -------------------------------------------------------------------
 .adi-nav {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 1px;
 
   &__item {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: 9px 12px;
+    gap: var(--space-2);
+    padding: 4px 8px;
     border-radius: var(--radius-sm);
     color: var(--muted);
     text-decoration: none;
     font-size: var(--text-md);
-    font-weight: 550;
+    font-weight: 500;
     transition: background var(--transition), color var(--transition);
 
     &:hover {
-      background: var(--surface-2);
+      background: color-mix(in srgb, var(--ink) 5%, transparent);
       color: var(--ink);
     }
 
+    // The active item lifts to the panel surface and takes an accent edge — the same move
+    // an editor makes for the open tab, and quieter than a filled pill.
     &[aria-current="page"] {
-      background: color-mix(in srgb, var(--accent) 14%, transparent);
-      color: var(--accent-ink);
-      font-weight: 650;
+      background: var(--surface);
+      color: var(--ink);
+      font-weight: 600;
+      box-shadow: inset 2px 0 0 var(--accent);
     }
   }
 
   &__group {
     display: flex;
     flex-direction: column;
-    gap: 2px;
-    margin-top: var(--space-5);
+    gap: 1px;
+    margin-top: var(--space-4);
   }
 
   &__heading {
     @include eyebrow(var(--text-xs));
-    padding: 0 12px;
-    margin-bottom: var(--space-2);
+    padding: 0 9px;
+    margin-bottom: var(--space-1);
   }
 }
 
-// Stack the rail into a top bar when there isn't room for two columns.
+// Stack the rail into a top bar when there isn't room for the full workbench, and drop the
+// explorer entirely — a 232px tree is the first thing to go when width is scarce.
 @media (max-width: 860px) {
+  .adi-workbench { height: auto; min-height: 100vh; }
+
   .adi-shell { flex-direction: column; }
 
+  .adi-explorer { display: none; }
+
   .adi-sidebar {
-    position: static;
-    height: auto;
     flex-basis: auto;
+    overflow-y: visible;
     flex-direction: row;
     align-items: center;
-    gap: var(--space-4);
-    padding: 12px 16px;
+    gap: var(--space-3);
+    padding: 8px 12px;
     border-right: none;
     border-bottom: 1px solid var(--border);
 
@@ -132,36 +224,35 @@
 .adi-bar {
   display: flex;
   align-items: center;
-  gap: var(--space-4);
-  padding-bottom: 22px;
-  margin-bottom: 26px;
+  gap: var(--space-3);
+  padding-bottom: 14px;
+  margin-bottom: 18px;
   border-bottom: 1px solid var(--border);
 
   &__brand {
     display: flex;
     align-items: baseline;
-    gap: var(--space-3);
+    gap: var(--space-2);
   }
 
   &__sub {
-    @include eyebrow(11px);
-    letter-spacing: .16em;
+    @include eyebrow(var(--text-xs));
     font-weight: 600;
   }
 
   &__title {
     margin: 0;
     font-size: var(--text-lg);
-    font-weight: 650;
-    letter-spacing: -.2px;
+    font-weight: 600;
+    letter-spacing: -.01em;
   }
 }
 
 .adi-logo {
   font-family: var(--font-mono);
-  font-weight: 700;
+  font-weight: 600;
   font-size: var(--text-lg);
-  letter-spacing: -.5px;
+  letter-spacing: -.03em;
   color: var(--ink);
 
   &__dot { color: var(--accent); }
@@ -172,109 +263,112 @@
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  padding: 6px 12px;
-  border-radius: var(--radius-pill);
+  padding: 3px 9px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   border: 1px solid var(--border);
-  font-size: 13px;
-  font-weight: 600;
+  font-size: var(--text-sm);
+  font-weight: 500;
   white-space: nowrap;
 
+  // A steady dot, not a pulsing one: this sits on screen all day, and motion that never
+  // resolves is noise rather than information.
   &__led {
-    width: 9px;
-    height: 9px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     background: var(--muted);
-    box-shadow: 0 0 0 0 transparent;
+    flex: none;
   }
 
-  &[data-state="online"] &__led {
-    background: var(--online);
-    animation: adi-pulse 2.4s infinite;
-  }
-
-  &[data-state="down"] &__led {
-    background: var(--down);
-  }
+  &[data-state="online"] &__led { background: var(--online); }
+  &[data-state="down"] &__led   { background: var(--down); }
 
   // The backend uptime, set off from the state label by a thin divider.
   &__uptime {
     padding-left: var(--space-2);
     border-left: 1px solid var(--border);
     font-family: var(--font-mono);
-    font-weight: 500;
+    font-variant-numeric: tabular-nums;
+    font-weight: 400;
     color: var(--muted);
   }
-}
-
-@keyframes adi-pulse {
-  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--online) 55%, transparent); }
-  70%  { box-shadow: 0 0 0 7px transparent; }
-  100% { box-shadow: 0 0 0 0 transparent; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .adi-status__led { animation: none !important; }
 }
 
 // ---- buttons -----------------------------------------------------------------------
 .adi-btn {
   font: inherit;
-  font-weight: 600;
-  font-size: 13.5px;
+  font-weight: 500;
+  font-size: var(--text-md);
+  line-height: 1.2;
   cursor: pointer;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   transition: background var(--transition), color var(--transition), border-color var(--transition);
 
   &--primary {
-    padding: 9px 16px;
+    padding: 6px 12px;
     background: var(--accent);
     color: var(--on-accent);
+    font-weight: 550;
 
     &:hover { background: var(--accent-ink); }
-    &:disabled { opacity: .55; cursor: progress; }
+    &:disabled { opacity: .5; cursor: progress; }
   }
 
   &--icon {
     display: inline-grid;
     place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 9px;
+    width: 28px;
+    height: 28px;
+    border-radius: var(--radius-sm);
     border-color: var(--border);
     background: var(--surface);
     color: var(--muted);
-    font-size: 15px;
+    font-size: var(--text-md);
 
-    &:hover { color: var(--ink); border-color: var(--accent); }
+    &:hover { color: var(--ink); background: var(--surface-2); }
+  }
+
+  // A borderless icon button for panel headers, where a framed control would outweigh the
+  // header it sits in.
+  &--icon-sm {
+    display: inline-grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border-color: transparent;
+    background: none;
+    color: var(--muted);
+    font-size: var(--text-base);
+    line-height: 1;
+
+    &:hover { color: var(--ink); background: var(--surface-2); }
   }
 
   &--link {
-    padding: 4px 6px;
+    padding: 3px 5px;
     background: none;
     border: none;
     color: var(--muted);
     font-weight: 400;
-    font-size: 13px;
+    font-size: var(--text-sm);
     border-radius: var(--radius-sm);
 
     &:hover {
       color: var(--down);
-      background: color-mix(in srgb, var(--down) 12%, transparent);
+      background: color-mix(in srgb, var(--down) 10%, transparent);
     }
   }
 
   &--ghost {
-    padding: 8px 14px;
+    padding: 6px 11px;
     background: var(--surface);
     border-color: var(--border);
-    color: var(--muted);
+    color: var(--ink);
 
-    &:hover {
-      color: var(--ink);
-      border-color: var(--accent);
-    }
+    &:hover { background: var(--surface-2); }
   }
 }
 
@@ -282,21 +376,21 @@
 .adi-segmented {
   display: inline-flex;
   gap: 2px;
-  padding: 3px;
+  padding: 2px;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: var(--radius-pill);
+  border-radius: var(--radius);
 
   &__option {
     font: inherit;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: var(--text-sm);
+    font-weight: 500;
     cursor: pointer;
-    padding: 5px 13px;
+    padding: 3px 10px;
     border: none;
     background: none;
     color: var(--muted);
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-sm);
     transition: background var(--transition), color var(--transition);
 
     &:hover { color: var(--ink); }
@@ -304,7 +398,8 @@
     &[aria-pressed="true"] {
       background: var(--surface);
       color: var(--ink);
-      box-shadow: 0 1px 2px rgba(16, 24, 32, .08);
+      font-weight: 550;
+      box-shadow: var(--shadow);
     }
   }
 }
@@ -317,28 +412,28 @@
 .adi-tiles {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-4);
-  margin-bottom: 26px;
+  gap: var(--space-3);
+  margin-bottom: 16px;
 
   @include narrow { grid-template-columns: 1fr; }
 }
 
 .adi-tile {
   @include card;
-  padding: var(--space-4) 18px;
+  padding: 10px 14px 12px;
 
   &__label {
     @include eyebrow(var(--text-xs));
-    letter-spacing: .14em;
   }
 
   &__value {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
     font-size: var(--text-xl);
-    font-weight: 600;
-    margin-top: 6px;
-    letter-spacing: -.5px;
+    font-weight: 550;
+    margin-top: 4px;
+    letter-spacing: -.03em;
+    line-height: 1.15;
   }
 
   &__note {
@@ -354,39 +449,42 @@
   overflow: hidden;
 
   & + & {
-    margin-top: var(--space-6);
+    margin-top: var(--space-4);
   }
 
   &__head {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: var(--space-4) 18px;
+    gap: var(--space-2);
+    padding: 9px 14px;
     border-bottom: 1px solid var(--border);
+
+    // A second head stacked under a table or body needs a rule above it too.
+    &--divided { border-top: 1px solid var(--border); }
   }
 
   &__title {
     margin: 0;
-    font-size: var(--text-base);
-    font-weight: 650;
+    font-size: var(--text-md);
+    font-weight: 600;
   }
 
   &__body {
     display: flex;
     flex-direction: column;
-    gap: var(--space-4);
-    padding: var(--space-4) 18px;
+    gap: var(--space-3);
+    padding: 12px 14px;
   }
 }
 
 .adi-copyrow {
   display: flex;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .adi-updated {
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
@@ -403,13 +501,12 @@
   th,
   td {
     text-align: left;
-    padding: 11px 18px;
+    padding: 7px 14px;
     white-space: nowrap;
   }
 
   th {
     @include eyebrow(var(--text-xs));
-    letter-spacing: .1em;
     background: var(--surface-2);
   }
 
@@ -421,16 +518,104 @@
   tbody tr:hover td { background: var(--surface-2); }
 
   .adi-table__port {
-    font-weight: 650;
+    font-weight: 550;
     color: var(--accent-ink);
+  }
+
+  // Trailing column of row controls — right-aligned and shrink-wrapped so the data
+  // columns keep the width.
+  .adi-table__actions {
+    text-align: right;
+    width: 1%;
   }
 }
 
 .adi-empty {
-  padding: 30px 18px;
+  padding: 24px 14px;
   text-align: center;
   color: var(--muted);
   font-size: var(--text-md);
+}
+
+// ---- tree --------------------------------------------------------------------------
+// An IDE-style directory tree: indent rails, a twisty on branches, one selected row. Rows
+// are deliberately tight (24px) — a tree earns its keep by showing a lot of structure at
+// once.
+.adi-tree {
+  padding: var(--space-2) 0;
+  font-size: var(--text-md);
+  user-select: none;
+  overflow-x: auto;
+
+  &__row {
+    display: flex;
+    align-items: center;
+    padding: 2px 10px 2px 0;
+    cursor: default;
+    white-space: nowrap;
+    color: var(--ink);
+
+    &:hover { background: var(--surface-2); }
+
+    // Selection is the one thing in a tree worth spending the accent on.
+    &[data-selected="true"] {
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      color: var(--accent-ink);
+
+      .adi-tree__icon { color: var(--accent); }
+    }
+  }
+
+  // One per level of depth. Bordered and stretched, so consecutive rows draw the
+  // continuous guide lines that make deep nesting readable.
+  &__rail {
+    flex: none;
+    width: 14px;
+    align-self: stretch;
+    margin-left: 8px;
+    border-left: 1px solid var(--border);
+  }
+
+  &__twisty {
+    flex: none;
+    display: inline-grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    margin-left: 4px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover { color: var(--ink); }
+  }
+
+  &__icon {
+    flex: none;
+    width: 14px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
+  &__label {
+    padding-left: 5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__badge {
+    margin-left: auto;
+    padding-left: var(--space-3);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    font-variant-numeric: tabular-nums;
+  }
 }
 
 // ---- term --------------------------------------------------------------------------
@@ -438,13 +623,13 @@
 // themes, like the tmux pane it mirrors.
 .adi-term {
   margin: 0;
-  padding: 14px 18px;
-  max-height: 440px;
+  padding: 10px 14px;
+  max-height: 380px;
   overflow: auto;
-  background: #10151c;
-  color: #dde4ec;
+  background: #101215; // the dark theme's surface — a terminal, not a void
+  color: #d5dae2;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: 11.5px;
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
@@ -454,32 +639,84 @@
 // ---- chip --------------------------------------------------------------------------
 .adi-chip {
   display: inline-block;
-  padding: 2px 9px;
-  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--text-sm);
   color: var(--muted);
 }
 
 // ---- form --------------------------------------------------------------------------
 .adi-form {
   display: flex;
-  gap: var(--space-3);
-  align-items: flex-end;
+  gap: var(--space-2);
+  align-items: flex-end;   // labelled fields align on their inputs, not their labels
   flex-wrap: wrap;
-  padding: var(--space-4) 18px;
+  padding: 10px 14px;
   border-top: 1px solid var(--border);
   background: var(--surface-2);
+
+  // The same strip used as a toolbar — bare controls with no labels above them, so they
+  // centre on each other instead of hanging from a baseline that isn't there.
+  &--toolbar {
+    align-items: center;
+    justify-content: flex-start;
+  }
+
+  // In a horizontal row a hint has to hang *below* its field rather than sit in flow:
+  // in flow it makes that one field taller, and since the row aligns on its bottom edge
+  // the hinted field's input rides up out of line with every other input.
+  .adi-field { position: relative; }
+
+  .adi-field__hint {
+    position: absolute;
+    top: calc(100% + 3px);
+    left: 0;
+  }
+
+  // Only a form that actually has a hint pays for the space one needs. Two lines' worth:
+  // fields are narrow, so a hint of more than a few words wraps, and anything following
+  // the form would otherwise be overlapped by it.
+  &:has(.adi-field__hint) {
+    row-gap: 34px;
+    padding-bottom: 34px;
+  }
+}
+
+// Explanatory copy hanging below a form or panel body — the written-out version of what
+// a field's hint says in one line. Aligns to the form's own gutter.
+.adi-hint {
+  padding: 0 14px 10px;
+  font-size: var(--text-sm);
+  color: var(--muted);
+  background: var(--surface-2);
+
+  code { font-family: var(--font-mono); }
 }
 
 .adi-field {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
+
+  // A field that should absorb the free space on a wrapping form row.
+  &--grow {
+    flex: 1 1 240px;
+    min-width: 0;
+  }
+
+  // A checkbox and its label, side by side — the control leads, so the stacking and the
+  // baseline alignment the default field uses both work against it.
+  &--check {
+    flex-direction: row;
+    align-items: center;
+    align-self: center;
+    gap: var(--space-2);
+  }
 
   &__label {
-    @include eyebrow(10px);
+    @include eyebrow(var(--text-xs));
   }
 
   &__hint {
@@ -490,22 +727,29 @@
   }
 }
 
+// The focus treatment for text entry: the border takes the accent and a soft ring sits
+// outside it, so focus is obvious without the jump an outline causes.
+@mixin field-focus {
+  &:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+  }
+}
+
 .adi-input {
   font: inherit;
   font-family: var(--font-mono);
-  font-size: 13.5px;
-  padding: 8px 11px;
-  width: 150px;
+  font-size: var(--text-sm);
+  padding: 5px 8px;
+  width: 140px;
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
+  transition: border-color var(--transition), box-shadow var(--transition);
 
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-    border-color: var(--accent);
-  }
+  @include field-focus;
 
   &--wide {
     width: 100%;
@@ -514,13 +758,23 @@
   }
 }
 
+// Selects reuse `.adi-input` for their frame, but the fixed input width clips the longest
+// option behind the platform's dropdown arrow — so let them size to their content. The
+// arrow itself stays native: `color-scheme` (see _tokens.scss) keeps it on-theme.
+select.adi-input {
+  width: auto;
+  min-width: 150px;
+  max-width: 100%;
+  cursor: pointer;
+}
+
 .adi-textarea {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-sm);
   line-height: 1.55;
   width: 100%;
-  min-height: 340px;
-  padding: 12px 14px;
+  min-height: 300px;
+  padding: 10px 12px;
   background: var(--surface);
   color: var(--ink);
   border: 1px solid var(--border);
@@ -529,12 +783,9 @@
   tab-size: 2;
   white-space: pre;
   overflow: auto;
+  transition: border-color var(--transition), box-shadow var(--transition);
 
-  &:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: 1px;
-    border-color: var(--accent);
-  }
+  @include field-focus;
 }
 
 .adi-crumbs {
@@ -543,20 +794,20 @@
   flex-wrap: wrap;
   gap: 2px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-md);
 
   &__sep {
     color: var(--muted);
     padding: 0 2px;
   }
 
-  &__here { color: var(--ink); font-weight: 600; }
+  &__here { color: var(--ink); font-weight: 550; }
 }
 
 .adi-filerow {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   font-family: var(--font-mono);
 
   &__icon { color: var(--muted); width: 1em; text-align: center; }
@@ -565,9 +816,9 @@
 
 // ---- flash (kind via `data-kind`) --------------------------------------------------
 .adi-flash {
-  min-height: 18px;
-  padding: 0 18px 14px;
-  font-size: 13px;
+  min-height: 16px;
+  padding: 0 14px 10px;
+  font-size: var(--text-sm);
   background: var(--surface-2);
 
   &[data-kind="err"] { color: var(--down); }
@@ -575,27 +826,27 @@
 
   &--card {
     min-height: 0;
-    padding: 10px 14px;
-    margin-bottom: 26px;
+    padding: 8px 12px;
+    margin-bottom: 16px;
     border: 1px solid var(--border);
-    border-radius: var(--radius);
+    border-radius: var(--radius-sm);
     background: var(--surface);
-    font-weight: 550;
+    font-weight: 500;
 
     &[data-kind="err"] {
-      border-color: color-mix(in srgb, var(--down) 45%, var(--border));
-      background: color-mix(in srgb, var(--down) 8%, var(--surface));
+      border-color: color-mix(in srgb, var(--down) 35%, var(--border));
+      background: color-mix(in srgb, var(--down) 6%, var(--surface));
     }
     &[data-kind="ok"] {
-      border-color: color-mix(in srgb, var(--online) 45%, var(--border));
-      background: color-mix(in srgb, var(--online) 8%, var(--surface));
+      border-color: color-mix(in srgb, var(--online) 35%, var(--border));
+      background: color-mix(in srgb, var(--online) 6%, var(--surface));
     }
   }
 }
 
 // ---- page footer -------------------------------------------------------------------
 .adi-footer {
-  margin-top: 26px;
+  margin-top: 20px;
   color: var(--muted);
   font-size: var(--text-sm);
   text-align: center;

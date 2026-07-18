@@ -9,19 +9,25 @@ pub const PAGE: &str = r##"<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>4XX error</title>
 <style>
-  :root { --bg: #ffffff; --fg: #14181d; --muted: #7b828c; --accent: #d64545; }
+  /* Mirrors the adi design-system tokens; inlined because this page makes no external
+     requests. Keep in sync with crates/adi-css/scss/_tokens.scss. */
+  :root { --bg: #fafafb; --fg: #0d0f12; --muted: #6b7280; --accent: #dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0a0b0d; --fg: #e9ecf1; --muted: #8b919c; --accent: #f87171; }
+  }
   * { box-sizing: border-box; }
   html, body { height: 100%; }
   body {
     margin: 0; min-height: 100vh; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 8px; padding: 40px 24px;
     background: var(--bg); color: var(--fg);
-    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    letter-spacing: -.006em; -webkit-font-smoothing: antialiased;
+    font: 13.5px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     text-align: center;
   }
 
   .adi-mark {
-    width: min(230px, 48vw); height: min(230px, 48vw); display: block;
+    width: min(168px, 38vw); height: min(168px, 38vw); display: block;
     color: var(--fg); overflow: visible;
   }
   .adi-mark path, .adi-mark line { stroke-linecap: round; stroke-linejoin: round; }
@@ -38,20 +44,26 @@ pub const PAGE: &str = r##"<!doctype html>
     50% { transform: scale(1.2); opacity: 1; }
   }
 
-  .err { margin-top: 22px; }
+  .err { margin-top: 18px; }
   .err-code {
     display: block;
-    font: 800 clamp(72px, 17vw, 132px)/.92 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    letter-spacing: 2px; color: var(--fg);
+    font: 600 clamp(38px, 8vw, 56px)/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    letter-spacing: -.02em; color: var(--fg);
   }
   .err-code b { color: var(--accent); animation: nfFlicker 5s 3.0s steps(1, end) infinite; }
   .err-code b:nth-of-type(2) { animation-delay: 3.6s; }
   .err-word {
-    display: block; margin-top: 10px;
-    font-size: clamp(16px, 3.4vw, 22px); font-weight: 600; letter-spacing: .42em;
-    text-transform: uppercase; color: var(--muted); padding-left: .42em;
+    display: block; margin-top: 8px;
+    font-size: 12px; font-weight: 600; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--muted); padding-left: .06em;
   }
   @keyframes nfFlicker { 0%, 96%, 100% { opacity: 1; } 97% { opacity: .25; } 98% { opacity: 1; } 99% { opacity: .5; } }
+
+  /* Hold the mark in its finished state for anyone who has asked for less motion. */
+  @media (prefers-reduced-motion: reduce) {
+    .mk-outer, .mk-node, .mk-core, .mk-halo, .err-code b { animation: none !important; }
+    .mk-outer { stroke-dasharray: none; }
+  }
 </style>
 </head>
 <body>
@@ -128,6 +140,10 @@ pub const PAGE: &str = r##"<!doctype html>
       mark.style.transform = 'translateX(' + JX[k] + 'px)'; mark.style.opacity = OP[k];
       xx.style.transform = 'translateX(' + (-JX[k]) + 'px)'; xx.style.opacity = OP[k];
     }
+
+    // Reduced motion: draw the mechanism once, at rest, and skip the spin and glitch.
+    var still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (still) { place(0); return; }
 
     var t0 = null, lastTs = null, spinMs = 0;
     function frame(ts) {
