@@ -8,7 +8,6 @@ use crate::state::State;
 /// The pages the sidebar navigates between, each mapped to a URL path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {
-    Overview,
     Projects,
     /// A single project's detail page (`/projects/<id>`); the id lives in `State::current_project`.
     ProjectDetail,
@@ -24,20 +23,19 @@ pub(crate) enum Route {
 }
 
 impl Route {
-    /// The page for a URL path; `/`, `/overview`, and anything unknown resolve to Overview.
+    /// The page for a URL path; `/` and anything unknown resolve to Projects.
     pub(crate) fn from_path(path: &str) -> Self {
         if project_id_from_path(path).is_some() {
             return Route::ProjectDetail;
         }
         match path {
-            "/projects" => Route::Projects,
             "/tasks" => Route::Tasks,
             "/agents" => Route::Agents,
             "/triggers" => Route::Triggers,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
-            _ => Route::Overview,
+            _ => Route::Projects,
         }
     }
 
@@ -45,7 +43,6 @@ impl Route {
     /// returns the list base for it (used only for nav; detail canonicalization is skipped).
     pub(crate) fn path(self) -> &'static str {
         match self {
-            Route::Overview => "/overview",
             Route::Projects | Route::ProjectDetail => "/projects",
             Route::Tasks => "/tasks",
             Route::Agents => "/agents",
@@ -59,7 +56,6 @@ impl Route {
     /// The page title shown in the header.
     pub(crate) fn title(self) -> &'static str {
         match self {
-            Route::Overview => "Overview",
             Route::Projects => "Projects",
             Route::ProjectDetail => "Project",
             Route::Tasks => "Tasks",

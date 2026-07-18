@@ -17,6 +17,17 @@ pub(crate) fn placeholder_row(colspan: &'static str, msg: &str) -> AnyView {
     view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
 }
 
+/// Format an uptime in seconds as `Ns` / `Nm Ss` / `Nh Mm`.
+pub(crate) fn fmt_uptime(s: u64) -> String {
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3_600 {
+        format!("{}m {}s", s / 60, s % 60)
+    } else {
+        format!("{}h {}m", s / 3_600, (s % 3_600) / 60)
+    }
+}
+
 /// One stat tile in an `adi-tiles` strip: a label, a big value, and a sub-note. `value`/`note`
 /// take any view, so a caller passes either a literal or a reactive `move || …` closure.
 pub(crate) fn tile(

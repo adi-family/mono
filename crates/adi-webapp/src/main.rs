@@ -29,9 +29,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, hive_view, load_dir, mesh_view, overview_view, poll_hook_log, poll_term,
-    poll_trigger_log, poll_watch, ports_manager_view, project_detail_view, projects_view,
-    tasks_view, triggers_view,
+    agents_view, hive_view, load_dir, mesh_view, poll_hook_log, poll_term, poll_trigger_log,
+    poll_watch, ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
 };
 use routing::{Route, current_path, project_id_from_path, replace_state, spa_click};
 use state::{
@@ -39,7 +38,7 @@ use state::{
     ProjectsForm, State,
     Status, TasksForm, TermWatch, TriggersForm, TriggersLogView, load,
 };
-use ui::{apply_saved_theme, nav_item, toggle_theme};
+use ui::{apply_saved_theme, fmt_uptime, nav_item, toggle_theme};
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -162,7 +161,7 @@ fn App() -> impl IntoView {
     let managed_only = RwSignal::new(true);
 
     // The active page, derived from the URL path. Unknown paths (including `/`) resolve to
-    // Overview; canonicalize the address bar so a refresh lands on the same page.
+    // Projects; canonicalize the address bar so a refresh lands on the same page.
     let route = RwSignal::new(Route::from_path(&current_path()));
     // Canonicalize the address bar, except on a project detail page whose path carries the id.
     if !matches!(route.get_untracked(), Route::ProjectDetail)
@@ -253,7 +252,6 @@ fn App() -> impl IntoView {
                     <span class="adi-bar__sub">"control panel"</span>
                 </div>
                 <nav class="adi-nav">
-                    {nav_item(route, Route::Overview, "Overview")}
                     <a class="adi-nav__item" href=Route::Projects.path()
                         aria-current=move || if matches!(route.get(), Route::Projects | Route::ProjectDetail) { "page" } else { "false" }
                         on:click=move |ev| spa_click(&ev, route, Route::Projects)>
@@ -271,9 +269,14 @@ fn App() -> impl IntoView {
                 </nav>
                 <span class="adi-spacer"></span>
                 <div class="adi-sidebar__foot">
-                    <span class="adi-status" data-state=move || status.get().data()>
+                    <span class="adi-status" data-state=move || status.get().data()
+                        title=move || health.get().map(|h| format!("{} v{}", h.service, h.version))>
                         <span class="adi-status__led"></span>
                         <span>{move || status.get().label()}</span>
+                        // The backend's uptime, shown only once a health response has landed.
+                        {move || health.get().map(|h| view! {
+                            <span class="adi-status__uptime">{fmt_uptime(h.uptime_secs)}</span>
+                        })}
                     </span>
                     <button class="adi-btn adi-btn--icon" title="Toggle theme" aria-label="Toggle theme"
                         on:click=move |_| toggle_theme()>"◐"</button>
@@ -293,7 +296,6 @@ fn App() -> impl IntoView {
                     }}
 
                     {move || match route.get() {
-                        Route::Overview => overview_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, hook_log, term_watch),
                         Route::Tasks => tasks_view(state, tasks_form),

@@ -196,6 +196,15 @@
   &[data-state="down"] &__led {
     background: var(--down);
   }
+
+  // The backend uptime, set off from the state label by a thin divider.
+  &__uptime {
+    padding-left: var(--space-2);
+    border-left: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-weight: 500;
+    color: var(--muted);
+  }
 }
 
 @keyframes adi-pulse {
