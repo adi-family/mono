@@ -261,6 +261,8 @@ async fn handle(
         }
         ("GET", "/api/tasks") => handlers::tasks(tasks),
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
+        ("POST", "/api/tasks/archive") => handlers::archive_task(tasks, &req.body),
+        ("POST", "/api/tasks/reopen") => handlers::reopen_task(tasks, &req.body),
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),

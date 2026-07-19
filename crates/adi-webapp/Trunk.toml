@@ -9,12 +9,13 @@ dist = "dist"
 watch = [".", "../adi-css/scss"]
 ignore = ["dist"]
 
-# `trunk serve` is only for standalone UI iteration. It proxies /api to a locally running
-# adi-app so fetches resolve; point the backend at whatever port adi-app is on.
+# `trunk serve` is only for standalone UI iteration. It proxies /api to the adi-app that
+# `scripts/dev.sh` starts on :8090 against the isolated ADI_DIR=.adi-dev registry — NOT the
+# live control panel on :8000, which runs the installed binary and whatever state is real.
 [serve]
 addresses = ["127.0.0.1"]
 port = 9080
 
 [[proxy]]
 rewrite = "/api/"
-backend = "http://127.0.0.1:8000/api/"
+backend = "http://127.0.0.1:8090/api/"

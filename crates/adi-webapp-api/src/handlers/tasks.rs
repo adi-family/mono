@@ -2,7 +2,7 @@ use adi_tasks::Error as TaskStoreError;
 use adi_tasks::TaskView;
 use adi_tasks::Tasks;
 
-use crate::types::{NewTask, TaskRow, TasksState};
+use crate::types::{NewTask, TaskRef, TaskRow, TasksState};
 
 use super::response::{error, ok_json, Response};
 
@@ -35,6 +35,33 @@ pub fn create_task(store: &Tasks, body: &[u8]) -> Response {
         req.tag,
         req.parent,
     ) {
+        Ok(_) => tasks(store),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/tasks/archive` — archive a task (stored status `archived`), then report the fresh
+/// tree. With `cascade`, its open descendants are archived along with it; without, they stay open
+/// and re-root into the live tree.
+#[must_use]
+pub fn archive_task(store: &Tasks, body: &[u8]) -> Response {
+    let Some(req) = parse_task_ref(body) else {
+        return bad_task_ref();
+    };
+    match store.archive(req.id.trim(), req.cascade) {
+        Ok(_) => tasks(store),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/tasks/reopen` — return a done or archived task to `open`, then report the fresh
+/// tree. This is the undo for archive.
+#[must_use]
+pub fn reopen_task(store: &Tasks, body: &[u8]) -> Response {
+    let Some(req) = parse_task_ref(body) else {
+        return bad_task_ref();
+    };
+    match store.reopen(req.id.trim()) {
         Ok(_) => tasks(store),
         Err(e) => Response::from(&e),
     }
@@ -82,6 +109,18 @@ fn bad_new_task() -> Response {
     error(
         400,
         "expected JSON body { \"title\": \"…\" } with a non-empty title",
+    )
+}
+
+fn parse_task_ref(body: &[u8]) -> Option<TaskRef> {
+    let req: TaskRef = serde_json::from_slice(body).ok()?;
+    (!req.id.trim().is_empty()).then_some(req)
+}
+
+fn bad_task_ref() -> Response {
+    error(
+        400,
+        "expected JSON body { \"id\": \"…\" } with a non-empty task id",
     )
 }
 

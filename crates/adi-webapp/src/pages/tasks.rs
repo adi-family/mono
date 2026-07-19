@@ -39,8 +39,8 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(tasks, secs_since)}</span>
             </div>
 
-            {data_table(&["Task", "ID", "Project", "Tag", "Status", "Subtasks"],
-                move || task_rows(tasks, false))}
+            {data_table(&["Task", "ID", "Project", "Tag", "Status", "Subtasks", ""],
+                move || task_rows(state, false))}
         </section>
 
         <section class="adi-panel">
@@ -114,7 +114,8 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
             </form>
             {flash_view(flash)}
             <div class="adi-hint">
-                "Completing, archiving, editing, and deleting stay in the "
+                "Archive takes a task and its subtasks off the plate; Reopen in the Done block "
+                "brings one back. Completing, editing, and deleting stay in the "
                 <code>"adi-mono tasks"</code> " CLI."
             </div>
         </section>
@@ -126,7 +127,7 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
 
 /// Whether a computed effective status counts as finished — the tasks that drop out of the main
 /// tree into the collapsed block. `archived` rides along with `done`: both are off the plate.
-fn is_finished(effective: &str) -> bool {
+pub(crate) fn is_finished(effective: &str) -> bool {
     matches!(effective, "done" | "archived")
 }
 
@@ -152,8 +153,8 @@ fn done_section(state: State, show: RwSignal<bool>) -> AnyView {
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
                         {open.then(|| data_table(
-                            &["Task", "ID", "Project", "Tag", "Status", "Subtasks"],
-                            move || task_rows(state.tasks, true)))}
+                            &["Task", "ID", "Project", "Tag", "Status", "Subtasks", ""],
+                            move || task_rows(state, true)))}
                     </section>
                 }
                 .into_any()
@@ -163,7 +164,7 @@ fn done_section(state: State, show: RwSignal<bool>) -> AnyView {
     .into_any()
 }
 
-/// Run a task mutation (currently just create): set the returned tree and a success flash, or an
+/// Run a task mutation (create, archive, reopen): set the returned tree and a success flash, or an
 /// error flash; toggles `busy` around the request when a form is driving it.
 fn apply_tasks<F>(state: State, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
 where
@@ -174,13 +175,14 @@ where
 
 /// Render a task table body: a loading/empty placeholder, or the tree flattened into rows (a
 /// parent immediately followed by its subtree), each indented by its depth. `finished` picks the
-/// side of the split — the open tree, or the collapsed Done block.
+/// side of the split — the open tree, or the collapsed Done block — and with it the trailing
+/// action: Archive on a live row, Reopen on a finished one.
 ///
 /// Each side is tree-flattened over its own subset, so an open subtask of a finished parent
 /// re-roots into the main tree rather than disappearing with its parent.
-fn task_rows(tasks: RwSignal<Option<TasksState>>, finished: bool) -> AnyView {
-    let Some(state_tasks) = tasks.get() else {
-        return placeholder_row("6", "Loading…");
+fn task_rows(state: State, finished: bool) -> AnyView {
+    let Some(state_tasks) = state.tasks.get() else {
+        return placeholder_row("7", "Loading…");
     };
     let rows: Vec<_> = state_tasks
         .tasks
@@ -189,7 +191,7 @@ fn task_rows(tasks: RwSignal<Option<TasksState>>, finished: bool) -> AnyView {
         .collect();
     if rows.is_empty() {
         return placeholder_row(
-            "6",
+            "7",
             if finished {
                 "Nothing finished yet."
             } else {
@@ -209,6 +211,26 @@ fn task_rows(tasks: RwSignal<Option<TasksState>>, finished: bool) -> AnyView {
             };
             let details = t.details.unwrap_or_default();
             let label = effective_label_title(&t.effective);
+            let action = {
+                let id = t.id.clone();
+                if finished {
+                    view! {
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_tasks(state, None, format!("Reopened {id}."),
+                                fetch::reopen_task(id.clone()));
+                        }>"Reopen"</button>
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_tasks(state, None, format!("Archived {id}."),
+                                fetch::archive_task(id.clone()));
+                        }>"Archive"</button>
+                    }
+                    .into_any()
+                }
+            };
             let project_cell = match t.project {
                 Some(p) if !p.trim().is_empty() => {
                     view! { <span class="adi-chip adi-mono">{p}</span> }.into_any()
@@ -229,6 +251,7 @@ fn task_rows(tasks: RwSignal<Option<TasksState>>, finished: bool) -> AnyView {
                     <td>{tag_cell}</td>
                     <td><span class="adi-tstatus" data-status=t.effective>{label}</span></td>
                     <td class="adi-mono adi-muted">{subtasks}</td>
+                    <td>{action}</td>
                 </tr>
             }
         })

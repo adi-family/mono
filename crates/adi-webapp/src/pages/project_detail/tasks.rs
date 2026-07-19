@@ -4,6 +4,7 @@ use adi_webapp_api::types::{NewTask, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
+use crate::pages::tasks::is_finished;
 use crate::state::{Flash, State};
 use crate::ui::{
     TextField, apply_mutation, data_table, effective_label_title, placeholder_row, task_tree_rows,
@@ -40,7 +41,7 @@ pub(crate) fn tasks_panel(state: State, form: TaskForm) -> AnyView {
                 <h2 class="adi-panel__title">"Tasks"</h2>
                 <span class="adi-updated">"filed under this project"</span>
             </div>
-            {data_table(&["Task", "ID", "Tag", "Status", "Subtasks"], move || project_task_rows(state))}
+            {data_table(&["Task", "ID", "Tag", "Status", "Subtasks", ""], move || project_task_rows(state))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -117,11 +118,11 @@ fn project_task_tree(state: State) -> Vec<(usize, adi_webapp_api::types::TaskRow
 /// placeholders otherwise.
 fn project_task_rows(state: State) -> AnyView {
     if state.tasks.get().is_none() {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row("6", "Loading…");
     }
     let tree = project_task_tree(state);
     if tree.is_empty() {
-        return placeholder_row("5", "No tasks in this project yet — add one below.");
+        return placeholder_row("6", "No tasks in this project yet — add one below.");
     }
     tree.into_iter()
         .map(|(depth, t)| {
@@ -133,6 +134,27 @@ fn project_task_rows(state: State) -> AnyView {
             };
             let details = t.details.unwrap_or_default();
             let label = effective_label_title(&t.effective);
+            let action = {
+                let id = t.id.clone();
+                let store = |s: State, ts: TasksState| s.tasks.set(Some(ts));
+                if is_finished(&t.effective) {
+                    view! {
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_mutation(state, None, format!("Reopened {id}."), store,
+                                fetch::reopen_task(id.clone()));
+                        }>"Reopen"</button>
+                    }
+                    .into_any()
+                } else {
+                    view! {
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_mutation(state, None, format!("Archived {id}."), store,
+                                fetch::archive_task(id.clone()));
+                        }>"Archive"</button>
+                    }
+                    .into_any()
+                }
+            };
             let tag_cell = match t.tag {
                 Some(tg) if !tg.trim().is_empty() => {
                     view! { <span class="adi-chip adi-mono">{tg}</span> }.into_any()
@@ -146,6 +168,7 @@ fn project_task_rows(state: State) -> AnyView {
                     <td>{tag_cell}</td>
                     <td><span class="adi-tstatus" data-status=t.effective>{label}</span></td>
                     <td class="adi-mono adi-muted">{subtasks}</td>
+                    <td>{action}</td>
                 </tr>
             }
         })

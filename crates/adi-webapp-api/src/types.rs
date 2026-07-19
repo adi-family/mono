@@ -356,6 +356,16 @@ pub struct NewTask {
     pub parent: Option<String>,
 }
 
+/// Request body naming one task — `POST /api/tasks/archive` and `POST /api/tasks/reopen`. Both
+/// return a fresh [`TasksState`], so the client refreshes the tree from one round-trip. `cascade`
+/// applies only to archive: when set, the task's open descendants are archived along with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TaskRef {
+    pub id: String,
+    #[serde(default)]
+    pub cascade: bool,
+}
+
 // ---- agents (AgentDef definitions under ~/.adi/mono/agents) --------------------------
 
 /// UI/schema metadata for the Agents create/edit form. The backend owns this so adding a

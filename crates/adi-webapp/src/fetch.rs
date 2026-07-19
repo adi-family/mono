@@ -8,7 +8,7 @@ use adi_webapp_api::types::{
     NewProjectHook, NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
     ReserveResponse, SaveAgent, SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult,
-    TasksState,
+    TaskRef, TasksState,
     TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
     WorkspacesState, WriteFile,
@@ -107,6 +107,16 @@ pub async fn tasks() -> Result<TasksState, String> {
 
 pub async fn create_task(body: NewTask) -> Result<TasksState, String> {
     post("/api/tasks/create", &body).await
+}
+
+/// Archive a task and its open descendants — archiving a parent from the UI takes the whole
+/// subtree off the plate, rather than leaving orphaned subtasks re-rooted in the live list.
+pub async fn archive_task(id: String) -> Result<TasksState, String> {
+    post("/api/tasks/archive", &TaskRef { id, cascade: true }).await
+}
+
+pub async fn reopen_task(id: String) -> Result<TasksState, String> {
+    post("/api/tasks/reopen", &TaskRef { id, cascade: false }).await
 }
 
 // Agents: every endpoint returns the fresh AgentsState so the page updates in one round-trip.
