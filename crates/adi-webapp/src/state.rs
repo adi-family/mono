@@ -5,9 +5,9 @@
 use std::collections::{BTreeMap, HashSet};
 
 use adi_webapp_api::types::{
-    AgentPeek, AgentsState, DashboardsState, DirListing, FileEntry, Health, HiveState, MeshState,
-    PortsState, ProjectDetail, ProjectHookLog, ProjectsState, TasksState, TriggerLog,
-    TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
+    AgentPeek, AgentRunInfo, AgentsState, DashboardsState, DirListing, FileEntry, Health,
+    HiveState, MeshState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState, TasksState,
+    TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -445,9 +445,16 @@ impl AgentCodeEditor {
 pub(crate) struct AgentsWatch {
     /// The watched agent's name, or `None` while the live view is closed.
     pub(crate) name: RwSignal<Option<String>>,
+    /// Whether the watched agent is interactive (tmux) — it then shows a live pane and a send bar.
+    /// A headless agent shows its run history and a task composer instead.
+    pub(crate) interactive: RwSignal<bool>,
+    /// For a headless agent, the run whose log the view is showing (or `None` = none selected yet).
+    pub(crate) run_id: RwSignal<Option<String>>,
+    /// For a headless agent, its run history (newest first), refreshed by the poll.
+    pub(crate) runs: RwSignal<Vec<AgentRunInfo>>,
     /// The last snapshot received, or `None` before the first one lands.
     pub(crate) peek: RwSignal<Option<AgentPeek>>,
-    /// The send bar's text buffer (typed into the session on submit).
+    /// Text buffer: the send bar (tmux) or the run composer's task (headless).
     pub(crate) input: RwSignal<String>,
 }
 
@@ -455,6 +462,9 @@ impl AgentsWatch {
     pub(crate) fn new() -> Self {
         Self {
             name: RwSignal::new(None),
+            interactive: RwSignal::new(false),
+            run_id: RwSignal::new(None),
+            runs: RwSignal::new(Vec::new()),
             peek: RwSignal::new(None),
             input: RwSignal::new(String::new()),
         }
@@ -463,6 +473,9 @@ impl AgentsWatch {
     /// Close the live view (stops the polling; `poll_watch` no-ops while `name` is `None`).
     pub(crate) fn close(self) {
         self.name.set(None);
+        self.interactive.set(false);
+        self.run_id.set(None);
+        self.runs.set(Vec::new());
         self.peek.set(None);
         self.input.set(String::new());
     }

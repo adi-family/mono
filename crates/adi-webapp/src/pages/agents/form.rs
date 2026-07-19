@@ -59,6 +59,8 @@ fn render_agent_field(
         AgentFormFieldKind::Select => render_agent_select(field, form),
         AgentFormFieldKind::Checkbox => render_agent_checkbox(field, form),
         AgentFormFieldKind::Textarea => render_agent_textarea(field, form),
+        AgentFormFieldKind::ToolPicker => render_agent_tools(field, form),
+        AgentFormFieldKind::ModelPicker => render_agent_model(field, backends, form),
         AgentFormFieldKind::Text | AgentFormFieldKind::Number => {
             render_agent_input(field, backends, form)
         }
@@ -213,6 +215,153 @@ fn render_agent_textarea(field: AgentFormField, form: AgentsForm) -> AnyView {
             <textarea class="adi-textarea" id=id placeholder=placeholder
                 prop:value=move || agent_field_value(form, &name_for_value)
                 on:input=move |ev| set_agent_field_value(form, &name_for_input, event_target_value(&ev))></textarea>
+        </div>
+    }
+    .into_any()
+}
+
+/// Render the tool picker: a row of toggle chips for the well-known tools over a free-text input,
+/// both editing the one space-separated tool spec. The chips manage bare tool names; the input
+/// stays authoritative for everything, so scoped rules like `Bash(git *)` are typed there and the
+/// chips leave them untouched.
+fn render_agent_tools(field: AgentFormField, form: AgentsForm) -> AnyView {
+    let id = field_id(&field.name);
+    let label_for = id.clone();
+    let label = field.label.clone();
+    let placeholder = field.placeholder.clone();
+    let hint = field.hint.clone();
+    let show_hint = !hint.is_empty();
+    let options = field.options.clone();
+    let name = field.name.clone();
+    let name_value = name.clone();
+    let name_input = name.clone();
+    view! {
+        <div class="adi-field" style="flex:1 1 100%; min-width:0">
+            <label class="adi-field__label" for=label_for>{label}</label>
+            <div class="adi-toolpick">
+                {options.into_iter().map(|opt| {
+                    let tool = opt.value;
+                    let text = opt.label;
+                    let name_pressed = name.clone();
+                    let name_toggle = name.clone();
+                    let tool_pressed = tool.clone();
+                    view! {
+                        <button type="button" class="adi-toolpick__chip"
+                            aria-pressed=move || tool_selected(&agent_field_value(form, &name_pressed), &tool_pressed).to_string()
+                            on:click=move |_| {
+                                let next = toggle_tool(&agent_field_value(form, &name_toggle), &tool);
+                                set_agent_field_value(form, &name_toggle, next);
+                            }>
+                            {text}
+                        </button>
+                    }
+                }).collect::<Vec<_>>()}
+            </div>
+            <input class="adi-input adi-input--wide adi-mono" id=id placeholder=placeholder autocomplete="off"
+                prop:value=move || agent_field_value(form, &name_value)
+                on:input=move |ev| set_agent_field_value(form, &name_input, event_target_value(&ev)) />
+            {show_hint.then(|| field_hint(hint))}
+        </div>
+    }
+    .into_any()
+}
+
+/// Split a space-separated tool spec into tokens, keeping a parenthesised specifier (e.g.
+/// `Bash(git *)`, which itself contains spaces) whole.
+fn split_tool_tokens(spec: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0i32;
+    for ch in spec.chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth = (depth - 1).max(0);
+                current.push(ch);
+            }
+            c if c.is_whitespace() && depth == 0 => {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+            }
+            c => current.push(c),
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    tokens
+}
+
+/// Whether the bare tool token `tool` is present in `spec` — its exact name, not a scoped
+/// `Tool(...)` specifier, which the chip deliberately leaves to the text input.
+fn tool_selected(spec: &str, tool: &str) -> bool {
+    split_tool_tokens(spec).iter().any(|t| t == tool)
+}
+
+/// Toggle the bare `tool` token in `spec`, keeping every other token (scoped rules included) and
+/// their order. Returns the new space-joined spec.
+fn toggle_tool(spec: &str, tool: &str) -> String {
+    let mut tokens = split_tool_tokens(spec);
+    if let Some(pos) = tokens.iter().position(|t| t == tool) {
+        tokens.remove(pos);
+    } else {
+        tokens.push(tool.to_string());
+    }
+    tokens.join(" ")
+}
+
+/// Render the Model field as single-select suggestion chips over its free-text input. The chips
+/// are the selected backend's `model_suggestions`; clicking one sets the model, clicking the
+/// active one clears it (back to the backend default). Any other model is still typed by hand,
+/// and the input keeps the backend-specific placeholder.
+fn render_agent_model(
+    field: AgentFormField,
+    backends: Vec<AgentBackendOption>,
+    form: AgentsForm,
+) -> AnyView {
+    let id = field_id(&field.name);
+    let label_for = id.clone();
+    let label = field.label.clone();
+    let hint = field.hint.clone();
+    let show_hint = !hint.is_empty();
+    let backend = form.backend.get();
+    let placeholder = field_placeholder(&field, &backends, &backend);
+    let class = field_class(&field);
+    let suggestions = selected_backend(&backends, &backend)
+        .map(|b| b.model_suggestions.clone())
+        .unwrap_or_default();
+    view! {
+        <div class="adi-field" style=field_style(&field)>
+            <label class="adi-field__label" for=label_for>{label}</label>
+            {(!suggestions.is_empty()).then(|| view! {
+                <div class="adi-toolpick">
+                    {suggestions.into_iter().map(|model| {
+                        let for_pressed = model.clone();
+                        let for_click = model.clone();
+                        view! {
+                            <button type="button" class="adi-toolpick__chip"
+                                aria-pressed=move || (form.model.get() == for_pressed).to_string()
+                                on:click=move |_| {
+                                    if form.model.get() == for_click {
+                                        form.model.set(String::new());
+                                    } else {
+                                        form.model.set(for_click.clone());
+                                    }
+                                }>
+                                {model}
+                            </button>
+                        }
+                    }).collect::<Vec<_>>()}
+                </div>
+            })}
+            <input class=class id=id placeholder=placeholder autocomplete="off"
+                prop:value=move || form.model.get()
+                on:input=move |ev| form.model.set(event_target_value(&ev)) />
+            {show_hint.then(|| field_hint(hint))}
         </div>
     }
     .into_any()

@@ -1,16 +1,16 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
-    ApiError, Dashboard, DashboardsState, DirListing, FileContent, FilesRef, FsContent, FsCreate,
-    FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef, MeshListenRef,
-    MeshPeerRef, MeshPortRef, MeshState, NewDashboard, NewProject, NewProjectHook, NewService,
-    NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
-    ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, SaveAgent,
-    SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult, TaskRef, TasksState,
-    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
-    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
-    WorkspacesState, WriteFile,
+    AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
+    AgentsState, ApiError, Dashboard, DashboardsState, DirListing, FileContent, FilesRef,
+    FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef,
+    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewDashboard, NewProject, NewProjectHook,
+    NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, RunAgent,
+    RunRef, SaveAgent, SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult, TaskRef,
+    TasksState, TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts,
+    WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef,
+    WorkspacesRef, WorkspacesState, WriteFile,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -132,12 +132,27 @@ pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
     post("/api/agents/delete", &AgentRef { name }).await
 }
 
-pub async fn run_agent(name: String) -> Result<AgentRunResult, String> {
-    post("/api/agents/run", &AgentRef { name }).await
+pub async fn run_agent(name: String, message: String) -> Result<AgentRunResult, String> {
+    post("/api/agents/run", &RunAgent { name, message }).await
 }
 
 pub async fn stop_agent(name: String) -> Result<AgentsState, String> {
     post("/api/agents/stop", &AgentRef { name }).await
+}
+
+/// A headless agent's run history, newest first.
+pub async fn agent_runs(name: String) -> Result<AgentRuns, String> {
+    post("/api/agents/runs", &AgentRef { name }).await
+}
+
+/// A snapshot of one specific run's log.
+pub async fn peek_run(name: String, run_id: String) -> Result<AgentPeek, String> {
+    post("/api/agents/run/peek", &RunRef { name, run_id }).await
+}
+
+/// Stop one specific run, returning the fresh run history.
+pub async fn stop_run(name: String, run_id: String) -> Result<AgentRuns, String> {
+    post("/api/agents/run/stop", &RunRef { name, run_id }).await
 }
 
 pub async fn peek_agent(name: String) -> Result<AgentPeek, String> {

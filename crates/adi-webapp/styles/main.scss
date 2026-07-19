@@ -37,3 +37,38 @@
 
   &[data-status="archived"] { opacity: 0.7; }
 }
+
+// ---- tool picker (allowed / disallowed tools) --------------------------------------
+// A wrap of one-tap toggle chips over the free-text tool spec below them. A pressed chip means
+// the bare tool name is in the spec; scoped rules (`Bash(git *)`) live only in the text input, so
+// their chip stays unpressed.
+.adi-toolpick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+
+  &__chip {
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 500;
+    line-height: 1.2;
+    cursor: pointer;
+    padding: 3px 9px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    transition: background var(--transition), color var(--transition),
+      border-color var(--transition);
+
+    &:hover { color: var(--ink); background: var(--surface-2); }
+
+    &[aria-pressed="true"] {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: var(--on-accent);
+      font-weight: 550;
+    }
+  }
+}

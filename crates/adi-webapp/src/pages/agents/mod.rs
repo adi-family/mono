@@ -128,9 +128,12 @@ pub(crate) fn agents_view(
             {flash_view(flash)}
             <div class="adi-hint">
                 "▶ Run launches tmux backends in an interactive " <code>"adi-agent-<name>"</code>
-                " session, or process backends as headless Claude/Codex CLI jobs. ● View is tmux
-                 only; background-process output is written under "
-                <code>"~/.adi/mono/sessions/process"</code> "."
+                " session you type into. For headless backends (process / harness) the agent is a
+                 template: ▶ Run… starts an independent run from a task you give it — one "
+                <code>"--print"</code> " turn, never a continuation — and several can run at once.
+                 Each run keeps its own log under "
+                <code>"~/.adi/mono/sessions/{process,harness}/<agent>/"</code>
+                ", browsable as history in ● View."
             </div>
         </section>
     }

@@ -11,8 +11,8 @@ use adi_agents::contains_json_null;
 
 use crate::types::{
     AgentBackendOption, AgentBuildResult, AgentCode, AgentDto, AgentFormField, AgentFormFieldKind,
-    AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
-    SaveAgent, SaveAgentCode,
+    AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunInfo, AgentRunResult,
+    AgentRuns, AgentsState, RunAgent, RunRef, SaveAgent, SaveAgentCode,
 };
 
 use super::files::MAX_TEXT_BYTES;
@@ -43,29 +43,130 @@ fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
 }
 
 /// `POST /api/agents/run` — launch an agent in its backend. Tmux engines start an interactive
-/// session; process engines start a headless background CLI with a PID and log.
+/// session you type into, so the `message` is optional there. Headless engines (`process` /
+/// `harness`) get one shot: they run a single `--print` turn on `message` as the prompt and exit,
+/// so a task is **required** — launching one with no message would just have it act on a placeholder
+/// and do nothing, so that is rejected (400) rather than silently run.
 #[must_use]
 pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_agent_ref(body) else {
+    let Some(req) = parse_run_agent(body) else {
         return bad_agent_ref();
     };
     let name = req.name.trim();
-    let launch = match store.run(name) {
+    let message = req.message.trim();
+    let agent = match get_agent(store, name) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let interactive = agent.manifest.executor() == "tmux";
+    if !interactive && message.is_empty() {
+        return error(
+            400,
+            "This backend runs headless (one --print turn), so it needs an initial task — enter what it should do before running.",
+        );
+    }
+    let launch = if message.is_empty() {
+        store.run(name)
+    } else {
+        store.run_with_message(name, message)
+    };
+    let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return Response::from(&e),
     };
-    let message = match launch {
-        adi_agents::Launch::Tmux { session, .. } => {
-            format!("Started “{name}” — attach: tmux attach -t {session}")
-        }
-        adi_agents::Launch::Process { pid, log, .. } => format!(
-            "Started “{name}” as process {pid} — output: {}",
-            log.display()
+    let (message, run_id) = match launch {
+        adi_agents::Launch::Tmux { session, .. } => (
+            format!("Started “{name}” — attach: tmux attach -t {session}"),
+            String::new(),
+        ),
+        adi_agents::Launch::Process {
+            pid, log, run_id, ..
+        } => (
+            format!(
+                "Started “{name}” as process {pid} — output: {}",
+                log.display()
+            ),
+            run_id,
         ),
     };
     match agents_state(store) {
-        Ok(state) => ok_json(&AgentRunResult { message, state }),
+        Ok(state) => ok_json(&AgentRunResult {
+            message,
+            run_id,
+            state,
+        }),
         Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/agents/runs` — a headless agent's run history, newest first (each Run is an independent
+/// run of the agent's settings). Interactive (tmux) agents keep no history and answer `runs: []`.
+#[must_use]
+pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_agent_ref(body) else {
+        return bad_agent_ref();
+    };
+    match get_agent(store, req.name.trim()) {
+        Ok(agent) => ok_json(&runs_response(store, &agent)),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/agents/run/peek` — a read-only snapshot of one specific run's log (or the tmux pane
+/// for an interactive backend). A run that has produced nothing answers with empty output, not 404.
+#[must_use]
+pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_run_ref(body) else {
+        return bad_run_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    let peek = store.peek_run(&agent, run_id);
+    ok_json(&AgentPeek {
+        name: agent.name.clone(),
+        running: peek.running,
+        output: peek.output,
+        attach: peek.attach,
+        interactive: peek.interactive,
+        run_id: run_id.to_string(),
+    })
+}
+
+/// `POST /api/agents/run/stop` — stop one specific run, then report the fresh run history. Idempotent
+/// for an already-finished run; only an unknown agent is a 404.
+#[must_use]
+pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_run_ref(body) else {
+        return bad_run_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    if let Err(e) = store.stop_run(&agent.name, req.run_id.trim()) {
+        return Response::from(&e);
+    }
+    ok_json(&runs_response(store, &agent))
+}
+
+/// Build the [`AgentRuns`] history answer for an agent.
+fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
+    AgentRuns {
+        name: agent.name.clone(),
+        interactive: agent.manifest.executor() == "tmux",
+        runs: store
+            .runs(agent)
+            .into_iter()
+            .map(|r| AgentRunInfo {
+                run_id: r.run_id,
+                started_at: r.started_at,
+                message: r.message,
+                running: r.running,
+            })
+            .collect(),
     }
 }
 
@@ -84,7 +185,7 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         );
     }
     let name = req.name.trim().to_string();
-    // Move the manifest first so the save below is an ordinary edit of an existing file — that is
+    // Move the manifest first, so the save below is an ordinary edit of an existing file — that is
     // what preserves `created_at`. A failed rename must abort the save, or the edit would land on
     // a fresh agent and strand the original.
     if let Some(from) = clean(req.rename_from).filter(|from| *from != name) {
@@ -134,7 +235,7 @@ pub fn peek_agent(store: &Agents, body: &[u8]) -> Response {
         return bad_agent_ref();
     };
     match get_agent(store, req.name.trim()) {
-        Ok(agent) => peek_response(&agent),
+        Ok(agent) => peek_response(store, &agent),
         Err(e) => Response::from(&e),
     }
 }
@@ -156,7 +257,7 @@ pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
     }
     // Give the TUI a beat to redraw, so the response snapshot already shows the keystrokes.
     std::thread::sleep(std::time::Duration::from_millis(120));
-    peek_response(&agent)
+    peek_response(store, &agent)
 }
 
 /// `POST /api/agents/stop` — stop a live tmux session or detached process, then report the fresh
@@ -403,14 +504,18 @@ fn get_agent(store: &Agents, name: &str) -> Result<StoredAgent, AgentStoreError>
         .ok_or_else(|| AgentStoreError::NotFound(name.to_string()))
 }
 
-/// The [`AgentPeek`] answer for an agent: its live pane capture, or `running: false` without one.
-fn peek_response(agent: &StoredAgent) -> Response {
-    let pane = adi_agents::capture_pane(&agent.name);
+/// The [`AgentPeek`] answer for an agent: a tmux pane capture for interactive backends, or the tail
+/// of the detached run's log for the headless backends (which persists after the run ends). A
+/// registered agent with nothing to show answers `running: false` with empty output, not an error.
+fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
+    let peek = store.peek(agent);
     ok_json(&AgentPeek {
-        running: pane.is_some(),
-        output: pane.unwrap_or_default(),
-        attach: format!("tmux attach -t {}", adi_agents::session_name(&agent.name)),
         name: agent.name.clone(),
+        running: peek.running,
+        output: peek.output,
+        attach: peek.attach,
+        interactive: peek.interactive,
+        run_id: String::new(),
     })
 }
 
@@ -457,6 +562,35 @@ const CLAUDE_BACKENDS: &[&str] = &["tmux:claude", "process:claude", "harness:cla
 /// The backends whose engine is the Codex CLI.
 const CODEX_BACKENDS: &[&str] = &["tmux:codex", "process:codex"];
 
+/// The built-in Claude Code tools offered as one-tap toggles on the allow/deny tool pickers.
+/// These are the bare tool names; a scoped specifier (e.g. `Bash(git *)`) is still typed by hand
+/// into the same field. Kept in the order they read best in the picker, not alphabetically.
+const CLAUDE_TOOLS: &[&str] = &[
+    "Read",
+    "Edit",
+    "Write",
+    "Bash",
+    "Glob",
+    "Grep",
+    "Task",
+    "TodoWrite",
+    "NotebookEdit",
+    "WebFetch",
+    "WebSearch",
+    "BashOutput",
+    "KillShell",
+    "ExitPlanMode",
+    "SlashCommand",
+];
+
+/// Suggested models per backend, offered as one-tap chips on the Model picker. These mirror each
+/// backend's `model_placeholder` — the canonical aliases/ids for that engine — while the field
+/// stays free text for anything else (a full id, a provider-specific or local model).
+const CLAUDE_CLI_MODELS: &[&str] = &["opus", "sonnet", "haiku", "fable"];
+const CLAUDE_SDK_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"];
+const CODEX_MODELS: &[&str] = &["gpt-5-codex"];
+const ADI_MODELS: &[&str] = &["kimi-k2.6", "gemini-2.5-pro"];
+
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
 /// both the selectable backends and the field shape the client renders. Backends are
 /// `executor:what` pairs — the executor (`tmux` / `process` / `harness` / `wasm`) is the run
@@ -502,9 +636,11 @@ fn agent_form_spec() -> AgentFormSpec {
     provider.hint = "model provider the adi loop calls".into();
     fields.push(provider);
 
-    let mut model = agent_field("model", "Model", AgentFormFieldKind::Text);
+    let mut model = agent_field("model", "Model", AgentFormFieldKind::ModelPicker);
     model.placeholder = "model alias".into();
+    model.hint = "tap a suggestion for the chosen backend, or type any model".into();
     model.mono = true;
+    model.wide = true;
     fields.push(model);
 
     // ---- wasm employees (adi-workforce) ----
@@ -576,25 +712,19 @@ fn agent_form_spec() -> AgentFormSpec {
         "how the run result is emitted",
     ));
 
-    let mut allowed = txt_field(
+    fields.push(tools_field(
         "allowed_tools",
         "Allowed tools",
-        CLAUDE_BACKENDS,
         "Bash(git *) Edit Read",
-        "built-in tools to allow",
-    );
-    allowed.wide = true;
-    fields.push(allowed);
+        "built-in tools to allow — tap to toggle, or type a scoped rule like Bash(git *)",
+    ));
 
-    let mut disallowed = txt_field(
+    fields.push(tools_field(
         "disallowed_tools",
         "Disallowed tools",
-        CLAUDE_BACKENDS,
         "Bash(rm *) WebFetch",
-        "built-in tools to deny",
-    );
-    disallowed.wide = true;
-    fields.push(disallowed);
+        "built-in tools to deny — tap to toggle, or type a scoped rule like Bash(rm *)",
+    ));
 
     fields.push(num_field(
         "max_budget_usd",
@@ -919,37 +1049,49 @@ fn agent_form_spec() -> AgentFormSpec {
                 "tmux · Claude CLI",
                 "tmux",
                 "opus / sonnet / fable / haiku",
+                CLAUDE_CLI_MODELS,
             ),
-            agent_backend("tmux:codex", "tmux · Codex CLI", "tmux", "gpt-5-codex"),
+            agent_backend(
+                "tmux:codex",
+                "tmux · Codex CLI",
+                "tmux",
+                "gpt-5-codex",
+                CODEX_MODELS,
+            ),
             agent_backend(
                 "process:claude",
                 "process · Claude CLI",
                 "process",
                 "opus / sonnet / fable / haiku",
+                CLAUDE_CLI_MODELS,
             ),
             agent_backend(
                 "process:codex",
                 "process · Codex CLI",
                 "process",
                 "gpt-5-codex",
+                CODEX_MODELS,
             ),
             agent_backend(
                 "harness:claude-sdk",
                 "harness · Claude SDK",
                 "harness",
                 "claude-opus-4-8 / claude-sonnet-5",
+                CLAUDE_SDK_MODELS,
             ),
             agent_backend(
                 ADI_HARNESS,
                 "harness · ADI loop",
                 "harness",
                 "provider model, e.g. kimi-k2.6 / gemini-2.5-pro",
+                ADI_MODELS,
             ),
             agent_backend(
                 WASM_LOOP,
                 "wasm · Workforce employee",
                 "wasm",
                 "set by the employee's loop config",
+                &[],
             ),
         ],
         fields,
@@ -961,12 +1103,14 @@ fn agent_backend(
     label: &str,
     executor: &str,
     model_placeholder: &str,
+    model_suggestions: &[&str],
 ) -> AgentBackendOption {
     AgentBackendOption {
         id: id.into(),
         label: label.into(),
         executor: executor.into(),
         model_placeholder: model_placeholder.into(),
+        model_suggestions: strings(model_suggestions),
     }
 }
 
@@ -1074,6 +1218,18 @@ fn chk_field(name: &str, label: &str, ids: &[&str]) -> AgentFormField {
     field_ids(name, label, AgentFormFieldKind::Checkbox, ids)
 }
 
+/// A tool-picker for the Claude backends: toggle chips for [`CLAUDE_TOOLS`] over a free-text
+/// input, both editing the one space-separated tool spec (`--allowed-tools` / `--disallowed-tools`).
+fn tools_field(name: &str, label: &str, placeholder: &str, hint: &str) -> AgentFormField {
+    let mut f = field_ids(name, label, AgentFormFieldKind::ToolPicker, CLAUDE_BACKENDS);
+    f.options = CLAUDE_TOOLS.iter().map(|&t| agent_option(t, t)).collect();
+    f.placeholder = placeholder.into();
+    f.hint = hint.into();
+    f.mono = true;
+    f.wide = true;
+    f
+}
+
 /// Build a select-option list from `(value, label)` pairs.
 fn opts(pairs: &[(&str, &str)]) -> Vec<AgentFormOption> {
     pairs.iter().map(|&(v, l)| agent_option(v, l)).collect()
@@ -1117,6 +1273,23 @@ fn bad_save_agent() -> Response {
 fn parse_agent_ref(body: &[u8]) -> Option<AgentRef> {
     let req: AgentRef = serde_json::from_slice(body).ok()?;
     (!req.name.trim().is_empty()).then_some(req)
+}
+
+fn parse_run_agent(body: &[u8]) -> Option<RunAgent> {
+    let req: RunAgent = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty()).then_some(req)
+}
+
+fn parse_run_ref(body: &[u8]) -> Option<RunRef> {
+    let req: RunRef = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty()).then_some(req)
+}
+
+fn bad_run_ref() -> Response {
+    error(
+        400,
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id",
+    )
 }
 
 fn bad_agent_ref() -> Response {

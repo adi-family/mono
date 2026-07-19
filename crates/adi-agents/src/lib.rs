@@ -44,11 +44,13 @@ pub use agent::{
 };
 pub use backend::Backend;
 pub use error::{Error, Result};
-pub use run::{Launch, capture_pane, is_runnable, running_sessions, send_keys, session_name};
+pub use run::{
+    Launch, Peek, RunInfo, capture_pane, is_runnable, running_sessions, send_keys, session_name,
+};
 pub use wasm::DispatchOutcome;
 
 use agent::validate_name;
-use run::{is_running_in, launch_in, stop_in};
+use run::{is_running_in, launch_in, peek_in, peek_run_in, runs_in, stop_in, stop_run_in};
 
 const AGENTS_MODULE: &str = "agents";
 const WORKFORCE_MODULE: &str = "workforce";
@@ -249,6 +251,43 @@ impl Agents {
     pub fn is_running(&self, agent: &StoredAgent) -> bool {
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         is_running_in(agent, &sessions_dir)
+    }
+
+    /// A read-only live snapshot of an agent for the live view: a tmux pane capture for interactive
+    /// backends, or the latest run's log tail for the headless backends.
+    #[must_use]
+    pub fn peek(&self, agent: &StoredAgent) -> Peek {
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        peek_in(agent, &sessions_dir)
+    }
+
+    /// The run history of a headless agent, newest first (empty for interactive backends, whose
+    /// live session is their only "run").
+    #[must_use]
+    pub fn runs(&self, agent: &StoredAgent) -> Vec<RunInfo> {
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        runs_in(agent, &sessions_dir)
+    }
+
+    /// A read-only snapshot of one specific run of a headless agent (or the tmux pane, for an
+    /// interactive backend, where `run_id` is ignored).
+    #[must_use]
+    pub fn peek_run(&self, agent: &StoredAgent, run_id: &str) -> Peek {
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        peek_run_in(agent, &sessions_dir, run_id)
+    }
+
+    /// Stops one specific run of an agent, returning whether a live run was found.
+    ///
+    /// # Errors
+    /// Returns name validation or backend lifecycle errors.
+    pub fn stop_run(&self, name: &str, run_id: &str) -> Result<bool> {
+        validate_name(name)?;
+        let Some(agent) = self.get(name)? else {
+            return Ok(false);
+        };
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        stop_run_in(&agent, &sessions_dir, run_id)
     }
 
     /// Stops a run, returning whether one was found.

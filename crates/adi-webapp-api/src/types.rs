@@ -386,6 +386,10 @@ pub struct AgentBackendOption {
     pub executor: String,
     #[serde(default)]
     pub model_placeholder: String,
+    /// Suggested models for this backend, shown as one-tap chips on the Model picker. The bare
+    /// aliases / ids a user most often wants; anything else is still typed into the same field.
+    #[serde(default)]
+    pub model_suggestions: Vec<String>,
 }
 
 /// One rendered form control. `backend_ids`, `executors`, and `providers` are visibility
@@ -435,6 +439,14 @@ pub enum AgentFormFieldKind {
     Select,
     Checkbox,
     Textarea,
+    /// A space-separated tool spec (as passed to `--allowed-tools`) edited two ways at once: a
+    /// row of toggle chips for the well-known tools in `options`, over a free-text input for the
+    /// same string, so scoped specifiers like `Bash(git *)` can still be typed by hand.
+    ToolPicker,
+    /// A single model value edited two ways at once: a row of single-select suggestion chips
+    /// (the selected backend's `model_suggestions`) over a free-text input, so any other model
+    /// alias or id can still be typed by hand.
+    ModelPicker,
 }
 
 /// One agent definition on the wire. ADI-owned metadata remains top-level; everything interpreted
@@ -494,16 +506,60 @@ pub struct SaveAgent {
     pub rename_from: Option<String>,
 }
 
-/// Request body naming an agent — `POST /api/agents/delete` and `POST /api/agents/run`.
+/// Request body naming an agent — `POST /api/agents/delete`, `/api/agents/stop`, `/api/agents/peek`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRef {
     pub name: String,
 }
 
-/// `POST /api/agents/run` — a human-readable launch outcome plus fresh agent state.
+/// `POST /api/agents/run` request: the agent to launch and its initial task. The agent is only a
+/// template — each launch is an independent run from those settings, never a continuation. Headless
+/// backends (`process` / `harness`) run one `--print` turn with `message` as the prompt (required
+/// there — see the handler); interactive (tmux) backends ignore it and type into the session.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunAgent {
+    pub name: String,
+    #[serde(default)]
+    pub message: String,
+}
+
+/// Request naming one specific run of an agent — `POST /api/agents/run/peek` and `/run/stop`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunRef {
+    pub name: String,
+    pub run_id: String,
+}
+
+/// One entry in a headless agent's run history: an independent run spawned from the agent's settings.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRunInfo {
+    pub run_id: String,
+    /// Unix milliseconds the run started.
+    pub started_at: u64,
+    /// The task the run was launched with.
+    #[serde(default)]
+    pub message: String,
+    pub running: bool,
+}
+
+/// `POST /api/agents/runs` — a headless agent's run history, newest first. `interactive` is true for
+/// tmux backends, which keep no run history (their live session is the run) and so return `runs: []`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRuns {
+    pub name: String,
+    #[serde(default)]
+    pub interactive: bool,
+    #[serde(default)]
+    pub runs: Vec<AgentRunInfo>,
+}
+
+/// `POST /api/agents/run` — a human-readable launch outcome, the new run's id, and fresh agent state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentRunResult {
     pub message: String,
+    /// The id of the run just launched (empty for interactive backends, which have no run id).
+    #[serde(default)]
+    pub run_id: String,
     pub state: AgentsState,
 }
 
@@ -558,9 +614,18 @@ pub struct AgentPeek {
     /// The visible pane text (trailing whitespace trimmed).
     #[serde(default)]
     pub output: String,
-    /// The command a human runs to take the session over: `tmux attach -t adi-agent-<name>`.
+    /// The command a human runs to follow the run: `tmux attach -t adi-agent-<name>` for an
+    /// interactive session, or `tail -f <log>` for a headless detached run.
     #[serde(default)]
     pub attach: String,
+    /// Whether this is an interactive (tmux) session — only then can the live view type into it.
+    /// Headless `process` / `harness` runs are log-only, and their `output` persists after they end.
+    #[serde(default)]
+    pub interactive: bool,
+    /// The run this snapshot is of, echoed back so a late poll for a run the view has moved off is
+    /// dropped. Empty for interactive backends (a session, not a run).
+    #[serde(default)]
+    pub run_id: String,
 }
 
 // ---- triggers (code blocks launched by a webhook or supervised in the background) ----
