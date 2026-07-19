@@ -4,8 +4,9 @@ use adi_webapp_api::types::{AgentsState, SaveAgent};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::agents::agent_actions;
-use crate::state::{AgentsWatch, Flash, State};
+use crate::pages::agents::{agent_actions, load_agent_into_form};
+use crate::routing::{Route, push_state, scroll_top};
+use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{TextField, apply_mutation, data_table, placeholder_row};
 
 /// The project detail page's quick agent create form (name, backend, system prompt; the project
@@ -22,7 +23,13 @@ pub(crate) struct QuickAgentForm {
 /// The Agents panel on a project's detail page: the agents filed under this project (from the
 /// shared list at `/api/agents`) with live Run/View/Stop actions, plus a quick create form
 /// pre-scoped to it.
-pub(crate) fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatch) -> AnyView {
+pub(crate) fn agents_panel(
+    state: State,
+    form: QuickAgentForm,
+    watch: AgentsWatch,
+    edit_form: AgentsForm,
+    route: RwSignal<Route>,
+) -> AnyView {
     let QuickAgentForm {
         name,
         backend,
@@ -36,7 +43,7 @@ pub(crate) fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatc
                 <h2 class="adi-panel__title">"Agents"</h2>
                 <span class="adi-updated">"filed under this project"</span>
             </div>
-            {data_table(&["Name", "Backend", "Model", "Status", ""], move || project_agent_rows(state, watch))}
+            {data_table(&["Name", "Backend", "Model", "Status", ""], move || project_agent_rows(state, watch, edit_form, route))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -65,6 +72,8 @@ pub(crate) fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatc
                     tags: Vec::new(),
                     starred: false,
                     project: Some(id),
+                    // This panel only creates; renaming lives on the Agents page.
+                    rename_from: None,
                 };
                 name.set(String::new());
                 system_prompt.set(String::new());
@@ -101,8 +110,14 @@ pub(crate) fn agents_panel(state: State, form: QuickAgentForm, watch: AgentsWatc
 }
 
 /// Rows for the project's agent table: this project's agents with the shared Run/View/Stop
-/// actions. Loading/empty placeholders otherwise.
-fn project_agent_rows(state: State, watch: AgentsWatch) -> AnyView {
+/// actions, plus an Edit that hands the agent to the full form on the Agents page. Loading/empty
+/// placeholders otherwise.
+fn project_agent_rows(
+    state: State,
+    watch: AgentsWatch,
+    edit_form: AgentsForm,
+    route: RwSignal<Route>,
+) -> AnyView {
     let id = state.current_project.get();
     let Some(st) = state.agents.get() else {
         return placeholder_row("5", "Loading…");
@@ -134,6 +149,9 @@ fn project_agent_rows(state: State, watch: AgentsWatch) -> AnyView {
             } else {
                 view! { <span class="adi-muted">"—"</span> }.into_any()
             };
+            // The full 49-field form lives on the Agents page; Edit loads this agent into it and
+            // takes you there, rather than duplicating the schema-driven form in this panel.
+            let a_edit = a.clone();
             view! {
                 <tr>
                     <td>{name_disp}</td>
@@ -142,6 +160,15 @@ fn project_agent_rows(state: State, watch: AgentsWatch) -> AnyView {
                     <td>{status}</td>
                     <td class="adi-table__actions">
                         {agent_actions(state, watch, &a)}
+                        " "
+                        <button class="adi-btn adi-btn--link"
+                            title="edit every field on the Agents page"
+                            on:click=move |_| {
+                                load_agent_into_form(edit_form, &a_edit);
+                                push_state(Route::Agents.path());
+                                route.set(Route::Agents);
+                                scroll_top();
+                            }>"Edit"</button>
                     </td>
                 </tr>
             }

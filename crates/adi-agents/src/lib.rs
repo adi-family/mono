@@ -181,6 +181,34 @@ impl Agents {
         })
     }
 
+    /// Renames an agent's manifest, keeping its contents and `created_at` intact.
+    ///
+    /// The rename is a plain file move, so a following [`Self::save`] under the new name behaves
+    /// like any other edit. Renaming a *running* agent is refused: sessions are keyed by name
+    /// (`adi-agent-<name>`, `sessions/<executor>/<name>.pid`), so the live session would be
+    /// orphaned beyond the reach of stop.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for either name, [`Error::NotFound`] when `from` isn't registered,
+    /// [`Error::Exists`] when `to` is taken, [`Error::AlreadyRunning`] when `from` is live.
+    pub fn rename(&self, from: &str, to: &str) -> Result<()> {
+        validate_name(from)?;
+        validate_name(to)?;
+        if from == to {
+            return Ok(());
+        }
+        let agent = self
+            .get(from)?
+            .ok_or_else(|| Error::NotFound(from.to_string()))?;
+        if self.agent_file(to).path().exists() {
+            return Err(Error::Exists(to.to_string()));
+        }
+        if self.is_running(&agent) {
+            return Err(Error::AlreadyRunning(from.to_string()));
+        }
+        std::fs::rename(self.agent_file(from).path(), self.agent_file(to).path()).map_err(Error::Io)
+    }
+
     /// # Errors
     /// Returns [`Error::NotFound`] or backend launch errors.
     pub fn run(&self, name: &str) -> Result<Launch> {
@@ -493,5 +521,66 @@ mod tests {
             Err(Error::InvalidName(_))
         ));
         assert!(matches!(store.delete(".."), Err(Error::InvalidName(_))));
+    }
+
+    #[test]
+    fn rename_moves_the_manifest_and_leaves_no_orphan() {
+        let store = scratch("rename");
+        let mut m = spec("tmux:claude");
+        m.arguments.model = Some("opus".into());
+        m.tags = vec!["athz".into()];
+        let created = store.save("old", m).expect("save").manifest.created_at;
+
+        store.rename("old", "new").expect("rename");
+
+        assert!(store.get("old").expect("old gone").is_none());
+        let moved = store
+            .get_typed::<TestArguments>("new")
+            .expect("load renamed")
+            .expect("renamed agent exists");
+        assert_eq!(moved.manifest.arguments.model.as_deref(), Some("opus"));
+        assert_eq!(moved.manifest.tags, vec!["athz".to_string()]);
+        // The rename is a move, so the agent keeps the age it had before.
+        assert_eq!(moved.manifest.created_at, created);
+        assert_eq!(store.list().expect("list").len(), 1);
+    }
+
+    #[test]
+    fn rename_refuses_to_clobber_an_existing_agent() {
+        let store = scratch("rename-clash");
+        store.save("one", spec("tmux:claude")).expect("save one");
+        store.save("two", spec("process:codex")).expect("save two");
+
+        assert!(matches!(
+            store.rename("one", "two"),
+            Err(Error::Exists(name)) if name == "two"
+        ));
+        // Both survive untouched.
+        let two = store.get("two").expect("get two").expect("two exists");
+        assert_eq!(two.manifest.backend, "process:codex".into());
+        assert_eq!(store.list().expect("list").len(), 2);
+    }
+
+    #[test]
+    fn rename_validates_both_names_and_no_ops_on_self() {
+        let store = scratch("rename-names");
+        store.save("keep", spec("tmux:claude")).expect("save");
+
+        assert!(matches!(
+            store.rename("keep", "../escape"),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(matches!(
+            store.rename("a/b", "keep"),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(matches!(
+            store.rename("ghost", "fresh"),
+            Err(Error::NotFound(_))
+        ));
+        store
+            .rename("keep", "keep")
+            .expect("self rename is a no-op");
+        assert!(store.get("keep").expect("still there").is_some());
     }
 }

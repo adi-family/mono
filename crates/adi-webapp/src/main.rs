@@ -381,7 +381,7 @@ fn App() -> impl IntoView {
 
                     {move || match route.get() {
                         Route::Projects => projects_view(state, projects_form, route),
-                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, hook_log, term_watch),
+                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch),
                         Route::StoreFile => store_file_view(state),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),

@@ -14,7 +14,7 @@ use super::workspaces::{
 use crate::fetch;
 use crate::routing::{ProjectSection, Route, go_projects, open_project};
 use crate::state::{
-    AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, TriggersLogView,
+    AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, TriggersLogView,
 };
 use crate::ui::{data_table, flash_view, fmt_date};
 
@@ -39,6 +39,7 @@ pub(crate) fn project_detail_view(
     route: RwSignal<Route>,
     triggers_log: TriggersLogView,
     agents_watch: AgentsWatch,
+    agents_form: AgentsForm,
     hook_log: HookLogView,
     term: TermWatch,
 ) -> AnyView {
@@ -123,7 +124,7 @@ pub(crate) fn project_detail_view(
                 .into_any(),
                 ProjectSection::Agents => view! {
                     {move || agent_live_view(state, agents_watch)}
-                    {agents_panel(state, agent_form, agents_watch)}
+                    {agents_panel(state, agent_form, agents_watch, agents_form, route)}
                 }
                 .into_any(),
                 ProjectSection::Triggers => view! {

@@ -8,6 +8,7 @@ pub enum Error {
     Arguments(String),
     InvalidName(String),
     NotFound(String),
+    Exists(String),
     Io(std::io::Error),
     NotRunnable(String),
     AlreadyRunning(String),
@@ -28,6 +29,7 @@ impl fmt::Display for Error {
                 "invalid agent name {name:?}: use a single segment of letters, digits, '.', '-', or '_'"
             ),
             Self::NotFound(name) => write!(f, "no such agent: {name}"),
+            Self::Exists(name) => write!(f, "an agent named {name} already exists"),
             Self::Io(e) => write!(f, "agent store I/O error: {e}"),
             Self::NotRunnable(backend) => write!(
                 f,
@@ -54,6 +56,7 @@ impl std::error::Error for Error {
             Self::Arguments(_)
             | Self::InvalidName(_)
             | Self::NotFound(_)
+            | Self::Exists(_)
             | Self::NotRunnable(_)
             | Self::AlreadyRunning(_)
             | Self::Launch(_)

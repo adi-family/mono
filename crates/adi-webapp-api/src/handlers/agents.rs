@@ -70,7 +70,8 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
 }
 
 /// `POST /api/agents/save` — create or update an agent definition (an upsert keyed by `name`),
-/// then report the fresh list. `name` and `backend` are required.
+/// then report the fresh list. `name` and `backend` are required. Passing `rename_from` renames an
+/// existing agent to `name` before applying the edit, instead of leaving the old manifest behind.
 #[must_use]
 pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_save_agent(body) else {
@@ -83,6 +84,14 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         );
     }
     let name = req.name.trim().to_string();
+    // Move the manifest first so the save below is an ordinary edit of an existing file — that is
+    // what preserves `created_at`. A failed rename must abort the save, or the edit would land on
+    // a fresh agent and strand the original.
+    if let Some(from) = clean(req.rename_from).filter(|from| *from != name) {
+        if let Err(e) = store.rename(&from, &name) {
+            return Response::from(&e);
+        }
+    }
     let manifest = AgentManifest {
         backend: Backend::from(req.backend.trim()),
         arguments: clean_arguments(req.arguments),
@@ -1080,7 +1089,9 @@ impl From<&AgentStoreError> for Response {
             | AgentStoreError::NotRunnable(_)
             | AgentStoreError::InvalidKey(_) => 400,
             AgentStoreError::NotFound(_) => 404,
-            AgentStoreError::AlreadyRunning(_) | AgentStoreError::NotRunning(_) => 409,
+            AgentStoreError::Exists(_)
+            | AgentStoreError::AlreadyRunning(_)
+            | AgentStoreError::NotRunning(_) => 409,
             AgentStoreError::Config(_)
             | AgentStoreError::Io(_)
             | AgentStoreError::Launch(_)

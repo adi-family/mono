@@ -21,10 +21,8 @@ mod form;
 use actions::apply_agents;
 pub(crate) use actions::{agent_actions, live_view, poll_watch};
 use code::{code_editor_view, open_code_editor};
-use form::{
-    agent_argument_values, agent_form_fields, agent_param_applies, clear_agent_form,
-    load_agent_into_form,
-};
+pub(crate) use form::load_agent_into_form;
+use form::{agent_argument_values, agent_form_fields, agent_param_applies, clear_agent_form};
 
 /// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
 /// pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
@@ -116,6 +114,8 @@ pub(crate) fn agents_view(
                     tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                     starred: starred.get(),
                     project: opt_str(project.get()),
+                    // Editing with the name field changed is a rename, not a second agent.
+                    rename_from: editing.get(),
                 };
                 editing.set(Some(nm.clone()));
                 apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));

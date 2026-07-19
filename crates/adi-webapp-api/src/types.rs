@@ -487,6 +487,11 @@ pub struct SaveAgent {
     /// The project to file the agent under (its id); blank/omitted saves a global agent.
     #[serde(default)]
     pub project: Option<String>,
+    /// The agent's previous name when an edit renames it. The manifest is moved first (keeping
+    /// `created_at`), then saved under `name`, so no orphan is left behind. Omitted — or equal to
+    /// `name` — for a plain create/update.
+    #[serde(default)]
+    pub rename_from: Option<String>,
 }
 
 /// Request body naming an agent — `POST /api/agents/delete` and `POST /api/agents/run`.
