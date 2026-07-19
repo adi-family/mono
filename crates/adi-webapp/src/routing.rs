@@ -22,6 +22,9 @@ pub(crate) enum Route {
     Hive,
     PortsManager,
     Mesh,
+    /// One file from the ADI store, open in the full-width editor (`/files/<path>`). The path
+    /// lives in `StoreBrowser::open_file`, the way a project id lives in `current_project`.
+    StoreFile,
 }
 
 impl Route {
@@ -29,6 +32,9 @@ impl Route {
     pub(crate) fn from_path(path: &str) -> Self {
         if project_id_from_path(path).is_some() {
             return Route::ProjectDetail;
+        }
+        if store_path_from_path(path).is_some() {
+            return Route::StoreFile;
         }
         match path {
             "/tasks" => Route::Tasks,
@@ -54,6 +60,8 @@ impl Route {
             Route::Hive => "/settings/hive",
             Route::PortsManager => "/settings/ports-manager",
             Route::Mesh => "/settings/mesh",
+            // The real path carries the file path; this base is only used for nav fallbacks.
+            Route::StoreFile => "/files",
         }
     }
 
@@ -69,6 +77,7 @@ impl Route {
             Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",
+            Route::StoreFile => "File",
         }
     }
 }
@@ -195,6 +204,38 @@ pub(crate) fn project_id_from_path(path: &str) -> Option<String> {
     let rest = path.strip_prefix("/projects/")?;
     let id = rest.split('/').next().unwrap_or_default();
     (!id.is_empty()).then(|| id.to_string())
+}
+
+/// The store-relative file path in a `/files/<path>` URL, or `None` for any other path. Each
+/// segment is percent-decoded, so a name with a space or `#` round-trips through the address bar.
+pub(crate) fn store_path_from_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/files/")?;
+    let decoded: Vec<String> = rest
+        .split('/')
+        .filter(|seg| !seg.is_empty())
+        .map(|seg| {
+            js_sys::decode_uri_component(seg)
+                .ok()
+                .and_then(|v| v.as_string())
+                .unwrap_or_else(|| seg.to_string())
+        })
+        .collect();
+    (!decoded.is_empty()).then(|| decoded.join("/"))
+}
+
+/// The `/files/<path>` URL for a store-relative file path, percent-encoding each segment so a
+/// name containing `?`, `#`, or a space cannot break the address bar.
+pub(crate) fn store_file_path(rel: &str) -> String {
+    let encoded: Vec<String> = rel
+        .split('/')
+        .filter(|seg| !seg.is_empty())
+        .map(|seg| {
+            js_sys::encode_uri_component(seg)
+                .as_string()
+                .unwrap_or_else(|| seg.to_string())
+        })
+        .collect();
+    format!("/files/{}", encoded.join("/"))
 }
 
 /// The section in a `/projects/<id>/<section>` path; the bare project path is its overview.

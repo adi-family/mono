@@ -9,7 +9,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::routing::{Route, open_project, push_state};
 use crate::state::{Flash, State};
-use crate::ui::{dash, data_table, fmt_ports, placeholder_row, tile};
+use crate::ui::{dash, data_table, fmt_ports, placeholder_row};
 
 /// Re-fetch `/api/hive` — which re-reads every project's `.adi/hive.yaml` and the global hive
 /// from disk (re-running any `bash`…`` port commands) — and refresh the Services view.
@@ -32,35 +32,20 @@ fn reload_hive(state: State) {
 pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
     let State { hive, .. } = state;
     view! {
-        <section class="adi-tiles">
-            {tile("Services",
-                move || hive.get().map_or_else(|| "—".to_string(), |h| h.services.len().to_string()),
-                "projects, dashboards + front-door")}
-            {tile("Running",
-                move || hive.get().map_or_else(|| "—".to_string(),
-                    |h| h.services.iter().filter(|s| s.running).count().to_string()),
-                move || hive.get().map_or_else(|| "primary port listening".to_string(),
-                    |h| format!("{} stopped", h.services.iter().filter(|s| !s.running).count())))}
-            {tile("Projects",
-                move || hive.get().map_or_else(|| "—".to_string(), |h| {
-                    let mut ids: Vec<&String> = h.services.iter().filter_map(|s| s.project.as_ref()).collect();
-                    ids.sort_unstable();
-                    ids.dedup();
-                    ids.len().to_string()
-                }),
-                "contributing services (+ front-door)")}
-        </section>
-
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">"Hive services"</h2>
+                <span class="adi-chip adi-mono" title="Declared services">
+                    {move || hive.get().map_or_else(|| "\u{2014}".to_string(),
+                        |h| h.services.len().to_string())}
+                </span>
+                <span class="adi-updated">
+                    {move || hive.get().map_or(String::new(),
+                        |h| format!("{} running", h.services.iter().filter(|s| s.running).count()))}
+                </span>
                 <span class="adi-spacer"></span>
                 <button class="adi-btn adi-btn--ghost" type="button"
                     title="Re-read every project's .adi/hive.yaml and the global hive from disk"
                     on:click=move |_| reload_hive(state)>"Reload config"</button>
-                <span class="adi-updated">
-                    {move || hive.get().map_or(String::new(), |h| format!("{} services", h.services.len()))}
-                </span>
             </div>
             {data_table(&["Source", "Service", "Host", "Ports", "Command", "Restart", "Status"],
                 move || hive_rows(state, route))}

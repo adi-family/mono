@@ -6,13 +6,13 @@
 
 use std::collections::BTreeMap;
 
-use adi_webapp_api::types::{AgentsState, SaveAgent};
+use adi_webapp_api::types::SaveAgent;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{AgentCodeEditor, AgentsForm, AgentsWatch, Flash, State};
-use crate::ui::{data_table, flash_view, placeholder_row, tile, updated_text};
+use crate::ui::{data_table, flash_view, placeholder_row, updated_text};
 
 mod actions;
 mod code;
@@ -53,21 +53,24 @@ pub(crate) fn agents_view(
         ..
     } = form;
     view! {
-        {agent_tiles(state)}
-
         {move || live_view(state, watch)}
 
         {move || code_editor_view(state, code)}
 
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">"Agent definitions"</h2>
-                <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
+                <span class="adi-chip adi-mono" title="Agents defined">
+                    {move || agents.get().map_or_else(|| "\u{2014}".to_string(),
+                        |a| a.agents.len().to_string())}
+                </span>
+                <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
             </div>
 
             {data_table(&["Name", "Backend", "Model", "Project", "Tags", ""], move || agent_rows(state, form, watch, code))}
+        </section>
 
-            <div class="adi-panel__head adi-panel__head--divided">
+        <section class="adi-panel">
+            <div class="adi-panel__head">
                 <h2 class="adi-panel__title">
                     {move || match editing.get() {
                         Some(n) => format!("Editing “{n}”"),
@@ -132,51 +135,6 @@ pub(crate) fn agents_view(
         </section>
     }
     .into_any()
-}
-
-/// The stat-tile strip: totals, per-executor counts, starred, and live runs.
-fn agent_tiles(state: State) -> impl IntoView {
-    let agents = state.agents;
-    view! {
-        <section class="adi-tiles">
-            {tile("Agents",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| a.agents.len().to_string()),
-                "defined")}
-            {tile("tmux",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_executor(&a, "tmux").to_string()),
-                "vendor CLI in a session")}
-            {tile("process",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_executor(&a, "process").to_string()),
-                "headless vendor CLI")}
-            {tile("harness",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_executor(&a, "harness").to_string()),
-                "agentic loop (SDK / ADI)")}
-            {tile("wasm",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_count_executor(&a, "wasm").to_string()),
-                "workforce employees")}
-            {tile("Starred",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_starred(&a).to_string()),
-                "pinned")}
-            {tile("Running",
-                move || agents.get().map_or_else(|| "—".to_string(), |a| agent_running(&a).to_string()),
-                "live sessions / processes")}
-        </section>
-    }
-}
-
-/// Count agents whose executor (`tmux`/`process`/`harness`/`wasm`) matches.
-fn agent_count_executor(st: &AgentsState, executor: &str) -> usize {
-    st.agents.iter().filter(|a| a.executor == executor).count()
-}
-
-/// Count starred agents.
-fn agent_starred(st: &AgentsState) -> usize {
-    st.agents.iter().filter(|a| a.starred).count()
-}
-
-/// Count agents with a live tmux session or detached process.
-fn agent_running(st: &AgentsState) -> usize {
-    st.agents.iter().filter(|a| a.running).count()
 }
 
 /// Render the agents table body: a loading/empty placeholder, or one row per agent with Run or

@@ -7,26 +7,13 @@ use wasm_bindgen::JsCast;
 
 use crate::fetch;
 use crate::state::{MeshForm, State};
-use crate::ui::{TextField, apply_mutation, data_table, placeholder_row, tile};
+use crate::ui::{TextField, apply_mutation, data_table, placeholder_row};
 
 /// The Mesh page: this machine's id/ticket to share, the ports it exposes to peers, the
 /// peers authorized to reach them, and the local→peer forwards.
 pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
     let mesh = state.mesh;
     view! {
-        <section class="adi-tiles">
-            {tile("Daemon",
-                move || mesh.get().map_or_else(|| "—".to_string(),
-                    |m| if m.running { "running".to_string() } else { "stopped".to_string() }),
-                "runs adi-mesh; publishes a ticket while up")}
-            {tile("Ports exposed",
-                move || mesh.get().map_or_else(|| "—".to_string(), |m| m.allow.len().to_string()),
-                "reachable by peers")}
-            {tile("Forwards",
-                move || mesh.get().map_or_else(|| "—".to_string(), |m| m.forwards.len().to_string()),
-                "local → peer tunnels")}
-        </section>
-
         {move || state.flash.get().map(|f| view! {
             <div class="adi-flash adi-flash--card" data-kind=f.kind>{f.msg}</div>
         })}

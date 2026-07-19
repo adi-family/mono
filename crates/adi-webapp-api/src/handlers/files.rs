@@ -83,7 +83,7 @@ pub fn write_file(store: &Projects, body: &[u8]) -> Response {
 }
 
 /// Read `rel` as text and shape a [`FileContent`], enforcing the [`MAX_TEXT_BYTES`] cap.
-fn read_file_content(jail: &Jail, id: &str, rel: &str) -> Response {
+pub(crate) fn read_file_content(jail: &Jail, id: &str, rel: &str) -> Response {
     let meta = match jail.metadata(rel) {
         Ok(meta) => meta,
         Err(e) => return Response::from(&e),
@@ -140,7 +140,7 @@ impl From<&FsError> for Response {
 }
 
 /// Flatten an [`adi_fs::Entry`] into its wire [`FileEntry`] DTO.
-fn file_entry(entry: adi_fs::Entry) -> FileEntry {
+pub(crate) fn file_entry(entry: adi_fs::Entry) -> FileEntry {
     FileEntry {
         name: entry.name,
         is_dir: entry.is_dir,
@@ -153,7 +153,7 @@ fn file_entry(entry: adi_fs::Entry) -> FileEntry {
 /// Normalize a jailed relative path to a clean display form: keep only real segments joined by
 /// `/`, dropping `.` and redundant separators. `..`/absolute paths never reach here (the jail
 /// rejects them first). The project root is the empty string.
-fn normalize_rel(rel: &str) -> String {
+pub(crate) fn normalize_rel(rel: &str) -> String {
     Path::new(rel)
         .components()
         .filter_map(|c| match c {
@@ -166,7 +166,7 @@ fn normalize_rel(rel: &str) -> String {
 
 /// The parent of a normalized relative path: `None` at the root, else the path with its last
 /// segment removed (a top-level entry's parent is the root, `""`).
-fn parent_rel(norm: &str) -> Option<String> {
+pub(crate) fn parent_rel(norm: &str) -> Option<String> {
     if norm.is_empty() {
         return None;
     }

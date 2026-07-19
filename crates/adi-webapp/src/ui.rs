@@ -29,6 +29,10 @@ pub(crate) fn fmt_uptime(s: u64) -> String {
 
 /// One stat tile in an `adi-tiles` strip: a label, a big value, and a sub-note. `value`/`note`
 /// take any view, so a caller passes either a literal or a reactive `move || …` closure.
+///
+/// Currently unused: the per-page stat strips were removed in favour of a plain count chip in
+/// each panel head, with the numbers moving to a dedicated analytics page. Kept for that page.
+#[allow(dead_code)]
 pub(crate) fn tile(
     label: &'static str,
     value: impl IntoView + 'static,

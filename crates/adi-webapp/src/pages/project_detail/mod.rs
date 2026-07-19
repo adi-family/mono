@@ -16,7 +16,7 @@ use crate::routing::{ProjectSection, Route, go_projects, open_project};
 use crate::state::{
     AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, TriggersLogView,
 };
-use crate::ui::{data_table, flash_view, fmt_date, tile};
+use crate::ui::{data_table, flash_view, fmt_date};
 
 mod agents_panel;
 mod files;
@@ -170,10 +170,16 @@ fn detail_body(
         .archived_at
         .map_or_else(String::new, |ts| format!("archived {}", fmt_date(ts)));
     let status_label = if archived { "Archived" } else { "Active" };
+    // The identity line that used to be a stat-tile strip: dates belong next to the name, not in
+    // cards of their own.
+    let meta = if archived_note.is_empty() {
+        format!("created {created}")
+    } else {
+        format!("created {created} \u{b7} {archived_note}")
+    };
     let description = d.description.clone();
     let has_hive = d.has_hive;
     let services = d.services.clone();
-    let service_count = services.len();
     let reload_id = id.clone();
     let rows_id = id.clone();
 
@@ -231,23 +237,15 @@ fn detail_body(
         <div class="adi-bar">
             <h1 class="adi-bar__title">{name}</h1>
             <span class="adi-chip">{status_label}</span>
+            <span class="adi-chip adi-mono" title="directory under ~/.adi/mono/projects">{id}</span>
             {parent_link(state, route, d.parent.clone())}
             <span class="adi-spacer"></span>
+            <span class="adi-updated">{meta}</span>
             {archive_btn}
             {delete_ctrl}
         </div>
 
         {(!services_section).then(|| view! {
-            <section class="adi-tiles">
-                <div class="adi-tile">
-                    <div class="adi-tile__label">"ID"</div>
-                    <div class="adi-tile__value adi-mono" style="font-size:var(--text-lg)">{id}</div>
-                    <div class="adi-tile__note">"directory under ~/.adi/mono/projects"</div>
-                </div>
-                {tile("Created", created, archived_note)}
-                {tile("Services", service_count.to_string(), "from .adi/hive.yaml")}
-            </section>
-
             {description.map(|text| view! {
                 <section class="adi-panel">
                     <div class="adi-panel__head"><h2 class="adi-panel__title">"Description"</h2></div>

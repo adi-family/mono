@@ -2,7 +2,7 @@
 
 use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
-    ApiError, DirListing, FileContent,
+    ApiError, DirListing, FileContent, FsContent, FsListing, FsRef, FsWrite,
     Dashboard, DashboardsState, FilesRef, Health, HiveState, NewDashboard,
     LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
     NewProjectHook, NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
@@ -338,4 +338,18 @@ async fn finish<T: DeserializeOwned>(resp: Response) -> Result<T, String> {
 
 fn stringify<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
+}
+
+// The ADI store browser: browse/read/edit everything under ~/.adi/mono (jailed to it).
+
+pub async fn fs_list(path: &str) -> Result<FsListing, String> {
+    post("/api/fs/list", &FsRef { path: path.to_string() }).await
+}
+
+pub async fn fs_read(path: &str) -> Result<FsContent, String> {
+    post("/api/fs/read", &FsRef { path: path.to_string() }).await
+}
+
+pub async fn fs_write(path: &str, content: String) -> Result<FsContent, String> {
+    post("/api/fs/write", &FsWrite { path: path.to_string(), content }).await
 }

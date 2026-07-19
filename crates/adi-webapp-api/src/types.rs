@@ -727,6 +727,56 @@ pub struct WriteFile {
     pub content: String,
 }
 
+// ---- the ADI store browser (~/.adi/mono, jailed) ---------------------------------------
+
+/// Request body for the store browser — `POST /api/fs/list` and `/api/fs/read`. `path` is
+/// relative to the store root (`~/.adi/mono`); `""` is the root itself. The same [`adi_fs`]
+/// jail rules as the project browser apply, so nothing outside the store is reachable.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsRef {
+    /// The path within the store, relative to its root.
+    #[serde(default)]
+    pub path: String,
+}
+
+/// `POST /api/fs/list` — a directory listing within the ADI store, browsed through the
+/// isolated [`adi_fs`] jail rooted at `~/.adi/mono`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsListing {
+    /// The listed directory, relative to the store root (`""` is the root).
+    pub path: String,
+    /// The parent directory, or `None` at the root — so the UI can offer an "up" control
+    /// without re-deriving it.
+    #[serde(default)]
+    pub parent: Option<String>,
+    /// The directory's entries, sorted directories-first then case-insensitively by name.
+    pub entries: Vec<FileEntry>,
+}
+
+/// `POST /api/fs/read` — one text file's contents, read through the store jail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsContent {
+    /// The file path, relative to the store root.
+    pub path: String,
+    /// The file's UTF-8 text (binary files are rejected rather than returned here).
+    pub content: String,
+    /// The file size in bytes.
+    pub size: u64,
+    /// Last-modified time as Unix epoch seconds, when the platform reports it.
+    #[serde(default)]
+    pub modified: Option<u64>,
+}
+
+/// Request body for saving a file in the store — `POST /api/fs/write`. Writes are atomic and
+/// create any missing parent directories within the store.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsWrite {
+    /// The file path to write, relative to the store root.
+    pub path: String,
+    /// The new UTF-8 text contents.
+    pub content: String,
+}
+
 // ---- project workspaces & hooks (script files under <project>/.adi/hooks + the
 // ---- .adi/workspaces.toml registry) ---------------------------------------------------
 

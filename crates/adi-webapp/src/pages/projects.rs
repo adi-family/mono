@@ -8,8 +8,7 @@ use crate::fetch;
 use crate::routing::{Route, open_project};
 use crate::state::{Flash, ProjectsForm, State};
 use crate::ui::{
-    TextField, apply_mutation, data_table, flash_view, fmt_date, placeholder_row, segmented, tile,
-    updated_text,
+    TextField, apply_mutation, data_table, flash_view, fmt_date, placeholder_row, updated_text,
 };
 
 /// The Projects page: the registry of project metadata manifests, with a create form and
@@ -30,27 +29,23 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
         show_archived,
     } = form;
     view! {
-        <section class="adi-tiles">
-            {tile("Projects",
-                move || projects.get().map_or_else(|| "—".to_string(), |p| p.projects.len().to_string()),
-                "registered manifests")}
-            {tile("Active",
-                move || projects.get().map_or_else(|| "—".to_string(),
-                    |p| p.projects.iter().filter(|x| !x.is_archived()).count().to_string()),
-                move || projects.get().map_or_else(|| "not archived".to_string(),
-                    |p| format!("{} archived", p.projects.iter().filter(|x| x.is_archived()).count())))}
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <span class="adi-chip adi-mono" title="Active projects, at every depth">
+                    {move || projects.get().map_or_else(|| "\u{2014}".to_string(),
+                        |p| p.projects.iter().filter(|x| !x.is_archived()).count().to_string())}
+                </span>
+                <span class="adi-updated">{move || updated_text(projects, secs_since)}</span>
+            </div>
+
+            {data_table(&["Name", "ID", "Tasks", "Created", "Status", ""],
+                move || project_rows(state, route, false))}
         </section>
 
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">"Registered projects"</h2>
-                <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
-                <span class="adi-spacer"></span>
-                {segmented("Filter projects", show_archived, "Active", "All")}
+                <h2 class="adi-panel__title">"New project"</h2>
             </div>
-
-            {data_table(&["Name", "ID", "Tasks", "Created", "Status", ""],
-                move || project_rows(state, show_archived, route))}
 
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
@@ -98,40 +93,82 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
             </form>
             {flash_view(flash)}
         </section>
+
+        {archived_section(state, route, show_archived)}
     }
     .into_any()
 }
 
-/// The projects currently in view: filtered by the archived toggle, then flattened into
-/// tree order. `None` while the first load is still in flight. Shared by the tree and the
-/// detail pane, so the two can never disagree about what is on screen.
-fn visible_projects(state: State, show_archived: RwSignal<bool>) -> Option<Vec<(usize, Project)>> {
-    let show_all = show_archived.get();
-    let rows: Vec<Project> = state
-        .projects
-        .get()?
-        .projects
-        .into_iter()
-        .filter(|p| show_all || !p.is_archived())
-        .collect();
-    Some(project_tree_rows(rows))
+/// The count of archived projects, at every depth. `0` while the first load is in flight, which
+/// also keeps the archived disclosure hidden until there is something real to disclose.
+fn archived_count(state: State) -> usize {
+    state.projects.get().map_or(0, |p| {
+        p.projects.iter().filter(|x| x.is_archived()).count()
+    })
 }
 
-/// Render the projects table body: a loading/empty placeholder, or one row per project
-/// (filtered to active-only unless `show_archived`), indented by its depth in the tree.
-/// The name opens the project's page; the trailing action archives or restores it. The
-/// hierarchy itself is the explorer's job — this table is the registry.
-fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Route>) -> AnyView {
-    let Some(rows) = visible_projects(state, show_archived) else {
-        return placeholder_row("6", "Loading\u{2026}");
+/// The archive: its own collapsed panel at the foot of the page, with a caret header and a count.
+/// Expanding reveals archived projects so they can be restored. A separate panel rather than a
+/// section inside the main one — inline, the split between live and archived rows reads as one
+/// continuous table. Renders nothing at all when nothing is archived.
+fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) -> AnyView {
+    view! {
+        {move || {
+            let n = archived_count(state);
+            (n > 0).then(|| {
+                let open = show.get();
+                view! {
+                    <section class="adi-panel">
+                        <div class="adi-panel__head">
+                            <button class="adi-btn adi-btn--link" type="button"
+                                aria-expanded=open.to_string()
+                                on:click=move |_| show.update(|v| *v = !*v)>
+                                {if open { "\u{25be}" } else { "\u{25b8}" }}" Archived"
+                            </button>
+                            <span class="adi-chip adi-mono">{n.to_string()}</span>
+                        </div>
+                        // No Status column: every row here is archived, so it would say the
+                        // same thing all the way down.
+                        {open.then(|| data_table(&["Name", "ID", "Tasks", "Archived", ""],
+                            move || project_rows(state, route, true)))}
+                    </section>
+                }
+                .into_any()
+            })
+        }}
+    }
+    .into_any()
+}
+
+/// Render a projects table body: a loading/empty placeholder, or one row per project matching
+/// `archived`, indented by its depth in the tree. The name opens the project's page; the trailing
+/// action archives or restores it. Archived rows are split into their own collapsed table, so the
+/// main one shows only live projects — but both are built from this one function.
+///
+/// Each side is tree-flattened over its own subset, so a project whose parent fell on the other
+/// side of the split renders as a root rather than vanishing.
+fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView {
+    // The archive drops the Status column, so its rows are one cell narrower.
+    let cols = if archived { "5" } else { "6" };
+    let Some(loaded) = state.projects.get() else {
+        return placeholder_row(cols, "Loading\u{2026}");
     };
+    let rows = project_tree_rows(
+        loaded
+            .projects
+            .into_iter()
+            .filter(|p| p.is_archived() == archived)
+            .collect(),
+    );
     if rows.is_empty() {
-        let msg = if show_archived.get() {
-            "No projects yet \u{2014} register one below."
-        } else {
-            "No active projects. Add one below, or switch to All to see archived ones."
-        };
-        return placeholder_row("6", msg);
+        return placeholder_row(
+            cols,
+            if archived {
+                "Nothing archived."
+            } else {
+                "No projects yet \u{2014} register one below."
+            },
+        );
     }
     let tasks = state.tasks.get();
 
@@ -159,11 +196,11 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
                     .into_any()
                 }
             };
-            let status = if archived {
-                view! { <span class="adi-chip">"Archived"</span> }.into_any()
-            } else {
-                view! { <span class="adi-muted">"Active"</span> }.into_any()
-            };
+            // Only the live table carries a Status column; in the archive every row would
+            // read "Archived", so the cell is dropped rather than repeated.
+            let status = (!archived)
+                .then(|| view! { <td><span class="adi-muted">"Active"</span></td> })
+                .into_any();
             let tasks_cell = match open_tasks(tasks.as_ref(), &p.id) {
                 Some((open, total)) => {
                     let tip = format!("{open} open \u{b7} {total} total");
@@ -172,7 +209,13 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
                 }
                 None => view! { <span class="adi-muted">"\u{2014}"</span> }.into_any(),
             };
-            let created = fmt_date(p.created_at);
+            // The archive dates rows by when they were archived, which is what you sort by
+            // when hunting for something to restore; the live table dates them by creation.
+            let date = fmt_date(if archived {
+                p.archived_at.unwrap_or(p.created_at)
+            } else {
+                p.created_at
+            });
             let title = p.description.clone().unwrap_or_default();
             let open_id = id.clone();
             let href = format!("/projects/{id}");
@@ -192,8 +235,8 @@ fn project_rows(state: State, show_archived: RwSignal<bool>, route: RwSignal<Rou
                     </td>
                     <td class="adi-mono">{p.id}</td>
                     <td>{tasks_cell}</td>
-                    <td class="adi-mono adi-muted">{created}</td>
-                    <td>{status}</td>
+                    <td class="adi-mono adi-muted">{date}</td>
+                    {status}
                     <td class="adi-table__actions">{action}</td>
                 </tr>
             }

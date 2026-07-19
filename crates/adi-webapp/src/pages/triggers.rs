@@ -14,7 +14,7 @@ use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView};
 use crate::ui::{
-    TextField, apply_mutation, data_table, flash_view, fmt_date, placeholder_row, tile,
+    TextField, apply_mutation, data_table, flash_view, fmt_date, placeholder_row,
     updated_text,
 };
 
@@ -55,19 +55,22 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
     } = form;
     let projects = state.projects;
     view! {
-        {trigger_tiles(state)}
-
         {move || log_view(log)}
 
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">"Trigger definitions"</h2>
-                <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
+                <span class="adi-chip adi-mono" title="Triggers defined">
+                    {move || triggers.get().map_or_else(|| "\u{2014}".to_string(),
+                        |t| t.triggers.len().to_string())}
+                </span>
+                <span class="adi-updated">{move || updated_text(triggers, secs_since)}</span>
             </div>
 
             {data_table(&["Name", "Kind", "Project", "Status", "Last fired", ""], move || trigger_rows(state, form, log))}
+        </section>
 
-            <div class="adi-panel__head adi-panel__head--divided">
+        <section class="adi-panel">
+            <div class="adi-panel__head">
                 <h2 class="adi-panel__title">
                     {move || match editing.get() {
                         Some(n) => format!("Editing “{n}”"),
@@ -169,32 +172,6 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
         </section>
     }
     .into_any()
-}
-
-/// The stat-tile strip: totals, enabled count, live webhooks, and how many ever fired.
-fn trigger_tiles(state: State) -> impl IntoView {
-    let triggers = state.triggers;
-    view! {
-        <section class="adi-tiles">
-            {tile("Triggers",
-                move || triggers.get().map_or_else(|| "—".to_string(), |t| t.triggers.len().to_string()),
-                "defined")}
-            {tile("Enabled",
-                move || triggers.get().map_or_else(|| "—".to_string(), |t| count(&t, |x| x.enabled).to_string()),
-                "may be fired by their source")}
-            {tile("Webhooks",
-                move || triggers.get().map_or_else(|| "—".to_string(), |t| count(&t, |x| x.kind == "webhook").to_string()),
-                "live at /api/hooks/<name>")}
-            {tile("Fired",
-                move || triggers.get().map_or_else(|| "—".to_string(), |t| count(&t, |x| x.last_fired_at.is_some()).to_string()),
-                "at least once")}
-        </section>
-    }
-}
-
-/// Count triggers matching a predicate.
-fn count(st: &TriggersState, pred: impl Fn(&TriggerDto) -> bool) -> usize {
-    st.triggers.iter().filter(|t| pred(t)).count()
 }
 
 /// The hint for the currently selected kind, from the server-owned kind options.

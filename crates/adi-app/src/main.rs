@@ -205,6 +205,10 @@ async fn handle(
         ("POST", "/api/projects/files") => handlers::list_files(projects, &req.body),
         ("POST", "/api/projects/file/read") => handlers::read_file(projects, &req.body),
         ("POST", "/api/projects/file/write") => handlers::write_file(projects, &req.body),
+        // The store browser: the whole ~/.adi/mono tree, jailed to it (see handlers::fs).
+        ("POST", "/api/fs/list") => handlers::fs_list(projects, &req.body),
+        ("POST", "/api/fs/read") => handlers::fs_read(projects, &req.body),
+        ("POST", "/api/fs/write") => handlers::fs_write(projects, &req.body),
         // Workspaces & project hooks: working copies created by the script files under a
         // project's .adi/hooks, registered in its .adi/workspaces.toml. All POST under
         // /api/projects/… — NOT /api/hooks/*, which is the triggers webhook URL space.

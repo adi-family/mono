@@ -13,10 +13,12 @@
 use std::collections::BTreeMap;
 
 mod fetch;
+mod highlight;
 mod icons;
 mod pages;
 mod routing;
 mod state;
+mod store_browser;
 mod tree;
 mod ui;
 
@@ -34,7 +36,9 @@ use wasm_bindgen_futures::spawn_local;
 use pages::{
     agents_view, dashboards_view, hive_view, load_dir, mesh_view, poll_hook_log, poll_term,
     poll_trigger_log,
-    poll_watch, ports_manager_view, project_detail_view, projects_view, tasks_view, triggers_view,
+    load_store_file, poll_watch, ports_manager_view, project_detail_view, projects_view,
+    store_file_view, tasks_view,
+    triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -78,6 +82,7 @@ fn App() -> impl IntoView {
     // Which section of that project is showing; the bare project path is its overview.
     let current_section = RwSignal::new(project_section_from_path(&current_path()));
     let files = FilesState::new();
+    let store = state::StoreBrowser::new();
     let state = State {
         status,
         ports,
@@ -97,6 +102,7 @@ fn App() -> impl IntoView {
         dashboards,
         workspaces,
         files,
+        store,
     };
 
     let projects_form = ProjectsForm {
@@ -124,6 +130,7 @@ fn App() -> impl IntoView {
         tag: RwSignal::new(String::new()),
         details: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
+        show_done: RwSignal::new(false),
     };
 
     let agents_form = AgentsForm {
@@ -185,9 +192,13 @@ fn App() -> impl IntoView {
     // The active page, derived from the URL path. Unknown paths (including `/`) resolve to
     // Projects; canonicalize the address bar so a refresh lands on the same page.
     let route = RwSignal::new(Route::from_path(&current_path()));
-    // Canonicalize the address bar, except on a project detail page whose path carries the id.
-    if !matches!(route.get_untracked(), Route::ProjectDetail)
-        && current_path() != route.get_untracked().path()
+    // Canonicalize the address bar, except where the path carries data `path()` cannot
+    // reproduce — a project's id, or a store file's path. Canonicalizing those would rewrite
+    // `/files/<path>` to `/files` and lose the file before it is ever read.
+    if !matches!(
+        route.get_untracked(),
+        Route::ProjectDetail | Route::StoreFile
+    ) && current_path() != route.get_untracked().path()
     {
         replace_state(route.get_untracked().path());
     }
@@ -218,12 +229,25 @@ fn App() -> impl IntoView {
         let path = current_path();
         current_project.set(project_id_from_path(&path).unwrap_or_default());
         current_section.set(project_section_from_path(&path));
+        // A /files/<path> entry carries the file, so history navigation reloads it. Only when
+        // it actually changes, or Back onto the page you are on would discard your edits.
+        match routing::store_path_from_path(&path) {
+            Some(file) if state.store.open_file.get_untracked().as_deref() != Some(file.as_str()) => {
+                load_store_file(state, file);
+            }
+            _ => {}
+        }
         route.set(Route::from_path(&path));
     });
     if let Some(w) = web_sys::window() {
         let _ = w.add_event_listener_with_callback("popstate", on_pop.as_ref().unchecked_ref());
     }
     on_pop.forget();
+
+    // A deep link (or a refresh) on /files/<path> loads that file before the first paint.
+    if let Some(file) = routing::store_path_from_path(&current_path()) {
+        load_store_file(state, file);
+    }
 
     // Load now, poll the backend every 4s, and tick the "updated Ns ago" label each second.
     // The same 1s tick refreshes the agents live view while one is open (it no-ops otherwise).
@@ -345,6 +369,7 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, hook_log, term_watch),
+                        Route::StoreFile => store_file_view(state),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
@@ -356,6 +381,10 @@ fn App() -> impl IntoView {
 
                 </div>
             </main>
+
+            // The store browser: a file view of ~/.adi/mono beside every page, collapsed by
+            // default. The left explorer navigates; this one shows what is on disk.
+            {store_browser::store_rail(state, route)}
         </div>
 
         // The status bar, pinned to the foot of the workbench on every route.

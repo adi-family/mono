@@ -1,5 +1,6 @@
-//! The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`). Stat tiles plus a
-//! nested table; deeper mutations stay in the `adi-mono tasks ...` CLI surface.
+//! The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`) as a nested table,
+//! a create form, and a collapsed block of finished tasks; deeper mutations stay in the
+//! `adi-mono tasks ...` CLI surface.
 
 use adi_webapp_api::types::{NewTask, TasksState};
 use leptos::prelude::*;
@@ -8,11 +9,12 @@ use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
     TextField, apply_mutation, data_table, effective_label_title, flash_view, placeholder_row,
-    task_tree_rows, tile, updated_text,
+    task_tree_rows, updated_text,
 };
 
-/// The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`). Stat tiles plus a
-/// nested table; deeper mutations stay in the `adi-mono tasks ...` CLI surface.
+/// The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`) as a nested table,
+/// a create form, and a collapsed block of finished tasks; deeper mutations stay in the
+/// `adi-mono tasks ...` CLI surface.
 pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
     let tasks = state.tasks;
     let projects = state.projects;
@@ -25,30 +27,27 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
         tag,
         details,
         busy,
+        show_done,
     } = form;
     view! {
-        <section class="adi-tiles">
-            {tile("Tasks",
-                move || tasks.get().map_or_else(|| "—".to_string(), |t| t.tasks.len().to_string()),
-                "in the tree")}
-            {tile("Ready",
-                move || tasks.get().map_or_else(|| "—".to_string(), |t| task_count(&t, "ready").to_string()),
-                "actionable now")}
-            {tile("Blocked",
-                move || tasks.get().map_or_else(|| "—".to_string(), |t| task_count(&t, "blocked").to_string()),
-                "waiting on subtasks")}
-            {tile("Done",
-                move || tasks.get().map_or_else(|| "—".to_string(), |t| task_count(&t, "done").to_string()),
-                "completed")}
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <span class="adi-chip adi-mono" title="Open tasks, at every depth">
+                    {move || tasks.get().map_or_else(|| "\u{2014}".to_string(),
+                        |t| t.tasks.iter().filter(|x| !is_finished(&x.effective)).count().to_string())}
+                </span>
+                <span class="adi-updated">{move || updated_text(tasks, secs_since)}</span>
+            </div>
+
+            {data_table(&["Task", "ID", "Project", "Tag", "Status", "Subtasks"],
+                move || task_rows(tasks, false))}
         </section>
 
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">"Task tree"</h2>
-                <span class="adi-updated">{move || updated_text(state.ports, secs_since)}</span>
+                <h2 class="adi-panel__title">"New task"</h2>
             </div>
 
-            {data_table(&["Task", "ID", "Project", "Tag", "Status", "Subtasks"], move || task_rows(tasks))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let t = title.get().trim().to_string();
@@ -119,17 +118,49 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 <code>"adi-mono tasks"</code> " CLI."
             </div>
         </section>
+
+        {done_section(state, show_done)}
     }
     .into_any()
 }
 
-/// Count tasks whose computed effective status equals `effective` (`ready`/`blocked`/`done`/`archived`).
-fn task_count(state: &TasksState, effective: &str) -> usize {
-    state
-        .tasks
-        .iter()
-        .filter(|t| t.effective == effective)
-        .count()
+/// Whether a computed effective status counts as finished — the tasks that drop out of the main
+/// tree into the collapsed block. `archived` rides along with `done`: both are off the plate.
+fn is_finished(effective: &str) -> bool {
+    matches!(effective, "done" | "archived")
+}
+
+/// The finished tasks: their own collapsed panel at the foot of the page, with a caret header and
+/// a count. Renders nothing at all until something is actually finished, so a fresh tree stays
+/// quiet. Mirrors the archive on the Projects page.
+fn done_section(state: State, show: RwSignal<bool>) -> AnyView {
+    view! {
+        {move || {
+            let n = state.tasks.get().map_or(0, |t| {
+                t.tasks.iter().filter(|x| is_finished(&x.effective)).count()
+            });
+            (n > 0).then(|| {
+                let open = show.get();
+                view! {
+                    <section class="adi-panel">
+                        <div class="adi-panel__head">
+                            <button class="adi-btn adi-btn--link" type="button"
+                                aria-expanded=open.to_string()
+                                on:click=move |_| show.update(|v| *v = !*v)>
+                                {if open { "\u{25be}" } else { "\u{25b8}" }}" Done"
+                            </button>
+                            <span class="adi-chip adi-mono">{n.to_string()}</span>
+                        </div>
+                        {open.then(|| data_table(
+                            &["Task", "ID", "Project", "Tag", "Status", "Subtasks"],
+                            move || task_rows(state.tasks, true)))}
+                    </section>
+                }
+                .into_any()
+            })
+        }}
+    }
+    .into_any()
 }
 
 /// Run a task mutation (currently just create): set the returned tree and a success flash, or an
@@ -141,20 +172,33 @@ where
     apply_mutation(state, busy, ok_msg, |s, t| s.tasks.set(Some(t)), fut);
 }
 
-/// Render the task table body: a loading/empty placeholder, or the tree flattened into rows
-/// (a parent immediately followed by its subtree), each indented by its depth.
-fn task_rows(tasks: RwSignal<Option<TasksState>>) -> AnyView {
+/// Render a task table body: a loading/empty placeholder, or the tree flattened into rows (a
+/// parent immediately followed by its subtree), each indented by its depth. `finished` picks the
+/// side of the split — the open tree, or the collapsed Done block.
+///
+/// Each side is tree-flattened over its own subset, so an open subtask of a finished parent
+/// re-roots into the main tree rather than disappearing with its parent.
+fn task_rows(tasks: RwSignal<Option<TasksState>>, finished: bool) -> AnyView {
     let Some(state_tasks) = tasks.get() else {
         return placeholder_row("6", "Loading…");
     };
-    if state_tasks.tasks.is_empty() {
+    let rows: Vec<_> = state_tasks
+        .tasks
+        .into_iter()
+        .filter(|t| is_finished(&t.effective) == finished)
+        .collect();
+    if rows.is_empty() {
         return placeholder_row(
             "6",
-            "No tasks yet — add one below, or use the adi-mono tasks add CLI command.",
+            if finished {
+                "Nothing finished yet."
+            } else {
+                "No open tasks — add one below, or use the adi-mono tasks add CLI command."
+            },
         );
     }
 
-    task_tree_rows(state_tasks.tasks)
+    task_tree_rows(rows)
         .into_iter()
         .map(|(depth, t)| {
             let indent = format!("padding-left:{}px", depth * 20);

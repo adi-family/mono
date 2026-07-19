@@ -8,7 +8,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::state::{Flash, Form, State, load};
 use crate::ui::{
-    TextField, dash, data_table, flash_view, placeholder_row, segmented, tile, updated_text,
+    TextField, dash, data_table, flash_view, placeholder_row, segmented, updated_text,
 };
 
 /// The Ports Manager page: the live registry table plus the reserve/release controls.
@@ -31,27 +31,25 @@ pub(crate) fn ports_manager_view(
         reserved,
     } = form;
     view! {
-        <section class="adi-tiles">
-            {tile("Active leases",
-                move || ports.get().map_or_else(|| "—".to_string(), |p| p.leases.len().to_string()),
-                "reserved static ports")}
-            {tile("Allocatable range",
-                move || ports.get().map_or_else(|| "—".to_string(),
-                    |p| format!("{}–{}", p.range.start, p.range.end)),
-                move || ports.get().map_or_else(|| "ports handed out from here".to_string(), |p| {
-                    let span = u32::from(p.range.end) - u32::from(p.range.start) + 1;
-                    format!("{span} ports · {} reserved bands", p.reserved.len())
-                }))}
-        </section>
-
         <section class="adi-panel">
             <div class="adi-panel__head">
+                // Two panels here list different things, so each keeps its title.
                 <h2 class="adi-panel__title">"Port registry"</h2>
+                <span class="adi-chip adi-mono" title="Active leases">
+                    {move || ports.get().map_or_else(|| "\u{2014}".to_string(),
+                        |p| p.leases.len().to_string())}
+                </span>
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(ports, secs_since)}</span>
             </div>
 
             {data_table(&["Service", "Key", "Port", ""], move || rows_view(state))}
+        </section>
+
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Reserve a port"</h2>
+            </div>
 
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();

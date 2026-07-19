@@ -2,10 +2,11 @@
 //! structs, the backend-liveness/flash enums, and the `load` routine that fans a fetch into the
 //! signals. Every page module reads from [`State`]; the router and view helpers thread it around.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use adi_webapp_api::types::{
-    AgentPeek, AgentsState, DashboardsState, DirListing, Health, HiveState, MeshState, PortsState,
+    AgentPeek, AgentsState, DashboardsState, DirListing, FileEntry, Health, HiveState, MeshState,
+    PortsState,
     ProjectDetail,
     ProjectHookLog, ProjectsState, TasksState, TriggerLog, TriggersState, UsedPorts,
     WorkspaceTerm, WorkspacesState,
@@ -46,6 +47,60 @@ pub(crate) struct State {
     pub(crate) workspaces: RwSignal<Option<WorkspacesState>>,
     /// The project file browser/editor state (the Files panel on the detail page).
     pub(crate) files: FilesState,
+    /// The store browser in the right rail — the whole `~/.adi/mono` tree, on every page.
+    pub(crate) store: StoreBrowser,
+}
+
+/// The right rail's store browser: a lazily-expanded tree over `~/.adi/mono` (served through
+/// the `adi-fs` jail rooted there) plus an inline editor for the selected file. `Copy` (arena
+/// handles) so it threads into the view and async handlers.
+///
+/// The tree keeps one listing per expanded directory rather than a single "current directory",
+/// so expanding a folder never collapses what is already open above it.
+#[derive(Clone, Copy)]
+pub(crate) struct StoreBrowser {
+    /// Whether the rail is showing at all. Collapsed by default — it is a side tool, not the
+    /// app's navigator (that is the left explorer).
+    pub(crate) open: RwSignal<bool>,
+    /// Every loaded directory listing, keyed by its path relative to the store root (`""` is
+    /// the root). A key being present is what makes a directory rendered-as-expanded.
+    pub(crate) dirs: RwSignal<BTreeMap<String, Vec<FileEntry>>>,
+    /// The directories the user has expanded. Kept apart from `dirs` so a folder can read as
+    /// expanded while its listing is still in flight.
+    pub(crate) expanded: RwSignal<HashSet<String>>,
+    /// The file open in the editor (its path relative to the store root), or `None`.
+    pub(crate) open_file: RwSignal<Option<String>>,
+    /// The open file's last-loaded/saved content — compared against `buffer` to detect edits.
+    pub(crate) original: RwSignal<String>,
+    /// The editable textarea buffer.
+    pub(crate) buffer: RwSignal<String>,
+    /// Whether a list/read/write is in flight.
+    pub(crate) busy: RwSignal<bool>,
+    /// Why the last list/read/write failed, or `None`. Shown in the rail, since the page's
+    /// flash line can be scrolled far away from it.
+    pub(crate) error: RwSignal<Option<String>>,
+}
+
+impl StoreBrowser {
+    /// Fresh signals for the store browser (collapsed, nothing loaded or open).
+    pub(crate) fn new() -> Self {
+        Self {
+            open: RwSignal::new(false),
+            dirs: RwSignal::new(BTreeMap::new()),
+            expanded: RwSignal::new(HashSet::new()),
+            open_file: RwSignal::new(None),
+            original: RwSignal::new(String::new()),
+            buffer: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+            error: RwSignal::new(None),
+        }
+    }
+
+    /// Whether the editor buffer differs from what was last loaded or saved.
+    pub(crate) fn dirty(self) -> bool {
+        self.buffer.get() != self.original.get()
+    }
+
 }
 
 /// The project detail page's file browser + editor state, scoped to the open project's own
@@ -96,8 +151,8 @@ impl FilesState {
     }
 }
 
-/// The Projects page's local signals: the create-form inputs, a busy flag, and the
-/// active/archived filter. `Copy` so it threads into the page view and handlers.
+/// The Projects page's local signals: the create-form inputs, a busy flag, and whether the
+/// archive below the main table is expanded. `Copy` so it threads into the page view and handlers.
 /// (The project *hierarchy* lives in the workbench explorer, not on this page.)
 #[derive(Clone, Copy)]
 pub(crate) struct ProjectsForm {
@@ -106,6 +161,8 @@ pub(crate) struct ProjectsForm {
     /// The project to nest the new one under (its id), or empty for a top-level project.
     pub(crate) parent: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    /// Whether the collapsed archive under the main table is open. Archived projects are hidden
+    /// by default; expanding is the only way to see and restore them.
     pub(crate) show_archived: RwSignal<bool>,
 }
 
@@ -122,6 +179,9 @@ pub(crate) struct TasksForm {
     pub(crate) tag: RwSignal<String>,
     pub(crate) details: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    /// Whether the collapsed block of finished tasks at the foot of the page is open. Done and
+    /// archived tasks are hidden by default so the tree shows only what is still open.
+    pub(crate) show_done: RwSignal<bool>,
 }
 
 /// The Agents page's local create/edit form. Numeric fields (`temperature`, `max_turns`) are held
@@ -313,6 +373,9 @@ pub(crate) struct AgentCodeEditor {
     pub(crate) busy: RwSignal<bool>,
     /// The last build's (succeeded, combined output), or `None` before the first build.
     pub(crate) build: RwSignal<Option<(bool, String)>>,
+    /// Why the source couldn't be loaded, or `None` when it loaded fine. The panel opens either
+    /// way: an unreadable `src` has to say so in place, since the action scrolls here.
+    pub(crate) error: RwSignal<Option<String>>,
 }
 
 impl AgentCodeEditor {
@@ -324,6 +387,7 @@ impl AgentCodeEditor {
             buffer: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             build: RwSignal::new(None),
+            error: RwSignal::new(None),
         }
     }
 
@@ -334,6 +398,7 @@ impl AgentCodeEditor {
         self.original.set(String::new());
         self.buffer.set(String::new());
         self.build.set(None);
+        self.error.set(None);
     }
 }
 

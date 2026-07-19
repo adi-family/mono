@@ -11,7 +11,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{DashboardsForm, Flash, State, load};
-use crate::ui::{TextField, data_table, flash_view, placeholder_row, tile, updated_text};
+use crate::ui::{TextField, data_table, flash_view, placeholder_row, updated_text};
 
 /// The Dashboards page: summary tiles, one row per dashboard, and the create form.
 pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
@@ -22,29 +22,12 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
     } = state;
 
     view! {
-        <section class="adi-tiles">
-            {tile("Dashboards",
-                move || dashboards.get().map_or_else(|| "—".to_string(), |d| d.dashboards.len().to_string()),
-                "bun-served, agent-authored")}
-            {tile("Serving",
-                move || dashboards.get().map_or_else(|| "—".to_string(),
-                    |d| d.dashboards.iter().filter(|x| x.frontend_running).count().to_string()),
-                move || dashboards.get().map_or_else(|| "frontends up".to_string(), |d| {
-                    format!("{} backend(s) up", d.dashboards.iter().filter(|x| x.backend_running).count())
-                }))}
-            {tile("Authored",
-                move || dashboards.get().map_or_else(|| "—".to_string(), |d| {
-                    d.dashboards.iter().map(|x| x.modules.len()).sum::<usize>().to_string()
-                }),
-                move || dashboards.get().map_or_else(|| "modules".to_string(), |d| {
-                    format!("modules · {} route(s)", d.dashboards.iter().map(|x| x.routes.len()).sum::<usize>())
-                }))}
-        </section>
-
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">"Dashboards"</h2>
-                <span class="adi-spacer"></span>
+                <span class="adi-chip adi-mono" title="Dashboards defined">
+                    {move || dashboards.get().map_or_else(|| "\u{2014}".to_string(),
+                        |d| d.dashboards.len().to_string())}
+                </span>
                 <span class="adi-updated">{move || updated_text(dashboards, secs_since)}</span>
             </div>
 
@@ -52,6 +35,12 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                 &["Dashboard", "Frontend", "Backend", "Modules", "Routes"],
                 move || rows_view(state),
             )}
+        </section>
+
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"New dashboard"</h2>
+            </div>
 
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();

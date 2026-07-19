@@ -109,6 +109,8 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Hive => Icon::Server,
         Route::PortsManager => Icon::Plug,
         Route::Mesh => Icon::Mesh,
+        // Reached from the Store rail rather than the explorer, so this icon is a fallback.
+        Route::StoreFile => Icon::Doc,
     }
 }
 
