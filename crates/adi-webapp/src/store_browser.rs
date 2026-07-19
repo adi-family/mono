@@ -80,9 +80,9 @@ fn load_dir(state: State, path: String) {
     spawn_local(async move {
         match fetch::fs_list(&path).await {
             Ok(listing) => {
-                store
-                    .dirs
-                    .update(|d| { d.insert(listing.path.clone(), listing.entries); });
+                store.dirs.update(|d| {
+                    d.insert(listing.path.clone(), listing.entries);
+                });
                 store.error.set(None);
             }
             Err(e) => store.error.set(Some(e)),
@@ -112,9 +112,9 @@ fn toggle_dir(state: State, path: String) {
 fn open_file(state: State, route: RwSignal<Route>, path: String) {
     let store = state.store;
     if store.open_file.get().is_some() && store.dirty() {
-        store
-            .error
-            .set(Some("Unsaved changes \u{2014} save the open file first.".to_string()));
+        store.error.set(Some(
+            "Unsaved changes \u{2014} save the open file first.".to_string(),
+        ));
         return;
     }
     store.error.set(None);
@@ -143,7 +143,13 @@ fn dir_rows(state: State, route: RwSignal<Route>, path: String, depth: usize) ->
 }
 
 /// One row — a directory with its caret, or a file that opens in the editor.
-fn entry_row(state: State, route: RwSignal<Route>, parent: &str, e: FileEntry, depth: usize) -> AnyView {
+fn entry_row(
+    state: State,
+    route: RwSignal<Route>,
+    parent: &str,
+    e: FileEntry,
+    depth: usize,
+) -> AnyView {
     let store = state.store;
     let path = join(parent, &e.name);
     let name = e.name.clone();

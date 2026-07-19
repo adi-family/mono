@@ -327,7 +327,9 @@ fn run_hook(store: &adi_core::Projects, project: &str, command: HookCommand) -> 
                     .collect();
                 print_json(&rows);
             } else if list.is_empty() {
-                println!("No hooks. Create one with `projects hook {project} create init --template init`.");
+                println!(
+                    "No hooks. Create one with `projects hook {project} create init --template init`."
+                );
             } else {
                 for hook in &list {
                     let status = hooks.status(&hook.name);
@@ -339,8 +341,9 @@ fn run_hook(store: &adi_core::Projects, project: &str, command: HookCommand) -> 
             }
         }
         HookCommand::Create { name, template } => {
-            let body = adi_core::hook_template(&template)
-                .ok_or_else(|| format!("unknown template {template:?} (init | workspace | blank)"))?;
+            let body = adi_core::hook_template(&template).ok_or_else(|| {
+                format!("unknown template {template:?} (init | workspace | blank)")
+            })?;
             hooks.create(&name, body).map_err(|e| e.to_string())?;
             let path = hooks.hook_path(&name).map_err(|e| e.to_string())?;
             println!("Created hook {name} at {} — edit it there.", path.display());

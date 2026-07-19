@@ -164,10 +164,14 @@ fn session_exists(session: &str) -> bool {
 /// PATH lookup. The absolute candidates matter because the app daemon runs under launchd,
 /// whose PATH misses Homebrew.
 fn tmux_bin() -> &'static str {
-    ["/opt/homebrew/bin/tmux", "/usr/local/bin/tmux", "/usr/bin/tmux"]
-        .into_iter()
-        .find(|p| std::path::Path::new(p).exists())
-        .unwrap_or("tmux")
+    [
+        "/opt/homebrew/bin/tmux",
+        "/usr/local/bin/tmux",
+        "/usr/bin/tmux",
+    ]
+    .into_iter()
+    .find(|p| std::path::Path::new(p).exists())
+    .unwrap_or("tmux")
 }
 
 #[cfg(test)]

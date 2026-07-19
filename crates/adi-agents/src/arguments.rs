@@ -543,14 +543,18 @@ mod tests {
     #[test]
     fn harness_backends_reject_unknown_fields() {
         // `deny_unknown_fields` is what turns a mis-scoped or misspelled knob into a save error.
-        assert!(serde_json::from_value::<HarnessClaudeSdkArguments>(serde_json::json!({
-            "temperature": 0.2,
-        }))
-        .is_err());
-        assert!(serde_json::from_value::<HarnessAdiArguments>(serde_json::json!({
-            "output_format": "json",
-        }))
-        .is_err());
+        assert!(
+            serde_json::from_value::<HarnessClaudeSdkArguments>(serde_json::json!({
+                "temperature": 0.2,
+            }))
+            .is_err()
+        );
+        assert!(
+            serde_json::from_value::<HarnessAdiArguments>(serde_json::json!({
+                "output_format": "json",
+            }))
+            .is_err()
+        );
     }
 
     #[test]
@@ -564,8 +568,7 @@ mod tests {
             ..HarnessClaudeSdkArguments::default()
         };
         let value = serde_json::to_value(&arguments).expect("serialize");
-        let decoded: HarnessClaudeSdkArguments =
-            serde_json::from_value(value).expect("round-trip");
+        let decoded: HarnessClaudeSdkArguments = serde_json::from_value(value).expect("round-trip");
         assert_eq!(decoded, arguments);
     }
 }

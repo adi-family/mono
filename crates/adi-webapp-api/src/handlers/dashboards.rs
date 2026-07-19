@@ -190,12 +190,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, listening: &[u16]) -> Dashboard {
 
     // The ports manager is the source of truth adi-hive allocated from, so read it rather than
     // the hive.yaml (which deliberately declares no ports).
-    let port_of = |service: &str| {
-        ports
-            .get(&format!("{id}/{service}"), "http")
-            .ok()
-            .flatten()
-    };
+    let port_of = |service: &str| ports.get(&format!("{id}/{service}"), "http").ok().flatten();
     let frontend_port = port_of("frontend");
     let backend_port = port_of("backend");
 

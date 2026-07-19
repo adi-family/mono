@@ -3,7 +3,7 @@ use adi_projects::Projects;
 
 use crate::types::{NewProject, Project, ProjectDetail, ProjectRef, ProjectsState};
 
-use super::response::{error, ok_json, Response};
+use super::response::{Response, error, ok_json};
 use super::services::read_hive_services;
 
 /// `GET /api/projects` — every registered project. Each mutation endpoint below returns a

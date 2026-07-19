@@ -196,7 +196,11 @@ pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -
     if !trigger.manifest.enabled {
         return error(403, &format!("hook {name} is disabled"));
     }
-    if let Some(secret) = trigger.manifest.extra.get("secret").filter(|s| !s.is_empty())
+    if let Some(secret) = trigger
+        .manifest
+        .extra
+        .get("secret")
+        .filter(|s| !s.is_empty())
         && query_param(query, "secret") != Some(secret.as_str())
     {
         return error(403, "bad or missing secret");

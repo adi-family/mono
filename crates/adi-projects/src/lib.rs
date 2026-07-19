@@ -367,7 +367,9 @@ mod tests {
     #[test]
     fn subprojects_nest_under_a_registered_parent() {
         let store = scratch("subprojects");
-        store.create_with_id("root", None, None, None).expect("root");
+        store
+            .create_with_id("root", None, None, None)
+            .expect("root");
         let child = store
             .create_with_id("child", None, None, Some("root".into()))
             .expect("child");
@@ -394,7 +396,9 @@ mod tests {
     #[test]
     fn remove_reparents_children_to_the_removed_projects_parent() {
         let store = scratch("reparent");
-        store.create_with_id("root", None, None, None).expect("root");
+        store
+            .create_with_id("root", None, None, None)
+            .expect("root");
         store
             .create_with_id("mid", None, None, Some("root".into()))
             .expect("mid");

@@ -2,16 +2,14 @@
 
 use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
-    ApiError, DirListing, FileContent, FsContent, FsListing, FsRef, FsWrite,
-    Dashboard, DashboardsState, FilesRef, Health, HiveState, NewDashboard,
-    LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewProject,
-    NewProjectHook, NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
-    ReserveResponse, SaveAgent, SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult,
-    TaskRef, TasksState,
-    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
-    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
-    WorkspacesState, WriteFile,
+    ApiError, Dashboard, DashboardsState, DirListing, FileContent, FilesRef, FsContent, FsListing,
+    FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef,
+    MeshPortRef, MeshState, NewDashboard, NewProject, NewProjectHook, NewService, NewTask,
+    NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult,
+    ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, SaveAgent, SaveAgentCode,
+    SaveTrigger, StartResult, StartService, StopResult, TaskRef, TasksState, TriggerFireResult,
+    TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult, WorkspaceRef,
+    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -272,7 +270,11 @@ pub async fn create_workspace(body: NewWorkspace) -> Result<WorkspaceCreateResul
 }
 
 pub async fn remove_workspace(id: String, name: String) -> Result<WorkspacesState, String> {
-    post("/api/projects/workspaces/remove", &WorkspaceRef { id, name }).await
+    post(
+        "/api/projects/workspaces/remove",
+        &WorkspaceRef { id, name },
+    )
+    .await
 }
 
 pub async fn run_project_hook(id: String, name: String) -> Result<ProjectHookRunResult, String> {
@@ -311,7 +313,12 @@ pub async fn send_workspace_terminal(
 ) -> Result<WorkspaceTerm, String> {
     post(
         "/api/projects/workspaces/terminal/send",
-        &WorkspaceTermKeys { id, name, text, key },
+        &WorkspaceTermKeys {
+            id,
+            name,
+            text,
+            key,
+        },
     )
     .await
 }
@@ -359,13 +366,32 @@ fn stringify<E: std::fmt::Display>(e: E) -> String {
 // The ADI store browser: browse/read/edit everything under ~/.adi/mono (jailed to it).
 
 pub async fn fs_list(path: &str) -> Result<FsListing, String> {
-    post("/api/fs/list", &FsRef { path: path.to_string() }).await
+    post(
+        "/api/fs/list",
+        &FsRef {
+            path: path.to_string(),
+        },
+    )
+    .await
 }
 
 pub async fn fs_read(path: &str) -> Result<FsContent, String> {
-    post("/api/fs/read", &FsRef { path: path.to_string() }).await
+    post(
+        "/api/fs/read",
+        &FsRef {
+            path: path.to_string(),
+        },
+    )
+    .await
 }
 
 pub async fn fs_write(path: &str, content: String) -> Result<FsContent, String> {
-    post("/api/fs/write", &FsWrite { path: path.to_string(), content }).await
+    post(
+        "/api/fs/write",
+        &FsWrite {
+            path: path.to_string(),
+            content,
+        },
+    )
+    .await
 }

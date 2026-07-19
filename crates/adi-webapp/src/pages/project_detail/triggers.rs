@@ -22,7 +22,11 @@ pub(crate) struct QuickTriggerForm {
 /// The Triggers panel on a project's detail page: the triggers filed under this project (from
 /// the shared list at `/api/triggers`) with live Fire/Log/Enable actions, plus a quick create
 /// form pre-scoped to it.
-pub(crate) fn triggers_panel(state: State, form: QuickTriggerForm, log: TriggersLogView) -> AnyView {
+pub(crate) fn triggers_panel(
+    state: State,
+    form: QuickTriggerForm,
+    log: TriggersLogView,
+) -> AnyView {
     let QuickTriggerForm {
         name,
         kind,

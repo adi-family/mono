@@ -161,7 +161,9 @@ pub fn with_ports<R>(ports: Ports, f: impl FnOnce() -> R) -> R {
 
 /// The manager command execution should use on this thread.
 fn current_ports() -> Ports {
-    OVERRIDE.with(|slot| slot.borrow().clone()).unwrap_or_default()
+    OVERRIDE
+        .with(|slot| slot.borrow().clone())
+        .unwrap_or_default()
 }
 
 /// A port field: a literal integer or a preprocessed `datacommand:<hash>` placeholder (originally
@@ -238,7 +240,9 @@ fn resolve(raw: &str) -> Result<u16, String> {
     let command = COMMANDS
         .with(|slot| slot.borrow().get(hash).cloned())
         .ok_or_else(|| {
-            format!("no command registered for hash `{hash}` — was the config run through preprocess()?")
+            format!(
+                "no command registered for hash `{hash}` — was the config run through preprocess()?"
+            )
         })?;
     Call::parse(&command)?.eval()
 }
@@ -300,7 +304,9 @@ fn parse_args(raw: &str) -> Result<Vec<String>, String> {
     if raw.is_empty() {
         return Ok(Vec::new());
     }
-    raw.split(',').map(|arg| parse_literal(arg.trim())).collect()
+    raw.split(',')
+        .map(|arg| parse_literal(arg.trim()))
+        .collect()
 }
 
 /// Parse a single `'quoted'` or `"quoted"` string literal.
@@ -403,7 +409,10 @@ mod tests {
         let port = with_ports(manager.clone(), || {
             with_commands(commands, || resolve(&placeholder)).expect("resolves")
         });
-        assert_eq!(manager.get("fresh/app", "http").expect("lookup"), Some(port));
+        assert_eq!(
+            manager.get("fresh/app", "http").expect("lookup"),
+            Some(port)
+        );
         cleanup(&path);
     }
 

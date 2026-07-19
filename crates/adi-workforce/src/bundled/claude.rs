@@ -385,7 +385,10 @@ fn read_keychain_oauth(keychain_service: &str) -> Result<Auth, PluginError> {
     let mut best: Option<OAuthTokens> = None;
     for svc in list_credential_services(keychain_service) {
         if let Ok(Some(tokens)) = keychain_entry_tokens(&svc) {
-            if best.as_ref().is_none_or(|b| tokens.expires_at > b.expires_at) {
+            if best
+                .as_ref()
+                .is_none_or(|b| tokens.expires_at > b.expires_at)
+            {
                 best = Some(tokens);
             }
         }
@@ -433,7 +436,10 @@ fn keychain_entry_tokens(service: &str) -> Result<Option<OAuthTokens>, PluginErr
     Ok(Some(OAuthTokens {
         access_token,
         refresh_token: token("refreshToken").unwrap_or_default(),
-        expires_at: oauth.get("expiresAt").and_then(serde_json::Value::as_u64).unwrap_or(0),
+        expires_at: oauth
+            .get("expiresAt")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
     }))
 }
 

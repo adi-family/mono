@@ -319,7 +319,11 @@ fn expand_templates(input: &str, ports: &BTreeMap<String, u16>) -> String {
 fn expand_vars(pattern: &str) -> String {
     let cfg = adi_config::Config::open();
     let projects = cfg.module("projects").dir().to_string_lossy().into_owned();
-    let dashboards = cfg.module("dashboards").dir().to_string_lossy().into_owned();
+    let dashboards = cfg
+        .module("dashboards")
+        .dir()
+        .to_string_lossy()
+        .into_owned();
     let mut out = pattern
         .replace("$ADI_PROJECTS_DIR", &projects)
         .replace("$ADI_DASHBOARDS_DIR", &dashboards);
@@ -362,12 +366,18 @@ fn walk_collect(dir: &Path, filename: &str, out: &mut Vec<PathBuf>) {
 /// `.../<project>/.adi/hive.yaml`, else the file's parent dir name, else `import`.
 fn import_namespace(file: &Path) -> String {
     let parent = file.parent();
-    let ns = if parent.and_then(Path::file_name).is_some_and(|n| n == ".adi") {
+    let ns = if parent
+        .and_then(Path::file_name)
+        .is_some_and(|n| n == ".adi")
+    {
         parent.and_then(Path::parent).and_then(Path::file_name)
     } else {
         parent.and_then(Path::file_name)
     };
-    ns.map_or_else(|| "import".to_string(), |n| n.to_string_lossy().into_owned())
+    ns.map_or_else(
+        || "import".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    )
 }
 
 /// Whether this hive runs as root — i.e. is the machine front door, which routes imported
@@ -429,10 +439,9 @@ impl Hive {
         let raw = std::fs::read_to_string(path)
             .with_context(|| format!("reading config file {}", path.display()))?;
         let (yaml, commands) = adi_ports_manager::preprocess(&raw);
-        let hive: Self = adi_ports_manager::with_commands(commands, || {
-            serde_yaml_ng::from_str(&yaml)
-        })
-        .with_context(|| format!("parsing config file {}", path.display()))?;
+        let hive: Self =
+            adi_ports_manager::with_commands(commands, || serde_yaml_ng::from_str(&yaml))
+                .with_context(|| format!("parsing config file {}", path.display()))?;
         Ok(hive)
     }
 
@@ -457,7 +466,9 @@ impl Hive {
                     Ok(child) => {
                         self.merge_import(child, &import_namespace(&file), strip_runners);
                     }
-                    Err(e) => warn!(file = %file.display(), error = %e, "skipping unreadable import"),
+                    Err(e) => {
+                        warn!(file = %file.display(), error = %e, "skipping unreadable import")
+                    }
                 }
             }
         }
@@ -716,7 +727,10 @@ services:
         .unwrap();
 
         let hive = Hive::load(&parent).expect("load with imports");
-        let svc = hive.services.get("proj/app").expect("imported service present");
+        let svc = hive
+            .services
+            .get("proj/app")
+            .expect("imported service present");
         assert_eq!(svc.proxy.as_ref().expect("proxy").host, "proj.adi");
         assert_eq!(svc.http_port(), Some(9123));
         // Runners survive an import here because the test process is unprivileged — that is

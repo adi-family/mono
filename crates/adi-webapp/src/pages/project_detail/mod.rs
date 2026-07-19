@@ -298,8 +298,13 @@ fn parent_link(state: State, route: RwSignal<Route>, parent: Option<String>) -> 
 /// Run a detail-page mutation (archive/restore, sub-project create) that returns the fresh
 /// project list, then re-fetch this project's detail so the page reflects the change; flashes
 /// success or error. Toggles `busy` around the request when a form is driving it.
-fn apply_detail_mutation<F>(state: State, id: String, busy: Option<RwSignal<bool>>, ok_msg: String, fut: F)
-where
+fn apply_detail_mutation<F>(
+    state: State,
+    id: String,
+    busy: Option<RwSignal<bool>>,
+    ok_msg: String,
+    fut: F,
+) where
     F: std::future::Future<Output = Result<ProjectsState, String>> + 'static,
 {
     if let Some(busy) = busy {

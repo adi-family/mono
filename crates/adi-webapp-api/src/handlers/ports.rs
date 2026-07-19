@@ -1,8 +1,10 @@
 use adi_ports_manager::Ports;
 
-use crate::types::{Lease, LeaseRef, PortsState, Range, ReleaseResponse, ReserveResponse, UsedPort, UsedPorts};
+use crate::types::{
+    Lease, LeaseRef, PortsState, Range, ReleaseResponse, ReserveResponse, UsedPort, UsedPorts,
+};
 
-use super::response::{error, ok_json, Response};
+use super::response::{Response, error, ok_json};
 
 /// `GET /api/ports` — the allocator's configuration and current static leases.
 #[must_use]

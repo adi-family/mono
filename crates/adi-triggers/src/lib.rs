@@ -252,7 +252,9 @@ impl Triggers {
             .flatten()
             .filter_map(|entry| {
                 let file_name = entry.file_name().into_string().ok()?;
-                let name = file_name.strip_suffix(&format!(".{MANIFEST_EXT}"))?.to_string();
+                let name = file_name
+                    .strip_suffix(&format!(".{MANIFEST_EXT}"))?
+                    .to_string();
                 validate_name(&name).ok()?;
                 let state = self.run_file(&name).load().ok()?;
                 Some((name, state))
@@ -334,7 +336,10 @@ mod tests {
         assert_eq!(saved.name, "deploy-hook");
         assert_eq!(saved.manifest.kind, KIND_WEBHOOK);
         assert_eq!(saved.manifest.project.as_deref(), Some("demo"));
-        assert_eq!(saved.manifest.extra.get("secret").map(String::as_str), Some("s3cr3t"));
+        assert_eq!(
+            saved.manifest.extra.get("secret").map(String::as_str),
+            Some("s3cr3t")
+        );
         assert!(saved.manifest.enabled);
         assert!(saved.manifest.created_at > 0);
 
@@ -346,7 +351,9 @@ mod tests {
     #[test]
     fn save_is_an_upsert_that_preserves_created_at() {
         let store = scratch("upsert");
-        let first = store.save("a", spec(KIND_BACKGROUND, "true")).expect("create");
+        let first = store
+            .save("a", spec(KIND_BACKGROUND, "true"))
+            .expect("create");
         let created = first.manifest.created_at;
         assert!(created > 0);
 
@@ -362,7 +369,9 @@ mod tests {
     #[test]
     fn delete_removes_the_trigger() {
         let store = scratch("delete");
-        store.save("gone", spec(KIND_BACKGROUND, "true")).expect("create");
+        store
+            .save("gone", spec(KIND_BACKGROUND, "true"))
+            .expect("create");
         assert!(store.delete("gone").expect("delete"));
         assert!(store.get("gone").expect("get").is_none());
         assert!(!store.delete("gone").expect("delete missing"));

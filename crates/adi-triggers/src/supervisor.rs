@@ -23,10 +23,10 @@ use tracing::{debug, info, warn};
 
 use adi_config::now_unix;
 
+use crate::Triggers;
 use crate::fire;
 use crate::run::RunState;
 use crate::trigger::Trigger;
-use crate::Triggers;
 
 /// How often the desired state is re-read from the store, and how often a live process
 /// refreshes its heartbeat. Well under the run state's staleness window, so a healthy trigger
@@ -187,7 +187,8 @@ impl Supervisor {
     /// is *still running the command the state recorded* — so a recycled pid is never hit.
     fn reap_orphans(&self) {
         for (name, state) in self.store.published_run_states() {
-            if state.pid > 0 && running_command(state.pid).as_deref() == Some(state.command.as_str())
+            if state.pid > 0
+                && running_command(state.pid).as_deref() == Some(state.command.as_str())
             {
                 info!(trigger = %name, pid = state.pid, "killing orphaned trigger process");
                 signal_group(state.pid, "KILL");
@@ -382,12 +383,7 @@ async fn spawn(store: &Triggers, spec: &Spec) -> crate::Result<(Child, String)> 
     let launch = fire::launch(&dir, &trigger, None)?;
 
     let mut log = fire::open_log(&dir, &spec.name, true)?;
-    let _ = writeln!(
-        log,
-        "\n── {} started at {} ──",
-        spec.name,
-        humanish_now()
-    );
+    let _ = writeln!(log, "\n── {} started at {} ──", spec.name, humanish_now());
     let errlog = log.try_clone()?;
 
     let mut cmd = Command::new(launch.program);
@@ -439,7 +435,10 @@ fn running_command(pid: u32) -> Option<String> {
 async fn stop_child(child: &mut Child, pid: u32) {
     if pid > 0 {
         signal_group(pid, "TERM");
-        if tokio::time::timeout(TERM_GRACE, child.wait()).await.is_err() {
+        if tokio::time::timeout(TERM_GRACE, child.wait())
+            .await
+            .is_err()
+        {
             warn!(pid, "trigger did not exit on SIGTERM; sending SIGKILL");
             signal_group(pid, "KILL");
             let _ = child.wait().await;
@@ -564,7 +563,10 @@ mod tests {
 
         let sup = Supervisor::start(store.clone());
         tokio::time::sleep(Duration::from_millis(400)).await;
-        assert!(store.status("hook").is_none(), "a webhook must not be held open");
+        assert!(
+            store.status("hook").is_none(),
+            "a webhook must not be held open"
+        );
 
         sup.shutdown();
     }
@@ -592,7 +594,10 @@ mod tests {
         save(&store, "svc", KIND_BACKGROUND, "sleep 300", true);
 
         let sup = Supervisor::start(store.clone());
-        assert!(wait_until(|| store.status("svc").is_some()).await, "should come up");
+        assert!(
+            wait_until(|| store.status("svc").is_some()).await,
+            "should come up"
+        );
         let first_pid = store.status("svc").expect("running").pid;
 
         // A reconcile with no change must leave the process strictly alone.
@@ -621,7 +626,10 @@ mod tests {
         save(&store, "svc", KIND_BACKGROUND, "sleep 300", true);
 
         let sup = Supervisor::start(store.clone());
-        assert!(wait_until(|| store.status("svc").is_some()).await, "should come up");
+        assert!(
+            wait_until(|| store.status("svc").is_some()).await,
+            "should come up"
+        );
         let first_pid = store.status("svc").expect("running").pid;
 
         sup.request_restart("svc");
@@ -671,7 +679,10 @@ mod tests {
             wait_until(|| orphan.try_wait().ok().flatten().is_some()).await,
             "the orphaned process (pid {pid}) should have been killed"
         );
-        assert!(store.status("leaky").is_none(), "its stale state should be cleared");
+        assert!(
+            store.status("leaky").is_none(),
+            "its stale state should be cleared"
+        );
 
         sup.stop(Duration::from_secs(5)).await;
     }
@@ -742,7 +753,10 @@ mod tests {
             running_command(pid).is_some(),
             "a recycled pid must survive the reaper"
         );
-        assert!(store.status("ghost").is_none(), "the stale state is still cleared");
+        assert!(
+            store.status("ghost").is_none(),
+            "the stale state is still cleared"
+        );
 
         sup.stop(Duration::from_secs(5)).await;
         let _ = bystander.kill().await;
@@ -750,7 +764,10 @@ mod tests {
 
     #[test]
     fn backoff_doubles_and_saturates() {
-        assert_eq!(next_backoff(Duration::from_millis(500)), Duration::from_secs(1));
+        assert_eq!(
+            next_backoff(Duration::from_millis(500)),
+            Duration::from_secs(1)
+        );
         assert_eq!(next_backoff(Duration::from_secs(20)), MAX_BACKOFF);
         assert_eq!(next_backoff(MAX_BACKOFF), MAX_BACKOFF);
     }

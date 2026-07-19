@@ -74,7 +74,12 @@ fn stop_agent(state: State, watch: AgentsWatch, name: String) {
     if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
         watch.close();
     }
-    apply_agents(state, None, format!("Stopped {name}."), fetch::stop_agent(name));
+    apply_agents(
+        state,
+        None,
+        format!("Stopped {name}."),
+        fetch::stop_agent(name),
+    );
 }
 
 /// Open the live view on an agent (the ● View action): show the panel, fetch the first snapshot

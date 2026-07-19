@@ -59,7 +59,10 @@ impl Lang {
     /// Pick a language from a file path's extension.
     pub(crate) fn from_path(path: &str) -> Self {
         let ext = path.rsplit('/').next().unwrap_or(path);
-        let ext = ext.rsplit_once('.').map_or("", |(_, e)| e).to_ascii_lowercase();
+        let ext = ext
+            .rsplit_once('.')
+            .map_or("", |(_, e)| e)
+            .to_ascii_lowercase();
         match ext.as_str() {
             "toml" => Lang::Toml,
             "json" => Lang::Json,
@@ -286,11 +289,52 @@ fn scan_value(v: &str) -> Vec<(Tok, String)> {
 }
 
 const TS_KEYWORDS: &[&str] = &[
-    "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "default",
-    "delete", "do", "else", "enum", "export", "extends", "false", "finally", "for", "from",
-    "function", "if", "implements", "import", "in", "instanceof", "interface", "let", "new",
-    "null", "of", "return", "static", "super", "switch", "this", "throw", "true", "try", "type",
-    "typeof", "undefined", "var", "void", "while", "yield",
+    "as",
+    "async",
+    "await",
+    "break",
+    "case",
+    "catch",
+    "class",
+    "const",
+    "continue",
+    "default",
+    "delete",
+    "do",
+    "else",
+    "enum",
+    "export",
+    "extends",
+    "false",
+    "finally",
+    "for",
+    "from",
+    "function",
+    "if",
+    "implements",
+    "import",
+    "in",
+    "instanceof",
+    "interface",
+    "let",
+    "new",
+    "null",
+    "of",
+    "return",
+    "static",
+    "super",
+    "switch",
+    "this",
+    "throw",
+    "true",
+    "try",
+    "type",
+    "typeof",
+    "undefined",
+    "var",
+    "void",
+    "while",
+    "yield",
 ];
 
 fn scan_ts(src: &str) -> Vec<(Tok, String)> {
@@ -321,7 +365,9 @@ fn scan_ts(src: &str) -> Vec<(Tok, String)> {
             out.push((Tok::Num, s));
             i = next;
         } else if c.is_ascii_alphabetic() || c == '_' || c == '$' {
-            let (s, next) = take_while(&chars, i, |c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
+            let (s, next) = take_while(&chars, i, |c| {
+                c.is_ascii_alphanumeric() || c == '_' || c == '$'
+            });
             let tok = if TS_KEYWORDS.contains(&s.as_str()) {
                 Tok::Kw
             } else {
@@ -333,7 +379,11 @@ fn scan_ts(src: &str) -> Vec<(Tok, String)> {
                 }
                 let called = chars.get(j) == Some(&'(');
                 let member = i > 0 && chars[i - 1] == '.';
-                if called || member { Tok::Func } else { Tok::Plain }
+                if called || member {
+                    Tok::Func
+                } else {
+                    Tok::Plain
+                }
             };
             out.push((tok, s));
             i = next;
@@ -382,7 +432,9 @@ fn scan_sh(src: &str) -> Vec<(Tok, String)> {
             out.push((Tok::Num, s));
             i = next;
         } else if c.is_ascii_alphabetic() || c == '_' {
-            let (s, next) = take_while(&chars, i, |c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            let (s, next) = take_while(&chars, i, |c| {
+                c.is_ascii_alphanumeric() || c == '_' || c == '-'
+            });
             let tok = if SH_KEYWORDS.contains(&s.as_str()) {
                 Tok::Kw
             } else if chars.get(next) == Some(&'=') {
@@ -407,7 +459,11 @@ fn scan_sh(src: &str) -> Vec<(Tok, String)> {
 /// Whether the character at `i` opens a word — i.e. nothing but whitespace or an operator
 /// precedes it. Used to tell a comment from a `#` inside a word.
 fn at_word_start(chars: &[char], i: usize) -> bool {
-    i == 0 || matches!(chars[i - 1], ' ' | '\t' | '\n' | ';' | '|' | '&' | '(' | ')')
+    i == 0
+        || matches!(
+            chars[i - 1],
+            ' ' | '\t' | '\n' | ';' | '|' | '&' | '(' | ')'
+        )
 }
 
 /// Consume a `$` expansion: `$NAME`, `${NAME:-default}`, or `$(command)`. A brace or paren form
@@ -415,7 +471,11 @@ fn at_word_start(chars: &[char], i: usize) -> bool {
 fn take_expansion(chars: &[char], i: usize) -> (String, usize) {
     match chars.get(i + 1) {
         Some('{') | Some('(') => {
-            let (open, close) = if chars[i + 1] == '{' { ('{', '}') } else { ('(', ')') };
+            let (open, close) = if chars[i + 1] == '{' {
+                ('{', '}')
+            } else {
+                ('(', ')')
+            };
             let mut depth = 0usize;
             let mut j = i + 1;
             while j < chars.len() {
@@ -433,8 +493,7 @@ fn take_expansion(chars: &[char], i: usize) -> (String, usize) {
             (chars[i..j].iter().collect(), j)
         }
         _ => {
-            let (name, next) =
-                take_while(chars, i + 1, |c| c.is_ascii_alphanumeric() || c == '_');
+            let (name, next) = take_while(chars, i + 1, |c| c.is_ascii_alphanumeric() || c == '_');
             (format!("${name}"), next)
         }
     }
@@ -482,7 +541,10 @@ mod tests {
         let samples = [
             (Lang::Toml, "# c\n[sec]\nname = \"Bug\"\nn = 12\n"),
             (Lang::Json, "{\"a\": 1, \"b\": [true, null], \"c\": \"x\"}"),
-            (Lang::Yaml, "# c\nkey: value\nlist:\n  - a: 1\n  - url: http://x\n"),
+            (
+                Lang::Yaml,
+                "# c\nkey: value\nlist:\n  - a: 1\n  - url: http://x\n",
+            ),
             (Lang::Ts, "const a = 1; // hi\n/* block */ let s = `t`;\n"),
             (Lang::Sh, "# c\nname=value\nwhile :; do echo \"$X\"; done\n"),
             (Lang::Md, "# H\n\n- item\n\n```ts\ncode\n```\n"),
@@ -509,10 +571,15 @@ mod tests {
     /// stand out — in every spelling a script uses.
     #[test]
     fn shell_expansions_are_highlighted_whole() {
-        for src in ["echo $ADI_CHAT_ID", "echo ${ADI_CHAT_ID:-none}", "x=$(date -u)"] {
+        for src in [
+            "echo $ADI_CHAT_ID",
+            "echo ${ADI_CHAT_ID:-none}",
+            "x=$(date -u)",
+        ] {
             let runs = highlight(Lang::Sh, src);
             assert!(
-                runs.iter().any(|(t, s)| *t == Tok::Func && s.starts_with('$')),
+                runs.iter()
+                    .any(|(t, s)| *t == Tok::Func && s.starts_with('$')),
                 "no expansion found in {src:?}: {runs:?}"
             );
         }

@@ -27,11 +27,8 @@ use crate::ui::{
 
 /// The settings input every webhook offers regardless of preset — the platform itself reads it
 /// to guard the endpoint, so it isn't any preset's business.
-const WEBHOOK_SECRET: (&str, &str, &str) = (
-    "secret",
-    "Secret",
-    "optional — callers must pass ?secret=…",
-);
+const WEBHOOK_SECRET: (&str, &str, &str) =
+    ("secret", "Secret", "optional — callers must pass ?secret=…");
 
 /// The Triggers page: the definitions table, the (optional) log view, and the create/edit form.
 pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogView) -> AnyView {
@@ -446,7 +443,8 @@ pub(crate) fn status_cell(t: &TriggerDto) -> AnyView {
         .into_any();
     }
     if !t.enabled {
-        return view! { <span class="adi-tstatus" data-status="archived">"Disabled"</span> }.into_any();
+        return view! { <span class="adi-tstatus" data-status="archived">"Disabled"</span> }
+            .into_any();
     }
     if t.kind == "background" {
         // Enabled but not up: either it is coming up, or its code block can't start at all.
@@ -548,7 +546,12 @@ fn toggle_trigger(state: State, t: &TriggerDto) {
         project: t.project.clone(),
         extra: t.extra.clone(),
     };
-    apply_triggers(state, None, format!("{verb} {}.", t.name), fetch::save_trigger(body));
+    apply_triggers(
+        state,
+        None,
+        format!("{verb} {}.", t.name),
+        fetch::save_trigger(body),
+    );
 }
 
 /// Open the log view on a trigger (the Log action): show the panel, fetch the first snapshot

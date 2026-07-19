@@ -24,8 +24,7 @@ mod ui;
 
 use adi_webapp_api::types::{
     AgentsState, DashboardsState, Health, HiveState, MeshState, PortsState, ProjectDetail,
-    ProjectsState,
-    TasksState, TriggersState, UsedPorts, WorkspacesState,
+    ProjectsState, TasksState, TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -34,11 +33,9 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, dashboards_view, hive_view, load_dir, mesh_view, poll_hook_log, poll_term,
-    poll_trigger_log,
-    load_store_file, poll_watch, ports_manager_view, project_detail_view, projects_view,
-    store_file_view, tasks_view,
-    triggers_view,
+    agents_view, dashboards_view, hive_view, load_dir, load_store_file, mesh_view, poll_hook_log,
+    poll_term, poll_trigger_log, poll_watch, ports_manager_view, project_detail_view,
+    projects_view, store_file_view, tasks_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -46,8 +43,8 @@ use routing::{
 };
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
-    MeshForm, ProjectsForm, State,
-    Status, TasksForm, TermWatch, TriggersForm, TriggersLogView, load,
+    MeshForm, ProjectsForm, State, Status, TasksForm, TermWatch, TriggersForm, TriggersLogView,
+    load,
 };
 use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
@@ -234,7 +231,9 @@ fn App() -> impl IntoView {
         // A /files/<path> entry carries the file, so history navigation reloads it. Only when
         // it actually changes, or Back onto the page you are on would discard your edits.
         match routing::store_path_from_path(&path) {
-            Some(file) if state.store.open_file.get_untracked().as_deref() != Some(file.as_str()) => {
+            Some(file)
+                if state.store.open_file.get_untracked().as_deref() != Some(file.as_str()) =>
+            {
                 load_store_file(state, file);
             }
             _ => {}
@@ -423,10 +422,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Dashboards,
         ],
     ),
-    (
-        "Settings",
-        &[Route::Hive, Route::PortsManager, Route::Mesh],
-    ),
+    ("Settings", &[Route::Hive, Route::PortsManager, Route::Mesh]),
 ];
 
 /// The glyph for a top-level scope header.
@@ -494,7 +490,10 @@ fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>
     for (i, (depth, p)) in rows.iter().enumerate() {
         // `project_tree_rows` emits a parent immediately followed by its children, so a row
         // one level deeper than the previous one is the first sub-project of that parent.
-        let first_child = *depth > 0 && rows.get(i.wrapping_sub(1)).is_some_and(|(prev, _)| *prev == depth - 1);
+        let first_child = *depth > 0
+            && rows
+                .get(i.wrapping_sub(1))
+                .is_some_and(|(prev, _)| *prev == depth - 1);
         // Badge each project with its open task count — the one number worth carrying in
         // the rail, so the tree shows where the work is without opening anything.
         let open = tasks.as_ref().map(|t| {

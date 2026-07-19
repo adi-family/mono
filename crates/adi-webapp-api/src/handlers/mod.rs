@@ -3,33 +3,33 @@
 //! owns the socket and writes the response. Compiled only with the `server` feature,
 //! which pulls in the filesystem-backed registry and so is native-only.
 
-mod response;
-mod health;
-mod ports;
-mod projects;
+mod agents;
+mod dashboards;
 mod files;
 mod fs;
-mod workspaces;
-mod services;
-mod dashboards;
-mod tasks;
-mod agents;
-mod triggers;
+mod health;
 mod mesh;
+mod ports;
+mod projects;
+mod response;
+mod services;
+mod tasks;
+mod triggers;
+mod workspaces;
 
-pub use response::{error, Response};
-pub use health::*;
-pub use ports::*;
-pub use projects::*;
+pub use agents::*;
+pub use dashboards::*;
 pub use files::*;
 pub use fs::*;
-pub use workspaces::*;
-pub use services::*;
-pub use dashboards::*;
-pub use tasks::*;
-pub use agents::*;
-pub use triggers::*;
+pub use health::*;
 pub use mesh::*;
+pub use ports::*;
+pub use projects::*;
+pub use response::{Response, error};
+pub use services::*;
+pub use tasks::*;
+pub use triggers::*;
+pub use workspaces::*;
 
 #[cfg(test)]
 use adi_agents::Agents;
@@ -125,7 +125,10 @@ mod tests {
             text.contains("bash`ports-manager.get('demo/web', 'http')`"),
             "the existing entry's port command survives the rewrite, got: {text}"
         );
-        assert!(text.contains("45112"), "the explicit port is written: {text}");
+        assert!(
+            text.contains("45112"),
+            "the explicit port is written: {text}"
+        );
     }
 
     #[test]
@@ -250,8 +253,18 @@ mod tests {
                     .iter()
                     .any(|id| id == "tmux:claude")
         }));
-        for name in ["effort", "sandbox", "approval", "thinking", "num_ctx", "max_tokens"] {
-            assert!(fields.iter().any(|f| f["name"] == name), "missing field {name}");
+        for name in [
+            "effort",
+            "sandbox",
+            "approval",
+            "thinking",
+            "num_ctx",
+            "max_tokens",
+        ] {
+            assert!(
+                fields.iter().any(|f| f["name"] == name),
+                "missing field {name}"
+            );
         }
         for (field, excluded_backend) in [
             ("tools", "tmux:codex"),
@@ -259,10 +272,7 @@ mod tests {
             ("fallback_model", "tmux:claude"),
             ("skip_git_repo_check", "tmux:codex"),
         ] {
-            let ids = fields
-                .iter()
-                .find(|f| f["name"] == field)
-                .unwrap()["backend_ids"]
+            let ids = fields.iter().find(|f| f["name"] == field).unwrap()["backend_ids"]
                 .as_array()
                 .unwrap();
             assert!(!ids.iter().any(|id| id == excluded_backend));
@@ -355,10 +365,14 @@ mod tests {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
 
-        assert_eq!(send_agent_keys(&store, br#"{"name":"ghost","key":"Enter"}"#).status, 404);
+        assert_eq!(
+            send_agent_keys(&store, br#"{"name":"ghost","key":"Enter"}"#).status,
+            404
+        );
         assert_eq!(send_agent_keys(&store, br#"{"name":"solver"}"#).status, 400);
 
-        let Response { status, body } = send_agent_keys(&store, br#"{"name":"solver","text":"hi"}"#);
+        let Response { status, body } =
+            send_agent_keys(&store, br#"{"name":"solver","text":"hi"}"#);
         assert_eq!(status, 409);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(v["error"].as_str().unwrap().contains("isn't running"));
@@ -372,7 +386,13 @@ mod tests {
         let Response { status, body } = stop_agent(&store, br#"{"name":"solver"}"#);
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
-        assert!(v["agents"].as_array().unwrap().iter().any(|a| a["name"] == "solver"));
+        assert!(
+            v["agents"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|a| a["name"] == "solver")
+        );
         assert_eq!(stop_agent(&store, br#"{"name":"ghost"}"#).status, 404);
     }
 
@@ -526,22 +546,41 @@ mod tests {
         assert!(t["extra"]["empty"].is_null());
         assert!(t["last_fired_at"].is_null());
 
-        assert_eq!(save_trigger(&store, &inert_supervisor(&store), br#"{"name":"x","kind":""}"#).status, 400);
-        assert_eq!(save_trigger(&store, &inert_supervisor(&store), b"not json").status, 400);
+        assert_eq!(
+            save_trigger(
+                &store,
+                &inert_supervisor(&store),
+                br#"{"name":"x","kind":""}"#
+            )
+            .status,
+            400
+        );
+        assert_eq!(
+            save_trigger(&store, &inert_supervisor(&store), b"not json").status,
+            400
+        );
     }
 
     #[test]
     fn fire_validates_the_target() {
         let store = temp_triggers();
         assert_eq!(fire_trigger(&store, br#"{"name":"ghost"}"#).status, 404);
-        let _ = save_trigger(&store, &inert_supervisor(&store), br#"{"name":"idle","kind":"background"}"#);
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"idle","kind":"background"}"#,
+        );
         assert_eq!(fire_trigger(&store, br#"{"name":"idle"}"#).status, 400);
     }
 
     #[test]
     fn log_of_a_never_fired_trigger_is_empty_not_an_error() {
         let store = temp_triggers();
-        let _ = save_trigger(&store, &inert_supervisor(&store), br#"{"name":"idle","kind":"background","code":"true"}"#);
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"idle","kind":"background","code":"true"}"#,
+        );
         let Response { status, body } = trigger_log(&store, br#"{"name":"idle"}"#);
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -575,8 +614,12 @@ mod tests {
         assert_eq!(hook_trigger(&store, "background-only", "", b"").status, 404);
         assert_eq!(hook_trigger(&store, "paused", "", b"").status, 403);
         assert_eq!(hook_trigger(&store, "locked", "", b"").status, 403);
-        assert_eq!(hook_trigger(&store, "locked", "secret=wrong", b"").status, 403);
-        let Response { status, body } = hook_trigger(&store, "locked", "x=1&secret=s3", b"{\"ref\":\"main\"}");
+        assert_eq!(
+            hook_trigger(&store, "locked", "secret=wrong", b"").status,
+            403
+        );
+        let Response { status, body } =
+            hook_trigger(&store, "locked", "x=1&secret=s3", b"{\"ref\":\"main\"}");
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ok"], true);
@@ -630,7 +673,8 @@ mod tests {
     #[test]
     fn read_then_write_round_trips_the_hive_file() {
         let store = temp_projects();
-        let Response { status, body } = read_file(&store, br#"{"id":"demo","path":".adi/hive.yaml"}"#);
+        let Response { status, body } =
+            read_file(&store, br#"{"id":"demo","path":".adi/hive.yaml"}"#);
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["content"], "version: \"1\"\n");
@@ -651,7 +695,10 @@ mod tests {
     #[test]
     fn escaping_paths_are_refused_with_400() {
         let store = temp_projects();
-        assert_eq!(list_files(&store, br#"{"id":"demo","path":".."}"#).status, 400);
+        assert_eq!(
+            list_files(&store, br#"{"id":"demo","path":".."}"#).status,
+            400
+        );
         assert_eq!(
             read_file(&store, br#"{"id":"demo","path":"../../secret"}"#).status,
             400
@@ -665,8 +712,14 @@ mod tests {
     #[test]
     fn unregistered_project_is_a_404() {
         let store = temp_projects();
-        assert_eq!(list_files(&store, br#"{"id":"ghost","path":""}"#).status, 404);
-        assert_eq!(list_files(&store, br#"{"id":"../x","path":""}"#).status, 400);
+        assert_eq!(
+            list_files(&store, br#"{"id":"ghost","path":""}"#).status,
+            404
+        );
+        assert_eq!(
+            list_files(&store, br#"{"id":"../x","path":""}"#).status,
+            400
+        );
     }
 
     #[test]
@@ -717,10 +770,7 @@ mod tests {
         assert_eq!(v["has_init_hook"], true);
         assert_eq!(v["hooks"][0]["name"], "init");
         assert_eq!(v["hooks"][0]["status"], "never");
-        let file = store
-            .project_dir("demo")
-            .unwrap()
-            .join(".adi/hooks/init");
+        let file = store.project_dir("demo").unwrap().join(".adi/hooks/init");
         assert!(file.is_file());
 
         assert_eq!(
@@ -795,7 +845,8 @@ mod tests {
         assert_eq!(v["state"]["workspaces"][0]["status"], "local");
         assert_eq!(v["state"]["next_hook"], "init");
 
-        let Response { status, body: resp } = remove_workspace(&store, br#"{"id":"demo","name":"home"}"#);
+        let Response { status, body: resp } =
+            remove_workspace(&store, br#"{"id":"demo","name":"home"}"#);
         assert_eq!(status, 200, "{resp}");
         let v: Value = serde_json::from_str(&resp).unwrap();
         assert_eq!(v["workspaces"].as_array().unwrap().len(), 0);
@@ -838,12 +889,16 @@ mod tests {
             open_workspace_terminal(&store, br#"{"id":"demo","name":"gone"}"#).status,
             400
         );
-        let Response { status, body } = peek_workspace_terminal(&store, br#"{"id":"demo","name":"gone"}"#);
+        let Response { status, body } =
+            peek_workspace_terminal(&store, br#"{"id":"demo","name":"gone"}"#);
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["running"], false);
         assert!(
-            v["attach"].as_str().unwrap().starts_with("tmux attach -t adi-ws-"),
+            v["attach"]
+                .as_str()
+                .unwrap()
+                .starts_with("tmux attach -t adi-ws-"),
             "{body}"
         );
     }
@@ -859,17 +914,20 @@ mod tests {
         )
         .unwrap();
 
-        let Response { status, body } = run_project_hook(&store, br#"{"id":"demo","name":"greet"}"#);
+        let Response { status, body } =
+            run_project_hook(&store, br#"{"id":"demo","name":"greet"}"#);
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(v["message"].as_str().unwrap().contains("pid"));
 
         assert!(wait_until(|| {
-            let Response { body, .. } = project_hook_log(&store, br#"{"id":"demo","name":"greet"}"#);
+            let Response { body, .. } =
+                project_hook_log(&store, br#"{"id":"demo","name":"greet"}"#);
             let v: Value = serde_json::from_str(&body).unwrap();
             v["status"] == "ok"
         }));
-        let Response { status, body } = project_hook_log(&store, br#"{"id":"demo","name":"greet"}"#);
+        let Response { status, body } =
+            project_hook_log(&store, br#"{"id":"demo","name":"greet"}"#);
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["ran"], true);

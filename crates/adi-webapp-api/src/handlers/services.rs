@@ -5,10 +5,13 @@ use std::path::{Path, PathBuf};
 use adi_projects::Projects;
 use serde::Deserialize;
 
-use crate::types::{HiveService, HiveState, NewService, ProjectService, ServicePort, StartResult, StartService, StopResult};
+use crate::types::{
+    HiveService, HiveState, NewService, ProjectService, ServicePort, StartResult, StartService,
+    StopResult,
+};
 
-use super::response::{error, ok_json, Response};
 use super::projects::project_detail;
+use super::response::{Response, error, ok_json};
 
 // A read-only view of the subset of adi-hive's `hive.yaml` schema the detail page shows.
 // adi-hive owns the authoritative schema (`crates/adi-hive/src/config.rs`); it's a binary
@@ -181,7 +184,8 @@ fn collect_dashboard_services(
         let Some(id) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let (_has_hive, parsed) = read_hive_services(&dir.join(".adi").join("hive.yaml"), listening);
+        let (_has_hive, parsed) =
+            read_hive_services(&dir.join(".adi").join("hive.yaml"), listening);
         for svc in parsed {
             let port = ports
                 .get(&format!("{id}/{}", svc.name), "http")
@@ -392,10 +396,12 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Respo
         Ok(Yaml::Null) => Yaml::Mapping(Mapping::new()),
         Ok(doc @ Yaml::Mapping(_)) => doc,
         Ok(_) => return error(422, "the existing hive.yaml is not a YAML mapping"),
-        Err(_) => return error(
-            422,
-            "could not parse the existing hive.yaml — fix it in the project's files first",
-        ),
+        Err(_) => {
+            return error(
+                422,
+                "could not parse the existing hive.yaml — fix it in the project's files first",
+            );
+        }
     };
 
     let mut svc = Mapping::new();
@@ -406,7 +412,9 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Respo
     }
     let http_port = match req.port {
         Some(p) => Yaml::Number(p.into()),
-        None => ystr(&commands.placeholder(&format!("ports-manager.get('{project}/{name}', 'http')"))),
+        None => {
+            ystr(&commands.placeholder(&format!("ports-manager.get('{project}/{name}', 'http')")))
+        }
     };
     let mut ports = Mapping::new();
     ports.insert(ystr("http"), http_port);
@@ -438,7 +446,10 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Respo
     };
     let key = ystr(name);
     if services.contains_key(&key) {
-        return error(409, &format!("service `{name}` already exists in this project"));
+        return error(
+            409,
+            &format!("service `{name}` already exists in this project"),
+        );
     }
     services.insert(key, Yaml::Mapping(svc));
 

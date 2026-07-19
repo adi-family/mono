@@ -267,7 +267,11 @@ impl Workspaces {
             return Err(Error::NoHook(hook.to_string()));
         }
 
-        fs::create_dir_all(target.parent().ok_or_else(|| Error::NotADir(target.clone()))?)?;
+        fs::create_dir_all(
+            target
+                .parent()
+                .ok_or_else(|| Error::NotADir(target.clone()))?,
+        )?;
 
         let mut env: Vec<(String, String)> = project_env.to_vec();
         env.push((
@@ -335,7 +339,10 @@ impl Workspaces {
     /// creates are last-write-wins — acceptable for a single-user tool.
     fn save(&self, registry: &Registry) -> Result<()> {
         let path = self.registry_path();
-        fs::create_dir_all(path.parent().expect("registry path has the .adi dir as parent"))?;
+        fs::create_dir_all(
+            path.parent()
+                .expect("registry path has the .adi dir as parent"),
+        )?;
         let text = toml::to_string_pretty(registry).map_err(|e| Error::Registry(e.to_string()))?;
         let tmp = path.with_extension("toml.tmp");
         fs::write(&tmp, text)?;
@@ -439,10 +446,7 @@ mod tests {
         assert!(wait_until(|| first.path.join("cwd").is_file()));
         assert!(wait_until(|| ws.status(&first) == WorkspaceStatus::Ready));
         let cwd = fs::read_to_string(first.path.join("cwd")).unwrap();
-        assert!(
-            cwd.trim().ends_with(WORKSPACES_DIR),
-            "init cwd was {cwd:?}"
-        );
+        assert!(cwd.trim().ends_with(WORKSPACES_DIR), "init cwd was {cwd:?}");
 
         let (second, _) = ws.create("feature", None, false, &env()).unwrap();
         assert_eq!(second.kind, WorkspaceKind::Workspace);

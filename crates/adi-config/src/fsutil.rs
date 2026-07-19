@@ -11,9 +11,10 @@ pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
 
     // Per-pid temp name keeps concurrent writers from clobbering each other's temp file.
-    let file_name = path
-        .file_name()
-        .map_or_else(|| "config".to_string(), |n| n.to_string_lossy().into_owned());
+    let file_name = path.file_name().map_or_else(
+        || "config".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
     let tmp = path.with_file_name(format!("{file_name}.{}.tmp", std::process::id()));
 
     std::fs::write(&tmp, bytes)?;

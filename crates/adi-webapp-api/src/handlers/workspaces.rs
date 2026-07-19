@@ -8,9 +8,13 @@ use adi_hooks::is_lifecycle;
 use adi_hooks::terminal;
 use adi_projects::Projects;
 
-use crate::types::{NewProjectHook, NewWorkspace, ProjectHookDto, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, WorkspaceCreateResult, WorkspaceDto, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState};
+use crate::types::{
+    NewProjectHook, NewWorkspace, ProjectHookDto, ProjectHookLog, ProjectHookRef,
+    ProjectHookRunResult, WorkspaceCreateResult, WorkspaceDto, WorkspaceRef, WorkspaceTerm,
+    WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
+};
 
-use super::response::{error, ok_json, Response};
+use super::response::{Response, error, ok_json};
 
 /// `POST /api/projects/workspaces` — a project's workspaces and hooks in one snapshot. Every
 /// mutation in this family returns a fresh [`WorkspacesState`] for one-round-trip refreshes.
@@ -294,7 +298,9 @@ fn resolve_workspace(
     name: &str,
 ) -> Result<adi_hooks::WorkspaceEntry, Response> {
     let (dir, _) = project_scope(store, id)?;
-    let entries = Workspaces::new(&dir).list().map_err(|e| Response::from(&e))?;
+    let entries = Workspaces::new(&dir)
+        .list()
+        .map_err(|e| Response::from(&e))?;
     entries
         .into_iter()
         .find(|w| w.name == name)
@@ -366,10 +372,7 @@ fn build_workspaces_state(store: &Projects, id: &str) -> Result<WorkspacesState,
 
 /// Resolve a *registered* project for the workspaces/hooks family: its directory plus the
 /// `ADI_PROJECT_*` env pairs the hook contract needs. Same gate as [`project_jail`].
-fn project_scope(
-    store: &Projects,
-    id: &str,
-) -> Result<(PathBuf, Vec<(String, String)>), Response> {
+fn project_scope(store: &Projects, id: &str) -> Result<(PathBuf, Vec<(String, String)>), Response> {
     let project = match store.get(id) {
         Ok(Some(project)) => project,
         Ok(None) => return Err(error(404, &format!("no such project: {id}"))),

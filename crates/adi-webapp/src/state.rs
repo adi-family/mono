@@ -6,10 +6,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use adi_webapp_api::types::{
     AgentPeek, AgentsState, DashboardsState, DirListing, FileEntry, Health, HiveState, MeshState,
-    PortsState,
-    ProjectDetail,
-    ProjectHookLog, ProjectsState, TasksState, TriggerLog, TriggersState, UsedPorts,
-    WorkspaceTerm, WorkspacesState,
+    PortsState, ProjectDetail, ProjectHookLog, ProjectsState, TasksState, TriggerLog,
+    TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -100,7 +98,6 @@ impl StoreBrowser {
     pub(crate) fn dirty(self) -> bool {
         self.buffer.get() != self.original.get()
     }
-
 }
 
 /// The project detail page's file browser + editor state, scoped to the open project's own

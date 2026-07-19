@@ -434,7 +434,10 @@ mod tests {
             .expect("typed get")
             .expect("present");
         assert_eq!(typed.manifest.arguments.max_turns, Some(20));
-        assert_eq!(typed.manifest.arguments.tools.as_deref(), Some("tasks,projects"));
+        assert_eq!(
+            typed.manifest.arguments.tools.as_deref(),
+            Some("tasks,projects")
+        );
     }
 
     #[test]
@@ -450,7 +453,9 @@ mod tests {
             ..StoredAgentManifest::default()
         };
 
-        store.save("adi-agent", manifest).expect("save adi harness agent");
+        store
+            .save("adi-agent", manifest)
+            .expect("save adi harness agent");
         let stored = store
             .get("adi-agent")
             .expect("get")

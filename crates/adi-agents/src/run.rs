@@ -60,12 +60,8 @@ pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
 pub(crate) fn stop_in(agent: &StoredAgent, sessions_dir: &Path) -> Result<bool> {
     match &agent.manifest.backend {
         Backend::TmuxClaude | Backend::TmuxCodex => tmux::stop(&agent.name),
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::stop(sessions_dir, &agent.name)
-        }
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::stop(sessions_dir, &agent.name)
-        }
+        Backend::ProcessClaude | Backend::ProcessCodex => process::stop(sessions_dir, &agent.name),
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => harness::stop(sessions_dir, &agent.name),
         _ => Ok(false),
     }
 }

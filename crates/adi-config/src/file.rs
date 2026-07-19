@@ -160,7 +160,10 @@ mod tests {
         let file: ConfigFile<Settings> = ConfigFile::new(dir.join("settings.toml"));
 
         assert!(matches!(file.load(), Err(Error::Io(_))));
-        assert_eq!(file.load_or_default().expect("default"), Settings::default());
+        assert_eq!(
+            file.load_or_default().expect("default"),
+            Settings::default()
+        );
         assert!(!file.exists(), "load_or_default must not write");
         let _ = std::fs::remove_dir_all(&dir);
     }

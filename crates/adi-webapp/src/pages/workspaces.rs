@@ -357,9 +357,9 @@ fn submit_workspace(state: State, form: WorkspaceForm) {
     }
     let name = form.name.get_untracked().trim().to_string();
     if name.is_empty() {
-        state
-            .flash
-            .set(Some(Flash::err("A workspace name is required.".to_string())));
+        state.flash.set(Some(Flash::err(
+            "A workspace name is required.".to_string(),
+        )));
         return;
     }
     let path = form.path.get_untracked().trim().to_string();

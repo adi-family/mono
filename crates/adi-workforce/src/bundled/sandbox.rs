@@ -277,4 +277,3 @@ pub fn register_plugin() -> crate::core::PluginEntry {
         .tool("Cleanup", CleanupTool::create)
         .filesystem("Sandbox", SandboxFilesystem::create)
 }
-

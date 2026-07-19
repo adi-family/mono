@@ -63,7 +63,9 @@ impl Config {
     /// Open the standard store — the `~/.adi/mono` directory (honoring `$ADI_DIR`).
     #[must_use]
     pub fn open() -> Self {
-        Self { root: layout::dir() }
+        Self {
+            root: layout::dir(),
+        }
     }
 
     /// Open a store rooted at an arbitrary directory — for tests or alternate installs.

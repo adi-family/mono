@@ -64,11 +64,9 @@ pub struct ShellSettings {
 impl ShellSettings {
     fn from_config(cfg: &ConfigValue) -> Self {
         let rules = |key: &str| {
-            cfg.get(key).and_then(ConfigValue::as_list).map(|list| {
-                list.iter()
-                    .map(ShellRule::from_config)
-                    .collect::<Vec<_>>()
-            })
+            cfg.get(key)
+                .and_then(ConfigValue::as_list)
+                .map(|list| list.iter().map(ShellRule::from_config).collect::<Vec<_>>())
         };
         let prompt = |key: &str| {
             cfg.get(key)

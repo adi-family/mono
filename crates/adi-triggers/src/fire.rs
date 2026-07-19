@@ -75,7 +75,11 @@ pub(crate) fn payload_path(module_dir: &Path, name: &str) -> PathBuf {
 /// # Errors
 /// [`Error::NoCode`] when the trigger has no code block, or [`Error::Io`] when the staged
 /// source or payload file can't be written.
-pub(crate) fn launch(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]>) -> Result<Launch> {
+pub(crate) fn launch(
+    module_dir: &Path,
+    trigger: &Trigger,
+    payload: Option<&[u8]>,
+) -> Result<Launch> {
     let code = trigger.manifest.code.trim();
     if code.is_empty() {
         return Err(Error::NoCode(trigger.name.clone()));
@@ -93,14 +97,20 @@ pub(crate) fn launch(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]
     let mut env = vec![
         ("PATH".to_string(), augmented_path()),
         ("ADI_TRIGGER".to_string(), trigger.name.clone()),
-        ("ADI_TRIGGER_KIND".to_string(), trigger.manifest.kind.clone()),
+        (
+            "ADI_TRIGGER_KIND".to_string(),
+            trigger.manifest.kind.clone(),
+        ),
     ];
     env.extend(extra_env(&trigger.manifest.extra));
 
     // The payload is written *before* the spawn so the code block always finds a complete file.
     if let Some(bytes) = payload {
         let file = payload_path(module_dir, &trigger.name);
-        std::fs::create_dir_all(file.parent().expect("payload path has the logs dir as parent"))?;
+        std::fs::create_dir_all(
+            file.parent()
+                .expect("payload path has the logs dir as parent"),
+        )?;
         std::fs::write(&file, bytes)?;
         env.push(("ADI_PAYLOAD_FILE".to_string(), file.display().to_string()));
         if bytes.len() <= INLINE_PAYLOAD_MAX
@@ -110,11 +120,7 @@ pub(crate) fn launch(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]
         }
     }
 
-    Ok(Launch {
-        program,
-        args,
-        env,
-    })
+    Ok(Launch { program, args, env })
 }
 
 /// Export a trigger's settings into its code block as `ADI_<KEY>`, uppercased with `-` folded
@@ -126,9 +132,15 @@ fn extra_env(extra: &BTreeMap<String, String>) -> Vec<(String, String)> {
         .filter(|(k, _)| {
             !k.is_empty()
                 && !k.starts_with(|c: char| c.is_ascii_digit())
-                && k.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+                && k.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
         })
-        .map(|(k, v)| (format!("ADI_{}", k.to_uppercase().replace('-', "_")), v.clone()))
+        .map(|(k, v)| {
+            (
+                format!("ADI_{}", k.to_uppercase().replace('-', "_")),
+                v.clone(),
+            )
+        })
         .collect()
 }
 
@@ -181,9 +193,9 @@ pub(crate) fn fire(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]>)
         cmd.current_dir(home);
     }
 
-    let child = cmd.spawn().map_err(|e| {
-        Error::Launch(format!("couldn't spawn {}: {e}", spec.program))
-    })?;
+    let child = cmd
+        .spawn()
+        .map_err(|e| Error::Launch(format!("couldn't spawn {}: {e}", spec.program)))?;
     Ok(Firing {
         pid: child.id(),
         log: log_path(module_dir, &trigger.name),
@@ -298,20 +310,29 @@ mod tests {
     #[test]
     fn fire_runs_the_code_block_with_identity_env() {
         let dir = scratch_dir("env");
-        let t = trigger("greeter", "printf '%s/%s' \"$ADI_TRIGGER\" \"$ADI_TRIGGER_KIND\"");
+        let t = trigger(
+            "greeter",
+            "printf '%s/%s' \"$ADI_TRIGGER\" \"$ADI_TRIGGER_KIND\"",
+        );
         let firing = fire(&dir, &t, None).expect("fire");
         assert!(firing.pid > 0);
         let text = wait_for_log(&firing.log, |s| !s.is_empty());
         assert_eq!(text, "greeter/background");
         assert!(last_fired(&dir, "greeter").is_some());
-        assert_eq!(read_log(&dir, "greeter").as_deref(), Some("greeter/background"));
+        assert_eq!(
+            read_log(&dir, "greeter").as_deref(),
+            Some("greeter/background")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn fire_hands_the_payload_over_as_file_and_inline_env() {
         let dir = scratch_dir("payload");
-        let t = trigger("hook", "printf '%s|' \"$ADI_PAYLOAD\"; cat \"$ADI_PAYLOAD_FILE\"");
+        let t = trigger(
+            "hook",
+            "printf '%s|' \"$ADI_PAYLOAD\"; cat \"$ADI_PAYLOAD_FILE\"",
+        );
         let firing = fire(&dir, &t, Some(b"{\"x\":1}")).expect("fire");
         assert_eq!(
             std::fs::read(payload_path(&dir, "hook")).expect("payload file"),
@@ -326,11 +347,19 @@ mod tests {
     #[test]
     fn settings_reach_the_code_block_as_adi_env_vars() {
         let dir = scratch_dir("extras");
-        let mut t = trigger("notify", "printf '%s/%s' \"$ADI_CHAT_ID\" \"$ADI_TOKEN_ENV\"");
+        let mut t = trigger(
+            "notify",
+            "printf '%s/%s' \"$ADI_CHAT_ID\" \"$ADI_TOKEN_ENV\"",
+        );
         t.manifest.extra.insert("chat_id".into(), "4242".into());
-        t.manifest.extra.insert("token_env".into(), "MY_TOKEN".into());
+        t.manifest
+            .extra
+            .insert("token_env".into(), "MY_TOKEN".into());
         let firing = fire(&dir, &t, None).expect("fire");
-        assert_eq!(wait_for_log(&firing.log, |s| s.contains('/')), "4242/MY_TOKEN");
+        assert_eq!(
+            wait_for_log(&firing.log, |s| s.contains('/')),
+            "4242/MY_TOKEN"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -359,7 +388,10 @@ mod tests {
         let spec = launch(&dir, &t, None).expect("launch");
         assert_eq!(spec.program, "bun");
         let staged = dir.join(SRC_DIR).join("poller.ts");
-        assert_eq!(spec.args, vec!["run".to_string(), staged.display().to_string()]);
+        assert_eq!(
+            spec.args,
+            vec!["run".to_string(), staged.display().to_string()]
+        );
         assert_eq!(
             std::fs::read_to_string(&staged).expect("staged module"),
             "console.log('hi');\n"

@@ -247,9 +247,7 @@ async fn handle(
         }
         ("POST", "/api/projects/hook/run") => handlers::run_project_hook(projects, &req.body),
         ("POST", "/api/projects/hook/log") => handlers::project_hook_log(projects, &req.body),
-        ("POST", "/api/projects/hook/create") => {
-            handlers::create_project_hook(projects, &req.body)
-        }
+        ("POST", "/api/projects/hook/create") => handlers::create_project_hook(projects, &req.body),
         // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
         // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
         ("GET", p) if p.starts_with("/api/projects/") => {

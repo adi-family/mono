@@ -53,7 +53,10 @@ pub fn core() -> Arc<Core> {
         PluginEntry::new().tool("Env", env::Env::create),
     );
 
-    core.register_plugin("adi.workforce.filesystem.sandbox", sandbox::register_plugin());
+    core.register_plugin(
+        "adi.workforce.filesystem.sandbox",
+        sandbox::register_plugin(),
+    );
 
     Arc::new(core)
 }

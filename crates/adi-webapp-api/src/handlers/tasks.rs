@@ -4,7 +4,7 @@ use adi_tasks::Tasks;
 
 use crate::types::{NewTask, TaskRef, TaskRow, TasksState};
 
-use super::response::{error, ok_json, Response};
+use super::response::{Response, error, ok_json};
 
 /// `GET /api/tasks` — the whole task tree as a flat list, ordered by task number so a parent
 /// precedes the children created after it. The client nests them into a tree by `parent`.

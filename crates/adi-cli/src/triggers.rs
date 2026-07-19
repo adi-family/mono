@@ -102,10 +102,18 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
         }
         TriggersCommand::Presets { json } => {
             if json {
-                print_json(&trigger_presets::all().iter().map(preset_json).collect::<Vec<_>>());
+                print_json(
+                    &trigger_presets::all()
+                        .iter()
+                        .map(preset_json)
+                        .collect::<Vec<_>>(),
+                );
             } else {
                 for preset in trigger_presets::all() {
-                    println!("{} — {} [{}/{}]", preset.id, preset.label, preset.kind, preset.runtime);
+                    println!(
+                        "{} — {} [{}/{}]",
+                        preset.id, preset.label, preset.kind, preset.runtime
+                    );
                     println!("  {}", preset.description);
                     for field in preset.fields {
                         println!("    --extra {}=…  {}", field.key, field.hint);

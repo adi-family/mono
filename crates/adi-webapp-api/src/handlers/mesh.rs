@@ -3,9 +3,11 @@ use adi_mesh::config::MeshConfig;
 use adi_mesh::identity;
 use adi_mesh::ticket;
 
-use crate::types::{MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState};
+use crate::types::{
+    MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
+};
 
-use super::response::{error, ok_json, Response};
+use super::response::{Response, error, ok_json};
 
 /// `GET /api/mesh` — this machine's mesh identity, published ticket, and config. `running`
 /// is the host's authoritative view of whether the in-process daemon is up (the host owns

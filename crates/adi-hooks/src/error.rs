@@ -52,7 +52,9 @@ impl fmt::Display for Error {
             ),
             Self::Exists(what) => write!(f, "already exists: {what}"),
             Self::NotFound(name) => write!(f, "not found: {name}"),
-            Self::NoHook(name) => write!(f, "no {name} hook file — create one under .adi/hooks first"),
+            Self::NoHook(name) => {
+                write!(f, "no {name} hook file — create one under .adi/hooks first")
+            }
             Self::EmptyHook(name) => write!(f, "hook {name} is blank, nothing to run"),
             Self::PrimaryMissing => write!(
                 f,

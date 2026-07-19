@@ -32,10 +32,18 @@ impl fmt::Display for Error {
         match self {
             Self::Io(e) => write!(f, "config store I/O error: {e}"),
             Self::Parse { path, source } => {
-                write!(f, "config file at {} is invalid TOML: {source}", path.display())
+                write!(
+                    f,
+                    "config file at {} is invalid TOML: {source}",
+                    path.display()
+                )
             }
             Self::Encode { path, source } => {
-                write!(f, "could not encode config for {}: {source}", path.display())
+                write!(
+                    f,
+                    "could not encode config for {}: {source}",
+                    path.display()
+                )
             }
         }
     }

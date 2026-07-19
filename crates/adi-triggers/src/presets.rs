@@ -281,7 +281,12 @@ mod tests {
     #[test]
     fn declared_fields_cover_the_env_vars_each_code_block_reads() {
         // Set by the platform for every trigger, so a block may read these without declaring them.
-        let platform = ["ADI_TRIGGER", "ADI_TRIGGER_KIND", "ADI_PAYLOAD_FILE", "ADI_PAYLOAD"];
+        let platform = [
+            "ADI_TRIGGER",
+            "ADI_TRIGGER_KIND",
+            "ADI_PAYLOAD_FILE",
+            "ADI_PAYLOAD",
+        ];
         for p in all() {
             let declared: Vec<String> = p
                 .fields

@@ -1,8 +1,8 @@
 use std::time::Instant;
 
-use crate::types::{Health};
+use crate::types::Health;
 
-use super::response::{ok_json, Response};
+use super::response::{Response, ok_json};
 
 /// `GET /api/health` — liveness plus identity and uptime. The host supplies its own
 /// `service`/`version` so the reported identity is the app's, not this library's.

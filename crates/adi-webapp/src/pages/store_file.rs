@@ -101,7 +101,9 @@ fn save(state: State) {
         match fetch::fs_write(&path, content).await {
             Ok(c) => {
                 store.original.set(c.content);
-                state.flash.set(Some(Flash::ok(format!("Saved {}.", c.path))));
+                state
+                    .flash
+                    .set(Some(Flash::ok(format!("Saved {}.", c.path))));
                 store.error.set(None);
             }
             Err(e) => store.error.set(Some(e)),

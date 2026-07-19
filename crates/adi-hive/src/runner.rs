@@ -278,11 +278,15 @@ mod tests {
         let keep_task = sup.running["keep"].task.id();
 
         // Swap `drop` out for `add`, leaving `keep` byte-identical.
-        let (started, stopped) = sup.reconcile(vec![spec("keep", "sleep 30"), spec("add", "sleep 30")]);
+        let (started, stopped) =
+            sup.reconcile(vec![spec("keep", "sleep 30"), spec("add", "sleep 30")]);
         assert_eq!((started, stopped), (1, 1), "one added, one removed");
         assert_eq!(sup.len(), 2);
         assert!(sup.running.contains_key("add"), "the new service started");
-        assert!(!sup.running.contains_key("drop"), "the removed service is gone");
+        assert!(
+            !sup.running.contains_key("drop"),
+            "the removed service is gone"
+        );
         assert_eq!(
             sup.running["keep"].task.id(),
             keep_task,
@@ -299,7 +303,11 @@ mod tests {
         let before = sup.running["api"].task.id();
 
         let (started, stopped) = sup.reconcile(vec![spec("api", "sleep 31")]);
-        assert_eq!((started, stopped), (1, 1), "respec counts as a stop then a start");
+        assert_eq!(
+            (started, stopped),
+            (1, 1),
+            "respec counts as a stop then a start"
+        );
         assert_eq!(sup.len(), 1);
         assert_ne!(
             sup.running["api"].task.id(),

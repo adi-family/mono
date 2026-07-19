@@ -18,8 +18,8 @@ mod actions;
 mod code;
 mod form;
 
-pub(crate) use actions::{agent_actions, live_view, poll_watch};
 use actions::apply_agents;
+pub(crate) use actions::{agent_actions, live_view, poll_watch};
 use code::{code_editor_view, open_code_editor};
 use form::{
     agent_argument_values, agent_form_fields, agent_param_applies, clear_agent_form,
@@ -139,7 +139,12 @@ pub(crate) fn agents_view(
 
 /// Render the agents table body: a loading/empty placeholder, or one row per agent with Run or
 /// View (live session), Code (wasm employees), Edit (loads it into the form), and Delete actions.
-fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, code: AgentCodeEditor) -> AnyView {
+fn agent_rows(
+    state: State,
+    form: AgentsForm,
+    watch: AgentsWatch,
+    code: AgentCodeEditor,
+) -> AnyView {
     let Some(st) = state.agents.get() else {
         return placeholder_row("6", "Loading…");
     };

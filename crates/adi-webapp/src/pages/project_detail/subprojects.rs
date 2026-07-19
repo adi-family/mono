@@ -22,7 +22,11 @@ pub(crate) struct QuickSubprojectForm {
 /// The Sub-projects panel on a project's detail page: the projects nested directly under this
 /// one (served in the detail payload), each opening its own detail page, plus a quick create
 /// form pre-scoped to the open project as the parent.
-pub(crate) fn subprojects_panel(state: State, route: RwSignal<Route>, form: QuickSubprojectForm) -> AnyView {
+pub(crate) fn subprojects_panel(
+    state: State,
+    route: RwSignal<Route>,
+    form: QuickSubprojectForm,
+) -> AnyView {
     let QuickSubprojectForm { name, busy } = form;
     view! {
         <section class="adi-panel">

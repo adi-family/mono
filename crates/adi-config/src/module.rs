@@ -103,7 +103,10 @@ mod tests {
             module.file::<()>("hive.toml").path(),
             Path::new("/store/hive/hive.toml")
         );
-        assert_eq!(module.raw_path("hive.yaml"), Path::new("/store/hive/hive.yaml"));
+        assert_eq!(
+            module.raw_path("hive.yaml"),
+            Path::new("/store/hive/hive.yaml")
+        );
     }
 
     #[test]

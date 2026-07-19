@@ -9,10 +9,14 @@ use adi_agents::StoredAgent;
 use adi_agents::arguments::WasmArguments;
 use adi_agents::contains_json_null;
 
-use crate::types::{AgentBackendOption, AgentBuildResult, AgentCode, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState, SaveAgent, SaveAgentCode};
+use crate::types::{
+    AgentBackendOption, AgentBuildResult, AgentCode, AgentDto, AgentFormField, AgentFormFieldKind,
+    AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
+    SaveAgent, SaveAgentCode,
+};
 
-use super::response::{error, ok_json, clean, Response};
 use super::files::MAX_TEXT_BYTES;
+use super::response::{Response, clean, error, ok_json};
 
 /// `GET /api/agents` — every registered agent definition. Each mutation endpoint below returns a
 /// fresh [`AgentsState`], so the client refreshes from one round-trip.
@@ -182,7 +186,10 @@ pub fn agent_code(store: &Agents, body: &[u8]) -> Response {
         Ok(meta) if meta.len() > MAX_TEXT_BYTES => {
             return error(
                 400,
-                &format!("{src} is too large to edit ({} bytes, max {MAX_TEXT_BYTES})", meta.len()),
+                &format!(
+                    "{src} is too large to edit ({} bytes, max {MAX_TEXT_BYTES})",
+                    meta.len()
+                ),
             );
         }
         _ => {}
@@ -202,13 +209,22 @@ pub fn agent_code(store: &Agents, body: &[u8]) -> Response {
 #[must_use]
 pub fn save_agent_code(store: &Agents, body: &[u8]) -> Response {
     let Ok(req) = serde_json::from_slice::<SaveAgentCode>(body) else {
-        return error(400, "expected JSON body { \"name\": \"…\", \"code\": \"…\" }");
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"code\": \"…\" }",
+        );
     };
     if req.name.trim().is_empty() {
-        return error(400, "expected JSON body { \"name\": \"…\", \"code\": \"…\" }");
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"code\": \"…\" }",
+        );
     }
     if req.code.len() as u64 > MAX_TEXT_BYTES {
-        return error(400, &format!("source too large to save (max {MAX_TEXT_BYTES} bytes)"));
+        return error(
+            400,
+            &format!("source too large to save (max {MAX_TEXT_BYTES} bytes)"),
+        );
     }
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -270,7 +286,10 @@ pub fn build_agent(store: &Agents, body: &[u8]) -> Response {
     // jco runs via a `#!/usr/bin/env node` shebang, so the child's PATH must reach node even
     // when this server was launched with a minimal LaunchAgent environment.
     let mut path_env = std::env::var("PATH").unwrap_or_default();
-    if let Some(node_dir) = Path::new(&node).parent().filter(|d| !d.as_os_str().is_empty()) {
+    if let Some(node_dir) = Path::new(&node)
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+    {
         path_env = format!("{}:{path_env}", node_dir.display());
     }
 
@@ -457,8 +476,12 @@ fn agent_form_spec() -> AgentFormSpec {
 
     // The adi harness runs its own agentic loop and needs to know which provider API to call;
     // provider-specific knobs below are scoped to this choice via `providers`.
-    let mut provider =
-        field_ids("provider", "Provider", AgentFormFieldKind::Select, &[ADI_HARNESS]);
+    let mut provider = field_ids(
+        "provider",
+        "Provider",
+        AgentFormFieldKind::Select,
+        &[ADI_HARNESS],
+    );
     provider.options = opts(&[
         ("", "— pick a provider —"),
         ("anthropic", "Anthropic"),
@@ -497,8 +520,12 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(wasm);
 
     // ---- claude engines (any executor) ----
-    let mut permission =
-        field_ids("permission_mode", "Permission mode", AgentFormFieldKind::Select, CLAUDE_BACKENDS);
+    let mut permission = field_ids(
+        "permission_mode",
+        "Permission mode",
+        AgentFormFieldKind::Select,
+        CLAUDE_BACKENDS,
+    );
     permission.options = opts(&[
         ("", "— default —"),
         ("acceptEdits", "acceptEdits"),
@@ -532,7 +559,11 @@ fn agent_form_spec() -> AgentFormSpec {
         "output_format",
         "Output format",
         &["process:claude"],
-        opts(&[("", "text (default)"), ("json", "json"), ("stream-json", "stream-json")]),
+        opts(&[
+            ("", "text (default)"),
+            ("json", "json"),
+            ("stream-json", "stream-json"),
+        ]),
         "how the run result is emitted",
     ));
 
@@ -614,7 +645,12 @@ fn agent_form_spec() -> AgentFormSpec {
             "reasoning_effort",
             "Reasoning effort",
             CODEX_BACKENDS,
-            opts(&[("", "— default —"), ("low", "low"), ("medium", "medium"), ("high", "high")]),
+            opts(&[
+                ("", "— default —"),
+                ("low", "low"),
+                ("medium", "medium"),
+                ("high", "high"),
+            ]),
             "reasoning depth",
         ),
         &["openai"],
@@ -637,8 +673,12 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(chk_field("json_events", "JSONL events", &["process:codex"]));
 
     // ---- tmux/process shared (a vendor CLI runs either way) ----
-    let mut add_dir =
-        field_executors("add_dir", "Add dir", AgentFormFieldKind::Text, &["tmux", "process"]);
+    let mut add_dir = field_executors(
+        "add_dir",
+        "Add dir",
+        AgentFormFieldKind::Text,
+        &["tmux", "process"],
+    );
     add_dir.placeholder = "/extra/writable/dir".into();
     add_dir.hint = "additional writable directory".into();
     add_dir.mono = true;
@@ -651,18 +691,34 @@ fn agent_form_spec() -> AgentFormSpec {
             "thinking",
             "Thinking",
             &[],
-            opts(&[("", "— default —"), ("adaptive", "adaptive"), ("disabled", "disabled")]),
+            opts(&[
+                ("", "— default —"),
+                ("adaptive", "adaptive"),
+                ("disabled", "disabled"),
+            ]),
             "extended-thinking mode",
         ),
         &["anthropic"],
     ));
 
     fields.push(for_providers(
-        num_field("frequency_penalty", "Frequency penalty", &[], "-2.0 – 2.0", ""),
+        num_field(
+            "frequency_penalty",
+            "Frequency penalty",
+            &[],
+            "-2.0 – 2.0",
+            "",
+        ),
         &["openai"],
     ));
     fields.push(for_providers(
-        num_field("presence_penalty", "Presence penalty", &[], "-2.0 – 2.0", ""),
+        num_field(
+            "presence_penalty",
+            "Presence penalty",
+            &[],
+            "-2.0 – 2.0",
+            "",
+        ),
         &["openai", "monshoot"],
     ));
     fields.push(for_providers(
@@ -682,24 +738,48 @@ fn agent_form_spec() -> AgentFormSpec {
     ));
 
     fields.push(for_providers(
-        num_field("thinking_budget", "Thinking budget", &[], "tokens", "thinkingConfig budget"),
+        num_field(
+            "thinking_budget",
+            "Thinking budget",
+            &[],
+            "tokens",
+            "thinkingConfig budget",
+        ),
         &["gemini"],
     ));
 
     fields.push(for_providers(
-        num_field("num_ctx", "Context size", &[], "e.g. 8192", "context window (num_ctx)"),
+        num_field(
+            "num_ctx",
+            "Context size",
+            &[],
+            "e.g. 8192",
+            "context window (num_ctx)",
+        ),
         &["ollama"],
     ));
     fields.push(for_providers(
         num_field("repeat_penalty", "Repeat penalty", &[], "e.g. 1.1", ""),
         &["ollama"],
     ));
-    fields.push(for_providers(num_field("min_p", "Min-p", &[], "0.0 – 1.0", ""), &["ollama"]));
     fields.push(for_providers(
-        txt_field("keep_alive", "Keep alive", &[], "5m / -1", "how long to keep the model loaded"),
+        num_field("min_p", "Min-p", &[], "0.0 – 1.0", ""),
         &["ollama"],
     ));
-    fields.push(for_providers(chk_field("think", "Thinking", &[]), &["ollama"]));
+    fields.push(for_providers(
+        txt_field(
+            "keep_alive",
+            "Keep alive",
+            &[],
+            "5m / -1",
+            "how long to keep the model loaded",
+        ),
+        &["ollama"],
+    ));
+    fields.push(for_providers(
+        chk_field("think", "Thinking", &[]),
+        &["ollama"],
+    ));
     fields.push(for_providers(
         sel_field(
             "format",
@@ -733,14 +813,23 @@ fn agent_form_spec() -> AgentFormSpec {
     ));
 
     // ---- harness:adi shared (whatever the provider) ----
-    let mut max_tokens =
-        field_ids("max_tokens", "Max output tokens", AgentFormFieldKind::Number, &[ADI_HARNESS]);
+    let mut max_tokens = field_ids(
+        "max_tokens",
+        "Max output tokens",
+        AgentFormFieldKind::Number,
+        &[ADI_HARNESS],
+    );
     max_tokens.placeholder = "e.g. 4096".into();
     max_tokens.hint = "maps to each provider's output-cap field".into();
     max_tokens.numeric = true;
     fields.push(max_tokens);
 
-    let mut stop = field_ids("stop", "Stop sequences", AgentFormFieldKind::Text, &[ADI_HARNESS]);
+    let mut stop = field_ids(
+        "stop",
+        "Stop sequences",
+        AgentFormFieldKind::Text,
+        &[ADI_HARNESS],
+    );
     stop.placeholder = "comma-separated".into();
     stop.hint = "stop generation on these strings".into();
     stop.mono = true;
@@ -758,14 +847,23 @@ fn agent_form_spec() -> AgentFormSpec {
     max_turns.numeric = true;
     fields.push(max_turns);
 
-    let mut api_key_env =
-        field_ids("api_key_env", "API key env", AgentFormFieldKind::Text, &[ADI_HARNESS]);
+    let mut api_key_env = field_ids(
+        "api_key_env",
+        "API key env",
+        AgentFormFieldKind::Text,
+        &[ADI_HARNESS],
+    );
     api_key_env.placeholder = "OPENAI_API_KEY".into();
     api_key_env.hint = "environment variable read for the chosen provider".into();
     api_key_env.mono = true;
     fields.push(api_key_env);
 
-    let mut base_url = field_ids("base_url", "Base URL", AgentFormFieldKind::Text, &[ADI_HARNESS]);
+    let mut base_url = field_ids(
+        "base_url",
+        "Base URL",
+        AgentFormFieldKind::Text,
+        &[ADI_HARNESS],
+    );
     base_url.placeholder = "provider endpoint override".into();
     base_url.hint = "e.g. https://api.moonshot.ai/v1 · http://localhost:11434".into();
     base_url.mono = true;
@@ -773,7 +871,11 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(base_url);
 
     // ---- always shown ----
-    fields.push(agent_field("starred", "Starred", AgentFormFieldKind::Checkbox));
+    fields.push(agent_field(
+        "starred",
+        "Starred",
+        AgentFormFieldKind::Checkbox,
+    ));
 
     let mut tags = agent_field("tags", "Tags", AgentFormFieldKind::Text);
     tags.placeholder = "comma-separated (dispatch / filtering)".into();
@@ -816,7 +918,12 @@ fn agent_form_spec() -> AgentFormSpec {
                 "process",
                 "opus / sonnet / fable / haiku",
             ),
-            agent_backend("process:codex", "process · Codex CLI", "process", "gpt-5-codex"),
+            agent_backend(
+                "process:codex",
+                "process · Codex CLI",
+                "process",
+                "gpt-5-codex",
+            ),
             agent_backend(
                 "harness:claude-sdk",
                 "harness · Claude SDK",
@@ -840,7 +947,12 @@ fn agent_form_spec() -> AgentFormSpec {
     }
 }
 
-fn agent_backend(id: &str, label: &str, executor: &str, model_placeholder: &str) -> AgentBackendOption {
+fn agent_backend(
+    id: &str,
+    label: &str,
+    executor: &str,
+    model_placeholder: &str,
+) -> AgentBackendOption {
     AgentBackendOption {
         id: id.into(),
         label: label.into(),
@@ -919,7 +1031,13 @@ fn sel_field(
 }
 
 /// A numeric field scoped to backend ids.
-fn num_field(name: &str, label: &str, ids: &[&str], placeholder: &str, hint: &str) -> AgentFormField {
+fn num_field(
+    name: &str,
+    label: &str,
+    ids: &[&str],
+    placeholder: &str,
+    hint: &str,
+) -> AgentFormField {
     let mut f = field_ids(name, label, AgentFormFieldKind::Number, ids);
     f.placeholder = placeholder.into();
     f.hint = hint.into();
@@ -928,7 +1046,13 @@ fn num_field(name: &str, label: &str, ids: &[&str], placeholder: &str, hint: &st
 }
 
 /// A monospace text field scoped to backend ids.
-fn txt_field(name: &str, label: &str, ids: &[&str], placeholder: &str, hint: &str) -> AgentFormField {
+fn txt_field(
+    name: &str,
+    label: &str,
+    ids: &[&str],
+    placeholder: &str,
+    hint: &str,
+) -> AgentFormField {
     let mut f = field_ids(name, label, AgentFormFieldKind::Text, ids);
     f.placeholder = placeholder.into();
     f.hint = hint.into();

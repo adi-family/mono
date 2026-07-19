@@ -6,7 +6,7 @@ use adi_projects::Projects;
 
 use crate::types::{DirListing, FileContent, FileEntry, FilesRef, WriteFile};
 
-use super::response::{error, ok_json, Response};
+use super::response::{Response, error, ok_json};
 
 /// The largest text file we'll read into the editor or accept on a write. Keeps a single
 /// response/request bounded (project files here are configs — small); a larger file is

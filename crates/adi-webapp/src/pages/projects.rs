@@ -102,9 +102,10 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
 /// The count of archived projects, at every depth. `0` while the first load is in flight, which
 /// also keeps the archived disclosure hidden until there is something real to disclose.
 fn archived_count(state: State) -> usize {
-    state.projects.get().map_or(0, |p| {
-        p.projects.iter().filter(|x| x.is_archived()).count()
-    })
+    state
+        .projects
+        .get()
+        .map_or(0, |p| p.projects.iter().filter(|x| x.is_archived()).count())
 }
 
 /// The archive: its own collapsed panel at the foot of the page, with a caret header and a count.

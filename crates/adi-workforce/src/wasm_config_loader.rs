@@ -22,13 +22,13 @@ use wasmtime::{Config, Engine, Store};
 
 use crate::config_value::ConfigValue;
 use crate::core::Core;
-use crate::loop_runner_plugin::ResolvedRunner;
 use crate::employee_registry::EmployeeRegistration;
 use crate::filesystem::Filesystem;
 use crate::llm::{
     AssistantBlock, AssistantTurn, LlmBackend, LlmRequest, Turn, UserBlock, UserTurn,
 };
 use crate::loop_run_context::LoopRunContext;
+use crate::loop_runner_plugin::ResolvedRunner;
 use crate::tool_def::{to_tool_def, Tool, ToolDef};
 
 // ── WIT bindings ──
@@ -435,9 +435,7 @@ fn serialize_llm_response(
                 // instead of routing through `loop_tool`. First match
                 // wins — prompt guidance says "call exactly once" but
                 // a runaway model still only yields one decision.
-                if decision.is_none()
-                    && decision_tool.is_some_and(|n| n == name.as_str())
-                {
+                if decision.is_none() && decision_tool.is_some_and(|n| n == name.as_str()) {
                     decision = Some(input.clone());
                 }
                 serde_json::json!({
@@ -697,11 +695,9 @@ impl adi::workforce::host::Host for HostState {
         // SDK's transcript picks up only the final response, so the
         // next turn isn't polluted by the non-compliance exchange.
         if let Some(decision_tool) = session.decision_tool.clone() {
-            let had_decision = response
-                .turn
-                .blocks
-                .iter()
-                .any(|b| matches!(b, AssistantBlock::ToolUse { name, .. } if name == &decision_tool));
+            let had_decision = response.turn.blocks.iter().any(
+                |b| matches!(b, AssistantBlock::ToolUse { name, .. } if name == &decision_tool),
+            );
             let had_any_tool_use = response
                 .turn
                 .blocks

@@ -258,7 +258,8 @@ impl Hooks {
 
         let log_file = fs::File::create(&log)?;
         let errlog = log_file.try_clone()?;
-        cmd.stdout(Stdio::from(log_file)).stderr(Stdio::from(errlog));
+        cmd.stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(errlog));
 
         let mut child = cmd
             .spawn()
@@ -428,10 +429,8 @@ pub(crate) mod tests {
     use super::*;
 
     pub(crate) fn scratch_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "adi-hooks-test-{}-{name}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("adi-hooks-test-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -543,7 +542,9 @@ pub(crate) mod tests {
         let hooks = Hooks::new(&dir);
         hooks.create("boom", "echo before; exit 3").unwrap();
         hooks.run("boom", &[], &dir).unwrap();
-        assert!(wait_until(|| hooks.status("boom") == HookRunStatus::Failed(3)));
+        assert!(wait_until(
+            || hooks.status("boom") == HookRunStatus::Failed(3)
+        ));
         assert_eq!(hooks.status("boom").exit_code(), Some(3));
     }
 
@@ -551,7 +552,10 @@ pub(crate) mod tests {
     fn run_rejects_missing_and_blank_hooks() {
         let dir = scratch_dir("run-bad");
         let hooks = Hooks::new(&dir);
-        assert!(matches!(hooks.run("ghost", &[], &dir), Err(Error::NoHook(_))));
+        assert!(matches!(
+            hooks.run("ghost", &[], &dir),
+            Err(Error::NoHook(_))
+        ));
         hooks.create("blank", "   \n").unwrap();
         assert!(matches!(
             hooks.run("blank", &[], &dir),

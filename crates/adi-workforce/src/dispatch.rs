@@ -178,7 +178,10 @@ fn aggregate_usage_since(path: &Path, offset: u64) -> (u64, u64, u64) {
             continue;
         };
         turns += 1;
-        input += v.get("input_tokens").and_then(serde_json::Value::as_u64).unwrap_or(0);
+        input += v
+            .get("input_tokens")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
         output += v
             .get("output_tokens")
             .and_then(serde_json::Value::as_u64)

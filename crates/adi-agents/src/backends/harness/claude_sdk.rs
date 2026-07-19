@@ -60,7 +60,12 @@ fn append_system_prompt(config: &HarnessClaudeSdkArguments) -> Option<String> {
     .map(ToString::to_string)
     .collect::<Vec<_>>();
 
-    if let Some(scope) = config.tools.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(scope) = config
+        .tools
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
         parts.push(format!(
             "You may use only these adi-mono command groups: {scope}."
         ));

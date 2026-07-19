@@ -123,7 +123,10 @@ mod tests {
             "wasm:loop-script",
         ] {
             let backend = Backend::from(wire);
-            assert!(!matches!(backend, Backend::Other(_)), "{wire} should be named");
+            assert!(
+                !matches!(backend, Backend::Other(_)),
+                "{wire} should be named"
+            );
             assert_eq!(backend.as_str(), wire);
             assert_eq!(Backend::from(wire.to_string()), backend);
         }
@@ -131,7 +134,13 @@ mod tests {
 
     #[test]
     fn unknown_and_empty_backends_are_kept_verbatim() {
-        for wire in ["cloud:worker", "harness:unknown", "tmux:unknown", "weird", ""] {
+        for wire in [
+            "cloud:worker",
+            "harness:unknown",
+            "tmux:unknown",
+            "weird",
+            "",
+        ] {
             let backend = Backend::from(wire);
             assert_eq!(backend, Backend::Other(wire.to_string()));
             assert_eq!(backend.as_str(), wire);

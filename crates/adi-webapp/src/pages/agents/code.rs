@@ -127,7 +127,9 @@ fn save_code(state: State, code: AgentCodeEditor, name: String) {
         match fetch::save_agent_code(name, content).await {
             Ok(c) => {
                 code.original.set(c.code);
-                state.flash.set(Some(Flash::ok(format!("Saved {}.", c.path))));
+                state
+                    .flash
+                    .set(Some(Flash::ok(format!("Saved {}.", c.path))));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
