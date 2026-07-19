@@ -8,9 +8,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
+use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
-use crate::ui::{TextField, data_table, fmt_date, placeholder_row};
+use crate::ui::{TextField, code_editor, data_table, fmt_date, placeholder_row};
 
 /// A hook's path inside the project, as the file API sees it.
 fn hook_rel_path(name: &str) -> String {
@@ -546,37 +547,32 @@ fn reload_hook(state: State, editor: HookEditor) {
     });
 }
 
-/// The hook editor panel: a toolbar (script path, dirty state, Save/Reload/Close) and a
-/// monospace textarea bound to the buffer. Renders nothing while no hook is open.
+/// The hook editor panel: a head carrying the script path, dirty state and Save/Reload/Close,
+/// then the shared highlighted editor. Hooks are extensionless files run through `sh -c`, so
+/// the buffer is always painted as shell rather than guessed from the path. Renders nothing
+/// while no hook is open.
 pub(crate) fn hook_editor_view(state: State, editor: HookEditor) -> Option<AnyView> {
     let (_, name) = editor.open.get()?;
     let dirty = move || editor.buffer.get() != editor.original.get();
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">{format!("Edit hook — {name}")}</h2>
-                <span class="adi-updated">"runs as sh -c, detached"</span>
-            </div>
-            <div class="adi-form adi-form--toolbar">
-                <span class="adi-chip adi-mono">{hook_rel_path(&name)}</span>
-                <span class="adi-muted" style="font-size:var(--text-md)">
-                    {move || if dirty() { "unsaved changes".to_string() } else { "saved".to_string() }}
+                <h2 class="adi-panel__title adi-mono">{hook_rel_path(&name)}</h2>
+                <span class="adi-updated">
+                    {move || if dirty() { "unsaved changes" } else { "saved" }}
                 </span>
+                <span class="adi-chip">"sh -c, detached"</span>
                 <span class="adi-spacer"></span>
+                <button class="adi-btn adi-btn--ghost" type="button" title="Re-read from disk"
+                    prop:disabled=move || editor.busy.get()
+                    on:click=move |_| reload_hook(state, editor)>"Reload"</button>
                 <button class="adi-btn adi-btn--primary" type="button"
                     prop:disabled=move || editor.busy.get() || !dirty()
                     on:click=move |_| save_hook(state, editor)>"Save"</button>
-                <button class="adi-btn adi-btn--ghost" type="button"
-                    prop:disabled=move || editor.busy.get()
-                    on:click=move |_| reload_hook(state, editor)>"Reload"</button>
                 <button class="adi-btn adi-btn--link" type="button"
                     on:click=move |_| editor.close()>"Close"</button>
             </div>
-            <div class="adi-panel__body">
-                <textarea class="adi-textarea adi-mono" spellcheck="false" autocomplete="off"
-                    prop:value=move || editor.buffer.get()
-                    on:input=move |ev| editor.buffer.set(event_target_value(&ev))></textarea>
-            </div>
+            {code_editor(move || Lang::Sh, editor.buffer, "", "hook-editor")}
         </section>
     }
     .into_any()
