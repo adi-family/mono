@@ -1,22 +1,29 @@
-//! Firing a trigger — the first slice of its run layer. A fire spawns the trigger's shell code
-//! block **detached** (its own process group, so it outlives the caller): the process runs in
-//! the background with the trigger's identity in its environment, its output captured to
-//! `triggers/logs/<name>.log`, and the event payload (a webhook body, …) handed over via
-//! `ADI_PAYLOAD_FILE`. Live listeners (a Telegram poller, a cron scheduler) are future work —
-//! today's sources are the app's webhook endpoint and explicit manual fires.
+//! Launching a trigger's code block. Both ways a trigger runs — a one-off fire (a webhook
+//! delivery, a manual ▶ Fire) and a supervised background process — funnel through
+//! [`Launch`], which resolves the runtime (`sh -c` or `bun run`), exports the trigger's
+//! identity and settings into the environment, and stages the event payload.
+//!
+//! A fire spawns that launch **detached** (its own process group, so it outlives the caller)
+//! with output captured to `triggers/logs/<name>.log`. The supervised path
+//! ([`crate::supervisor`]) builds the same launch under tokio so it can wait on the child and
+//! relaunch it.
 
+use std::collections::BTreeMap;
 use std::io::Read as _;
 use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
-use crate::trigger::Trigger;
+use crate::trigger::{RUNTIME_TS, Trigger, normalize_runtime};
 
 /// Where a trigger's fire artifacts live under the module dir: `logs/<name>.log` (the code
-/// block's combined stdout+stderr, truncated per fire) and `logs/<name>.payload` (the last
-/// event payload).
+/// block's combined stdout+stderr) and `logs/<name>.payload` (the last event payload).
 const LOGS_DIR: &str = "logs";
+
+/// Where a non-shell runtime's code block is materialized so its interpreter can run it:
+/// `src/<name>.ts`. Rewritten from the manifest on every launch, so it never drifts.
+const SRC_DIR: &str = "src";
 
 /// A payload no larger than this is *also* exported inline as `ADI_PAYLOAD`, saving trivial
 /// consumers the file read. Larger payloads are file-only — environment blocks have hard
@@ -36,7 +43,20 @@ pub struct Firing {
     pub log: PathBuf,
 }
 
-/// The log file for a trigger's fires: `<module_dir>/logs/<name>.log`.
+/// A resolved, ready-to-spawn invocation of a trigger's code block: what to execute, where, and
+/// with which environment. Runtime-agnostic by construction — the caller only decides *how* to
+/// spawn it (detached via `std::process`, or supervised via `tokio::process`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Launch {
+    /// The interpreter to execute (`sh`, `bun`).
+    pub(crate) program: &'static str,
+    /// Its arguments — the inline script for `sh -c`, or the staged module path for `bun run`.
+    pub(crate) args: Vec<String>,
+    /// The environment to add on top of the inherited one.
+    pub(crate) env: Vec<(String, String)>,
+}
+
+/// The log file for a trigger's runs: `<module_dir>/logs/<name>.log`.
 #[must_use]
 pub(crate) fn log_path(module_dir: &Path, name: &str) -> PathBuf {
     module_dir.join(LOGS_DIR).join(format!("{name}.log"))
@@ -48,61 +68,130 @@ pub(crate) fn payload_path(module_dir: &Path, name: &str) -> PathBuf {
     module_dir.join(LOGS_DIR).join(format!("{name}.payload"))
 }
 
-/// Spawn `trigger`'s code block detached: `sh -c <code>` in its own process group, in `$HOME`
-/// (a trigger shouldn't inherit the daemon's working directory), with the trigger's identity
-/// and the payload in the environment, and output redirected to the trigger's log (truncated —
-/// each fire's log replaces the last).
+/// Resolve `trigger` into a spawnable [`Launch`]: pick the interpreter for its runtime (staging
+/// a `ts` block to `src/<name>.ts`), export its identity and every setting, and — when the event
+/// carries one — write the payload file the block reads.
 ///
 /// # Errors
-/// [`Error::NoCode`] when the trigger has no code block, [`Error::Io`] when the log/payload
-/// files can't be written, or [`Error::Launch`] when the shell can't be spawned.
-pub(crate) fn fire(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]>) -> Result<Firing> {
-    if trigger.manifest.code.trim().is_empty() {
+/// [`Error::NoCode`] when the trigger has no code block, or [`Error::Io`] when the staged
+/// source or payload file can't be written.
+pub(crate) fn launch(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]>) -> Result<Launch> {
+    let code = trigger.manifest.code.trim();
+    if code.is_empty() {
         return Err(Error::NoCode(trigger.name.clone()));
     }
 
-    let log = log_path(module_dir, &trigger.name);
-    std::fs::create_dir_all(log.parent().expect("log path has the logs dir as parent"))?;
+    let (program, args) = match normalize_runtime(&trigger.manifest.runtime) {
+        RUNTIME_TS => {
+            let module = stage_source(module_dir, &trigger.name, &trigger.manifest.code, "ts")?;
+            ("bun", vec!["run".to_string(), module.display().to_string()])
+        }
+        // `sh` and anything a newer build might have written: run it as a shell script.
+        _ => ("sh", vec!["-c".to_string(), trigger.manifest.code.clone()]),
+    };
 
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(&trigger.manifest.code)
-        .env("PATH", augmented_path())
-        .env("ADI_TRIGGER", &trigger.name)
-        .env("ADI_TRIGGER_KIND", &trigger.manifest.kind)
+    let mut env = vec![
+        ("PATH".to_string(), augmented_path()),
+        ("ADI_TRIGGER".to_string(), trigger.name.clone()),
+        ("ADI_TRIGGER_KIND".to_string(), trigger.manifest.kind.clone()),
+    ];
+    env.extend(extra_env(&trigger.manifest.extra));
+
+    // The payload is written *before* the spawn so the code block always finds a complete file.
+    if let Some(bytes) = payload {
+        let file = payload_path(module_dir, &trigger.name);
+        std::fs::create_dir_all(file.parent().expect("payload path has the logs dir as parent"))?;
+        std::fs::write(&file, bytes)?;
+        env.push(("ADI_PAYLOAD_FILE".to_string(), file.display().to_string()));
+        if bytes.len() <= INLINE_PAYLOAD_MAX
+            && let Ok(text) = std::str::from_utf8(bytes)
+        {
+            env.push(("ADI_PAYLOAD".to_string(), text.to_string()));
+        }
+    }
+
+    Ok(Launch {
+        program,
+        args,
+        env,
+    })
+}
+
+/// Export a trigger's settings into its code block as `ADI_<KEY>`, uppercased with `-` folded
+/// to `_` — this is the contract every [preset](crate::presets) field is written against. A key
+/// that isn't a usable environment-variable name is dropped rather than mangled.
+fn extra_env(extra: &BTreeMap<String, String>) -> Vec<(String, String)> {
+    extra
+        .iter()
+        .filter(|(k, _)| {
+            !k.is_empty()
+                && !k.starts_with(|c: char| c.is_ascii_digit())
+                && k.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+        })
+        .map(|(k, v)| (format!("ADI_{}", k.to_uppercase().replace('-', "_")), v.clone()))
+        .collect()
+}
+
+/// Write a non-shell code block to `<module_dir>/src/<name>.<ext>` so its interpreter has a file
+/// to run, returning that path. Rewritten every launch: the manifest is the source of truth.
+fn stage_source(module_dir: &Path, name: &str, code: &str, ext: &str) -> Result<PathBuf> {
+    let dir = module_dir.join(SRC_DIR);
+    std::fs::create_dir_all(&dir)?;
+    let file = dir.join(format!("{name}.{ext}"));
+    std::fs::write(&file, code)?;
+    Ok(file)
+}
+
+/// Open a trigger's log for writing: truncating for a one-off fire (each fire's log replaces
+/// the last), appending for a supervised process (a crash loop's history is the whole point).
+pub(crate) fn open_log(module_dir: &Path, name: &str, append: bool) -> Result<std::fs::File> {
+    let path = log_path(module_dir, name);
+    std::fs::create_dir_all(path.parent().expect("log path has the logs dir as parent"))?;
+    Ok(std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(append)
+        .truncate(!append)
+        .open(&path)?)
+}
+
+/// Spawn `trigger`'s code block detached: its own process group, in `$HOME` (a trigger shouldn't
+/// inherit the daemon's working directory), with its identity and the payload in the
+/// environment, and output redirected to the trigger's log (truncated — each fire replaces the
+/// last).
+///
+/// # Errors
+/// [`Error::NoCode`] when the trigger has no code block, [`Error::Io`] when the log/payload
+/// files can't be written, or [`Error::Launch`] when the interpreter can't be spawned.
+pub(crate) fn fire(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]>) -> Result<Firing> {
+    let spec = launch(module_dir, trigger, payload)?;
+    let log_file = open_log(module_dir, &trigger.name, false)?;
+    let errlog = log_file.try_clone()?;
+
+    let mut cmd = Command::new(spec.program);
+    cmd.args(&spec.args)
         .process_group(0)
-        .stdin(Stdio::null());
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(errlog));
+    for (key, value) in &spec.env {
+        cmd.env(key, value);
+    }
     if let Ok(home) = std::env::var("HOME") {
         cmd.current_dir(home);
     }
 
-    // The payload is written *before* the spawn so the code block always finds a complete file.
-    if let Some(bytes) = payload {
-        let payload_file = payload_path(module_dir, &trigger.name);
-        std::fs::write(&payload_file, bytes)?;
-        cmd.env("ADI_PAYLOAD_FILE", &payload_file);
-        if bytes.len() <= INLINE_PAYLOAD_MAX
-            && let Ok(text) = std::str::from_utf8(bytes)
-        {
-            cmd.env("ADI_PAYLOAD", text);
-        }
-    }
-
-    let log_file = std::fs::File::create(&log)?;
-    let errlog = log_file.try_clone()?;
-    cmd.stdout(Stdio::from(log_file)).stderr(Stdio::from(errlog));
-
-    let child = cmd
-        .spawn()
-        .map_err(|e| Error::Launch(format!("couldn't spawn sh: {e}")))?;
+    let child = cmd.spawn().map_err(|e| {
+        Error::Launch(format!("couldn't spawn {}: {e}", spec.program))
+    })?;
     Ok(Firing {
         pid: child.id(),
-        log,
+        log: log_path(module_dir, &trigger.name),
     })
 }
 
-/// When the trigger last fired, as Unix epoch seconds — derived from its log file's mtime (each
-/// fire recreates the log), so no manifest write races the fire. `None` if it never fired.
+/// When the trigger last ran, as Unix epoch seconds — derived from its log file's mtime, so no
+/// manifest write races the launch. `None` if it never ran.
 #[must_use]
 pub(crate) fn last_fired(module_dir: &Path, name: &str) -> Option<u64> {
     let modified = std::fs::metadata(log_path(module_dir, name))
@@ -115,8 +204,8 @@ pub(crate) fn last_fired(module_dir: &Path, name: &str) -> Option<u64> {
         .map(|d| d.as_secs())
 }
 
-/// The tail (last [`LOG_TAIL_MAX`] bytes, lossily UTF-8) of the trigger's most recent fire log,
-/// or `None` if it never fired. Reading is best-effort: the code block may still be running and
+/// The tail (last [`LOG_TAIL_MAX`] bytes, lossily UTF-8) of the trigger's most recent run log,
+/// or `None` if it never ran. Reading is best-effort: the code block may still be running and
 /// appending.
 #[must_use]
 pub(crate) fn read_log(module_dir: &Path, name: &str) -> Option<String> {
@@ -133,9 +222,9 @@ pub(crate) fn read_log(module_dir: &Path, name: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// A `PATH` that includes the user's common tool directories, so a code block fired under a
+/// A `PATH` that includes the user's common tool directories, so a code block launched under a
 /// minimal launchd environment can still find `bun`, `node`, and Homebrew binaries (the same
-/// augmentation the hive runner uses).
+/// augmentation the hive runner uses). `bun` living here is what makes the `ts` runtime work.
 fn augmented_path() -> String {
     let mut parts = Vec::new();
     if let Ok(home) = std::env::var("HOME") {
@@ -155,7 +244,7 @@ fn augmented_path() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::trigger::TriggerManifest;
+    use crate::trigger::{KIND_BACKGROUND, RUNTIME_SH, TriggerManifest};
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
@@ -172,7 +261,8 @@ mod tests {
         Trigger {
             name: name.to_string(),
             manifest: TriggerManifest {
-                kind: "manual".into(),
+                kind: KIND_BACKGROUND.into(),
+                runtime: RUNTIME_SH.into(),
                 code: code.into(),
                 ..TriggerManifest::default()
             },
@@ -212,9 +302,9 @@ mod tests {
         let firing = fire(&dir, &t, None).expect("fire");
         assert!(firing.pid > 0);
         let text = wait_for_log(&firing.log, |s| !s.is_empty());
-        assert_eq!(text, "greeter/manual");
+        assert_eq!(text, "greeter/background");
         assert!(last_fired(&dir, "greeter").is_some());
-        assert_eq!(read_log(&dir, "greeter").as_deref(), Some("greeter/manual"));
+        assert_eq!(read_log(&dir, "greeter").as_deref(), Some("greeter/background"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -229,6 +319,74 @@ mod tests {
         );
         let text = wait_for_log(&firing.log, |s| s.contains('|') && s.len() > 8);
         assert_eq!(text, "{\"x\":1}|{\"x\":1}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The preset contract: every setting reaches the code block as `ADI_<KEY>`.
+    #[test]
+    fn settings_reach_the_code_block_as_adi_env_vars() {
+        let dir = scratch_dir("extras");
+        let mut t = trigger("notify", "printf '%s/%s' \"$ADI_CHAT_ID\" \"$ADI_TOKEN_ENV\"");
+        t.manifest.extra.insert("chat_id".into(), "4242".into());
+        t.manifest.extra.insert("token_env".into(), "MY_TOKEN".into());
+        let firing = fire(&dir, &t, None).expect("fire");
+        assert_eq!(wait_for_log(&firing.log, |s| s.contains('/')), "4242/MY_TOKEN");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dashed_setting_key_becomes_an_underscored_env_var() {
+        let extra = BTreeMap::from([
+            ("chat-id".to_string(), "7".to_string()),
+            ("1bad".to_string(), "x".to_string()),
+            ("also bad".to_string(), "x".to_string()),
+        ]);
+        assert_eq!(
+            extra_env(&extra),
+            vec![("ADI_CHAT_ID".to_string(), "7".to_string())],
+            "only the usable key survives, uppercased with dashes folded"
+        );
+    }
+
+    /// A `ts` trigger is staged to a real file and handed to `bun run` — the launch resolves
+    /// without needing bun installed to assert the shape.
+    #[test]
+    fn a_typescript_block_is_staged_and_handed_to_bun() {
+        let dir = scratch_dir("ts");
+        let mut t = trigger("poller", "console.log('hi');\n");
+        t.manifest.runtime = RUNTIME_TS.into();
+
+        let spec = launch(&dir, &t, None).expect("launch");
+        assert_eq!(spec.program, "bun");
+        let staged = dir.join(SRC_DIR).join("poller.ts");
+        assert_eq!(spec.args, vec!["run".to_string(), staged.display().to_string()]);
+        assert_eq!(
+            std::fs::read_to_string(&staged).expect("staged module"),
+            "console.log('hi');\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A supervised relaunch appends, so a crash loop leaves a readable history; a one-off fire
+    /// truncates, so its log is exactly that run.
+    #[test]
+    fn logs_append_when_supervised_and_truncate_when_fired() {
+        let dir = scratch_dir("logmode");
+        {
+            use std::io::Write as _;
+            let mut first = open_log(&dir, "svc", false).expect("open");
+            write!(first, "one\n").expect("write");
+            let mut second = open_log(&dir, "svc", true).expect("reopen append");
+            write!(second, "two\n").expect("write");
+        }
+        assert_eq!(read_log(&dir, "svc").as_deref(), Some("one\ntwo\n"));
+
+        {
+            use std::io::Write as _;
+            let mut fresh = open_log(&dir, "svc", false).expect("reopen truncate");
+            write!(fresh, "three\n").expect("write");
+        }
+        assert_eq!(read_log(&dir, "svc").as_deref(), Some("three\n"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

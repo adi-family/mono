@@ -21,7 +21,7 @@ use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
 use adi_tasks::Tasks;
-use adi_triggers::Triggers;
+use adi_triggers::{Supervisor, Triggers};
 use adi_webapp_api::handlers;
 use adi_webapp_api::handlers::Response;
 use include_dir::{Dir, include_dir};
@@ -74,6 +74,10 @@ const DEFAULT_PORT: u16 = 8090;
 /// Env var pointing at a webapp `dist/` to serve from disk instead of the embedded copy.
 const DIST_ENV: &str = "ADI_WEBAPP_DIST";
 
+/// How long to wait for background triggers to exit at shutdown before giving up on them — a
+/// code block that ignores SIGTERM must not hold the whole app open.
+const TRIGGER_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -91,6 +95,9 @@ async fn main() -> anyhow::Result<()> {
     let tasks = Arc::new(Tasks::open());
     let agents = Arc::new(Agents::open());
     let triggers = Arc::new(Triggers::open());
+    // Background triggers are long-lived processes owned by this app: the supervisor keeps
+    // every enabled one running for as long as the app is up, and stops them on the way out.
+    let trigger_supervisor = Supervisor::start((*triggers).clone());
     let webapp_dist = Arc::new(webapp_dist_override());
     // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
     // (non-blocking, best-effort) so the whole stack is up once the app is — the control
@@ -120,6 +127,7 @@ async fn main() -> anyhow::Result<()> {
                     let tasks = Arc::clone(&tasks);
                     let agents = Arc::clone(&agents);
                     let triggers = Arc::clone(&triggers);
+                    let trigger_supervisor = Arc::clone(&trigger_supervisor);
                     let webapp_dist = Arc::clone(&webapp_dist);
                     let mesh = Arc::clone(&mesh);
                     tokio::spawn(async move {
@@ -130,6 +138,7 @@ async fn main() -> anyhow::Result<()> {
                             &tasks,
                             &agents,
                             &triggers,
+                            &trigger_supervisor,
                             &mesh,
                             start,
                             webapp_dist.as_deref(),
@@ -148,6 +157,10 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+    // Background triggers run in their own process groups so the supervisor can signal their
+    // whole tree — which also means they outlive this process unless they are stopped first.
+    // Waiting here is what keeps a restart from leaking a copy of every background trigger.
+    trigger_supervisor.stop(TRIGGER_STOP_GRACE).await;
     mesh.stop().await;
     Ok(())
 }
@@ -181,6 +194,7 @@ async fn handle(
     tasks: &Tasks,
     agents: &Agents,
     triggers: &Triggers,
+    trigger_supervisor: &Supervisor,
     mesh: &MeshCtl,
     start: Instant,
     dist: Option<&Path>,
@@ -258,9 +272,17 @@ async fn handle(
         ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),
         ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),
         ("GET", "/api/triggers") => handlers::triggers(triggers),
-        ("POST", "/api/triggers/save") => handlers::save_trigger(triggers, &req.body),
-        ("POST", "/api/triggers/delete") => handlers::delete_trigger(triggers, &req.body),
+        ("POST", "/api/triggers/save") => {
+            handlers::save_trigger(triggers, trigger_supervisor, &req.body)
+        }
+        ("POST", "/api/triggers/delete") => {
+            handlers::delete_trigger(triggers, trigger_supervisor, &req.body)
+        }
         ("POST", "/api/triggers/fire") => handlers::fire_trigger(triggers, &req.body),
+        // Replace a supervised background trigger's process without changing its definition.
+        ("POST", "/api/triggers/restart") => {
+            handlers::restart_trigger(triggers, trigger_supervisor, &req.body)
+        }
         ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
         // The public webhook endpoint: fire an enabled `webhook` trigger with the request body
         // as its payload. GET is accepted too — some webhook providers ping with it. The secret

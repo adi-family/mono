@@ -9,6 +9,7 @@ use leptos::prelude::*;
 
 use crate::routing::scroll_top;
 use crate::state::{AgentsForm, State};
+use crate::ui::field_hint;
 
 use super::{argument_text, scalar_argument_text};
 
@@ -121,7 +122,7 @@ fn render_project_select(field: AgentFormField, state: State, form: AgentsForm) 
                         view! { <option value=id>{label}</option> }
                     }).collect::<Vec<_>>()).unwrap_or_default()}
             </select>
-            {show_hint.then(|| view! { <span class="adi-field__hint">{hint}</span> })}
+            {show_hint.then(|| field_hint(hint))}
         </div>
     }
     .into_any()
@@ -175,7 +176,7 @@ fn render_agent_input(
             <input class=class id=id placeholder=placeholder autocomplete="off" inputmode=inputmode
                 prop:value=move || agent_field_value(form, &name_for_value)
                 on:input=move |ev| set_agent_field_value(form, &name_for_input, event_target_value(&ev)) />
-            {show_hint.then(|| view! { <span class="adi-field__hint">{hint}</span> })}
+            {show_hint.then(|| field_hint(hint))}
         </div>
     }
     .into_any()

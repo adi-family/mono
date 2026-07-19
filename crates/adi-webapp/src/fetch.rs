@@ -169,6 +169,12 @@ pub async fn fire_trigger(name: String) -> Result<TriggerFireResult, String> {
     post("/api/triggers/fire", &TriggerRef { name }).await
 }
 
+/// Replace a supervised background trigger's process with a fresh one, leaving its definition
+/// alone.
+pub async fn restart_trigger(name: String) -> Result<TriggerFireResult, String> {
+    post("/api/triggers/restart", &TriggerRef { name }).await
+}
+
 pub async fn trigger_log(name: String) -> Result<TriggerLog, String> {
     post("/api/triggers/log", &TriggerRef { name }).await
 }

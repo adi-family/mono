@@ -224,7 +224,13 @@ pub(crate) struct AgentsForm {
 #[derive(Clone, Copy)]
 pub(crate) struct TriggersForm {
     pub(crate) name: RwSignal<String>,
+    /// How the trigger launches: `webhook` or `background`.
     pub(crate) kind: RwSignal<String>,
+    /// The language of the code block: `sh` or `ts`.
+    pub(crate) runtime: RwSignal<String>,
+    /// The preset the form was prefilled from, which decides the settings inputs it offers.
+    /// `None` once the user starts from scratch.
+    pub(crate) preset: RwSignal<Option<String>>,
     /// The project to file the trigger under (its id), or empty for a global trigger.
     pub(crate) project: RwSignal<String>,
     pub(crate) description: RwSignal<String>,

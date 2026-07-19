@@ -39,7 +39,10 @@ pub use adi_hooks::{
 
 pub use adi_tasks::{EffectiveStatus, Error as TasksError, TaskPatch, TaskStatus, TaskView, Tasks};
 
-pub use adi_triggers::{Error as TriggersError, Firing, Trigger, TriggerManifest, Triggers};
+pub use adi_triggers::{
+    Error as TriggersError, Firing, KIND_BACKGROUND, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS,
+    RunState, Trigger, TriggerManifest, Triggers, presets as trigger_presets,
+};
 
 /// The CLI binary name — the single Rust-side source of truth for user-facing messages.
 pub const BIN_NAME: &str = "adi-mono";

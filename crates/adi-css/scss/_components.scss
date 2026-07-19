@@ -203,6 +203,16 @@ $fileedit-pad: 12px 14px;
   // below takes over and it grows to whatever the pane has left.
   height: 60vh;
 
+  // Inside a form the editor is one field among several rather than the whole pane: it takes
+  // a fixed, generous height, and it needs the frame the surrounding inputs have — on the
+  // file page the panel supplies that edge, in a form nothing does.
+  &--form {
+    height: 340px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+  }
+
   // The shared metrics, applied to both layers exactly once. Any divergence here shows up
   // as the caret drifting away from the glyphs.
   &__paint,
@@ -801,24 +811,9 @@ $fileedit-pad: 12px 14px;
     justify-content: flex-start;
   }
 
-  // In a horizontal row a hint has to hang *below* its field rather than sit in flow:
-  // in flow it makes that one field taller, and since the row aligns on its bottom edge
-  // the hinted field's input rides up out of line with every other input.
-  .adi-field { position: relative; }
-
-  .adi-field__hint {
-    position: absolute;
-    top: calc(100% + 3px);
-    left: 0;
-  }
-
-  // Only a form that actually has a hint pays for the space one needs. Two lines' worth:
-  // fields are narrow, so a hint of more than a few words wraps, and anything following
-  // the form would otherwise be overlapped by it.
-  &:has(.adi-field__hint) {
-    row-gap: 34px;
-    padding-bottom: 34px;
-  }
+  // A hint costs a form no vertical space at all: it lives as a “?” beside its own field's
+  // label and only opens on demand (see `.adi-field__hint`). Fields therefore stay the same
+  // height whether or not they explain themselves, and rows keep aligning on their inputs.
 }
 
 // Explanatory copy hanging below a form or panel body — the written-out version of what
@@ -832,10 +827,18 @@ $fileedit-pad: 12px 14px;
   code { font-family: var(--font-mono); }
 }
 
+// A labelled control. Grid rather than a column flex so a hint can sit *beside* the label
+// (row 1, second column) while the control below still spans the full width — the hint is
+// written last in the markup, where it reads naturally, but lands next to the title.
 .adi-field {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
   gap: 4px;
+
+  > * { grid-column: 1 / -1; }
+  > .adi-field__label { grid-row: 1; grid-column: 1; }
+  > .adi-field__hint { grid-row: 1; grid-column: 2; justify-self: start; }
 
   // A field that should absorb the free space on a wrapping form row.
   &--grow {
@@ -846,6 +849,7 @@ $fileedit-pad: 12px 14px;
   // A checkbox and its label, side by side — the control leads, so the stacking and the
   // baseline alignment the default field uses both work against it.
   &--check {
+    display: flex;
     flex-direction: row;
     align-items: center;
     align-self: center;
@@ -856,7 +860,71 @@ $fileedit-pad: 12px 14px;
     @include eyebrow(var(--text-xs));
   }
 
+  // A field's explanation, collapsed to a “?” next to its label. Keeping the words out of the
+  // form until they're asked for is what lets a dense row of fields stay readable — and what
+  // stops a long hint from pushing the layout around.
   &__hint {
+    display: inline-grid;
+    place-items: center;
+    position: relative;
+    width: 14px;
+    height: 14px;
+    border: 1px solid var(--border);
+    border-radius: 50%;
+    color: var(--muted);
+    font-size: 9px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: help;
+    transition: color var(--transition), border-color var(--transition);
+
+    &::before { content: "?"; }
+
+    &:hover,
+    &:focus-visible {
+      outline: none;
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+  }
+
+  // The words themselves, revealed under the “?” on hover or keyboard focus. Anchored below
+  // and left so it opens into the form's own body rather than off its top or right edge.
+  &__hint-text {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: -6px;
+    z-index: 30;
+    width: max-content;
+    max-width: 260px;
+    padding: 6px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    color: var(--ink);
+    font-size: var(--text-sm);
+    font-weight: 400;
+    line-height: 1.45;
+    letter-spacing: normal;
+    text-transform: none;
+    text-align: left;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--transition), visibility var(--transition);
+
+    code { font-family: var(--font-mono); }
+  }
+
+  &__hint:hover &__hint-text,
+  &__hint:focus-visible &__hint-text {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  // Explanatory copy that belongs *in* the field rather than behind a “?” — a paragraph
+  // standing in for absent content, not a one-line gloss on a control.
+  &__note {
     font-size: var(--text-sm);
     color: var(--muted);
 

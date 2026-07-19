@@ -154,6 +154,8 @@ fn App() -> impl IntoView {
     let triggers_form = TriggersForm {
         name: RwSignal::new(String::new()),
         kind: RwSignal::new(String::new()),
+        runtime: RwSignal::new(String::new()),
+        preset: RwSignal::new(None::<String>),
         project: RwSignal::new(String::new()),
         description: RwSignal::new(String::new()),
         code: RwSignal::new(String::new()),

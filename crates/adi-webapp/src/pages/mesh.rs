@@ -53,19 +53,19 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 <div class="adi-field">
                     <label class="adi-field__label">"Endpoint ID"</label>
                     {copy_row(form.id_ref, move || mesh.get().map(|m| m.id).unwrap_or_default())}
-                    <div class="adi-field__hint">"The minimal token a peer can dial (resolved via discovery)."</div>
+                    <div class="adi-field__note">"The minimal token a peer can dial (resolved via discovery)."</div>
                 </div>
                 <div class="adi-field">
                     <label class="adi-field__label">"Ticket"</label>
                     {move || match mesh.get().and_then(|m| m.ticket) {
                         Some(ticket) => copy_row(form.ticket_ref, move || ticket.clone()).into_any(),
                         None => view! {
-                            <div class="adi-field__hint adi-muted">
+                            <div class="adi-field__note adi-muted">
                                 "Start the mesh daemon (the "<strong>"Start mesh"</strong>" button above) to publish a ticket a peer can dial without discovery."
                             </div>
                         }.into_any(),
                     }}
-                    <div class="adi-field__hint">"id + relay + direct addresses — the reliable token to hand a peer."</div>
+                    <div class="adi-field__note">"id + relay + direct addresses — the reliable token to hand a peer."</div>
                 </div>
             </div>
         </section>

@@ -7,6 +7,7 @@ use adi_webapp_api::types::{ServicePort, TaskRow};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::highlight::{Lang, highlight};
 use crate::state::{Flash, State};
 
 /// A single full-width placeholder row spanning `colspan` columns — the
@@ -132,9 +133,84 @@ pub(crate) fn TextField(
             <input class=class id=id placeholder=placeholder autocomplete="off" inputmode=inputmode
                 prop:value=move || value.get()
                 on:input=move |ev| value.set(event_target_value(&ev)) />
-            {(!hint.is_empty()).then(|| view! { <span class="adi-field__hint">{hint}</span> })}
+            {(!hint.is_empty()).then(|| field_hint(hint))}
         </div>
     }
+}
+
+/// A code editor over `buffer`: a syntax-highlighted view of the text with a real textarea on
+/// top of it. Two stacked layers sharing one box — a painted `<pre>` underneath, and a
+/// transparent-text `<textarea>` above that still owns the caret, selection, and typing. They
+/// must keep identical font metrics and padding or the two drift apart; `.adi-code` /
+/// `.adi-fileedit` enforce that in one place.
+///
+/// `modifier` is an extra class on the wrapper, for callers that need a different height than
+/// the full-pane default (`adi-code--form` sizes it for a form).
+pub(crate) fn code_editor(
+    lang: impl Fn() -> Lang + Copy + Send + Sync + 'static,
+    buffer: RwSignal<String>,
+    modifier: &'static str,
+    id: &'static str,
+) -> AnyView {
+    let area = NodeRef::<leptos::html::Textarea>::new();
+    let paint = NodeRef::<leptos::html::Pre>::new();
+    let class = if modifier.is_empty() {
+        "adi-code".to_string()
+    } else {
+        format!("adi-code {modifier}")
+    };
+    view! {
+        <div class=class>
+            <pre class="adi-code__paint adi-mono" aria-hidden="true" node_ref=paint>
+                {move || painted(lang(), &buffer.get())}
+            </pre>
+            <textarea class="adi-textarea adi-mono adi-fileedit" spellcheck="false"
+                autocomplete="off" id=id node_ref=area
+                prop:value=move || buffer.get()
+                on:scroll=move |_| sync_code_scroll(area, paint)
+                on:input=move |ev| {
+                    buffer.set(event_target_value(&ev));
+                    sync_code_scroll(area, paint);
+                }></textarea>
+        </div>
+    }
+    .into_any()
+}
+
+/// The buffer painted as coloured spans. A trailing newline gets a space appended so the last
+/// line still has height — otherwise the painted layer is one line shorter than the textarea
+/// and the two scroll out of step at the bottom.
+fn painted(lang: Lang, src: &str) -> AnyView {
+    let mut text = src.to_string();
+    if text.ends_with('\n') {
+        text.push(' ');
+    }
+    highlight(lang, &text)
+        .into_iter()
+        .map(|(tok, run)| view! { <span class=tok.class()>{run}</span> })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+/// Keep the painted layer aligned with the textarea's scroll position. The textarea is the one
+/// that actually scrolls; the `<pre>` is dragged along behind it.
+fn sync_code_scroll(area: NodeRef<leptos::html::Textarea>, paint: NodeRef<leptos::html::Pre>) {
+    if let (Some(a), Some(p)) = (area.get_untracked(), paint.get_untracked()) {
+        p.set_scroll_top(a.scroll_top());
+        p.set_scroll_left(a.scroll_left());
+    }
+}
+
+/// A field's explanation, rendered as a “?” beside its label that opens the text on hover or
+/// keyboard focus. Written after the control (where it reads naturally in the markup); the
+/// field's grid places it up next to the title, so it costs the form no vertical space.
+pub(crate) fn field_hint(text: impl IntoView + 'static) -> AnyView {
+    view! {
+        <span class="adi-field__hint" tabindex="0" role="note">
+            <span class="adi-field__hint-text">{text}</span>
+        </span>
+    }
+    .into_any()
 }
 
 /// Run a mutation that returns fresh state `T`, hand the result to `store`, and flash success or

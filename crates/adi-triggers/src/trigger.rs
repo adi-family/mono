@@ -7,42 +7,85 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// The well-known trigger kinds. `kind` is stored as a free string (so new kinds don't break
-/// older stores), but these are the ones the platform understands today:
+/// The trigger kinds. A kind answers exactly one question — **how the code block gets
+/// launched** — so there are only two:
 ///
-/// * [`KIND_WEBHOOK`] — fired by an HTTP call to the app's `/api/hooks/<name>` endpoint; the
-///   request body becomes the payload. Extras: `secret` (optional shared secret the caller must
-///   pass as a `?secret=` query parameter).
-/// * [`KIND_TELEGRAM`] — fired by a Telegram bot update. The listener runtime is future work;
-///   the definition (extras: `token_env`, `chat_id`) is stored now and can be fired manually.
-/// * [`KIND_CRON`] — fired on a schedule (extra: `schedule`). The scheduler runtime is future
-///   work; stored now, manually firable.
-/// * [`KIND_MANUAL`] — fired only by hand (UI button / CLI / API).
+/// * [`KIND_WEBHOOK`] — launched by an inbound HTTP call to `/api/hooks/<name>`; the request
+///   body becomes the payload. Extra: `secret` (optional shared secret the caller must pass as
+///   `?secret=`).
+/// * [`KIND_BACKGROUND`] — a long-lived independent process. While the trigger is enabled the
+///   supervisor keeps it running, restarting it with backoff if it exits; disabling stops it.
+///
+/// Everything a trigger *does* — talk to Telegram, poll on a schedule, react to a push — is the
+/// job of its code block, prefilled from a [preset](crate::presets) rather than a kind.
 pub const KIND_WEBHOOK: &str = "webhook";
-pub const KIND_TELEGRAM: &str = "telegram";
-pub const KIND_CRON: &str = "cron";
-pub const KIND_MANUAL: &str = "manual";
+pub const KIND_BACKGROUND: &str = "background";
 
-/// A reusable trigger definition: *what* fires it (the kind plus its kind-specific extras) and
-/// *what runs* when it fires (the shell code block). It says nothing about any live listener —
-/// the store is pure data; firing spawns the code block detached (see [`crate::fire`]).
+/// Kinds this store used to have, now folded into [`KIND_BACKGROUND`]. Kept so manifests written
+/// before the collapse keep loading (see [`normalize_kind`]).
+const LEGACY_BACKGROUND_KINDS: &[&str] = &["telegram", "cron", "manual"];
+
+/// How a code block is interpreted when it is launched.
+///
+/// * [`RUNTIME_SH`] — a shell script, run as `sh -c <code>`.
+/// * [`RUNTIME_TS`] — TypeScript, written to `triggers/src/<name>.ts` and run with `bun run`.
+pub const RUNTIME_SH: &str = "sh";
+pub const RUNTIME_TS: &str = "ts";
+
+/// Map a stored `kind` onto one this build understands: the two live kinds pass through, and
+/// every retired kind (`telegram`, `cron`, `manual`) reads as [`KIND_BACKGROUND`] — those were
+/// always "a code block that isn't a webhook", which is what a background trigger is. An
+/// unrecognized kind also reads as background, so a manifest from a newer build still loads
+/// rather than vanishing from the list.
+#[must_use]
+pub fn normalize_kind(kind: &str) -> &str {
+    match kind.trim() {
+        KIND_WEBHOOK => KIND_WEBHOOK,
+        k if k == KIND_BACKGROUND || LEGACY_BACKGROUND_KINDS.contains(&k) => KIND_BACKGROUND,
+        _ => KIND_BACKGROUND,
+    }
+}
+
+/// Map a stored `runtime` onto one this build understands, defaulting to [`RUNTIME_SH`] — an
+/// empty field is what every manifest written before runtimes existed has.
+#[must_use]
+pub fn normalize_runtime(runtime: &str) -> &str {
+    match runtime.trim() {
+        RUNTIME_TS => RUNTIME_TS,
+        _ => RUNTIME_SH,
+    }
+}
+
+/// A reusable trigger definition: *how* it launches (the kind), *what language* its code block
+/// is (the runtime), and *what runs* (the code block itself). It says nothing about any live
+/// process — the store is pure data; launching is [`crate::fire`] and [`crate::Supervisor`].
 ///
 /// Unknown fields are ignored so the manifest can gain fields without breaking older stores.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TriggerManifest {
-    /// The event source that fires this trigger: `webhook` | `telegram` | `cron` | `manual`.
+    /// How this trigger launches: `webhook` | `background`. Normalized on load.
     pub kind: String,
-    /// The code block run when the trigger fires — a shell script executed as `sh -c <code>`,
-    /// detached, with `ADI_TRIGGER`/`ADI_TRIGGER_KIND` (and `ADI_PAYLOAD_FILE` when the event
-    /// carries a payload) in its environment.
+    /// The language of [`code`](Self::code): `sh` | `ts`. Normalized on load.
+    #[serde(default)]
+    pub runtime: String,
+    /// The code block launched when the trigger fires — a shell script (`sh -c`) or a
+    /// TypeScript module (`bun run`), spawned detached with `ADI_TRIGGER`/`ADI_TRIGGER_KIND`,
+    /// every [extra](Self::extra) as `ADI_<KEY>`, and `ADI_PAYLOAD_FILE` when the event carries
+    /// a payload.
     #[serde(default)]
     pub code: String,
+    /// The [preset](crate::presets) this trigger was prefilled from, if any. Pure provenance:
+    /// it tells the editor which named settings the code block expects, so reopening a trigger
+    /// shows the same fields the preset offered. Never affects launching.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preset: Option<String>,
     /// A free-form one-line description shown in lists.
     #[serde(default)]
     pub description: String,
-    /// Whether the trigger's event source may fire it. A disabled trigger keeps its definition
-    /// and can still be fired manually (an explicit user action), but its external source — the
-    /// webhook endpoint, a future listener — refuses.
+    /// Whether the trigger may launch. For a webhook that gates the endpoint; for a background
+    /// trigger it *is* the on/off switch — the supervisor runs exactly the enabled ones. A
+    /// disabled trigger keeps its definition and can still be fired by hand (an explicit user
+    /// action).
     #[serde(default = "default_enabled")]
     pub enabled: bool,
     /// The project this trigger is filed under (its [`adi-projects`] id), or `None` for a
@@ -50,8 +93,9 @@ pub struct TriggerManifest {
     /// page), not what it may do.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Kind-specific settings not promoted to first-class manifest properties (`secret`,
-    /// `schedule`, `token_env`, `chat_id`, …).
+    /// Named settings the code block reads, exported into its environment as `ADI_<KEY>`
+    /// (uppercased). Which keys matter is the preset's business — `secret` is the one the
+    /// platform itself reads, to guard a webhook.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,
     /// When the definition was created, as Unix epoch seconds.
@@ -62,13 +106,30 @@ pub struct TriggerManifest {
     pub updated_at: u64,
 }
 
+impl TriggerManifest {
+    /// Fold the stored `kind`/`runtime` onto the values this build understands. Applied on every
+    /// load, so the rest of the crate — and every caller — only ever sees a live kind and runtime.
+    pub(crate) fn normalize(&mut self) {
+        self.kind = normalize_kind(&self.kind).to_string();
+        self.runtime = normalize_runtime(&self.runtime).to_string();
+    }
+
+    /// Whether this is a supervised long-lived trigger.
+    #[must_use]
+    pub fn is_background(&self) -> bool {
+        normalize_kind(&self.kind) == KIND_BACKGROUND
+    }
+}
+
 impl Default for TriggerManifest {
-    /// An empty manifest that is nonetheless *enabled* — a freshly defined trigger should fire
+    /// An empty manifest that is nonetheless *enabled* — a freshly defined trigger should launch
     /// without an extra toggle step, matching the form/CLI defaults.
     fn default() -> Self {
         Self {
             kind: String::new(),
+            runtime: RUNTIME_SH.to_string(),
             code: String::new(),
+            preset: None,
             description: String::new(),
             enabled: true,
             project: None,
@@ -108,8 +169,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_default_manifest_is_enabled() {
-        assert!(TriggerManifest::default().enabled);
+    fn a_default_manifest_is_enabled_and_shell_flavored() {
+        let m = TriggerManifest::default();
+        assert!(m.enabled);
+        assert_eq!(m.runtime, RUNTIME_SH);
+    }
+
+    /// The kind collapse: the two live kinds survive, and every retired kind lands on
+    /// `background` so an existing store keeps listing.
+    #[test]
+    fn retired_kinds_normalize_onto_background() {
+        assert_eq!(normalize_kind(KIND_WEBHOOK), KIND_WEBHOOK);
+        assert_eq!(normalize_kind(KIND_BACKGROUND), KIND_BACKGROUND);
+        for legacy in ["telegram", "cron", "manual", "something-newer"] {
+            assert_eq!(normalize_kind(legacy), KIND_BACKGROUND, "{legacy}");
+        }
+    }
+
+    #[test]
+    fn an_unset_runtime_reads_as_shell() {
+        assert_eq!(normalize_runtime(""), RUNTIME_SH);
+        assert_eq!(normalize_runtime("sh"), RUNTIME_SH);
+        assert_eq!(normalize_runtime("ts"), RUNTIME_TS);
+        assert_eq!(normalize_runtime("python"), RUNTIME_SH);
     }
 
     #[test]

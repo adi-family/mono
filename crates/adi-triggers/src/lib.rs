@@ -1,15 +1,21 @@
-//! adi-triggers — trigger definitions ([`TriggerManifest`]) for the adi platform: a pure
-//! library (no CLI, no daemon) over the shared [`adi_config`] store. A trigger is a named
-//! background code block fired by an external event source — a webhook call, a Telegram bot,
-//! a cron schedule, or a manual fire. Each trigger is one `<name>.toml` file under
-//! `~/.adi/mono/triggers/`, holding its kind, shell code block, enabled flag, and
-//! kind-specific extras.
+//! adi-triggers — trigger definitions ([`TriggerManifest`]) for the adi platform: a library
+//! over the shared [`adi_config`] store. A trigger is a named code block plus one fact about
+//! *how it launches*, and there are only two ways:
 //!
-//! This is the **definition/store layer** plus the first slice of the run layer:
-//! [`Triggers::fire`] spawns the code block detached (own process group, output to
-//! `triggers/logs/<name>.log`, payload via `ADI_PAYLOAD_FILE`). Live listeners — a Telegram
-//! poller, a cron scheduler — are future work; today's event sources are the app's
-//! `/api/hooks/<name>` webhook endpoint and explicit manual fires.
+//! * [`KIND_WEBHOOK`] — launched by an inbound call to the app's `/api/hooks/<name>`, with the
+//!   request body as its payload.
+//! * [`KIND_BACKGROUND`] — a long-lived independent process, kept alive by [`Supervisor`] for
+//!   as long as the trigger is enabled.
+//!
+//! What a trigger *does* is its code block — shell or TypeScript, per its
+//! [runtime](RUNTIME_TS) — prefilled from a [preset](presets) rather than baked into a kind.
+//! Each trigger is one `<name>.toml` file under `~/.adi/mono/triggers/`.
+//!
+//! Both launch paths run through the same layer: [`Triggers::fire`] spawns a code block
+//! detached (own process group, output to `triggers/logs/<name>.log`, settings exported as
+//! `ADI_<KEY>`, payload via `ADI_PAYLOAD_FILE`), and [`Supervisor`] does the same under tokio
+//! so it can wait on the process and relaunch it. Status is published to
+//! `triggers/run/<name>.toml` so [`Triggers::status`] answers "is it up?" from any process.
 //!
 //! ```
 //! # let tmp = std::env::temp_dir().join(format!("adi-triggers-doctest-{}", std::process::id()));
@@ -34,6 +40,10 @@
 
 mod error;
 mod fire;
+pub mod presets;
+mod run;
+#[cfg(feature = "supervisor")]
+mod supervisor;
 mod trigger;
 
 use std::path::PathBuf;
@@ -42,8 +52,13 @@ use adi_config::{Config, ConfigFile, now_unix};
 
 pub use error::{Error, Result};
 pub use fire::Firing;
+pub use presets::{Preset, PresetField};
+pub use run::{RunState, Status};
+#[cfg(feature = "supervisor")]
+pub use supervisor::Supervisor;
 pub use trigger::{
-    KIND_CRON, KIND_MANUAL, KIND_TELEGRAM, KIND_WEBHOOK, Trigger, TriggerManifest,
+    KIND_BACKGROUND, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS, Trigger, TriggerManifest,
+    normalize_kind, normalize_runtime,
 };
 
 use trigger::validate_name;
@@ -126,9 +141,11 @@ impl Triggers {
             if validate_name(name).is_err() {
                 continue;
             }
+            let mut manifest = self.trigger_file(name).load()?;
+            manifest.normalize();
             triggers.push(Trigger {
                 name: name.to_string(),
-                manifest: self.trigger_file(name).load()?,
+                manifest,
             });
         }
         triggers.sort_by(|a, b| a.name.cmp(&b.name));
@@ -145,9 +162,11 @@ impl Triggers {
         if !file.exists() {
             return Ok(None);
         }
+        let mut manifest = file.load()?;
+        manifest.normalize();
         Ok(Some(Trigger {
             name: name.to_string(),
-            manifest: file.load()?,
+            manifest,
         }))
     }
 
@@ -159,6 +178,9 @@ impl Triggers {
     /// [`Error::InvalidName`] for an unsafe name, or [`Error::Config`] on a write failure.
     pub fn save(&self, name: &str, mut manifest: TriggerManifest) -> Result<Trigger> {
         validate_name(name)?;
+        // Fold the incoming kind/runtime onto the live set, so a caller passing a retired kind
+        // (or nothing at all) still writes a manifest the supervisor understands.
+        manifest.normalize();
         let file = self.trigger_file(name);
         let now = now_unix();
         // Preserve the original creation time on edit; stamp a fresh one on first save.
@@ -204,6 +226,63 @@ impl Triggers {
     pub fn read_log(&self, name: &str) -> Option<String> {
         validate_name(name).ok()?;
         fire::read_log(&self.dir(), name)
+    }
+
+    /// Whether a background trigger is up right now, and since when — read from the state its
+    /// supervisor publishes, so this answers correctly from *any* process (the CLI included,
+    /// even though supervision happens inside the app). `None` means nothing is running it: a
+    /// webhook trigger, a disabled one, or one whose supervisor has gone away.
+    #[must_use]
+    pub fn status(&self, name: &str) -> Status {
+        validate_name(name).ok()?;
+        let state: RunState = self.run_file(name).load().ok()?;
+        state.is_live().then_some(state)
+    }
+
+    /// Every published run state, as `(trigger name, state)` — including stale ones, which is
+    /// the point: a supervisor starting up uses these to find processes a previous one left
+    /// behind. Unreadable entries are skipped rather than failing the sweep.
+    #[must_use]
+    pub fn published_run_states(&self) -> Vec<(String, RunState)> {
+        let dir = self.dir().join(run::RUN_DIR);
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|entry| {
+                let file_name = entry.file_name().into_string().ok()?;
+                let name = file_name.strip_suffix(&format!(".{MANIFEST_EXT}"))?.to_string();
+                validate_name(&name).ok()?;
+                let state = self.run_file(&name).load().ok()?;
+                Some((name, state))
+            })
+            .collect()
+    }
+
+    /// The run-state file for `name`, at `triggers/run/<name>.toml`.
+    fn run_file(&self, name: &str) -> ConfigFile<RunState> {
+        self.config
+            .module(TRIGGERS_MODULE)
+            .file(&format!("{}/{name}.{MANIFEST_EXT}", run::RUN_DIR))
+    }
+
+    /// Publish a supervised trigger's run state for other processes to read. Best-effort: a
+    /// status file that can't be written costs a status readout, never the running process.
+    pub(crate) fn publish_run_state(&self, name: &str, state: &RunState) {
+        if validate_name(name).is_ok() {
+            let _ = self.run_file(name).save(state);
+        }
+    }
+
+    /// Withdraw a trigger's published run state — it is no longer running.
+    pub(crate) fn clear_run_state(&self, name: &str) {
+        if validate_name(name).is_ok() {
+            let _ = self
+                .config
+                .module(TRIGGERS_MODULE)
+                .remove_raw(&format!("{}/{name}.{MANIFEST_EXT}", run::RUN_DIR));
+        }
     }
 
     /// Delete a trigger definition (its fire log is kept — history is cheap and separate).
@@ -267,14 +346,14 @@ mod tests {
     #[test]
     fn save_is_an_upsert_that_preserves_created_at() {
         let store = scratch("upsert");
-        let first = store.save("a", spec(KIND_MANUAL, "true")).expect("create");
+        let first = store.save("a", spec(KIND_BACKGROUND, "true")).expect("create");
         let created = first.manifest.created_at;
         assert!(created > 0);
 
-        let mut edited = spec(KIND_CRON, "date");
+        let mut edited = spec(KIND_BACKGROUND, "date");
         edited.enabled = false;
         let second = store.save("a", edited).expect("update");
-        assert_eq!(second.manifest.kind, KIND_CRON);
+        assert_eq!(second.manifest.kind, KIND_BACKGROUND);
         assert!(!second.manifest.enabled);
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
@@ -283,7 +362,7 @@ mod tests {
     #[test]
     fn delete_removes_the_trigger() {
         let store = scratch("delete");
-        store.save("gone", spec(KIND_MANUAL, "true")).expect("create");
+        store.save("gone", spec(KIND_BACKGROUND, "true")).expect("create");
         assert!(store.delete("gone").expect("delete"));
         assert!(store.get("gone").expect("get").is_none());
         assert!(!store.delete("gone").expect("delete missing"));
@@ -294,7 +373,7 @@ mod tests {
         let store = scratch("invalid");
         assert!(matches!(store.get("../escape"), Err(Error::InvalidName(_))));
         assert!(matches!(
-            store.save("a/b", spec(KIND_MANUAL, "true")),
+            store.save("a/b", spec(KIND_BACKGROUND, "true")),
             Err(Error::InvalidName(_))
         ));
         assert!(matches!(store.delete(".."), Err(Error::InvalidName(_))));
@@ -312,7 +391,7 @@ mod tests {
     fn fire_spawns_and_the_log_becomes_readable() {
         let store = scratch("fire");
         store
-            .save("pinger", spec(KIND_MANUAL, "printf fired"))
+            .save("pinger", spec(KIND_BACKGROUND, "printf fired"))
             .expect("create");
         let firing = store.fire("pinger", None).expect("fire");
         assert!(firing.pid > 0);

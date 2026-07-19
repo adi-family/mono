@@ -1,14 +1,21 @@
 use std::collections::BTreeMap;
 
 use adi_triggers::Error as TriggerStoreError;
+use adi_triggers::RunState;
+use adi_triggers::Supervisor;
 use adi_triggers::TriggerManifest;
 use adi_triggers::Triggers;
 
-use crate::types::{HookAck, SaveTrigger, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog, TriggerRef, TriggersState};
+use crate::types::{
+    HookAck, SaveTrigger, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog,
+    TriggerPreset, TriggerPresetField, TriggerRef, TriggerRuntimeOption, TriggersState,
+};
 
-use super::response::{error, ok_json, clean, Response};
+use super::response::{Response, clean, error, ok_json};
 
-/// Trim dynamic backend parameters and drop empty or unsafe keys.
+/// Trim dynamic backend parameters and drop empty or unsafe keys. Which keys are *meaningful*
+/// is the code block's business (its preset declares them, and each reaches it as `ADI_<KEY>`),
+/// so nothing here filters by kind — only by what can safely become an environment variable.
 fn clean_extra(extra: BTreeMap<String, String>) -> BTreeMap<String, String> {
     extra
         .into_iter()
@@ -22,7 +29,7 @@ fn safe_extra_key(key: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
 }
 
-/// `GET /api/triggers` — every registered trigger plus the selectable kinds. Each mutation
+/// `GET /api/triggers` — every registered trigger plus the editor's vocabulary. Each mutation
 /// endpoint below returns a fresh [`TriggersState`], so the client refreshes from one round-trip.
 #[must_use]
 pub fn triggers(store: &Triggers) -> Response {
@@ -32,8 +39,8 @@ pub fn triggers(store: &Triggers) -> Response {
     }
 }
 
-/// The full [`TriggersState`]: the stored definitions decorated with their last-fired time,
-/// plus the server-owned kind options.
+/// The full [`TriggersState`]: the stored definitions decorated with their last-fired time and
+/// live run status, plus the server-owned kinds, runtimes, and presets.
 fn triggers_state(store: &Triggers) -> Result<TriggersState, TriggerStoreError> {
     Ok(TriggersState {
         triggers: store
@@ -42,20 +49,28 @@ fn triggers_state(store: &Triggers) -> Result<TriggersState, TriggerStoreError> 
             .map(|t| trigger_dto(store, t))
             .collect(),
         kinds: trigger_kinds(),
+        runtimes: trigger_runtimes(),
+        presets: trigger_presets(),
     })
 }
 
 /// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
 /// `name`), then report the fresh list. `name` and `kind` are required.
+///
+/// Saving is also how a background trigger is started and stopped: the supervisor runs exactly
+/// the enabled ones, so it is poked here to pick the change up now rather than at its next tick.
 #[must_use]
-pub fn save_trigger(store: &Triggers, body: &[u8]) -> Response {
+pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
     let Some(req) = parse_save_trigger(body) else {
         return bad_save_trigger();
     };
     let name = req.name.trim().to_string();
     let manifest = TriggerManifest {
+        // The store normalizes both onto the kinds/runtimes this build understands.
         kind: req.kind.trim().to_string(),
+        runtime: req.runtime.trim().to_string(),
         code: req.code,
+        preset: clean(req.preset),
         description: req.description.trim().to_string(),
         enabled: req.enabled,
         project: clean(req.project),
@@ -65,26 +80,58 @@ pub fn save_trigger(store: &Triggers, body: &[u8]) -> Response {
         updated_at: 0,
     };
     match store.save(&name, manifest) {
-        Ok(_) => triggers(store),
+        Ok(_) => {
+            supervisor.poke();
+            triggers(store)
+        }
         Err(e) => Response::from(&e),
     }
 }
 
-/// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list.
+/// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list. A
+/// deleted background trigger's process is stopped by the supervisor on its next reconcile.
 #[must_use]
-pub fn delete_trigger(store: &Triggers, body: &[u8]) -> Response {
+pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
     let Some(req) = parse_trigger_ref(body) else {
         return bad_trigger_ref();
     };
     match store.delete(req.name.trim()) {
-        Ok(_) => triggers(store),
+        Ok(_) => {
+            supervisor.poke();
+            triggers(store)
+        }
         Err(e) => Response::from(&e),
     }
 }
 
-/// `POST /api/triggers/fire` — fire a trigger by hand (no payload). An explicit user action, so
-/// it works even on a disabled trigger — only the *external* sources are gated by `enabled`.
-/// Replies with the spawned pid plus fresh state.
+/// `POST /api/triggers/restart` — replace a supervised background trigger's process with a
+/// fresh one, without changing its definition. A no-op for a trigger that isn't running: the
+/// supervisor starts whatever should be up anyway.
+#[must_use]
+pub fn restart_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
+    let Some(req) = parse_trigger_ref(body) else {
+        return bad_trigger_ref();
+    };
+    let name = req.name.trim();
+    match store.get(name) {
+        Ok(Some(trigger)) => {
+            supervisor.request_restart(&trigger.name);
+            match triggers_state(store) {
+                Ok(state) => ok_json(&TriggerFireResult {
+                    message: format!("Restarting “{}”.", trigger.name),
+                    state,
+                }),
+                Err(e) => Response::from(&e),
+            }
+        }
+        Ok(None) => Response::from(&TriggerStoreError::NotFound(name.to_string())),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/triggers/fire` — run a trigger's code block once, by hand. An explicit user
+/// action, so it works even on a disabled trigger — only the *external* sources are gated by
+/// `enabled`. Replies with the spawned pid plus fresh state.
 #[must_use]
 pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
     let Some(req) = parse_trigger_ref(body) else {
@@ -104,8 +151,8 @@ pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
     }
 }
 
-/// `POST /api/triggers/log` — the tail of a trigger's most recent fire log. A registered
-/// trigger that never fired answers `fired: false` (200, not an error); only an unknown name
+/// `POST /api/triggers/log` — the tail of a trigger's most recent run log. A registered
+/// trigger that never ran answers `fired: false` (200, not an error); only an unknown name
 /// is a 404.
 #[must_use]
 pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
@@ -128,10 +175,10 @@ pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
     }
 }
 
-/// `POST|GET /api/hooks/<name>` — the public webhook endpoint: fire the named trigger with the
-/// request body as its payload. Only an **enabled** trigger of the `webhook` kind fires; when
+/// `POST|GET /api/hooks/<name>` — the public webhook endpoint: launch the named trigger with the
+/// request body as its payload. Only an **enabled** trigger of the `webhook` kind launches; when
 /// its `secret` extra is set, the caller must match it with a `?secret=` query parameter.
-/// An unknown name and a non-webhook trigger answer the same 404, so the endpoint doesn't
+/// An unknown name and a background trigger answer the same 404, so the endpoint doesn't
 /// reveal which internal names exist.
 #[must_use]
 pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -> Response {
@@ -173,41 +220,77 @@ fn query_param<'q>(query: &'q str, key: &str) -> Option<&'q str> {
         .map(|(_, v)| v)
 }
 
-/// The selectable trigger kinds — server-owned so adding one doesn't require a webapp rebuild.
+/// The two trigger kinds — a kind answers only "how does this launch?". What a trigger *does*
+/// comes from its code block, prefilled by a [preset](trigger_presets).
 fn trigger_kinds() -> Vec<TriggerKindOption> {
-    let kind = |id: &str, label: &str, hint: &str| TriggerKindOption {
-        id: id.into(),
-        label: label.into(),
-        hint: hint.into(),
-    };
     vec![
-        kind(
-            adi_triggers::KIND_WEBHOOK,
-            "Webhook",
-            "fires on POST/GET to /api/hooks/<name>; optional shared secret",
-        ),
-        kind(
-            adi_triggers::KIND_TELEGRAM,
-            "Telegram",
-            "bot-update listener is future work — define now, fire manually to test",
-        ),
-        kind(
-            adi_triggers::KIND_CRON,
-            "Cron",
-            "scheduler runtime is future work — define now, fire manually to test",
-        ),
-        kind(adi_triggers::KIND_MANUAL, "Manual", "fired only by hand (UI / CLI / API)"),
+        TriggerKindOption {
+            id: adi_triggers::KIND_WEBHOOK.into(),
+            label: "Webhook".into(),
+            hint: "runs on a call to /api/hooks/<name>".into(),
+        },
+        TriggerKindOption {
+            id: adi_triggers::KIND_BACKGROUND.into(),
+            label: "Background".into(),
+            hint: "runs continuously; auto-restarts".into(),
+        },
     ]
 }
 
-/// Flatten a stored trigger into its wire [`TriggerDto`], decorated with its last-fired time.
+/// The runtimes a code block can be written in.
+fn trigger_runtimes() -> Vec<TriggerRuntimeOption> {
+    vec![
+        TriggerRuntimeOption {
+            id: adi_triggers::RUNTIME_SH.into(),
+            label: "Shell".into(),
+            hint: "run with sh -c".into(),
+        },
+        TriggerRuntimeOption {
+            id: adi_triggers::RUNTIME_TS.into(),
+            label: "TypeScript".into(),
+            hint: "run with bun".into(),
+        },
+    ]
+}
+
+/// The preset catalog, straight from the trigger library so the CLI and the UI offer the same
+/// starting points.
+fn trigger_presets() -> Vec<TriggerPreset> {
+    adi_triggers::presets::all()
+        .iter()
+        .map(|p| TriggerPreset {
+            id: p.id.into(),
+            label: p.label.into(),
+            description: p.description.into(),
+            kind: p.kind.into(),
+            runtime: p.runtime.into(),
+            code: p.code.into(),
+            fields: p
+                .fields
+                .iter()
+                .map(|f| TriggerPresetField {
+                    key: f.key.into(),
+                    label: f.label.into(),
+                    hint: f.hint.into(),
+                    default: f.default.into(),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Flatten a stored trigger into its wire [`TriggerDto`], decorated with its last-run time and
+/// — for a background trigger — the live process the supervisor publishes.
 fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
     let last_fired_at = store.last_fired(&trigger.name);
+    let status = store.status(&trigger.name);
     let m = trigger.manifest;
     TriggerDto {
         name: trigger.name,
         kind: m.kind,
+        runtime: m.runtime,
         code: m.code,
+        preset: m.preset,
         description: m.description,
         enabled: m.enabled,
         project: m.project,
@@ -215,6 +298,10 @@ fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
         created_at: m.created_at,
         updated_at: m.updated_at,
         last_fired_at,
+        running: status.is_some(),
+        pid: status.as_ref().map(|s| s.pid),
+        uptime_secs: status.as_ref().and_then(RunState::uptime_secs),
+        restarts: status.as_ref().map_or(0, |s| s.restarts),
     }
 }
 
@@ -224,9 +311,9 @@ impl From<&TriggerStoreError> for Response {
         let status = match e {
             TriggerStoreError::InvalidName(_) | TriggerStoreError::NoCode(_) => 400,
             TriggerStoreError::NotFound(_) => 404,
-            TriggerStoreError::Config(_) | TriggerStoreError::Io(_) | TriggerStoreError::Launch(_) => {
-                500
-            }
+            TriggerStoreError::Config(_)
+            | TriggerStoreError::Io(_)
+            | TriggerStoreError::Launch(_) => 500,
         };
         error(status, &e.to_string())
     }

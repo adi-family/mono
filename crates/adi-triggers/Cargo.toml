@@ -1,6 +1,6 @@
 [package]
 name = "adi-triggers"
-description = "Trigger definitions for the adi platform: named background code blocks fired by an external event source — a webhook call, a Telegram bot, a cron schedule, or a manual fire. Each trigger is one TOML file (kind, shell code block, enabled flag, kind-specific extras) under ~/.adi/mono/triggers. Pure library: the definition/store layer plus the first run slice — firing a trigger spawns its code block detached, with the event payload handed over via ADI_PAYLOAD_FILE and output captured to a per-trigger log."
+description = "Triggers for the adi platform: named code blocks that launch one of two ways — as a webhook, or as a supervised long-lived background process. Each trigger is one TOML file (kind, runtime, code block, enabled flag, settings) under ~/.adi/mono/triggers, prefillable from a preset catalog. Code blocks run as shell or TypeScript, with settings exported as ADI_<KEY> and any event payload handed over via ADI_PAYLOAD_FILE; the optional `supervisor` feature keeps background triggers alive."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,10 +8,21 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# Keeping background triggers alive needs an async runtime, which only the app wants — the CLI
+# reads status from the published run-state files instead.
+supervisor = ["dep:tokio", "dep:tracing"]
+
 [dependencies]
 adi-config = { workspace = true }
 
 serde = { workspace = true }
+
+tokio = { version = "1", features = ["rt", "process", "time", "sync", "macros"], optional = true }
+tracing = { version = "0.1", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "process", "time", "sync", "macros"] }
 
 [lints]
 workspace = true

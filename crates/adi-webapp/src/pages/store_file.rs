@@ -8,9 +8,9 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::{Lang, highlight};
+use crate::highlight::Lang;
 use crate::state::{Flash, State};
-use crate::ui::flash_view;
+use crate::ui::{code_editor, flash_view};
 
 /// The editor page: a header with the path and Save, then the buffer. Shows a placeholder when
 /// no file is selected, and the failure in place when one couldn't be read.
@@ -28,8 +28,6 @@ pub(crate) fn store_file_view(state: State) -> AnyView {
             .into_any(),
             Some(path) => {
                 let lang = Lang::from_path(&path);
-                let area = NodeRef::<leptos::html::Textarea>::new();
-                let paint = NodeRef::<leptos::html::Pre>::new();
                 view! {
                 <section class="adi-panel adi-panel--fill">
                     <div class="adi-panel__head">
@@ -50,23 +48,7 @@ pub(crate) fn store_file_view(state: State) -> AnyView {
                         <div class="adi-flash" data-kind="err">{e}</div>
                     })}
 
-                    // The editor is two stacked layers sharing one box: a highlighted <pre>
-                    // underneath, and a transparent-text textarea on top that still owns the
-                    // caret, selection, and typing. They must use identical font metrics and
-                    // padding or the two drift apart — see `.adi-code` / `.adi-fileedit`.
-                    <div class="adi-code">
-                        <pre class="adi-code__paint adi-mono" aria-hidden="true" node_ref=paint>
-                            {move || highlighted(&lang, &store.buffer.get())}
-                        </pre>
-                        <textarea class="adi-textarea adi-mono adi-fileedit" spellcheck="false"
-                            autocomplete="off" node_ref=area
-                            prop:value=move || store.buffer.get()
-                            on:scroll=move |_| sync_scroll(area, paint)
-                            on:input=move |ev| {
-                                store.buffer.set(event_target_value(&ev));
-                                sync_scroll(area, paint);
-                            }></textarea>
-                    </div>
+                    {code_editor(move || lang, store.buffer, "", "store-file-editor")}
                 </section>
                 }
                 .into_any()
@@ -75,33 +57,6 @@ pub(crate) fn store_file_view(state: State) -> AnyView {
         {flash_view(state.flash)}
     }
     .into_any()
-}
-
-/// The buffer painted as coloured spans. A trailing newline gets a space appended so the last
-/// line still has height — otherwise the painted layer is one line shorter than the textarea
-/// and the two scroll out of step at the bottom.
-fn highlighted(lang: &Lang, src: &str) -> AnyView {
-    let mut text = src.to_string();
-    if text.ends_with('\n') {
-        text.push(' ');
-    }
-    highlight(*lang, &text)
-        .into_iter()
-        .map(|(tok, run)| view! { <span class=tok.class()>{run}</span> })
-        .collect::<Vec<_>>()
-        .into_any()
-}
-
-/// Keep the painted layer aligned with the textarea's scroll position. The textarea is the one
-/// that actually scrolls; the <pre> is dragged along behind it.
-fn sync_scroll(
-    area: NodeRef<leptos::html::Textarea>,
-    paint: NodeRef<leptos::html::Pre>,
-) {
-    if let (Some(a), Some(p)) = (area.get_untracked(), paint.get_untracked()) {
-        p.set_scroll_top(a.scroll_top());
-        p.set_scroll_left(a.scroll_left());
-    }
 }
 
 /// Load a file into the editor buffer. Called by the rail on navigation and by Reload here.

@@ -22,6 +22,9 @@ server = [
     "dep:adi-tasks",
     "dep:adi-agents",
     "dep:adi-triggers",
+    # Background triggers are supervised in-process by the app, so the handlers can poke the
+    # supervisor when a save changes what should be running.
+    "adi-triggers/supervisor",
     "dep:adi-fs",
     "dep:adi-hooks",
     "dep:serde_yaml_ng",

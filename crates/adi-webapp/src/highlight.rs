@@ -2,7 +2,7 @@
 //!
 //! Deliberately hand-rolled rather than pulled from a crate: `syntect` and friends carry a
 //! grammar database that would dwarf the whole wasm bundle, and the store holds a handful of
-//! formats (TOML, JSON, YAML, TypeScript, Markdown). This is a scanner per format, good enough
+//! formats (TOML, JSON, YAML, TypeScript, shell, Markdown). This is a scanner per format, good enough
 //! to make structure visible — not a parser, and never one that can fail on odd input.
 //!
 //! Every scanner is total: unterminated strings and comments run to end-of-input and are still
@@ -50,6 +50,7 @@ pub(crate) enum Lang {
     Json,
     Yaml,
     Ts,
+    Sh,
     Md,
     None,
 }
@@ -64,6 +65,7 @@ impl Lang {
             "json" => Lang::Json,
             "yaml" | "yml" => Lang::Yaml,
             "ts" | "tsx" | "js" | "mjs" | "jsx" => Lang::Ts,
+            "sh" | "bash" | "zsh" => Lang::Sh,
             "md" | "markdown" => Lang::Md,
             _ => Lang::None,
         }
@@ -78,6 +80,7 @@ pub(crate) fn highlight(lang: Lang, src: &str) -> Vec<(Tok, String)> {
         Lang::Json => scan_json(src),
         Lang::Yaml => scan_yaml(src),
         Lang::Ts => scan_ts(src),
+        Lang::Sh => scan_sh(src),
         Lang::Md => scan_md(src),
         Lang::None => vec![(Tok::Plain, src.to_string())],
     };
@@ -345,6 +348,98 @@ fn scan_ts(src: &str) -> Vec<(Tok, String)> {
     out
 }
 
+/// The words that give a shell script its shape. Control flow and the builtins you actually
+/// read for — not every command on the system, which would colour the whole script.
+const SH_KEYWORDS: &[&str] = &[
+    "case", "do", "done", "elif", "else", "esac", "exit", "export", "fi", "for", "function", "if",
+    "in", "local", "read", "return", "select", "shift", "then", "until", "while",
+];
+
+/// Shell. The one thing worth getting right beyond comments and strings is `$VARIABLE`
+/// expansion — a trigger's settings arrive that way, so seeing them stand out is the point.
+fn scan_sh(src: &str) -> Vec<(Tok, String)> {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '#' && at_word_start(&chars, i) {
+            // A `#` only opens a comment at the start of a word: `${X#pfx}` and `a#b` are not
+            // comments.
+            let (s, next) = take_while(&chars, i, |c| c != '\n');
+            out.push((Tok::Comment, s));
+            i = next;
+        } else if c == '"' || c == '\'' {
+            let (s, next) = take_string(&chars, i);
+            out.push((Tok::Str, s));
+            i = next;
+        } else if c == '$' {
+            let (s, next) = take_expansion(&chars, i);
+            out.push((Tok::Func, s));
+            i = next;
+        } else if c.is_ascii_digit() && at_word_start(&chars, i) {
+            let (s, next) = take_while(&chars, i, |c| c.is_ascii_alphanumeric() || c == '.');
+            out.push((Tok::Num, s));
+            i = next;
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            let (s, next) = take_while(&chars, i, |c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+            let tok = if SH_KEYWORDS.contains(&s.as_str()) {
+                Tok::Kw
+            } else if chars.get(next) == Some(&'=') {
+                // `name=value` — the assignment target reads like a key.
+                Tok::Key
+            } else {
+                Tok::Plain
+            };
+            out.push((tok, s));
+            i = next;
+        } else if "|&;()<>{}".contains(c) {
+            out.push((Tok::Punct, c.to_string()));
+            i += 1;
+        } else {
+            out.push((Tok::Plain, c.to_string()));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Whether the character at `i` opens a word — i.e. nothing but whitespace or an operator
+/// precedes it. Used to tell a comment from a `#` inside a word.
+fn at_word_start(chars: &[char], i: usize) -> bool {
+    i == 0 || matches!(chars[i - 1], ' ' | '\t' | '\n' | ';' | '|' | '&' | '(' | ')')
+}
+
+/// Consume a `$` expansion: `$NAME`, `${NAME:-default}`, or `$(command)`. A brace or paren form
+/// runs to its closing delimiter, or to end of input if it never closes.
+fn take_expansion(chars: &[char], i: usize) -> (String, usize) {
+    match chars.get(i + 1) {
+        Some('{') | Some('(') => {
+            let (open, close) = if chars[i + 1] == '{' { ('{', '}') } else { ('(', ')') };
+            let mut depth = 0usize;
+            let mut j = i + 1;
+            while j < chars.len() {
+                if chars[j] == open {
+                    depth += 1;
+                } else if chars[j] == close {
+                    depth -= 1;
+                    if depth == 0 {
+                        j += 1;
+                        break;
+                    }
+                }
+                j += 1;
+            }
+            (chars[i..j].iter().collect(), j)
+        }
+        _ => {
+            let (name, next) =
+                take_while(chars, i + 1, |c| c.is_ascii_alphanumeric() || c == '_');
+            (format!("${name}"), next)
+        }
+    }
+}
+
 fn scan_md(src: &str) -> Vec<(Tok, String)> {
     let mut out = Vec::new();
     let mut fenced = false;
@@ -389,6 +484,7 @@ mod tests {
             (Lang::Json, "{\"a\": 1, \"b\": [true, null], \"c\": \"x\"}"),
             (Lang::Yaml, "# c\nkey: value\nlist:\n  - a: 1\n  - url: http://x\n"),
             (Lang::Ts, "const a = 1; // hi\n/* block */ let s = `t`;\n"),
+            (Lang::Sh, "# c\nname=value\nwhile :; do echo \"$X\"; done\n"),
             (Lang::Md, "# H\n\n- item\n\n```ts\ncode\n```\n"),
             (Lang::None, "anything at all"),
         ];
@@ -404,6 +500,32 @@ mod tests {
         assert_lossless(Lang::Ts, "/* never closed");
         assert_lossless(Lang::Toml, "k = 'never closed");
         assert_lossless(Lang::Json, "{\"k\": \"unterminated");
+        assert_lossless(Lang::Sh, "echo \"never closed");
+        assert_lossless(Lang::Sh, "echo ${NEVER_CLOSED");
+        assert_lossless(Lang::Sh, "echo $(never closed");
+    }
+
+    /// A trigger's settings reach its code block as `$ADI_*`, so those must be the runs that
+    /// stand out — in every spelling a script uses.
+    #[test]
+    fn shell_expansions_are_highlighted_whole() {
+        for src in ["echo $ADI_CHAT_ID", "echo ${ADI_CHAT_ID:-none}", "x=$(date -u)"] {
+            let runs = highlight(Lang::Sh, src);
+            assert!(
+                runs.iter().any(|(t, s)| *t == Tok::Func && s.starts_with('$')),
+                "no expansion found in {src:?}: {runs:?}"
+            );
+        }
+    }
+
+    /// `#` opens a comment only at the start of a word — inside `${VAR#prefix}` it does not.
+    #[test]
+    fn a_hash_inside_a_word_is_not_a_comment() {
+        let runs = highlight(Lang::Sh, "echo ${PATH#/usr}\n");
+        assert!(
+            !runs.iter().any(|(t, _)| *t == Tok::Comment),
+            "misread a parameter expansion as a comment: {runs:?}"
+        );
     }
 
     #[test]

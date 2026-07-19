@@ -476,6 +476,12 @@ mod tests {
         Triggers::with_config(adi_config::Config::with_root(root))
     }
 
+    /// Saving is what steers the background supervisor, so the handlers take one. These tests
+    /// exercise the store side only, so they hand over a supervisor that runs nothing.
+    fn inert_supervisor(store: &Triggers) -> std::sync::Arc<adi_triggers::Supervisor> {
+        adi_triggers::Supervisor::inert(store.clone())
+    }
+
     #[test]
     fn triggers_response_includes_the_kind_options() {
         let store = temp_triggers();
@@ -489,7 +495,7 @@ mod tests {
             .iter()
             .map(|k| k["id"].as_str().unwrap())
             .collect();
-        assert_eq!(kinds, ["webhook", "telegram", "cron", "manual"]);
+        assert_eq!(kinds, ["webhook", "background"]);
     }
 
     #[test]
@@ -497,6 +503,7 @@ mod tests {
         let store = temp_triggers();
         let Response { status, body } = save_trigger(
             &store,
+            &inert_supervisor(&store),
             br#"{
                 "name":"deploy-hook",
                 "kind":"webhook",
@@ -519,22 +526,22 @@ mod tests {
         assert!(t["extra"]["empty"].is_null());
         assert!(t["last_fired_at"].is_null());
 
-        assert_eq!(save_trigger(&store, br#"{"name":"x","kind":""}"#).status, 400);
-        assert_eq!(save_trigger(&store, b"not json").status, 400);
+        assert_eq!(save_trigger(&store, &inert_supervisor(&store), br#"{"name":"x","kind":""}"#).status, 400);
+        assert_eq!(save_trigger(&store, &inert_supervisor(&store), b"not json").status, 400);
     }
 
     #[test]
     fn fire_validates_the_target() {
         let store = temp_triggers();
         assert_eq!(fire_trigger(&store, br#"{"name":"ghost"}"#).status, 404);
-        let _ = save_trigger(&store, br#"{"name":"idle","kind":"manual"}"#);
+        let _ = save_trigger(&store, &inert_supervisor(&store), br#"{"name":"idle","kind":"background"}"#);
         assert_eq!(fire_trigger(&store, br#"{"name":"idle"}"#).status, 400);
     }
 
     #[test]
     fn log_of_a_never_fired_trigger_is_empty_not_an_error() {
         let store = temp_triggers();
-        let _ = save_trigger(&store, br#"{"name":"idle","kind":"manual","code":"true"}"#);
+        let _ = save_trigger(&store, &inert_supervisor(&store), br#"{"name":"idle","kind":"background","code":"true"}"#);
         let Response { status, body } = trigger_log(&store, br#"{"name":"idle"}"#);
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
@@ -548,21 +555,24 @@ mod tests {
         let store = temp_triggers();
         let _ = save_trigger(
             &store,
-            br#"{"name":"manual-only","kind":"manual","code":"true"}"#,
+            &inert_supervisor(&store),
+            br#"{"name":"background-only","kind":"background","code":"true"}"#,
         );
         let _ = save_trigger(
             &store,
+            &inert_supervisor(&store),
             br#"{"name":"paused","kind":"webhook","code":"true","enabled":false}"#,
         );
         let _ = save_trigger(
             &store,
+            &inert_supervisor(&store),
             br#"{"name":"locked","kind":"webhook","code":"true","extra":{"secret":"s3"}}"#,
         );
 
-        // Unknown, unsafe, and non-webhook names all answer the same 404.
+        // Unknown, unsafe, and background names all answer the same 404.
         assert_eq!(hook_trigger(&store, "ghost", "", b"").status, 404);
         assert_eq!(hook_trigger(&store, "../etc", "", b"").status, 404);
-        assert_eq!(hook_trigger(&store, "manual-only", "", b"").status, 404);
+        assert_eq!(hook_trigger(&store, "background-only", "", b"").status, 404);
         assert_eq!(hook_trigger(&store, "paused", "", b"").status, 403);
         assert_eq!(hook_trigger(&store, "locked", "", b"").status, 403);
         assert_eq!(hook_trigger(&store, "locked", "secret=wrong", b"").status, 403);

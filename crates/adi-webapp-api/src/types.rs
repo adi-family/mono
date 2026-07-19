@@ -548,11 +548,11 @@ pub struct AgentPeek {
     pub attach: String,
 }
 
-// ---- triggers (background code blocks fired by webhooks & co., under ~/.adi/mono/triggers) ----
+// ---- triggers (code blocks launched by a webhook or supervised in the background) ----
 
-/// One selectable trigger kind: its id (`webhook` / `telegram` / `cron` / `manual`), a display
-/// label, and a hint about how (or whether, yet) that source fires. Server-owned so adding a
-/// kind doesn't require a webapp rebuild.
+/// One selectable trigger kind — *how* a trigger launches: `webhook` (an inbound HTTP call) or
+/// `background` (a supervised long-lived process). Server-owned so the set can change without a
+/// webapp rebuild.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TriggerKindOption {
     pub id: String,
@@ -561,15 +561,62 @@ pub struct TriggerKindOption {
     pub hint: String,
 }
 
-/// One trigger definition, flattened for the wire. `kind` names the event source; `code` is the
-/// shell block spawned detached on fire; `last_fired_at` is derived from the fire log's mtime
-/// (`None` if it never fired).
+/// One selectable runtime — what language a code block is written in (`sh`, `ts`) and therefore
+/// which interpreter runs it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerRuntimeOption {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub hint: String,
+}
+
+/// One setting a preset's code block reads, offered as a labelled input in the editor and
+/// exported to the code block as `ADI_<KEY>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerPresetField {
+    pub key: String,
+    pub label: String,
+    #[serde(default)]
+    pub hint: String,
+    /// Prefilled when the preset is applied; empty when only the user can supply the value.
+    #[serde(default)]
+    pub default: String,
+}
+
+/// A ready-made trigger definition the editor can apply, prefilling the kind, runtime, code
+/// block, and settings in one click. Applying one is a client-side prefill — nothing is stored
+/// until the user saves.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TriggerPreset {
+    pub id: String,
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    pub kind: String,
+    pub runtime: String,
+    #[serde(default)]
+    pub code: String,
+    #[serde(default)]
+    pub fields: Vec<TriggerPresetField>,
+}
+
+/// One trigger definition, flattened for the wire. `kind` is how it launches, `runtime` is the
+/// language of `code`. `last_fired_at` comes from the log's mtime; the `running`/`pid`/
+/// `restarts` group describes a *background* trigger's supervised process and is inert for a
+/// webhook.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TriggerDto {
     pub name: String,
     pub kind: String,
     #[serde(default)]
+    pub runtime: String,
+    #[serde(default)]
     pub code: String,
+    /// The preset this trigger was created from, if any — tells the editor which settings to
+    /// offer when it is reopened.
+    #[serde(default)]
+    pub preset: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default)]
@@ -583,14 +630,32 @@ pub struct TriggerDto {
     pub updated_at: u64,
     #[serde(default)]
     pub last_fired_at: Option<u64>,
+    /// Whether a supervisor is currently keeping this background trigger's process alive.
+    #[serde(default)]
+    pub running: bool,
+    /// The live process's pid, while `running`.
+    #[serde(default)]
+    pub pid: Option<u32>,
+    /// How long the live process has been up, in seconds.
+    #[serde(default)]
+    pub uptime_secs: Option<u64>,
+    /// How many times the supervisor has relaunched it after an exit — non-zero means the code
+    /// block keeps dying.
+    #[serde(default)]
+    pub restarts: u32,
 }
 
-/// `GET /api/triggers` — every registered trigger, sorted by name, plus the selectable kinds.
-/// Each mutation endpoint returns a fresh one, so the client refreshes from one round-trip.
+/// `GET /api/triggers` — every registered trigger, sorted by name, plus the editor's
+/// server-owned vocabulary: the kinds, the runtimes, and the preset catalog. Each mutation
+/// endpoint returns a fresh one, so the client refreshes from one round-trip.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TriggersState {
     pub triggers: Vec<TriggerDto>,
     pub kinds: Vec<TriggerKindOption>,
+    #[serde(default)]
+    pub runtimes: Vec<TriggerRuntimeOption>,
+    #[serde(default)]
+    pub presets: Vec<TriggerPreset>,
 }
 
 /// Request body for `POST /api/triggers/save` — create or update a trigger definition (an
@@ -599,8 +664,14 @@ pub struct TriggersState {
 pub struct SaveTrigger {
     pub name: String,
     pub kind: String,
+    /// The language of `code` (`sh` / `ts`); omitted or unknown saves a shell block.
+    #[serde(default)]
+    pub runtime: String,
     #[serde(default)]
     pub code: String,
+    /// The preset this was prefilled from, recorded so the editor can re-offer its settings.
+    #[serde(default)]
+    pub preset: Option<String>,
     #[serde(default)]
     pub description: String,
     #[serde(default = "trigger_enabled_default")]

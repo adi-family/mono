@@ -176,6 +176,8 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
