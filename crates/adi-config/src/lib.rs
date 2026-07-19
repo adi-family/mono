@@ -46,6 +46,12 @@ pub use file::ConfigFile;
 pub use layout::{dir, dir_name};
 pub use module::Module;
 
+/// The extension every store gives its per-entry manifests: one `<name>.toml` file per named
+/// entry (an agent, a trigger, …). Centralized here so registry crates share the convention
+/// via [`Module::manifest_file`] / [`Module::remove_manifest`] instead of each re-`format!`-ing
+/// it at every call site.
+pub const MANIFEST_EXT: &str = "toml";
+
 /// The settings store: one directory that hands out per-[module](Module) settings
 /// directories. Cheap to clone; holds only the root path.
 #[derive(Debug, Clone)]

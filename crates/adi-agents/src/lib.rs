@@ -93,9 +93,7 @@ impl Agents {
     }
 
     fn agent_file(&self, name: &str) -> ConfigFile<StoredAgentManifest> {
-        self.config
-            .module(AGENTS_MODULE)
-            .file(&format!("{name}.{MANIFEST_EXT}"))
+        self.config.module(AGENTS_MODULE).manifest_file(name)
     }
 
     /// Returns registered agents sorted by name.
@@ -307,10 +305,7 @@ impl Agents {
     /// Returns name validation or store errors.
     pub fn delete(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
-        Ok(self
-            .config
-            .module(AGENTS_MODULE)
-            .remove_raw(&format!("{name}.{MANIFEST_EXT}"))?)
+        Ok(self.config.module(AGENTS_MODULE).remove_manifest(name)?)
     }
 }
 

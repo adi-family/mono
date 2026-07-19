@@ -109,9 +109,7 @@ impl Triggers {
 
     /// The manifest file handle for `name`, at `triggers/<name>.toml` (touches no disk).
     fn trigger_file(&self, name: &str) -> ConfigFile<TriggerManifest> {
-        self.config
-            .module(TRIGGERS_MODULE)
-            .file(&format!("{name}.{MANIFEST_EXT}"))
+        self.config.module(TRIGGERS_MODULE).manifest_file(name)
     }
 
     /// Every registered trigger, sorted by name. A file without a `.toml` extension is skipped;
@@ -294,10 +292,7 @@ impl Triggers {
     /// [`Error::InvalidName`] for an unsafe name, or [`Error::Config`] on a removal failure.
     pub fn delete(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
-        Ok(self
-            .config
-            .module(TRIGGERS_MODULE)
-            .remove_raw(&format!("{name}.{MANIFEST_EXT}"))?)
+        Ok(self.config.module(TRIGGERS_MODULE).remove_manifest(name)?)
     }
 }
 

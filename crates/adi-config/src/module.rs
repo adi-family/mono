@@ -41,6 +41,26 @@ impl Module {
         ConfigFile::new(self.dir.join(name))
     }
 
+    /// The typed `<name>.toml` manifest for a named entry — the file a registry keeps one of per
+    /// agent / trigger. A convenience over [`file`](Self::file) so the `<name>.`[`MANIFEST_EXT`]
+    /// naming convention lives here rather than at each registry's call site.
+    ///
+    /// [`MANIFEST_EXT`]: crate::MANIFEST_EXT
+    #[must_use]
+    pub fn manifest_file<T>(&self, name: &str) -> ConfigFile<T> {
+        self.file(&format!("{name}.{}", crate::MANIFEST_EXT))
+    }
+
+    /// Remove a named entry's `<name>.toml` manifest, returning whether it existed. The delete
+    /// half of [`manifest_file`](Self::manifest_file): a convenience over
+    /// [`remove_raw`](Self::remove_raw) that keeps the `<name>.toml` convention in one place.
+    ///
+    /// # Errors
+    /// [`Error::Io`](crate::Error::Io) on any removal failure other than not-found.
+    pub fn remove_manifest(&self, name: &str) -> Result<bool> {
+        self.remove_raw(&format!("{name}.{}", crate::MANIFEST_EXT))
+    }
+
     /// Where a raw file named `name` lives (does not touch disk). Use this when the
     /// module owns its own file format (JSON, YAML, a log, a socket path, …) and only
     /// needs the store to decide *where* it goes.
