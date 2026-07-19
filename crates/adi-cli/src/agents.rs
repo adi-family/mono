@@ -190,8 +190,14 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                         println!("  command: {command}");
                         println!("  attach:  tmux attach -t {session}");
                     }
-                    Launch::Process { command, pid, log } => {
+                    Launch::Process {
+                        command,
+                        pid,
+                        log,
+                        run_id,
+                    } => {
                         println!("Started agent {name} as background process {pid}.");
+                        println!("  run:     {run_id}");
                         println!("  command: {command}");
                         println!("  log:     {}", log.display());
                     }
