@@ -454,6 +454,10 @@ pub(crate) struct AgentsWatch {
     pub(crate) runs: RwSignal<Vec<AgentRunInfo>>,
     /// The last snapshot received, or `None` before the first one lands.
     pub(crate) peek: RwSignal<Option<AgentPeek>>,
+    /// The selected run's log tail, kept apart from `peek` so the inline viewer binds to a plain
+    /// `String` signal and the poll only touches it when the log actually grew — the log follows
+    /// (`tail -f`) without the whole panel re-rendering each second.
+    pub(crate) log: RwSignal<String>,
     /// Text buffer: the send bar (tmux) or the run composer's task (headless).
     pub(crate) input: RwSignal<String>,
 }
@@ -466,6 +470,7 @@ impl AgentsWatch {
             run_id: RwSignal::new(None),
             runs: RwSignal::new(Vec::new()),
             peek: RwSignal::new(None),
+            log: RwSignal::new(String::new()),
             input: RwSignal::new(String::new()),
         }
     }
@@ -477,6 +482,7 @@ impl AgentsWatch {
         self.run_id.set(None);
         self.runs.set(Vec::new());
         self.peek.set(None);
+        self.log.set(String::new());
         self.input.set(String::new());
     }
 }

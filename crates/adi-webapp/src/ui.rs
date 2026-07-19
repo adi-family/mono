@@ -177,6 +177,51 @@ pub(crate) fn code_editor(
     .into_any()
 }
 
+/// A read-only, syntax-highlighted viewer over `buffer` that follows the tail. Unlike
+/// [`code_editor`], this is a single scrollable `<pre>` with no editing textarea: appending output
+/// never resets the reader's scroll the way setting a textarea's `value` does, so a log that grows
+/// under the poll reads cleanly. It stays pinned to the newest line while the reader is at the
+/// bottom; scrolling up pauses the follow, scrolling back to the end resumes it — `tail -f`, inline.
+pub(crate) fn code_viewer(
+    lang: impl Fn() -> Lang + Copy + Send + Sync + 'static,
+    buffer: RwSignal<String>,
+    modifier: &'static str,
+    id: &'static str,
+) -> AnyView {
+    let pre = NodeRef::<leptos::html::Pre>::new();
+    // Whether the viewer is pinned to the bottom. Starts true so a freshly opened log lands on its
+    // newest line; the reader's own scrolling flips it (see the scroll handler below).
+    let follow = RwSignal::new(true);
+    // Follow the tail: when the buffer grows, drop to the newest line — but only while pinned, so
+    // scrolling up to read history isn't yanked away. Reads `buffer`, so it also runs on mount.
+    Effect::new(move |_| {
+        let _ = buffer.get();
+        if follow.get_untracked()
+            && let Some(p) = pre.get_untracked()
+        {
+            p.set_scroll_top(p.scroll_height());
+        }
+    });
+    let class = if modifier.is_empty() {
+        "adi-logview adi-mono".to_string()
+    } else {
+        format!("adi-logview adi-mono {modifier}")
+    };
+    view! {
+        <pre class=class id=id node_ref=pre tabindex="0"
+            on:scroll=move |_| {
+                if let Some(p) = pre.get_untracked() {
+                    // Within a couple of lines of the end still counts as "following".
+                    let dist = p.scroll_height() - p.scroll_top() - p.client_height();
+                    follow.set(dist <= 24);
+                }
+            }>
+            {move || painted(lang(), &buffer.get())}
+        </pre>
+    }
+    .into_any()
+}
+
 /// The buffer painted as coloured spans. A trailing newline gets a space appended so the last
 /// line still has height — otherwise the painted layer is one line shorter than the textarea
 /// and the two scroll out of step at the bottom.

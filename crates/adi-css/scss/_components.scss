@@ -328,6 +328,105 @@ $fileedit-pad: 12px 14px;
   }
 }
 
+// ---- run-log console (the expanded log under a selected run) -------------------------
+//
+// The drawer reads as a terminal, not another grey table row: a titled, bordered, dark card seated
+// inside the row with breathing room around it. Dark in both themes, because a console is the one
+// thing that should look the same everywhere — that is what makes "this is a log" unmistakable.
+$runlog-body: #0f1115;
+$runlog-bar: #171a20;
+$runlog-ink: #d5dae2;
+$runlog-dim: #8b93a1;
+
+// The detail cell: restore padding (with a matching tint) so the card floats inside the row rather
+// than butting edge-to-edge against the zebra shading. Higher-specificity than `.adi-table td`.
+.adi-table td.adi-runlog__cell {
+  padding: 10px 14px 14px;
+  white-space: normal;
+  background: var(--surface-2);
+}
+
+// The console card itself: framed and rounded so it is clearly one object — a log panel.
+.adi-runlog__card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: $runlog-body;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+}
+
+// Its title bar: says "Log", names the run, shows the tail-f hint, and carries the one Close.
+.adi-runlog__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 6px 10px;
+  background: $runlog-bar;
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
+}
+
+.adi-runlog__title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: $runlog-ink;
+}
+
+.adi-runlog__run {
+  font-size: var(--text-xs);
+  color: $runlog-dim;
+}
+
+.adi-runlog__cmd {
+  font-size: var(--text-xs);
+  color: $runlog-dim;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 46ch;
+}
+
+// The Close: a plain light control that stays legible on the dark bar, unlike the accent link.
+.adi-runlog__close {
+  flex: none;
+  padding: 2px 9px;
+  border: 1px solid rgba(255, 255, 255, .16);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: $runlog-ink;
+  font-family: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  cursor: pointer;
+
+  &:hover { background: rgba(255, 255, 255, .1); }
+}
+
+// The console body: the scrollable, tail-following log itself. A <pre>, so appended lines keep the
+// reader's scroll where it was (a textarea would reset it).
+.adi-logview {
+  margin: 0;
+  padding: 10px 12px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  tab-size: 2;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  color: $runlog-ink;
+  background: $runlog-body;
+}
+
+// The "waiting for output" note, inside the dark console.
+.adi-runlog__empty {
+  padding: 10px 12px;
+  color: $runlog-dim;
+  font-size: var(--text-sm);
+}
+
 // Token colours. Deliberately few: structure (keys), literals, and comments are what you
 // scan a config for — colouring every operator turns a manifest into confetti.
 .tok {
