@@ -67,7 +67,7 @@ use trigger::validate_name;
 const TRIGGERS_MODULE: &str = "triggers";
 const MANIFEST_EXT: &str = "toml";
 
-/// The triggers registry: lists, reads, mutates, and fires the per-trigger manifests under the
+/// The trigger registry: lists, reads, mutates, and fires the per-trigger manifests under the
 /// `triggers` module dir. Cheap to clone; all state is on disk.
 #[derive(Debug, Clone)]
 pub struct Triggers {
@@ -89,7 +89,7 @@ impl Triggers {
         }
     }
 
-    /// Open the registry backed by a caller-supplied [`Config`] — for tests or alternate installs.
+    /// Open the registry backed by a caller-supplied [`Config`] — for tests or alternate installations.
     #[must_use]
     pub fn with_config(config: Config) -> Self {
         Self { config }
@@ -175,7 +175,7 @@ impl Triggers {
     /// save), `updated_at` is stamped every save — any values in `manifest` are ignored.
     ///
     /// # Errors
-    /// [`Error::InvalidName`] for an unsafe name, or [`Error::Config`] on a write failure.
+    /// [`Error::InvalidName`] for an unsafe name, or [`Error::Config`] on a writing failure.
     pub fn save(&self, name: &str, mut manifest: TriggerManifest) -> Result<Trigger> {
         validate_name(name)?;
         // Fold the incoming kind/runtime onto the live set, so a caller passing a retired kind
