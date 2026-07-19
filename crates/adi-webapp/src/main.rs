@@ -354,11 +354,13 @@ fn App() -> impl IntoView {
                 </div>
             </aside>
 
-            <main class="adi-main">
+            <main class="adi-main"
+                class:adi-main--flush=move || matches!(route.get(), Route::StoreFile)>
                 <div class="adi-container">
                     {move || match route.get() {
                         // These pages render their own headings — no generic page title.
-                        Route::PortsManager | Route::ProjectDetail => None,
+                        // StoreFile is a full-bleed editor: its head carries the file path.
+                        Route::PortsManager | Route::ProjectDetail | Route::StoreFile => None,
                         other => Some(view! {
                             <header class="adi-bar">
                                 <h1 class="adi-bar__title">{other.title()}</h1>

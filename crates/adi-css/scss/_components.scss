@@ -89,6 +89,24 @@
   flex: 1;
   min-width: 0; // let wide children (tables) scroll instead of stretching the layout
   overflow-y: auto;
+
+  // Full-bleed mode, for a page that is one editor: the pane stops scrolling and stops
+  // centring its content, so the page can hand its whole height to a single child and let
+  // that child do the scrolling. Without `overflow: hidden` here the page and the buffer
+  // would each grow a scrollbar.
+  &--flush {
+    display: flex;
+    overflow: hidden;
+
+    > .adi-container {
+      display: flex;
+      flex-direction: column;
+      flex: 1;
+      min-height: 0;
+      max-width: none;
+      padding: 0;
+    }
+  }
 }
 
 // ---- store browser (the right rail over ~/.adi/mono) ---------------------------------
@@ -181,6 +199,8 @@ $fileedit-pad: 12px 14px;
 
 .adi-code {
   position: relative;
+  // A height when the editor sits in a normal page; inside `.adi-panel--fill` the flex rule
+  // below takes over and it grows to whatever the pane has left.
   height: 60vh;
 
   // The shared metrics, applied to both layers exactly once. Any divergence here shows up
@@ -242,6 +262,25 @@ $fileedit-pad: 12px 14px;
   &--func    { color: var(--accent-ink); }
   // Brackets and separators are scaffolding: dimmed so the names between them lead.
   &--punct   { color: var(--muted); }
+}
+
+// A panel that is the page: it takes the pane's full height, drops the outer border and
+// radius that would draw a card edge against the window, and gives its last child the rest.
+.adi-panel--fill {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+
+  .adi-code {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+  }
 }
 
 // ---- status bar ---------------------------------------------------------------------

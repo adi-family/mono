@@ -31,7 +31,7 @@ pub(crate) fn store_file_view(state: State) -> AnyView {
                 let area = NodeRef::<leptos::html::Textarea>::new();
                 let paint = NodeRef::<leptos::html::Pre>::new();
                 view! {
-                <section class="adi-panel">
+                <section class="adi-panel adi-panel--fill">
                     <div class="adi-panel__head">
                         <h2 class="adi-panel__title adi-mono">{path.clone()}</h2>
                         <span class="adi-updated">
