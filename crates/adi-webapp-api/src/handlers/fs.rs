@@ -9,7 +9,7 @@
 use adi_fs::Jail;
 use adi_projects::Projects;
 
-use crate::types::{FsContent, FsListing, FsRef, FsWrite};
+use crate::types::{FsContent, FsCreate, FsListing, FsRef, FsWrite};
 
 use super::files::{MAX_TEXT_BYTES, normalize_rel, parent_rel};
 use super::response::{Response, error, ok_json};
@@ -74,6 +74,48 @@ pub fn fs_write(store: &Projects, body: &[u8]) -> Response {
     read_content(&jail, &req.path)
 }
 
+/// `POST /api/fs/create` — create one empty file (`kind: "file"`) or directory (`kind: "dir"`)
+/// inside the ADI store. Returns the fresh listing of the *parent* directory, so the tree that
+/// asked for the create can redraw the folder it landed in without a second round-trip.
+///
+/// Creates never overwrite: a path that is already taken comes back 409.
+#[must_use]
+pub fn fs_create(store: &Projects, body: &[u8]) -> Response {
+    let Some(req) = parse_create(body) else {
+        return error(
+            400,
+            "expected JSON body { \"path\": \"…\", \"kind\": \"file\" | \"dir\" }",
+        );
+    };
+    // Normalizing a path of only `.`/slashes empties it out, which would name the store root.
+    let path = normalize_rel(&req.path);
+    if path.is_empty() {
+        return error(400, "a name is required");
+    }
+    let jail = store_jail(store);
+    // The *raw* path goes to the jail, never the normalized one: `normalize_rel` strips `..`
+    // components, so normalizing first would turn a climb the jail is meant to refuse into a
+    // silent create somewhere else inside the store.
+    let created = if req.kind == "dir" {
+        jail.create_dir(&req.path)
+    } else {
+        jail.create_file(&req.path)
+    };
+    if let Err(e) = created {
+        return Response::from(&e);
+    }
+    // The parent of a normalized non-empty path is `Some`, or the root — either way listable.
+    let parent = parent_rel(&path).unwrap_or_default();
+    match jail.list(&parent) {
+        Ok(entries) => ok_json(&FsListing {
+            path: parent.clone(),
+            parent: parent_rel(&parent),
+            entries: entries.into_iter().map(super::files::file_entry).collect(),
+        }),
+        Err(e) => Response::from(&e),
+    }
+}
+
 /// Read `rel` as text and shape an [`FsContent`], enforcing the [`MAX_TEXT_BYTES`] cap.
 fn read_content(jail: &Jail, rel: &str) -> Response {
     let meta = match jail.metadata(rel) {
@@ -123,5 +165,10 @@ fn bad_ref() -> Response {
 
 fn parse_write(body: &[u8]) -> Option<FsWrite> {
     let req: FsWrite = serde_json::from_slice(body).ok()?;
+    (!req.path.trim().is_empty()).then_some(req)
+}
+
+fn parse_create(body: &[u8]) -> Option<FsCreate> {
+    let req: FsCreate = serde_json::from_slice(body).ok()?;
     (!req.path.trim().is_empty()).then_some(req)
 }

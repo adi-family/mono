@@ -126,12 +126,13 @@ fn project_jail(store: &Projects, id: &str) -> Result<Jail, Response> {
 }
 
 // Map a jail [`FsError`] to an HTTP status: an escape/`not-a-file` is a 400, a missing path a
-// 404, a non-UTF-8 (binary) file a 415, and any other I/O error a 500.
+// 404, a taken path a 409, a non-UTF-8 (binary) file a 415, and any other I/O error a 500.
 impl From<&FsError> for Response {
     fn from(e: &FsError) -> Self {
         let status = match e {
             FsError::Escape(_) | FsError::NotAFile(_) => 400,
             FsError::NotFound(_) => 404,
+            FsError::AlreadyExists(_) => 409,
             FsError::NotText(_) => 415,
             FsError::Io { .. } => 500,
         };

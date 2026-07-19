@@ -223,6 +223,7 @@ async fn handle(
         ("POST", "/api/fs/list") => handlers::fs_list(projects, &req.body),
         ("POST", "/api/fs/read") => handlers::fs_read(projects, &req.body),
         ("POST", "/api/fs/write") => handlers::fs_write(projects, &req.body),
+        ("POST", "/api/fs/create") => handlers::fs_create(projects, &req.body),
         // Workspaces & project hooks: working copies created by the script files under a
         // project's .adi/hooks, registered in its .adi/workspaces.toml. All POST under
         // /api/projects/… — NOT /api/hooks/*, which is the triggers webhook URL space.

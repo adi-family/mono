@@ -2,14 +2,15 @@
 
 use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentsState,
-    ApiError, Dashboard, DashboardsState, DirListing, FileContent, FilesRef, FsContent, FsListing,
-    FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef, MeshListenRef, MeshPeerRef,
-    MeshPortRef, MeshState, NewDashboard, NewProject, NewProjectHook, NewService, NewTask,
-    NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult,
-    ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, SaveAgent, SaveAgentCode,
-    SaveTrigger, StartResult, StartService, StopResult, TaskRef, TasksState, TriggerFireResult,
-    TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult, WorkspaceRef,
-    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    ApiError, Dashboard, DashboardsState, DirListing, FileContent, FilesRef, FsContent, FsCreate,
+    FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef, MeshListenRef,
+    MeshPeerRef, MeshPortRef, MeshState, NewDashboard, NewProject, NewProjectHook, NewService,
+    NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, SaveAgent,
+    SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult, TaskRef, TasksState,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
+    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
+    WorkspacesState, WriteFile,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -391,6 +392,19 @@ pub async fn fs_write(path: &str, content: String) -> Result<FsContent, String> 
         &FsWrite {
             path: path.to_string(),
             content,
+        },
+    )
+    .await
+}
+
+/// Create an empty file or a directory in the store. The reply is the fresh listing of the
+/// directory it landed in, so the tree redraws that folder without a second round-trip.
+pub async fn fs_create(path: String, dir: bool) -> Result<FsListing, String> {
+    post(
+        "/api/fs/create",
+        &FsCreate {
+            path,
+            kind: if dir { "dir" } else { "file" }.to_string(),
         },
     )
     .await

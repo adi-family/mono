@@ -858,6 +858,16 @@ pub struct FsWrite {
     pub content: String,
 }
 
+/// `POST /api/fs/create` — create one empty file or directory within the ADI store. Creates
+/// never clobber; an existing path is a 409 rather than an overwrite.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FsCreate {
+    /// The path to create, relative to the store root.
+    pub path: String,
+    /// What to create: `"dir"` for a directory, anything else (`"file"`) for an empty file.
+    pub kind: String,
+}
+
 // ---- project workspaces & hooks (script files under <project>/.adi/hooks + the
 // ---- .adi/workspaces.toml registry) ---------------------------------------------------
 

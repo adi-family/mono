@@ -20,6 +20,10 @@ pub enum Error {
     NotAFile(String),
     /// A file's bytes are not valid UTF-8, so it can't be surfaced as editable text.
     NotText(String),
+    /// Something already exists at the path a create asked for. Creates never clobber, so this
+    /// is an error rather than a silent overwrite (that is what [`write`](crate::Jail::write)
+    /// is for).
+    AlreadyExists(String),
     /// An underlying I/O error, tagged with the relative path it happened on.
     Io {
         /// The relative path (within the jail) the error occurred on.
@@ -39,6 +43,7 @@ impl fmt::Display for Error {
             Self::NotFound(path) => write!(f, "no such file or directory: {path}"),
             Self::NotAFile(path) => write!(f, "not a file: {path}"),
             Self::NotText(path) => write!(f, "not a UTF-8 text file: {path}"),
+            Self::AlreadyExists(path) => write!(f, "already exists: {path}"),
             Self::Io { path, source } => write!(f, "I/O error on {path}: {source}"),
         }
     }
@@ -48,7 +53,11 @@ impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Io { source, .. } => Some(source),
-            Self::Escape(_) | Self::NotFound(_) | Self::NotAFile(_) | Self::NotText(_) => None,
+            Self::Escape(_)
+            | Self::NotFound(_)
+            | Self::NotAFile(_)
+            | Self::NotText(_)
+            | Self::AlreadyExists(_) => None,
         }
     }
 }

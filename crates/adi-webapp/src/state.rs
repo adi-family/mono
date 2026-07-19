@@ -77,6 +77,35 @@ pub(crate) struct StoreBrowser {
     /// Why the last list/read/write failed, or `None`. Shown in the rail, since the page's
     /// flash line can be scrolled far away from it.
     pub(crate) error: RwSignal<Option<String>>,
+    /// The open right-click menu: the directory a create would land in, and the viewport point
+    /// to draw at. `None` when no menu is showing.
+    pub(crate) menu: RwSignal<Option<StoreMenu>>,
+    /// The create in progress: which directory it lands in and whether it's a directory. The
+    /// tree renders a name input inside that folder while this is set.
+    pub(crate) creating: RwSignal<Option<StoreDraft>>,
+    /// The name being typed into that input.
+    pub(crate) draft: RwSignal<String>,
+}
+
+/// An open right-click menu on the store tree.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct StoreMenu {
+    /// The directory a create from this menu lands in — the row itself for a folder, its parent
+    /// for a file, so "New file" next to a file always means "beside it".
+    pub(crate) dir: String,
+    /// Where to draw, in viewport pixels (the menu is `position: fixed`).
+    pub(crate) x: i32,
+    /// See [`x`](Self::x).
+    pub(crate) y: i32,
+}
+
+/// A create the tree is collecting a name for.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct StoreDraft {
+    /// The directory the new entry lands in (`""` is the store root).
+    pub(crate) dir: String,
+    /// Whether to create a directory rather than an empty file.
+    pub(crate) is_dir: bool,
 }
 
 impl StoreBrowser {
@@ -91,6 +120,9 @@ impl StoreBrowser {
             buffer: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
             error: RwSignal::new(None),
+            menu: RwSignal::new(None),
+            creating: RwSignal::new(None),
+            draft: RwSignal::new(String::new()),
         }
     }
 

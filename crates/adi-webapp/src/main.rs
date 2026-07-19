@@ -314,6 +314,16 @@ fn App() -> impl IntoView {
         }
     });
 
+    // Keep the right rail standing at the directory behind the page: opening a project — or
+    // moving between its sections — expands the store tree down to that project. Runs on every
+    // route change, so history navigation reveals as well as clicks do.
+    Effect::new(move |_| {
+        let (id, section) = (current_project.get(), current_section.get());
+        if matches!(route.get(), Route::ProjectDetail) {
+            store_browser::reveal_project(state, &id, section);
+        }
+    });
+
     view! {
         <div class="adi-workbench">
         // The frame's lid: identity on the left, where you are on the right.

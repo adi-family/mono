@@ -210,6 +210,51 @@ impl Jail {
         fsutil::atomic_write(&path, bytes).map_err(|e| Error::io(rel, e))
     }
 
+    /// Create an empty file at `rel`, creating any missing parent directories **within the
+    /// jail**. Unlike [`write`](Self::write), this never clobbers: anything already at `rel` is
+    /// an [`Error::AlreadyExists`].
+    ///
+    /// # Errors
+    /// [`Error::Escape`] if `rel` escapes the base, [`Error::AlreadyExists`] if a file or
+    /// directory is already there (the base itself included), or [`Error::Io`] on failure.
+    pub fn create_file(&self, rel: &str) -> Result<()> {
+        let path = self.create_target(rel)?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| Error::io(rel, e))?;
+        }
+        // `create_new` rather than `File::create`: the existence check above is for a friendly
+        // error, this is the guarantee — a file appearing in between still can't be truncated.
+        match std::fs::File::create_new(&path) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                Err(Error::AlreadyExists(rel.to_string()))
+            }
+            Err(e) => Err(Error::io(rel, e)),
+        }
+    }
+
+    /// Create the directory at `rel`, and any missing parents, within the jail.
+    ///
+    /// # Errors
+    /// [`Error::Escape`] if `rel` escapes the base, [`Error::AlreadyExists`] if a file or
+    /// directory is already there (the base itself included), or [`Error::Io`] on failure.
+    pub fn create_dir(&self, rel: &str) -> Result<()> {
+        let path = self.create_target(rel)?;
+        std::fs::create_dir_all(&path).map_err(|e| Error::io(rel, e))
+    }
+
+    /// The vetted absolute path a create may land on: in-bounds, past the symlink guard, and
+    /// not already taken. `symlink_metadata` (not `metadata`) so a *broken* symlink still reads
+    /// as occupied rather than as free space to create over.
+    fn create_target(&self, rel: &str) -> Result<PathBuf> {
+        let path = self.resolve(rel)?;
+        if path == self.base || std::fs::symlink_metadata(&path).is_ok() {
+            return Err(Error::AlreadyExists(rel.to_string()));
+        }
+        self.guard(rel, &path)?;
+        Ok(path)
+    }
+
     /// Stat the path at `rel`.
     ///
     /// # Errors
@@ -348,6 +393,40 @@ mod tests {
             jail.read_to_string(".adi/hive.yaml").unwrap(),
             "version: \"2\"\n"
         );
+        let _ = std::fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn creates_files_and_dirs_without_clobbering() {
+        let (base, jail) = scratch("create");
+        jail.create_file("notes.md").unwrap();
+        assert_eq!(jail.read_to_string("notes.md").unwrap(), "");
+        jail.create_dir("sub/deep/nested").unwrap();
+        assert!(base.join("sub/deep/nested").is_dir());
+
+        // Whatever is already there stays there — a create is never an overwrite.
+        for taken in ["notes.md", "sub", "config.toml", "sub/deep"] {
+            assert!(
+                matches!(jail.create_file(taken), Err(Error::AlreadyExists(_))),
+                "create_file({taken:?}) should refuse an occupied path"
+            );
+            assert!(
+                matches!(jail.create_dir(taken), Err(Error::AlreadyExists(_))),
+                "create_dir({taken:?}) should refuse an occupied path"
+            );
+        }
+        assert_eq!(
+            jail.read_to_string("config.toml").unwrap(),
+            "name = \"demo\"\n"
+        );
+
+        // The base itself is occupied, and climbing out is still refused.
+        assert!(matches!(jail.create_dir(""), Err(Error::AlreadyExists(_))));
+        assert!(matches!(
+            jail.create_file("../escapee"),
+            Err(Error::Escape(_))
+        ));
+        assert!(!base.parent().unwrap().join("escapee").exists());
         let _ = std::fs::remove_dir_all(base);
     }
 

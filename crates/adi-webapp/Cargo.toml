@@ -33,7 +33,8 @@ web-sys = { version = "0.3", features = [
     "Location",
     "History",           # push/replaceState for client-side routing
     "EventTarget",       # popstate listener (back/forward)
-    "MouseEvent",        # nav-link click handling
+    "MouseEvent",        # nav-link click handling, right-click menus on the store tree
+    "KeyboardEvent",     # Enter/Escape on the store tree's new-entry input
     "FocusEvent",        # select-all on focus for the copyable id/ticket fields
     "HtmlElement",       # focus() the copyable field before copying
     "HtmlInputElement",  # select() the id/ticket text for the Copy button
