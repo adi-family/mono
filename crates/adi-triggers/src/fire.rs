@@ -79,6 +79,7 @@ pub(crate) fn launch(
     module_dir: &Path,
     trigger: &Trigger,
     payload: Option<&[u8]>,
+    event: Option<&str>,
     secret_env: &[(String, String)],
 ) -> Result<Launch> {
     let code = trigger.manifest.code.trim();
@@ -105,6 +106,11 @@ pub(crate) fn launch(
         "ADI_TRIGGER_KIND".to_string(),
         trigger.manifest.kind.clone(),
     ));
+    // For an event trigger, the concrete event name that matched — so one handler subscribed to
+    // `adi.tasks.*` can branch on whether it was `created` or `updated`.
+    if let Some(name) = event {
+        env.push(("ADI_EVENT".to_string(), name.to_string()));
+    }
     env.extend(extra_env(&trigger.manifest.extra));
 
     // The payload is written *before* the spawn so the code block always finds a complete file.
@@ -182,9 +188,10 @@ pub(crate) fn fire(
     module_dir: &Path,
     trigger: &Trigger,
     payload: Option<&[u8]>,
+    event: Option<&str>,
     secret_env: &[(String, String)],
 ) -> Result<Firing> {
-    let spec = launch(module_dir, trigger, payload, secret_env)?;
+    let spec = launch(module_dir, trigger, payload, event, secret_env)?;
     let log_file = open_log(module_dir, &trigger.name, false)?;
     let errlog = log_file.try_clone()?;
 
@@ -311,7 +318,10 @@ mod tests {
     fn firing_without_code_is_refused() {
         let dir = scratch_dir("nocode");
         let t = trigger("empty", "   ");
-        assert!(matches!(fire(&dir, &t, None, &[]), Err(Error::NoCode(_))));
+        assert!(matches!(
+            fire(&dir, &t, None, None, &[]),
+            Err(Error::NoCode(_))
+        ));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -322,7 +332,7 @@ mod tests {
             "greeter",
             "printf '%s/%s' \"$ADI_TRIGGER\" \"$ADI_TRIGGER_KIND\"",
         );
-        let firing = fire(&dir, &t, None, &[]).expect("fire");
+        let firing = fire(&dir, &t, None, None, &[]).expect("fire");
         assert!(firing.pid > 0);
         let text = wait_for_log(&firing.log, |s| !s.is_empty());
         assert_eq!(text, "greeter/background");
@@ -341,13 +351,28 @@ mod tests {
             "hook",
             "printf '%s|' \"$ADI_PAYLOAD\"; cat \"$ADI_PAYLOAD_FILE\"",
         );
-        let firing = fire(&dir, &t, Some(b"{\"x\":1}"), &[]).expect("fire");
+        let firing = fire(&dir, &t, Some(b"{\"x\":1}"), None, &[]).expect("fire");
         assert_eq!(
             std::fs::read(payload_path(&dir, "hook")).expect("payload file"),
             b"{\"x\":1}"
         );
         let text = wait_for_log(&firing.log, |s| s.contains('|') && s.len() > 8);
         assert_eq!(text, "{\"x\":1}|{\"x\":1}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An event fire hands the matched event name over as `ADI_EVENT` alongside the payload, so a
+    /// handler subscribed to a wildcard can tell which concrete event it got.
+    #[test]
+    fn an_event_fire_exposes_the_event_name() {
+        let dir = scratch_dir("eventname");
+        let t = trigger("on-task", "printf '%s|%s' \"$ADI_EVENT\" \"$ADI_PAYLOAD\"");
+        let firing = fire(&dir, &t, Some(b"{\"id\":\"t1\"}"), Some("adi.tasks.created"), &[])
+            .expect("fire");
+        assert_eq!(
+            wait_for_log(&firing.log, |s| s.contains('|')),
+            "adi.tasks.created|{\"id\":\"t1\"}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -363,7 +388,7 @@ mod tests {
         t.manifest
             .extra
             .insert("token_env".into(), "MY_TOKEN".into());
-        let firing = fire(&dir, &t, None, &[]).expect("fire");
+        let firing = fire(&dir, &t, None, None, &[]).expect("fire");
         assert_eq!(
             wait_for_log(&firing.log, |s| s.contains('/')),
             "4242/MY_TOKEN"
@@ -396,7 +421,7 @@ mod tests {
             // A secret unwisely named after a platform var must lose to the real one.
             ("ADI_TRIGGER".to_string(), "hijacked".to_string()),
         ];
-        let firing = fire(&dir, &t, None, &secret_env).expect("fire");
+        let firing = fire(&dir, &t, None, None, &secret_env).expect("fire");
         assert_eq!(
             wait_for_log(&firing.log, |s| s.contains('|')),
             "s3cr3t|reader"
@@ -412,7 +437,7 @@ mod tests {
         let mut t = trigger("poller", "console.log('hi');\n");
         t.manifest.runtime = RUNTIME_TS.into();
 
-        let spec = launch(&dir, &t, None, &[]).expect("launch");
+        let spec = launch(&dir, &t, None, None, &[]).expect("launch");
         assert_eq!(spec.program, "bun");
         let staged = dir.join(SRC_DIR).join("poller.ts");
         assert_eq!(

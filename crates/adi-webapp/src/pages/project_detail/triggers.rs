@@ -69,6 +69,9 @@ pub(crate) fn triggers_panel(
                     enabled: true,
                     project: Some(id),
                     extra: std::collections::BTreeMap::new(),
+                    // The quick project form only creates webhook/background triggers; event
+                    // subscriptions are edited on the full Triggers page.
+                    events: Vec::new(),
                 };
                 name.set(String::new());
                 code.set(String::new());

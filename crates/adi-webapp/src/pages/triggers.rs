@@ -47,6 +47,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
         // The settings inputs are derived from the whole form (kind + preset), so they read
         // `extra` through it rather than from a loose signal here.
         extra: _,
+        events,
         editing,
         busy,
     } = form;
@@ -104,6 +105,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     enabled: enabled.get(),
                     project: (!proj.is_empty()).then_some(proj),
                     extra: current_extras(state, form),
+                    events: parse_event_patterns(&events.get()),
                 };
                 editing.set(Some(nm.clone()));
                 apply_triggers(state, Some(busy), format!("Saved trigger “{nm}”."),
@@ -161,6 +163,17 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     <span class="adi-field__label">"Enabled"</span>
                 </label>
                 {move || extra_fields(state, form)}
+                {move || (kind.get() == "event").then(|| view! {
+                    <div class="adi-field" style="flex:1 1 100%; min-width:0">
+                        <label class="adi-field__label" for="trigger-events">"Events"</label>
+                        <textarea class="adi-input adi-mono" id="trigger-events" rows="3"
+                            placeholder="adi.tasks.*"
+                            prop:value=move || events.get()
+                            on:input=move |ev| events.set(event_target_value(&ev))></textarea>
+                        {field_hint("one pattern per line — * matches one segment, ** the tail (e.g. adi.tasks.*)")}
+                    </div>
+                })}
+                {move || (kind.get() == "event").then(|| event_catalog_view(state, form))}
                 <div class="adi-field" style="flex:1 1 100%; min-width:0">
                     <label class="adi-field__label" for="trigger-code">"Code block"</label>
                     // The same editor the store file page uses, so a trigger's code gets the
@@ -230,6 +243,8 @@ fn apply_preset(form: TriggersForm, preset: &TriggerPreset) {
     form.runtime.set(preset.runtime.clone());
     form.code.set(preset.code.clone());
     form.preset.set(Some(preset.id.clone()));
+    // An event preset ships suggested patterns; every other kind clears them.
+    form.events.set(preset.events.join("\n"));
     if form.description.get_untracked().trim().is_empty() {
         form.description.set(preset.description.clone());
     }
@@ -241,6 +256,72 @@ fn apply_preset(form: TriggersForm, preset: &TriggerPreset) {
                     .or_insert_with(|| field.default.clone());
             }
         }
+    });
+}
+
+/// Split the Events textarea into subscription patterns: one per line or comma, trimmed, with
+/// blanks dropped. The inverse of the `join("\n")` used when a trigger or preset is loaded in.
+fn parse_event_patterns(text: &str) -> Vec<String> {
+    text.split(['\n', ','])
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The event catalog reference shown under the Events patterns for an event trigger: one chip per
+/// platform event (click to add it to the patterns; hover shows the payload example), plus a note
+/// on how an event reaches the code block. Answers "what can I subscribe to, and what will I get?".
+fn event_catalog_view(state: State, form: TriggersForm) -> AnyView {
+    let Some(st) = state.triggers.get() else {
+        return ().into_any();
+    };
+    if st.event_types.is_empty() {
+        return ().into_any();
+    }
+    let chips = st
+        .event_types
+        .into_iter()
+        .map(|e| {
+            let name = e.name;
+            let label = name.clone();
+            let insert = name.clone();
+            let title = if e.payload.trim().is_empty() {
+                e.summary
+            } else {
+                format!("{}\npayload: {}", e.summary, e.payload)
+            };
+            view! {
+                <button class="adi-btn" type="button" title=title
+                    on:click=move |_| add_event_pattern(form.events, &insert)>{label}</button>
+            }
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <div class="adi-field" style="flex:1 1 100%; min-width:0">
+            <span class="adi-field__label">"Available events"</span>
+            <div class="adi-table__actions" style="display:flex; flex-wrap:wrap; gap:var(--space-2)">
+                {chips}
+            </div>
+            {field_hint("click to add a pattern · each event arrives in $ADI_PAYLOAD, its name in $ADI_EVENT")}
+        </div>
+    }
+    .into_any()
+}
+
+/// Add `name` to the Events patterns textarea if it isn't already present, normalizing the box to
+/// one pattern per line.
+fn add_event_pattern(events: RwSignal<String>, name: &str) {
+    events.update(|text| {
+        let mut patterns: Vec<String> = text
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect();
+        if !patterns.iter().any(|p| p == name) {
+            patterns.push(name.to_string());
+        }
+        *text = patterns.join("\n");
     });
 }
 
@@ -280,10 +361,10 @@ fn runtime_or_default(runtime: &str) -> String {
 
 /// What to tell the user about the code block they're writing, given how it will be launched.
 fn code_hint(kind: &str, runtime: &str) -> String {
-    let payload = if kind == "webhook" {
-        "the request body lands in $ADI_PAYLOAD_FILE"
-    } else {
-        "keep it running — the app restarts it if it exits"
+    let payload = match kind {
+        "webhook" => "the request body lands in $ADI_PAYLOAD_FILE",
+        "event" => "the event lands in $ADI_PAYLOAD; its name in $ADI_EVENT",
+        _ => "keep it running — the app restarts it if it exits",
     };
     let how = if runtime_or_default(runtime) == "ts" {
         "run with bun"
@@ -545,6 +626,7 @@ fn toggle_trigger(state: State, t: &TriggerDto) {
         enabled: !t.enabled,
         project: t.project.clone(),
         extra: t.extra.clone(),
+        events: t.events.clone(),
     };
     apply_triggers(
         state,
@@ -627,6 +709,7 @@ fn load_trigger_into_form(form: TriggersForm, t: &TriggerDto) {
     form.code.set(t.code.clone());
     form.enabled.set(t.enabled);
     form.extra.set(t.extra.clone());
+    form.events.set(t.events.join("\n"));
     form.editing.set(Some(t.name.clone()));
     scroll_top();
 }
@@ -642,5 +725,6 @@ fn clear_trigger_form(form: TriggersForm) {
     form.code.set(String::new());
     form.enabled.set(true);
     form.extra.set(BTreeMap::new());
+    form.events.set(String::new());
     form.editing.set(None);
 }

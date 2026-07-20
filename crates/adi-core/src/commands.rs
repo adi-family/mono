@@ -74,6 +74,14 @@ impl Adi {
         adi_triggers::Triggers::open()
     }
 
+    /// The event bus backed by the standard store — `Adi::new().events().emit(name, payload)`.
+    /// Publishing here reaches every [event trigger](adi_triggers::KIND_EVENT) the app's
+    /// dispatcher delivers to.
+    #[must_use]
+    pub fn events(self) -> adi_events::Events {
+        adi_events::Events::open()
+    }
+
     /// Every managed service, in display + apply order. DNS is first so, when enabling, its
     /// `on_enable` migrates the front door (proxy-only) before the control-panel agent
     /// binds the shared port — otherwise the old runner-supervised adi-app would collide

@@ -53,6 +53,11 @@ pub(crate) enum TriggersCommand {
         /// `token_env`, `chat_id`, …). Which keys matter is the preset's business.
         #[arg(long = "extra")]
         extra: Vec<String>,
+        /// For `--kind event`: an event-name pattern to subscribe to, matched segment-by-segment
+        /// (`adi.tasks.*` = one segment, `adi.tasks.**` = the tail). Repeatable. Falls back to the
+        /// preset's patterns when omitted.
+        #[arg(long = "event")]
+        events: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -118,6 +123,9 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
                     for field in preset.fields {
                         println!("    --extra {}=…  {}", field.key, field.hint);
                     }
+                    for pattern in preset.events {
+                        println!("    --event {pattern}");
+                    }
                 }
             }
         }
@@ -131,6 +139,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             project,
             disabled,
             extra,
+            events,
             json,
         } => {
             let kind = clean_required("kind", kind)?;
@@ -158,6 +167,9 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
                 enabled: !disabled,
                 project: clean(project),
                 extra: preset_defaults(preset, parse_extra(extra)?),
+                // Explicit --event patterns win; otherwise inherit the preset's (an event preset
+                // ships a sensible default like `adi.tasks.*`).
+                events: preset_events(preset, events),
                 created_at: 0,
                 updated_at: 0,
             };
@@ -237,6 +249,26 @@ fn preset_defaults(
     extra
 }
 
+/// The event patterns to save: the caller's `--event` values (trimmed, blanks dropped) if any,
+/// else the preset's — an event preset ships defaults like `adi.tasks.*`; every other kind ships
+/// none.
+fn preset_events(
+    preset: Option<&adi_core::trigger_presets::Preset>,
+    events: Vec<String>,
+) -> Vec<String> {
+    let events: Vec<String> = events
+        .into_iter()
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty())
+        .collect();
+    if events.is_empty() {
+        return preset
+            .map(|p| p.events.iter().map(|e| (*e).to_string()).collect())
+            .unwrap_or_default();
+    }
+    events
+}
+
 /// A preset as JSON, for `triggers presets --json`.
 fn preset_json(preset: &adi_core::trigger_presets::Preset) -> serde_json::Value {
     serde_json::json!({
@@ -252,6 +284,7 @@ fn preset_json(preset: &adi_core::trigger_presets::Preset) -> serde_json::Value 
             "hint": f.hint,
             "default": f.default,
         })).collect::<Vec<_>>(),
+        "events": preset.events,
     })
 }
 
@@ -283,6 +316,9 @@ fn print_trigger(store: &adi_core::Triggers, trigger: &Trigger) {
     }
     if let Some(project) = &trigger.manifest.project {
         println!("  project: {project}");
+    }
+    if !trigger.manifest.events.is_empty() {
+        println!("  events: {}", trigger.manifest.events.join(" · "));
     }
     if !trigger.manifest.extra.is_empty() {
         let extras: Vec<String> = trigger

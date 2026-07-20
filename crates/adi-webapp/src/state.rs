@@ -498,6 +498,9 @@ pub(crate) struct TriggersForm {
     pub(crate) code: RwSignal<String>,
     pub(crate) enabled: RwSignal<bool>,
     pub(crate) extra: RwSignal<BTreeMap<String, String>>,
+    /// For an event trigger: the subscription patterns, one per line (`adi.tasks.*`). Held as raw
+    /// text and split on save; irrelevant to the other kinds.
+    pub(crate) events: RwSignal<String>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
 }

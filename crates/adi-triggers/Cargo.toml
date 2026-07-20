@@ -16,6 +16,10 @@ supervisor = ["dep:tokio", "dep:tracing"]
 [dependencies]
 adi-config = { workspace = true }
 
+# An `event` trigger subscribes to platform events; the supervisor's event dispatcher drains the
+# shared event spool (adi-events) and fires the triggers whose patterns match.
+adi-events = { workspace = true }
+
 # Firing a trigger injects its resolved secrets (global + the trigger's project) as env vars.
 adi-secrets = { workspace = true }
 

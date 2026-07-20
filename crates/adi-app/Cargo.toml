@@ -30,6 +30,8 @@ adi-agents = { workspace = true }
 
 adi-triggers = { workspace = true }
 
+adi-events = { workspace = true }
+
 adi-mesh = { workspace = true }
 
 adi-css = { workspace = true }

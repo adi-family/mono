@@ -12,6 +12,7 @@ repository.workspace = true
 adi-config = { workspace = true }
 
 adi-agents = { workspace = true }
+adi-events = { workspace = true }
 adi-tasks = { workspace = true }
 adi-tools = { workspace = true }
 adi-triggers = { workspace = true }

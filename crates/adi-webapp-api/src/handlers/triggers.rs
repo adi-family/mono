@@ -7,8 +7,9 @@ use adi_triggers::TriggerManifest;
 use adi_triggers::Triggers;
 
 use crate::types::{
-    HookAck, SaveTrigger, TriggerDto, TriggerFireResult, TriggerKindOption, TriggerLog,
-    TriggerPreset, TriggerPresetField, TriggerRef, TriggerRuntimeOption, TriggersState,
+    EmitAck, EmitEvent, EventTypeDto, HookAck, SaveTrigger, TriggerDto, TriggerFireResult,
+    TriggerKindOption, TriggerLog, TriggerPreset, TriggerPresetField, TriggerRef,
+    TriggerRuntimeOption, TriggersState,
 };
 
 use super::response::{Response, clean, error, ok_json};
@@ -27,6 +28,16 @@ fn clean_extra(extra: BTreeMap<String, String>) -> BTreeMap<String, String> {
 fn safe_extra_key(key: &str) -> bool {
     key.chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-'))
+}
+
+/// Trim and drop blank subscription patterns. Kept permissive — a pattern is matched, never used
+/// as a path — so anything non-blank rides through (`adi.tasks.*`, `adi.**`, a bare exact name).
+fn clean_events(events: Vec<String>) -> Vec<String> {
+    events
+        .into_iter()
+        .map(|e| e.trim().to_string())
+        .filter(|e| !e.is_empty())
+        .collect()
 }
 
 /// `GET /api/triggers` — every registered trigger plus the editor's vocabulary. Each mutation
@@ -51,7 +62,21 @@ fn triggers_state(store: &Triggers) -> Result<TriggersState, TriggerStoreError> 
         kinds: trigger_kinds(),
         runtimes: trigger_runtimes(),
         presets: trigger_presets(),
+        event_types: event_types(),
     })
+}
+
+/// The platform event catalog, straight from the event library so the editor shows a subscriber
+/// exactly which events exist and what payload each delivers.
+fn event_types() -> Vec<EventTypeDto> {
+    adi_events::catalog()
+        .iter()
+        .map(|e| EventTypeDto {
+            name: e.name.into(),
+            summary: e.summary.into(),
+            payload: e.payload.into(),
+        })
+        .collect()
 }
 
 /// `POST /api/triggers/save` — create or update a trigger definition (an upsert keyed by
@@ -75,6 +100,7 @@ pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> R
         enabled: req.enabled,
         project: clean(req.project),
         extra: clean_extra(req.extra),
+        events: clean_events(req.events),
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -238,6 +264,11 @@ fn trigger_kinds() -> Vec<TriggerKindOption> {
             label: "Background".into(),
             hint: "runs continuously; auto-restarts".into(),
         },
+        TriggerKindOption {
+            id: adi_triggers::KIND_EVENT.into(),
+            label: "Event".into(),
+            hint: "runs when a matching platform event fires".into(),
+        },
     ]
 }
 
@@ -279,6 +310,7 @@ fn trigger_presets() -> Vec<TriggerPreset> {
                     default: f.default.into(),
                 })
                 .collect(),
+            events: p.events.iter().map(|&e| e.into()).collect(),
         })
         .collect()
 }
@@ -299,6 +331,7 @@ fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
         enabled: m.enabled,
         project: m.project,
         extra: m.extra,
+        events: m.events,
         created_at: m.created_at,
         updated_at: m.updated_at,
         last_fired_at,
@@ -342,6 +375,31 @@ fn parse_trigger_ref(body: &[u8]) -> Option<TriggerRef> {
 
 fn bad_trigger_ref() -> Response {
     error(400, "expected JSON body { \"name\": \"…\" }")
+}
+
+/// `POST /api/events/emit` — publish one platform event by hand, exactly as a task or agent
+/// mutation does automatically. The app's event dispatcher then fires every enabled event trigger
+/// whose patterns match. Handy for testing a subscription without waiting for the real source.
+#[must_use]
+pub fn emit_event(events: &adi_events::Events, body: &[u8]) -> Response {
+    let Ok(req) = serde_json::from_slice::<EmitEvent>(body) else {
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"payload\"?: \"…\" }",
+        );
+    };
+    let name = req.name.trim();
+    if name.is_empty() {
+        return error(400, "an event name is required");
+    }
+    match events.emit(name, req.payload) {
+        Ok(()) => ok_json(&EmitAck {
+            ok: true,
+            event: name.to_string(),
+        }),
+        Err(e @ adi_events::Error::InvalidName(_)) => error(400, &e.to_string()),
+        Err(e) => error(500, &e.to_string()),
+    }
 }
 
 // MARK: mesh — peer-to-peer port-forwarding config over the adi-mesh library

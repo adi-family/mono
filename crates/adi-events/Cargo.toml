@@ -1,0 +1,18 @@
+[package]
+name = "adi-events"
+description = "A tiny, decoupled event bus for the adi platform: publishers `emit(name, payload)` a named event (e.g. `adi.tasks.created`) as one JSON record spooled under ~/.adi/mono/events, and a consumer drains the spool and delivers each to whoever subscribed. Publishers depend only on this crate (which depends only on adi-config) — they never know a subscriber exists. Event names are dotted topics matched with segment-aware glob patterns (`*` = one segment, `**` = the tail)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-config = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

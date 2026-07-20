@@ -8,18 +8,23 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 
 /// The trigger kinds. A kind answers exactly one question — **how the code block gets
-/// launched** — so there are only two:
+/// launched** — so there are only three:
 ///
 /// * [`KIND_WEBHOOK`] — launched by an inbound HTTP call to `/api/hooks/<name>`; the request
 ///   body becomes the payload. Extra: `secret` (optional shared secret the caller must pass as
 ///   `?secret=`).
 /// * [`KIND_BACKGROUND`] — a long-lived independent process. While the trigger is enabled the
 ///   supervisor keeps it running, restarting it with backoff if it exits; disabling stops it.
+/// * [`KIND_EVENT`] — launched whenever a platform event ([`adi_events`]) whose name matches one
+///   of the trigger's [`events`](TriggerManifest::events) patterns is published. The event's
+///   payload becomes the payload; its concrete name arrives as `ADI_EVENT`. A one-off fire like a
+///   webhook, but the source is the internal event bus rather than an HTTP call.
 ///
 /// Everything a trigger *does* — talk to Telegram, poll on a schedule, react to a push — is the
 /// job of its code block, prefilled from a [preset](crate::presets) rather than a kind.
 pub const KIND_WEBHOOK: &str = "webhook";
 pub const KIND_BACKGROUND: &str = "background";
+pub const KIND_EVENT: &str = "event";
 
 /// Kinds this store used to have, now folded into [`KIND_BACKGROUND`]. Kept so manifests written
 /// before the collapse keep loading (see [`normalize_kind`]).
@@ -32,7 +37,7 @@ const LEGACY_BACKGROUND_KINDS: &[&str] = &["telegram", "cron", "manual"];
 pub const RUNTIME_SH: &str = "sh";
 pub const RUNTIME_TS: &str = "ts";
 
-/// Map a stored `kind` onto one this build understands: the two live kinds pass through, and
+/// Map a stored `kind` onto one this build understands: the three live kinds pass through, and
 /// every retired kind (`telegram`, `cron`, `manual`) reads as [`KIND_BACKGROUND`] — those were
 /// always "a code block that isn't a webhook", which is what a background trigger is. An
 /// unrecognized kind also reads as background, so a manifest from a newer build still loads
@@ -41,6 +46,7 @@ pub const RUNTIME_TS: &str = "ts";
 pub fn normalize_kind(kind: &str) -> &str {
     match kind.trim() {
         KIND_WEBHOOK => KIND_WEBHOOK,
+        KIND_EVENT => KIND_EVENT,
         k if k == KIND_BACKGROUND || LEGACY_BACKGROUND_KINDS.contains(&k) => KIND_BACKGROUND,
         _ => KIND_BACKGROUND,
     }
@@ -98,6 +104,12 @@ pub struct TriggerManifest {
     /// platform itself reads, to guard a webhook.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub extra: BTreeMap<String, String>,
+    /// For an [event](KIND_EVENT) trigger only: the event-name patterns it subscribes to, matched
+    /// segment-by-segment ([`adi_events::matches`]) — `adi.tasks.*` (one segment) or `adi.tasks.**`
+    /// (the tail). Any match fires the code block with the event's payload as `ADI_PAYLOAD` and its
+    /// concrete name as `ADI_EVENT`. Ignored for the other kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub events: Vec<String>,
     /// When the definition was created, as Unix epoch seconds.
     #[serde(default)]
     pub created_at: u64,
@@ -119,6 +131,13 @@ impl TriggerManifest {
     pub fn is_background(&self) -> bool {
         normalize_kind(&self.kind) == KIND_BACKGROUND
     }
+
+    /// Whether this is an event-driven trigger (fired by the event dispatcher on a matching
+    /// [`adi_events`] publication).
+    #[must_use]
+    pub fn is_event(&self) -> bool {
+        normalize_kind(&self.kind) == KIND_EVENT
+    }
 }
 
 impl Default for TriggerManifest {
@@ -134,6 +153,7 @@ impl Default for TriggerManifest {
             enabled: true,
             project: None,
             extra: BTreeMap::new(),
+            events: Vec::new(),
             created_at: 0,
             updated_at: 0,
         }
@@ -181,6 +201,7 @@ mod tests {
     fn retired_kinds_normalize_onto_background() {
         assert_eq!(normalize_kind(KIND_WEBHOOK), KIND_WEBHOOK);
         assert_eq!(normalize_kind(KIND_BACKGROUND), KIND_BACKGROUND);
+        assert_eq!(normalize_kind(KIND_EVENT), KIND_EVENT);
         for legacy in ["telegram", "cron", "manual", "something-newer"] {
             assert_eq!(normalize_kind(legacy), KIND_BACKGROUND, "{legacy}");
         }

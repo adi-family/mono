@@ -678,7 +678,66 @@ mod tests {
             .iter()
             .map(|k| k["id"].as_str().unwrap())
             .collect();
-        assert_eq!(kinds, ["webhook", "background"]);
+        assert_eq!(kinds, ["webhook", "background", "event"]);
+    }
+
+    #[test]
+    fn save_trigger_persists_event_kind_and_patterns() {
+        let store = temp_triggers();
+        let Response { status, body } = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{
+                "name":"on-task",
+                "kind":"event",
+                "code":"echo $ADI_EVENT",
+                "events":[" adi.tasks.* ", "", "adi.agents.**"]
+            }"#,
+        );
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let t = &v["triggers"].as_array().unwrap()[0];
+        assert_eq!(t["kind"], "event");
+        // Blank patterns are dropped; the rest are trimmed and preserved in order.
+        let events: Vec<&str> = t["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e.as_str().unwrap())
+            .collect();
+        assert_eq!(events, ["adi.tasks.*", "adi.agents.**"]);
+    }
+
+    fn temp_events() -> adi_events::Events {
+        let root = std::env::temp_dir().join(format!(
+            "adi-webapp-api-events-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        adi_events::Events::with_config(adi_config::Config::with_root(root))
+    }
+
+    #[test]
+    fn emit_event_publishes_onto_the_bus() {
+        let bus = temp_events();
+        let Response { status, body } = emit_event(
+            &bus,
+            br#"{ "name":"adi.tasks.created", "payload":"{\"id\":\"t1\"}" }"#,
+        );
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["event"], "adi.tasks.created");
+
+        let spooled = bus.drain().unwrap();
+        assert_eq!(spooled.len(), 1);
+        assert_eq!(spooled[0].record.name, "adi.tasks.created");
+        assert_eq!(spooled[0].record.payload, r#"{"id":"t1"}"#);
+
+        // An empty name is a 400, not a spooled empty event.
+        let Response { status, .. } = emit_event(&bus, br#"{ "name":"  " }"#);
+        assert_eq!(status, 400);
     }
 
     #[test]

@@ -381,7 +381,7 @@ async fn spawn(store: &Triggers, spec: &Spec) -> crate::Result<(Child, String)> 
         .ok_or_else(|| crate::Error::NotFound(spec.name.clone()))?;
     let dir = store.dir();
     let secret_env = store.secret_env(trigger.manifest.project.as_deref());
-    let launch = fire::launch(&dir, &trigger, None, &secret_env)?;
+    let launch = fire::launch(&dir, &trigger, None, None, &secret_env)?;
 
     let mut log = fire::open_log(&dir, &spec.name, true)?;
     let _ = writeln!(log, "\n── {} started at {} ──", spec.name, humanish_now());

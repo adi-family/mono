@@ -12,6 +12,7 @@ default-members = [
     "crates/adi-core",
     "crates/adi-css",
     "crates/adi-dns",
+    "crates/adi-events",
     "crates/adi-fs",
     "crates/adi-hive",
     "crates/adi-hooks",
@@ -45,6 +46,7 @@ adi-agents = { path = "crates/adi-agents" }
 adi-config = { path = "crates/adi-config" }
 adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }
+adi-events = { path = "crates/adi-events" }
 adi-fs = { path = "crates/adi-fs" }
 adi-hooks = { path = "crates/adi-hooks" }
 adi-mesh = { path = "crates/adi-mesh" }

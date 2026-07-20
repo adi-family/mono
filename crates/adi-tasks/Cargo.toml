@@ -11,6 +11,10 @@ repository.workspace = true
 [dependencies]
 adi-config = { workspace = true }
 
+# Task mutations publish `adi.tasks.*` events onto the shared bus; whatever subscribes (event
+# triggers) is nobody this crate knows about — it just drops a record.
+adi-events = { workspace = true }
+
 serde = { workspace = true }
 serde_json = { workspace = true }
 

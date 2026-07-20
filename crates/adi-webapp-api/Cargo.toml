@@ -27,6 +27,8 @@ server = [
     # Background triggers are supervised in-process by the app, so the handlers can poke the
     # supervisor when a save changes what should be running.
     "adi-triggers/supervisor",
+    # The event-emit endpoint publishes onto the shared event bus.
+    "dep:adi-events",
     "dep:adi-fs",
     "dep:adi-hooks",
     "dep:serde_yaml_ng",
@@ -45,6 +47,7 @@ adi-secrets = { workspace = true, optional = true }
 adi-tasks = { workspace = true, optional = true }
 adi-tools = { workspace = true, optional = true }
 adi-agents = { workspace = true, optional = true }
+adi-events = { workspace = true, optional = true }
 adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }

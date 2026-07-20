@@ -7,6 +7,7 @@ mod dns;
 mod format;
 mod projects;
 mod secrets;
+mod events;
 mod tasks;
 mod tools;
 mod triggers;
@@ -20,6 +21,7 @@ use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::secrets::{SecretsCommand, run_secrets};
+use crate::events::{EventsCommand, run_events};
 use crate::tasks::{TasksCommand, run_tasks};
 use crate::tools::{ToolsCommand, run_tools};
 use crate::triggers::{TriggersCommand, run_triggers};
@@ -82,6 +84,11 @@ enum Command {
         #[command(subcommand)]
         command: TriggersCommand,
     },
+    /// Event bus commands: publish platform events and peek at the spool.
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
     /// Auto-update commands: one update swaps the whole app bundle (every binary).
     Update {
         #[command(subcommand)]
@@ -136,6 +143,12 @@ fn main() {
         }
         Command::Triggers { command } => {
             if let Err(e) = run_triggers(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Events { command } => {
+            if let Err(e) = run_events(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }

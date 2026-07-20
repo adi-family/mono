@@ -43,6 +43,8 @@ mod fire;
 pub mod presets;
 mod run;
 #[cfg(feature = "supervisor")]
+mod dispatch;
+#[cfg(feature = "supervisor")]
 mod supervisor;
 mod trigger;
 
@@ -55,9 +57,11 @@ pub use fire::Firing;
 pub use presets::{Preset, PresetField};
 pub use run::{RunState, Status};
 #[cfg(feature = "supervisor")]
+pub use dispatch::EventDispatcher;
+#[cfg(feature = "supervisor")]
 pub use supervisor::Supervisor;
 pub use trigger::{
-    KIND_BACKGROUND, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS, Trigger, TriggerManifest,
+    KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS, Trigger, TriggerManifest,
     normalize_kind, normalize_runtime,
 };
 
@@ -208,7 +212,23 @@ impl Triggers {
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let secret_env = self.secret_env(trigger.manifest.project.as_deref());
-        fire::fire(&self.dir(), &trigger, payload, &secret_env)
+        fire::fire(&self.dir(), &trigger, payload, None, &secret_env)
+    }
+
+    /// Fire a registered trigger *because a platform event matched it*: like [`fire`](Self::fire),
+    /// but the concrete event name is handed to the code block as `ADI_EVENT` in addition to the
+    /// payload. This is the path the [`EventDispatcher`] takes for every [event
+    /// trigger](KIND_EVENT) whose patterns match a drained event.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unregistered name, plus everything the spawn can return
+    /// ([`Error::NoCode`], [`Error::Io`], [`Error::Launch`]).
+    pub fn fire_event(&self, name: &str, event: &str, payload: Option<&[u8]>) -> Result<Firing> {
+        let trigger = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let secret_env = self.secret_env(trigger.manifest.project.as_deref());
+        fire::fire(&self.dir(), &trigger, payload, Some(event), &secret_env)
     }
 
     /// The secret environment a trigger's code block runs with: every global secret plus the

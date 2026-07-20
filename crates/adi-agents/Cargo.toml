@@ -11,6 +11,9 @@ repository.workspace = true
 [dependencies]
 adi-config = { workspace = true }
 adi-workforce = { workspace = true }
+# Agent lifecycle changes (run started, saved, deleted, stopped) publish `adi.agents.*` events
+# onto the shared bus for event triggers to react to; this crate never learns who subscribes.
+adi-events = { workspace = true }
 # An agent materializes its own `.bin` of enabled tools onto its PATH at launch.
 adi-tools = { workspace = true }
 # A run inherits its agent's resolved secrets (global + the agent's project) as env vars.

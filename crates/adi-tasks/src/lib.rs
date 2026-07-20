@@ -118,6 +118,16 @@ impl Tasks {
         Ok(())
     }
 
+    /// Publish an `adi.tasks.*` event with `payload` (a task view, or `{id}` for a delete) onto
+    /// the shared event bus. Best-effort and fire-and-forget: this store neither knows nor cares
+    /// whether anything subscribes, and a spool failure must never fail the mutation that caused
+    /// it. Emitted against **this store's** [`Config`], so a scratch store stays isolated.
+    fn emit(&self, event: &str, payload: &impl serde::Serialize) {
+        if let Ok(json) = serde_json::to_string(payload) {
+            let _ = adi_events::Events::with_config(self.config.clone()).emit(event, json);
+        }
+    }
+
     /// Create a new `open` task. If `parent` is given (and non-blank) it must already exist.
     ///
     /// The new task's id follows its project: a project-scoped task gets a Jira-style `<KEY>-<n>`
@@ -183,7 +193,9 @@ impl Tasks {
         };
         doc.tasks.push(task);
         self.save(&doc)?;
-        view_of(&doc, &id)
+        let view = view_of(&doc, &id)?;
+        self.emit("adi.tasks.created", &view);
+        Ok(view)
     }
 
     /// List task views, filtered by any provided stored/computed field.
@@ -271,7 +283,9 @@ impl Tasks {
         }
         task.updated_at = now_unix();
         self.save(&doc)?;
-        view_of(&doc, id)
+        let view = view_of(&doc, id)?;
+        self.emit("adi.tasks.updated", &view);
+        Ok(view)
     }
 
     /// Mark a task `done` (idempotent). An archived task must be reopened first. Open direct
@@ -291,7 +305,9 @@ impl Tasks {
         task.status = TaskStatus::Done;
         task.updated_at = now_unix();
         self.save(&doc)?;
-        view_of(&doc, id)
+        let view = view_of(&doc, id)?;
+        self.emit("adi.tasks.completed", &view);
+        Ok(view)
     }
 
     /// Archive a task. With `cascade`, also archive every still-open descendant (recursively);
@@ -322,7 +338,9 @@ impl Tasks {
             }
         }
         self.save(&doc)?;
-        view_of(&doc, id)
+        let view = view_of(&doc, id)?;
+        self.emit("adi.tasks.archived", &view);
+        Ok(view)
     }
 
     /// Reopen a `done` or `archived` task back to `open` (idempotent on an already-open task).
@@ -339,7 +357,9 @@ impl Tasks {
             task.updated_at = now_unix();
         }
         self.save(&doc)?;
-        view_of(&doc, id)
+        let view = view_of(&doc, id)?;
+        self.emit("adi.tasks.reopened", &view);
+        Ok(view)
     }
 
     /// Hard-delete a task, reparenting its direct children to the deleted task's parent so no
@@ -360,6 +380,7 @@ impl Tasks {
         }
         doc.tasks.remove(idx);
         self.save(&doc)?;
+        self.emit("adi.tasks.deleted", &serde_json::json!({ "id": id }));
         Ok(())
     }
 }
@@ -390,6 +411,30 @@ mod tests {
         store
             .create(title.into(), None, None, None, parent.map(Into::into))
             .expect("create")
+    }
+
+    #[test]
+    fn mutations_publish_events_onto_the_bus() {
+        let store = scratch("events");
+        let bus = adi_events::Events::with_config(store.config().clone());
+
+        mk(&store, "ship it", None);
+        store.complete("t1").expect("complete");
+
+        let events: Vec<(String, String)> = bus
+            .drain()
+            .expect("drain")
+            .into_iter()
+            .map(|s| (s.record.name, s.record.payload))
+            .collect();
+        assert_eq!(events.len(), 2, "create + complete each emit one event");
+        assert_eq!(events[0].0, "adi.tasks.created");
+        assert_eq!(events[1].0, "adi.tasks.completed");
+        // The payload is the task view — parseable JSON carrying the id (the Task fields are
+        // flattened to the top level).
+        let payload: serde_json::Value =
+            serde_json::from_str(&events[0].1).expect("payload is JSON");
+        assert_eq!(payload["id"], "t1");
     }
 
     #[test]

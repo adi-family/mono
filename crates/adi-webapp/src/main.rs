@@ -173,6 +173,7 @@ fn App() -> impl IntoView {
         code: RwSignal::new(String::new()),
         enabled: RwSignal::new(true),
         extra: RwSignal::new(BTreeMap::new()),
+        events: RwSignal::new(String::new()),
         editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
     };

@@ -853,6 +853,10 @@ pub struct TriggerPreset {
     pub code: String,
     #[serde(default)]
     pub fields: Vec<TriggerPresetField>,
+    /// For an event preset: the event-name patterns to prefill the subscription with. Empty for
+    /// every other kind.
+    #[serde(default)]
+    pub events: Vec<String>,
 }
 
 /// One trigger definition, flattened for the wire. `kind` is how it launches, `runtime` is the
@@ -880,6 +884,10 @@ pub struct TriggerDto {
     pub project: Option<String>,
     #[serde(default)]
     pub extra: BTreeMap<String, String>,
+    /// For an event trigger: the event-name patterns it subscribes to (`adi.tasks.*`). Empty for
+    /// the other kinds.
+    #[serde(default)]
+    pub events: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default)]
@@ -910,6 +918,22 @@ pub struct TriggersState {
     pub runtimes: Vec<TriggerRuntimeOption>,
     #[serde(default)]
     pub presets: Vec<TriggerPreset>,
+    /// The catalog of platform events an `event` trigger can subscribe to — name, when it fires,
+    /// and an example of the JSON payload it delivers. The editor shows these so a subscriber
+    /// knows what to catch and what shape to parse.
+    #[serde(default)]
+    pub event_types: Vec<EventTypeDto>,
+}
+
+/// One entry in the platform's event catalog: a concrete event name, when it fires, and an example
+/// of its `ADI_PAYLOAD` body. Mirrors `adi_events::EventType`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventTypeDto {
+    pub name: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub payload: String,
 }
 
 /// Request body for `POST /api/triggers/save` — create or update a trigger definition (an
@@ -935,11 +959,33 @@ pub struct SaveTrigger {
     pub project: Option<String>,
     #[serde(default)]
     pub extra: BTreeMap<String, String>,
+    /// For an event trigger: the event-name patterns it subscribes to (`adi.tasks.*`). Blank
+    /// entries are dropped server-side.
+    #[serde(default)]
+    pub events: Vec<String>,
 }
 
 /// serde default for [`SaveTrigger::enabled`] — an omitted flag saves an enabled trigger.
 fn trigger_enabled_default() -> bool {
     true
+}
+
+/// Request body for `POST /api/events/emit` — publish one platform event by hand, the way task
+/// and agent mutations do automatically. Every enabled event trigger whose patterns match fires.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmitEvent {
+    /// The dotted event name, e.g. `adi.tasks.created`.
+    pub name: String,
+    /// The event body handed to matching triggers as `ADI_PAYLOAD` (JSON by convention).
+    #[serde(default)]
+    pub payload: String,
+}
+
+/// Reply to a successful `POST /api/events/emit`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EmitAck {
+    pub ok: bool,
+    pub event: String,
 }
 
 /// Request body naming a trigger — `POST /api/triggers/delete`, `/fire`, and `/log`.

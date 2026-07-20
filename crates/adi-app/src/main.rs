@@ -17,13 +17,14 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adi_agents::Agents;
+use adi_events::Events;
 use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
 use adi_secrets::Secrets;
 use adi_tasks::Tasks;
 use adi_tools::Tools;
-use adi_triggers::{Supervisor, Triggers};
+use adi_triggers::{EventDispatcher, Supervisor, Triggers};
 use adi_webapp_api::handlers;
 use adi_webapp_api::handlers::Response;
 use include_dir::{Dir, include_dir};
@@ -104,9 +105,14 @@ async fn main() -> anyhow::Result<()> {
     }
     let agents = Arc::new(Agents::open());
     let triggers = Arc::new(Triggers::open());
+    let events = Arc::new(Events::open());
     // Background triggers are long-lived processes owned by this app: the supervisor keeps
     // every enabled one running for as long as the app is up, and stops them on the way out.
     let trigger_supervisor = Supervisor::start((*triggers).clone());
+    // Event triggers, in turn, are fired on demand: the dispatcher drains the shared event spool
+    // (which task/agent mutations and the emit endpoint publish onto) and launches every enabled
+    // event trigger whose patterns match a drained event.
+    let event_dispatcher = EventDispatcher::start((*triggers).clone());
     let webapp_dist = Arc::new(webapp_dist_override());
     // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
     // (non-blocking, best-effort) so the whole stack is up once the app is — the control
@@ -139,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
                     let agents = Arc::clone(&agents);
                     let triggers = Arc::clone(&triggers);
                     let trigger_supervisor = Arc::clone(&trigger_supervisor);
+                    let events = Arc::clone(&events);
                     let webapp_dist = Arc::clone(&webapp_dist);
                     let mesh = Arc::clone(&mesh);
                     tokio::spawn(async move {
@@ -152,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
                             &agents,
                             &triggers,
                             &trigger_supervisor,
+                            &events,
                             &mesh,
                             start,
                             webapp_dist.as_deref(),
@@ -174,6 +182,9 @@ async fn main() -> anyhow::Result<()> {
     // whole tree — which also means they outlive this process unless they are stopped first.
     // Waiting here is what keeps a restart from leaking a copy of every background trigger.
     trigger_supervisor.stop(TRIGGER_STOP_GRACE).await;
+    // The dispatcher owns no child processes (fired event triggers are detached one-offs), so
+    // this just ends its poll loop cleanly.
+    event_dispatcher.stop(TRIGGER_STOP_GRACE).await;
     mesh.stop().await;
     Ok(())
 }
@@ -210,6 +221,7 @@ async fn handle(
     agents: &Agents,
     triggers: &Triggers,
     trigger_supervisor: &Supervisor,
+    events: &Events,
     mesh: &MeshCtl,
     start: Instant,
     dist: Option<&Path>,
@@ -328,6 +340,8 @@ async fn handle(
             handlers::restart_trigger(triggers, trigger_supervisor, &req.body)
         }
         ("POST", "/api/triggers/log") => handlers::trigger_log(triggers, &req.body),
+        // Publish a platform event by hand — the app's dispatcher fires matching event triggers.
+        ("POST", "/api/events/emit") => handlers::emit_event(events, &req.body),
         // The public webhook endpoint: fire an enabled `webhook` trigger with the request body
         // as its payload. GET is accepted too — some webhook providers ping with it. The secret
         // (when the trigger requires one) rides in the query, which route_path() strips.

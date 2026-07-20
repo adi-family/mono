@@ -176,10 +176,21 @@ impl Agents {
         let stored = manifest.to_stored()?;
         arguments::validate_builtin(&stored)?;
         file.save(&stored)?;
+        self.emit("adi.agents.saved", &serde_json::json!({ "agent": name }));
         Ok(Agent {
             name: name.to_string(),
             manifest,
         })
+    }
+
+    /// Publish an `adi.agents.*` event onto the shared bus. Best-effort and fire-and-forget: this
+    /// registry neither knows nor cares whether anything subscribes, and a spool failure must
+    /// never fail the lifecycle action that caused it. Emitted against **this store's** [`Config`],
+    /// so a scratch store stays isolated.
+    fn emit(&self, event: &str, payload: &impl serde::Serialize) {
+        if let Ok(json) = serde_json::to_string(payload) {
+            let _ = adi_events::Events::with_config(self.config.clone()).emit(event, json);
+        }
     }
 
     /// Renames an agent's manifest, keeping its contents and `created_at` intact.
@@ -238,14 +249,19 @@ impl Agents {
         // for existing. Resolved against this store's Config, so a test store stays isolated;
         // best-effort, so a missing or undecryptable secret is skipped, never a blocked run.
         let secret_env = attached_secret_env(&self.config, &agent.manifest.secrets);
-        launch_in(
+        let launch = launch_in(
             &agent,
             &sessions_dir,
             &base_dir,
             bin_dir.as_deref(),
             message,
             &secret_env,
-        )
+        )?;
+        self.emit(
+            "adi.agents.run.started",
+            &run_started_payload(name, message, &launch),
+        );
+        Ok(launch)
     }
 
     /// Dispatches a message synchronously to a `wasm:*` agent.
@@ -308,7 +324,14 @@ impl Agents {
             return Ok(false);
         };
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        stop_run_in(&agent, &sessions_dir, run_id)
+        let stopped = stop_run_in(&agent, &sessions_dir, run_id)?;
+        if stopped {
+            self.emit(
+                "adi.agents.run.stopped",
+                &serde_json::json!({ "agent": name, "run_id": run_id }),
+            );
+        }
+        Ok(stopped)
     }
 
     /// Stops a run, returning whether one was found.
@@ -321,14 +344,46 @@ impl Agents {
             return Ok(false);
         };
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        stop_in(&agent, &sessions_dir)
+        let stopped = stop_in(&agent, &sessions_dir)?;
+        if stopped {
+            self.emit(
+                "adi.agents.run.stopped",
+                &serde_json::json!({ "agent": name }),
+            );
+        }
+        Ok(stopped)
     }
 
     /// # Errors
     /// Returns name validation or store errors.
     pub fn delete(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
-        Ok(self.config.module(AGENTS_MODULE).remove_manifest(name)?)
+        let removed = self.config.module(AGENTS_MODULE).remove_manifest(name)?;
+        if removed {
+            self.emit("adi.agents.deleted", &serde_json::json!({ "agent": name }));
+        }
+        Ok(removed)
+    }
+}
+
+/// The `adi.agents.run.started` payload for a launched run: the agent, the task it was given, and
+/// the backend-specific handle (a tmux session, or a detached run's pid + run id) so a subscriber
+/// can follow the run it just heard about.
+fn run_started_payload(name: &str, message: &str, launch: &Launch) -> serde_json::Value {
+    match launch {
+        Launch::Tmux { session, .. } => serde_json::json!({
+            "agent": name,
+            "message": message,
+            "backend": "tmux",
+            "session": session,
+        }),
+        Launch::Process { pid, run_id, .. } => serde_json::json!({
+            "agent": name,
+            "message": message,
+            "backend": "process",
+            "pid": pid,
+            "run_id": run_id,
+        }),
     }
 }
 

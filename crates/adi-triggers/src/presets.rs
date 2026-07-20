@@ -10,7 +10,7 @@
 //! Every field a preset declares reaches its code block as `ADI_<KEY>`, uppercased — the
 //! `chat_id` field below is `$ADI_CHAT_ID` in the script.
 
-use crate::trigger::{KIND_BACKGROUND, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS};
+use crate::trigger::{KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS};
 
 /// One named setting a preset's code block reads from its environment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +43,9 @@ pub struct Preset {
     pub code: &'static str,
     /// The settings the code block reads.
     pub fields: &'static [PresetField],
+    /// For an [event](crate::KIND_EVENT) preset: the event-name patterns to prefill the
+    /// subscription with (e.g. `adi.tasks.*`). Empty for every other kind.
+    pub events: &'static [&'static str],
 }
 
 /// Every preset the platform ships, in the order the editor offers them.
@@ -89,6 +92,7 @@ const INTERVAL: PresetField = PresetField {
 static PRESETS: &[Preset] = &[
     Preset {
         id: "telegram-bot",
+        events: &[],
         label: "Telegram bot",
         description: "Long-polls Telegram for messages and replies. Runs until you disable it.",
         kind: KIND_BACKGROUND,
@@ -129,6 +133,7 @@ for (;;) {
     },
     Preset {
         id: "telegram-notify",
+        events: &[],
         label: "Telegram notification",
         description: "Forwards whatever calls the webhook straight into a Telegram chat.",
         kind: KIND_WEBHOOK,
@@ -149,6 +154,7 @@ $text"
     },
     Preset {
         id: "interval",
+        events: &[],
         label: "Every N seconds",
         description: "A loop that does the work, sleeps, and repeats — the scheduled-job shape.",
         kind: KIND_BACKGROUND,
@@ -167,6 +173,7 @@ done
     },
     Preset {
         id: "http-poll",
+        events: &[],
         label: "Watch a URL",
         description: "Polls a URL on an interval and logs whenever the response changes.",
         kind: KIND_BACKGROUND,
@@ -208,6 +215,7 @@ for (;;) {
     },
     Preset {
         id: "webhook-echo",
+        events: &[],
         label: "Echo the payload",
         description: "Logs every inbound call — the one to start from when wiring a new webhook.",
         kind: KIND_WEBHOOK,
@@ -221,6 +229,7 @@ cat "$ADI_PAYLOAD_FILE"
     },
     Preset {
         id: "github-push",
+        events: &[],
         label: "GitHub push",
         description: "Parses a GitHub webhook delivery and reports the commits that landed.",
         kind: KIND_WEBHOOK,
@@ -243,6 +252,25 @@ for (const commit of payload.commits ?? []) {
 }
 
 // …deploy, notify, whatever this push should cause…
+"#,
+    },
+    Preset {
+        id: "event",
+        events: &["adi.tasks.*"],
+        label: "On a platform event",
+        description: "Runs whenever a platform event matches its patterns — e.g. adi.tasks.* on any task change.",
+        kind: KIND_EVENT,
+        runtime: RUNTIME_TS,
+        fields: &[],
+        code: r#"// Runs when a subscribed platform event fires (edit the "Events" patterns above).
+// $ADI_EVENT is the concrete event name that matched; $ADI_PAYLOAD is its JSON body.
+const event = process.env.ADI_EVENT ?? "(unknown)";
+const payload = JSON.parse(process.env.ADI_PAYLOAD ?? "{}");
+
+console.log(`event: ${event}`);
+console.log(JSON.stringify(payload, null, 2));
+
+// …react to the event here — notify, kick off a build, update something…
 "#,
     },
 ];
@@ -286,6 +314,7 @@ mod tests {
             "ADI_TRIGGER_KIND",
             "ADI_PAYLOAD_FILE",
             "ADI_PAYLOAD",
+            "ADI_EVENT",
         ];
         for p in all() {
             let declared: Vec<String> = p
@@ -331,5 +360,22 @@ mod tests {
         assert_eq!(fields_for(Some("telegram-bot")).len(), 2);
         assert!(fields_for(None).is_empty());
         assert!(fields_for(Some("no-such-preset")).is_empty());
+    }
+
+    /// The event preset is the only one that ships subscription patterns, and only event presets
+    /// do: `events` is empty for every non-event kind.
+    #[test]
+    fn only_the_event_preset_carries_subscription_patterns() {
+        let event = get("event").expect("the event preset exists");
+        assert_eq!(event.kind, KIND_EVENT);
+        assert_eq!(event.events, &["adi.tasks.*"]);
+        for p in all() {
+            assert_eq!(
+                p.kind == KIND_EVENT,
+                !p.events.is_empty(),
+                "{} carries patterns iff it is an event preset",
+                p.id
+            );
+        }
     }
 }
