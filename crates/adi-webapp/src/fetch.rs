@@ -5,7 +5,8 @@ use adi_webapp_api::types::{
     AgentsState, ApiError, Dashboard, DashboardRef, DashboardsState, DirListing, FileContent,
     FilesRef,
     FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef,
-    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewDashboard, NewProject, NewProjectHook,
+    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewProject,
+    NewProjectHook,
     NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, RunAgent,
     RunRef, SaveAgent, SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult, TaskRef,
@@ -27,6 +28,12 @@ pub async fn ports() -> Result<PortsState, String> {
 
 pub async fn used() -> Result<UsedPorts, String> {
     get("/api/ports/used").await
+}
+
+/// The Meta page's state: the well-known `adi-agent` (if set up), the default system prompt, and
+/// the agent form schema. Creating/running it reuses the `save_agent` / `run_agent` endpoints.
+pub async fn meta() -> Result<MetaState, String> {
+    get("/api/meta").await
 }
 
 pub async fn reserve(body: &LeaseRef) -> Result<ReserveResponse, String> {

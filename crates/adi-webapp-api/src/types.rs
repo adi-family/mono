@@ -628,6 +628,28 @@ pub struct AgentPeek {
     pub run_id: String,
 }
 
+// ---- meta (the default ADI agent — a single well-known global agent) ----------------
+
+/// `GET /api/meta` — the state of the Meta page, which manages one well-known global agent named
+/// `adi-agent`: the default ADI agent (a "meta-agent" that helps set up and operate this
+/// environment). The page reuses the agents endpoints (`/api/agents/save`, `/run`, `/peek`) to
+/// create and run it, so this endpoint only reports whether it exists, its current definition, and
+/// the canonical system prompt to seed a fresh one with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetaState {
+    /// The well-known agent name this page manages (`adi-agent`).
+    pub name: String,
+    /// The canonical system prompt a freshly created meta-agent is seeded with — it teaches the
+    /// agent how to operate this ADI environment (the store, projects, services, dashboards,
+    /// ports, DNS). The setup form opens prefilled with it, still editable.
+    pub default_prompt: String,
+    /// The `adi-agent` definition, or `None` when it hasn't been set up yet.
+    #[serde(default)]
+    pub agent: Option<AgentDto>,
+    /// The agent create/edit form schema — its `backends` list drives the setup page's picker.
+    pub form: AgentFormSpec,
+}
+
 // ---- triggers (code blocks launched by a webhook or supervised in the background) ----
 
 /// One selectable trigger kind — *how* a trigger launches: `webhook` (an inbound HTTP call) or

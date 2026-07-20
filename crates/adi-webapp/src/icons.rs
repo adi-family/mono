@@ -24,6 +24,7 @@ pub(crate) enum Icon {
     Layers,
     File,
     Doc,
+    Spark,
 }
 
 impl Icon {
@@ -94,6 +95,12 @@ impl Icon {
                 r#"<rect x="2.75" y="2.25" width="10.5" height="11.5" rx="1"/>
                    <path d="M5.5 5.75h5M5.5 8.25h5M5.5 10.75h3"/>"#
             }
+            // Two four-point sparkles — the "assistant / meta-agent" mark. Concave points keep it
+            // reading as a spark rather than a plus at 13px.
+            Icon::Spark => {
+                r#"<path d="M6.5 1.75c.35 2.55 1.2 3.4 3.75 3.75-2.55.35-3.4 1.2-3.75 3.75-.35-2.55-1.2-3.4-3.75-3.75 2.55-.35 3.4-1.2 3.75-3.75z"/>
+                   <path d="M11.75 9.25c.2 1.5.7 2 2.2 2.2-1.5.2-2 .7-2.2 2.2-.2-1.5-.7-2-2.2-2.2 1.5-.2 2-.7 2.2-2.2z"/>"#
+            }
         }
     }
 }
@@ -101,6 +108,7 @@ impl Icon {
 /// The icon for a global page.
 pub(crate) fn route_icon(route: Route) -> Icon {
     match route {
+        Route::Meta => Icon::Spark,
         Route::Projects | Route::ProjectDetail => Icon::List,
         Route::Tasks => Icon::Tasks,
         Route::Agents => Icon::Agent,

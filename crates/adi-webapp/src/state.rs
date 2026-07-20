@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use adi_webapp_api::types::{
     AgentPeek, AgentRunInfo, AgentsState, DashboardsState, DirListing, FileEntry, Health,
-    HiveState, MeshState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState, TasksState,
-    TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
+    HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState,
+    TasksState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -34,6 +34,9 @@ pub(crate) struct State {
     pub(crate) tasks: RwSignal<Option<TasksState>>,
     /// Agent definitions (`/api/agents`), shown on the Agents page.
     pub(crate) agents: RwSignal<Option<AgentsState>>,
+    /// The Meta page's state (`/api/meta`): the well-known `adi-agent`, the default system prompt
+    /// to seed a new one with, and the agent form schema.
+    pub(crate) meta: RwSignal<Option<MetaState>>,
     /// Trigger definitions (`/api/triggers`), shown on the Triggers page.
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
@@ -248,6 +251,34 @@ pub(crate) struct AgentsForm {
     pub(crate) argument_values: RwSignal<BTreeMap<String, String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
+}
+
+/// The Meta page's setup form for the default `adi-agent`: the chosen backend and the (editable)
+/// system prompt, a busy flag while a save is in flight, and `editing` — true while reconfiguring
+/// an agent that already exists (the same form doubles as create and edit). `Copy` so it threads
+/// into the page view and handlers. Seeded from the server's default prompt on first load (see
+/// [`crate::App`]).
+#[derive(Clone, Copy)]
+pub(crate) struct MetaForm {
+    /// The selected backend id (`tmux:claude`, `process:codex`, …).
+    pub(crate) backend: RwSignal<String>,
+    /// The system prompt buffer — prefilled with the server's default, then editable.
+    pub(crate) prompt: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+    /// True while reconfiguring an agent that already exists, so the setup form shows in place of
+    /// the ready view.
+    pub(crate) editing: RwSignal<bool>,
+}
+
+impl MetaForm {
+    pub(crate) fn new() -> Self {
+        Self {
+            backend: RwSignal::new(String::new()),
+            prompt: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+            editing: RwSignal::new(false),
+        }
+    }
 }
 
 /// The Triggers page's local create/edit form. `editing` is `Some(name)` while an existing
@@ -609,6 +640,11 @@ pub(crate) async fn load(s: State) {
         if let Ok(t) = fetch::tasks().await {
             s.tasks.set(Some(t));
         }
+    }
+    if path == Route::Meta.path()
+        && let Ok(m) = fetch::meta().await
+    {
+        s.meta.set(Some(m));
     }
     if path == Route::Agents.path() {
         if let Ok(a) = fetch::agents().await {

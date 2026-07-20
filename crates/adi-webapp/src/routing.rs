@@ -8,6 +8,8 @@ use crate::state::State;
 /// The pages the sidebar navigates between, each mapped to a URL path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {
+    /// The default ADI agent — set up and run `adi-agent` (`/meta`).
+    Meta,
     Projects,
     /// A single project's detail page (`/projects/<id>`); the id lives in `State::current_project`.
     ProjectDetail,
@@ -37,6 +39,7 @@ impl Route {
             return Route::StoreFile;
         }
         match path {
+            "/meta" => Route::Meta,
             "/tasks" => Route::Tasks,
             "/agents" => Route::Agents,
             "/triggers" => Route::Triggers,
@@ -52,6 +55,7 @@ impl Route {
     /// returns the list base for it (used only for nav; detail canonicalization is skipped).
     pub(crate) fn path(self) -> &'static str {
         match self {
+            Route::Meta => "/meta",
             Route::Projects | Route::ProjectDetail => "/projects",
             Route::Tasks => "/tasks",
             Route::Agents => "/agents",
@@ -68,6 +72,7 @@ impl Route {
     /// The page title shown in the header.
     pub(crate) fn title(self) -> &'static str {
         match self {
+            Route::Meta => "Meta",
             Route::Projects => "Projects",
             Route::ProjectDetail => "Project",
             Route::Tasks => "Tasks",

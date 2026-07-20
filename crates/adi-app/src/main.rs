@@ -263,6 +263,9 @@ async fn handle(
         ("POST", "/api/tasks/archive") => handlers::archive_task(tasks, &req.body),
         ("POST", "/api/tasks/reopen") => handlers::reopen_task(tasks, &req.body),
         ("POST", "/api/tasks/delete") => handlers::delete_task(tasks, &req.body),
+        // The Meta page's state: the well-known `adi-agent` (if set up), the default system
+        // prompt to seed a new one with, and the agent form schema. Reads the same agents store.
+        ("GET", "/api/meta") => handlers::meta(agents),
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),

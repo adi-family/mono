@@ -23,8 +23,8 @@ mod tree;
 mod ui;
 
 use adi_webapp_api::types::{
-    AgentsState, DashboardsState, Health, HiveState, MeshState, PortsState, ProjectDetail,
-    ProjectsState, TasksState, TriggersState, UsedPorts, WorkspacesState,
+    AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState, PortsState,
+    ProjectDetail, ProjectsState, TasksState, TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -33,9 +33,9 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, dashboards_view, hive_view, load_dir, load_store_file, mesh_view, poll_hook_log,
-    poll_term, poll_trigger_log, poll_watch, ports_manager_view, project_detail_view,
-    projects_view, store_file_view, tasks_view, triggers_view,
+    agents_view, dashboards_view, hive_view, load_dir, load_store_file, mesh_view, meta_view,
+    poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
+    project_detail_view, projects_view, store_file_view, tasks_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -43,8 +43,8 @@ use routing::{
 };
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
-    MeshForm, ProjectsForm, State, Status, TasksForm, TermWatch, TriggersForm, TriggersLogView,
-    load,
+    MeshForm, MetaForm, ProjectsForm, State, Status, TasksForm, TermWatch, TriggersForm,
+    TriggersLogView, load,
 };
 use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
@@ -69,6 +69,7 @@ fn App() -> impl IntoView {
     let project_detail = RwSignal::new(None::<ProjectDetail>);
     let tasks = RwSignal::new(None::<TasksState>);
     let agents = RwSignal::new(None::<AgentsState>);
+    let meta = RwSignal::new(None::<MetaState>);
     let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
     let dashboards = RwSignal::new(None::<DashboardsState>);
@@ -94,6 +95,7 @@ fn App() -> impl IntoView {
         current_section,
         tasks,
         agents,
+        meta,
         triggers,
         hive,
         dashboards,
@@ -148,6 +150,10 @@ fn App() -> impl IntoView {
         editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
     };
+
+    // The Meta page's setup form for the default `adi-agent`. Seeded from the server's default
+    // prompt by an effect below, once `/api/meta` first reports the agent isn't set up yet.
+    let meta_form = MetaForm::new();
 
     let triggers_form = TriggersForm {
         name: RwSignal::new(String::new()),
@@ -271,7 +277,8 @@ fn App() -> impl IntoView {
         let _ = current_project.get();
         if matches!(
             route.get(),
-            Route::Projects
+            Route::Meta
+                | Route::Projects
                 | Route::ProjectDetail
                 | Route::Tasks
                 | Route::Agents
@@ -283,8 +290,12 @@ fn App() -> impl IntoView {
             spawn_local(load(state));
         }
         // Leaving the pages that show the agents live view closes it, so its 1s poll stops
-        // (it also renders on a project's detail page, whose Agents panel shares the actions).
-        if !matches!(route.get(), Route::Agents | Route::ProjectDetail) {
+        // (it also renders on a project's detail page, whose Agents panel shares the actions, and
+        // on the Meta page, which runs the `adi-agent` through the same live view).
+        if !matches!(
+            route.get(),
+            Route::Agents | Route::ProjectDetail | Route::Meta
+        ) {
             agents_watch.close();
         }
         // Likewise, leaving the pages that show the fire-log view closes it (it also renders
@@ -322,6 +333,25 @@ fn App() -> impl IntoView {
         let (id, section) = (current_project.get(), current_section.get());
         if matches!(route.get(), Route::ProjectDetail) {
             store_browser::reveal_project(state, &id, section);
+        }
+    });
+
+    // Seed the Meta setup form the first time `/api/meta` reports the agent isn't set up yet: the
+    // prompt from the server's default (so the create form opens prefilled and editable), and the
+    // backend to the first option. Guarded on an empty buffer, so it never clobbers the user's edits
+    // and never re-seeds after the agent exists.
+    Effect::new(move |_| {
+        if let Some(m) = meta.get()
+            && m.agent.is_none()
+            && !meta_form.editing.get_untracked()
+            && meta_form.prompt.get_untracked().is_empty()
+        {
+            meta_form.prompt.set(m.default_prompt.clone());
+            if meta_form.backend.get_untracked().is_empty()
+                && let Some(first) = m.form.backends.first()
+            {
+                meta_form.backend.set(first.id.clone());
+            }
         }
     });
 
@@ -381,6 +411,7 @@ fn App() -> impl IntoView {
                     }}
 
                     {move || match route.get() {
+                        Route::Meta => meta_view(state, route, meta_form, agents_watch),
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch),
                         Route::StoreFile => store_file_view(state),
@@ -426,6 +457,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
     (
         "Global",
         &[
+            Route::Meta,
             Route::Projects,
             Route::Tasks,
             Route::Agents,

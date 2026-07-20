@@ -29,8 +29,9 @@ pub fn agents(store: &Agents) -> Response {
 }
 
 /// The full [`AgentsState`]: the stored definitions decorated with live run state, plus the form
-/// schema. Tmux sessions are listed once; process agents consult their recorded PID.
-fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
+/// schema. Tmux sessions are listed once; process agents consult their recorded PID. Shared with
+/// the meta handler, which reuses it to find the well-known `adi-agent` and reads back the schema.
+pub(crate) fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
     let sessions = adi_agents::running_sessions();
     Ok(AgentsState {
         agents: store
