@@ -1,7 +1,7 @@
 //! The `agents` command group: the agent-definition subcommand surface and its dispatch
 //! over the shared agent-definition store.
 
-use adi_core::{Adi, AgentManifest, AgentSummaryArguments, Launch, StoredAgent};
+use adi_core::{Adi, AgentManifest, AgentSummaryArguments, Launch, SecretAttachment, StoredAgent};
 use clap::Subcommand;
 
 use crate::format::{clean, clean_required, clean_tags, parse_arguments, print_json};
@@ -54,6 +54,12 @@ pub(crate) enum AgentsCommand {
         /// values are also accepted. Distinct from `--command-scope` (the LLM's allowed tools).
         #[arg(long = "tool")]
         tools: Vec<String>,
+        /// A secret to attach to this agent (injected into its runs as an env var under its name).
+        /// Give `NAME` for a global secret or `PROJECT/NAME` for a project-scoped one. Repeatable;
+        /// comma-separated values are also accepted. Only attached secrets are injected — an
+        /// explicit allowlist.
+        #[arg(long = "secret")]
+        secrets: Vec<String>,
         /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
@@ -121,6 +127,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             starred,
             project,
             tools,
+            secrets,
             arguments,
             json,
         } => {
@@ -151,6 +158,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 starred,
                 project: clean(project),
                 bin_tools: clean_tags(tools),
+                secrets: parse_secret_attachments(secrets),
                 created_at: 0,
                 updated_at: 0,
             };
@@ -228,6 +236,32 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
     Ok(())
 }
 
+/// Parse `--secret` values into attachments. Each value is a comma-separated list of
+/// `NAME` (global) or `PROJECT/NAME` (project-scoped) references; blanks are dropped.
+fn parse_secret_attachments(values: Vec<String>) -> Vec<SecretAttachment> {
+    values
+        .iter()
+        .flat_map(|value| value.split(','))
+        .filter_map(|token| {
+            let token = token.trim();
+            if token.is_empty() {
+                return None;
+            }
+            let attachment = match token.split_once('/') {
+                Some((project, name)) => SecretAttachment {
+                    project: Some(project.trim().to_string()),
+                    name: name.trim().to_string(),
+                },
+                None => SecretAttachment {
+                    project: None,
+                    name: token.to_string(),
+                },
+            };
+            (!attachment.name.is_empty()).then_some(attachment)
+        })
+        .collect()
+}
+
 /// Print an agent definition in the compact human CLI format.
 fn print_agent(agent: &StoredAgent) {
     let arguments = agent
@@ -251,6 +285,18 @@ fn print_agent(agent: &StoredAgent) {
     }
     if !agent.manifest.bin_tools.is_empty() {
         println!("  tools (.bin): {}", agent.manifest.bin_tools.join(", "));
+    }
+    if !agent.manifest.secrets.is_empty() {
+        let refs: Vec<String> = agent
+            .manifest
+            .secrets
+            .iter()
+            .map(|s| match &s.project {
+                Some(project) => format!("{project}/{}", s.name),
+                None => s.name.clone(),
+            })
+            .collect();
+        println!("  secrets: {}", refs.join(", "));
     }
     if !agent.manifest.tags.is_empty() {
         println!("  tags: {}", agent.manifest.tags.join(", "));

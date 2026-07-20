@@ -5,6 +5,7 @@ use adi_agents::AgentManifest;
 use adi_agents::Agents;
 use adi_agents::Backend;
 use adi_agents::Error as AgentStoreError;
+use adi_agents::SecretAttachment;
 use adi_agents::StoredAgent;
 use adi_agents::arguments::WasmArguments;
 use adi_agents::contains_json_null;
@@ -12,7 +13,7 @@ use adi_agents::contains_json_null;
 use crate::types::{
     AgentBackendOption, AgentBuildResult, AgentCode, AgentDto, AgentFormField, AgentFormFieldKind,
     AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunInfo, AgentRunResult,
-    AgentRuns, AgentsState, RunAgent, RunRef, SaveAgent, SaveAgentCode,
+    AgentRuns, AgentsState, RunAgent, RunRef, SaveAgent, SaveAgentCode, SecretRef,
 };
 
 use super::files::MAX_TEXT_BYTES;
@@ -212,6 +213,13 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
             .into_iter()
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
+            .collect(),
+        // The secrets attached to this agent (its per-secret checkboxes). Only these are decrypted
+        // and injected into the agent's runs. A blank scope is normalized to `None` (global).
+        secrets: req
+            .secrets
+            .into_iter()
+            .filter_map(secret_attachment)
             .collect(),
         // The store owns the timestamps.
         created_at: 0,
@@ -551,11 +559,33 @@ fn agent_dto(
         starred: m.starred,
         project: m.project,
         bin_tools: m.bin_tools,
+        secrets: m
+            .secrets
+            .into_iter()
+            .map(|s| SecretRef {
+                project: s.project,
+                name: s.name,
+            })
+            .collect(),
         created_at: m.created_at,
         updated_at: m.updated_at,
         runnable,
         running,
     }
+}
+
+/// Normalize a wire [`SecretRef`] into a store [`SecretAttachment`], trimming the name and folding
+/// a blank scope to `None` (global). Dropped (→ `None`) when the name is blank after trimming.
+fn secret_attachment(reference: SecretRef) -> Option<SecretAttachment> {
+    let name = reference.name.trim().to_string();
+    if name.is_empty() {
+        return None;
+    }
+    let project = reference
+        .project
+        .map(|p| p.trim().to_string())
+        .filter(|p| !p.is_empty());
+    Some(SecretAttachment { project, name })
 }
 
 /// The agentic-loop backend that picks its model provider at definition time (the `provider`

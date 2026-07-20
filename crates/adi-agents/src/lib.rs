@@ -40,7 +40,8 @@ use std::path::PathBuf;
 use adi_config::{Config, ConfigFile, now_unix};
 
 pub use agent::{
-    Agent, AgentManifest, RawAgentArguments, StoredAgent, StoredAgentManifest, contains_json_null,
+    Agent, AgentManifest, RawAgentArguments, SecretAttachment, StoredAgent, StoredAgentManifest,
+    contains_json_null,
 };
 pub use backend::Backend;
 pub use error::{Error, Result};
@@ -232,14 +233,11 @@ impl Agents {
         let bin_dir = adi_tools::Tools::with_config(self.config.clone())
             .sync_agent_bin(&agent.name, &agent.manifest.bin_tools)
             .ok();
-        // The run inherits this agent's resolved secrets (global + the agent's project) as env
-        // vars under their literal names. Resolved against this store's Config, so a test store
-        // stays isolated; best-effort, so a secrets failure never blocks a run.
-        let secret_env: Vec<(String, String)> = adi_secrets::Secrets::with_config(self.config.clone())
-            .resolve(agent.manifest.project.as_deref())
-            .unwrap_or_default()
-            .into_iter()
-            .collect();
+        // The run inherits only the secrets explicitly attached to this agent (an allowlist),
+        // exported as env vars under their literal names — nothing is pulled in from a scope just
+        // for existing. Resolved against this store's Config, so a test store stays isolated;
+        // best-effort, so a missing or undecryptable secret is skipped, never a blocked run.
+        let secret_env = attached_secret_env(&self.config, &agent.manifest.secrets);
         launch_in(
             &agent,
             &sessions_dir,
@@ -332,6 +330,30 @@ impl Agents {
         validate_name(name)?;
         Ok(self.config.module(AGENTS_MODULE).remove_manifest(name)?)
     }
+}
+
+/// Resolve an agent's attached-secret allowlist into `(env-var, value)` pairs for a run. Only the
+/// listed secrets are decrypted — nothing is inherited from a scope for merely existing. A global
+/// attachment resolves ahead of a project-scoped one, so a project secret overrides a global of
+/// the same name (matching [`adi_secrets::Secrets::resolve`]'s precedence). Best-effort: a secret
+/// that is missing or fails to decrypt is skipped rather than aborting the run. An empty allowlist
+/// short-circuits, so a secrets-free agent never touches the master key.
+fn attached_secret_env(config: &Config, attachments: &[SecretAttachment]) -> Vec<(String, String)> {
+    if attachments.is_empty() {
+        return Vec::new();
+    }
+    let secrets = adi_secrets::Secrets::with_config(config.clone());
+    // Stable sort by scope: globals (`false`) before project-scoped (`true`), so the latter win
+    // on a name collision when inserted into the map below.
+    let mut ordered: Vec<&SecretAttachment> = attachments.iter().collect();
+    ordered.sort_by_key(|a| a.project.is_some());
+    let mut env: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    for att in ordered {
+        if let Ok(Some(value)) = secrets.reveal(att.project.as_deref(), &att.name) {
+            env.insert(att.name.clone(), value);
+        }
+    }
+    env.into_iter().collect()
 }
 
 #[cfg(test)]
@@ -618,6 +640,103 @@ mod tests {
         let two = store.get("two").expect("get two").expect("two exists");
         assert_eq!(two.manifest.backend, "process:codex".into());
         assert_eq!(store.list().expect("list").len(), 2);
+    }
+
+    #[test]
+    fn secrets_attachment_round_trips_and_stores_as_array_of_tables() {
+        let store = scratch("secret-attach");
+        let mut m = spec("process:claude");
+        m.secrets = vec![
+            SecretAttachment {
+                project: None,
+                name: "API_KEY".into(),
+            },
+            SecretAttachment {
+                project: Some("proj".into()),
+                name: "DB_URL".into(),
+            },
+        ];
+        store.save("a", m).expect("save with secrets");
+
+        let got = store.get("a").expect("get").expect("present").manifest;
+        assert_eq!(got.secrets.len(), 2);
+        assert_eq!(got.secrets[0].project, None);
+        assert_eq!(got.secrets[0].name, "API_KEY");
+        assert_eq!(got.secrets[1].project.as_deref(), Some("proj"));
+        assert_eq!(got.secrets[1].name, "DB_URL");
+
+        // The attachment list is stored as a valid TOML array-of-tables (proven to round-trip by
+        // the load above, since `toml::from_str` parsed it back into the two attachments).
+        let raw = std::fs::read_to_string(store.dir().join("a.toml")).expect("stored manifest");
+        assert!(raw.contains("[[secrets]]"), "expected array-of-tables in {raw}");
+        assert!(raw.contains("name = \"API_KEY\""));
+        assert!(raw.contains("project = \"proj\""));
+    }
+
+    #[test]
+    fn an_agent_with_no_attachments_stores_no_secrets_table() {
+        let store = scratch("no-secret-attach");
+        store.save("a", spec("process:claude")).expect("save");
+        let raw = std::fs::read_to_string(store.dir().join("a.toml")).expect("stored manifest");
+        // The empty allowlist is skipped on serialization, so pre-secrets manifests are unchanged.
+        assert!(!raw.contains("[[secrets]]"));
+    }
+
+    #[test]
+    fn only_attached_secrets_are_injected_project_scope_winning() {
+        let store = scratch("attached-env");
+        let secrets = adi_secrets::Secrets::with_config(store.config().clone());
+        secrets.set(None, "GLOBAL_ONLY", "g", None).expect("g");
+        secrets.set(None, "SHARED", "global", None).expect("shared-g");
+        secrets
+            .set(None, "NOT_ATTACHED", "ambient", None)
+            .expect("ambient");
+        secrets.set(Some("proj"), "PROJ_ONLY", "p", None).expect("p");
+        secrets
+            .set(Some("proj"), "SHARED", "project", None)
+            .expect("shared-p");
+
+        let attachments = vec![
+            SecretAttachment {
+                project: None,
+                name: "GLOBAL_ONLY".into(),
+            },
+            SecretAttachment {
+                project: Some("proj".into()),
+                name: "PROJ_ONLY".into(),
+            },
+            // The same key exists in both scopes; the project one must win.
+            SecretAttachment {
+                project: None,
+                name: "SHARED".into(),
+            },
+            SecretAttachment {
+                project: Some("proj".into()),
+                name: "SHARED".into(),
+            },
+            // A dangling reference is skipped, not fatal.
+            SecretAttachment {
+                project: None,
+                name: "MISSING".into(),
+            },
+        ];
+        let env: std::collections::BTreeMap<String, String> =
+            attached_secret_env(store.config(), &attachments)
+                .into_iter()
+                .collect();
+
+        assert_eq!(env.get("GLOBAL_ONLY").map(String::as_str), Some("g"));
+        assert_eq!(env.get("PROJ_ONLY").map(String::as_str), Some("p"));
+        assert_eq!(env.get("SHARED").map(String::as_str), Some("project"));
+        assert!(!env.contains_key("MISSING"));
+        // The allowlist is exclusive: a secret that exists but isn't attached is never injected.
+        assert!(!env.contains_key("NOT_ATTACHED"));
+    }
+
+    #[test]
+    fn an_empty_allowlist_injects_nothing_and_touches_no_key() {
+        let store = scratch("empty-allowlist");
+        assert!(attached_secret_env(store.config(), &[]).is_empty());
     }
 
     #[test]

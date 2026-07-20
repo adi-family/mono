@@ -12,6 +12,19 @@ pub type StoredAgentManifest = AgentManifest<RawAgentArguments>;
 
 pub type StoredAgent = Agent<RawAgentArguments>;
 
+/// A reference to one secret attached to an agent — its scope (`project`, or `None` for a global
+/// secret) and key `name`. At launch, exactly the secrets in an agent's attachment list are
+/// decrypted and exported into the run's environment under their literal `name`s: an explicit
+/// **allowlist**, not the whole scope. Serialized as a TOML array-of-tables (`[[secrets]]`).
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SecretAttachment {
+    /// The scope of the attached secret: a project id, or absent/`None` for a global secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// The secret's key name — also the env-var name it injects into the run as.
+    pub name: String,
+}
+
 /// An agent definition with backend-specific arguments.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, bound(deserialize = "Args: Deserialize<'de> + Default"))]
@@ -28,6 +41,12 @@ pub struct AgentManifest<Args> {
     /// `--allowed-tools` (which lives in `arguments.tools`); these are ADI CLIs the agent can run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bin_tools: Vec<String>,
+    /// The secrets attached to this agent (its per-secret checkboxes). At launch, exactly these
+    /// are decrypted and injected into the run's environment under their literal names — an
+    /// explicit allowlist, so nothing is inherited from a scope just for existing. Empty = the
+    /// run gets no secrets. See [`SecretAttachment`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub secrets: Vec<SecretAttachment>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -60,6 +79,7 @@ impl<Args> AgentManifest<Args> {
             starred: self.starred,
             project: self.project.clone(),
             bin_tools: self.bin_tools.clone(),
+            secrets: self.secrets.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

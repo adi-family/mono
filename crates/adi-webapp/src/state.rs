@@ -436,6 +436,10 @@ pub(crate) struct AgentsForm {
     /// The adi tool ids enabled for this agent (its per-tool checkboxes) — each becomes a shim in
     /// the agent's own `.bin`. Distinct from `tools` above, which is the LLM `--allowed-tools` spec.
     pub(crate) bin_tools: RwSignal<BTreeSet<String>>,
+    /// The secrets attached to this agent (its per-secret checkboxes), each keyed by its
+    /// `(scope, name)` pair — `None` scope is a global secret. Only these are injected into the
+    /// agent's runs as env vars (an allowlist).
+    pub(crate) secrets: RwSignal<BTreeSet<(Option<String>, String)>>,
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
     /// The complete backend argument map loaded for editing, including structured values the
@@ -855,6 +859,11 @@ pub(crate) async fn load(s: State) {
         // The agent form's per-tool checkboxes are populated from the tools list.
         if let Ok(t) = fetch::tools().await {
             s.tools.set(Some(t));
+        }
+        // The agent form's per-secret checkboxes are populated from the secrets list (metadata
+        // only — values are never fetched here).
+        if let Ok(sec) = fetch::secrets().await {
+            s.secrets.set(Some(sec));
         }
     }
     if path == Route::Tools.path()

@@ -150,6 +150,7 @@ fn App() -> impl IntoView {
         tags: RwSignal::new(String::new()),
         tools: RwSignal::new(String::new()),
         bin_tools: RwSignal::new(BTreeSet::new()),
+        secrets: RwSignal::new(BTreeSet::new()),
         system_prompt: RwSignal::new(String::new()),
         starred: RwSignal::new(false),
         arguments: RwSignal::new(BTreeMap::new()),

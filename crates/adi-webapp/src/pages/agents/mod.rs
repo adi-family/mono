@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use adi_webapp_api::types::{SaveAgent, ToolDto};
+use adi_webapp_api::types::{SaveAgent, SecretDto, SecretRef, ToolDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -116,6 +116,10 @@ pub(crate) fn agents_view(
                     project: opt_str(project.get()),
                     // The adi tools ticked on for this agent — its own `.bin` at launch.
                     bin_tools: form.bin_tools.get().into_iter().collect(),
+                    // The secrets ticked on for this agent — injected into its runs as env vars.
+                    secrets: form.secrets.get().into_iter()
+                        .map(|(project, name)| SecretRef { project, name })
+                        .collect(),
                     // Editing with the name field changed is a rename, not a second agent.
                     rename_from: editing.get(),
                 };
@@ -124,6 +128,7 @@ pub(crate) fn agents_view(
             }>
                 {move || agent_form_fields(state, form)}
                 {move || agent_tool_checkboxes(state, form)}
+                {move || agent_secret_checkboxes(state, form)}
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     {move || if editing.get().is_some() { "Update agent" } else { "Create agent" }}
                 </button>
@@ -206,6 +211,85 @@ fn agent_tool_checkboxes(state: State, form: AgentsForm) -> AnyView {
     view! {
         <div class="adi-field adi-field--grow">
             <label class="adi-field__label">"Tools (this agent's .bin)"</label>
+            <div style="display:flex; flex-wrap:wrap; align-items:center; padding:var(--space-1) 0">
+                {boxes}
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// The per-agent secret checkboxes: one toggle per registered secret (across every scope) that
+/// adds/removes its `(scope, name)` reference from the agent's attachment set. Only the ticked
+/// secrets are decrypted and injected into the agent's runs as environment variables — an explicit
+/// allowlist, so nothing is inherited from a scope for merely existing. Populated from the shared
+/// secrets list (`state.secrets`), which carries metadata only (never a value).
+fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
+    let Some(st) = state.secrets.get() else {
+        return view! {
+            <div class="adi-field adi-field--grow">
+                <label class="adi-field__label">"Secrets"</label>
+                <div class="adi-muted">"Loading secrets…"</div>
+            </div>
+        }
+        .into_any();
+    };
+    let mut secrets: Vec<SecretDto> = st.secrets;
+    // Global secrets first, then by project, then by name — the shared baseline groups together.
+    secrets.sort_by(|a, b| {
+        a.project
+            .is_some()
+            .cmp(&b.project.is_some())
+            .then_with(|| a.project.cmp(&b.project))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    if secrets.is_empty() {
+        return view! {
+            <div class="adi-field adi-field--grow">
+                <label class="adi-field__label">"Secrets"</label>
+                <div class="adi-hint">
+                    "No secrets yet — add one on the Secrets page. Whatever you tick here is "
+                    "injected into this agent's runs as an environment variable."
+                </div>
+            </div>
+        }
+        .into_any();
+    }
+    let boxes = secrets
+        .into_iter()
+        .map(|s| {
+            let key = (s.project.clone(), s.name.clone());
+            let key_checked = key.clone();
+            let key_toggle = key.clone();
+            let checked = move || form.secrets.get().contains(&key_checked);
+            let label = match s.project.as_deref().filter(|p| !p.trim().is_empty()) {
+                Some(p) => format!("{} · {p}", s.name),
+                None => s.name.clone(),
+            };
+            // The value is never sent here; the tooltip carries the description / OAuth provider.
+            let title = match (&s.description, &s.oauth) {
+                (Some(d), _) if !d.trim().is_empty() => d.clone(),
+                (_, Some(o)) => format!("OAuth · {}", o.provider),
+                _ => String::new(),
+            };
+            view! {
+                <label class="adi-check" title=title
+                    style="display:inline-flex; align-items:center; gap:var(--space-1); margin:0 var(--space-3) var(--space-1) 0">
+                    <input type="checkbox" prop:checked=checked
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            form.secrets.update(|set| {
+                                if on { set.insert(key_toggle.clone()); } else { set.remove(&key_toggle); }
+                            });
+                        } />
+                    <span class="adi-mono">{label}</span>
+                </label>
+            }
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <div class="adi-field adi-field--grow">
+            <label class="adi-field__label">"Secrets (injected as env vars)"</label>
             <div style="display:flex; flex-wrap:wrap; align-items:center; padding:var(--space-1) 0">
                 {boxes}
             </div>

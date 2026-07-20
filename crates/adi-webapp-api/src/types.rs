@@ -603,6 +603,11 @@ pub struct AgentDto {
     /// `--allowed-tools` in `arguments.tools`.
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    /// The secrets attached to this agent (its per-secret checkboxes). Each is a `(scope, name)`
+    /// reference; at launch exactly these are decrypted and injected into the run's environment
+    /// under their literal names — an explicit allowlist, never the whole scope.
+    #[serde(default)]
+    pub secrets: Vec<SecretRef>,
     pub created_at: u64,
     pub updated_at: u64,
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
@@ -642,6 +647,10 @@ pub struct SaveAgent {
     /// `--allowed-tools`.
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    /// The secrets to attach to this agent (its per-secret checkboxes). Each is a `(scope, name)`
+    /// reference; only these are decrypted and injected into the agent's runs — an allowlist.
+    #[serde(default)]
+    pub secrets: Vec<SecretRef>,
     /// The agent's previous name when an edit renames it. The manifest is moved first (keeping
     /// `created_at`), then saved under `name`, so no orphan is left behind. Omitted — or equal to
     /// `name` — for a plain create/update.
