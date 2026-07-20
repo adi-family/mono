@@ -222,7 +222,11 @@ impl Agents {
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        launch_in(&agent, &sessions_dir, message)
+        // An agent starts in the ADI mono store root (`~/.adi/mono`) by default, not the launching
+        // daemon's cwd — so a run kicked off from the app lands in the ADI store, not $HOME. An
+        // agent that sets an explicit `working_dir` still overrides this.
+        let base_dir = self.config.root().to_path_buf();
+        launch_in(&agent, &sessions_dir, &base_dir, message)
     }
 
     /// Dispatches a message synchronously to a `wasm:*` agent.

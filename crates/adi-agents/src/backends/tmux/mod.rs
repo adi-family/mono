@@ -4,6 +4,7 @@ mod claude;
 mod codex;
 
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::process::Command;
 
 use crate::arguments::{TmuxClaudeArguments, TmuxCodexArguments};
@@ -91,7 +92,7 @@ pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn launch(agent: &StoredAgent) -> Result<Launch> {
+pub fn launch(agent: &StoredAgent, base_dir: &Path) -> Result<Launch> {
     let argv = engine_argv(&agent.manifest)?;
     let session = session_name(&agent.name);
     if session_exists(&session) {
@@ -101,10 +102,10 @@ pub fn launch(agent: &StoredAgent) -> Result<Launch> {
     let command = argv.join(" ");
     let mut cmd = Command::new(tmux_bin());
     cmd.args(["new-session", "-d", "-s", &session]);
-    // Agents should not inherit a daemon working directory; start in the user's home.
-    if let Ok(home) = std::env::var("HOME") {
-        cmd.args(["-c", &home]);
-    }
+    // Agents should not inherit the launching daemon's working directory; start in the ADI mono
+    // store root (`~/.adi/mono`), threaded in as `base_dir`, so a session opened from the app lands
+    // in the ADI store rather than $HOME.
+    cmd.args(["-c", &base_dir.to_string_lossy()]);
     cmd.arg(shell_command(&argv));
 
     let out = cmd

@@ -21,11 +21,17 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     engine_run(manifest, "").is_ok()
 }
 
-pub fn launch(agent: &StoredAgent, sessions_dir: &Path, message: &str) -> Result<Launch> {
+pub fn launch(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    base_dir: &Path,
+    message: &str,
+) -> Result<Launch> {
     let (argv, working_dir) = engine_run(&agent.manifest, message)?;
     detached::launch(
         agent,
         sessions_dir,
+        base_dir,
         PROCESS_DIR,
         &argv,
         working_dir,

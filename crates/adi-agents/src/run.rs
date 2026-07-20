@@ -68,14 +68,21 @@ fn is_interactive(backend: &Backend) -> bool {
     matches!(backend, Backend::TmuxClaude | Backend::TmuxCodex)
 }
 
-pub(crate) fn launch_in(agent: &StoredAgent, sessions_dir: &Path, message: &str) -> Result<Launch> {
+/// Launch an agent. `base_dir` is the default working directory a run starts in when the agent
+/// defines no explicit `working_dir` of its own — the ADI mono store root, threaded from the store.
+pub(crate) fn launch_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    base_dir: &Path,
+    message: &str,
+) -> Result<Launch> {
     match &agent.manifest.backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => tmux::launch(agent),
+        Backend::TmuxClaude | Backend::TmuxCodex => tmux::launch(agent, base_dir),
         Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::launch(agent, sessions_dir, message)
+            process::launch(agent, sessions_dir, base_dir, message)
         }
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::launch(agent, sessions_dir, message)
+            harness::launch(agent, sessions_dir, base_dir, message)
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -237,7 +244,7 @@ mod tests {
             manifest: manifest("harness:adi"),
         };
         assert!(matches!(
-            launch_in(&agent, Path::new("/unused"), "run"),
+            launch_in(&agent, Path::new("/unused"), Path::new("/unused"), "run"),
             Err(Error::NotRunnable(backend)) if backend == "harness:adi"
         ));
     }

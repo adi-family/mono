@@ -48,6 +48,7 @@ fn started_at(run_id: &str) -> u64 {
 pub(crate) fn launch(
     agent: &StoredAgent,
     sessions_dir: &Path,
+    base_dir: &Path,
     subdir: &str,
     argv: &[String],
     working_dir: Option<String>,
@@ -76,10 +77,12 @@ pub(crate) fn launch(
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(errlog));
+    // The agent's own `working_dir` wins; otherwise a run starts in `base_dir` (the ADI mono store
+    // root), not the launching daemon's cwd.
     if let Some(d) = working_dir.filter(|d| !d.trim().is_empty()) {
         command.current_dir(d);
-    } else if let Ok(home) = std::env::var("HOME") {
-        command.current_dir(home);
+    } else {
+        command.current_dir(base_dir);
     }
 
     let mut child = command
@@ -390,6 +393,7 @@ mod tests {
         let r1 = launch(
             &a,
             &sessions,
+            &sessions,
             "harness",
             &["/bin/sleep".into(), "10".into()],
             None,
@@ -398,6 +402,7 @@ mod tests {
         .expect("run 1");
         let r2 = launch(
             &a,
+            &sessions,
             &sessions,
             "harness",
             &["/bin/sleep".into(), "10".into()],
@@ -441,6 +446,42 @@ mod tests {
     }
 
     #[test]
+    fn a_run_without_working_dir_starts_in_base_dir() {
+        let sessions = scratch_dir("basedir-sessions");
+        let base = scratch_dir("basedir-cwd");
+        std::fs::create_dir_all(&base).unwrap();
+        let a = agent("cwd-probe");
+
+        // No explicit working_dir, so the run must start in base_dir — the child writes its cwd.
+        let _ = launch(
+            &a,
+            &sessions,
+            &base,
+            "harness",
+            &["/bin/sh".into(), "-c".into(), "pwd > cwd.txt".into()],
+            None,
+            "probe",
+        )
+        .expect("launch");
+
+        let probe = base.join("cwd.txt");
+        for _ in 0..100 {
+            if probe.is_file() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let got = std::fs::read_to_string(&probe).expect("child wrote its cwd");
+        // macOS temp dirs are symlinks (/var → /private/var), so compare canonical paths.
+        let got = std::fs::canonicalize(got.trim()).unwrap();
+        let want = std::fs::canonicalize(&base).unwrap();
+        assert_eq!(got, want, "the run started in base_dir");
+
+        let _ = std::fs::remove_dir_all(&sessions);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
     fn tail_log_reads_the_end_and_drops_a_partial_first_line() {
         let sessions = scratch_dir("tail");
         let dir = agent_dir(&sessions, "harness", "job");
@@ -471,6 +512,7 @@ mod tests {
         let a = agent("sleeper");
         let launched = launch(
             &a,
+            &sessions,
             &sessions,
             "harness",
             &["/bin/sleep".into(), "10".into()],
