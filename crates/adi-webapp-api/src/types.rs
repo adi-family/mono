@@ -1176,6 +1176,19 @@ pub struct Dashboard {
     pub modules: Vec<String>,
     /// Agent-authored endpoints (`backend/routes/*.ts`), by route id.
     pub routes: Vec<String>,
+    /// When the dashboard was archived (Unix seconds), or `None` while it is live. Archiving
+    /// takes both bun services out of the supervisor's import glob (so they stop) and hides the
+    /// row behind the Archived disclosure — without deleting any of the dashboard's files.
+    #[serde(default)]
+    pub archived_at: Option<u64>,
+}
+
+impl Dashboard {
+    /// Whether the dashboard is archived (soft-removed from supervision).
+    #[must_use]
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
 }
 
 /// `POST /api/dashboards/create` — scaffold a new dashboard. The id is generated, so a name is
@@ -1191,6 +1204,13 @@ pub struct NewDashboard {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardsState {
     pub dashboards: Vec<Dashboard>,
+}
+
+/// Request body naming a dashboard — `POST /api/dashboards/archive` and `/unarchive`. Both
+/// return a fresh [`DashboardsState`], so the client refreshes the listing in one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardRef {
+    pub id: String,
 }
 
 /// A JSON error body: `{ "ok": false, "error": "…" }`.

@@ -2,7 +2,8 @@
 
 use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
-    AgentsState, ApiError, Dashboard, DashboardsState, DirListing, FileContent, FilesRef,
+    AgentsState, ApiError, Dashboard, DashboardRef, DashboardsState, DirListing, FileContent,
+    FilesRef,
     FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef,
     MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, NewDashboard, NewProject, NewProjectHook,
     NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
@@ -118,6 +119,11 @@ pub async fn reopen_task(id: String) -> Result<TasksState, String> {
     post("/api/tasks/reopen", &TaskRef { id, cascade: false }).await
 }
 
+/// Permanently delete a task; its direct children reparent to its parent. Irreversible.
+pub async fn delete_task(id: String) -> Result<TasksState, String> {
+    post("/api/tasks/delete", &TaskRef { id, cascade: false }).await
+}
+
 // Agents: every endpoint returns the fresh AgentsState so the page updates in one round-trip.
 
 pub async fn agents() -> Result<AgentsState, String> {
@@ -210,6 +216,23 @@ pub async fn dashboards() -> Result<DashboardsState, String> {
 /// Scaffold a new dashboard; the supervisor starts it within a few seconds.
 pub async fn create_dashboard(body: NewDashboard) -> Result<Dashboard, String> {
     post("/api/dashboards/create", &body).await
+}
+
+/// Archive a dashboard: park its hive file so the supervisor stops both bun services, and hide
+/// the row. Returns the fresh state so the page updates in one round-trip.
+pub async fn archive_dashboard(id: String) -> Result<DashboardsState, String> {
+    post("/api/dashboards/archive", &DashboardRef { id }).await
+}
+
+/// Restore an archived dashboard: the supervisor restarts both services on the same leased ports.
+pub async fn unarchive_dashboard(id: String) -> Result<DashboardsState, String> {
+    post("/api/dashboards/unarchive", &DashboardRef { id }).await
+}
+
+/// Permanently delete an archived dashboard's directory (all its files). Irreversible; the backend
+/// refuses unless the dashboard is archived first.
+pub async fn delete_dashboard(id: String) -> Result<DashboardsState, String> {
+    post("/api/dashboards/delete", &DashboardRef { id }).await
 }
 
 /// Every Hive service across all projects, with live running flags.

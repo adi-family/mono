@@ -38,6 +38,8 @@ use adi_ports_manager::Ports;
 #[cfg(test)]
 use adi_projects::Projects;
 #[cfg(test)]
+use adi_tasks::Tasks;
+#[cfg(test)]
 use adi_triggers::Triggers;
 #[cfg(test)]
 use std::time::Instant;
@@ -151,6 +153,161 @@ mod tests {
             &[],
         );
         assert_eq!(status, 404, "an unregistered project is rejected");
+    }
+
+    /// An isolated config rooted in a temp dir, so a dashboards test never touches the real store.
+    fn temp_dashboards_cfg() -> adi_config::Config {
+        let root = std::env::temp_dir().join(format!(
+            "adi-webapp-api-dash-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        adi_config::Config::with_root(root)
+    }
+
+    #[test]
+    fn dashboard_archive_parks_hive_and_restore_returns_it() {
+        let cfg = temp_dashboards_cfg();
+        let ports = temp_manager();
+
+        // Scaffold one dashboard; its live hive file is what the supervisor globs.
+        let Response { status, body } = create_dashboard(&cfg, &ports, br#"{"name":"Metrics"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let id = v["id"].as_str().unwrap().to_string();
+        let dir = cfg.module("dashboards").dir().join(&id);
+        assert!(dir.join(".adi/hive.yaml").is_file());
+
+        let ref_body = format!(r#"{{"id":{}}}"#, serde_json::to_string(&id).unwrap());
+
+        // Archive: manifest records archived_at, the hive file is parked out of the glob, and the
+        // fresh listing flags the dashboard.
+        let Response { status, body } = archive_dashboard(&cfg, &ports, &[], ref_body.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let d = &v["dashboards"][0];
+        assert_eq!(d["id"], id);
+        assert!(d["archived_at"].as_u64().is_some(), "archived_at set: {body}");
+        assert!(!dir.join(".adi/hive.yaml").exists(), "live hive file is parked");
+        assert!(dir.join(".adi/hive.yaml.archived").is_file(), "parked file present");
+        let toml = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+        assert!(toml.contains("archived_at ="), "manifest records archive: {toml}");
+
+        // Restore: the hive file returns to the glob and archived_at clears.
+        let Response { status, body } = unarchive_dashboard(&cfg, &ports, &[], ref_body.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["dashboards"][0]["archived_at"].is_null(),
+            "archived_at cleared: {body}"
+        );
+        assert!(dir.join(".adi/hive.yaml").is_file(), "hive file restored");
+        assert!(!dir.join(".adi/hive.yaml.archived").exists(), "parked file removed");
+
+        // Bad ids: an unknown or path-escaping id is a 404; a blank or unparseable body is a 400.
+        assert_eq!(
+            archive_dashboard(&cfg, &ports, &[], br#"{"id":"ghost"}"#).status,
+            404
+        );
+        assert_eq!(
+            archive_dashboard(&cfg, &ports, &[], br#"{"id":"../evil"}"#).status,
+            404
+        );
+        assert_eq!(
+            archive_dashboard(&cfg, &ports, &[], br#"{"id":""}"#).status,
+            400
+        );
+        assert_eq!(archive_dashboard(&cfg, &ports, &[], b"not json").status, 400);
+    }
+
+    #[test]
+    fn dashboard_delete_requires_archived_then_removes_dir() {
+        let cfg = temp_dashboards_cfg();
+        let ports = temp_manager();
+
+        let Response { body, .. } = create_dashboard(&cfg, &ports, br#"{"name":"Metrics"}"#);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let id = v["id"].as_str().unwrap().to_string();
+        let dir = cfg.module("dashboards").dir().join(&id);
+        let ref_body = format!(r#"{{"id":{}}}"#, serde_json::to_string(&id).unwrap());
+
+        // A live dashboard can't be deleted — it must be archived first, so the running servers
+        // are never pulled out from under themselves.
+        let Response { status, .. } = delete_dashboard(&cfg, &ports, &[], ref_body.as_bytes());
+        assert_eq!(status, 409, "delete refused while live");
+        assert!(dir.is_dir(), "directory left untouched");
+
+        // Archive, then delete removes the whole directory and drops it from the listing.
+        let _ = archive_dashboard(&cfg, &ports, &[], ref_body.as_bytes());
+        let Response { status, body } = delete_dashboard(&cfg, &ports, &[], ref_body.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        assert!(!dir.exists(), "directory removed");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["dashboards"].as_array().unwrap().is_empty(),
+            "listing is empty: {body}"
+        );
+
+        assert_eq!(
+            delete_dashboard(&cfg, &ports, &[], br#"{"id":"ghost"}"#).status,
+            404
+        );
+        assert_eq!(
+            delete_dashboard(&cfg, &ports, &[], br#"{"id":""}"#).status,
+            400
+        );
+    }
+
+    /// An isolated tasks store rooted in a temp dir, so a tasks test never touches the real one.
+    fn temp_tasks() -> Tasks {
+        let root = std::env::temp_dir().join(format!(
+            "adi-webapp-api-tasks-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Tasks::with_config(adi_config::Config::with_root(root))
+    }
+
+    #[test]
+    fn delete_task_removes_it_and_reparents_children() {
+        let store = temp_tasks();
+
+        // A parent with one child.
+        let _ = create_task(&store, br#"{"title":"parent"}"#);
+        let Response { body, .. } = tasks(&store);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let parent_id = v["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["title"] == "parent")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let child_body = format!(
+            r#"{{"title":"child","parent":{}}}"#,
+            serde_json::to_string(&parent_id).unwrap()
+        );
+        let _ = create_task(&store, child_body.as_bytes());
+
+        // Deleting the parent removes it and reparents the child to the root (no dangling link).
+        let ref_body = format!(r#"{{"id":{}}}"#, serde_json::to_string(&parent_id).unwrap());
+        let Response { status, body } = delete_task(&store, ref_body.as_bytes());
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let list = v["tasks"].as_array().unwrap();
+        assert!(
+            !list.iter().any(|t| t["id"] == parent_id.as_str()),
+            "parent is gone: {body}"
+        );
+        let child = list.iter().find(|t| t["title"] == "child").unwrap();
+        assert!(child["parent"].is_null(), "child reparented to root: {body}");
+
+        assert_eq!(delete_task(&store, br#"{"id":"ghost"}"#).status, 404);
+        assert_eq!(delete_task(&store, br#"{"id":""}"#).status, 400);
     }
 
     #[test]

@@ -289,6 +289,15 @@ pub(crate) fn apply_mutation<T, S, F>(
     });
 }
 
+/// A native confirm dialog, returning `true` only when the user accepts. Gates the irreversible
+/// row actions (permanent deletes) behind an explicit yes; a browser that has no `confirm`
+/// (or denies it) reads as "cancelled", so nothing is destroyed by accident.
+pub(crate) fn confirm(message: &str) -> bool {
+    web_sys::window()
+        .and_then(|w| w.confirm_with_message(message).ok())
+        .unwrap_or(false)
+}
+
 /// The "updated Ns ago" label; empty until the first successful load. Generic over the loaded
 /// payload — every page has its own state type and only emptiness matters here.
 pub(crate) fn updated_text<T>(loaded: RwSignal<Option<T>>, secs_since: RwSignal<u32>) -> String

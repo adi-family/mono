@@ -9,13 +9,13 @@
 //! from the ports manager, keyed `<id>/frontend` and `<id>/backend`. We resolve them from that
 //! same registry, which is also why a dashboard can report ports before it is running.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use adi_config::Config;
 use adi_ports_manager::Ports;
 use serde::Deserialize;
 
-use crate::types::{Dashboard, DashboardsState, NewDashboard};
+use crate::types::{Dashboard, DashboardRef, DashboardsState, NewDashboard};
 
 use super::response::{Response, error, ok_json};
 
@@ -26,6 +26,9 @@ struct Manifest {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    /// When the dashboard was archived (Unix seconds), or `None` while it is live.
+    #[serde(default)]
+    archived_at: Option<u64>,
 }
 
 /// The scaffold a new dashboard starts from — the two fixed entry points plus one worked
@@ -68,6 +71,118 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
     ok_json(&read_dashboard(&dir, ports, &[]))
 }
 
+/// `POST /api/dashboards/archive` — soft-remove a dashboard, then report the fresh listing.
+///
+/// Archiving records `archived_at` in the manifest and parks the hive file so the supervisor's
+/// import glob no longer matches it — both bun servers stop within a few seconds — without
+/// deleting anything. The row moves to the page's Archived disclosure, from where Restore undoes it.
+#[must_use]
+pub fn archive_dashboard(cfg: &Config, ports: &Ports, listening: &[u16], body: &[u8]) -> Response {
+    set_archived(cfg, ports, listening, body, true)
+}
+
+/// `POST /api/dashboards/unarchive` — restore an archived dashboard, then report the fresh
+/// listing. Moves the hive file back into the supervisor's glob (so both servers restart on the
+/// same leased ports) and clears `archived_at`.
+#[must_use]
+pub fn unarchive_dashboard(
+    cfg: &Config,
+    ports: &Ports,
+    listening: &[u16],
+    body: &[u8],
+) -> Response {
+    set_archived(cfg, ports, listening, body, false)
+}
+
+/// `POST /api/dashboards/delete` — permanently delete an archived dashboard's directory (all its
+/// files), then report the fresh listing. Refused with a 409 unless the dashboard is archived
+/// first, so a live, supervised dashboard is never pulled out from under its running bun servers.
+/// Irreversible — the UI gates it behind a confirm.
+#[must_use]
+pub fn delete_dashboard(cfg: &Config, ports: &Ports, listening: &[u16], body: &[u8]) -> Response {
+    let Some(id) = parse_dashboard_ref(body) else {
+        return error(400, "expected JSON body { \"id\": \"…\" }");
+    };
+    let Some(dir) = dashboard_dir(cfg, &id) else {
+        return error(404, &format!("no such dashboard: {id}"));
+    };
+    if read_manifest(&dir).archived_at.is_none() {
+        return error(409, "archive the dashboard before deleting it");
+    }
+    if let Err(e) = std::fs::remove_dir_all(&dir) {
+        return error(500, &format!("could not delete dashboard: {e}"));
+    }
+    dashboards(cfg, ports, listening)
+}
+
+/// Shared body of archive/unarchive: validate the id, flip the manifest's `archived_at`, move the
+/// hive file into or out of the supervisor's glob, then answer with the fresh full listing.
+fn set_archived(
+    cfg: &Config,
+    ports: &Ports,
+    listening: &[u16],
+    body: &[u8],
+    archived: bool,
+) -> Response {
+    let Some(id) = parse_dashboard_ref(body) else {
+        return error(400, "expected JSON body { \"id\": \"…\" }");
+    };
+    let Some(dir) = dashboard_dir(cfg, &id) else {
+        return error(404, &format!("no such dashboard: {id}"));
+    };
+
+    let mut manifest = read_manifest(&dir);
+    manifest.archived_at = archived.then(now_secs);
+    if let Err(e) = write_manifest(&dir, &manifest) {
+        return error(500, &format!("could not update dashboard manifest: {e}"));
+    }
+
+    // Park the hive file aside (archive) or move it back (restore). Renaming it out of the
+    // `**/hive.yaml` glob is what actually stops the supervised servers.
+    let live = dir.join(".adi").join(HIVE_LIVE);
+    let parked = dir.join(".adi").join(HIVE_ARCHIVED);
+    let (from, to) = if archived {
+        (&live, &parked)
+    } else {
+        (&parked, &live)
+    };
+    // Best-effort: a dashboard with no hive file (or already in the target state) has nothing to
+    // move, which is not an error — the manifest flag above is the source of truth.
+    if from.exists()
+        && let Err(e) = std::fs::rename(from, to)
+    {
+        return error(500, &format!("could not move dashboard hive file: {e}"));
+    }
+
+    dashboards(cfg, ports, listening)
+}
+
+/// Resolve a client-supplied dashboard id to its directory, refusing anything that isn't a single
+/// path segment naming an existing dashboard — so the id can never climb out of the dashboards
+/// root.
+fn dashboard_dir(cfg: &Config, id: &str) -> Option<PathBuf> {
+    let id = id.trim();
+    if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
+        return None;
+    }
+    let dir = cfg.module("dashboards").dir().join(id);
+    dir.is_dir().then_some(dir)
+}
+
+/// Parse a [`DashboardRef`] body into its trimmed, non-empty id.
+fn parse_dashboard_ref(body: &[u8]) -> Option<String> {
+    let req: DashboardRef = serde_json::from_slice(body).ok()?;
+    let id = req.id.trim().to_string();
+    (!id.is_empty()).then_some(id)
+}
+
+/// The current Unix time in whole seconds (0 before the epoch, which never happens in practice).
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 /// Write the full scaffold into `dir`. Any error leaves the caller to clean up.
 fn scaffold(dir: &Path, name: &str, description: &str) -> std::io::Result<()> {
     std::fs::create_dir_all(dir.join("frontend").join("modules"))?;
@@ -94,16 +209,49 @@ fn scaffold(dir: &Path, name: &str, description: &str) -> std::io::Result<()> {
         README.replace("{{NAME}}", name).replace("{{ID}}", &id),
     )?;
 
-    std::fs::write(
-        dir.join("config.toml"),
-        format!(
-            "name = {}\ndescription = {}\n",
-            toml_string(name),
-            toml_string(description)
-        ),
+    write_manifest(
+        dir,
+        &Manifest {
+            name: Some(name.to_string()),
+            description: Some(description.to_string()),
+            archived_at: None,
+        },
     )?;
-    std::fs::write(dir.join(".adi").join("hive.yaml"), hive_yaml(dir))?;
+    std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(dir))?;
     Ok(())
+}
+
+/// The dashboard's hive file, as the supervisor's `$ADI_DASHBOARDS_DIR/**/hive.yaml` glob names
+/// it. Archiving parks it aside under [`HIVE_ARCHIVED`] (which the glob no longer matches), so
+/// the supervisor drops both bun services within a few seconds; restoring moves it back.
+const HIVE_LIVE: &str = "hive.yaml";
+/// The parked name an archived dashboard's hive file takes — deliberately not `hive.yaml`, so the
+/// supervisor's glob skips it.
+const HIVE_ARCHIVED: &str = "hive.yaml.archived";
+
+/// Read a dashboard directory's `config.toml` manifest, degrading a missing or malformed file to
+/// the default (all fields absent) rather than failing.
+fn read_manifest(dir: &Path) -> Manifest {
+    std::fs::read_to_string(dir.join("config.toml"))
+        .ok()
+        .and_then(|raw| toml::from_str::<Manifest>(&raw).ok())
+        .unwrap_or_default()
+}
+
+/// Write a dashboard's `config.toml`, emitting only the fields that are present so a rewrite never
+/// invents a blank `name`/`description` the manifest didn't already carry.
+fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
+    let mut out = String::new();
+    if let Some(name) = &manifest.name {
+        out.push_str(&format!("name = {}\n", toml_string(name)));
+    }
+    if let Some(description) = &manifest.description {
+        out.push_str(&format!("description = {}\n", toml_string(description)));
+    }
+    if let Some(ts) = manifest.archived_at {
+        out.push_str(&format!("archived_at = {ts}\n"));
+    }
+    std::fs::write(dir.join("config.toml"), out)
 }
 
 /// The dashboard's hive services. No `proxy:` (reached by port, so nothing to route) and no
@@ -183,10 +331,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, listening: &[u16]) -> Dashboard {
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
 
-    let manifest = std::fs::read_to_string(dir.join("config.toml"))
-        .ok()
-        .and_then(|raw| toml::from_str::<Manifest>(&raw).ok())
-        .unwrap_or_default();
+    let manifest = read_manifest(dir);
 
     // The ports manager is the source of truth adi-hive allocated from, so read it rather than
     // the hive.yaml (which deliberately declares no ports).
@@ -203,6 +348,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, listening: &[u16]) -> Dashboard {
         backend_port,
         modules: ts_stems(&dir.join("frontend").join("modules")),
         routes: ts_stems(&dir.join("backend").join("routes")),
+        archived_at: manifest.archived_at,
         id,
     }
 }

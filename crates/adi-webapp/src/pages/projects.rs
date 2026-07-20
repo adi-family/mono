@@ -8,7 +8,8 @@ use crate::fetch;
 use crate::routing::{Route, open_project};
 use crate::state::{Flash, ProjectsForm, State};
 use crate::ui::{
-    TextField, apply_mutation, data_table, flash_view, fmt_date, placeholder_row, updated_text,
+    TextField, apply_mutation, confirm, data_table, flash_view, fmt_date, placeholder_row,
+    updated_text,
 };
 
 /// The Projects page: the registry of project metadata manifests, with a create form and
@@ -180,11 +181,23 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
             let action = {
                 let id = id.clone();
                 if archived {
+                    let del_id = id.clone();
                     view! {
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_projects(state, None, format!("Restored {id}."),
-                                fetch::unarchive_project(id.clone()));
-                        }>"Restore"</button>
+                        <div style="display:flex; gap:var(--space-2); justify-content:flex-end">
+                            <button class="adi-btn adi-btn--link" on:click=move |_| {
+                                apply_projects(state, None, format!("Restored {id}."),
+                                    fetch::unarchive_project(id.clone()));
+                            }>"Restore"</button>
+                            <button class="adi-btn adi-btn--link" style="color:var(--down)"
+                                on:click=move |_| {
+                                    if !confirm(&format!(
+                                        "Permanently delete project {del_id}? This cannot be undone.")) {
+                                        return;
+                                    }
+                                    apply_projects(state, None, format!("Deleted {del_id}."),
+                                        fetch::remove_project(del_id.clone()));
+                                }>"Delete"</button>
+                        </div>
                     }
                     .into_any()
                 } else {

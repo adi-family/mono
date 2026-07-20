@@ -262,6 +262,7 @@ async fn handle(
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
         ("POST", "/api/tasks/archive") => handlers::archive_task(tasks, &req.body),
         ("POST", "/api/tasks/reopen") => handlers::reopen_task(tasks, &req.body),
+        ("POST", "/api/tasks/delete") => handlers::delete_task(tasks, &req.body),
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
@@ -312,6 +313,27 @@ async fn handle(
         }
         ("POST", "/api/dashboards/create") => {
             handlers::create_dashboard(projects.config(), ports, &req.body)
+        }
+        ("POST", "/api/dashboards/archive") => {
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
+            handlers::archive_dashboard(projects.config(), ports, &listening, &req.body)
+        }
+        ("POST", "/api/dashboards/unarchive") => {
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
+            handlers::unarchive_dashboard(projects.config(), ports, &listening, &req.body)
+        }
+        ("POST", "/api/dashboards/delete") => {
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
+            handlers::delete_dashboard(projects.config(), ports, &listening, &req.body)
         }
         ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
         ("POST", "/api/hive/stop") => handlers::stop_service(projects, &req.body),

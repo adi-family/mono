@@ -118,6 +118,7 @@ fn App() -> impl IntoView {
         name: RwSignal::new(String::new()),
         description: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
+        show_archived: RwSignal::new(false),
     };
 
     let tasks_form = TasksForm {

@@ -8,8 +8,8 @@ use leptos::prelude::*;
 use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
-    TextField, apply_mutation, data_table, effective_label_title, flash_view, placeholder_row,
-    task_tree_rows, updated_text,
+    TextField, apply_mutation, confirm, data_table, effective_label_title, flash_view,
+    placeholder_row, task_tree_rows, updated_text,
 };
 
 /// The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`) as a nested table,
@@ -114,9 +114,9 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
             </form>
             {flash_view(flash)}
             <div class="adi-hint">
-                "Archive takes a task and its subtasks off the plate; Reopen in the Done block "
-                "brings one back. Completing, editing, and deleting stay in the "
-                <code>"adi-mono tasks"</code> " CLI."
+                "Archive takes a task and its subtasks off the plate; in the Done block, Reopen "
+                "brings one back and Delete removes it for good (its subtasks reparent). "
+                "Completing and editing stay in the " <code>"adi-mono tasks"</code> " CLI."
             </div>
         </section>
 
@@ -214,11 +214,23 @@ fn task_rows(state: State, finished: bool) -> AnyView {
             let action = {
                 let id = t.id.clone();
                 if finished {
+                    let del_id = id.clone();
                     view! {
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_tasks(state, None, format!("Reopened {id}."),
-                                fetch::reopen_task(id.clone()));
-                        }>"Reopen"</button>
+                        <span style="display:inline-flex; gap:var(--space-2)">
+                            <button class="adi-btn adi-btn--link" on:click=move |_| {
+                                apply_tasks(state, None, format!("Reopened {id}."),
+                                    fetch::reopen_task(id.clone()));
+                            }>"Reopen"</button>
+                            <button class="adi-btn adi-btn--link" style="color:var(--down)"
+                                on:click=move |_| {
+                                    if !confirm(&format!(
+                                        "Permanently delete task {del_id}? This cannot be undone.")) {
+                                        return;
+                                    }
+                                    apply_tasks(state, None, format!("Deleted {del_id}."),
+                                        fetch::delete_task(del_id.clone()));
+                                }>"Delete"</button>
+                        </span>
                     }
                     .into_any()
                 } else {

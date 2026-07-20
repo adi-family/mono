@@ -213,15 +213,18 @@ pub(crate) struct TasksForm {
     pub(crate) show_done: RwSignal<bool>,
 }
 
-/// The Agents page's local create/edit form. Numeric fields (`temperature`, `max_turns`) are held
-/// The Dashboards page's create form.
+/// The Dashboards page's create form, plus whether the collapsed archive below the main table is
+/// open. Archived dashboards are hidden by default; expanding is the only way to see and restore
+/// them.
 #[derive(Clone, Copy)]
 pub(crate) struct DashboardsForm {
     pub(crate) name: RwSignal<String>,
     pub(crate) description: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    pub(crate) show_archived: RwSignal<bool>,
 }
 
+/// The Agents page's local create/edit form. Numeric fields (`temperature`, `max_turns`) are held
 /// as strings and parsed on submit; `editing` is `Some(name)` while an existing agent is loaded
 /// into the form (drives the header + a "New agent" reset). `Copy` so it threads into handlers.
 #[derive(Clone, Copy)]

@@ -67,6 +67,20 @@ pub fn reopen_task(store: &Tasks, body: &[u8]) -> Response {
     }
 }
 
+/// `POST /api/tasks/delete` — permanently remove a task, reparenting its direct children to the
+/// deleted task's parent so no dangling links remain, then report the fresh tree. Irreversible —
+/// the UI gates it behind a confirm. The body's `cascade` is ignored (children are kept, reparented).
+#[must_use]
+pub fn delete_task(store: &Tasks, body: &[u8]) -> Response {
+    let Some(req) = parse_task_ref(body) else {
+        return bad_task_ref();
+    };
+    match store.delete(req.id.trim()) {
+        Ok(()) => tasks(store),
+        Err(e) => Response::from(&e),
+    }
+}
+
 /// Flatten a store [`TaskView`] into its wire [`TaskRow`] DTO, stringifying the status enums.
 fn task_row(view: &TaskView) -> TaskRow {
     let task = &view.task;
