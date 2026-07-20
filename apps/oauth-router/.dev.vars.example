@@ -1,0 +1,15 @@
+# Copy to `.dev.vars` for `wrangler dev` (git-ignored). In production these are set with
+# `wrangler secret put <NAME>` instead of living in a file.
+
+# Signs the opaque `state`. Use a long random value: `openssl rand -hex 32`.
+STATE_SECRET="dev-only-change-me"
+
+# Google OAuth client (console.cloud.google.com -> Credentials -> OAuth client ID).
+# Register the redirect URI: https://oauth-router.withadi.dev/callback/google
+GOOGLE_CLIENT_ID=""
+GOOGLE_CLIENT_SECRET=""
+
+# GitHub OAuth app (github.com/settings/developers).
+# Register the callback URL: https://oauth-router.withadi.dev/callback/github
+GITHUB_CLIENT_ID=""
+GITHUB_CLIENT_SECRET=""

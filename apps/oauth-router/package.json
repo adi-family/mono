@@ -1,0 +1,20 @@
+{
+  "name": "adi-oauth-router",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Generic OAuth router Cloudflare Worker: /login/<provider> -> provider, /callback/<provider> -> exchange code and redirect the token back to the app.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250109.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.5",
+    "wrangler": "^4.0.0"
+  }
+}

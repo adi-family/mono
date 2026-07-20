@@ -1,0 +1,39 @@
+# Cloudflare Worker config for the OAuth router.
+#
+# Non-secret settings live under [vars]; secrets are set out-of-band and never committed:
+#   npx wrangler secret put STATE_SECRET
+#   npx wrangler secret put GOOGLE_CLIENT_ID
+#   npx wrangler secret put GOOGLE_CLIENT_SECRET
+#   npx wrangler secret put GITHUB_CLIENT_ID
+#   npx wrangler secret put GITHUB_CLIENT_SECRET
+#
+# Deploy:  npx wrangler deploy
+# Local:   npx wrangler dev   (reads secrets from .dev.vars — see .dev.vars.example)
+
+name = "adi-oauth-router"
+main = "src/index.ts"
+compatibility_date = "2025-06-01"
+
+# Served on this custom domain. Requires the `withadi.dev` zone to be on this Cloudflare
+# account; `wrangler deploy` provisions the DNS record + TLS certificate automatically.
+# The provider callback URLs are then https://oauth-router.withadi.dev/callback/<provider>.
+routes = [
+  { pattern = "oauth-router.withadi.dev", custom_domain = true }
+]
+# Reachable only on the custom domain above — no *.workers.dev URL (keeps the
+# request-derived redirect_uri stable at https://oauth-router.withadi.dev).
+workers_dev = false
+
+[vars]
+# Default token-delivery target when /login carries no ?redirect=. The local ADI app is
+# served over http on the .adi split-DNS zone, which the redirect guard permits; this is
+# the only origin redirects may target unless ALLOWED_REDIRECT_ORIGINS adds more. Any path
+# under this origin is allowed (e.g. http://app.adi/oauth/callback/<...>).
+APP_URL = "http://app.adi"
+# Extra origins a caller-supplied ?redirect= may target (comma-separated). APP_URL's
+# origin is always allowed; uncomment to permit more.
+# ALLOWED_REDIRECT_ORIGINS = "http://app.adi,http://localhost:8000"
+# Forward the provider's refresh_token to the app too, so ADI can store it and later renew the
+# access token via POST /refresh/<provider> without the user re-authorizing. On for this
+# deployment because the ADI secrets store captures the refresh token (encrypted at rest).
+INCLUDE_REFRESH_TOKEN = "true"
