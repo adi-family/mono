@@ -18,6 +18,7 @@ default-members = [
     "crates/adi-mesh",
     "crates/adi-ports-manager",
     "crates/adi-projects",
+    "crates/adi-secrets",
     "crates/adi-tasks",
     "crates/adi-tools",
     "crates/adi-triggers",
@@ -49,6 +50,7 @@ adi-hooks = { path = "crates/adi-hooks" }
 adi-mesh = { path = "crates/adi-mesh" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }
+adi-secrets = { path = "crates/adi-secrets" }
 adi-tasks = { path = "crates/adi-tasks" }
 adi-tools = { path = "crates/adi-tools" }
 adi-triggers = { path = "crates/adi-triggers" }
@@ -57,6 +59,9 @@ adi-webapp-api = { path = "crates/adi-webapp-api" }
 adi-workforce = { path = "crates/adi-workforce" }
 
 # External crates (add as needed)
+# Authenticated encryption + base64 for adi-secrets' at-rest secret storage.
+base64 = "0.22"
+chacha20poly1305 = "0.10"
 clap = { version = "4", features = ["derive"] }
 # Peer-to-peer QUIC transport with relay-assisted NAT traversal and dial-by-EndpointId
 # discovery; the backbone of adi-mesh.

@@ -28,6 +28,8 @@ pub use adi_agents::{
 
 pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
 
+pub use adi_secrets::{Error as SecretsError, Secret, Secrets};
+
 // Project hooks + workspaces are rooted at a project's directory rather than a global
 // store, so there is no `Adi` accessor: compose `projects().project_dir(id)` with
 // `ProjectHooks::new(dir)` / `Workspaces::new(dir)`.

@@ -79,6 +79,7 @@ pub(crate) fn launch(
     module_dir: &Path,
     trigger: &Trigger,
     payload: Option<&[u8]>,
+    secret_env: &[(String, String)],
 ) -> Result<Launch> {
     let code = trigger.manifest.code.trim();
     if code.is_empty() {
@@ -94,14 +95,16 @@ pub(crate) fn launch(
         _ => ("sh", vec!["-c".to_string(), trigger.manifest.code.clone()]),
     };
 
-    let mut env = vec![
-        ("PATH".to_string(), augmented_path()),
-        ("ADI_TRIGGER".to_string(), trigger.name.clone()),
-        (
-            "ADI_TRIGGER_KIND".to_string(),
-            trigger.manifest.kind.clone(),
-        ),
-    ];
+    // Resolved secrets go in FIRST, under their literal key names, so the platform's own
+    // reserved vars pushed below (PATH, ADI_TRIGGER*) win if a secret is unwisely named after
+    // one — the injection can never break a launch by shadowing `PATH`.
+    let mut env: Vec<(String, String)> = secret_env.to_vec();
+    env.push(("PATH".to_string(), augmented_path()));
+    env.push(("ADI_TRIGGER".to_string(), trigger.name.clone()));
+    env.push((
+        "ADI_TRIGGER_KIND".to_string(),
+        trigger.manifest.kind.clone(),
+    ));
     env.extend(extra_env(&trigger.manifest.extra));
 
     // The payload is written *before* the spawn so the code block always finds a complete file.
@@ -175,8 +178,13 @@ pub(crate) fn open_log(module_dir: &Path, name: &str, append: bool) -> Result<st
 /// # Errors
 /// [`Error::NoCode`] when the trigger has no code block, [`Error::Io`] when the log/payload
 /// files can't be written, or [`Error::Launch`] when the interpreter can't be spawned.
-pub(crate) fn fire(module_dir: &Path, trigger: &Trigger, payload: Option<&[u8]>) -> Result<Firing> {
-    let spec = launch(module_dir, trigger, payload)?;
+pub(crate) fn fire(
+    module_dir: &Path,
+    trigger: &Trigger,
+    payload: Option<&[u8]>,
+    secret_env: &[(String, String)],
+) -> Result<Firing> {
+    let spec = launch(module_dir, trigger, payload, secret_env)?;
     let log_file = open_log(module_dir, &trigger.name, false)?;
     let errlog = log_file.try_clone()?;
 
@@ -303,7 +311,7 @@ mod tests {
     fn firing_without_code_is_refused() {
         let dir = scratch_dir("nocode");
         let t = trigger("empty", "   ");
-        assert!(matches!(fire(&dir, &t, None), Err(Error::NoCode(_))));
+        assert!(matches!(fire(&dir, &t, None, &[]), Err(Error::NoCode(_))));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -314,7 +322,7 @@ mod tests {
             "greeter",
             "printf '%s/%s' \"$ADI_TRIGGER\" \"$ADI_TRIGGER_KIND\"",
         );
-        let firing = fire(&dir, &t, None).expect("fire");
+        let firing = fire(&dir, &t, None, &[]).expect("fire");
         assert!(firing.pid > 0);
         let text = wait_for_log(&firing.log, |s| !s.is_empty());
         assert_eq!(text, "greeter/background");
@@ -333,7 +341,7 @@ mod tests {
             "hook",
             "printf '%s|' \"$ADI_PAYLOAD\"; cat \"$ADI_PAYLOAD_FILE\"",
         );
-        let firing = fire(&dir, &t, Some(b"{\"x\":1}")).expect("fire");
+        let firing = fire(&dir, &t, Some(b"{\"x\":1}"), &[]).expect("fire");
         assert_eq!(
             std::fs::read(payload_path(&dir, "hook")).expect("payload file"),
             b"{\"x\":1}"
@@ -355,7 +363,7 @@ mod tests {
         t.manifest
             .extra
             .insert("token_env".into(), "MY_TOKEN".into());
-        let firing = fire(&dir, &t, None).expect("fire");
+        let firing = fire(&dir, &t, None, &[]).expect("fire");
         assert_eq!(
             wait_for_log(&firing.log, |s| s.contains('/')),
             "4242/MY_TOKEN"
@@ -377,6 +385,25 @@ mod tests {
         );
     }
 
+    /// Injected secrets reach the code block under their literal names, and a secret can never
+    /// shadow a reserved platform var (here `ADI_TRIGGER`), which is pushed after the secrets.
+    #[test]
+    fn secret_env_injects_by_literal_name_and_never_shadows_platform_vars() {
+        let dir = scratch_dir("secretenv");
+        let t = trigger("reader", "printf '%s|%s' \"$MY_SECRET\" \"$ADI_TRIGGER\"");
+        let secret_env = vec![
+            ("MY_SECRET".to_string(), "s3cr3t".to_string()),
+            // A secret unwisely named after a platform var must lose to the real one.
+            ("ADI_TRIGGER".to_string(), "hijacked".to_string()),
+        ];
+        let firing = fire(&dir, &t, None, &secret_env).expect("fire");
+        assert_eq!(
+            wait_for_log(&firing.log, |s| s.contains('|')),
+            "s3cr3t|reader"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A `ts` trigger is staged to a real file and handed to `bun run` — the launch resolves
     /// without needing bun installed to assert the shape.
     #[test]
@@ -385,7 +412,7 @@ mod tests {
         let mut t = trigger("poller", "console.log('hi');\n");
         t.manifest.runtime = RUNTIME_TS.into();
 
-        let spec = launch(&dir, &t, None).expect("launch");
+        let spec = launch(&dir, &t, None, &[]).expect("launch");
         assert_eq!(spec.program, "bun");
         let staged = dir.join(SRC_DIR).join("poller.ts");
         assert_eq!(

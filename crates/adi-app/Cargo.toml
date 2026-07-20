@@ -20,6 +20,8 @@ adi-ports-manager = { workspace = true }
 
 adi-projects = { workspace = true }
 
+adi-secrets = { workspace = true }
+
 adi-tasks = { workspace = true }
 
 adi-tools = { workspace = true }
@@ -37,6 +39,11 @@ adi-css = { workspace = true }
 include_dir = "0.7"
 
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util", "fs", "sync"] }
+
+# Server-side OAuth-secret refresh: adi-app calls the OAuth router's /refresh/<provider> so
+# the refresh token never reaches the browser. rustls to avoid a system OpenSSL dependency.
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde_json = { workspace = true }
 
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

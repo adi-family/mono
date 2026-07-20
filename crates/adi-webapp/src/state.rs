@@ -7,7 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use adi_webapp_api::types::{
     AgentPeek, AgentRunInfo, AgentsState, DashboardsState, DirListing, FileEntry, Health,
     HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState,
-    TasksState, ToolsState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
+    SecretsState, TasksState, ToolsState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm,
+    WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -36,6 +37,10 @@ pub(crate) struct State {
     pub(crate) agents: RwSignal<Option<AgentsState>>,
     /// Tool definitions (`/api/tools`), shown on the Tools page and each project's Tools panel.
     pub(crate) tools: RwSignal<Option<ToolsState>>,
+    /// Secret metadata across every scope (`/api/secrets`), shown on the Secrets page and each
+    /// project's Secrets panel — never the values, which are fetched on demand by an explicit
+    /// reveal.
+    pub(crate) secrets: RwSignal<Option<SecretsState>>,
     /// The Meta page's state (`/api/meta`): the well-known `adi-agent`, the default system prompt
     /// to seed a new one with, and the agent form schema.
     pub(crate) meta: RwSignal<Option<MetaState>>,
@@ -262,6 +267,59 @@ impl ToolsForm {
             busy: RwSignal::new(false),
             show_archived: RwSignal::new(false),
         }
+    }
+}
+
+/// The Secrets page's create form plus its reveal cache. `project` files the secret under a
+/// project (empty = global). `revealed` holds the values a user has explicitly revealed, keyed
+/// by scope+name (see `reveal_key`), so a value is shown only after a deliberate Reveal and
+/// never persists across a reload. `Copy` so it threads into the page view and handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct SecretsForm {
+    pub(crate) name: RwSignal<String>,
+    pub(crate) value: RwSignal<String>,
+    pub(crate) description: RwSignal<String>,
+    /// The project to file the secret under (its id), or empty for a global secret.
+    pub(crate) project: RwSignal<String>,
+    /// Where the value comes from: `"text"` (typed) or `"oauth"` (obtained through a provider
+    /// flow). Toggled in the create form.
+    pub(crate) source: RwSignal<String>,
+    /// The OAuth provider selected for an `oauth`-source secret (`"google"`, `"github"`).
+    pub(crate) provider: RwSignal<String>,
+    /// The access scopes ticked for the flow (e.g. individual Gmail permissions). What's
+    /// requested; the provider returns what it actually granted, which is stored on the secret.
+    pub(crate) scopes: RwSignal<Vec<String>>,
+    pub(crate) busy: RwSignal<bool>,
+    /// Revealed plaintext values, keyed by `reveal_key(project, name)`. Empty by default; a row
+    /// masks its value until its key is present here.
+    pub(crate) revealed: RwSignal<BTreeMap<String, String>>,
+}
+
+impl SecretsForm {
+    /// Fresh signals for the create form (global scope, nothing typed, nothing revealed).
+    pub(crate) fn new() -> Self {
+        Self {
+            name: RwSignal::new(String::new()),
+            value: RwSignal::new(String::new()),
+            description: RwSignal::new(String::new()),
+            project: RwSignal::new(String::new()),
+            source: RwSignal::new("text".to_string()),
+            provider: RwSignal::new("google".to_string()),
+            // Sensible default for the default provider (Google): read Gmail + identify the
+            // account. The user ticks more in the create form.
+            scopes: RwSignal::new(vec![
+                "https://www.googleapis.com/auth/gmail.readonly".to_string(),
+                "email".to_string(),
+            ]),
+            busy: RwSignal::new(false),
+            revealed: RwSignal::new(BTreeMap::new()),
+        }
+    }
+
+    /// Forget every revealed value — called when leaving the page so a value never lingers in
+    /// memory across a navigation.
+    pub(crate) fn clear_revealed(self) {
+        self.revealed.set(BTreeMap::new());
     }
 }
 
@@ -771,6 +829,10 @@ pub(crate) async fn load(s: State) {
         if let Ok(t) = fetch::tools().await {
             s.tools.set(Some(t));
         }
+        // The project's Secrets panel filters the shared secrets list to this project.
+        if let Ok(sec) = fetch::secrets().await {
+            s.secrets.set(Some(sec));
+        }
         // The Workspaces panel's snapshot; polling it flips `creating` → `ready` live.
         if let Ok(w) = fetch::workspaces(&id).await {
             s.workspaces.set(Some(w));
@@ -799,6 +861,11 @@ pub(crate) async fn load(s: State) {
         && let Ok(t) = fetch::tools().await
     {
         s.tools.set(Some(t));
+    }
+    if path == Route::Secrets.path()
+        && let Ok(sec) = fetch::secrets().await
+    {
+        s.secrets.set(Some(sec));
     }
     if path == Route::Triggers.path() {
         if let Ok(t) = fetch::triggers().await {

@@ -10,7 +10,9 @@ use adi_webapp_api::types::{
     LinkTool, NewService, NewTask, NewTool, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
     ReserveResponse, RunAgent, RunRef, RunTool, SaveAgent, SaveAgentCode, SaveTrigger, StartResult,
-    StartService, StopResult, TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
+    RevealedSecret, SecretRef, SecretsState, SetOAuthSecret, SetSecret, StartService, StopResult,
+    TaskRef,
+    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
     TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
     WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
     WorkspacesState, WriteFile, WriteToolScript,
@@ -170,6 +172,36 @@ pub async fn write_tool_script(id: String, content: String) -> Result<ToolScript
 /// Run a tool once and capture its output, plus the fresh tools state.
 pub async fn run_tool(id: String, args: Vec<String>) -> Result<ToolRunResult, String> {
     post("/api/tools/run", &RunTool { id, args }).await
+}
+
+// Secrets: list/set/remove return the fresh SecretsState (metadata only). `reveal` is the one
+// call that returns a value — kept separate so a value only ever crosses the wire on demand.
+
+pub async fn secrets() -> Result<SecretsState, String> {
+    get("/api/secrets").await
+}
+
+pub async fn set_secret(body: SetSecret) -> Result<SecretsState, String> {
+    post("/api/secrets/set", &body).await
+}
+
+pub async fn remove_secret(project: Option<String>, name: String) -> Result<SecretsState, String> {
+    post("/api/secrets/remove", &SecretRef { project, name }).await
+}
+
+pub async fn reveal_secret(project: Option<String>, name: String) -> Result<RevealedSecret, String> {
+    post("/api/secrets/reveal", &SecretRef { project, name }).await
+}
+
+/// Store a secret whose value came from an OAuth flow (access token + refresh token + metadata).
+pub async fn set_oauth_secret(body: SetOAuthSecret) -> Result<SecretsState, String> {
+    post("/api/secrets/set-oauth", &body).await
+}
+
+/// Renew an OAuth secret's access token from its stored refresh token — done server-side, so the
+/// refresh token never reaches the browser.
+pub async fn refresh_secret(project: Option<String>, name: String) -> Result<SecretsState, String> {
+    post("/api/secrets/refresh", &SecretRef { project, name }).await
 }
 
 // Agents: every endpoint returns the fresh AgentsState so the page updates in one round-trip.

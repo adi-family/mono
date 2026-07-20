@@ -92,7 +92,12 @@ pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn launch(agent: &StoredAgent, base_dir: &Path, bin_dir: Option<&Path>) -> Result<Launch> {
+pub fn launch(
+    agent: &StoredAgent,
+    base_dir: &Path,
+    bin_dir: Option<&Path>,
+    secret_env: &[(String, String)],
+) -> Result<Launch> {
     let argv = engine_argv(&agent.manifest)?;
     let session = session_name(&agent.name);
     if session_exists(&session) {
@@ -106,7 +111,7 @@ pub fn launch(agent: &StoredAgent, base_dir: &Path, bin_dir: Option<&Path>) -> R
     // store root (`~/.adi/mono`), threaded in as `base_dir`, so a session opened from the app lands
     // in the ADI store rather than $HOME.
     cmd.args(["-c", &base_dir.to_string_lossy()]);
-    cmd.arg(shell_command(&argv, bin_dir));
+    cmd.arg(shell_command(&argv, bin_dir, secret_env));
 
     let out = cmd
         .output()
@@ -164,12 +169,19 @@ fn run_tmux(args: &[&str]) -> Result<()> {
     }))
 }
 
-fn shell_command(argv: &[String], bin_dir: Option<&Path>) -> String {
+fn shell_command(argv: &[String], bin_dir: Option<&Path>, secret_env: &[(String, String)]) -> String {
     let engine = argv
         .iter()
         .map(|a| sh_quote(a))
         .collect::<Vec<_>>()
         .join(" ");
+    // Inject the agent's secrets first, under their literal names — the value is single-quoted,
+    // and the name is a validated env identifier, so nothing here can break out of the export.
+    // These come before the PATH export so a secret can't shadow PATH.
+    let exports = secret_env
+        .iter()
+        .map(|(k, v)| format!("export {k}={}; ", sh_quote(v)))
+        .collect::<String>();
     // Prepend the agent's own `.bin` (its enabled tools) so it can run them by name, ahead of
     // the standard search dirs. The path lives under the ADI store, which has no shell-special
     // characters, so it's embedded directly into the double-quoted export.
@@ -177,7 +189,7 @@ fn shell_command(argv: &[String], bin_dir: Option<&Path>) -> String {
         .map(|d| format!("{}:", d.display()))
         .unwrap_or_default();
     format!(
-        "export PATH=\"{prefix}$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
+        "{exports}export PATH=\"{prefix}$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
          {engine}; status=$?; \
          if [ \"$status\" -ne 0 ]; then \
          printf '\\n[adi] agent exited with status %s - press enter to close\\n' \"$status\"; \
@@ -249,6 +261,7 @@ mod tests {
                 "don't".into(),
             ],
             None,
+            &[],
         );
         assert!(
             cmd.contains("'claude' '--append-system-prompt' 'don'\\''t'"),
@@ -262,10 +275,26 @@ mod tests {
         let cmd = shell_command(
             &["claude".into()],
             Some(Path::new("/store/tools/.agent-bin/solver")),
+            &[],
         );
         assert!(
             cmd.contains("export PATH=\"/store/tools/.agent-bin/solver:$HOME/.local/bin:"),
             "{cmd}"
         );
+    }
+
+    #[test]
+    fn shell_command_exports_secrets_safely_before_path() {
+        let secrets = vec![
+            ("API_KEY".to_string(), "s3 cr'et".to_string()),
+            ("TOKEN".to_string(), "abc".to_string()),
+        ];
+        let cmd = shell_command(&["claude".into()], None, &secrets);
+        // Value is single-quoted with the embedded quote escaped; exports precede the PATH line.
+        assert!(cmd.contains("export API_KEY='s3 cr'\\''et'; "), "{cmd}");
+        assert!(cmd.contains("export TOKEN='abc'; "), "{cmd}");
+        let api_at = cmd.find("export API_KEY").expect("api export");
+        let path_at = cmd.find("export PATH=").expect("path export");
+        assert!(api_at < path_at, "secrets must export before PATH: {cmd}");
     }
 }

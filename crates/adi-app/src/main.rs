@@ -20,6 +20,7 @@ use adi_agents::Agents;
 use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
+use adi_secrets::Secrets;
 use adi_tasks::Tasks;
 use adi_tools::Tools;
 use adi_triggers::{Supervisor, Triggers};
@@ -93,6 +94,7 @@ async fn main() -> anyhow::Result<()> {
     let local = listener.local_addr().unwrap_or(addr);
     let ports = Arc::new(Ports::new());
     let projects = Arc::new(Projects::open());
+    let secrets = Arc::new(Secrets::open());
     let tasks = Arc::new(Tasks::open());
     let tools = Arc::new(Tools::open());
     // Ensure the built-in system tools (the adi-ecosystem CLIs) exist, then rebuild the global
@@ -131,6 +133,7 @@ async fn main() -> anyhow::Result<()> {
                 Ok((stream, peer)) => {
                     let ports = Arc::clone(&ports);
                     let projects = Arc::clone(&projects);
+                    let secrets = Arc::clone(&secrets);
                     let tasks = Arc::clone(&tasks);
                     let tools = Arc::clone(&tools);
                     let agents = Arc::clone(&agents);
@@ -143,6 +146,7 @@ async fn main() -> anyhow::Result<()> {
                             stream,
                             &ports,
                             &projects,
+                            &secrets,
                             &tasks,
                             &tools,
                             &agents,
@@ -200,6 +204,7 @@ async fn handle(
     mut stream: TcpStream,
     ports: &Ports,
     projects: &Projects,
+    secrets: &Secrets,
     tasks: &Tasks,
     tools: &Tools,
     agents: &Agents,
@@ -285,6 +290,15 @@ async fn handle(
         ("POST", "/api/tools/script/write") => handlers::write_tool_script(tools, &req.body),
         // A run resolves a project-scoped tool's cwd from the project registry.
         ("POST", "/api/tools/run") => handlers::run_tool(tools, projects, &req.body),
+
+        ("GET", "/api/secrets") => handlers::secrets(secrets),
+        ("POST", "/api/secrets/set") => handlers::set_secret(secrets, &req.body),
+        ("POST", "/api/secrets/set-oauth") => handlers::set_oauth_secret(secrets, &req.body),
+        ("POST", "/api/secrets/remove") => handlers::remove_secret(secrets, &req.body),
+        ("POST", "/api/secrets/reveal") => handlers::reveal_secret(secrets, &req.body),
+        // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async
+        // because it makes an outbound call, so it can't be a plain sync handler.
+        ("POST", "/api/secrets/refresh") => refresh_secret(secrets, &req.body).await,
         // The Meta page's state: the well-known `adi-agent` (if set up), the default system
         // prompt to seed a new one with, and the agent form schema. Reads the same agents store.
         ("GET", "/api/meta") => handlers::meta(agents),
@@ -406,6 +420,115 @@ async fn mesh_start(mesh: &MeshCtl) -> Response {
 async fn mesh_stop(mesh: &MeshCtl) -> Response {
     mesh.stop().await;
     handlers::mesh(false)
+}
+
+/// The OAuth router base URL used for server-side secret refresh (override with
+/// `ADI_OAUTH_ROUTER_URL`, e.g. for a self-hosted or local router).
+fn oauth_router_url() -> String {
+    std::env::var("ADI_OAUTH_ROUTER_URL")
+        .unwrap_or_else(|_| "https://oauth-router.withadi.dev".to_string())
+}
+
+/// Seconds since the Unix epoch (for stamping a refreshed token's absolute expiry).
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// `POST /api/secrets/refresh` — renew an OAuth secret's access token using its stored refresh
+/// token, entirely server-side: the refresh token is decrypted here, exchanged at the router
+/// (which holds the provider client secret), and the fresh token is re-stored. The refresh token
+/// never crosses to the browser. Returns the fresh secrets list on success.
+async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
+    let Ok(req) = serde_json::from_slice::<adi_webapp_api::types::SecretRef>(body) else {
+        return handlers::error(400, "expected JSON body { \"name\": \"…\", \"project\"?: \"…\" }");
+    };
+    let name = req.name.trim();
+    if name.is_empty() {
+        return handlers::error(400, "a secret name is required");
+    }
+    let project = req
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+
+    // Find the secret and confirm it's an OAuth secret with a refresh token.
+    let secret = match secrets.get(project, name) {
+        Ok(Some(s)) => s,
+        Ok(None) => return handlers::error(404, &format!("no such secret: {name}")),
+        Err(e) => return Response::from(&e),
+    };
+    let Some(oauth) = secret.oauth else {
+        return handlers::error(400, "not an OAuth secret — nothing to refresh");
+    };
+    if !oauth.has_refresh {
+        return handlers::error(409, "no refresh token stored — re-authorize to get a new one");
+    }
+    let refresh_token = match secrets.reveal_refresh(project, name) {
+        Ok(Some(rt)) => rt,
+        Ok(None) => return handlers::error(409, "no refresh token stored"),
+        Err(e) => return Response::from(&e),
+    };
+
+    // Exchange it at the router (holds the client secret); the refresh token stays server-side.
+    let url = format!(
+        "{}/refresh/{}",
+        oauth_router_url().trim_end_matches('/'),
+        oauth.provider
+    );
+    let resp = match reqwest::Client::new()
+        .post(&url)
+        .json(&serde_json::json!({ "refresh_token": refresh_token }))
+        .send()
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => return handlers::error(502, &format!("could not reach the OAuth router: {e}")),
+    };
+    let status = resp.status();
+    let payload: serde_json::Value = match resp.json().await {
+        Ok(v) => v,
+        Err(e) => return handlers::error(502, &format!("bad response from the OAuth router: {e}")),
+    };
+    if !status.is_success() {
+        let msg = payload
+            .get("error")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("refresh failed");
+        return handlers::error(502, &format!("OAuth refresh failed: {msg}"));
+    }
+    let Some(access_token) = payload.get("access_token").and_then(serde_json::Value::as_str) else {
+        return handlers::error(502, "the OAuth router returned no access_token");
+    };
+
+    // Re-store: new access token; the provider's rotated refresh token if it issued one, else
+    // keep the current one; the new expiry and scope.
+    let rotated = payload
+        .get("refresh_token")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    let expires_at = payload
+        .get("expires_in")
+        .and_then(serde_json::Value::as_u64)
+        .map(|s| now_secs().saturating_add(s));
+    let scope = payload
+        .get("scope")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string)
+        .or(oauth.scope);
+    let token = adi_secrets::OAuthToken {
+        provider: oauth.provider,
+        access_token: access_token.to_string(),
+        refresh_token: rotated.or(Some(refresh_token)),
+        expires_at,
+        scope,
+    };
+    match secrets.set_oauth(project, name, &token, secret.description.as_deref()) {
+        Ok(_) => handlers::secrets(secrets),
+        Err(e) => Response::from(&e),
+    }
 }
 
 /// Serve a webapp asset. With a disk override ([`DIST_ENV`]) set, files come from that

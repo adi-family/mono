@@ -1378,6 +1378,98 @@ pub struct DashboardRef {
     pub id: String,
 }
 
+// MARK: secrets — encrypted global / per-project key-values (~/.adi/mono/secrets)
+
+/// One secret's **metadata** — `GET /api/secrets` returns a list of these across every scope.
+/// It never carries the value: the plaintext is only ever returned by an explicit reveal
+/// (`POST /api/secrets/reveal` → [`RevealedSecret`]), so listing can't leak it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretDto {
+    /// The project this secret is scoped to, or `None` for a global secret.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// The secret's key name (also the env-var name it injects into runs as).
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+    /// Present when the value came from an OAuth flow — provider, lifetime, and whether a refresh
+    /// token is held. **Never a token.** `None` for a plain text secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<OAuthInfoDto>,
+}
+
+/// The non-secret OAuth provenance of a secret, for display: provider, token lifetime, and
+/// whether a refresh token is held. Never carries a token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OAuthInfoDto {
+    pub provider: String,
+    pub obtained_at: u64,
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    pub has_refresh: bool,
+}
+
+/// Request body storing a secret obtained from an OAuth flow — `POST /api/secrets/set-oauth`.
+/// The browser posts the tokens it received in the redirect fragment; the server encrypts the
+/// access token as the value, encrypts the refresh token separately, and records the metadata.
+/// `expires_in` is the provider's seconds-to-expiry; the server stamps the absolute `expires_at`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetOAuthSecret {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub provider: String,
+    pub access_token: String,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub expires_in: Option<u64>,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+/// `GET /api/secrets` — every secret across all scopes (metadata only). Each mutation endpoint
+/// returns a fresh one of these, so the client refreshes from one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretsState {
+    pub secrets: Vec<SecretDto>,
+}
+
+/// Request body setting a secret — `POST /api/secrets/set`. `project` omitted/blank = global.
+/// The plaintext `value` travels here (client → server on localhost) to be encrypted at rest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetSecret {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// Request body naming a secret in a scope — `POST /api/secrets/remove` and `/reveal`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SecretRef {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub name: String,
+}
+
+/// `POST /api/secrets/reveal` response — the one place a decrypted value crosses the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RevealedSecret {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub name: String,
+    pub value: String,
+}
+
 /// A JSON error body: `{ "ok": false, "error": "…" }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiError {

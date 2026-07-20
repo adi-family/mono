@@ -56,6 +56,12 @@ impl Adi {
         adi_tools::Tools::open()
     }
 
+    /// The secrets store backed by the standard store — `Adi::new().secrets().resolve(...)`.
+    #[must_use]
+    pub fn secrets(self) -> adi_secrets::Secrets {
+        adi_secrets::Secrets::open()
+    }
+
     /// The agent-definition registry backed by the standard store.
     #[must_use]
     pub fn agents(self) -> adi_agents::Agents {

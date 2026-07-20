@@ -26,6 +26,7 @@ pub(crate) enum Icon {
     Doc,
     Spark,
     Wrench,
+    Key,
 }
 
 impl Icon {
@@ -106,6 +107,11 @@ impl Icon {
             Icon::Wrench => {
                 r#"<path d="M11.4 2.4a3 3 0 0 0-3.85 3.75l-5 5a1.35 1.35 0 0 0 1.9 1.9l5-5A3 3 0 0 0 13.1 4.1l-1.85 1.85-1.5-.35-.35-1.5z"/>"#
             }
+            // A key — the "secret" mark: a ringed bow with a notched bit on a diagonal shaft.
+            Icon::Key => {
+                r#"<circle cx="5.25" cy="10.75" r="3"/><path d="M7.4 8.6l5.35-5.35"/>
+                   <path d="M10.5 5.5l1.5 1.5M12.75 3.25l1.5 1.5"/>"#
+            }
         }
     }
 }
@@ -118,6 +124,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Tasks => Icon::Tasks,
         Route::Agents => Icon::Agent,
         Route::Tools => Icon::Wrench,
+        Route::Secrets => Icon::Key,
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,
         Route::Hive => Icon::Server,
@@ -136,6 +143,7 @@ pub(crate) fn section_icon(section: ProjectSection) -> Icon {
         ProjectSection::Agents => Icon::Agent,
         ProjectSection::Triggers => Icon::Trigger,
         ProjectSection::Tools => Icon::Wrench,
+        ProjectSection::Secrets => Icon::Key,
         ProjectSection::Services => Icon::Box,
         ProjectSection::Workspaces => Icon::Layers,
         ProjectSection::Files => Icon::File,

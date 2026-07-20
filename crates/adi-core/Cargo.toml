@@ -22,6 +22,8 @@ adi-ports-manager = { workspace = true }
 
 adi-projects = { workspace = true }
 
+adi-secrets = { workspace = true }
+
 adi-hooks = { workspace = true }
 
 adi-update = { workspace = true }

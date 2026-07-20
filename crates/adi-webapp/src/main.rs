@@ -24,7 +24,8 @@ mod ui;
 
 use adi_webapp_api::types::{
     AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState, PortsState,
-    ProjectDetail, ProjectsState, TasksState, ToolsState, TriggersState, UsedPorts, WorkspacesState,
+    ProjectDetail, ProjectsState, SecretsState, TasksState, ToolsState, TriggersState, UsedPorts,
+    WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -35,7 +36,8 @@ use wasm_bindgen_futures::spawn_local;
 use pages::{
     agents_view, dashboards_view, hive_view, load_dir, load_store_file, mesh_view, meta_view,
     poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
-    project_detail_view, projects_view, store_file_view, tasks_view, tools_view, triggers_view,
+    project_detail_view, projects_view, secrets_view, store_file_view, tasks_view, tools_view,
+    triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -43,8 +45,8 @@ use routing::{
 };
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
-    MeshForm, MetaForm, ProjectsForm, State, Status, TasksForm, TermWatch, ToolEditor, ToolRunView,
-    ToolsForm, TriggersForm, TriggersLogView, load,
+    MeshForm, MetaForm, ProjectsForm, SecretsForm, State, Status, TasksForm, TermWatch, ToolEditor,
+    ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
 };
 use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
@@ -70,6 +72,7 @@ fn App() -> impl IntoView {
     let tasks = RwSignal::new(None::<TasksState>);
     let agents = RwSignal::new(None::<AgentsState>);
     let tools = RwSignal::new(None::<ToolsState>);
+    let secrets = RwSignal::new(None::<SecretsState>);
     let meta = RwSignal::new(None::<MetaState>);
     let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
@@ -97,6 +100,7 @@ fn App() -> impl IntoView {
         tasks,
         agents,
         tools,
+        secrets,
         meta,
         triggers,
         hive,
@@ -183,6 +187,9 @@ fn App() -> impl IntoView {
     let tools_form = ToolsForm::new();
     let tool_editor = ToolEditor::new();
     let tool_run = ToolRunView::new();
+
+    // The Secrets page's create form + reveal cache, shared with a project's Secrets panel.
+    let secrets_form = SecretsForm::new();
 
     let form = Form {
         svc: RwSignal::new(String::new()),
@@ -292,6 +299,7 @@ fn App() -> impl IntoView {
                 | Route::Tasks
                 | Route::Agents
                 | Route::Tools
+                | Route::Secrets
                 | Route::Triggers
                 | Route::Hive
                 | Route::PortsManager
@@ -324,6 +332,11 @@ fn App() -> impl IntoView {
         if !matches!(route.get(), Route::Tools | Route::ProjectDetail) {
             tool_run.close();
             tool_editor.close();
+        }
+        // Leaving the Secrets page (and project details) forgets any revealed values, so a
+        // plaintext secret never lingers in memory after the user navigates away.
+        if !matches!(route.get(), Route::Secrets | Route::ProjectDetail) {
+            secrets_form.clear_revealed();
         }
     });
 
@@ -434,6 +447,7 @@ fn App() -> impl IntoView {
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),
                         Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
+                        Route::Secrets => secrets_view(state, secrets_form),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Hive => hive_view(state, route),
@@ -479,6 +493,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Tasks,
             Route::Agents,
             Route::Tools,
+            Route::Secrets,
             Route::Triggers,
             Route::Dashboards,
         ],

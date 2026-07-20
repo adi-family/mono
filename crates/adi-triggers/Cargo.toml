@@ -16,6 +16,9 @@ supervisor = ["dep:tokio", "dep:tracing"]
 [dependencies]
 adi-config = { workspace = true }
 
+# Firing a trigger injects its resolved secrets (global + the trigger's project) as env vars.
+adi-secrets = { workspace = true }
+
 serde = { workspace = true }
 
 tokio = { version = "1", features = ["rt", "process", "time", "sync", "macros"], optional = true }

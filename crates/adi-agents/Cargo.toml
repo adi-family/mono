@@ -13,6 +13,8 @@ adi-config = { workspace = true }
 adi-workforce = { workspace = true }
 # An agent materializes its own `.bin` of enabled tools onto its PATH at launch.
 adi-tools = { workspace = true }
+# A run inherits its agent's resolved secrets (global + the agent's project) as env vars.
+adi-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

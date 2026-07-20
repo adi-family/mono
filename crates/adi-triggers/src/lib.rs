@@ -207,7 +207,21 @@ impl Triggers {
         let trigger = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        fire::fire(&self.dir(), &trigger, payload)
+        let secret_env = self.secret_env(trigger.manifest.project.as_deref());
+        fire::fire(&self.dir(), &trigger, payload, &secret_env)
+    }
+
+    /// The secret environment a trigger's code block runs with: every global secret plus the
+    /// trigger's project's, resolved (project overrides global) into literal `KEY=value` pairs
+    /// — a namespace distinct from the `ADI_<KEY>` settings. Resolved against **this store's**
+    /// [`Config`], so a test store stays isolated. Best-effort: if the secrets store can't be
+    /// read or decrypted, the launch proceeds with no injected secrets rather than failing.
+    pub(crate) fn secret_env(&self, project: Option<&str>) -> Vec<(String, String)> {
+        adi_secrets::Secrets::with_config(self.config.clone())
+            .resolve(project)
+            .unwrap_or_default()
+            .into_iter()
+            .collect()
     }
 
     /// When the trigger last fired (Unix epoch seconds, from its log's mtime), or `None` if it

@@ -38,6 +38,7 @@ web-sys = { version = "0.3", features = [
     "FocusEvent",        # select-all on focus for the copyable id/ticket fields
     "HtmlElement",       # focus() the copyable field before copying
     "HtmlInputElement",  # select() the id/ticket text for the Copy button
+    "UrlSearchParams",   # parse the OAuth token returned in the redirect URL fragment
 ] }
 
 serde = { workspace = true }

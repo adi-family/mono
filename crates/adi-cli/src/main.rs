@@ -6,6 +6,7 @@ mod agents;
 mod dns;
 mod format;
 mod projects;
+mod secrets;
 mod tasks;
 mod tools;
 mod triggers;
@@ -18,6 +19,7 @@ use crate::agents::{AgentsCommand, run_agents};
 use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
 use crate::projects::{ProjectsCommand, run_projects};
+use crate::secrets::{SecretsCommand, run_secrets};
 use crate::tasks::{TasksCommand, run_tasks};
 use crate::tools::{ToolsCommand, run_tools};
 use crate::triggers::{TriggersCommand, run_triggers};
@@ -65,6 +67,11 @@ enum Command {
         #[command(subcommand)]
         command: ToolsCommand,
     },
+    /// Secret commands: encrypted global / per-project key-values, injected into runs.
+    Secrets {
+        #[command(subcommand)]
+        command: SecretsCommand,
+    },
     /// Agent definition commands.
     Agents {
         #[command(subcommand)]
@@ -111,6 +118,12 @@ fn main() {
         }
         Command::Tools { command } => {
             if let Err(e) = run_tools(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Secrets { command } => {
+            if let Err(e) = run_secrets(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }

@@ -232,7 +232,22 @@ impl Agents {
         let bin_dir = adi_tools::Tools::with_config(self.config.clone())
             .sync_agent_bin(&agent.name, &agent.manifest.bin_tools)
             .ok();
-        launch_in(&agent, &sessions_dir, &base_dir, bin_dir.as_deref(), message)
+        // The run inherits this agent's resolved secrets (global + the agent's project) as env
+        // vars under their literal names. Resolved against this store's Config, so a test store
+        // stays isolated; best-effort, so a secrets failure never blocks a run.
+        let secret_env: Vec<(String, String)> = adi_secrets::Secrets::with_config(self.config.clone())
+            .resolve(agent.manifest.project.as_deref())
+            .unwrap_or_default()
+            .into_iter()
+            .collect();
+        launch_in(
+            &agent,
+            &sessions_dir,
+            &base_dir,
+            bin_dir.as_deref(),
+            message,
+            &secret_env,
+        )
     }
 
     /// Dispatches a message synchronously to a `wasm:*` agent.

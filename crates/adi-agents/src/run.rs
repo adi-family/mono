@@ -78,14 +78,17 @@ pub(crate) fn launch_in(
     base_dir: &Path,
     bin_dir: Option<&Path>,
     message: &str,
+    secret_env: &[(String, String)],
 ) -> Result<Launch> {
     match &agent.manifest.backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => tmux::launch(agent, base_dir, bin_dir),
+        Backend::TmuxClaude | Backend::TmuxCodex => {
+            tmux::launch(agent, base_dir, bin_dir, secret_env)
+        }
         Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::launch(agent, sessions_dir, base_dir, bin_dir, message)
+            process::launch(agent, sessions_dir, base_dir, bin_dir, message, secret_env)
         }
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::launch(agent, sessions_dir, base_dir, bin_dir, message)
+            harness::launch(agent, sessions_dir, base_dir, bin_dir, message, secret_env)
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -247,7 +250,7 @@ mod tests {
             manifest: manifest("harness:adi"),
         };
         assert!(matches!(
-            launch_in(&agent, Path::new("/unused"), Path::new("/unused"), None, "run"),
+            launch_in(&agent, Path::new("/unused"), Path::new("/unused"), None, "run", &[]),
             Err(Error::NotRunnable(backend)) if backend == "harness:adi"
         ));
     }

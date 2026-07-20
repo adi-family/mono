@@ -54,6 +54,7 @@ pub(crate) fn launch(
     argv: &[String],
     working_dir: Option<String>,
     message: &str,
+    secret_env: &[(String, String)],
 ) -> Result<Launch> {
     let dir = agent_dir(sessions_dir, subdir, &agent.name);
     std::fs::create_dir_all(&dir)?;
@@ -73,6 +74,9 @@ pub(crate) fn launch(
     let mut command = Command::new(program);
     command
         .args(command_args)
+        // Injected secrets go in first, under their literal names; `PATH` is set right after so
+        // a secret can never shadow the tool path.
+        .envs(secret_env.iter().map(|(k, v)| (k, v)))
         .env("PATH", augmented_path(bin_dir))
         .process_group(0)
         .stdin(Stdio::null())
@@ -404,6 +408,7 @@ mod tests {
             &["/bin/sleep".into(), "10".into()],
             None,
             "task one",
+            &[],
         )
         .expect("run 1");
         let r2 = launch(
@@ -415,6 +420,7 @@ mod tests {
             &["/bin/sleep".into(), "10".into()],
             None,
             "task two",
+            &[],
         )
         .expect("run 2");
         let (id1, id2) = match (&r1, &r2) {
@@ -469,6 +475,7 @@ mod tests {
             &["/bin/sh".into(), "-c".into(), "pwd > cwd.txt".into()],
             None,
             "probe",
+            &[],
         )
         .expect("launch");
 
@@ -527,6 +534,7 @@ mod tests {
             &["/bin/sleep".into(), "10".into()],
             None,
             "go",
+            &[],
         )
         .expect("launch under harness");
         let run_id = match launched {

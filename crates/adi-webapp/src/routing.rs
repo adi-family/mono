@@ -19,6 +19,8 @@ pub(crate) enum Route {
     Agents,
     /// Tool definitions — user CLIs (`/tools`).
     Tools,
+    /// Encrypted secrets — global & per-project key-values (`/secrets`).
+    Secrets,
     /// Trigger definitions (`/triggers`).
     Triggers,
     /// Agent-authored dashboards (`/dashboards`).
@@ -45,6 +47,7 @@ impl Route {
             "/tasks" => Route::Tasks,
             "/agents" => Route::Agents,
             "/tools" => Route::Tools,
+            "/secrets" => Route::Secrets,
             "/triggers" => Route::Triggers,
             "/dashboards" => Route::Dashboards,
             "/settings/hive" => Route::Hive,
@@ -63,6 +66,7 @@ impl Route {
             Route::Tasks => "/tasks",
             Route::Agents => "/agents",
             Route::Tools => "/tools",
+            Route::Secrets => "/secrets",
             Route::Triggers => "/triggers",
             Route::Dashboards => "/dashboards",
             Route::Hive => "/settings/hive",
@@ -82,6 +86,7 @@ impl Route {
             Route::Tasks => "Tasks",
             Route::Agents => "Agents",
             Route::Tools => "Tools",
+            Route::Secrets => "Secrets",
             Route::Triggers => "Triggers",
             Route::Dashboards => "Dashboards",
             Route::Hive => "Hive",
@@ -102,6 +107,7 @@ pub(crate) enum ProjectSection {
     Agents,
     Triggers,
     Tools,
+    Secrets,
     Services,
     Workspaces,
     Files,
@@ -109,12 +115,13 @@ pub(crate) enum ProjectSection {
 
 impl ProjectSection {
     /// Every section, in the order the explorer lists them.
-    pub(crate) const ALL: [ProjectSection; 8] = [
+    pub(crate) const ALL: [ProjectSection; 9] = [
         ProjectSection::Overview,
         ProjectSection::Tasks,
         ProjectSection::Agents,
         ProjectSection::Triggers,
         ProjectSection::Tools,
+        ProjectSection::Secrets,
         ProjectSection::Services,
         ProjectSection::Workspaces,
         ProjectSection::Files,
@@ -128,6 +135,7 @@ impl ProjectSection {
             ProjectSection::Agents => "agents",
             ProjectSection::Triggers => "triggers",
             ProjectSection::Tools => "tools",
+            ProjectSection::Secrets => "secrets",
             ProjectSection::Services => "services",
             ProjectSection::Workspaces => "workspaces",
             ProjectSection::Files => "files",
@@ -141,6 +149,7 @@ impl ProjectSection {
             ProjectSection::Agents => "Agents",
             ProjectSection::Triggers => "Triggers",
             ProjectSection::Tools => "Tools",
+            ProjectSection::Secrets => "Secrets",
             ProjectSection::Services => "Services",
             ProjectSection::Workspaces => "Workspaces",
             ProjectSection::Files => "Files",

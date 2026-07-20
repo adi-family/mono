@@ -15,13 +15,14 @@ use super::workspaces::{
 use crate::fetch;
 use crate::routing::{ProjectSection, Route, go_projects, open_project};
 use crate::state::{
-    AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, ToolEditor,
-    ToolRunView, ToolsForm, TriggersLogView,
+    AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, SecretsForm, State, TermWatch,
+    ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
 };
 use crate::ui::{data_table, flash_view, fmt_date};
 
 mod agents_panel;
 mod files;
+mod secrets_panel;
 mod services;
 mod subprojects;
 mod tasks;
@@ -30,6 +31,7 @@ mod triggers;
 
 use agents_panel::{QuickAgentForm, agents_panel};
 use files::files_view;
+use secrets_panel::secrets_panel;
 use services::{QuickServiceForm, service_create_form, service_rows};
 use subprojects::{QuickSubprojectForm, subprojects_panel};
 use tasks::{TaskForm, tasks_panel};
@@ -102,6 +104,8 @@ pub(crate) fn project_detail_view(
     let hook_editor = HookEditor::new();
     // The Tools panel's create/link form, pre-scoped to this project on submit.
     let tool_form = ToolsForm::new();
+    // The Secrets panel's create form + reveal cache, pre-scoped to this project on submit.
+    let secrets_form = SecretsForm::new();
     view! {
         // Only the selected section renders. The explorer nests these under each project,
         // so the page is one thing at a time instead of every panel stacked at once.
@@ -144,6 +148,10 @@ pub(crate) fn project_detail_view(
                     {move || tool_run_view(state, tool_run)}
                     {move || tool_editor_view(state, tool_editor)}
                     {tools_panel(state, tool_form, tool_editor, tool_run)}
+                }
+                .into_any(),
+                ProjectSection::Secrets => view! {
+                    {secrets_panel(state, secrets_form)}
                 }
                 .into_any(),
                 ProjectSection::Workspaces => view! {
