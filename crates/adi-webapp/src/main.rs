@@ -10,7 +10,7 @@
 
 #![allow(non_snake_case)] // Leptos components are PascalCase by convention.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 mod fetch;
 mod highlight;
@@ -24,7 +24,7 @@ mod ui;
 
 use adi_webapp_api::types::{
     AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState, PortsState,
-    ProjectDetail, ProjectsState, TasksState, TriggersState, UsedPorts, WorkspacesState,
+    ProjectDetail, ProjectsState, TasksState, ToolsState, TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -35,7 +35,7 @@ use wasm_bindgen_futures::spawn_local;
 use pages::{
     agents_view, dashboards_view, hive_view, load_dir, load_store_file, mesh_view, meta_view,
     poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
-    project_detail_view, projects_view, store_file_view, tasks_view, triggers_view,
+    project_detail_view, projects_view, store_file_view, tasks_view, tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -43,8 +43,8 @@ use routing::{
 };
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
-    MeshForm, MetaForm, ProjectsForm, State, Status, TasksForm, TermWatch, TriggersForm,
-    TriggersLogView, load,
+    MeshForm, MetaForm, ProjectsForm, State, Status, TasksForm, TermWatch, ToolEditor, ToolRunView,
+    ToolsForm, TriggersForm, TriggersLogView, load,
 };
 use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
@@ -69,6 +69,7 @@ fn App() -> impl IntoView {
     let project_detail = RwSignal::new(None::<ProjectDetail>);
     let tasks = RwSignal::new(None::<TasksState>);
     let agents = RwSignal::new(None::<AgentsState>);
+    let tools = RwSignal::new(None::<ToolsState>);
     let meta = RwSignal::new(None::<MetaState>);
     let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
@@ -95,6 +96,7 @@ fn App() -> impl IntoView {
         current_section,
         tasks,
         agents,
+        tools,
         meta,
         triggers,
         hive,
@@ -143,6 +145,7 @@ fn App() -> impl IntoView {
         max_turns: RwSignal::new(String::new()),
         tags: RwSignal::new(String::new()),
         tools: RwSignal::new(String::new()),
+        bin_tools: RwSignal::new(BTreeSet::new()),
         system_prompt: RwSignal::new(String::new()),
         starred: RwSignal::new(false),
         arguments: RwSignal::new(BTreeMap::new()),
@@ -174,6 +177,12 @@ fn App() -> impl IntoView {
     let term_watch = TermWatch::new();
     let agents_watch = AgentsWatch::new();
     let agents_code = AgentCodeEditor::new();
+
+    // The Tools page's create/link form, and the run + script-editor panels it shares with a
+    // project's Tools panel (page-scoped so they survive re-renders and thread into both).
+    let tools_form = ToolsForm::new();
+    let tool_editor = ToolEditor::new();
+    let tool_run = ToolRunView::new();
 
     let form = Form {
         svc: RwSignal::new(String::new()),
@@ -282,6 +291,7 @@ fn App() -> impl IntoView {
                 | Route::ProjectDetail
                 | Route::Tasks
                 | Route::Agents
+                | Route::Tools
                 | Route::Triggers
                 | Route::Hive
                 | Route::PortsManager
@@ -308,6 +318,12 @@ fn App() -> impl IntoView {
         if !matches!(route.get(), Route::ProjectDetail) {
             hook_log.close();
             term_watch.close();
+        }
+        // The tool run + script-editor panels render on the Tools page and a project's Tools
+        // section; leaving both drops their (stale) output/buffers.
+        if !matches!(route.get(), Route::Tools | Route::ProjectDetail) {
+            tool_run.close();
+            tool_editor.close();
         }
     });
 
@@ -413,10 +429,11 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Meta => meta_view(state, route, meta_form, agents_watch),
                         Route::Projects => projects_view(state, projects_form, route),
-                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch),
+                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run),
                         Route::StoreFile => store_file_view(state),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),
+                        Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Hive => hive_view(state, route),
@@ -461,6 +478,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Projects,
             Route::Tasks,
             Route::Agents,
+            Route::Tools,
             Route::Triggers,
             Route::Dashboards,
         ],

@@ -205,6 +205,14 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
             .collect(),
         starred: req.starred,
         project: clean(req.project),
+        // The adi tools enabled for this agent (its per-tool checkboxes) — each becomes a shim in
+        // the agent's own `.bin` at launch. Trimmed and de-blanked; order + dedup left to the store.
+        bin_tools: req
+            .bin_tools
+            .into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -542,6 +550,7 @@ fn agent_dto(
         tags: m.tags,
         starred: m.starred,
         project: m.project,
+        bin_tools: m.bin_tools,
         created_at: m.created_at,
         updated_at: m.updated_at,
         runnable,

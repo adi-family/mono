@@ -7,6 +7,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use super::agents::live_view as agent_live_view;
+use super::tools::{tool_editor_view, tool_run_view};
 use super::triggers::log_view;
 use super::workspaces::{
     NewHookForm, WorkspaceForm, hook_editor_view, hook_log_view, term_view, workspaces_panel,
@@ -14,7 +15,8 @@ use super::workspaces::{
 use crate::fetch;
 use crate::routing::{ProjectSection, Route, go_projects, open_project};
 use crate::state::{
-    AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, TriggersLogView,
+    AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, State, TermWatch, ToolEditor,
+    ToolRunView, ToolsForm, TriggersLogView,
 };
 use crate::ui::{data_table, flash_view, fmt_date};
 
@@ -23,6 +25,7 @@ mod files;
 mod services;
 mod subprojects;
 mod tasks;
+mod tools_panel;
 mod triggers;
 
 use agents_panel::{QuickAgentForm, agents_panel};
@@ -30,6 +33,7 @@ use files::files_view;
 use services::{QuickServiceForm, service_create_form, service_rows};
 use subprojects::{QuickSubprojectForm, subprojects_panel};
 use tasks::{TaskForm, tasks_panel};
+use tools_panel::tools_panel;
 use triggers::{QuickTriggerForm, triggers_panel};
 
 /// The project detail page (`/projects/<id>`): the manifest, its actions, and the services
@@ -42,6 +46,8 @@ pub(crate) fn project_detail_view(
     agents_form: AgentsForm,
     hook_log: HookLogView,
     term: TermWatch,
+    tool_editor: ToolEditor,
+    tool_run: ToolRunView,
 ) -> AnyView {
     let State {
         project_detail,
@@ -94,6 +100,8 @@ pub(crate) fn project_detail_view(
         busy: RwSignal::new(false),
     };
     let hook_editor = HookEditor::new();
+    // The Tools panel's create/link form, pre-scoped to this project on submit.
+    let tool_form = ToolsForm::new();
     view! {
         // Only the selected section renders. The explorer nests these under each project,
         // so the page is one thing at a time instead of every panel stacked at once.
@@ -130,6 +138,12 @@ pub(crate) fn project_detail_view(
                 ProjectSection::Triggers => view! {
                     {move || log_view(triggers_log)}
                     {triggers_panel(state, trigger_form, triggers_log)}
+                }
+                .into_any(),
+                ProjectSection::Tools => view! {
+                    {move || tool_run_view(state, tool_run)}
+                    {move || tool_editor_view(state, tool_editor)}
+                    {tools_panel(state, tool_form, tool_editor, tool_run)}
                 }
                 .into_any(),
                 ProjectSection::Workspaces => view! {

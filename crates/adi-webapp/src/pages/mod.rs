@@ -11,6 +11,7 @@ mod project_detail;
 mod projects;
 mod store_file;
 mod tasks;
+mod tools;
 mod triggers;
 mod workspaces;
 
@@ -24,5 +25,6 @@ pub(crate) use project_detail::{load_dir, project_detail_view};
 pub(crate) use projects::{project_tree_rows, projects_view};
 pub(crate) use store_file::{load_store_file, store_file_view};
 pub(crate) use tasks::tasks_view;
+pub(crate) use tools::tools_view;
 pub(crate) use triggers::{poll_trigger_log, triggers_view};
 pub(crate) use workspaces::{poll_hook_log, poll_term};

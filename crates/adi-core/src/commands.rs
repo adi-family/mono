@@ -50,6 +50,12 @@ impl Adi {
         adi_tasks::Tasks::open()
     }
 
+    /// The tools registry backed by the standard store — `Adi::new().tools().list()`.
+    #[must_use]
+    pub fn tools(self) -> adi_tools::Tools {
+        adi_tools::Tools::open()
+    }
+
     /// The agent-definition registry backed by the standard store.
     #[must_use]
     pub fn agents(self) -> adi_agents::Agents {

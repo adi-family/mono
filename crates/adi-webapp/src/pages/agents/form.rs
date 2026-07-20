@@ -662,6 +662,7 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.max_turns.set(argument_text(&a.arguments, "max_turns"));
     form.tags.set(a.tags.join(", "));
     form.tools.set(argument_text(&a.arguments, "tools"));
+    form.bin_tools.set(a.bin_tools.iter().cloned().collect());
     form.system_prompt
         .set(argument_text(&a.arguments, "system_prompt"));
     form.starred.set(a.starred);
@@ -690,6 +691,7 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.max_turns.set(String::new());
     form.tags.set(String::new());
     form.tools.set(String::new());
+    form.bin_tools.set(std::collections::BTreeSet::new());
     form.system_prompt.set(String::new());
     form.starred.set(false);
     form.arguments.set(BTreeMap::new());

@@ -22,6 +22,12 @@ pub struct AgentManifest<Args> {
     pub starred: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// The ids of the adi **tools** enabled for this agent (its per-tool checkboxes). Each becomes
+    /// a shim in the agent's own `.bin` (see `adi_tools::Tools::sync_agent_bin`), materialized on
+    /// its PATH at launch. Empty = no tools. Named `bin_tools` to stay distinct from the LLM
+    /// `--allowed-tools` (which lives in `arguments.tools`); these are ADI CLIs the agent can run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bin_tools: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -53,6 +59,7 @@ impl<Args> AgentManifest<Args> {
             tags: self.tags.clone(),
             starred: self.starred,
             project: self.project.clone(),
+            bin_tools: self.bin_tools.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

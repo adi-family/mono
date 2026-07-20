@@ -2,12 +2,12 @@
 //! structs, the backend-liveness/flash enums, and the `load` routine that fans a fetch into the
 //! signals. Every page module reads from [`State`]; the router and view helpers thread it around.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_webapp_api::types::{
     AgentPeek, AgentRunInfo, AgentsState, DashboardsState, DirListing, FileEntry, Health,
     HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState,
-    TasksState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
+    TasksState, ToolsState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -34,6 +34,8 @@ pub(crate) struct State {
     pub(crate) tasks: RwSignal<Option<TasksState>>,
     /// Agent definitions (`/api/agents`), shown on the Agents page.
     pub(crate) agents: RwSignal<Option<AgentsState>>,
+    /// Tool definitions (`/api/tools`), shown on the Tools page and each project's Tools panel.
+    pub(crate) tools: RwSignal<Option<ToolsState>>,
     /// The Meta page's state (`/api/meta`): the well-known `adi-agent`, the default system prompt
     /// to seed a new one with, and the agent form schema.
     pub(crate) meta: RwSignal<Option<MetaState>>,
@@ -227,6 +229,137 @@ pub(crate) struct DashboardsForm {
     pub(crate) show_archived: RwSignal<bool>,
 }
 
+/// The Tools page's create/link form. `linking` flips the form between creating a new owned
+/// script (name + runtime) and linking an existing file by `path`; `project` files the tool
+/// under a project (empty = global). `show_archived` expands the collapsed archive at the foot.
+/// `Copy` so it threads into the page view and handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct ToolsForm {
+    pub(crate) name: RwSignal<String>,
+    /// The script language of a *new* tool: `sh` or `ts`.
+    pub(crate) runtime: RwSignal<String>,
+    pub(crate) description: RwSignal<String>,
+    /// The project to file the tool under (its id), or empty for a global tool.
+    pub(crate) project: RwSignal<String>,
+    /// The existing file path, when linking rather than creating.
+    pub(crate) path: RwSignal<String>,
+    /// Whether the form is in "link an existing file" mode (vs. "create a new script").
+    pub(crate) linking: RwSignal<bool>,
+    pub(crate) busy: RwSignal<bool>,
+    pub(crate) show_archived: RwSignal<bool>,
+}
+
+impl ToolsForm {
+    /// Fresh signals for the create/link form (create mode, sh runtime, nothing typed).
+    pub(crate) fn new() -> Self {
+        Self {
+            name: RwSignal::new(String::new()),
+            runtime: RwSignal::new("sh".to_string()),
+            description: RwSignal::new(String::new()),
+            project: RwSignal::new(String::new()),
+            path: RwSignal::new(String::new()),
+            linking: RwSignal::new(false),
+            busy: RwSignal::new(false),
+            show_archived: RwSignal::new(false),
+        }
+    }
+}
+
+/// The Tools page's script editor panel: which tool's script is open (`None` = closed), the
+/// resolved on-disk path, the runtime (for syntax highlighting), the edit buffer with its saved
+/// baseline, a busy flag, and any load error. Mirrors [`AgentCodeEditor`]. `Copy` so it threads
+/// into the view and async handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct ToolEditor {
+    /// The open tool's id, or `None` while the editor is closed.
+    pub(crate) open: RwSignal<Option<String>>,
+    /// The tool's display name, for the panel heading.
+    pub(crate) name: RwSignal<String>,
+    /// The resolved script path (owned file, or linked target).
+    pub(crate) path: RwSignal<String>,
+    /// The script runtime (`sh` | `ts`), driving the highlighter.
+    pub(crate) runtime: RwSignal<String>,
+    /// The last-loaded/saved content — compared against `buffer` to detect edits.
+    pub(crate) original: RwSignal<String>,
+    /// The editable buffer.
+    pub(crate) buffer: RwSignal<String>,
+    /// Whether a read/write is in flight.
+    pub(crate) busy: RwSignal<bool>,
+    /// Why the script couldn't be loaded, or `None`.
+    pub(crate) error: RwSignal<Option<String>>,
+}
+
+impl ToolEditor {
+    pub(crate) fn new() -> Self {
+        Self {
+            open: RwSignal::new(None),
+            name: RwSignal::new(String::new()),
+            path: RwSignal::new(String::new()),
+            runtime: RwSignal::new(String::new()),
+            original: RwSignal::new(String::new()),
+            buffer: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+            error: RwSignal::new(None),
+        }
+    }
+
+    /// Close the editor and drop its buffers.
+    pub(crate) fn close(self) {
+        self.open.set(None);
+        self.name.set(String::new());
+        self.path.set(String::new());
+        self.runtime.set(String::new());
+        self.original.set(String::new());
+        self.buffer.set(String::new());
+        self.error.set(None);
+    }
+}
+
+/// The Tools page's run panel: which tool was last run (`None` = closed), the args input, the
+/// captured output, its exit code + success flag, and a busy flag while a run is in flight.
+/// `Copy` so it threads into the view and async handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct ToolRunView {
+    /// The tool whose output is showing, or `None` while the panel is closed.
+    pub(crate) id: RwSignal<Option<String>>,
+    /// The tool's display name, for the panel heading.
+    pub(crate) name: RwSignal<String>,
+    /// The args input buffer (space-separated; passed to the tool verbatim).
+    pub(crate) args: RwSignal<String>,
+    /// The last run's combined output.
+    pub(crate) output: RwSignal<String>,
+    /// The last run's exit code, or `None` before a run / when signal-killed.
+    pub(crate) code: RwSignal<Option<i32>>,
+    /// Whether the last run exited cleanly.
+    pub(crate) ok: RwSignal<bool>,
+    /// Whether a run is in flight.
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl ToolRunView {
+    pub(crate) fn new() -> Self {
+        Self {
+            id: RwSignal::new(None),
+            name: RwSignal::new(String::new()),
+            args: RwSignal::new(String::new()),
+            output: RwSignal::new(String::new()),
+            code: RwSignal::new(None),
+            ok: RwSignal::new(false),
+            busy: RwSignal::new(false),
+        }
+    }
+
+    /// Close the run panel and drop its output.
+    pub(crate) fn close(self) {
+        self.id.set(None);
+        self.name.set(String::new());
+        self.args.set(String::new());
+        self.output.set(String::new());
+        self.code.set(None);
+        self.ok.set(false);
+    }
+}
+
 /// The Agents page's local create/edit form. Numeric fields (`temperature`, `max_turns`) are held
 /// as strings and parsed on submit; `editing` is `Some(name)` while an existing agent is loaded
 /// into the form (drives the header + a "New agent" reset). `Copy` so it threads into handlers.
@@ -242,6 +375,9 @@ pub(crate) struct AgentsForm {
     pub(crate) max_turns: RwSignal<String>,
     pub(crate) tags: RwSignal<String>,
     pub(crate) tools: RwSignal<String>,
+    /// The adi tool ids enabled for this agent (its per-tool checkboxes) — each becomes a shim in
+    /// the agent's own `.bin`. Distinct from `tools` above, which is the LLM `--allowed-tools` spec.
+    pub(crate) bin_tools: RwSignal<BTreeSet<String>>,
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
     /// The complete backend argument map loaded for editing, including structured values the
@@ -631,6 +767,10 @@ pub(crate) async fn load(s: State) {
         if let Ok(a) = fetch::agents().await {
             s.agents.set(Some(a));
         }
+        // The project's Tools panel lists the tools filed under it (from the shared list).
+        if let Ok(t) = fetch::tools().await {
+            s.tools.set(Some(t));
+        }
         // The Workspaces panel's snapshot; polling it flips `creating` → `ready` live.
         if let Ok(w) = fetch::workspaces(&id).await {
             s.workspaces.set(Some(w));
@@ -650,6 +790,15 @@ pub(crate) async fn load(s: State) {
         if let Ok(a) = fetch::agents().await {
             s.agents.set(Some(a));
         }
+        // The agent form's per-tool checkboxes are populated from the tools list.
+        if let Ok(t) = fetch::tools().await {
+            s.tools.set(Some(t));
+        }
+    }
+    if path == Route::Tools.path()
+        && let Ok(t) = fetch::tools().await
+    {
+        s.tools.set(Some(t));
     }
     if path == Route::Triggers.path() {
         if let Ok(t) = fetch::triggers().await {

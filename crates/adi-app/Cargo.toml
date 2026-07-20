@@ -22,6 +22,8 @@ adi-projects = { workspace = true }
 
 adi-tasks = { workspace = true }
 
+adi-tools = { workspace = true }
+
 adi-agents = { workspace = true }
 
 adi-triggers = { workspace = true }

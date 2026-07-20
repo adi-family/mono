@@ -20,6 +20,7 @@ server = [
     "dep:adi-mesh",
     "dep:adi-projects",
     "dep:adi-tasks",
+    "dep:adi-tools",
     "dep:adi-agents",
     "dep:adi-triggers",
     # Background triggers are supervised in-process by the app, so the handlers can poke the
@@ -40,6 +41,7 @@ adi-ports-manager = { workspace = true, optional = true }
 adi-mesh = { workspace = true, optional = true }
 adi-projects = { workspace = true, optional = true }
 adi-tasks = { workspace = true, optional = true }
+adi-tools = { workspace = true, optional = true }
 adi-agents = { workspace = true, optional = true }
 adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }

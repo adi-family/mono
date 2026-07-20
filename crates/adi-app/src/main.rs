@@ -21,6 +21,7 @@ use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
 use adi_tasks::Tasks;
+use adi_tools::Tools;
 use adi_triggers::{Supervisor, Triggers};
 use adi_webapp_api::handlers;
 use adi_webapp_api::handlers::Response;
@@ -93,6 +94,12 @@ async fn main() -> anyhow::Result<()> {
     let ports = Arc::new(Ports::new());
     let projects = Arc::new(Projects::open());
     let tasks = Arc::new(Tasks::open());
+    let tools = Arc::new(Tools::open());
+    // Ensure the built-in system tools (the adi-ecosystem CLIs) exist, then rebuild the global
+    // `.bin`. Best-effort — a store that can't be seeded shouldn't stop the app from starting.
+    if let Err(e) = tools.seed_system().and_then(|_| tools.sync_bin().map(|_| ())) {
+        warn!(error = %e, "seeding system tools failed");
+    }
     let agents = Arc::new(Agents::open());
     let triggers = Arc::new(Triggers::open());
     // Background triggers are long-lived processes owned by this app: the supervisor keeps
@@ -125,6 +132,7 @@ async fn main() -> anyhow::Result<()> {
                     let ports = Arc::clone(&ports);
                     let projects = Arc::clone(&projects);
                     let tasks = Arc::clone(&tasks);
+                    let tools = Arc::clone(&tools);
                     let agents = Arc::clone(&agents);
                     let triggers = Arc::clone(&triggers);
                     let trigger_supervisor = Arc::clone(&trigger_supervisor);
@@ -136,6 +144,7 @@ async fn main() -> anyhow::Result<()> {
                             &ports,
                             &projects,
                             &tasks,
+                            &tools,
                             &agents,
                             &triggers,
                             &trigger_supervisor,
@@ -192,6 +201,7 @@ async fn handle(
     ports: &Ports,
     projects: &Projects,
     tasks: &Tasks,
+    tools: &Tools,
     agents: &Agents,
     triggers: &Triggers,
     trigger_supervisor: &Supervisor,
@@ -263,6 +273,18 @@ async fn handle(
         ("POST", "/api/tasks/archive") => handlers::archive_task(tasks, &req.body),
         ("POST", "/api/tasks/reopen") => handlers::reopen_task(tasks, &req.body),
         ("POST", "/api/tasks/delete") => handlers::delete_task(tasks, &req.body),
+        // Tools: user CLIs (sh/ts) created in-store or linked by path, exposed as tools/.bin/<name>
+        // shims agents run. Every mutation returns the fresh list for one-round-trip updates.
+        ("GET", "/api/tools") => handlers::tools(tools),
+        ("POST", "/api/tools/create") => handlers::create_tool(tools, &req.body),
+        ("POST", "/api/tools/link") => handlers::link_tool(tools, &req.body),
+        ("POST", "/api/tools/archive") => handlers::archive_tool(tools, &req.body),
+        ("POST", "/api/tools/unarchive") => handlers::unarchive_tool(tools, &req.body),
+        ("POST", "/api/tools/remove") => handlers::remove_tool(tools, &req.body),
+        ("POST", "/api/tools/script/read") => handlers::read_tool_script(tools, &req.body),
+        ("POST", "/api/tools/script/write") => handlers::write_tool_script(tools, &req.body),
+        // A run resolves a project-scoped tool's cwd from the project registry.
+        ("POST", "/api/tools/run") => handlers::run_tool(tools, projects, &req.body),
         // The Meta page's state: the well-known `adi-agent` (if set up), the default system
         // prompt to seed a new one with, and the agent form schema. Reads the same agents store.
         ("GET", "/api/meta") => handlers::meta(agents),

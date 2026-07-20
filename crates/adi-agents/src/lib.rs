@@ -226,7 +226,13 @@ impl Agents {
         // daemon's cwd — so a run kicked off from the app lands in the ADI store, not $HOME. An
         // agent that sets an explicit `working_dir` still overrides this.
         let base_dir = self.config.root().to_path_buf();
-        launch_in(&agent, &sessions_dir, &base_dir, message)
+        // Materialize this agent's own `.bin` from its enabled tools and prepend it to the run's
+        // PATH, so it can invoke exactly those tools by name. Best-effort: a sync failure (or an
+        // agent with no tools) just means no extra bin, never a blocked run.
+        let bin_dir = adi_tools::Tools::with_config(self.config.clone())
+            .sync_agent_bin(&agent.name, &agent.manifest.bin_tools)
+            .ok();
+        launch_in(&agent, &sessions_dir, &base_dir, bin_dir.as_deref(), message)
     }
 
     /// Dispatches a message synchronously to a `wasm:*` agent.

@@ -19,6 +19,7 @@ default-members = [
     "crates/adi-ports-manager",
     "crates/adi-projects",
     "crates/adi-tasks",
+    "crates/adi-tools",
     "crates/adi-triggers",
     "crates/adi-update",
     "crates/adi-webapp-api",
@@ -49,6 +50,7 @@ adi-mesh = { path = "crates/adi-mesh" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }
 adi-tasks = { path = "crates/adi-tasks" }
+adi-tools = { path = "crates/adi-tools" }
 adi-triggers = { path = "crates/adi-triggers" }
 adi-update = { path = "crates/adi-update" }
 adi-webapp-api = { path = "crates/adi-webapp-api" }

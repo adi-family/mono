@@ -25,6 +25,7 @@ pub(crate) enum Icon {
     File,
     Doc,
     Spark,
+    Wrench,
 }
 
 impl Icon {
@@ -101,6 +102,10 @@ impl Icon {
                 r#"<path d="M6.5 1.75c.35 2.55 1.2 3.4 3.75 3.75-2.55.35-3.4 1.2-3.75 3.75-.35-2.55-1.2-3.4-3.75-3.75 2.55-.35 3.4-1.2 3.75-3.75z"/>
                    <path d="M11.75 9.25c.2 1.5.7 2 2.2 2.2-1.5.2-2 .7-2.2 2.2-.2-1.5-.7-2-2.2-2.2 1.5-.2 2-.7 2.2-2.2z"/>"#
             }
+            // A wrench — the "tool" mark: an open-end head over a diagonal handle.
+            Icon::Wrench => {
+                r#"<path d="M11.4 2.4a3 3 0 0 0-3.85 3.75l-5 5a1.35 1.35 0 0 0 1.9 1.9l5-5A3 3 0 0 0 13.1 4.1l-1.85 1.85-1.5-.35-.35-1.5z"/>"#
+            }
         }
     }
 }
@@ -112,6 +117,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Projects | Route::ProjectDetail => Icon::List,
         Route::Tasks => Icon::Tasks,
         Route::Agents => Icon::Agent,
+        Route::Tools => Icon::Wrench,
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,
         Route::Hive => Icon::Server,
@@ -129,6 +135,7 @@ pub(crate) fn section_icon(section: ProjectSection) -> Icon {
         ProjectSection::Tasks => Icon::Tasks,
         ProjectSection::Agents => Icon::Agent,
         ProjectSection::Triggers => Icon::Trigger,
+        ProjectSection::Tools => Icon::Wrench,
         ProjectSection::Services => Icon::Box,
         ProjectSection::Workspaces => Icon::Layers,
         ProjectSection::Files => Icon::File,

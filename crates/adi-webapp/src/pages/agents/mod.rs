@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use adi_webapp_api::types::SaveAgent;
+use adi_webapp_api::types::{SaveAgent, ToolDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -114,6 +114,8 @@ pub(crate) fn agents_view(
                     tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                     starred: starred.get(),
                     project: opt_str(project.get()),
+                    // The adi tools ticked on for this agent — its own `.bin` at launch.
+                    bin_tools: form.bin_tools.get().into_iter().collect(),
                     // Editing with the name field changed is a rename, not a second agent.
                     rename_from: editing.get(),
                 };
@@ -121,6 +123,7 @@ pub(crate) fn agents_view(
                 apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
             }>
                 {move || agent_form_fields(state, form)}
+                {move || agent_tool_checkboxes(state, form)}
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     {move || if editing.get().is_some() { "Update agent" } else { "Create agent" }}
                 </button>
@@ -136,6 +139,77 @@ pub(crate) fn agents_view(
                 ", browsable as history in ● View."
             </div>
         </section>
+    }
+    .into_any()
+}
+
+/// The per-agent tool checkboxes: one toggle per registered (active) tool — system or user — that
+/// adds/removes its id from the agent's enabled set (`bin_tools`). The ticked tools become shims in
+/// the agent's own `.bin`, on its PATH at launch. This is the "functionality enabled for this agent"
+/// control: nothing is auto-added, including the system tools — an agent gets a tool only when it's
+/// ticked on here.
+fn agent_tool_checkboxes(state: State, form: AgentsForm) -> AnyView {
+    let Some(st) = state.tools.get() else {
+        return view! {
+            <div class="adi-field adi-field--grow">
+                <label class="adi-field__label">"Tools"</label>
+                <div class="adi-muted">"Loading tools…"</div>
+            </div>
+        }
+        .into_any();
+    };
+    let mut tools: Vec<ToolDto> = st.tools.into_iter().filter(|t| !t.is_archived()).collect();
+    // System tools first, then by name — the platform CLIs group together.
+    tools.sort_by(|a, b| b.system.cmp(&a.system).then_with(|| a.name.cmp(&b.name)));
+    if tools.is_empty() {
+        return view! {
+            <div class="adi-field adi-field--grow">
+                <label class="adi-field__label">"Tools"</label>
+                <div class="adi-hint">
+                    "No tools yet — create one on the Tools page. Whatever you enable here lands "
+                    "in this agent's " <code>".bin"</code> "."
+                </div>
+            </div>
+        }
+        .into_any();
+    }
+    let boxes = tools
+        .into_iter()
+        .map(|t| {
+            let id = t.id.clone();
+            let id_checked = id.clone();
+            let id_toggle = id.clone();
+            let checked = move || form.bin_tools.get().contains(&id_checked);
+            let label = if t.system {
+                format!("{} (system)", t.name)
+            } else if let Some(p) = t.project.as_deref().filter(|p| !p.trim().is_empty()) {
+                format!("{} · {p}", t.name)
+            } else {
+                t.name.clone()
+            };
+            let title = t.description.clone().unwrap_or_default();
+            view! {
+                <label class="adi-check" title=title
+                    style="display:inline-flex; align-items:center; gap:var(--space-1); margin:0 var(--space-3) var(--space-1) 0">
+                    <input type="checkbox" prop:checked=checked
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            form.bin_tools.update(|set| {
+                                if on { set.insert(id_toggle.clone()); } else { set.remove(&id_toggle); }
+                            });
+                        } />
+                    <span class="adi-mono">{label}</span>
+                </label>
+            }
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <div class="adi-field adi-field--grow">
+            <label class="adi-field__label">"Tools (this agent's .bin)"</label>
+            <div style="display:flex; flex-wrap:wrap; align-items:center; padding:var(--space-1) 0">
+                {boxes}
+            </div>
+        </div>
     }
     .into_any()
 }

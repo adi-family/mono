@@ -15,6 +15,7 @@ mod projects;
 mod response;
 mod services;
 mod tasks;
+mod tools;
 mod triggers;
 mod workspaces;
 
@@ -30,6 +31,7 @@ pub use projects::*;
 pub use response::{Response, error};
 pub use services::*;
 pub use tasks::*;
+pub use tools::*;
 pub use triggers::*;
 pub use workspaces::*;
 

@@ -366,6 +366,139 @@ pub struct TaskRef {
     pub cascade: bool,
 }
 
+// ---- tools (user CLIs under ~/.adi/mono/tools, run by agents) ------------------------
+
+/// One registered tool, flattened for the wire. A tool is a small CLI an agent runs. It is
+/// either **owned** (its script lives in the store) or **linked** (`path` points at an existing
+/// file). `bin_name` is the `.bin/<name>` shim an agent invokes it by. `archived_at` is `None`
+/// while the tool is active.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolDto {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The script language/interpreter: `sh` or `ts`.
+    pub runtime: String,
+    /// Whether this tool links an existing file on disk (rather than owning a script in the store).
+    #[serde(default)]
+    pub linked: bool,
+    /// The linked target's absolute path, or `None` for an owned tool.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The `.bin/<name>` shim file name an agent runs this tool by.
+    pub bin_name: String,
+    /// The project this tool is filed under (its id), or `None` for a global tool.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Whether this is a built-in **system** tool (an adi-ecosystem CLI). System tools are their
+    /// own category, protected from hard delete, and enabled per-agent like any other tool.
+    #[serde(default)]
+    pub system: bool,
+    pub created_at: u64,
+    #[serde(default)]
+    pub archived_at: Option<u64>,
+}
+
+impl ToolDto {
+    /// Whether the tool is archived (soft-deleted).
+    #[must_use]
+    pub fn is_archived(&self) -> bool {
+        self.archived_at.is_some()
+    }
+}
+
+/// `GET /api/tools` — every registered tool, plus the `.bin` directory agents put on their PATH.
+/// Each mutation endpoint returns a fresh one, so the client refreshes from one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolsState {
+    pub tools: Vec<ToolDto>,
+    /// The absolute path of `~/.adi/mono/tools/.bin` — the directory holding the shims.
+    pub bin_dir: String,
+}
+
+/// Request body creating an **owned** tool — `POST /api/tools/create`. The server generates the
+/// id and writes a starter script (unless `content` seeds it). `name` and `runtime` are required.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewTool {
+    pub name: String,
+    /// The script language: `sh` or `ts`.
+    pub runtime: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The project to file the tool under (its id); blank/omitted saves a global tool.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Seed the new script with this text instead of the runtime template.
+    #[serde(default)]
+    pub content: Option<String>,
+}
+
+/// Request body linking an existing file as a tool — `POST /api/tools/link`. `name` defaults to
+/// the file's stem and `runtime` is inferred from the extension when omitted.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LinkTool {
+    /// The absolute or relative path to an existing sh/ts file (never copied).
+    pub path: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub runtime: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// Request body naming a tool — `POST /api/tools/archive`, `/unarchive`, `/remove`,
+/// `/script/read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRef {
+    pub id: String,
+}
+
+/// `POST /api/tools/script/read` and `/script/write` — a tool's script text. `path` is the
+/// resolved on-disk location (the owned file in the store, or the linked target).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolScript {
+    pub id: String,
+    pub path: String,
+    pub content: String,
+    pub runtime: String,
+}
+
+/// Request body saving a tool's script — `POST /api/tools/script/write`. Owned scripts are
+/// written into the store; a linked tool's target file is written through (the user linked it to
+/// edit it here).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WriteToolScript {
+    pub id: String,
+    pub content: String,
+}
+
+/// Request body running a tool — `POST /api/tools/run`. `args` are forwarded to the script.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunTool {
+    pub id: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
+/// `POST /api/tools/run` — the captured outcome of a one-off run plus the fresh tools state, so
+/// the page refreshes in one round-trip.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolRunResult {
+    pub id: String,
+    /// The process exit code, or `None` if it was killed by a signal.
+    #[serde(default)]
+    pub exit_code: Option<i32>,
+    /// Whether the run exited cleanly (`exit_code == 0`).
+    pub ok: bool,
+    /// The run's combined stdout+stderr.
+    pub output: String,
+    pub state: ToolsState,
+}
+
 // ---- agents (AgentDef definitions under ~/.adi/mono/agents) --------------------------
 
 /// UI/schema metadata for the Agents create/edit form. The backend owns this so adding a
@@ -465,6 +598,11 @@ pub struct AgentDto {
     /// The project this agent is filed under (its id), or `None` for a global agent.
     #[serde(default)]
     pub project: Option<String>,
+    /// The ids of the adi **tools** enabled for this agent (its per-tool checkboxes). Each becomes
+    /// a shim in the agent's own `.bin` at launch. Named `bin_tools` to stay distinct from the LLM
+    /// `--allowed-tools` in `arguments.tools`.
+    #[serde(default)]
+    pub bin_tools: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
@@ -499,6 +637,11 @@ pub struct SaveAgent {
     /// The project to file the agent under (its id); blank/omitted saves a global agent.
     #[serde(default)]
     pub project: Option<String>,
+    /// The ids of the adi **tools** enabled for this agent (its per-tool checkboxes). Each becomes
+    /// a shim in the agent's own `.bin` at launch. Named `bin_tools` to stay distinct from the LLM
+    /// `--allowed-tools`.
+    #[serde(default)]
+    pub bin_tools: Vec<String>,
     /// The agent's previous name when an edit renames it. The manifest is moved first (keeping
     /// `created_at`), then saved under `name`, so no orphan is left behind. Omitted — or equal to
     /// `name` — for a plain create/update.

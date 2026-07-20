@@ -50,6 +50,10 @@ pub(crate) enum AgentsCommand {
         /// The project to file the agent under (its id); omit for a global agent.
         #[arg(long)]
         project: Option<String>,
+        /// An adi tool id to enable for this agent (its own `.bin`). Repeatable; comma-separated
+        /// values are also accepted. Distinct from `--command-scope` (the LLM's allowed tools).
+        #[arg(long = "tool")]
+        tools: Vec<String>,
         /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
@@ -116,6 +120,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             tags,
             starred,
             project,
+            tools,
             arguments,
             json,
         } => {
@@ -145,6 +150,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 tags: clean_tags(tags),
                 starred,
                 project: clean(project),
+                bin_tools: clean_tags(tools),
                 created_at: 0,
                 updated_at: 0,
             };
@@ -242,6 +248,9 @@ fn print_agent(agent: &StoredAgent) {
     }
     if let Some(tools) = arguments.tools.filter(|tools| !tools.trim().is_empty()) {
         println!("  commands: {tools}");
+    }
+    if !agent.manifest.bin_tools.is_empty() {
+        println!("  tools (.bin): {}", agent.manifest.bin_tools.join(", "));
     }
     if !agent.manifest.tags.is_empty() {
         println!("  tags: {}", agent.manifest.tags.join(", "));

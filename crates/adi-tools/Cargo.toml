@@ -1,0 +1,19 @@
+[package]
+name = "adi-tools"
+description = "Register, edit, and run adi tools: user CLIs (sh/ts) created in-store or linked by path, one directory per tool under ~/.adi/mono/tools, each exposed as a .bin/<name> shim agents can run. Pure library."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+adi-config = { workspace = true }
+
+serde = { workspace = true }
+
+uuid = { workspace = true }
+
+[lints]
+workspace = true

@@ -7,6 +7,7 @@ mod dns;
 mod format;
 mod projects;
 mod tasks;
+mod tools;
 mod triggers;
 mod update;
 
@@ -18,6 +19,7 @@ use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::tasks::{TasksCommand, run_tasks};
+use crate::tools::{ToolsCommand, run_tools};
 use crate::triggers::{TriggersCommand, run_triggers};
 use crate::update::{UpdateCommand, run_update};
 
@@ -57,6 +59,11 @@ enum Command {
     Tasks {
         #[command(subcommand)]
         command: TasksCommand,
+    },
+    /// Tool commands: user CLIs (sh/ts) created in-store or linked by path, run by agents.
+    Tools {
+        #[command(subcommand)]
+        command: ToolsCommand,
     },
     /// Agent definition commands.
     Agents {
@@ -98,6 +105,12 @@ fn main() {
         }
         Command::Tasks { command } => {
             if let Err(e) = run_tasks(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Tools { command } => {
+            if let Err(e) = run_tools(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }

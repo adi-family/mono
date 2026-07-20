@@ -16,6 +16,7 @@ name = "adi-agents"
 version = "0.1.0"
 dependencies = [
  "adi-config",
+ "adi-tools",
  "adi-workforce",
  "serde",
  "serde_json",
@@ -31,6 +32,7 @@ dependencies = [
  "adi-ports-manager",
  "adi-projects",
  "adi-tasks",
+ "adi-tools",
  "adi-triggers",
  "adi-webapp-api",
  "anyhow",
@@ -68,6 +70,7 @@ dependencies = [
  "adi-ports-manager",
  "adi-projects",
  "adi-tasks",
+ "adi-tools",
  "adi-triggers",
  "adi-update",
  "serde",
@@ -171,6 +174,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-tools"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "adi-triggers"
 version = "0.1.0"
 dependencies = [
@@ -218,6 +230,7 @@ dependencies = [
  "adi-ports-manager",
  "adi-projects",
  "adi-tasks",
+ "adi-tools",
  "adi-triggers",
  "serde",
  "serde_json",

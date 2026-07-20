@@ -212,6 +212,7 @@ fn submit_setup(state: State, form: MetaForm) {
         tags: Vec::new(),
         starred: false,
         project: None,
+        bin_tools: Vec::new(),
         rename_from: None,
     };
     form.busy.set(true);

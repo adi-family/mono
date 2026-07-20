@@ -39,6 +39,10 @@ pub use adi_hooks::{
 
 pub use adi_tasks::{EffectiveStatus, Error as TasksError, TaskPatch, TaskStatus, TaskView, Tasks};
 
+pub use adi_tools::{
+    Error as ToolsError, Manifest as ToolManifest, RunOutput as ToolRunOutput, Tool, Tools,
+};
+
 pub use adi_triggers::{
     Error as TriggersError, Firing, KIND_BACKGROUND, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS,
     RunState, Trigger, TriggerManifest, Triggers, presets as trigger_presets,

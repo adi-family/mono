@@ -13,6 +13,7 @@ adi-config = { workspace = true }
 
 adi-agents = { workspace = true }
 adi-tasks = { workspace = true }
+adi-tools = { workspace = true }
 adi-triggers = { workspace = true }
 
 # The control-panel (adi-app) runs as a user LaunchAgent on a stable port taken from the

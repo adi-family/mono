@@ -49,6 +49,7 @@ pub(crate) fn launch(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
+    bin_dir: Option<&Path>,
     subdir: &str,
     argv: &[String],
     working_dir: Option<String>,
@@ -72,7 +73,7 @@ pub(crate) fn launch(
     let mut command = Command::new(program);
     command
         .args(command_args)
-        .env("PATH", augmented_path())
+        .env("PATH", augmented_path(bin_dir))
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
@@ -326,8 +327,12 @@ fn signal_group(pid: u32, signal: &str) -> Result<()> {
     }
 }
 
-fn augmented_path() -> String {
+fn augmented_path(bin_dir: Option<&Path>) -> String {
     let mut parts = Vec::new();
+    // The agent's own `.bin` (its enabled tools) comes first, so it runs those tools by name.
+    if let Some(dir) = bin_dir {
+        parts.push(dir.display().to_string());
+    }
     if let Ok(home) = std::env::var("HOME") {
         parts.extend([
             format!("{home}/.local/bin"),
@@ -394,6 +399,7 @@ mod tests {
             &a,
             &sessions,
             &sessions,
+            None,
             "harness",
             &["/bin/sleep".into(), "10".into()],
             None,
@@ -404,6 +410,7 @@ mod tests {
             &a,
             &sessions,
             &sessions,
+            None,
             "harness",
             &["/bin/sleep".into(), "10".into()],
             None,
@@ -457,6 +464,7 @@ mod tests {
             &a,
             &sessions,
             &base,
+            None,
             "harness",
             &["/bin/sh".into(), "-c".into(), "pwd > cwd.txt".into()],
             None,
@@ -514,6 +522,7 @@ mod tests {
             &a,
             &sessions,
             &sessions,
+            None,
             "harness",
             &["/bin/sleep".into(), "10".into()],
             None,

@@ -25,6 +25,7 @@ pub fn launch(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
+    bin_dir: Option<&Path>,
     message: &str,
 ) -> Result<Launch> {
     let (argv, working_dir) = engine_run(&agent.manifest, message)?;
@@ -32,6 +33,7 @@ pub fn launch(
         agent,
         sessions_dir,
         base_dir,
+        bin_dir,
         PROCESS_DIR,
         &argv,
         working_dir,

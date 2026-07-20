@@ -72,6 +72,7 @@ pub(crate) fn agents_panel(
                     tags: Vec::new(),
                     starred: false,
                     project: Some(id),
+                    bin_tools: Vec::new(),
                     // This panel only creates; renaming lives on the Agents page.
                     rename_from: None,
                 };

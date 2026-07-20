@@ -92,7 +92,7 @@ pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn launch(agent: &StoredAgent, base_dir: &Path) -> Result<Launch> {
+pub fn launch(agent: &StoredAgent, base_dir: &Path, bin_dir: Option<&Path>) -> Result<Launch> {
     let argv = engine_argv(&agent.manifest)?;
     let session = session_name(&agent.name);
     if session_exists(&session) {
@@ -106,7 +106,7 @@ pub fn launch(agent: &StoredAgent, base_dir: &Path) -> Result<Launch> {
     // store root (`~/.adi/mono`), threaded in as `base_dir`, so a session opened from the app lands
     // in the ADI store rather than $HOME.
     cmd.args(["-c", &base_dir.to_string_lossy()]);
-    cmd.arg(shell_command(&argv));
+    cmd.arg(shell_command(&argv, bin_dir));
 
     let out = cmd
         .output()
@@ -164,14 +164,20 @@ fn run_tmux(args: &[&str]) -> Result<()> {
     }))
 }
 
-fn shell_command(argv: &[String]) -> String {
+fn shell_command(argv: &[String], bin_dir: Option<&Path>) -> String {
     let engine = argv
         .iter()
         .map(|a| sh_quote(a))
         .collect::<Vec<_>>()
         .join(" ");
+    // Prepend the agent's own `.bin` (its enabled tools) so it can run them by name, ahead of
+    // the standard search dirs. The path lives under the ADI store, which has no shell-special
+    // characters, so it's embedded directly into the double-quoted export.
+    let prefix = bin_dir
+        .map(|d| format!("{}:", d.display()))
+        .unwrap_or_default();
     format!(
-        "export PATH=\"$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
+        "export PATH=\"{prefix}$HOME/.local/bin:$HOME/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
          {engine}; status=$?; \
          if [ \"$status\" -ne 0 ]; then \
          printf '\\n[adi] agent exited with status %s - press enter to close\\n' \"$status\"; \
@@ -236,15 +242,30 @@ mod tests {
 
     #[test]
     fn shell_command_quotes_arguments_for_sh() {
-        let cmd = shell_command(&[
-            "claude".into(),
-            "--append-system-prompt".into(),
-            "don't".into(),
-        ]);
+        let cmd = shell_command(
+            &[
+                "claude".into(),
+                "--append-system-prompt".into(),
+                "don't".into(),
+            ],
+            None,
+        );
         assert!(
             cmd.contains("'claude' '--append-system-prompt' 'don'\\''t'"),
             "{cmd}"
         );
         assert!(cmd.contains("read _"));
+    }
+
+    #[test]
+    fn shell_command_prepends_the_agent_bin_dir_to_path() {
+        let cmd = shell_command(
+            &["claude".into()],
+            Some(Path::new("/store/tools/.agent-bin/solver")),
+        );
+        assert!(
+            cmd.contains("export PATH=\"/store/tools/.agent-bin/solver:$HOME/.local/bin:"),
+            "{cmd}"
+        );
     }
 }

@@ -7,12 +7,13 @@ use adi_webapp_api::types::{
     FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef,
     MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewProject,
     NewProjectHook,
-    NewService, NewTask, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
-    ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse, ReserveResponse, RunAgent,
-    RunRef, SaveAgent, SaveAgentCode, SaveTrigger, StartResult, StartService, StopResult, TaskRef,
-    TasksState, TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts,
-    WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef,
-    WorkspacesRef, WorkspacesState, WriteFile,
+    LinkTool, NewService, NewTask, NewTool, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
+    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
+    ReserveResponse, RunAgent, RunRef, RunTool, SaveAgent, SaveAgentCode, SaveTrigger, StartResult,
+    StartService, StopResult, TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
+    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
+    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
+    WorkspacesState, WriteFile, WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -129,6 +130,46 @@ pub async fn reopen_task(id: String) -> Result<TasksState, String> {
 /// Permanently delete a task; its direct children reparent to its parent. Irreversible.
 pub async fn delete_task(id: String) -> Result<TasksState, String> {
     post("/api/tasks/delete", &TaskRef { id, cascade: false }).await
+}
+
+// Tools: every mutation returns the fresh ToolsState so the page updates in one round-trip.
+
+pub async fn tools() -> Result<ToolsState, String> {
+    get("/api/tools").await
+}
+
+pub async fn create_tool(body: NewTool) -> Result<ToolsState, String> {
+    post("/api/tools/create", &body).await
+}
+
+pub async fn link_tool(body: LinkTool) -> Result<ToolsState, String> {
+    post("/api/tools/link", &body).await
+}
+
+pub async fn archive_tool(id: String) -> Result<ToolsState, String> {
+    post("/api/tools/archive", &ToolRef { id }).await
+}
+
+pub async fn unarchive_tool(id: String) -> Result<ToolsState, String> {
+    post("/api/tools/unarchive", &ToolRef { id }).await
+}
+
+/// Permanently delete a tool; a linked target file is never touched. Irreversible.
+pub async fn remove_tool(id: String) -> Result<ToolsState, String> {
+    post("/api/tools/remove", &ToolRef { id }).await
+}
+
+pub async fn read_tool_script(id: String) -> Result<ToolScript, String> {
+    post("/api/tools/script/read", &ToolRef { id }).await
+}
+
+pub async fn write_tool_script(id: String, content: String) -> Result<ToolScript, String> {
+    post("/api/tools/script/write", &WriteToolScript { id, content }).await
+}
+
+/// Run a tool once and capture its output, plus the fresh tools state.
+pub async fn run_tool(id: String, args: Vec<String>) -> Result<ToolRunResult, String> {
+    post("/api/tools/run", &RunTool { id, args }).await
 }
 
 // Agents: every endpoint returns the fresh AgentsState so the page updates in one round-trip.
