@@ -25,11 +25,18 @@ pub(crate) enum EventsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// List the catalog of platform events you can subscribe to: each name, when it fires, and an
-    /// example of the payload it delivers.
+    /// List the catalog of platform events you can subscribe to: each name, when it fires, and the
+    /// structure of the payload it delivers (a concrete example, or the full JSON Schema with
+    /// `--schema`). Pass a `name` to show just that event.
     Types {
+        /// Show only this exact event (e.g. `adi.tasks.created`); omitted lists them all.
+        name: Option<String>,
+        /// Emit machine-readable JSON — each event as `{name, summary, schema, example}`.
         #[arg(long)]
         json: bool,
+        /// In text mode, also print each payload's full JSON Schema (not just the example).
+        #[arg(long)]
+        schema: bool,
     },
 }
 
@@ -67,8 +74,20 @@ pub(crate) fn run_events(adi: Adi, command: EventsCommand) -> Result<(), String>
                 }
             }
         }
-        EventsCommand::Types { json } => {
-            let types = adi_core::event_catalog();
+        EventsCommand::Types {
+            name,
+            json,
+            schema,
+        } => {
+            let mut types = adi_core::event_catalog();
+            if let Some(name) = &name {
+                types.retain(|e| e.name == name);
+                if types.is_empty() {
+                    return Err(format!(
+                        "Unknown event `{name}`. Run `adi events types` to list them."
+                    ));
+                }
+            }
             if json {
                 let items: Vec<_> = types
                     .iter()
@@ -76,15 +95,24 @@ pub(crate) fn run_events(adi: Adi, command: EventsCommand) -> Result<(), String>
                         serde_json::json!({
                             "name": e.name,
                             "summary": e.summary,
-                            "payload": e.payload,
+                            "schema": e.schema,
+                            "example": e.example,
                         })
                     })
                     .collect();
                 print_json(&items);
             } else {
-                for e in types {
+                for e in &types {
                     println!("{} — {}", e.name, e.summary);
-                    println!("  payload: {}", e.payload);
+                    println!("  example: {}", e.example);
+                    if schema {
+                        let pretty = serde_json::to_string_pretty(&e.schema)
+                            .unwrap_or_else(|_| e.schema.to_string());
+                        // Indent the schema block so it reads under its event.
+                        for line in pretty.lines() {
+                            println!("    {line}");
+                        }
+                    }
                 }
                 println!("\n{}", adi_core::EVENT_ENVELOPE);
             }

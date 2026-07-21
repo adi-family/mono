@@ -28,6 +28,7 @@
 //! ```
 
 mod error;
+mod events;
 mod task;
 
 use std::path::PathBuf;
@@ -35,7 +36,8 @@ use std::path::PathBuf;
 use adi_config::{Config, Module, now_unix};
 
 pub use error::{Error, Result};
-pub use task::{EffectiveStatus, Task, TaskPatch, TaskStatus, TaskView};
+pub use events::event_types;
+pub use task::{EffectiveStatus, Task, TaskDeleted, TaskPatch, TaskStatus, TaskView};
 
 use task::{ParentChange, TasksDoc, clean, descendants, max_num_for_key, project_key, would_cycle};
 
@@ -380,7 +382,7 @@ impl Tasks {
         }
         doc.tasks.remove(idx);
         self.save(&doc)?;
-        self.emit("adi.tasks.deleted", &serde_json::json!({ "id": id }));
+        self.emit("adi.tasks.deleted", &TaskDeleted { id: id.to_string() });
         Ok(())
     }
 }

@@ -38,12 +38,13 @@ pub fn meta(store: &Agents) -> Response {
 }
 
 /// The seed system prompt: the static base plus an **Events** section generated from the live
-/// [`adi_events::catalog`], so the agent's orientation always lists exactly the events the stack
-/// currently publishes (rather than a copy that drifts).
+/// [`adi_agents::event_catalog`], so the agent's orientation always lists exactly the events the
+/// stack currently publishes, each with a concrete example — and points at the reflected JSON
+/// Schema for the exact structure, rather than carrying a hand-written copy that drifts.
 fn default_prompt() -> String {
     let mut events = String::new();
-    for e in adi_events::catalog() {
-        events.push_str(&format!("- `{}` — {}\n", e.name, e.summary));
+    for e in adi_agents::event_catalog() {
+        events.push_str(&format!("- `{}` — {} · example `{}`\n", e.name, e.summary, e.example));
     }
     format!(
         "{DEFAULT_SYSTEM_PROMPT}\n\n\
@@ -52,14 +53,11 @@ The stack publishes platform events — dotted topics like `adi.tasks.created`. 
 (a trigger of kind `event`, on /triggers) subscribes to name patterns — `*` matches one segment, \
 `**` the tail, so `adi.tasks.*` catches every task event — and runs its code block whenever a \
 matching event fires. {envelope} Publish one by hand with `adi events emit <name> [--payload …]` \
-or `POST /api/events/emit`; list the pending queue with `adi events list`, and the full catalog \
-with payload examples with `adi events types` (or GET /api/triggers → `event_types`).\n\n\
+or `POST /api/events/emit`; list the pending queue with `adi events list`. For an event's exact \
+payload structure, read its JSON Schema with `adi events types <name> --schema` (or GET \
+/api/triggers → `event_types[].schema`); `event_types[].example` is a concrete sample.\n\n\
 Events currently published:\n\
-{events}\
-Every `adi.tasks.*` event but `deleted` carries the task view \
-(`{{id,title,status,project,parent,effective,…}}`); `adi.tasks.deleted` carries just \
-`{{\"id\":…}}`. Agent events carry `{{\"agent\":…}}` (plus `message`/`backend`/`pid`/`run_id` for \
-`run.*`).",
+{events}",
         envelope = adi_events::ENVELOPE,
     )
 }

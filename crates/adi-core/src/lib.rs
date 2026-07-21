@@ -24,6 +24,7 @@ pub use adi_agents::arguments::AgentSummaryArguments;
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, Error as AgentsError, Launch, RawAgentArguments,
     SecretAttachment, StoredAgent, StoredAgentManifest, contains_json_null,
+    event_catalog,
 };
 
 pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
@@ -47,7 +48,7 @@ pub use adi_tools::{
 
 pub use adi_events::{
     ENVELOPE as EVENT_ENVELOPE, Error as EventsError, EventRecord, EventType, Events, SpooledEvent,
-    catalog as event_catalog, matches as event_matches,
+    matches as event_matches,
 };
 
 pub use adi_triggers::{

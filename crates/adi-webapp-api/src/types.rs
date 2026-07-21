@@ -910,7 +910,8 @@ pub struct TriggerDto {
 /// `GET /api/triggers` — every registered trigger, sorted by name, plus the editor's
 /// server-owned vocabulary: the kinds, the runtimes, and the preset catalog. Each mutation
 /// endpoint returns a fresh one, so the client refreshes from one round-trip.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Not `Eq`: `event_types` carries `serde_json::Value` schemas, which are `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TriggersState {
     pub triggers: Vec<TriggerDto>,
     pub kinds: Vec<TriggerKindOption>,
@@ -919,21 +920,27 @@ pub struct TriggersState {
     #[serde(default)]
     pub presets: Vec<TriggerPreset>,
     /// The catalog of platform events an `event` trigger can subscribe to — name, when it fires,
-    /// and an example of the JSON payload it delivers. The editor shows these so a subscriber
-    /// knows what to catch and what shape to parse.
+    /// the JSON Schema of the payload it delivers, and a concrete example. The editor shows these
+    /// so a subscriber knows what to catch and exactly what shape to parse.
     #[serde(default)]
     pub event_types: Vec<EventTypeDto>,
 }
 
-/// One entry in the platform's event catalog: a concrete event name, when it fires, and an example
-/// of its `ADI_PAYLOAD` body. Mirrors `adi_events::EventType`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One entry in the platform's event catalog: a concrete event name, when it fires, the JSON Schema
+/// of its `ADI_PAYLOAD` body, and a concrete example instance. Mirrors `adi_events::EventType`; the
+/// `schema` and `example` are reflected/serialized from the exact Rust type emitted at the source,
+/// so they never drift from the real payload. Not `Eq` (the JSON values aren't).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EventTypeDto {
     pub name: String,
     #[serde(default)]
     pub summary: String,
+    /// The payload's JSON Schema — the authoritative structure a subscriber will parse.
     #[serde(default)]
-    pub payload: String,
+    pub schema: serde_json::Value,
+    /// A concrete example payload body (a real serialized instance of the schema's type).
+    #[serde(default)]
+    pub example: serde_json::Value,
 }
 
 /// Request body for `POST /api/triggers/save` — create or update a trigger definition (an
@@ -996,7 +1003,8 @@ pub struct TriggerRef {
 
 /// `POST /api/triggers/fire` — the manual-fire outcome: a human-readable message (the spawned
 /// pid), plus the fresh triggers state so the client refreshes in the same round-trip.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Not `Eq`: it embeds `TriggersState`, whose event schemas are `serde_json::Value` (no `Eq`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TriggerFireResult {
     pub message: String,
     pub state: TriggersState,

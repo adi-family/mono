@@ -17,6 +17,9 @@ adi-events = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `adi.tasks.*` payloads (the task view, the delete stub) derive their JSON Schema, so the
+# event catalog documents exactly what is emitted.
+schemars = { workspace = true }
 
 anyhow = "1"
 

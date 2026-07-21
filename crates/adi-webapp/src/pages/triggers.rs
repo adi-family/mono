@@ -286,10 +286,11 @@ fn event_catalog_view(state: State, form: TriggersForm) -> AnyView {
             let name = e.name;
             let label = name.clone();
             let insert = name.clone();
-            let title = if e.payload.trim().is_empty() {
+            let example = e.example.to_string();
+            let title = if example.is_empty() || example == "null" {
                 e.summary
             } else {
-                format!("{}\npayload: {}", e.summary, e.payload)
+                format!("{}\nexample: {}", e.summary, example)
             };
             view! {
                 <button class="adi-btn" type="button" title=title

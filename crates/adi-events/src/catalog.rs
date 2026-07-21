@@ -1,126 +1,72 @@
-//! The catalog of platform events the ADI stack itself publishes — the answer to "what events
-//! exist and how do I catch them?".
+//! The public description of a platform event — one [`EventType`] per event the ADI stack
+//! publishes — plus the one-sentence [`ENVELOPE`] that says how every event reaches a subscriber.
 //!
-//! Every entry is a concrete event [`name`](EventType::name) (a dotted topic), one line on when it
-//! fires, and a compact example of the JSON [`payload`](EventType::payload). A subscriber names the
-//! event in an event trigger's patterns — verbatim, or with a `*`/`**` wildcard (see
-//! [`matches`](crate::matches)) — and reads the payload from `ADI_PAYLOAD` in its code block.
-//!
-//! This is documentation, kept deliberately next to nothing that produces events: the producers
-//! (the task store, the agent registry, the CLI) each `emit` independently, so this list is a hand-
-//! maintained index of the taxonomy rather than something derived. Keep it in sync when a producer
-//! gains or renames an event.
+//! This low-level bus crate defines the *type* but cannot enumerate the catalog itself: that needs
+//! each producer's payload types (the task view lives in `adi-tasks`, the agent payloads in
+//! `adi-agents`), which sit *above* this crate. The catalog is therefore assembled where every
+//! producer is visible — see [`adi_agents::event_catalog`] — and each entry carries a JSON
+//! [`schema`](EventType::schema) and a concrete [`example`](EventType::example) *derived from the
+//! exact Rust type serialized at the emit site*, so the documented payload can never drift from
+//! what is actually published.
+
+use serde::Serialize;
+use serde_json::Value;
 
 /// One kind of event the platform publishes, for display in the editor, the CLI, and the agent's
-/// system prompt.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// system prompt. A producer builds it from its payload's own Rust type via [`EventType::new`], so
+/// the schema and example are generated, never hand-maintained.
+#[derive(Debug, Clone, PartialEq)]
 pub struct EventType {
-    /// The exact event name published, e.g. `adi.tasks.created`. Also what a subscriber types
-    /// into an event trigger's patterns — verbatim, or with a `*` (one segment) / `**` (the tail)
-    /// wildcard.
+    /// The exact event name published, e.g. `adi.tasks.created`. Also what a subscriber types into
+    /// an event trigger's patterns — verbatim, or with a `*` (one segment) / `**` (the tail)
+    /// wildcard (see [`matches`](crate::matches)).
     pub name: &'static str,
     /// One line on when it fires.
     pub summary: &'static str,
-    /// A compact example of the JSON body delivered to a matching trigger as `ADI_PAYLOAD`.
-    pub payload: &'static str,
+    /// The JSON Schema of the JSON body delivered to a matching trigger as `ADI_PAYLOAD`, generated
+    /// from the Rust type the producer serializes. The authoritative description of the payload's
+    /// structure — this is what a user or agent reads to learn "what shape will I parse?".
+    pub schema: Value,
+    /// A concrete example body: a real instance of that same type, serialized. Never written by
+    /// hand, so it stays in lockstep with [`schema`](Self::schema) and with what is emitted.
+    pub example: Value,
+}
+
+impl EventType {
+    /// Describe an event from its payload type. Pass `schema` as
+    /// `serde_json::to_value(schemars::schema_for!(T))` and `example` as the serialized form of a
+    /// real `T` value — both taken from the producer's own type so the two never diverge.
+    #[must_use]
+    pub fn new(name: &'static str, summary: &'static str, schema: Value, example: Value) -> Self {
+        Self {
+            name,
+            summary,
+            schema,
+            example,
+        }
+    }
+
+    /// Build from a live sample `value` of the payload type: derives the [`example`](Self::example)
+    /// from it while taking the [`schema`](Self::schema) (which needs the concrete type by name, so
+    /// the caller produces it with `schemars::schema_for!`). The most drift-proof entry point — one
+    /// value drives the example.
+    #[must_use]
+    pub fn of<T: Serialize>(
+        name: &'static str,
+        summary: &'static str,
+        schema: Value,
+        value: &T,
+    ) -> Self {
+        Self::new(
+            name,
+            summary,
+            schema,
+            serde_json::to_value(value).unwrap_or(Value::Null),
+        )
+    }
 }
 
 /// How every event reaches a subscribed trigger's code block, in one sentence — reused by the UI
 /// and the agent prompt so the "format" is described in exactly one place.
 pub const ENVELOPE: &str = "Each event reaches a matching event trigger with its name in \
     $ADI_EVENT and its JSON body in $ADI_PAYLOAD (also written to $ADI_PAYLOAD_FILE).";
-
-/// The task view (`adi.tasks.*`, except `deleted`) carries the whole task, flattened, plus its
-/// computed status — the same shape the `/api/tasks` list returns.
-const TASK_VIEW: &str = "{\"id\":\"t1\",\"title\":\"ship it\",\"status\":\"open\",\
-\"project\":null,\"parent\":null,\"tag\":null,\"assignee\":null,\
-\"effective\":\"ready\",\"children_total\":0,\"children_open\":0}";
-
-/// Every event the platform publishes, grouped by producer, in a sensible reading order.
-static CATALOG: &[EventType] = &[
-    // Tasks — the task tree. Every mutation but `deleted` carries the resulting task view.
-    EventType {
-        name: "adi.tasks.created",
-        summary: "A task was created.",
-        payload: TASK_VIEW,
-    },
-    EventType {
-        name: "adi.tasks.updated",
-        summary: "A task's fields (title, details, tag, assignee, parent) were edited.",
-        payload: TASK_VIEW,
-    },
-    EventType {
-        name: "adi.tasks.completed",
-        summary: "A task was marked done.",
-        payload: TASK_VIEW,
-    },
-    EventType {
-        name: "adi.tasks.archived",
-        summary: "A task was archived.",
-        payload: TASK_VIEW,
-    },
-    EventType {
-        name: "adi.tasks.reopened",
-        summary: "A done or archived task was reopened.",
-        payload: TASK_VIEW,
-    },
-    EventType {
-        name: "adi.tasks.deleted",
-        summary: "A task was permanently deleted (only its id survives).",
-        payload: "{\"id\":\"t1\"}",
-    },
-    // Agents — agent definitions and their runs.
-    EventType {
-        name: "adi.agents.saved",
-        summary: "An agent definition was created or updated.",
-        payload: "{\"agent\":\"my-agent\"}",
-    },
-    EventType {
-        name: "adi.agents.deleted",
-        summary: "An agent definition was deleted.",
-        payload: "{\"agent\":\"my-agent\"}",
-    },
-    EventType {
-        name: "adi.agents.run.started",
-        summary: "An agent run was launched.",
-        payload: "{\"agent\":\"my-agent\",\"message\":\"run\",\"backend\":\"process\",\
-\"pid\":1234,\"run_id\":\"r-…\"}",
-    },
-    EventType {
-        name: "adi.agents.run.stopped",
-        summary: "A running agent (or one of its runs) was stopped.",
-        payload: "{\"agent\":\"my-agent\",\"run_id\":\"r-…\"}",
-    },
-];
-
-/// The full event catalog, in reading order.
-#[must_use]
-pub fn catalog() -> &'static [EventType] {
-    CATALOG
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_is_coherent() {
-        assert!(!catalog().is_empty());
-        let mut names: Vec<&str> = catalog().iter().map(|e| e.name).collect();
-        let count = names.len();
-        names.sort_unstable();
-        names.dedup();
-        assert_eq!(names.len(), count, "event names must be unique");
-        for e in catalog() {
-            assert!(!e.summary.is_empty(), "{} needs a summary", e.name);
-            assert!(
-                crate::validate_name(e.name).is_ok(),
-                "{} is not a valid event name",
-                e.name
-            );
-            // Every payload example must be valid JSON — it is shown as "this is what you'll parse".
-            serde_json::from_str::<serde_json::Value>(e.payload)
-                .unwrap_or_else(|e2| panic!("{} has a non-JSON payload example: {e2}", e.name));
-        }
-    }
-}

@@ -70,6 +70,9 @@ clap = { version = "4", features = ["derive"] }
 iroh = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Reflects `#[derive(JsonSchema)]` types into JSON Schema — the source of truth for the payload
+# shape of every platform event (see adi-tasks / adi-agents event catalogs).
+schemars = "1"
 toml = "0.8"
 uuid = { version = "1", features = ["v4"] }
 # Lints applied workspace-wide; member crates opt in with `[lints] workspace = true`.

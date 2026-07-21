@@ -32,6 +32,7 @@ pub mod arguments;
 mod backend;
 mod backends;
 mod error;
+mod events;
 mod run;
 pub mod wasm;
 
@@ -45,6 +46,9 @@ pub use agent::{
 };
 pub use backend::Backend;
 pub use error::{Error, Result};
+pub use events::{
+    AgentDeleted, AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog, event_types,
+};
 pub use run::{
     Launch, Peek, RunInfo, capture_pane, is_runnable, running_sessions, send_keys, session_name,
 };
@@ -176,7 +180,12 @@ impl Agents {
         let stored = manifest.to_stored()?;
         arguments::validate_builtin(&stored)?;
         file.save(&stored)?;
-        self.emit("adi.agents.saved", &serde_json::json!({ "agent": name }));
+        self.emit(
+            "adi.agents.saved",
+            &AgentSaved {
+                agent: name.to_string(),
+            },
+        );
         Ok(Agent {
             name: name.to_string(),
             manifest,
@@ -259,7 +268,7 @@ impl Agents {
         )?;
         self.emit(
             "adi.agents.run.started",
-            &run_started_payload(name, message, &launch),
+            &AgentRunStarted::of(name, message, &launch),
         );
         Ok(launch)
     }
@@ -328,7 +337,10 @@ impl Agents {
         if stopped {
             self.emit(
                 "adi.agents.run.stopped",
-                &serde_json::json!({ "agent": name, "run_id": run_id }),
+                &AgentRunStopped {
+                    agent: name.to_string(),
+                    run_id: Some(run_id.to_string()),
+                },
             );
         }
         Ok(stopped)
@@ -348,7 +360,10 @@ impl Agents {
         if stopped {
             self.emit(
                 "adi.agents.run.stopped",
-                &serde_json::json!({ "agent": name }),
+                &AgentRunStopped {
+                    agent: name.to_string(),
+                    run_id: None,
+                },
             );
         }
         Ok(stopped)
@@ -360,30 +375,14 @@ impl Agents {
         validate_name(name)?;
         let removed = self.config.module(AGENTS_MODULE).remove_manifest(name)?;
         if removed {
-            self.emit("adi.agents.deleted", &serde_json::json!({ "agent": name }));
+            self.emit(
+                "adi.agents.deleted",
+                &AgentDeleted {
+                    agent: name.to_string(),
+                },
+            );
         }
         Ok(removed)
-    }
-}
-
-/// The `adi.agents.run.started` payload for a launched run: the agent, the task it was given, and
-/// the backend-specific handle (a tmux session, or a detached run's pid + run id) so a subscriber
-/// can follow the run it just heard about.
-fn run_started_payload(name: &str, message: &str, launch: &Launch) -> serde_json::Value {
-    match launch {
-        Launch::Tmux { session, .. } => serde_json::json!({
-            "agent": name,
-            "message": message,
-            "backend": "tmux",
-            "session": session,
-        }),
-        Launch::Process { pid, run_id, .. } => serde_json::json!({
-            "agent": name,
-            "message": message,
-            "backend": "process",
-            "pid": pid,
-            "run_id": run_id,
-        }),
     }
 }
 

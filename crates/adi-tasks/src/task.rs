@@ -5,11 +5,12 @@
 
 use std::collections::BTreeMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A task's *stored* lifecycle state — the only status written to disk. Legacy names from the
 /// previous model are accepted on read (via serde aliases) so old `tasks.json` files still load.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     /// Not yet finished (covers legacy `pending` / `in_progress`).
@@ -35,7 +36,7 @@ impl TaskStatus {
 }
 
 /// A task's *computed* status, derived from its stored status and direct children. Never stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum EffectiveStatus {
     /// Open with no open direct child — actionable now.
@@ -62,7 +63,7 @@ impl EffectiveStatus {
 }
 
 /// One tracked unit of work (a node in the task tree).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Task {
     /// Stable id, assigned on creation (e.g. `t1`).
     pub id: String,
@@ -93,7 +94,7 @@ pub struct Task {
 
 /// A task plus its derived fields — the shape every store method returns (never stored). Flattens
 /// all of [`Task`]'s stored fields and adds the computed status and direct-child rollup.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, JsonSchema)]
 pub struct TaskView {
     /// The stored task, inlined.
     #[serde(flatten)]
@@ -135,6 +136,40 @@ impl TaskView {
             .cmp(&other.task.created_at)
             .then_with(|| self.task.id.cmp(&other.task.id))
     }
+
+    /// A representative view for the event catalog's example payload — a plain, ready, childless
+    /// task. Built from real fields (not a hand-written JSON string) so the published example is
+    /// always a valid `TaskView`.
+    #[must_use]
+    pub(crate) fn example() -> Self {
+        Self {
+            task: Task {
+                id: "t1".into(),
+                title: "ship it".into(),
+                details: None,
+                status: TaskStatus::Open,
+                project: None,
+                parent: None,
+                tag: None,
+                assignee: None,
+                created_at: 1_700_000_000,
+                updated_at: 1_700_000_000,
+            },
+            effective: EffectiveStatus::Ready,
+            children_total: 0,
+            children_open: 0,
+        }
+    }
+}
+
+/// The `adi.tasks.deleted` payload: only the id of the removed task — the task itself is gone, so
+/// there is no view to carry.
+// A dedicated type (not an ad-hoc `json!`) so the emitted body and the published JSON Schema come
+// from one definition and can never drift.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct TaskDeleted {
+    /// The id of the task that was deleted.
+    pub id: String,
 }
 
 /// The on-disk document: the id counters plus the task list. `next_id` numbers project-less tasks

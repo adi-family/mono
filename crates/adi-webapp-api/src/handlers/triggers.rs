@@ -66,15 +66,17 @@ fn triggers_state(store: &Triggers) -> Result<TriggersState, TriggerStoreError> 
     })
 }
 
-/// The platform event catalog, straight from the event library so the editor shows a subscriber
-/// exactly which events exist and what payload each delivers.
+/// The platform event catalog — assembled from every producer's own payload types (via
+/// [`adi_agents::event_catalog`]) so the editor shows a subscriber exactly which events exist and,
+/// per event, the JSON Schema and a concrete example of the payload it delivers.
 fn event_types() -> Vec<EventTypeDto> {
-    adi_events::catalog()
-        .iter()
+    adi_agents::event_catalog()
+        .into_iter()
         .map(|e| EventTypeDto {
             name: e.name.into(),
             summary: e.summary.into(),
-            payload: e.payload.into(),
+            schema: e.schema,
+            example: e.example,
         })
         .collect()
 }

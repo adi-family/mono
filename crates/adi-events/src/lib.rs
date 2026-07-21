@@ -48,7 +48,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use adi_config::{Config, now_unix};
 use serde::{Deserialize, Serialize};
 
-pub use catalog::{ENVELOPE, EventType, catalog};
+pub use catalog::{ENVELOPE, EventType};
 
 /// The result type every fallible `adi-events` operation returns.
 pub type Result<T> = std::result::Result<T, Error>;
@@ -275,8 +275,12 @@ fn record_stem(emitted_at: u64) -> String {
 /// Reject an event name that isn't a safe dotted topic: non-empty, every character a letter,
 /// digit, `.`, `-`, or `_`. The rule matters because the name is matched against subscription
 /// patterns and shows up in logs — not because it becomes a path (the record's filename is
-/// generated, never the name itself).
-fn validate_name(name: &str) -> Result<()> {
+/// generated, never the name itself). Public so a producer (or the catalog's coherence test) can
+/// check a name against the same rule the bus enforces on [`Events::emit`].
+///
+/// # Errors
+/// [`Error::InvalidName`] if `name` is empty or holds a character outside `[A-Za-z0-9._-]`.
+pub fn validate_name(name: &str) -> Result<()> {
     if name.is_empty()
         || !name
             .chars()

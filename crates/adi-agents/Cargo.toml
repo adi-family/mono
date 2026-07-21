@@ -16,10 +16,17 @@ adi-workforce = { workspace = true }
 adi-events = { workspace = true }
 # An agent materializes its own `.bin` of enabled tools onto its PATH at launch.
 adi-tools = { workspace = true }
+# Not used at runtime: this crate assembles the *whole* platform event catalog (task events +
+# agent events) in `event_catalog`, so it needs the `adi.tasks.*` payload types + `event_types`.
+# It is the lowest crate that can see every producer's payload type (adi-events sits below both).
+adi-tasks = { workspace = true }
 # A run inherits its agent's resolved secrets (global + the agent's project) as env vars.
 adi-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# `adi.agents.*` payloads derive their JSON Schema; this crate also assembles the full event
+# catalog (task events + agent events), the lowest crate that can see every producer's type.
+schemars = { workspace = true }
 
 [lints]
 workspace = true
