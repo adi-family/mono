@@ -239,20 +239,15 @@ impl Agents {
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        // An agent starts in the ADI mono store root (`~/.adi/mono`) by default, not the launching
-        // daemon's cwd — so a run kicked off from the app lands in the ADI store, not $HOME. An
-        // agent that sets an explicit `working_dir` still overrides this.
+        // Default cwd is the ADI store root (`~/.adi/mono`), not the daemon's cwd or $HOME.
+        // An agent's explicit `working_dir` still overrides this.
         let base_dir = self.config.root().to_path_buf();
-        // Materialize this agent's own `.bin` from its enabled tools and prepend it to the run's
-        // PATH, so it can invoke exactly those tools by name. Best-effort: a sync failure (or an
-        // agent with no tools) just means no extra bin, never a blocked run.
+        // Best-effort: a sync failure (or no tools) just means no extra bin on PATH, never a blocked run.
         let bin_dir = adi_tools::Tools::with_config(self.config.clone())
             .sync_agent_bin(&agent.name, &agent.manifest.bin_tools)
             .ok();
-        // The run inherits only the secrets explicitly attached to this agent (an allowlist),
-        // exported as env vars under their literal names — nothing is pulled in from a scope just
-        // for existing. Resolved against this store's Config, so a test store stays isolated;
-        // best-effort, so a missing or undecryptable secret is skipped, never a blocked run.
+        // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
+        // store's Config (test stores stay isolated). Best-effort: a missing/undecryptable secret is skipped.
         let secret_env = attached_secret_env(&self.config, &agent.manifest.secrets);
         let launch = launch_in(
             &agent,
