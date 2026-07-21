@@ -174,6 +174,7 @@ fn App() -> impl IntoView {
         enabled: RwSignal::new(true),
         extra: RwSignal::new(BTreeMap::new()),
         events: RwSignal::new(String::new()),
+        trigger_on: RwSignal::new(Vec::new()),
         editing: RwSignal::new(None::<String>),
         busy: RwSignal::new(false),
     };

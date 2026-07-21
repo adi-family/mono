@@ -222,6 +222,7 @@ dependencies = [
  "adi-events",
  "adi-secrets",
  "serde",
+ "serde_json",
  "tokio",
  "tracing",
 ]

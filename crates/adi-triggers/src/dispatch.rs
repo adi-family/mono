@@ -144,12 +144,17 @@ impl EventDispatcher {
         };
 
         for ev in spooled.into_iter().take(MAX_PER_TICK) {
+            // The project this event names, read once from its payload — a subscriber restricted by
+            // `trigger_on` fires only for a project in its allowlist (an empty allowlist, the
+            // default, fires for every project).
+            let project = crate::payload_project(ev.record.payload.as_bytes());
             for t in &subscribers {
-                if t.manifest
+                let matches_name = t
+                    .manifest
                     .events
                     .iter()
-                    .any(|pattern| adi_events::matches(pattern, &ev.record.name))
-                {
+                    .any(|pattern| adi_events::matches(pattern, &ev.record.name));
+                if matches_name && t.manifest.allows_project(project.as_deref()) {
                     match self.triggers.fire_event(
                         &t.name,
                         &ev.record.name,
@@ -259,6 +264,55 @@ mod tests {
         assert!(
             store.read_log("on-task").is_none(),
             "the non-matching subscriber must not have fired"
+        );
+
+        dispatcher.stop(Duration::from_secs(2)).await;
+    }
+
+    /// A `trigger_on` allowlist gates delivery by the event payload's `project`: the trigger fires
+    /// for an in-list project, stays silent for one outside the list, and stays silent for an event
+    /// that names no project at all.
+    #[tokio::test]
+    async fn trigger_on_gates_delivery_by_payload_project() {
+        let store = scratch("triggeron");
+        store
+            .save(
+                "on-alpha",
+                TriggerManifest {
+                    kind: KIND_EVENT.into(),
+                    runtime: RUNTIME_SH.into(),
+                    code: "printf '%s' \"$ADI_PAYLOAD\"".into(),
+                    events: vec!["adi.tasks.*".into()],
+                    trigger_on: vec!["alpha".into()],
+                    ..TriggerManifest::default()
+                },
+            )
+            .expect("save");
+        let bus = Events::with_config(store.config().clone());
+        let dispatcher = EventDispatcher::start(store.clone());
+
+        // A task in a different project must not fire it, and neither must one naming no project.
+        bus.emit("adi.tasks.created", r#"{"id":"t1","project":"beta"}"#)
+            .expect("emit beta");
+        bus.emit("adi.tasks.created", r#"{"id":"t2"}"#)
+            .expect("emit none");
+        assert!(
+            wait_until(|| bus.drain().expect("drain").is_empty()).await,
+            "both non-matching events should be consumed"
+        );
+        assert!(
+            store.read_log("on-alpha").is_none(),
+            "a project-restricted trigger must not fire for another project or an unattributed event"
+        );
+
+        // A task in the allowed project fires it, with its payload intact.
+        bus.emit("adi.tasks.created", r#"{"id":"t3","project":"alpha"}"#)
+            .expect("emit alpha");
+        assert!(
+            wait_until(|| store.read_log("on-alpha").as_deref()
+                == Some(r#"{"id":"t3","project":"alpha"}"#))
+            .await,
+            "the trigger should fire for a task in its allowed project"
         );
 
         dispatcher.stop(Duration::from_secs(2)).await;

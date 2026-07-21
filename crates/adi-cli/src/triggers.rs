@@ -58,6 +58,11 @@ pub(crate) enum TriggersCommand {
         /// preset's patterns when omitted.
         #[arg(long = "event")]
         events: Vec<String>,
+        /// Restrict which projects may fire this trigger (a project id). Repeatable. Omit to run
+        /// for every project. For `event`/`webhook` triggers the project is read from the fire's
+        /// payload; a payload naming a project outside this list, or none, is skipped.
+        #[arg(long = "on")]
+        trigger_on: Vec<String>,
         #[arg(long)]
         json: bool,
     },
@@ -140,6 +145,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
             disabled,
             extra,
             events,
+            trigger_on,
             json,
         } => {
             let kind = clean_required("kind", kind)?;
@@ -170,6 +176,7 @@ pub(crate) fn run_triggers(adi: Adi, command: TriggersCommand) -> Result<(), Str
                 // Explicit --event patterns win; otherwise inherit the preset's (an event preset
                 // ships a sensible default like `adi.tasks.*`).
                 events: preset_events(preset, events),
+                trigger_on: clean_trigger_on(trigger_on),
                 created_at: 0,
                 updated_at: 0,
             };
@@ -269,6 +276,19 @@ fn preset_events(
     events
 }
 
+/// The project allowlist to save: each id trimmed, blanks dropped, duplicates removed (order
+/// preserved). An empty result saves an unrestricted trigger — one that fires for every project.
+fn clean_trigger_on(trigger_on: Vec<String>) -> Vec<String> {
+    let mut cleaned: Vec<String> = Vec::new();
+    for id in trigger_on {
+        let id = id.trim().to_string();
+        if !id.is_empty() && !cleaned.contains(&id) {
+            cleaned.push(id);
+        }
+    }
+    cleaned
+}
+
 /// A preset as JSON, for `triggers presets --json`.
 fn preset_json(preset: &adi_core::trigger_presets::Preset) -> serde_json::Value {
     serde_json::json!({
@@ -319,6 +339,9 @@ fn print_trigger(store: &adi_core::Triggers, trigger: &Trigger) {
     }
     if !trigger.manifest.events.is_empty() {
         println!("  events: {}", trigger.manifest.events.join(" · "));
+    }
+    if !trigger.manifest.trigger_on.is_empty() {
+        println!("  runs only for: {}", trigger.manifest.trigger_on.join(" · "));
     }
     if !trigger.manifest.extra.is_empty() {
         let extras: Vec<String> = trigger

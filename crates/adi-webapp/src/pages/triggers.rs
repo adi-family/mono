@@ -48,6 +48,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
         // `extra` through it rather than from a loose signal here.
         extra: _,
         events,
+        trigger_on,
         editing,
         busy,
     } = form;
@@ -106,6 +107,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     project: (!proj.is_empty()).then_some(proj),
                     extra: current_extras(state, form),
                     events: parse_event_patterns(&events.get()),
+                    trigger_on: trigger_on.get(),
                 };
                 editing.set(Some(nm.clone()));
                 apply_triggers(state, Some(busy), format!("Saved trigger “{nm}”."),
@@ -154,6 +156,8 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     </select>
                     {field_hint("shows on that project's page")}
                 </div>
+                {move || matches!(kind.get().as_str(), "event" | "webhook")
+                    .then(|| trigger_on_field(state, form))}
                 <TextField id="trigger-description" label="Description" placeholder="what this trigger does"
                     wide=true field_class="adi-field--grow" value=description />
                 <label class="adi-field adi-field--check">
@@ -323,6 +327,52 @@ fn add_event_pattern(events: RwSignal<String>, name: &str) {
             patterns.push(name.to_string());
         }
         *text = patterns.join("\n");
+    });
+}
+
+/// The project-restriction field for event/webhook triggers: one checkbox per live project,
+/// toggling membership in the `trigger_on` allowlist. None checked = unrestricted (fires for
+/// every project); otherwise the trigger fires only when the fire's payload names a checked
+/// project. Renders nothing until the project list loads.
+fn trigger_on_field(state: State, form: TriggersForm) -> AnyView {
+    let projects = state.projects;
+    let trigger_on = form.trigger_on;
+    view! {
+        <div class="adi-field" style="flex:1 1 100%; min-width:0">
+            <span class="adi-field__label">"Run only for projects"</span>
+            <div class="adi-table__actions" style="display:flex; flex-wrap:wrap; gap:var(--space-3)">
+                {move || projects.get().map(|p| p.projects.into_iter()
+                    .filter(|proj| !proj.is_archived())
+                    .map(|proj| {
+                        let checked_id = proj.id.clone();
+                        let toggle_id = proj.id.clone();
+                        let label = proj.name.clone();
+                        view! {
+                            <label class="adi-field adi-field--check" style="margin:0">
+                                <input type="checkbox"
+                                    prop:checked=move || trigger_on.get().iter().any(|x| *x == checked_id)
+                                    on:change=move |ev| toggle_trigger_on(trigger_on, &toggle_id, event_target_checked(&ev)) />
+                                <span class="adi-field__label">{label}</span>
+                            </label>
+                        }
+                    }).collect::<Vec<_>>()).unwrap_or_default()}
+            </div>
+            {field_hint("none checked = every project · otherwise fires only when the payload names a checked project")}
+        </div>
+    }
+    .into_any()
+}
+
+/// Add or remove a project id from the `trigger_on` allowlist as its checkbox is toggled.
+fn toggle_trigger_on(trigger_on: RwSignal<Vec<String>>, id: &str, on: bool) {
+    trigger_on.update(|list| {
+        if on {
+            if !list.iter().any(|x| x == id) {
+                list.push(id.to_string());
+            }
+        } else {
+            list.retain(|x| x != id);
+        }
     });
 }
 
@@ -628,6 +678,7 @@ fn toggle_trigger(state: State, t: &TriggerDto) {
         project: t.project.clone(),
         extra: t.extra.clone(),
         events: t.events.clone(),
+        trigger_on: t.trigger_on.clone(),
     };
     apply_triggers(
         state,
@@ -711,6 +762,7 @@ fn load_trigger_into_form(form: TriggersForm, t: &TriggerDto) {
     form.enabled.set(t.enabled);
     form.extra.set(t.extra.clone());
     form.events.set(t.events.join("\n"));
+    form.trigger_on.set(t.trigger_on.clone());
     form.editing.set(Some(t.name.clone()));
     scroll_top();
 }
@@ -727,5 +779,6 @@ fn clear_trigger_form(form: TriggersForm) {
     form.enabled.set(true);
     form.extra.set(BTreeMap::new());
     form.events.set(String::new());
+    form.trigger_on.set(Vec::new());
     form.editing.set(None);
 }

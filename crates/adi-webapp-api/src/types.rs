@@ -888,6 +888,10 @@ pub struct TriggerDto {
     /// the other kinds.
     #[serde(default)]
     pub events: Vec<String>,
+    /// Restrict which projects may fire this trigger — an allowlist of project ids read from the
+    /// fire's payload. Empty means unrestricted (fires for every project).
+    #[serde(default)]
+    pub trigger_on: Vec<String>,
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default)]
@@ -970,6 +974,11 @@ pub struct SaveTrigger {
     /// entries are dropped server-side.
     #[serde(default)]
     pub events: Vec<String>,
+    /// Restrict which projects may fire this trigger — an allowlist of project ids read from the
+    /// fire's payload. Blank entries are dropped server-side; an empty list saves an unrestricted
+    /// trigger (fires for every project).
+    #[serde(default)]
+    pub trigger_on: Vec<String>,
 }
 
 /// serde default for [`SaveTrigger::enabled`] — an omitted flag saves an enabled trigger.

@@ -501,6 +501,10 @@ pub(crate) struct TriggersForm {
     /// For an event trigger: the subscription patterns, one per line (`adi.tasks.*`). Held as raw
     /// text and split on save; irrelevant to the other kinds.
     pub(crate) events: RwSignal<String>,
+    /// Restrict which projects may fire this trigger — the checked project ids. Empty means
+    /// unrestricted (fires for every project). For event/webhook triggers the project is read
+    /// from the fire's payload.
+    pub(crate) trigger_on: RwSignal<Vec<String>>,
     pub(crate) editing: RwSignal<Option<String>>,
     pub(crate) busy: RwSignal<bool>,
 }

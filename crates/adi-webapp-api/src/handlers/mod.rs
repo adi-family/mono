@@ -848,6 +848,32 @@ mod tests {
         assert_eq!(v["trigger"], "locked");
     }
 
+    /// A webhook with a `trigger_on` allowlist only fires for a request body naming an allowed
+    /// project; a body naming another project (or none) is refused with a 403.
+    #[test]
+    fn hook_gates_on_trigger_on_project() {
+        let store = temp_triggers();
+        let _ = save_trigger(
+            &store,
+            &inert_supervisor(&store),
+            br#"{"name":"scoped","kind":"webhook","code":"true","trigger_on":["alpha"]}"#,
+        );
+
+        // No project, and the wrong project, are both refused.
+        assert_eq!(hook_trigger(&store, "scoped", "", b"{}").status, 403);
+        assert_eq!(
+            hook_trigger(&store, "scoped", "", br#"{"project":"beta"}"#).status,
+            403
+        );
+        // The allowed project fires it.
+        let Response { status, body } =
+            hook_trigger(&store, "scoped", "", br#"{"project":"alpha"}"#);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["trigger"], "scoped");
+    }
+
     // ---- files -----------------------------------------------------------------------
 
     /// A projects store rooted in an isolated temp dir, with a registered `demo` project whose

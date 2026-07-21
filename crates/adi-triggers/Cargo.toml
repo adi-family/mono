@@ -24,6 +24,8 @@ adi-events = { workspace = true }
 adi-secrets = { workspace = true }
 
 serde = { workspace = true }
+# Reading the `project` a fire's payload names, so a trigger's `trigger_on` allowlist can gate it.
+serde_json = { workspace = true }
 
 tokio = { version = "1", features = ["rt", "process", "time", "sync", "macros"], optional = true }
 tracing = { version = "0.1", optional = true }

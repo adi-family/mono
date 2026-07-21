@@ -40,6 +40,19 @@ fn clean_events(events: Vec<String>) -> Vec<String> {
         .collect()
 }
 
+/// Trim, drop blanks, and dedupe a `trigger_on` project allowlist (preserving order). An empty
+/// result saves an unrestricted trigger.
+fn clean_trigger_on(projects: Vec<String>) -> Vec<String> {
+    let mut cleaned: Vec<String> = Vec::new();
+    for id in projects {
+        let id = id.trim().to_string();
+        if !id.is_empty() && !cleaned.contains(&id) {
+            cleaned.push(id);
+        }
+    }
+    cleaned
+}
+
 /// `GET /api/triggers` — every registered trigger plus the editor's vocabulary. Each mutation
 /// endpoint below returns a fresh [`TriggersState`], so the client refreshes from one round-trip.
 #[must_use]
@@ -103,6 +116,7 @@ pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> R
         project: clean(req.project),
         extra: clean_extra(req.extra),
         events: clean_events(req.events),
+        trigger_on: clean_trigger_on(req.trigger_on),
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -233,6 +247,15 @@ pub fn hook_trigger(store: &Triggers, name: &str, query: &str, payload: &[u8]) -
     {
         return error(403, "bad or missing secret");
     }
+    // A project-restricted hook (`trigger_on`) only fires for a request body that names an allowed
+    // project — read from the body's top-level `project` field, the same gate the event dispatcher
+    // applies to event payloads.
+    if !trigger
+        .manifest
+        .allows_project(adi_triggers::payload_project(payload).as_deref())
+    {
+        return error(403, &format!("hook {name} is not enabled for this project"));
+    }
     match store.fire(&trigger.name, Some(payload)) {
         Ok(_) => ok_json(&HookAck {
             ok: true,
@@ -334,6 +357,7 @@ fn trigger_dto(store: &Triggers, trigger: adi_triggers::Trigger) -> TriggerDto {
         project: m.project,
         extra: m.extra,
         events: m.events,
+        trigger_on: m.trigger_on,
         created_at: m.created_at,
         updated_at: m.updated_at,
         last_fired_at,

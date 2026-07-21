@@ -110,6 +110,16 @@ pub struct TriggerManifest {
     /// concrete name as `ADI_EVENT`. Ignored for the other kinds.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<String>,
+    /// Restrict which projects may fire this trigger — an allowlist of [`adi-projects`] ids read
+    /// from the *fire's payload*. Empty (the default) is unrestricted: the trigger fires for every
+    /// project, exactly as before this field existed. When non-empty, an external source fires the
+    /// trigger only if the event/request payload names a `project` in this list (see
+    /// [`allows_project`](Self::allows_project) and [`payload_project`](crate::payload_project)) —
+    /// a payload naming no project, or one outside the list, is skipped. A manual ▶ Fire is an
+    /// explicit user action and bypasses it, as it does `enabled`. Distinct from
+    /// [`project`](Self::project), which only files *where the trigger is shown*, never gating it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_on: Vec<String>,
     /// When the definition was created, as Unix epoch seconds.
     #[serde(default)]
     pub created_at: u64,
@@ -144,6 +154,18 @@ impl TriggerManifest {
     pub fn is_event(&self) -> bool {
         normalize_kind(&self.kind) == KIND_EVENT
     }
+
+    /// Whether this trigger may fire for `project` — the project an external source read from the
+    /// fire's payload (via [`payload_project`](crate::payload_project)). An empty
+    /// [`trigger_on`](Self::trigger_on) allowlist admits every project (the trigger is
+    /// unrestricted); otherwise the project must be present and listed. A `None` project (the
+    /// payload named none) never satisfies a non-empty allowlist — a restricted trigger stays
+    /// silent rather than firing for an unattributed event.
+    #[must_use]
+    pub fn allows_project(&self, project: Option<&str>) -> bool {
+        self.trigger_on.is_empty()
+            || project.is_some_and(|p| self.trigger_on.iter().any(|allowed| allowed == p))
+    }
 }
 
 impl Default for TriggerManifest {
@@ -160,6 +182,7 @@ impl Default for TriggerManifest {
             project: None,
             extra: BTreeMap::new(),
             events: Vec::new(),
+            trigger_on: Vec::new(),
             created_at: 0,
             updated_at: 0,
         }
@@ -170,6 +193,19 @@ impl Default for TriggerManifest {
 /// manifests written before the flag existed keep firing.
 fn default_enabled() -> bool {
     true
+}
+
+/// The `project` an event or webhook payload names, if any: the top-level `"project"` string of a
+/// JSON body — the field every task/agent event payload carries (a task's `project`, flattened
+/// into its event view). Returns `None` for a non-JSON body, a missing / null / non-string
+/// `project`, or a blank one: a body that names no project. This is the value
+/// [`TriggerManifest::allows_project`] is checked against when a [`trigger_on`](TriggerManifest::trigger_on)
+/// allowlist gates a fire.
+#[must_use]
+pub fn payload_project(payload: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let project = value.get("project")?.as_str()?.trim();
+    (!project.is_empty()).then(|| project.to_string())
 }
 
 /// A registered trigger: its name (the file stem under `triggers/`) plus its loaded
@@ -219,6 +255,39 @@ mod tests {
         assert_eq!(normalize_runtime("sh"), RUNTIME_SH);
         assert_eq!(normalize_runtime("ts"), RUNTIME_TS);
         assert_eq!(normalize_runtime("python"), RUNTIME_SH);
+    }
+
+    /// An empty allowlist admits every project; a populated one admits only its members, and never
+    /// an unattributed (`None`) fire.
+    #[test]
+    fn allows_project_gates_on_the_allowlist() {
+        let mut m = TriggerManifest::default();
+        // Unrestricted: everything passes, including a payload that named no project.
+        assert!(m.allows_project(Some("alpha")));
+        assert!(m.allows_project(None));
+
+        m.trigger_on = vec!["alpha".into(), "beta".into()];
+        assert!(m.allows_project(Some("alpha")));
+        assert!(m.allows_project(Some("beta")));
+        assert!(!m.allows_project(Some("gamma")));
+        // A restricted trigger stays silent for an event that named no project.
+        assert!(!m.allows_project(None));
+    }
+
+    /// `payload_project` pulls the top-level `project` string out of a JSON body, and yields `None`
+    /// for anything that names no usable project.
+    #[test]
+    fn payload_project_reads_the_top_level_project() {
+        assert_eq!(
+            payload_project(br#"{"id":"t1","project":"alpha","title":"x"}"#).as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(payload_project(br#"{"id":"t1"}"#), None);
+        assert_eq!(payload_project(br#"{"project":null}"#), None);
+        assert_eq!(payload_project(br#"{"project":"  "}"#), None);
+        assert_eq!(payload_project(br#"{"project":42}"#), None);
+        assert_eq!(payload_project(b"not json"), None);
+        assert_eq!(payload_project(b""), None);
     }
 
     #[test]

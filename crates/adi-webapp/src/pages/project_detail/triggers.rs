@@ -72,6 +72,8 @@ pub(crate) fn triggers_panel(
                     // The quick project form only creates webhook/background triggers; event
                     // subscriptions are edited on the full Triggers page.
                     events: Vec::new(),
+                    // No project restriction from the quick form — set it on the Triggers page.
+                    trigger_on: Vec::new(),
                 };
                 name.set(String::new());
                 code.set(String::new());
