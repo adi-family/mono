@@ -118,6 +118,12 @@ pub struct TriggerManifest {
     pub updated_at: u64,
 }
 
+impl adi_config::Timestamped for TriggerManifest {
+    fn created_at(&self) -> u64 {
+        self.created_at
+    }
+}
+
 impl TriggerManifest {
     /// Fold the stored `kind`/`runtime` onto the values this build understands. Applied on every
     /// load, so the rest of the crate — and every caller — only ever sees a live kind and runtime.

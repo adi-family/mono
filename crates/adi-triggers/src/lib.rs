@@ -185,11 +185,7 @@ impl Triggers {
         manifest.normalize();
         let file = self.trigger_file(name);
         let now = now_unix();
-        // Preserve the original creation time on edit; stamp a fresh one on first save.
-        manifest.created_at = match file.load() {
-            Ok(existing) if existing.created_at > 0 => existing.created_at,
-            _ => now,
-        };
+        manifest.created_at = file.carried_created_at(now);
         manifest.updated_at = now;
         file.save(&manifest)?;
         Ok(Trigger {

@@ -63,6 +63,29 @@ impl<T: DeserializeOwned> ConfigFile<T> {
     }
 }
 
+/// A manifest persisted through a [`ConfigFile`] that carries upsert timestamps — `created_at` /
+/// `updated_at`, stamped from [`now_unix`](crate::now_unix). Implement it so
+/// [`ConfigFile::carried_created_at`] can read the prior `created_at` and decide whether the next
+/// save is a first write or an edit.
+pub trait Timestamped {
+    /// Unix epoch seconds this record was first saved; `0` before it has ever been saved.
+    fn created_at(&self) -> u64;
+}
+
+impl<T: DeserializeOwned + Timestamped> ConfigFile<T> {
+    /// The `created_at` to carry onto the next save of this file: the value already on disk when
+    /// it is positive (an edit), otherwise `now` (a first save). The single home for the
+    /// preserve-or-init half of the upsert timestamp rule every store shares — pair it with a
+    /// plain `updated_at = now` stamp.
+    #[must_use]
+    pub fn carried_created_at(&self, now: u64) -> u64 {
+        match self.load() {
+            Ok(existing) if existing.created_at() > 0 => existing.created_at(),
+            _ => now,
+        }
+    }
+}
+
 impl<T: DeserializeOwned + Default> ConfigFile<T> {
     /// Load the file, or return `T::default()` if it does not exist. Unlike
     /// [`load_or_create`](Self::load_or_create) this does not write anything.
@@ -179,6 +202,35 @@ mod tests {
         assert!(file.exists(), "load_or_create must persist the default");
 
         assert_eq!(file.load_or_create().expect("reload"), Settings::default());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn carried_created_at_preserves_a_positive_stamp_and_inits_otherwise() {
+        #[derive(Serialize, Deserialize, Default)]
+        struct Stamped {
+            created_at: u64,
+        }
+        impl Timestamped for Stamped {
+            fn created_at(&self) -> u64 {
+                self.created_at
+            }
+        }
+
+        let dir = scratch("carried");
+        let _ = std::fs::remove_dir_all(&dir);
+        let file: ConfigFile<Stamped> = ConfigFile::new(dir.join("m.toml"));
+
+        // No file yet — a first save takes `now`.
+        assert_eq!(file.carried_created_at(100), 100);
+
+        // An existing positive stamp is preserved, ignoring `now`.
+        file.save(&Stamped { created_at: 42 }).expect("save");
+        assert_eq!(file.carried_created_at(100), 42);
+
+        // A never-stamped (`0`) file counts as a first save.
+        file.save(&Stamped { created_at: 0 }).expect("save zero");
+        assert_eq!(file.carried_created_at(100), 100);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

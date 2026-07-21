@@ -51,6 +51,12 @@ pub struct AgentManifest<Args> {
     pub updated_at: u64,
 }
 
+impl<Args> adi_config::Timestamped for AgentManifest<Args> {
+    fn created_at(&self) -> u64 {
+        self.created_at
+    }
+}
+
 /// A manifest paired with its filename-derived name.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Agent<Args> {

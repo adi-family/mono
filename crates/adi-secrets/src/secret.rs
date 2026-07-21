@@ -35,6 +35,12 @@ pub(crate) struct Manifest {
     pub oauth: Option<OAuthMeta>,
 }
 
+impl adi_config::Timestamped for Manifest {
+    fn created_at(&self) -> u64 {
+        self.created_at
+    }
+}
+
 /// The OAuth provenance of a secret's value, stored on disk. Everything here except the
 /// encrypted `refresh_*` is plaintext metadata; the access token lives in the manifest's own
 /// `ciphertext` (it's the secret's value).

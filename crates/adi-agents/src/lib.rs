@@ -171,11 +171,7 @@ impl Agents {
         validate_name(name)?;
         let file = self.agent_file(name);
         let now = now_unix();
-        // Preserve the original creation time on edit; stamp a fresh one on first save.
-        manifest.created_at = match file.load() {
-            Ok(existing) if existing.created_at > 0 => existing.created_at,
-            _ => now,
-        };
+        manifest.created_at = file.carried_created_at(now);
         manifest.updated_at = now;
         let stored = manifest.to_stored()?;
         arguments::validate_builtin(&stored)?;
@@ -675,7 +671,7 @@ mod tests {
             .expect("renamed agent exists");
         assert_eq!(moved.manifest.arguments.model.as_deref(), Some("opus"));
         assert_eq!(moved.manifest.tags, vec!["athz".to_string()]);
-        // The rename is a move, so the agent keeps the age it had before.
+        // A move, so the agent keeps its original age.
         assert_eq!(moved.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
     }
@@ -690,7 +686,6 @@ mod tests {
             store.rename("one", "two"),
             Err(Error::Exists(name)) if name == "two"
         ));
-        // Both survive untouched.
         let two = store.get("two").expect("get two").expect("two exists");
         assert_eq!(two.manifest.backend, "process:codex".into());
         assert_eq!(store.list().expect("list").len(), 2);

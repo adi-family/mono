@@ -111,11 +111,7 @@ impl Secrets {
         let (nonce, ciphertext) = crypto::encrypt(&key, &aad(project, name), value.as_bytes())?;
 
         let now = now_unix();
-        // Preserve the original creation time when overwriting an existing secret.
-        let created_at = file
-            .load()
-            .ok()
-            .map_or(now, |m: Manifest| if m.created_at == 0 { now } else { m.created_at });
+        let created_at = file.carried_created_at(now);
 
         let manifest = Manifest {
             description: clean(description),
@@ -165,10 +161,7 @@ impl Secrets {
         };
 
         let now = now_unix();
-        let created_at = file
-            .load()
-            .ok()
-            .map_or(now, |m: Manifest| if m.created_at == 0 { now } else { m.created_at });
+        let created_at = file.carried_created_at(now);
 
         let manifest = Manifest {
             description: clean(description),
