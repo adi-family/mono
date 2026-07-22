@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::config::ResolvedRoute;
@@ -18,7 +19,9 @@ const MAX_HEAD: usize = 16 * 1024;
 /// So a silent client can't tie up a task forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// The host → upstream routing table, built once at startup and shared across tasks.
+/// The host → upstream routing table. Shared through a [`watch`] channel so the config reloader can
+/// hot-swap it: a service added on disk (with a `proxy.host`) starts routing without a front-door
+/// restart. Each connection snapshots the current table, so an in-flight proxy keeps its own.
 #[derive(Debug)]
 pub struct Router {
     routes: Vec<(String, SocketAddr)>,
@@ -46,12 +49,15 @@ impl Router {
     }
 }
 
-/// Accept loop for one listener; per-connection errors are logged, not returned, until the task is aborted.
-pub async fn serve(listener: TcpListener, router: Arc<Router>) {
+/// Accept loop for one listener; per-connection errors are logged, not returned, until the task is
+/// aborted. Each accepted connection snapshots the *current* routing table from `routes`, so a
+/// hot-swap by the config reloader takes effect on the next connection.
+pub async fn serve(listener: TcpListener, routes: watch::Receiver<Arc<Router>>) {
     loop {
         match listener.accept().await {
             Ok((stream, peer)) => {
-                let router = Arc::clone(&router);
+                // Cheap Arc clone of whatever router is current right now.
+                let router = routes.borrow().clone();
                 tokio::spawn(async move {
                     if let Err(e) = handle(stream, &router).await {
                         debug!(%peer, error = %e, "proxy connection error");

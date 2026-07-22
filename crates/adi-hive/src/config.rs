@@ -409,7 +409,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 // MARK: resolution — from the parsed spec to what the daemon runs
 
 /// One routing rule the proxy enforces: `Host: host` → `upstream`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRoute {
     pub host: String,
     pub upstream: SocketAddr,

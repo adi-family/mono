@@ -16,6 +16,7 @@ use std::time::Duration;
 use config::Hive;
 use proxy::Router;
 use tokio::net::TcpListener;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
@@ -54,7 +55,11 @@ async fn main() -> anyhow::Result<()> {
         warn!(service = %skipped, "not routed: no HTTP port");
     }
     info!(binds = ?resolved.binds, routes = resolved.routes.len(), "starting adi-hive");
-    let router = Arc::new(Router::new(&resolved.routes));
+    // Serve the routing table through a watch channel so the reloader can hot-swap it — a service
+    // added on disk with a `proxy.host` starts routing without a front-door restart (which would
+    // drop `app.adi` and every other proxied host).
+    let (route_tx, route_rx) = watch::channel(Arc::new(Router::new(&resolved.routes)));
+    let mut current_routes = resolved.routes.clone();
 
     // Bind each address independently: a failure (privileged port, or in use) is logged and
     // skipped, not fatal. Only bail if nothing bound at all.
@@ -67,8 +72,7 @@ async fn main() -> anyhow::Result<()> {
                 let local = listener.local_addr().unwrap_or(*addr);
                 info!(%local, "listening");
                 bound.push(local.to_string());
-                let router = Arc::clone(&router);
-                tasks.push(tokio::spawn(proxy::serve(listener, router)));
+                tasks.push(tokio::spawn(proxy::serve(listener, route_rx.clone())));
             }
             Err(e) => {
                 warn!(%addr, error = %e, "could not bind (privileged port needs root, or in use?); skipping");
@@ -79,9 +83,10 @@ async fn main() -> anyhow::Result<()> {
         anyhow::bail!("no proxy address could be bound");
     }
 
-    // Status file sits beside the config, overridable via ADI_HIVE_STATUS_FILE.
+    // Status file sits beside the config, overridable via ADI_HIVE_STATUS_FILE. `bound` is cloned so
+    // it can be re-written with the fresh route count when the table hot-swaps below.
     let status_path = status::resolve_path(path.with_file_name("status.json"));
-    let status = status::Status::new(bound, resolved.routes.len());
+    let status = status::Status::new(bound.clone(), resolved.routes.len());
     match status::write(&status_path, &status) {
         Ok(()) => info!(path = %status_path.display(), "wrote status file"),
         Err(e) => warn!(error = %e, path = %status_path.display(), "could not write status file"),
@@ -101,9 +106,10 @@ async fn main() -> anyhow::Result<()> {
 
     info!("adi-hive ready");
 
-    // Watch the config (and everything it imports) so a service added on disk starts without a
-    // restart — the supervisor reconciles, touching only what actually changed. Routes are still
-    // resolved once at startup: changing a `proxy.host` needs a restart, adding a runner does not.
+    // Watch the config (and everything it imports) so a service added on disk applies without a
+    // restart: the supervisor reconciles runners, and the routing table is hot-swapped when a
+    // `proxy.host` is added/changed/removed — both touch only what actually changed. Only the *bind*
+    // addresses are still fixed at startup, so adding a new front-door bind (rare) needs a restart.
     let mut reload = tokio::time::interval(RELOAD_INTERVAL);
     reload.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Pinned outside the loop so a signal arriving between ticks is never missed.
@@ -121,10 +127,22 @@ async fn main() -> anyhow::Result<()> {
                 break;
             }
             _ = reload.tick() => {
-                if let Some(specs) = reload_runners(&path, &ports_manager, &base_dir) {
+                if let Some((specs, routes)) = reload_config(&path, &ports_manager, &base_dir) {
                     let (started, stopped) = supervisor.reconcile(specs);
                     if started > 0 || stopped > 0 {
-                        info!(started, stopped, total = supervisor.len(), "reloaded config");
+                        info!(started, stopped, total = supervisor.len(), "reloaded runners");
+                    }
+                    // Hot-swap the routing table when the host→upstream set changed, so a service
+                    // added with a domain starts routing on the next connection — no restart, so
+                    // `app.adi` and every other proxied host stay up.
+                    if routes != current_routes {
+                        info!(routes = routes.len(), "routes changed; hot-swapping the proxy table");
+                        route_tx.send_replace(Arc::new(Router::new(&routes)));
+                        let status = status::Status::new(bound.clone(), routes.len());
+                        if let Err(e) = status::write(&status_path, &status) {
+                            warn!(error = %e, "could not update status file after route change");
+                        }
+                        current_routes = routes;
                     }
                 }
             }
@@ -152,28 +170,29 @@ const TERM_TIMEOUT: Duration = Duration::from_secs(20);
 /// adi-hive dependency-free.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Re-read the config and resolve it to the runner set it now describes, or `None` if it could
-/// not be read (a half-written file mid-edit, say) — in which case the caller keeps what it has
-/// rather than tearing every service down over a transient parse error.
-fn reload_runners(
+/// Re-read the config and resolve it to the runners *and* routes it now describes, or `None` if it
+/// could not be read (a half-written file mid-edit, say) — in which case the caller keeps what it
+/// has rather than tearing every service down (or dropping every route) over a transient parse error.
+fn reload_config(
     path: &Path,
     ports_manager: &adi_ports_manager::Ports,
     base_dir: &Path,
-) -> Option<Vec<config::RunnerSpec>> {
+) -> Option<(Vec<config::RunnerSpec>, Vec<config::ResolvedRoute>)> {
     if !path.exists() {
         return None;
     }
     let mut hive = match Hive::load(path) {
         Ok(hive) => hive,
         Err(e) => {
-            warn!(error = %e, "could not reload config; keeping the running services");
+            warn!(error = %e, "could not reload config; keeping the running services and routes");
             return None;
         }
     };
     // A service added since startup has no port yet; leases are idempotent, so re-running this
-    // over unchanged services is a no-op that returns their existing ports.
+    // over unchanged services is a no-op that returns their existing ports. Ports must be allocated
+    // before resolving, or a fresh service would resolve to no upstream.
     hive.allocate_missing_ports(ports_manager);
-    Some(hive.runners(base_dir))
+    Some((hive.runners(base_dir), hive.resolve().routes))
 }
 
 /// How often the self-watch re-checks the binary on disk.
