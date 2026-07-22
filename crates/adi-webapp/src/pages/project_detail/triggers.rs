@@ -4,9 +4,9 @@ use adi_webapp_api::types::{SaveTrigger, TriggersState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::triggers::{status_cell, trigger_actions};
+use crate::pages::triggers::{status_cell, trigger_actions, trigger_toggle_item};
 use crate::state::{Flash, State, TriggersLogView};
-use crate::ui::{TextField, apply_mutation, data_table, fmt_date, placeholder_row};
+use crate::ui::{TextField, apply_mutation, data_table, fmt_date, placeholder_row, row_actions};
 
 /// The project detail page's quick trigger create form (name, kind, code; the project is fixed
 /// to the open project). Full editing — presets, runtimes, settings, enable/disable — lives on
@@ -148,7 +148,8 @@ fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
                     <td>{status_cell(&t)}</td>
                     <td class="adi-mono adi-muted">{fired}</td>
                     <td class="adi-table__actions">
-                        {trigger_actions(state, log, &t)}
+                        {row_actions(state, format!("trigger:{}", t.name),
+                            trigger_actions(state, log, &t), vec![trigger_toggle_item(state, &t)])}
                     </td>
                 </tr>
             }

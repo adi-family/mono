@@ -17,6 +17,12 @@ pub enum Error {
     InvalidKey(String),
     Tmux(String),
     Process(String),
+    /// A conversation reply arrived while the previous answer was still being produced — one turn
+    /// runs at a time. Carries a ready-to-show message; maps to HTTP 409.
+    Busy(String),
+    /// An operation doesn't apply to this backend (e.g. replying to a one-shot / interactive
+    /// backend that keeps no conversation). Carries a ready-to-show message; maps to HTTP 400.
+    Unsupported(String),
 }
 
 impl fmt::Display for Error {
@@ -44,6 +50,8 @@ impl fmt::Display for Error {
             ),
             Self::Tmux(msg) => write!(f, "tmux error: {msg}"),
             Self::Process(msg) => write!(f, "process error: {msg}"),
+            // Both carry a ready-to-show sentence, so no prefix is added.
+            Self::Busy(msg) | Self::Unsupported(msg) => write!(f, "{msg}"),
         }
     }
 }
@@ -63,7 +71,9 @@ impl std::error::Error for Error {
             | Self::NotRunning(_)
             | Self::InvalidKey(_)
             | Self::Tmux(_)
-            | Self::Process(_) => None,
+            | Self::Process(_)
+            | Self::Busy(_)
+            | Self::Unsupported(_) => None,
         }
     }
 }

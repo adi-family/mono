@@ -6,6 +6,7 @@ use crate::error::{Error, Result};
 use crate::{StoredAgent, StoredAgentManifest};
 use std::path::{Path, PathBuf};
 
+pub use harness::Turn;
 pub use tmux::{capture_pane, running_sessions, send_keys, session_name};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -194,6 +195,99 @@ pub(crate) fn stop_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str
         }
         _ => Ok(false),
     }
+}
+
+/// Answer into one of an agent's conversations, spawning the next turn. Only harness backends keep
+/// conversations; anything else has no thread to continue.
+pub(crate) fn reply_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    base_dir: &Path,
+    bin_dir: Option<&Path>,
+    conv_id: &str,
+    message: &str,
+    secret_env: &[(String, String)],
+) -> Result<Launch> {
+    match &agent.manifest.backend {
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::reply(agent, sessions_dir, base_dir, bin_dir, conv_id, message, secret_env)
+        }
+        other => Err(Error::Unsupported(format!(
+            "backend {other} isn't answerable — only harness backends keep conversations you can reply to"
+        ))),
+    }
+}
+
+/// Run one `adi` conversation turn — read the transcript, call the provider, return the answer.
+/// See [`crate::Agents::run_adi_turn`]. Only the `adi` harness engine has a loop to run.
+pub(crate) fn adi_turn_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> Result<String> {
+    match &agent.manifest.backend {
+        Backend::HarnessAdi => harness::run_adi_turn(agent, sessions_dir, conv_id),
+        other => Err(Error::Unsupported(format!(
+            "backend {other} has no adi loop to run"
+        ))),
+    }
+}
+
+/// A run's turns, oldest first. For a harness backend this is the answerable conversation; for a
+/// one-shot process run it is the task and its single parsed answer (so both render as the same
+/// progress feed). Interactive (tmux) and wasm backends keep no turn transcript.
+pub(crate) fn transcript_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> Vec<Turn> {
+    match &agent.manifest.backend {
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::transcript(sessions_dir, &agent.name, conv_id, &agent.manifest.backend)
+        }
+        Backend::ProcessClaude | Backend::ProcessCodex => {
+            process_run_turns(agent, sessions_dir, conv_id)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Synthesize a one-shot process run as a two-turn transcript: the task it was launched with (a user
+/// turn) and its parsed output (a single assistant turn, still `pending` while the run is live). This
+/// lets a headless run render through the same progress feed as a conversation.
+fn process_run_turns(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> Vec<Turn> {
+    let task = process::list_runs(sessions_dir, &agent.name)
+        .into_iter()
+        .find(|r| r.run_id == run_id)
+        .map(|r| r.message)
+        .unwrap_or_default();
+    let running = process::is_running(sessions_dir, &agent.name, run_id);
+    let log = read_capped(&process::log_path(sessions_dir, &agent.name, run_id));
+    let content = crate::progress::parse(&agent.manifest.backend, &log);
+
+    let mut turns = Vec::new();
+    if !task.trim().is_empty() {
+        turns.push(Turn {
+            role: "user".to_string(),
+            text: task,
+            at: 0,
+            pending: false,
+            steps: Vec::new(),
+            metrics: None,
+        });
+    }
+    turns.push(Turn {
+        role: "assistant".to_string(),
+        text: content.text,
+        at: 0,
+        pending: running,
+        steps: content.steps,
+        metrics: content.metrics,
+    });
+    turns
+}
+
+/// Read a log file whole, up to the progress parse cap.
+fn read_capped(path: &Path) -> Vec<u8> {
+    use std::io::Read as _;
+    let Ok(file) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let mut buf = Vec::new();
+    let _ = file.take(crate::progress::MAX_PARSE_BYTES).read_to_end(&mut buf);
+    buf
 }
 
 /// Stop the agent wholesale: the tmux session, or every live run of a headless agent.

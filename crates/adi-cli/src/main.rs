@@ -94,6 +94,17 @@ enum Command {
         #[command(subcommand)]
         command: UpdateCommand,
     },
+    /// Internal: run one turn of a `harness:adi` conversation — read its transcript, call the
+    /// provider, and print the answer. Spawned by the app for each `adi` turn; not for direct use.
+    #[command(hide = true)]
+    HarnessTurn {
+        /// The agent whose conversation this turn belongs to.
+        #[arg(long)]
+        agent: String,
+        /// The conversation (run) id to answer into.
+        #[arg(long)]
+        conv: String,
+    },
 }
 
 fn main() {
@@ -154,5 +165,19 @@ fn main() {
             }
         }
         Command::Update { command } => run_update(adi, command),
+        // The answer (or a readable error) is this process's stdout, which the spawning conversation
+        // captures as the turn's output and folds into the transcript. Flush explicitly: a
+        // `process::exit` skips the normal stdout flush.
+        Command::HarnessTurn { agent, conv } => {
+            use std::io::Write as _;
+            let (text, code) = match adi.agents().run_adi_turn(&agent, &conv) {
+                Ok(answer) => (answer, 0),
+                Err(e) => (format!("⚠ adi loop error: {e}"), 1),
+            };
+            let mut out = std::io::stdout();
+            let _ = out.write_all(text.as_bytes());
+            let _ = out.flush();
+            std::process::exit(code);
+        }
     }
 }

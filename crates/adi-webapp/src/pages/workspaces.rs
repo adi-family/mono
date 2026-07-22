@@ -11,7 +11,9 @@ use crate::fetch;
 use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
-use crate::ui::{TextField, code_editor, data_table, fmt_date, placeholder_row};
+use crate::ui::{
+    TextField, code_editor, confirm, data_table, fmt_date, menu_item, placeholder_row, row_actions,
+};
 
 /// A hook's path inside the project, as the file API sees it.
 fn hook_rel_path(name: &str) -> String {
@@ -60,8 +62,6 @@ pub(crate) fn workspaces_panel(
         local,
         busy,
     } = form;
-    // The two-step unregister confirmation: `Some(name)` after the first click.
-    let confirm_remove = RwSignal::new(None::<String>);
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
@@ -70,7 +70,7 @@ pub(crate) fn workspaces_panel(
                 <span class="adi-spacer"></span>
                 {move || initialize_button(state, form)}
             </div>
-            {data_table(&["Name", "Path", "Kind", "Status", "Created", ""], move || workspace_rows(state, confirm_remove, term))}
+            {data_table(&["Name", "Path", "Kind", "Status", "Created", ""], move || workspace_rows(state, term))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_workspace(state, form);
@@ -128,12 +128,9 @@ pub(crate) fn workspaces_panel(
     .into_any()
 }
 
-/// Rows for the workspaces table, with Terminal and a two-step Unregister action.
-fn workspace_rows(
-    state: State,
-    confirm_remove: RwSignal<Option<String>>,
-    term: TermWatch,
-) -> AnyView {
+/// Rows for the workspaces table: **⌨ Terminal** inline (when the directory exists), with the
+/// Unregister action in the kebab (behind a confirm; files stay on disk).
+fn workspace_rows(state: State, term: TermWatch) -> AnyView {
     let Some(snapshot) = current_snapshot(state) else {
         return placeholder_row("6", "Loading…");
     };
@@ -169,12 +166,22 @@ fn workspace_rows(
             } else {
                 "—".to_string()
             };
-            let label_name = w.name.clone();
-            let click_name = w.name.clone();
+            let del_name = w.name.clone();
+            let del_display = w.name.clone();
             let term_name = w.name.clone();
             // A terminal needs the directory on disk: ready always has it, local links do
             // by definition; a creating/failed workspace has nothing to open a shell in.
             let can_term = matches!(w.status.as_str(), "ready" | "local");
+            let terminal = can_term.then(|| view! {
+                <button class="adi-btn adi-btn--link" title="open a tmux terminal in this directory"
+                    on:click=move |_| open_terminal(state, term, term_name.clone())>"⌨ Terminal"</button>
+            });
+            let unregister = menu_item(state, "Unregister", true, move || {
+                if !confirm(&format!("Unregister workspace {del_display}? Files stay on disk.")) {
+                    return;
+                }
+                remove_workspace(state, del_name.clone());
+            });
             view! {
                 <tr>
                     <td>
@@ -193,27 +200,7 @@ fn workspace_rows(
                     </td>
                     <td class="adi-mono adi-muted">{created}</td>
                     <td class="adi-table__actions">
-                        {can_term.then(|| view! {
-                            <button class="adi-btn adi-btn--link" title="open a tmux terminal in this directory"
-                                on:click=move |_| open_terminal(state, term, term_name.clone())>"⌨ Terminal"</button>
-                            " "
-                        })}
-                        <button class="adi-btn adi-btn--link"
-                            title="unregister only — files stay on disk"
-                            on:click=move |_| {
-                                if confirm_remove.get_untracked().as_deref() == Some(click_name.as_str()) {
-                                    confirm_remove.set(None);
-                                    remove_workspace(state, click_name.clone());
-                                } else {
-                                    confirm_remove.set(Some(click_name.clone()));
-                                }
-                            }>
-                            {move || if confirm_remove.get().as_deref() == Some(label_name.as_str()) {
-                                "Confirm unregister?"
-                            } else {
-                                "Unregister"
-                            }}
-                        </button>
+                        {row_actions(state, format!("workspace:{}", w.name), terminal, vec![unregister])}
                     </td>
                 </tr>
             }
@@ -264,25 +251,28 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
                     <td><span class="adi-tstatus" data-status=status_data>{status_label}</span></td>
                     <td class="adi-mono adi-muted">{ran}</td>
                     <td class="adi-table__actions">
-                        {if lifecycle {
-                            view! {
-                                <span class="adi-muted" style="font-size:var(--text-sm)"
-                                    title="lifecycle hooks run when a workspace is created — use Add workspace">
-                                    "via Add workspace"
-                                </span>
-                            }.into_any()
-                        } else {
-                            view! {
-                                <button class="adi-btn adi-btn--link" title="run the hook now, detached"
-                                    on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
-                            }.into_any()
-                        }}
-                        " "
-                        <button class="adi-btn adi-btn--link" title="show the last run's output"
-                            on:click=move |_| open_hook_log(state, log, log_name.clone())>"Log"</button>
-                        " "
-                        <button class="adi-btn adi-btn--link" title="open the script in the hook editor"
-                            on:click=move |_| open_hook_editor(state, editor, edit_name.clone())>"Edit"</button>
+                        {
+                            // ▶ Run inline for a runnable hook (a lifecycle hook shows why it can't
+                            // be run by hand instead); Log + Edit live in the kebab.
+                            let inline = if lifecycle {
+                                view! {
+                                    <span class="adi-muted" style="font-size:var(--text-sm)"
+                                        title="lifecycle hooks run when a workspace is created — use Add workspace">
+                                        "via Add workspace"
+                                    </span>
+                                }.into_any()
+                            } else {
+                                view! {
+                                    <button class="adi-btn adi-btn--link" title="run the hook now, detached"
+                                        on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
+                                }.into_any()
+                            };
+                            let items = vec![
+                                menu_item(state, "Log", false, move || open_hook_log(state, log, log_name.clone())),
+                                menu_item(state, "Edit", false, move || open_hook_editor(state, editor, edit_name.clone())),
+                            ];
+                            row_actions(state, format!("hook:{}", h.name), inline, items)
+                        }
                     </td>
                 </tr>
             }

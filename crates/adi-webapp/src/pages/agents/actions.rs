@@ -6,15 +6,16 @@
 //! own log, several may be live at once, and the live view is a browsable run history plus a task
 //! composer — never a shared, overwritten slot.
 
-use adi_webapp_api::types::{AgentDto, AgentRunInfo, AgentsState};
+use adi_webapp_api::types::{
+    AgentDto, AgentRunInfo, AgentStep, AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{AgentsWatch, Flash, State};
-use crate::ui::{apply_mutation, code_viewer, data_table};
+use crate::ui::{apply_mutation, data_table};
 
 use super::send_bar;
 
@@ -27,13 +28,19 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
     let show_run = a.runnable && !a.running;
     let running = a.running;
     let interactive = a.executor == "tmux";
+    // Harness backends keep answerable conversations; the run controls read as a chat there.
+    let answerable = a.executor == "harness";
     let stop_title = if interactive {
         "kill the tmux session"
+    } else if answerable {
+        "stop the current answer of every live conversation"
     } else {
         "stop every live run"
     };
     let view_title = if interactive {
         "watch the live tmux session"
+    } else if answerable {
+        "open this agent's conversations"
     } else {
         "browse this agent's runs"
     };
@@ -56,6 +63,13 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
                 view! {
                     <button class="adi-btn adi-btn--link" title="start an interactive tmux session"
                         on:click=move |_| run_now(state, run_name.clone())>"▶ Run"</button>
+                    " "
+                }
+                .into_any()
+            } else if answerable {
+                view! {
+                    <button class="adi-btn adi-btn--link" title="start a conversation you can answer"
+                        on:click=move |_| open_watch(watch, run_name.clone(), false)>"▶ Chat…"</button>
                     " "
                 }
                 .into_any()
@@ -158,17 +172,22 @@ fn open_watch(watch: AgentsWatch, name: String, interactive: bool) {
     watch.log.set(String::new());
     watch.run_id.set(None);
     watch.runs.set(Vec::new());
+    // Reset until the first history poll reports whether this backend keeps answerable conversations.
+    watch.answerable.set(false);
+    watch.reply.set(String::new());
     watch.interactive.set(interactive);
     watch.name.set(Some(name));
     poll_watch(watch);
     scroll_top();
 }
 
-/// Select a run of a headless agent to view its log. Clears the previous run's tail so the viewer
-/// doesn't briefly show it before the first poll of the newly selected run lands.
+/// Select a run of a headless agent to view its log (or, for a harness backend, its conversation).
+/// Clears the previous run's tail and reply draft so nothing bleeds across before the first poll of
+/// the newly selected run lands.
 fn select_run(watch: AgentsWatch, run_id: String) {
     watch.peek.set(None);
     watch.log.set(String::new());
+    watch.reply.set(String::new());
     watch.run_id.set(Some(run_id));
     poll_watch(watch);
 }
@@ -180,6 +199,7 @@ fn close_run_view(watch: AgentsWatch) {
     watch.run_id.set(None);
     watch.peek.set(None);
     watch.log.set(String::new());
+    watch.reply.set(String::new());
 }
 
 /// Refresh the open live view. The shell calls this every second; it no-ops while closed. For an
@@ -206,9 +226,14 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
         spawn_local(async move {
             if let Ok(runs) = fetch::agent_runs(name.clone()).await
                 && watch.name.get_untracked().as_deref() == Some(name.as_str())
-                && watch.runs.get_untracked() != runs.runs
             {
-                watch.runs.set(runs.runs);
+                // Whether these runs are answerable conversations — drives the chat vs. log view.
+                if watch.answerable.get_untracked() != runs.answerable {
+                    watch.answerable.set(runs.answerable);
+                }
+                if watch.runs.get_untracked() != runs.runs {
+                    watch.runs.set(runs.runs);
+                }
             }
         });
     }
@@ -284,11 +309,18 @@ fn tmux_live_view(state: State, watch: AgentsWatch, name: String) -> AnyView {
 /// gated on real change), so a live run's log grows in place without rebuilding — and so tearing —
 /// the expanded viewer.
 fn runs_panel(state: State, watch: AgentsWatch, name: String) -> AnyView {
+    let title_name = name;
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
-                <h2 class="adi-panel__title">{format!("Runs — {name}")}</h2>
-                <span class="adi-chip adi-mono" title="runs in history">
+                <h2 class="adi-panel__title">
+                    {move || if watch.answerable.get() {
+                        format!("Chats — {title_name}")
+                    } else {
+                        format!("Runs — {title_name}")
+                    }}
+                </h2>
+                <span class="adi-chip adi-mono" title="conversations in history">
                     {move || watch.runs.get().len().to_string()}
                 </span>
                 <span class="adi-spacer"></span>
@@ -307,50 +339,283 @@ fn runs_panel(state: State, watch: AgentsWatch, name: String) -> AnyView {
 /// a run is added or stops, or the viewed run changes — never for log growth.
 fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
     let runs = watch.runs.get();
+    // Read here so the list re-renders (labels, headers, empty text) when the backend's kind lands.
+    let answerable = watch.answerable.get();
     if runs.is_empty() {
-        return view! {
-            <div class="adi-empty">"No runs yet — type a task above and press Run."</div>
-        }
-        .into_any();
+        let msg = if answerable {
+            "No conversations yet — type a message above to start one."
+        } else {
+            "No runs yet — type a task above and press Run."
+        };
+        return view! { <div class="adi-empty">{msg}</div> }.into_any();
     }
     let selected = watch.run_id.get();
     let mut rows: Vec<AnyView> = Vec::with_capacity(runs.len() + 1);
     for r in &runs {
         let is_selected = selected.as_deref() == Some(r.run_id.as_str());
-        rows.push(run_row(state, watch, r, selected.as_deref()));
-        // The log opens as a detail row right beneath the run it belongs to.
+        rows.push(run_row(state, watch, r, selected.as_deref(), answerable));
+        // The log / chat opens as a detail row right beneath the run it belongs to.
         if is_selected {
-            rows.push(run_detail_row(watch, r.run_id.clone()));
+            rows.push(run_detail_row(state, watch, r.run_id.clone(), answerable));
         }
     }
-    data_table(&["When", "Status", "Task", ""], rows).into_any()
+    let headers: &'static [&'static str] = if answerable {
+        &["When", "Status", "Conversation", ""]
+    } else {
+        &["When", "Status", "Task", ""]
+    };
+    data_table(headers, rows).into_any()
 }
 
 /// The expanded log for the selected run: a full-width table row directly under it, holding the run
 /// header (id, the `tail -f` hint, a Close) and the inline viewer that follows the tail. Built once
 /// per selected run — the log merely growing updates the bound `log` signal in place rather than
 /// rebuilding this row, so the follow-scroll is never reset.
-fn run_detail_row(watch: AgentsWatch, run_id: String) -> AnyView {
+fn run_detail_row(state: State, watch: AgentsWatch, run_id: String, answerable: bool) -> AnyView {
+    // Conversations read as a chat; one-shot runs as a progress feed of the same shape.
+    let title = if answerable { "\u{25A4} Chat" } else { "\u{25A4} Run" };
     view! {
         <tr class="adi-runlog">
             <td class="adi-runlog__cell" colspan="4">
-                // A titled, bordered terminal card — obviously a log console, not another grey row.
+                // A titled, bordered card — obviously a console/chat, not another grey row.
                 <div class="adi-runlog__card">
                     <div class="adi-runlog__bar">
-                        <span class="adi-runlog__title">"\u{25A4} Log"</span>
+                        <span class="adi-runlog__title">{title}</span>
                         <span class="adi-runlog__run adi-mono">{run_id}</span>
                         <span class="adi-spacer"></span>
+                        // The `tail -f` hint stays available for following the raw log by hand.
                         {move || run_log_status(watch)}
-                        <button class="adi-runlog__close" type="button" title="close this log"
+                        <button class="adi-runlog__close" type="button" title="close this"
                             on:click=move |_| close_run_view(watch)>"\u{2715} Close"</button>
                     </div>
-                    {move || watch.log.get().is_empty().then(|| run_log_empty(watch))}
-                    {code_viewer(move || Lang::None, watch.log, "", "run-log")}
+                    {feed_view(state, watch, answerable)}
                 </div>
             </td>
         </tr>
     }
     .into_any()
+}
+
+/// The progress feed under a selected run: the turns (each with its tool/thinking steps and metrics)
+/// which the poll refreshes as they stream in — plus, for answerable backends, the reply box.
+fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
+    view! {
+        {move || chat_transcript(watch)}
+        {answerable.then(|| reply_bar(state, watch))}
+    }
+    .into_any()
+}
+
+/// Render the transcript as stacked bubbles, or a placeholder while the first turn is still coming.
+fn chat_transcript(watch: AgentsWatch) -> AnyView {
+    let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
+    if turns.is_empty() {
+        let msg = match watch.peek.get() {
+            None => "Loading…",
+            Some(p) if p.running => "Working…",
+            Some(_) => "No output.",
+        };
+        return view! { <div class="adi-chat__empty">{msg}</div> }.into_any();
+    }
+    let bubbles = turns.into_iter().map(chat_bubble).collect::<Vec<_>>();
+    view! { <div class="adi-chat">{bubbles}</div> }.into_any()
+}
+
+/// One message bubble: the speaker on one side (agent) or the other (you). An assistant turn shows,
+/// in order, its activity feed (tool calls + thinking), the answer text, then a metrics footer. The
+/// still-streaming answer is tagged and, while empty, shows a typing ellipsis.
+fn chat_bubble(turn: AgentTurn) -> AnyView {
+    let is_user = turn.role == "user";
+    let class = if is_user {
+        "adi-chat__turn adi-chat__turn--user"
+    } else {
+        "adi-chat__turn adi-chat__turn--agent"
+    };
+    let who = if is_user { "you" } else { "agent" };
+    let pending = turn.pending;
+    let errored = turn.metrics.as_ref().is_some_and(|m| m.is_error);
+    let has_body = !turn.text.trim().is_empty() || !turn.steps.is_empty();
+    let text = if pending && !has_body {
+        "\u{2026}".to_string()
+    } else {
+        turn.text
+    };
+    let steps = turn.steps;
+    view! {
+        <div class=class data-error=errored.then_some("1")>
+            <div class="adi-chat__role">
+                {who}
+                {pending.then(|| view! { <span class="adi-chat__typing">" · answering…"</span> })}
+            </div>
+            {(!steps.is_empty()).then(|| steps_view(steps))}
+            {(!text.trim().is_empty()).then(|| view! { <pre class="adi-chat__text">{text}</pre> })}
+            {turn.metrics.map(metrics_view)}
+        </div>
+    }
+    .into_any()
+}
+
+/// The activity feed of an assistant turn: one expandable row per tool call / thinking block.
+fn steps_view(steps: Vec<AgentStep>) -> AnyView {
+    let rows = steps.into_iter().map(step_row).collect::<Vec<_>>();
+    view! { <div class="adi-steps">{rows}</div> }.into_any()
+}
+
+/// One activity row. A `<details>` so its arguments/output (or reasoning) expand in place — no JS.
+fn step_row(step: AgentStep) -> AnyView {
+    match step {
+        AgentStep::Thinking { text } => view! {
+            <details class="adi-step adi-step--thinking">
+                <summary class="adi-step__head">
+                    <span class="adi-step__icon">"💭"</span>
+                    <span class="adi-step__name">"thinking"</span>
+                </summary>
+                <pre class="adi-step__detail">{text}</pre>
+            </details>
+        }
+        .into_any(),
+        AgentStep::Tool {
+            name,
+            input,
+            status,
+            output,
+        } => {
+            let (badge, status_attr) = match status {
+                AgentToolStatus::Running => ("\u{27F3}", "running"),
+                AgentToolStatus::Ok => ("\u{2713}", "ok"),
+                AgentToolStatus::Error => ("\u{2717}", "error"),
+            };
+            let arg = truncate_task(&input);
+            let detail = match (input.trim().is_empty(), output.trim().is_empty()) {
+                (true, true) => String::new(),
+                (false, true) => input,
+                (true, false) => output,
+                (false, false) => format!("{input}\n\u{2500}\u{2500}\u{2500}\n{output}"),
+            };
+            view! {
+                <details class="adi-step adi-step--tool" data-status=status_attr>
+                    <summary class="adi-step__head">
+                        <span class="adi-step__icon">"🔧"</span>
+                        <span class="adi-step__name adi-mono">{name}</span>
+                        {(!arg.is_empty()).then(|| view! {
+                            <span class="adi-step__arg adi-mono">{arg}</span>
+                        })}
+                        <span class="adi-step__status">{badge}</span>
+                    </summary>
+                    {(!detail.is_empty()).then(|| view! {
+                        <pre class="adi-step__detail adi-mono">{detail}</pre>
+                    })}
+                </details>
+            }
+            .into_any()
+        }
+    }
+}
+
+/// The metrics footer of a settled turn: tokens · cost · duration, plus any blocked-tool warning.
+fn metrics_view(m: AgentTurnMetrics) -> AnyView {
+    let mut chips: Vec<String> = Vec::new();
+    let tokens = m.input_tokens.unwrap_or(0) + m.output_tokens.unwrap_or(0);
+    if tokens > 0 {
+        chips.push(format!("{} tok", fmt_count(tokens)));
+    }
+    if let Some(micro) = m.cost_micro_usd.filter(|c| *c > 0) {
+        chips.push(fmt_cost(micro));
+    }
+    if let Some(ms) = m.duration_ms.filter(|d| *d > 0) {
+        chips.push(fmt_duration(ms));
+    }
+    let denied = m.permission_denials.len();
+    if chips.is_empty() && denied == 0 {
+        return ().into_any();
+    }
+    view! {
+        <div class="adi-chat__metrics adi-mono">
+            {chips.join(" \u{00B7} ")}
+            {(denied > 0).then(|| view! {
+                <span class="adi-chat__denied">{format!(" \u{00B7} \u{26A0} {denied} blocked")}</span>
+            })}
+        </div>
+    }
+    .into_any()
+}
+
+/// A compact count: `1.2k` past a thousand, else the plain number.
+fn fmt_count(n: u64) -> String {
+    if n >= 1000 {
+        format!("{:.1}k", n as f64 / 1000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+/// Micro-dollars as a short dollar amount (`$0.0195`), trailing zeros trimmed.
+fn fmt_cost(micro: u64) -> String {
+    let dollars = micro as f64 / 1_000_000.0;
+    let s = format!("{dollars:.4}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    format!("${s}")
+}
+
+/// Milliseconds as `850ms` under a second, else `8.6s`.
+fn fmt_duration(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms}ms")
+    } else {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    }
+}
+
+/// The reply box: sends the next turn into the selected conversation. Disabled (and no-ops) while a
+/// turn is still being answered — one turn runs at a time — and while empty.
+fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
+    let answering = move || watch.peek.get().is_some_and(|p| p.running);
+    view! {
+        <form class="adi-form adi-chat__replybar"
+            on:submit=move |ev| {
+                ev.prevent_default();
+                let message = watch.reply.get();
+                if message.trim().is_empty() || answering() {
+                    return;
+                }
+                watch.reply.set(String::new());
+                send_reply(state, watch, message);
+            }>
+            <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
+                placeholder="reply…"
+                prop:value=move || watch.reply.get()
+                on:input=move |ev| watch.reply.set(event_target_value(&ev)) />
+            <button class="adi-btn adi-btn--primary" type="submit"
+                prop:disabled=move || watch.reply.get().trim().is_empty() || answering()>
+                {move || if answering() { "Answering…" } else { "Send" }}
+            </button>
+        </form>
+    }
+}
+
+/// Send the reply box's message as the next turn, applying the returned snapshot at once (so the
+/// question and the streaming answer appear immediately) and resuming the poll. Errors go to flash.
+fn send_reply(state: State, watch: AgentsWatch, message: String) {
+    let Some(name) = watch.name.get_untracked() else {
+        return;
+    };
+    let Some(run_id) = watch.run_id.get_untracked() else {
+        return;
+    };
+    spawn_local(async move {
+        match fetch::reply_to_run(name.clone(), run_id.clone(), message).await {
+            Ok(peek) => {
+                // Only apply if the view is still on this same conversation.
+                if watch.name.get_untracked().as_deref() == Some(name.as_str())
+                    && watch.run_id.get_untracked().as_deref() == Some(run_id.as_str())
+                {
+                    watch.peek.set(Some(peek));
+                    poll_watch(watch);
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
 }
 
 /// The title bar's `tail -f <log>` hint, shown once a snapshot has landed — the human-runnable
@@ -362,26 +627,28 @@ fn run_log_status(watch: AgentsWatch) -> Option<AnyView> {
     })
 }
 
-/// The placeholder inside the (empty) console before any output: waiting while the run is live, or
-/// a plain note once it has finished with nothing to show.
-fn run_log_empty(watch: AgentsWatch) -> AnyView {
-    let msg = match watch.peek.get() {
-        None => "Loading…",
-        Some(p) if p.running => "Running — waiting for output…",
-        Some(_) => "No output yet.",
-    };
-    view! { <div class="adi-runlog__empty">{msg}</div> }.into_any()
-}
-
-/// One run row in the history table: when it started, status, its task, and View / Stop.
-fn run_row(state: State, watch: AgentsWatch, r: &AgentRunInfo, selected: Option<&str>) -> AnyView {
+/// One run row in the history table: when it started, status, its task (or the conversation's first
+/// message), and Open / Stop. For an answerable conversation the status reads "answering" while a
+/// turn is in flight and "idle" when it is waiting for the next message.
+fn run_row(
+    state: State,
+    watch: AgentsWatch,
+    r: &AgentRunInfo,
+    selected: Option<&str>,
+    answerable: bool,
+) -> AnyView {
     let run_id = r.run_id.clone();
     let is_selected = selected == Some(run_id.as_str());
     let running = r.running;
     let when = run_age(r.started_at);
     let task_full = r.message.clone();
     let task_short = truncate_task(&task_full);
-    let status = if running { "● running" } else { "done" };
+    let status = match (answerable, running) {
+        (true, true) => "● answering",
+        (true, false) => "idle",
+        (false, true) => "● running",
+        (false, false) => "done",
+    };
     let view_id = run_id.clone();
     let stop_id = run_id.clone();
     let row_style = if is_selected {
@@ -389,10 +656,20 @@ fn run_row(state: State, watch: AgentsWatch, r: &AgentRunInfo, selected: Option<
     } else {
         ""
     };
-    // The action toggles this row's log: View opens the drawer beneath it, and while open it reads
-    // "● Viewing" and a second click collapses it. Only the drawer carries an explicit "Close", so
-    // there is one thing labelled Close, not two.
-    let view_label = if is_selected { "● Viewing" } else { "View" };
+    // The action toggles this row's detail drawer: Open reveals the chat/log beneath it, and while
+    // open it reads "● Open" and a second click collapses it. Only the drawer carries an explicit
+    // "Close", so there is one thing labelled Close, not two.
+    let open_verb = if answerable { "Open" } else { "View" };
+    let view_label = if is_selected {
+        format!("● {open_verb}")
+    } else {
+        open_verb.to_string()
+    };
+    let stop_title = if answerable {
+        "stop the current answer"
+    } else {
+        "stop this run"
+    };
     view! {
         <tr style=row_style>
             <td class="adi-muted" style="white-space:nowrap">{when}</td>
@@ -407,7 +684,7 @@ fn run_row(state: State, watch: AgentsWatch, r: &AgentRunInfo, selected: Option<
                     }>{view_label}</button>
                 " "
                 {running.then(|| { let stop_id = stop_id.clone(); view! {
-                    <button class="adi-btn adi-btn--link" title="stop this run"
+                    <button class="adi-btn adi-btn--link" title=stop_title
                         on:click=move |_| stop_one_run(state, watch, stop_id.clone())>"Stop"</button>
                 }})}
             </td>
@@ -416,10 +693,18 @@ fn run_row(state: State, watch: AgentsWatch, r: &AgentRunInfo, selected: Option<
     .into_any()
 }
 
-/// The run composer: a task input plus a Run button. A headless run is one `--print` turn seeded by
-/// this prompt, so a task is required — the button stays disabled (and submit no-ops) until one is
-/// typed. Submitting launches a new run and streams its log.
+/// The composer that starts a new run/conversation: a message input plus a Start/Run button. A
+/// message is required — the button stays disabled (and submit no-ops) until one is typed.
+/// Submitting launches it and opens its detail: a streaming log for a one-shot run, or the chat for
+/// an answerable conversation you then reply to.
 fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
+    let placeholder = move || {
+        if watch.answerable.get() {
+            "start a conversation — your first message (required)"
+        } else {
+            "task for a new run (required) — e.g. review the latest commit and summarize it"
+        }
+    };
     view! {
         <form class="adi-form"
             on:submit=move |ev| {
@@ -433,11 +718,13 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 launch_agent(state, watch, name, message);
             }>
             <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
-                placeholder="task for a new run (required) — e.g. review the latest commit and summarize it"
+                placeholder=placeholder
                 prop:value=move || watch.input.get()
                 on:input=move |ev| watch.input.set(event_target_value(&ev)) />
             <button class="adi-btn adi-btn--primary" type="submit"
-                prop:disabled=move || watch.input.get().trim().is_empty()>"▶ Run"</button>
+                prop:disabled=move || watch.input.get().trim().is_empty()>
+                {move || if watch.answerable.get() { "▶ Start" } else { "▶ Run" }}
+            </button>
         </form>
     }
 }

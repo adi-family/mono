@@ -21,9 +21,11 @@ dependencies = [
  "adi-tasks",
  "adi-tools",
  "adi-workforce",
+ "reqwest 0.12.28",
  "schemars",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -4495,7 +4497,9 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "h2",
  "http",
  "http-body",

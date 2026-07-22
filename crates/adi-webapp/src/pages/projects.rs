@@ -8,8 +8,8 @@ use crate::fetch;
 use crate::routing::{Route, open_project};
 use crate::state::{Flash, ProjectsForm, State};
 use crate::ui::{
-    TextField, apply_mutation, confirm, data_table, flash_view, fmt_date, placeholder_row,
-    updated_text,
+    TextField, apply_mutation, confirm, data_table, flash_view, fmt_date, menu_item,
+    placeholder_row, row_actions, updated_text,
 };
 
 /// The Projects page: the registry of project metadata manifests, with a create form and
@@ -178,36 +178,36 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
         .map(|(depth, p)| {
             let archived = p.is_archived();
             let id = p.id.clone();
+            // Archived rows keep Restore inline with Delete in the kebab; a live row's lone Archive
+            // stays inline (no overflow ⇒ `row_actions` drops the kebab).
             let action = {
                 let id = id.clone();
+                let key = format!("project:{id}");
                 if archived {
                     let del_id = id.clone();
-                    view! {
-                        <div style="display:flex; gap:var(--space-2); justify-content:flex-end">
-                            <button class="adi-btn adi-btn--link" on:click=move |_| {
-                                apply_projects(state, None, format!("Restored {id}."),
-                                    fetch::unarchive_project(id.clone()));
-                            }>"Restore"</button>
-                            <button class="adi-btn adi-btn--link" style="color:var(--down)"
-                                on:click=move |_| {
-                                    if !confirm(&format!(
-                                        "Permanently delete project {del_id}? This cannot be undone.")) {
-                                        return;
-                                    }
-                                    apply_projects(state, None, format!("Deleted {del_id}."),
-                                        fetch::remove_project(del_id.clone()));
-                                }>"Delete"</button>
-                        </div>
-                    }
-                    .into_any()
+                    let restore = view! {
+                        <button class="adi-btn adi-btn--link" on:click=move |_| {
+                            apply_projects(state, None, format!("Restored {id}."),
+                                fetch::unarchive_project(id.clone()));
+                        }>"Restore"</button>
+                    };
+                    let delete = menu_item(state, "Delete", true, move || {
+                        if !confirm(&format!(
+                            "Permanently delete project {del_id}? This cannot be undone.")) {
+                            return;
+                        }
+                        apply_projects(state, None, format!("Deleted {del_id}."),
+                            fetch::remove_project(del_id.clone()));
+                    });
+                    row_actions(state, key, restore, vec![delete])
                 } else {
-                    view! {
+                    let archive = view! {
                         <button class="adi-btn adi-btn--link" on:click=move |_| {
                             apply_projects(state, None, format!("Archived {id}."),
                                 fetch::archive_project(id.clone()));
                         }>"Archive"</button>
-                    }
-                    .into_any()
+                    };
+                    row_actions(state, key, archive, Vec::new())
                 }
             };
             // Only the live table carries a Status column; in the archive every row would

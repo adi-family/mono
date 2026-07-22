@@ -26,7 +26,7 @@ static RUN_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// A unique, time-sortable run id: `<unix_millis>-<seq>`. The millis prefix is zero-padded so ids
 /// sort lexicographically by start time; the sequence disambiguates same-millisecond launches.
-fn new_run_id() -> String {
+pub(crate) fn new_run_id() -> String {
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -36,7 +36,7 @@ fn new_run_id() -> String {
 }
 
 /// The unix-millis start time encoded in a run id, or 0 if it can't be parsed.
-fn started_at(run_id: &str) -> u64 {
+pub(crate) fn started_at(run_id: &str) -> u64 {
     run_id
         .split_once('-')
         .and_then(|(ms, _)| ms.parse().ok())
@@ -65,11 +65,40 @@ pub(crate) fn launch(
     let _ = std::fs::write(meta_path(&dir, &run_id), meta.to_string());
 
     let log = log_path_in(&dir, &run_id);
-    let log_file = File::create(&log)?;
+    let pid = spawn_child(&dir, &run_id, &log, base_dir, bin_dir, argv, working_dir.as_deref(), secret_env)?;
+
+    prune_old_runs(&dir);
+
+    Ok(Launch::Process {
+        command: display_command(argv),
+        pid,
+        log,
+        run_id,
+    })
+}
+
+/// Spawn one detached child of a run: `argv` writing its combined stdout+stderr to `log` (created
+/// fresh, so a re-used slot's previous output is replaced), its PID recorded at `<run_id>.pid`, and
+/// a reaper thread that drops the PID file once the child exits. Returns the child PID.
+///
+/// Shared by the one-shot [`launch`] and the harness conversation turns, which spawn a fresh child
+/// into the *same* `run_id` slot for each answer — so this is the single place the detached-child
+/// wiring (secrets, `PATH`, working dir, process group, reaping) lives.
+pub(crate) fn spawn_child(
+    dir: &Path,
+    run_id: &str,
+    log: &Path,
+    base_dir: &Path,
+    bin_dir: Option<&Path>,
+    argv: &[String],
+    working_dir: Option<&str>,
+    secret_env: &[(String, String)],
+) -> Result<u32> {
+    let log_file = File::create(log)?;
     let errlog = log_file.try_clone()?;
     let (program, command_args) = argv
         .split_first()
-        .ok_or_else(|| Error::Launch(format!("{subdir} backend built an empty command")))?;
+        .ok_or_else(|| Error::Launch("backend built an empty command".to_string()))?;
 
     let mut command = Command::new(program);
     command
@@ -94,14 +123,14 @@ pub(crate) fn launch(
         .spawn()
         .map_err(|e| Error::Launch(format!("couldn't spawn {program}: {e}")))?;
     let pid = child.id();
-    let pid_file = pid_path_in(&dir, &run_id);
+    let pid_file = pid_path_in(dir, run_id);
     if let Err(e) = std::fs::write(&pid_file, format!("{pid}\n")) {
         let _ = child.kill();
         return Err(Error::Io(e));
     }
 
     // Long-lived app servers must reap completed children. On exit only the PID file is dropped
-    // (marking the run finished); the log and metadata stay as history.
+    // (marking the run/turn finished); the log and metadata stay as history.
     let reaper_pid_file = pid_file.clone();
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -110,14 +139,7 @@ pub(crate) fn launch(
         }
     });
 
-    prune_old_runs(&dir);
-
-    Ok(Launch::Process {
-        command: display_command(argv),
-        pid,
-        log,
-        run_id,
-    })
+    Ok(pid)
 }
 
 /// Every run of `agent` under `subdir`, newest first.
@@ -235,19 +257,19 @@ pub(crate) fn tail_log(
 
 // ---- paths & bookkeeping -----------------------------------------------------------
 
-fn agent_dir(sessions_dir: &Path, subdir: &str, agent_name: &str) -> PathBuf {
+pub(crate) fn agent_dir(sessions_dir: &Path, subdir: &str, agent_name: &str) -> PathBuf {
     sessions_dir.join(subdir).join(agent_name)
 }
 
-fn log_path_in(dir: &Path, run_id: &str) -> PathBuf {
+pub(crate) fn log_path_in(dir: &Path, run_id: &str) -> PathBuf {
     dir.join(format!("{run_id}.log"))
 }
 
-fn pid_path_in(dir: &Path, run_id: &str) -> PathBuf {
+pub(crate) fn pid_path_in(dir: &Path, run_id: &str) -> PathBuf {
     dir.join(format!("{run_id}.pid"))
 }
 
-fn meta_path(dir: &Path, run_id: &str) -> PathBuf {
+pub(crate) fn meta_path(dir: &Path, run_id: &str) -> PathBuf {
     dir.join(format!("{run_id}.json"))
 }
 
@@ -287,7 +309,7 @@ fn read_meta(dir: &Path, run_id: &str) -> (u64, String) {
 
 /// Keep only the newest `MAX_RUNS` runs, deleting older *finished* runs' files. A run that is somehow
 /// still alive is never pruned.
-fn prune_old_runs(dir: &Path) {
+pub(crate) fn prune_old_runs(dir: &Path) {
     let mut ids = run_ids(dir);
     if ids.len() <= MAX_RUNS {
         return;
@@ -304,11 +326,11 @@ fn prune_old_runs(dir: &Path) {
     }
 }
 
-fn read_pid(path: &Path) -> Option<u32> {
+pub(crate) fn read_pid(path: &Path) -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-fn pid_alive(pid: u32) -> bool {
+pub(crate) fn pid_alive(pid: u32) -> bool {
     Command::new("/bin/kill")
         .args(["-0", &pid.to_string()])
         .stdout(Stdio::null())
@@ -356,7 +378,7 @@ fn augmented_path(bin_dir: Option<&Path>) -> String {
     parts.join(":")
 }
 
-fn display_command(argv: &[String]) -> String {
+pub(crate) fn display_command(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| {
             if arg

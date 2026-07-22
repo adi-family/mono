@@ -24,6 +24,12 @@ adi-tasks = { workspace = true }
 adi-secrets = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# A harness conversation mints a fresh session id (v4 UUID) for the Claude CLI to establish on the
+# first turn and resume on every reply.
+uuid = { workspace = true }
+# The `harness:adi` loop calls a model provider's chat API over HTTP. Blocking client: each turn runs
+# in a spawned `adi-mono harness-turn` child (a sync process), never inside the app server's runtime.
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
 # `adi.agents.*` payloads derive their JSON Schema; this crate also assembles the full event
 # catalog (task events + agent events), the lowest crate that can see every producer's type.
 schemars = { workspace = true }

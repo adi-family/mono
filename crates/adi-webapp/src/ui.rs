@@ -8,13 +8,107 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::highlight::{Lang, highlight};
-use crate::state::{Flash, State};
+use crate::state::{Flash, RowMenu, State};
 
 /// A single full-width placeholder row spanning `colspan` columns — the
 /// `<tr><td class="adi-empty">…</td></tr>` every table body falls back to for its loading, empty,
 /// or error state.
 pub(crate) fn placeholder_row(colspan: &'static str, msg: &str) -> AnyView {
     view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
+}
+
+/// The trailing action controls for a table row: any always-visible `inline` buttons, then — when
+/// `items` is non-empty — a `⋮` kebab that opens an overflow menu holding them (each built with
+/// [`menu_item`], so it closes the menu when chosen). With no items the kebab is dropped and only
+/// `inline` shows. `key` identifies this row's menu and must be unique among the rows on screen
+/// (namespace it per table, e.g. `secret:…`/`tool:…`, so two panels on one page never collide). A
+/// full-viewport scrim behind the open menu makes the next click a dismiss. Shared by every page's
+/// action column, backed by the single [`State::row_menu`] signal (only one menu is ever open), so
+/// this replaces the old per-row `flex-end` button clusters.
+pub(crate) fn row_actions(
+    state: State,
+    key: String,
+    inline: impl IntoView + 'static,
+    items: Vec<AnyView>,
+) -> AnyView {
+    // No overflow actions ⇒ no kebab, no menu — just the inline controls in the shared container.
+    if items.is_empty() {
+        return view! { <div class="adi-rowacts">{inline}</div> }.into_any();
+    }
+    let rm = state.row_menu;
+    let toggle_key = key.clone();
+    let aria_key = key.clone();
+    let scrim_key = key.clone();
+    // The menu and its scrim stay mounted but hidden (display:none) until this row is the open
+    // one — cheaper than rebuilding the menu view on every open, and it keeps each item's click
+    // handler a plain move-closure rather than something rebuildable.
+    view! {
+        <div class="adi-rowacts">
+            {inline}
+            <button class="adi-btn adi-btn--icon-sm" type="button" title="More actions"
+                aria-label="More actions"
+                aria-expanded=move || rm.get().is_some_and(|m| m.key == aria_key).to_string()
+                on:click=move |ev: web_sys::MouseEvent| toggle_row_menu(rm, &toggle_key, &ev)>
+                "\u{22ee}"
+            </button>
+        </div>
+        <div class="adi-menu__scrim"
+            style=move || if rm.get().is_some_and(|m| m.key == scrim_key) { String::new() } else { "display:none".to_string() }
+            on:click=move |_| rm.set(None)
+            on:contextmenu=move |ev: web_sys::MouseEvent| { ev.prevent_default(); rm.set(None); }></div>
+        <div class="adi-menu"
+            style=move || match rm.get() {
+                Some(m) if m.key == key => format!("right:{}px; top:{}px", m.right, m.top),
+                _ => "display:none".to_string(),
+            }>
+            {items}
+        </div>
+    }
+    .into_any()
+}
+
+/// One item in a row's overflow [menu](row_actions): a full-width menu button that closes the menu,
+/// then runs `on_select`. `danger` tints it as destructive (Remove/Delete). Wrap the call in a
+/// `.then(|| …)` to make an item conditional.
+pub(crate) fn menu_item(
+    state: State,
+    label: &str,
+    danger: bool,
+    on_select: impl Fn() + 'static,
+) -> AnyView {
+    let rm = state.row_menu;
+    let class = if danger {
+        "adi-menu__item adi-menu__item--danger"
+    } else {
+        "adi-menu__item"
+    };
+    let label = label.to_string();
+    view! {
+        <button class=class type="button" on:click=move |_| { rm.set(None); on_select(); }>
+            {label}
+        </button>
+    }
+    .into_any()
+}
+
+/// Open (or close, if already this row's) the shared kebab menu for `key`, anchored to the click
+/// point. Anchored from the viewport's right edge so it opens leftward from the right-aligned kebab
+/// and never spills off-screen.
+fn toggle_row_menu(rm: RwSignal<Option<RowMenu>>, key: &str, ev: &web_sys::MouseEvent) {
+    if rm.get_untracked().is_some_and(|m| m.key == key) {
+        rm.set(None);
+        return;
+    }
+    let inner_w = web_sys::window()
+        .and_then(|w| w.inner_width().ok())
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    #[allow(clippy::cast_possible_truncation)]
+    rm.set(Some(RowMenu {
+        key: key.to_string(),
+        right: (inner_w - f64::from(ev.client_x())) as i32,
+        top: ev.client_y(),
+    }));
 }
 
 /// Format an uptime in seconds as `Ns` / `Nm Ss` / `Nh Mm`.

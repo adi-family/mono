@@ -14,8 +14,9 @@ pub enum Backend {
     ProcessCodex,
     /// The `claude` CLI driven headless by ADI's harness (a turn-capped, adi-scoped print run).
     HarnessClaudeSdk,
-    /// ADI's own agentic loop; the model provider is the manifest's `provider` argument. Typed and
-    /// stored today, but not yet runnable — its loop engine doesn't exist.
+    /// ADI's own answering loop; the model provider is the manifest's `provider` argument. Runnable
+    /// once a supported provider (Anthropic, or a local Ollama) is configured — each turn calls that
+    /// provider's chat API over the conversation transcript.
     HarnessAdi,
     Wasm,
     /// A backend this crate doesn't run itself — a plugin backend, or the empty default.

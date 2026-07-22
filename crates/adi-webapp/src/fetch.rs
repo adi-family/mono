@@ -9,7 +9,8 @@ use adi_webapp_api::types::{
     NewProjectHook,
     LinkTool, NewService, NewTask, NewTool, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
-    ReserveResponse, RunAgent, RunRef, RunTool, SaveAgent, SaveAgentCode, SaveTrigger, StartResult,
+    ReplyToRun, ReserveResponse, RunAgent, RunRef, RunTool, SaveAgent, SaveAgentCode, SaveTrigger,
+    StartResult,
     RevealedSecret, SecretRef, SecretsState, SetOAuthSecret, SetSecret, StartService, StopResult,
     TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
@@ -231,9 +232,27 @@ pub async fn agent_runs(name: String) -> Result<AgentRuns, String> {
     post("/api/agents/runs", &AgentRef { name }).await
 }
 
-/// A snapshot of one specific run's log.
+/// A snapshot of one specific run's log (plus the conversation transcript, for harness runs).
 pub async fn peek_run(name: String, run_id: String) -> Result<AgentPeek, String> {
     post("/api/agents/run/peek", &RunRef { name, run_id }).await
+}
+
+/// Answer into one of a harness agent's conversations, spawning the next turn. Returns a fresh
+/// snapshot with the updated transcript (including the streaming answer).
+pub async fn reply_to_run(
+    name: String,
+    run_id: String,
+    message: String,
+) -> Result<AgentPeek, String> {
+    post(
+        "/api/agents/run/reply",
+        &ReplyToRun {
+            name,
+            run_id,
+            message,
+        },
+    )
+    .await
 }
 
 /// Stop one specific run, returning the fresh run history.

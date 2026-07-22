@@ -8,10 +8,11 @@
 @use "mixins" as *;
 
 // ---- layout ------------------------------------------------------------------------
+// The content pane fills its column edge-to-edge, like an editor pane — no centered cap.
+// (The flush editor page still overrides padding/width via `.adi-main--flush`.)
 .adi-container {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 20px 20px 48px;
+  max-width: none;
+  padding: 20px 24px 48px;
 }
 
 .adi-spacer {
@@ -255,6 +256,14 @@
     cursor: pointer;
 
     &:hover { background: var(--surface-2); }
+
+    // A destructive item (e.g. Remove): the one place in the menu the down/danger accent earns
+    // its keep, tinted on hover so the whole row reads as "this deletes something".
+    &--danger {
+      color: var(--down);
+
+      &:hover { background: color-mix(in srgb, var(--down) 12%, transparent); }
+    }
   }
 }
 
@@ -426,6 +435,171 @@ $runlog-dim: #8b93a1;
   color: $runlog-dim;
   font-size: var(--text-sm);
 }
+
+// ---- conversation chat (answerable harness runs) ----------------------------------
+// The transcript inside the run card: a scrollable column of message bubbles. It shares the
+// console card's dark palette so a chat and a log read as the same kind of panel.
+.adi-chat {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 12px;
+  max-height: 460px;
+  overflow: auto;
+}
+
+// One message. Bubbles cap their width and hug their side: the agent on the left, you on the right.
+.adi-chat__turn {
+  max-width: 82%;
+  padding: 7px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, .08);
+}
+
+.adi-chat__turn--agent {
+  align-self: flex-start;
+  background: $runlog-bar;
+}
+
+.adi-chat__turn--user {
+  align-self: flex-end;
+  background: rgba(255, 255, 255, .06);
+}
+
+// The speaker label above the message text.
+.adi-chat__role {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: .02em;
+  color: $runlog-dim;
+  margin-bottom: 3px;
+}
+
+// The "answering…" tag on the still-streaming turn — a soft pulse to show it is live.
+.adi-chat__typing {
+  color: var(--accent);
+  font-weight: 500;
+  animation: adi-chat-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes adi-chat-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .45; }
+}
+
+// The message text: a <pre> so newlines and code survive, wrapping on long lines.
+.adi-chat__text {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  color: $runlog-ink;
+}
+
+// The placeholder shown before the first turn lands.
+.adi-chat__empty {
+  padding: 12px;
+  color: $runlog-dim;
+  font-size: var(--text-sm);
+}
+
+// The reply box, docked at the bottom of the card on its own bar.
+.adi-chat__replybar {
+  gap: var(--space-2);
+  padding: 8px 10px;
+  margin: 0;
+  background: $runlog-bar;
+  border-top: 1px solid rgba(255, 255, 255, .08);
+}
+
+// A turn that ended in error gets a red edge so a failed answer reads at a glance.
+.adi-chat__turn[data-error] {
+  border-color: rgba(240, 110, 110, .5);
+}
+
+// ---- progress feed (tool calls + thinking) inside an assistant turn ----------------
+// One activity per row, above the answer text. Each row is a <details> that expands its args/output.
+.adi-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+
+.adi-step {
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .03);
+  font-size: var(--text-xs);
+}
+
+// The clickable row: icon, name, a peek at the arguments, and a status badge pushed to the right.
+.adi-step__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px 8px;
+  cursor: pointer;
+  list-style: none;
+  color: $runlog-ink;
+
+  &::-webkit-details-marker { display: none; }
+}
+
+.adi-step__icon { flex: none; opacity: .85; }
+
+.adi-step__name { font-weight: 600; flex: none; }
+
+// The argument preview takes the remaining width and truncates — the full text is in the expansion.
+.adi-step__arg {
+  color: $runlog-dim;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+// Status badge colour by outcome; the running one pulses.
+.adi-step__status { flex: none; margin-left: auto; font-weight: 700; }
+
+.adi-step--tool[data-status="ok"] .adi-step__status { color: var(--online); }
+.adi-step--tool[data-status="error"] .adi-step__status { color: #f06e6e; }
+.adi-step--tool[data-status="running"] .adi-step__status {
+  color: var(--accent);
+  animation: adi-chat-pulse 1.2s ease-in-out infinite;
+}
+
+.adi-step--thinking {
+  border-style: dashed;
+  .adi-step__name { color: $runlog-dim; font-weight: 500; font-style: italic; }
+}
+
+// The expanded detail: a scrollable, wrapped block of the tool's args/output (or the reasoning).
+.adi-step__detail {
+  margin: 0;
+  padding: 6px 8px;
+  border-top: 1px solid rgba(255, 255, 255, .06);
+  max-height: 260px;
+  overflow: auto;
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: $runlog-dim;
+}
+
+// The metrics footer under the answer: tokens · cost · duration, muted and small.
+.adi-chat__metrics {
+  margin-top: 6px;
+  font-size: var(--text-xs);
+  color: $runlog-dim;
+}
+
+.adi-chat__denied { color: var(--warn); }
 
 // Token colours. Deliberately few: structure (keys), literals, and comments are what you
 // scan a config for — colouring every operator turns a manifest into confetti.
@@ -812,6 +986,16 @@ $runlog-dim: #8b93a1;
     text-align: right;
     width: 1%;
   }
+}
+
+// The inline action group inside a row's actions cell: the primary button(s) and the `⋮` kebab,
+// on one line, right-aligned. Replaces the ad-hoc `display:flex; justify-content:flex-end` each
+// row used to inline, and never wraps — the overflow lives in the kebab menu, not a second line.
+.adi-rowacts {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-1);
 }
 
 .adi-empty {

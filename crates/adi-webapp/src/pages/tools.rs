@@ -17,8 +17,8 @@ use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, ToolEditor, ToolRunView, ToolsForm};
 use crate::ui::{
-    TextField, apply_mutation, code_editor, code_viewer, confirm, data_table, flash_view,
-    placeholder_row, segmented, updated_text,
+    TextField, apply_mutation, code_editor, code_viewer, confirm, data_table, flash_view, menu_item,
+    placeholder_row, row_actions, segmented, updated_text,
 };
 
 /// The columns of the global tools table (the project panel uses its own, project-free set).
@@ -273,8 +273,9 @@ fn row_view(
 }
 
 /// The trailing actions for a tool row — shared by the global table and a project's panel. Active:
-/// Run (opens the panel and runs with no args) · Edit (opens the script editor) · Archive. Archived:
-/// Restore · Delete (behind a confirm; a linked target file is never touched).
+/// **▶ Run** inline (opens the panel and runs with no args), with Edit (opens the script editor) and
+/// Archive in the kebab. Archived: **Restore** inline, with Delete in the kebab (behind a confirm; a
+/// linked target file is never touched — a system tool has no Delete, so no kebab).
 pub(crate) fn tool_actions(
     state: State,
     editor: ToolEditor,
@@ -282,33 +283,31 @@ pub(crate) fn tool_actions(
     t: &ToolDto,
 ) -> AnyView {
     let id = t.id.clone();
+    let key = format!("tool:{id}");
     if t.is_archived() {
         let restore_id = id.clone();
         let del_id = id.clone();
         let del_short = short_id(&id);
-        // A system tool is protected from hard delete (archive is how you disable it), so it gets
-        // only Restore.
-        let system = t.system;
-        view! {
-            <div style="display:flex; gap:var(--space-2); justify-content:flex-end">
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    apply_tools(state, "Restored tool.".to_string(),
-                        fetch::unarchive_tool(restore_id.clone()));
-                }>"Restore"</button>
-                {(!system).then(|| view! {
-                    <button class="adi-btn adi-btn--link" style="color:var(--down)" on:click=move |_| {
-                        if !confirm(&format!(
-                            "Permanently delete tool {del_short}? This removes its manifest (and, for \
-                             an owned tool, its script). A linked file is left alone.")) {
-                            return;
-                        }
-                        apply_tools(state, "Deleted tool.".to_string(),
-                            fetch::remove_tool(del_id.clone()));
-                    }>"Delete"</button>
-                })}
-            </div>
+        let restore = view! {
+            <button class="adi-btn adi-btn--link" on:click=move |_| {
+                apply_tools(state, "Restored tool.".to_string(),
+                    fetch::unarchive_tool(restore_id.clone()));
+            }>"Restore"</button>
+        };
+        // A system tool is protected from hard delete (archive is how you disable it), so its row
+        // has no overflow item — `row_actions` then drops the kebab entirely.
+        let mut items = Vec::new();
+        if !t.system {
+            items.push(menu_item(state, "Delete", true, move || {
+                if !confirm(&format!(
+                    "Permanently delete tool {del_short}? This removes its manifest (and, for \
+                     an owned tool, its script). A linked file is left alone.")) {
+                    return;
+                }
+                apply_tools(state, "Deleted tool.".to_string(), fetch::remove_tool(del_id.clone()));
+            }));
         }
-        .into_any()
+        row_actions(state, key, restore, items)
     } else {
         let run_id = id.clone();
         let run_name = t.name.clone();
@@ -316,21 +315,20 @@ pub(crate) fn tool_actions(
         let edit_name = t.name.clone();
         let edit_runtime = t.runtime.clone();
         let arch_id = id.clone();
-        view! {
-            <div style="display:flex; gap:var(--space-2); justify-content:flex-end">
-                <button class="adi-btn adi-btn--link" title="Run with no arguments" on:click=move |_| {
-                    run_tool_now(state, run, run_id.clone(), run_name.clone(), Vec::new());
-                }>"▶ Run"</button>
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    open_tool_editor(state, editor, edit_id.clone(), edit_name.clone(), edit_runtime.clone());
-                }>"Edit"</button>
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    apply_tools(state, "Archived tool.".to_string(),
-                        fetch::archive_tool(arch_id.clone()));
-                }>"Archive"</button>
-            </div>
-        }
-        .into_any()
+        let run_btn = view! {
+            <button class="adi-btn adi-btn--link" title="Run with no arguments" on:click=move |_| {
+                run_tool_now(state, run, run_id.clone(), run_name.clone(), Vec::new());
+            }>"▶ Run"</button>
+        };
+        let items = vec![
+            menu_item(state, "Edit", false, move || {
+                open_tool_editor(state, editor, edit_id.clone(), edit_name.clone(), edit_runtime.clone());
+            }),
+            menu_item(state, "Archive", false, move || {
+                apply_tools(state, "Archived tool.".to_string(), fetch::archive_tool(arch_id.clone()));
+            }),
+        ];
+        row_actions(state, key, run_btn, items)
     }
 }
 

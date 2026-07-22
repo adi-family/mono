@@ -22,7 +22,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::state::{Flash, SecretsForm, State};
 use crate::ui::{
-    TextField, apply_mutation, confirm, data_table, flash_view, placeholder_row, updated_text,
+    TextField, apply_mutation, confirm, data_table, flash_view, menu_item, placeholder_row,
+    row_actions, updated_text,
 };
 
 /// The OAuth router that runs the provider flow and returns the token in the redirect fragment.
@@ -348,71 +349,62 @@ fn row_view(state: State, form: SecretsForm, s: SecretDto, show_project: bool) -
     .into_any()
 }
 
-/// The trailing actions for a secret row — shared by the global table and a project's panel:
-/// Reveal (fetches + shows the value) toggling to Hide, OAuth refresh/re-auth when applicable, and
-/// Remove (behind a confirm).
+/// The trailing actions for a secret row — shared by the global table and a project's panel. The
+/// row stays one compact line: **Reveal** (fetches + shows the value) toggling to Hide, then a
+/// `⋮` kebab holding the rest — OAuth Refresh/Re-auth when applicable, and the destructive Remove.
 pub(crate) fn secret_actions(state: State, form: SecretsForm, s: &SecretDto) -> AnyView {
     let key = reveal_key(s.project.as_deref(), &s.name);
     let toggle_key = key.clone();
+    let label_key = key.clone();
     let reveal_project = s.project.clone();
     let reveal_name = s.name.clone();
-    let del_project = s.project.clone();
-    let del_name = s.name.clone();
-    let del_display = s.name.clone();
-    let oauth = s.oauth.as_ref().map(|info| oauth_row_actions(state, s, info));
-    view! {
-        <div style="display:flex; gap:var(--space-2); justify-content:flex-end; flex-wrap:wrap">
-            <button class="adi-btn adi-btn--link" on:click=move |_| {
-                if form.revealed.get().contains_key(&toggle_key) {
-                    form.revealed.update(|m| { m.remove(&toggle_key); });
-                } else {
-                    reveal_now(state, form, reveal_project.clone(), reveal_name.clone());
-                }
-            }>
-                {move || if form.revealed.get().contains_key(&key) { "Hide" } else { "Reveal" }}
-            </button>
-            {oauth}
-            <button class="adi-btn adi-btn--link" style="color:var(--down)" on:click=move |_| {
-                if !confirm(&format!("Delete secret {del_display}? This is irreversible.")) {
-                    return;
-                }
-                apply_secrets(state, "Deleted secret.".to_string(),
-                    fetch::remove_secret(del_project.clone(), del_name.clone()));
-            }>"Remove"</button>
-        </div>
-    }
-    .into_any()
+    let reveal = view! {
+        <button class="adi-btn adi-btn--link" on:click=move |_| {
+            if form.revealed.get().contains_key(&toggle_key) {
+                form.revealed.update(|m| { m.remove(&toggle_key); });
+            } else {
+                reveal_now(state, form, reveal_project.clone(), reveal_name.clone());
+            }
+        }>
+            {move || if form.revealed.get().contains_key(&label_key) { "Hide" } else { "Reveal" }}
+        </button>
+    };
+    row_actions(state, format!("secret:{key}"), reveal, secret_menu_items(state, s))
 }
 
-/// The OAuth-only row actions: Refresh (server-side, only when a refresh token is held) and
-/// Re-auth (re-run the provider flow — works even once the access token has expired).
-fn oauth_row_actions(state: State, s: &SecretDto, info: &OAuthInfoDto) -> AnyView {
-    let refresh_name = s.name.clone();
-    let refresh_project = s.project.clone();
-    let refresh = info.has_refresh.then(|| {
-        view! {
-            <button class="adi-btn adi-btn--link" on:click=move |_| {
+/// The kebab menu items for a secret row: the OAuth actions (Refresh when a refresh token is held,
+/// Re-auth) and the destructive Remove.
+fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
+    let mut items = Vec::new();
+    if let Some(info) = s.oauth.as_ref() {
+        if info.has_refresh {
+            let (refresh_name, refresh_project) = (s.name.clone(), s.project.clone());
+            items.push(menu_item(state, "Refresh", false, move || {
                 apply_secrets(state, format!("Refreshed \u{201c}{refresh_name}\u{201d}."),
                     fetch::refresh_secret(refresh_project.clone(), refresh_name.clone()));
-            }>"Refresh"</button>
+            }));
         }
-    });
-    let reauth = PendingOAuth {
-        name: s.name.clone(),
-        project: s.project.clone(),
-        description: s.description.clone(),
-        provider: info.provider.clone(),
-    };
-    // Re-authorize asking for the same access the secret already holds.
-    let reauth_scope = info.scope.clone();
-    view! {
-        {refresh}
-        <button class="adi-btn adi-btn--link"
-            on:click=move |_| oauth_initiate(&reauth, reauth_scope.as_deref())>
-            "Re-auth"
-        </button>
+        // Re-authorize asking for the same access the secret already holds.
+        let reauth = PendingOAuth {
+            name: s.name.clone(),
+            project: s.project.clone(),
+            description: s.description.clone(),
+            provider: info.provider.clone(),
+        };
+        let reauth_scope = info.scope.clone();
+        items.push(menu_item(state, "Re-auth", false, move || {
+            oauth_initiate(&reauth, reauth_scope.as_deref());
+        }));
     }
-    .into_any()
+    let (del_project, del_name, del_display) = (s.project.clone(), s.name.clone(), s.name.clone());
+    items.push(menu_item(state, "Remove", true, move || {
+        if !confirm(&format!("Delete secret {del_display}? This is irreversible.")) {
+            return;
+        }
+        apply_secrets(state, "Deleted secret.".to_string(),
+            fetch::remove_secret(del_project.clone(), del_name.clone()));
+    }));
+    items
 }
 
 /// The provenance badge on an OAuth secret's row: the provider and a coarse expiry.

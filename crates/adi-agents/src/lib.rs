@@ -33,6 +33,7 @@ mod backend;
 mod backends;
 mod error;
 mod events;
+pub mod progress;
 mod run;
 pub mod wasm;
 
@@ -49,13 +50,20 @@ pub use error::{Error, Result};
 pub use events::{
     AgentDeleted, AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog, event_types,
 };
+pub use progress::{
+    BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities,
+};
 pub use run::{
-    Launch, Peek, RunInfo, capture_pane, is_runnable, running_sessions, send_keys, session_name,
+    Launch, Peek, RunInfo, Turn, capture_pane, is_runnable, running_sessions, send_keys,
+    session_name,
 };
 pub use wasm::DispatchOutcome;
 
 use agent::validate_name;
-use run::{is_running_in, launch_in, peek_in, peek_run_in, runs_in, stop_in, stop_run_in};
+use run::{
+    adi_turn_in, is_running_in, launch_in, peek_in, peek_run_in, reply_in, runs_in, stop_in,
+    stop_run_in, transcript_in,
+};
 
 const AGENTS_MODULE: &str = "agents";
 const WORKFORCE_MODULE: &str = "workforce";
@@ -66,6 +74,15 @@ const MANIFEST_EXT: &str = "toml";
 #[derive(Debug, Clone)]
 pub struct Agents {
     config: Config,
+}
+
+/// The resolved inputs a launch or reply needs from the store: the sessions/runs dir, the default
+/// working directory, the agent's `.bin` of enabled tools, and its injected secret env.
+struct LaunchContext {
+    sessions_dir: PathBuf,
+    base_dir: PathBuf,
+    bin_dir: Option<PathBuf>,
+    secret_env: Vec<(String, String)>,
 }
 
 impl Default for Agents {
@@ -238,9 +255,82 @@ impl Agents {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let ctx = self.launch_context(&agent);
+        let launch = launch_in(
+            &agent,
+            &ctx.sessions_dir,
+            &ctx.base_dir,
+            ctx.bin_dir.as_deref(),
+            message,
+            &ctx.secret_env,
+        )?;
+        self.emit(
+            "adi.agents.run.started",
+            &AgentRunStarted::of(name, message, &launch),
+        );
+        Ok(launch)
+    }
+
+    /// Answer into one of a harness agent's conversations (`run_id` is the conversation id), spawning
+    /// the next turn. Rejected while the previous answer is still being produced.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`], [`Error::AlreadyRunning`] (still answering), or backend launch
+    /// errors — including [`Error::NotRunnable`] for a backend that keeps no conversation.
+    pub fn reply(&self, name: &str, conv_id: &str, message: &str) -> Result<Launch> {
+        let agent = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let ctx = self.launch_context(&agent);
+        let launch = reply_in(
+            &agent,
+            &ctx.sessions_dir,
+            &ctx.base_dir,
+            ctx.bin_dir.as_deref(),
+            conv_id,
+            message,
+            &ctx.secret_env,
+        )?;
+        self.emit(
+            "adi.agents.run.started",
+            &AgentRunStarted::of(name, message, &launch),
+        );
+        Ok(launch)
+    }
+
+    /// A harness conversation's transcript, oldest first (empty for backends that keep no
+    /// conversation, or for an unknown conversation id).
+    #[must_use]
+    pub fn transcript(&self, agent: &StoredAgent, conv_id: &str) -> Vec<Turn> {
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        // Default cwd is the ADI store root (`~/.adi/mono`), not the daemon's cwd or $HOME.
-        // An agent's explicit `working_dir` still overrides this.
+        transcript_in(agent, &sessions_dir, conv_id)
+    }
+
+    /// Run one turn of a `harness:adi` conversation: read its transcript, call the configured model
+    /// provider, and return the answer text. Invoked by the `adi-mono harness-turn` child that an
+    /// `adi` turn spawns; that child prints the returned text, which the conversation folds into the
+    /// transcript as the assistant's answer.
+    ///
+    /// This blocks on the provider HTTP call, so it must run in a sync context (the CLI child), never
+    /// inside the app server's async runtime.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] for an unknown agent, or argument / provider-configuration /
+    /// HTTP / decoding errors from the loop.
+    pub fn run_adi_turn(&self, agent_name: &str, conv_id: &str) -> Result<String> {
+        let agent = self
+            .get(agent_name)?
+            .ok_or_else(|| Error::NotFound(agent_name.to_string()))?;
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        adi_turn_in(&agent, &sessions_dir, conv_id)
+    }
+
+    /// The shared per-launch context: where runs live, the default cwd, the agent's `.bin`, and its
+    /// injected secrets — resolved the same way whether launching a fresh run or answering a reply.
+    fn launch_context(&self, agent: &StoredAgent) -> LaunchContext {
+        // Default cwd is the ADI store root (`~/.adi/mono`), not the daemon's cwd or $HOME. An
+        // agent's explicit `working_dir` still overrides this. A conversation's replies must run in
+        // the same cwd as its first turn, so the engine's session store lines up — this is that cwd.
         let base_dir = self.config.root().to_path_buf();
         // Best-effort: a sync failure (or no tools) just means no extra bin on PATH, never a blocked run.
         let bin_dir = adi_tools::Tools::with_config(self.config.clone())
@@ -249,19 +339,12 @@ impl Agents {
         // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
         // store's Config (test stores stay isolated). Best-effort: a missing/undecryptable secret is skipped.
         let secret_env = attached_secret_env(&self.config, &agent.manifest.secrets);
-        let launch = launch_in(
-            &agent,
-            &sessions_dir,
-            &base_dir,
-            bin_dir.as_deref(),
-            message,
-            &secret_env,
-        )?;
-        self.emit(
-            "adi.agents.run.started",
-            &AgentRunStarted::of(name, message, &launch),
-        );
-        Ok(launch)
+        LaunchContext {
+            sessions_dir: self.config.module(SESSIONS_MODULE).dir().to_path_buf(),
+            base_dir,
+            bin_dir,
+            secret_env,
+        }
     }
 
     /// Dispatches a message synchronously to a `wasm:*` agent.

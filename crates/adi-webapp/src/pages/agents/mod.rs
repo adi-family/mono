@@ -12,7 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{AgentCodeEditor, AgentsForm, AgentsWatch, Flash, State};
-use crate::ui::{data_table, flash_view, placeholder_row, updated_text};
+use crate::ui::{data_table, flash_view, menu_item, placeholder_row, row_actions, updated_text};
 
 mod actions;
 mod code;
@@ -136,10 +136,12 @@ pub(crate) fn agents_view(
             {flash_view(flash)}
             <div class="adi-hint">
                 "▶ Run launches tmux backends in an interactive " <code>"adi-agent-<name>"</code>
-                " session you type into. For headless backends (process / harness) the agent is a
-                 template: ▶ Run… starts an independent run from a task you give it — one "
-                <code>"--print"</code> " turn, never a continuation — and several can run at once.
-                 Each run keeps its own log under "
+                " session you type into. A "<code>"process"</code>" backend is a template: ▶ Run…
+                 starts an independent one-shot run from a task you give it — one "<code>"--print"</code>
+                " turn, never continued — and several can run at once. A "<code>"harness"</code>"
+                 backend instead starts an answerable "<strong>"conversation"</strong>": ▶ Chat…
+                 sends a first message, the agent answers, and you reply to continue the same thread.
+                 Each run/conversation keeps its own log + transcript under "
                 <code>"~/.adi/mono/sessions/{process,harness}/<agent>/"</code>
                 ", browsable as history in ● View."
             </div>
@@ -334,6 +336,20 @@ fn agent_rows(
             let code_name = a.name.clone();
             let del_name = a.name.clone();
             let a_edit = a.clone();
+            // Run/View/Stop stay inline (the live controls); Code (wasm only), Edit, and the
+            // destructive Delete move into the kebab.
+            let mut items = Vec::new();
+            if is_wasm {
+                items.push(menu_item(state, "{ } Code", false, move || {
+                    open_code_editor(state, code, code_name.clone());
+                }));
+            }
+            items.push(menu_item(state, "Edit", false, move || load_agent_into_form(form, &a_edit)));
+            items.push(menu_item(state, "Delete", true, move || {
+                apply_agents(state, None, format!("Deleted {del_name}."),
+                    fetch::delete_agent(del_name.clone()));
+            }));
+            let actions = row_actions(state, format!("agent:{}", a.name), agent_actions(state, watch, &a), items);
             view! {
                 <tr>
                     <td>{name_disp}</td>
@@ -341,21 +357,7 @@ fn agent_rows(
                     <td class="adi-mono adi-muted">{model}</td>
                     <td>{project_cell}</td>
                     <td class="adi-muted">{tags}</td>
-                    <td class="adi-table__actions">
-                        {agent_actions(state, watch, &a)}
-                        {is_wasm.then(|| view! {
-                            <button class="adi-btn adi-btn--link" title="edit the employee's TypeScript source"
-                                on:click=move |_| open_code_editor(state, code, code_name.clone())>"{ } Code"</button>
-                            " "
-                        })}
-                        <button class="adi-btn adi-btn--link"
-                            on:click=move |_| load_agent_into_form(form, &a_edit)>"Edit"</button>
-                        " "
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_agents(state, None, format!("Deleted {del_name}."),
-                                fetch::delete_agent(del_name.clone()));
-                        }>"Delete"</button>
-                    </td>
+                    <td class="adi-table__actions">{actions}</td>
                 </tr>
             }
         })

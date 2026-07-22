@@ -7,7 +7,7 @@ use crate::fetch;
 use crate::pages::agents::{agent_actions, load_agent_into_form};
 use crate::routing::{Route, push_state, scroll_top};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
-use crate::ui::{TextField, apply_mutation, data_table, placeholder_row};
+use crate::ui::{TextField, apply_mutation, data_table, menu_item, placeholder_row, row_actions};
 
 /// The project detail page's quick agent create form (name, backend, system prompt; the project
 /// is fixed to the open project). Full editing — models, permission modes, backend params —
@@ -154,24 +154,21 @@ fn project_agent_rows(
             // The full 49-field form lives on the Agents page; Edit loads this agent into it and
             // takes you there, rather than duplicating the schema-driven form in this panel.
             let a_edit = a.clone();
+            let edit = menu_item(state, "Edit", false, move || {
+                load_agent_into_form(edit_form, &a_edit);
+                push_state(Route::Agents.path());
+                route.set(Route::Agents);
+                scroll_top();
+            });
+            let actions = row_actions(state, format!("agent:{}", a.name),
+                agent_actions(state, watch, &a), vec![edit]);
             view! {
                 <tr>
                     <td>{name_disp}</td>
                     <td class="adi-mono">{backend}</td>
                     <td class="adi-mono adi-muted">{model}</td>
                     <td>{status}</td>
-                    <td class="adi-table__actions">
-                        {agent_actions(state, watch, &a)}
-                        " "
-                        <button class="adi-btn adi-btn--link"
-                            title="edit every field on the Agents page"
-                            on:click=move |_| {
-                                load_agent_into_form(edit_form, &a_edit);
-                                push_state(Route::Agents.path());
-                                route.set(Route::Agents);
-                                scroll_top();
-                            }>"Edit"</button>
-                    </td>
+                    <td class="adi-table__actions">{actions}</td>
                 </tr>
             }
         })

@@ -57,6 +57,8 @@ pub(crate) struct State {
     pub(crate) files: FilesState,
     /// The store browser in the right rail — the whole `~/.adi/mono` tree, on every page.
     pub(crate) store: StoreBrowser,
+    /// The open table-row kebab menu, shared by every page's action columns. See [`RowMenu`].
+    pub(crate) row_menu: RwSignal<Option<RowMenu>>,
 }
 
 /// The right rail's store browser: a lazily-expanded tree over `~/.adi/mono` (served through
@@ -95,6 +97,17 @@ pub(crate) struct StoreBrowser {
     pub(crate) creating: RwSignal<Option<StoreDraft>>,
     /// The name being typed into that input.
     pub(crate) draft: RwSignal<String>,
+}
+
+/// An open row-actions (kebab) menu, shared by every table: which row it belongs to (a caller-
+/// supplied key, unique among the rows on screen) and where to anchor. `right`/`top` are distances
+/// from the viewport's right/top edges, so the menu opens leftward from the right-aligned kebab and
+/// never spills off the right edge. `None` when no menu is showing.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct RowMenu {
+    pub(crate) key: String,
+    pub(crate) right: i32,
+    pub(crate) top: i32,
 }
 
 /// An open right-click menu on the store tree.
@@ -691,6 +704,9 @@ pub(crate) struct AgentsWatch {
     pub(crate) run_id: RwSignal<Option<String>>,
     /// For a headless agent, its run history (newest first), refreshed by the poll.
     pub(crate) runs: RwSignal<Vec<AgentRunInfo>>,
+    /// Whether the watched agent's runs are answerable conversations (harness backends): the run
+    /// detail shows a chat transcript + reply box rather than a plain log. Set by the poll.
+    pub(crate) answerable: RwSignal<bool>,
     /// The last snapshot received, or `None` before the first one lands.
     pub(crate) peek: RwSignal<Option<AgentPeek>>,
     /// The selected run's log tail, kept apart from `peek` so the inline viewer binds to a plain
@@ -699,6 +715,9 @@ pub(crate) struct AgentsWatch {
     pub(crate) log: RwSignal<String>,
     /// Text buffer: the send bar (tmux) or the run composer's task (headless).
     pub(crate) input: RwSignal<String>,
+    /// Text buffer for the chat reply box under a selected answerable (harness) conversation —
+    /// kept apart from `input` (the new-conversation composer) so the two don't clobber each other.
+    pub(crate) reply: RwSignal<String>,
 }
 
 impl AgentsWatch {
@@ -708,9 +727,11 @@ impl AgentsWatch {
             interactive: RwSignal::new(false),
             run_id: RwSignal::new(None),
             runs: RwSignal::new(Vec::new()),
+            answerable: RwSignal::new(false),
             peek: RwSignal::new(None),
             log: RwSignal::new(String::new()),
             input: RwSignal::new(String::new()),
+            reply: RwSignal::new(String::new()),
         }
     }
 
@@ -720,9 +741,11 @@ impl AgentsWatch {
         self.interactive.set(false);
         self.run_id.set(None);
         self.runs.set(Vec::new());
+        self.answerable.set(false);
         self.peek.set(None);
         self.log.set(String::new());
         self.input.set(String::new());
+        self.reply.set(String::new());
     }
 }
 

@@ -11,9 +11,11 @@ use adi_agents::arguments::WasmArguments;
 use adi_agents::contains_json_null;
 
 use crate::types::{
-    AgentBackendOption, AgentBuildResult, AgentCode, AgentDto, AgentFormField, AgentFormFieldKind,
-    AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunInfo, AgentRunResult,
-    AgentRuns, AgentsState, RunAgent, RunRef, SaveAgent, SaveAgentCode, SecretRef,
+    AgentBackendOption, AgentBuildResult, AgentCapabilities, AgentCode, AgentDto, AgentFormField,
+    AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef,
+    AgentRunInfo, AgentRunResult, AgentRuns, AgentStep, AgentToolStatus, AgentTurn,
+    AgentTurnMetrics, AgentsState, ReplyToRun, RunAgent, RunRef, SaveAgent, SaveAgentCode,
+    SecretRef,
 };
 
 use super::files::MAX_TEXT_BYTES;
@@ -116,6 +118,8 @@ pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
 
 /// `POST /api/agents/run/peek` — a read-only snapshot of one specific run's log (or the tmux pane
 /// for an interactive backend). A run that has produced nothing answers with empty output, not 404.
+/// For a harness backend the run is an answerable conversation, so the snapshot also carries its
+/// turn-by-turn transcript (`turns`) and `answerable: true`.
 #[must_use]
 pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_run_ref(body) else {
@@ -127,6 +131,14 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     };
     let run_id = req.run_id.trim();
     let peek = store.peek_run(&agent, run_id);
+    let caps = agent_caps(&agent);
+    // Any backend that produces turns (conversations, or one-shot runs synthesized as one answered
+    // turn) feeds the same progress view; the transcript is empty for the rest (e.g. tmux).
+    let turns = store
+        .transcript(&agent, run_id)
+        .into_iter()
+        .map(agent_turn)
+        .collect();
     ok_json(&AgentPeek {
         name: agent.name.clone(),
         running: peek.running,
@@ -134,6 +146,46 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
         attach: peek.attach,
         interactive: peek.interactive,
         run_id: run_id.to_string(),
+        answerable: caps.answerable,
+        caps,
+        turns,
+    })
+}
+
+/// `POST /api/agents/run/reply` — answer into one of a harness agent's conversations, spawning the
+/// next turn, and reply with a fresh snapshot (transcript included). Rejected (409) while the
+/// previous answer is still being produced, and (400) for a backend that keeps no conversation.
+#[must_use]
+pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_reply_to_run(body) else {
+        return bad_reply_to_run();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    if let Err(e) = store.reply(&agent.name, run_id, req.message.trim()) {
+        return Response::from(&e);
+    }
+    // Snapshot the conversation right away so the sender sees their turn (and the streaming answer)
+    // without waiting for the next poll.
+    let peek = store.peek_run(&agent, run_id);
+    let turns = store
+        .transcript(&agent, run_id)
+        .into_iter()
+        .map(agent_turn)
+        .collect();
+    ok_json(&AgentPeek {
+        name: agent.name.clone(),
+        running: peek.running,
+        output: peek.output,
+        attach: peek.attach,
+        interactive: peek.interactive,
+        run_id: run_id.to_string(),
+        answerable: true,
+        caps: agent_caps(&agent),
+        turns,
     })
 }
 
@@ -156,9 +208,12 @@ pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
 
 /// Build the [`AgentRuns`] history answer for an agent.
 fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
+    let caps = agent_caps(agent);
     AgentRuns {
         name: agent.name.clone(),
-        interactive: agent.manifest.executor() == "tmux",
+        interactive: caps.interactive,
+        answerable: caps.answerable,
+        caps,
         runs: store
             .runs(agent)
             .into_iter()
@@ -169,6 +224,67 @@ fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
                 running: r.running,
             })
             .collect(),
+    }
+}
+
+/// The backend's capability profile as a wire [`AgentCapabilities`].
+fn agent_caps(agent: &StoredAgent) -> AgentCapabilities {
+    let c = adi_agents::capabilities(&agent.manifest.backend);
+    AgentCapabilities {
+        interactive: c.interactive,
+        history: c.history,
+        answerable: c.answerable,
+        live_text: c.live_text,
+        tool_steps: c.tool_steps,
+        thinking: c.thinking,
+        metrics: c.metrics,
+    }
+}
+
+/// Map a store [`adi_agents::Turn`] onto its wire [`AgentTurn`], including its steps and metrics.
+fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
+    AgentTurn {
+        role: t.role,
+        text: t.text,
+        at: t.at,
+        pending: t.pending,
+        steps: t.steps.into_iter().map(agent_step).collect(),
+        metrics: t.metrics.map(agent_metrics),
+    }
+}
+
+/// Map a store [`adi_agents::Step`] onto its wire [`AgentStep`].
+fn agent_step(s: adi_agents::Step) -> AgentStep {
+    match s {
+        adi_agents::Step::Thinking { text } => AgentStep::Thinking { text },
+        adi_agents::Step::Tool {
+            name,
+            input,
+            status,
+            output,
+        } => AgentStep::Tool {
+            name,
+            input,
+            status: match status {
+                adi_agents::ToolStatus::Running => AgentToolStatus::Running,
+                adi_agents::ToolStatus::Ok => AgentToolStatus::Ok,
+                adi_agents::ToolStatus::Error => AgentToolStatus::Error,
+            },
+            output,
+        },
+    }
+}
+
+/// Map store [`adi_agents::TurnMetrics`] onto their wire [`AgentTurnMetrics`].
+fn agent_metrics(m: adi_agents::TurnMetrics) -> AgentTurnMetrics {
+    AgentTurnMetrics {
+        input_tokens: m.input_tokens,
+        output_tokens: m.output_tokens,
+        cost_micro_usd: m.cost_micro_usd,
+        duration_ms: m.duration_ms,
+        num_turns: m.num_turns,
+        permission_denials: m.permission_denials,
+        is_error: m.is_error,
     }
 }
 
@@ -533,6 +649,11 @@ fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
         attach: peek.attach,
         interactive: peek.interactive,
         run_id: String::new(),
+        // A name-based peek isn't scoped to a run, so it carries no transcript. The progress feed is
+        // driven by the run-scoped `peek_run` / `reply_run` above.
+        answerable: false,
+        caps: agent_caps(agent),
+        turns: Vec::new(),
     })
 }
 
@@ -1283,10 +1404,12 @@ impl From<&AgentStoreError> for Response {
             AgentStoreError::Arguments(_)
             | AgentStoreError::InvalidName(_)
             | AgentStoreError::NotRunnable(_)
+            | AgentStoreError::Unsupported(_)
             | AgentStoreError::InvalidKey(_) => 400,
             AgentStoreError::NotFound(_) => 404,
             AgentStoreError::Exists(_)
             | AgentStoreError::AlreadyRunning(_)
+            | AgentStoreError::Busy(_)
             | AgentStoreError::NotRunning(_) => 409,
             AgentStoreError::Config(_)
             | AgentStoreError::Io(_)
@@ -1329,6 +1452,21 @@ fn bad_run_ref() -> Response {
     error(
         400,
         "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id",
+    )
+}
+
+fn parse_reply_to_run(body: &[u8]) -> Option<ReplyToRun> {
+    let req: ReplyToRun = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty()
+        && !req.run_id.trim().is_empty()
+        && !req.message.trim().is_empty())
+    .then_some(req)
+}
+
+fn bad_reply_to_run() -> Response {
+    error(
+        400,
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"message\": \"…\" } with all three non-empty",
     )
 }
 

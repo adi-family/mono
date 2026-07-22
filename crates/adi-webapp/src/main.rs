@@ -108,6 +108,7 @@ fn App() -> impl IntoView {
         workspaces,
         files,
         store,
+        row_menu: RwSignal::new(None),
     };
 
     let projects_form = ProjectsForm {
@@ -294,6 +295,8 @@ fn App() -> impl IntoView {
     Effect::new(move |_| {
         // Re-run when the open project changes too, so navigating detail A → B reloads.
         let _ = current_project.get();
+        // Any page change closes an open row menu (its row is about to unmount anyway).
+        state.row_menu.set(None);
         if matches!(
             route.get(),
             Route::Meta

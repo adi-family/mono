@@ -12,7 +12,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::state::{DashboardsForm, Flash, State, load};
 use crate::ui::{
-    TextField, apply_mutation, confirm, data_table, flash_view, placeholder_row, updated_text,
+    TextField, apply_mutation, confirm, data_table, flash_view, menu_item, placeholder_row,
+    row_actions, updated_text,
 };
 
 /// The columns shared by the live table and the archived disclosure — both render one dashboard
@@ -191,42 +192,41 @@ fn row_view(state: State, d: Dashboard) -> AnyView {
     .into_any()
 }
 
-/// The trailing action for a dashboard row: Archive while live (stops both services and hides it),
-/// or Restore + Delete while archived — Restore brings it back under supervision, Delete removes
-/// its directory for good (behind a confirm). Each posts and folds the fresh [`DashboardsState`]
-/// back into the page.
+/// The trailing action for a dashboard row: Archive while live (stops both services and hides it, a
+/// single inline action — no kebab), or **Restore** inline with Delete in the kebab while archived
+/// (Restore brings it back under supervision; Delete removes its directory for good, behind a
+/// confirm). Each posts and folds the fresh [`DashboardsState`] back into the page.
 fn row_action(state: State, id: &str, archived: bool) -> AnyView {
     let id = id.to_string();
     let short = short_id(&id);
+    let key = format!("dashboard:{id}");
     if archived {
         let del_id = id.clone();
         let del_short = short.clone();
-        view! {
-            <div style="display:flex; gap:var(--space-2); justify-content:flex-end">
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    apply_dashboards(state, format!("Restored {short}."),
-                        fetch::unarchive_dashboard(id.clone()));
-                }>"Restore"</button>
-                <button class="adi-btn adi-btn--link" style="color:var(--down)" on:click=move |_| {
-                    if !confirm(&format!(
-                        "Permanently delete dashboard {del_short}? This removes all of its files \
-                         and cannot be undone.")) {
-                        return;
-                    }
-                    apply_dashboards(state, format!("Deleted {del_short}."),
-                        fetch::delete_dashboard(del_id.clone()));
-                }>"Delete"</button>
-            </div>
-        }
-        .into_any()
+        let restore = view! {
+            <button class="adi-btn adi-btn--link" on:click=move |_| {
+                apply_dashboards(state, format!("Restored {short}."),
+                    fetch::unarchive_dashboard(id.clone()));
+            }>"Restore"</button>
+        };
+        let delete = menu_item(state, "Delete", true, move || {
+            if !confirm(&format!(
+                "Permanently delete dashboard {del_short}? This removes all of its files \
+                 and cannot be undone.")) {
+                return;
+            }
+            apply_dashboards(state, format!("Deleted {del_short}."),
+                fetch::delete_dashboard(del_id.clone()));
+        });
+        row_actions(state, key, restore, vec![delete])
     } else {
-        view! {
+        let archive = view! {
             <button class="adi-btn adi-btn--link" on:click=move |_| {
                 apply_dashboards(state, format!("Archived {short}."),
                     fetch::archive_dashboard(id.clone()));
             }>"Archive"</button>
-        }
-        .into_any()
+        };
+        row_actions(state, key, archive, Vec::new())
     }
 }
 

@@ -22,7 +22,7 @@ use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView};
 use crate::ui::{
     TextField, apply_mutation, code_editor, data_table, field_hint, flash_view, fmt_date,
-    fmt_uptime, placeholder_row, updated_text,
+    fmt_uptime, menu_item, placeholder_row, row_actions, updated_text,
 };
 
 /// The settings input every webhook offers regardless of preset — the platform itself reads it
@@ -512,6 +512,13 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
         .map(|t| {
             let del_name = t.name.clone();
             let t_edit = t.clone();
+            let edit = menu_item(state, "Edit", false, move || load_trigger_into_form(form, &t_edit));
+            let delete = menu_item(state, "Delete", true, move || {
+                apply_triggers(state, None, format!("Deleted {del_name}."),
+                    fetch::delete_trigger(del_name.clone()));
+            });
+            let actions = row_actions(state, format!("trigger:{}", t.name),
+                trigger_actions(state, log, &t), vec![trigger_toggle_item(state, &t), edit, delete]);
             let launches = launch_label(&t);
             let project_cell = match &t.project {
                 Some(p) if !p.trim().is_empty() => {
@@ -535,16 +542,7 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
                     <td>{project_cell}</td>
                     <td>{status_cell(&t)}</td>
                     <td class="adi-mono adi-muted">{fired}</td>
-                    <td class="adi-table__actions">
-                        {trigger_actions(state, log, &t)}
-                        <button class="adi-btn adi-btn--link"
-                            on:click=move |_| load_trigger_into_form(form, &t_edit)>"Edit"</button>
-                        " "
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_triggers(state, None, format!("Deleted {del_name}."),
-                                fetch::delete_trigger(del_name.clone()));
-                        }>"Delete"</button>
-                    </td>
+                    <td class="adi-table__actions">{actions}</td>
                 </tr>
             }
         })
@@ -595,8 +593,6 @@ pub(crate) fn status_cell(t: &TriggerDto) -> AnyView {
 /// still be fired once, which is how you test one without enabling it.
 pub(crate) fn trigger_actions(state: State, log: TriggersLogView, t: &TriggerDto) -> AnyView {
     let log_name = t.name.clone();
-    let toggle = t.clone();
-    let toggle_label = if t.enabled { "Disable" } else { "Enable" };
     let run_action = if t.running {
         let name = t.name.clone();
         view! {
@@ -614,15 +610,18 @@ pub(crate) fn trigger_actions(state: State, log: TriggersLogView, t: &TriggerDto
     };
     view! {
         {run_action}
-        " "
         <button class="adi-btn adi-btn--link" title="show the most recent output"
             on:click=move |_| open_log(log, log_name.clone())>"Log"</button>
-        " "
-        <button class="adi-btn adi-btn--link"
-            on:click=move |_| toggle_trigger(state, &toggle)>{toggle_label}</button>
-        " "
     }
     .into_any()
+}
+
+/// The Enable/Disable toggle as a kebab menu item — shared by the global table and a project's
+/// panel, so a trigger can be paused (or re-armed) from either without a second inline button.
+pub(crate) fn trigger_toggle_item(state: State, t: &TriggerDto) -> AnyView {
+    let toggle = t.clone();
+    let label = if t.enabled { "Disable" } else { "Enable" };
+    menu_item(state, label, false, move || toggle_trigger(state, &toggle))
 }
 
 /// Run a triggers mutation: set the returned list and a success flash, or an error flash;

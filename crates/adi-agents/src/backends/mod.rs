@@ -1,3 +1,4 @@
+pub(crate) mod claude_stream;
 pub(crate) mod detached;
 pub(crate) mod harness;
 pub(crate) mod process;

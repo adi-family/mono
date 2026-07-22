@@ -682,6 +682,97 @@ pub struct RunRef {
     pub run_id: String,
 }
 
+/// `POST /api/agents/run/reply` request — answer into one of a harness agent's conversations
+/// (`run_id` is the conversation id), appending `message` as the next turn. Only harness backends
+/// keep answerable conversations; anything else rejects it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReplyToRun {
+    pub name: String,
+    pub run_id: String,
+    pub message: String,
+}
+
+/// One message in a harness conversation's transcript: a `user` question or an `assistant` answer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTurn {
+    /// `"user"` or `"assistant"`.
+    pub role: String,
+    pub text: String,
+    /// Unix milliseconds the turn was recorded (0 for the still-streaming answer).
+    #[serde(default)]
+    pub at: u64,
+    /// True only for the provisional, still-streaming answer of a turn still in flight.
+    #[serde(default)]
+    pub pending: bool,
+    /// The assistant turn's activity — tool calls and thinking — parsed from the engine's output.
+    /// Empty for user turns and engines that emit no structured progress.
+    #[serde(default)]
+    pub steps: Vec<AgentStep>,
+    /// The assistant turn's telemetry (tokens / cost / duration), when the engine reports it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<AgentTurnMetrics>,
+}
+
+/// A tool step's lifecycle status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentToolStatus {
+    Running,
+    Ok,
+    Error,
+}
+
+/// One activity step within an assistant turn — a tool call or a thinking block. The answer text is
+/// not a step; it lives in [`AgentTurn::text`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentStep {
+    /// A model reasoning block (shown dim/collapsed).
+    Thinking { text: String },
+    /// A tool invocation and, once it returns, its result.
+    Tool {
+        name: String,
+        #[serde(default)]
+        input: String,
+        status: AgentToolStatus,
+        #[serde(default)]
+        output: String,
+    },
+}
+
+/// Per-turn telemetry. Cost is in micro-dollars (1e-6 USD) so the whole model stays integer-exact.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTurnMetrics {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_turns: Option<u64>,
+    #[serde(default)]
+    pub permission_denials: Vec<String>,
+    #[serde(default)]
+    pub is_error: bool,
+}
+
+/// A backend's capability profile — the single source of truth the client renders from: which
+/// container to show (pane / run history / chat) and which progress columns within it. Mirrors
+/// `adi_agents::BackendCapabilities`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentCapabilities {
+    pub interactive: bool,
+    pub history: bool,
+    pub answerable: bool,
+    pub live_text: bool,
+    pub tool_steps: bool,
+    pub thinking: bool,
+    pub metrics: bool,
+}
+
 /// One entry in a headless agent's run history: an independent run spawned from the agent's settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRunInfo {
@@ -701,8 +792,29 @@ pub struct AgentRuns {
     pub name: String,
     #[serde(default)]
     pub interactive: bool,
+    /// Whether these runs are *conversations* you can answer (harness backends) rather than one-shot
+    /// runs — so the client shows a chat transcript + reply box instead of a plain log. Mirrors
+    /// `caps.answerable`, kept for existing callers.
+    #[serde(default)]
+    pub answerable: bool,
+    /// The backend's full capability profile — drives which container and progress columns to show.
+    #[serde(default = "default_caps")]
+    pub caps: AgentCapabilities,
     #[serde(default)]
     pub runs: Vec<AgentRunInfo>,
+}
+
+/// A zero capability profile — the `serde` default when an older/absent response omits `caps`.
+fn default_caps() -> AgentCapabilities {
+    AgentCapabilities {
+        interactive: false,
+        history: false,
+        answerable: false,
+        live_text: false,
+        tool_steps: false,
+        thinking: false,
+        metrics: false,
+    }
 }
 
 /// `POST /api/agents/run` — a human-readable launch outcome, the new run's id, and fresh agent state.
@@ -778,6 +890,19 @@ pub struct AgentPeek {
     /// dropped. Empty for interactive backends (a session, not a run).
     #[serde(default)]
     pub run_id: String,
+    /// Whether this run is an answerable conversation (a harness backend). When true, `turns` carries
+    /// its transcript and the client shows a chat with a reply box rather than the plain `output` log.
+    /// Mirrors `caps.answerable`.
+    #[serde(default)]
+    pub answerable: bool,
+    /// The backend's capability profile — drives the progress feed (which columns) for this run.
+    #[serde(default = "default_caps")]
+    pub caps: AgentCapabilities,
+    /// The run/conversation transcript, oldest first — for backends that produce turns (conversations,
+    /// and one-shot runs synthesized as a single answered turn); empty otherwise. Includes the
+    /// still-streaming answer, with its parsed tool steps, while a turn is in flight.
+    #[serde(default)]
+    pub turns: Vec<AgentTurn>,
 }
 
 // ---- meta (the default ADI agent — a single well-known global agent) ----------------

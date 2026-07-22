@@ -18,11 +18,19 @@ pub(super) fn argv(config: &ProcessClaudeArguments, message: &str) -> Vec<String
         "--effort",
         config.effort.map(ClaudeEffort::as_str),
     );
-    push_option(
-        &mut argv,
-        "--output-format",
-        config.output_format.map(ClaudeOutputFormat::as_str),
-    );
+    // Default to a streamed event log so a run's progress (tool calls, thinking, metrics) is
+    // captured and can be shown as a feed; an explicit format is respected. `stream-json` needs
+    // `--verbose` in print mode.
+    match config.output_format.unwrap_or(ClaudeOutputFormat::StreamJson) {
+        ClaudeOutputFormat::StreamJson => {
+            argv.extend([
+                "--output-format".to_string(),
+                "stream-json".to_string(),
+                "--verbose".to_string(),
+            ]);
+        }
+        other => push_option(&mut argv, "--output-format", Some(other.as_str())),
+    }
     push_option(
         &mut argv,
         "--allowed-tools",
@@ -55,6 +63,9 @@ pub(super) fn argv(config: &ProcessClaudeArguments, message: &str) -> Vec<String
     if !prompts.is_empty() {
         argv.extend(["--append-system-prompt".into(), prompts.join("\n\n")]);
     }
+    // `--allowed-tools` / `--disallowed-tools` are variadic, so end option parsing with `--` before
+    // the positional prompt or it could be swallowed as another tool value.
+    argv.push("--".to_string());
     argv.push(run_message(message));
     argv
 }
@@ -105,8 +116,21 @@ mod tests {
                 "2.5",
                 "--append-system-prompt",
                 "You are a release agent.",
+                "--",
                 "prepare the release",
             ]
+        );
+    }
+
+    #[test]
+    fn argv_defaults_to_stream_json_so_a_run_emits_progress() {
+        let argv = argv(&ProcessClaudeArguments::default(), "go");
+        // No explicit output format → streamed events (with --verbose) rather than the CLI's plain
+        // text default, so the run's tool/thinking/metric events are captured.
+        let window = argv.windows(3).find(|w| w[0] == "--output-format");
+        assert_eq!(
+            window,
+            Some(["--output-format".to_string(), "stream-json".to_string(), "--verbose".to_string()].as_slice())
         );
     }
 }
