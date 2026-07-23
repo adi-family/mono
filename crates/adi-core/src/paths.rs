@@ -63,9 +63,19 @@ mod tests {
         assert!(support_dir().ends_with("mono"));
     }
 
+    #[cfg(unix)]
     #[test]
     fn launch_agents_and_logs_live_under_library() {
         assert!(launch_agents_dir().ends_with("Library/LaunchAgents"));
         assert!(logs_dir().ends_with("Library/Logs"));
+    }
+
+    // On Windows there is no `Library/*`: task definitions and logs live under the mono store.
+    #[cfg(not(unix))]
+    #[test]
+    fn launch_agents_and_logs_live_under_the_store() {
+        assert!(launch_agents_dir().ends_with("tasks"));
+        assert!(logs_dir().ends_with("logs"));
+        assert!(launch_agents_dir().starts_with(support_dir()));
     }
 }

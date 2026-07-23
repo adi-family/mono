@@ -248,7 +248,13 @@ mod tests {
     #[test]
     fn updater_program_is_the_cli_run_quietly() {
         let program = Updater::new().program();
-        assert!(program[0].ends_with(crate::BIN_NAME));
+        // The resolved binary is the CLI itself — `adi-mono` on Unix, `adi-mono.exe` on Windows,
+        // where `sibling_binary` appends the executable suffix.
+        let file = std::path::Path::new(&program[0])
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(&program[0]);
+        assert_eq!(file, crate::BIN_NAME);
         assert_eq!(&program[1..], ["update", "run", "--quiet"]);
     }
 }
