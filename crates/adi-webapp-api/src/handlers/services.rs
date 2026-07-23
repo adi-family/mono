@@ -59,6 +59,8 @@ struct HiveRecreate {
 struct HiveRunner {
     #[serde(default)]
     script: Option<HiveScript>,
+    #[serde(default)]
+    docker: Option<HiveDocker>,
 }
 
 #[derive(Deserialize)]
@@ -66,6 +68,24 @@ struct HiveScript {
     run: String,
     #[serde(default)]
     working_dir: Option<String>,
+}
+
+/// The docker runner, mirrored just enough to show *what* a container service runs; adi-hive owns
+/// the full schema. Only the image is surfaced (as the service's displayed command).
+#[derive(Deserialize)]
+struct HiveDocker {
+    image: String,
+}
+
+impl HiveRunner {
+    /// The command to show for this runner: a script's shell command, or `docker: <image>` for a
+    /// container. `docker` wins when both are present (as it does in adi-hive's `runners()`).
+    fn display_command(self) -> Option<String> {
+        if let Some(docker) = self.docker {
+            return Some(format!("docker: {}", docker.image));
+        }
+        self.script.map(|s| s.run)
+    }
 }
 
 /// Read a project's `.adi/hive.yaml` into `(has_hive, services)`, tagging each service with a live
@@ -103,7 +123,7 @@ pub(crate) fn read_hive_services(path: &Path, listening: &[u16]) -> (bool, Vec<P
                 name,
                 host: svc.proxy.map(|p| p.host),
                 ports,
-                run: svc.runner.and_then(|r| r.script).map(|s| s.run),
+                run: svc.runner.and_then(HiveRunner::display_command),
                 restart: svc.restart,
                 running,
             }
@@ -360,10 +380,22 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Respo
         field.map(str::trim).filter(|s| !s.is_empty())
     }
 
+    /// A YAML sequence of strings, dropping blank entries.
+    fn yseq(items: &[String]) -> Yaml {
+        Yaml::Sequence(
+            items
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(ystr)
+                .collect(),
+        )
+    }
+
     let Ok(req) = serde_json::from_slice::<NewService>(body) else {
         return error(
             400,
-            "expected JSON body { project, name, run, host?, port?, working_dir?, restart? }",
+            "expected JSON body { project, name, run|docker, host?, port?, working_dir?, restart? }",
         );
     };
     let project = req.project.trim();
@@ -375,8 +407,14 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Respo
             "a service name is letters, digits, `.`, `-`, `_` (and not `.`/`..`)",
         );
     }
-    if run.is_empty() {
-        return error(400, "a run command is required");
+    // A service is one runner kind: a docker container (when `docker` is set) or a script.
+    let docker = req.docker.as_ref();
+    if let Some(d) = docker {
+        if given(Some(&d.image)).is_none() {
+            return error(400, "a docker image is required");
+        }
+    } else if run.is_empty() {
+        return error(400, "a run command is required (or provide a docker image)");
     }
     match store.get(project) {
         Ok(Some(_)) => {}
@@ -423,13 +461,48 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Respo
     let mut rollout = Mapping::new();
     rollout.insert(ystr("recreate"), Yaml::Mapping(recreate));
     svc.insert(ystr("rollout"), Yaml::Mapping(rollout));
-    let mut script = Mapping::new();
-    script.insert(ystr("run"), ystr(run));
-    if let Some(dir) = given(req.working_dir.as_deref()) {
-        script.insert(ystr("working_dir"), ystr(dir));
-    }
     let mut runner = Mapping::new();
-    runner.insert(ystr("script"), Yaml::Mapping(script));
+    if let Some(d) = docker {
+        // A docker runner: `runner.docker` with the leased host `http` port mapped to the
+        // container port. adi-hive compiles this to a supervised `docker run` (see its config.rs).
+        let mut dk = Mapping::new();
+        dk.insert(ystr("image"), ystr(d.image.trim()));
+        if let Some(cp) = d.container_port {
+            let mut dports = Mapping::new();
+            dports.insert(ystr("http"), Yaml::Number(cp.into()));
+            dk.insert(ystr("ports"), Yaml::Mapping(dports));
+        }
+        if let Some(pull) = given(d.pull.as_deref()) {
+            dk.insert(ystr("pull"), ystr(pull));
+        }
+        if !d.environment.is_empty() {
+            let mut env = Mapping::new();
+            for (k, v) in &d.environment {
+                env.insert(ystr(k.trim()), ystr(v));
+            }
+            dk.insert(ystr("environment"), Yaml::Mapping(env));
+        }
+        let volumes = yseq(&d.volumes);
+        if volumes.as_sequence().is_some_and(|s| !s.is_empty()) {
+            dk.insert(ystr("volumes"), volumes);
+        }
+        let args = yseq(&d.args);
+        if args.as_sequence().is_some_and(|s| !s.is_empty()) {
+            dk.insert(ystr("args"), args);
+        }
+        let command = yseq(&d.command);
+        if command.as_sequence().is_some_and(|s| !s.is_empty()) {
+            dk.insert(ystr("command"), command);
+        }
+        runner.insert(ystr("docker"), Yaml::Mapping(dk));
+    } else {
+        let mut script = Mapping::new();
+        script.insert(ystr("run"), ystr(run));
+        if let Some(dir) = given(req.working_dir.as_deref()) {
+            script.insert(ystr("working_dir"), ystr(dir));
+        }
+        runner.insert(ystr("script"), Yaml::Mapping(script));
+    }
     svc.insert(ystr("runner"), Yaml::Mapping(runner));
     if let Some(restart) = given(req.restart.as_deref()) {
         svc.insert(ystr("restart"), ystr(restart));

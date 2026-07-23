@@ -1144,6 +1144,28 @@ $runlog-dim: #8b93a1;
   color: var(--muted);
 }
 
+// A "belongs to a nested sub-project" marker for an item (agent, task) surfaced in a parent
+// project's panel. Rendered as a clickable chip beside the item's name that opens the owning
+// sub-project. Accent-tinted so it reads as borrowed-from-elsewhere, not one of this project's own.
+.adi-subchip {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: var(--text-xs);
+  color: var(--accent-ink);
+  text-decoration: none;
+  vertical-align: middle;
+  white-space: nowrap;
+
+  &:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+}
+
 // ---- form --------------------------------------------------------------------------
 .adi-form {
   display: flex;
@@ -1321,6 +1343,14 @@ select.adi-input {
   min-width: 150px;
   max-width: 100%;
   cursor: pointer;
+}
+
+// A multi-line field reusing `.adi-input`'s frame (e.g. the docker volumes / env inputs in the
+// service form): let it grow downward only and sit flush with the label above it.
+textarea.adi-input {
+  resize: vertical;
+  vertical-align: top;
+  line-height: 1.5;
 }
 
 .adi-textarea {

@@ -5,6 +5,7 @@ use leptos::prelude::*;
 
 use crate::fetch;
 use crate::pages::tasks::is_finished;
+use crate::routing::{ProjectSection, Route};
 use crate::state::{Flash, State};
 use crate::ui::{
     TextField, apply_mutation, data_table, effective_label_title, placeholder_row, task_tree_rows,
@@ -27,7 +28,7 @@ pub(crate) struct TaskForm {
 /// The Tasks panel on a project's detail page: the tasks filed under this project (from the shared
 /// task tree at `/api/tasks`) plus a create form pre-scoped to it, so a task added here gets the
 /// project's Jira-style `<KEY>-<n>` id without the user having to pick a project.
-pub(crate) fn tasks_panel(state: State, form: TaskForm) -> AnyView {
+pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) -> AnyView {
     let TaskForm {
         title,
         parent,
@@ -39,9 +40,9 @@ pub(crate) fn tasks_panel(state: State, form: TaskForm) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Tasks"</h2>
-                <span class="adi-updated">"filed under this project"</span>
+                <span class="adi-updated">"filed under this project & its sub-projects"</span>
             </div>
-            {data_table(&["Task", "ID", "Tag", "Status", "Subtasks", ""], move || project_task_rows(state))}
+            {data_table(&["Task", "ID", "Tag", "Status", "Subtasks", ""], move || project_task_rows(state, route))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -99,34 +100,60 @@ pub(crate) fn tasks_panel(state: State, form: TaskForm) -> AnyView {
 }
 
 /// This project's tasks, filtered from the shared tree and flattened into depth-annotated tree
-/// order (so subtasks nest under their parent, at any depth).
-fn project_task_tree(state: State) -> Vec<(usize, adi_webapp_api::types::TaskRow)> {
+/// order (so subtasks nest under their parent, at any depth). With `include_subs`, tasks filed
+/// under this project's nested sub-projects are folded in too — each sub-project's tasks form
+/// their own subtree, since their `parent` links point within the same sub-project. Off for the
+/// parent picker (a task created here files under *this* project, so it should nest only under
+/// this project's own tasks); on for the display table.
+fn project_task_tree(
+    state: State,
+    include_subs: bool,
+) -> Vec<(usize, adi_webapp_api::types::TaskRow)> {
     let id = state.current_project.get();
+    let subs = include_subs
+        .then(|| super::descendant_projects(state, &id))
+        .unwrap_or_default();
     let Some(tasks) = state.tasks.get() else {
         return Vec::new();
     };
     let mine: Vec<_> = tasks
         .tasks
         .into_iter()
-        .filter(|t| t.project.as_deref() == Some(id.as_str()))
+        .filter(|t| {
+            let p = t.project.as_deref();
+            p == Some(id.as_str()) || p.is_some_and(|p| subs.contains_key(p))
+        })
         .collect();
     task_tree_rows(mine)
 }
 
-/// Rows for the project's task table: this project's tasks as a nested tree — each row indented by
-/// its depth, with its title, Jira id, tag, effective status, and subtask rollup. Loading/empty
-/// placeholders otherwise.
-fn project_task_rows(state: State) -> AnyView {
+/// Rows for the project's task table: this project's own tasks plus those filed under its nested
+/// sub-projects (each marked with a chip linking to the owning sub-project), as a nested tree —
+/// each row indented by its depth, with its title, Jira id, tag, effective status, and subtask
+/// rollup. Loading/empty placeholders otherwise.
+fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
     if state.tasks.get().is_none() {
         return placeholder_row("6", "Loading…");
     }
-    let tree = project_task_tree(state);
+    let id = state.current_project.get();
+    let subs = super::descendant_projects(state, &id);
+    let tree = project_task_tree(state, true);
     if tree.is_empty() {
         return placeholder_row("6", "No tasks in this project yet — add one below.");
     }
     tree.into_iter()
         .map(|(depth, t)| {
             let indent = format!("padding-left:{}px", depth * 20);
+            // A task belonging to a sub-project is marked with a chip opening that sub-project's
+            // Tasks section.
+            let sub_marker = t
+                .project
+                .as_deref()
+                .filter(|p| *p != id.as_str())
+                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())))
+                .map(|(oid, oname)| {
+                    super::sub_marker(state, route, oid, oname, ProjectSection::Tasks)
+                });
             let subtasks = if t.children_total > 0 {
                 format!("{}/{} open", t.children_open, t.children_total)
             } else {
@@ -163,7 +190,7 @@ fn project_task_rows(state: State) -> AnyView {
             };
             view! {
                 <tr>
-                    <td title=details><span style=indent>{t.title}</span></td>
+                    <td title=details><span style=indent>{t.title}</span>{sub_marker}</td>
                     <td class="adi-mono adi-muted">{t.id}</td>
                     <td>{tag_cell}</td>
                     <td><span class="adi-tstatus" data-status=t.effective>{label}</span></td>
@@ -177,9 +204,10 @@ fn project_task_rows(state: State) -> AnyView {
 }
 
 /// `<option>`s for the parent picker: every task in this project, indented by tree depth so a
-/// subtask can be nested under any node at any level.
+/// subtask can be nested under any node at any level. Sub-project tasks are deliberately excluded
+/// — a task added here files under this project, so it should only nest under this project's own.
 fn project_task_options(state: State) -> AnyView {
-    project_task_tree(state)
+    project_task_tree(state, false)
         .into_iter()
         .map(|(depth, t)| {
             // Non-breaking spaces so the depth indent survives inside <option> text.

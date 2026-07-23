@@ -5,7 +5,7 @@ use leptos::prelude::*;
 
 use crate::fetch;
 use crate::pages::agents::{agent_actions, load_agent_into_form};
-use crate::routing::{Route, push_state, scroll_top};
+use crate::routing::{ProjectSection, Route, push_state, scroll_top};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{TextField, apply_mutation, data_table, menu_item, placeholder_row, row_actions};
 
@@ -41,7 +41,7 @@ pub(crate) fn agents_panel(
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Agents"</h2>
-                <span class="adi-updated">"filed under this project"</span>
+                <span class="adi-updated">"filed under this project & its sub-projects"</span>
             </div>
             {data_table(&["Name", "Backend", "Model", "Status", ""], move || project_agent_rows(state, watch, edit_form, route))}
             <form class="adi-form" on:submit=move |ev| {
@@ -111,9 +111,10 @@ pub(crate) fn agents_panel(
     .into_any()
 }
 
-/// Rows for the project's agent table: this project's agents with the shared Run/View/Stop
-/// actions, plus an Edit that hands the agent to the full form on the Agents page. Loading/empty
-/// placeholders otherwise.
+/// Rows for the project's agent table: this project's own agents plus those filed under its
+/// nested sub-projects (each marked with a chip linking to the owning sub-project), with the
+/// shared Run/View/Stop actions and an Edit that hands the agent to the full form on the Agents
+/// page. Loading/empty placeholders otherwise.
 fn project_agent_rows(
     state: State,
     watch: AgentsWatch,
@@ -121,13 +122,18 @@ fn project_agent_rows(
     route: RwSignal<Route>,
 ) -> AnyView {
     let id = state.current_project.get();
+    // The sub-projects nested under this one — their agents fold into this panel, marked as such.
+    let subs = super::descendant_projects(state, &id);
     let Some(st) = state.agents.get() else {
         return placeholder_row("5", "Loading…");
     };
     let mine: Vec<_> = st
         .agents
         .into_iter()
-        .filter(|a| a.project.as_deref() == Some(id.as_str()))
+        .filter(|a| {
+            let p = a.project.as_deref();
+            p == Some(id.as_str()) || p.is_some_and(|p| subs.contains_key(p))
+        })
         .collect();
     if mine.is_empty() {
         return placeholder_row("5", "No agents in this project yet — add one below.");
@@ -139,6 +145,16 @@ fn project_agent_rows(
             } else {
                 a.name.clone()
             };
+            // If the agent belongs to a sub-project rather than this one, mark it with a chip that
+            // opens that sub-project's Agents section.
+            let sub_marker = a
+                .project
+                .as_deref()
+                .filter(|p| *p != id.as_str())
+                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())))
+                .map(|(oid, oname)| {
+                    super::sub_marker(state, route, oid, oname, ProjectSection::Agents)
+                });
             let backend = a.backend.clone();
             let model = a
                 .arguments
@@ -164,7 +180,7 @@ fn project_agent_rows(
                 agent_actions(state, watch, &a), vec![edit]);
             view! {
                 <tr>
-                    <td>{name_disp}</td>
+                    <td>{name_disp}{sub_marker}</td>
                     <td class="adi-mono">{backend}</td>
                     <td class="adi-mono adi-muted">{model}</td>
                     <td>{status}</td>

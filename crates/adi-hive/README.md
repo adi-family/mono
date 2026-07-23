@@ -26,13 +26,14 @@ The file is the nakit-yok **hive spec** format (see
 - **Proxy:** `proxy.bind` (addresses to listen on) and, per service, `proxy.host` +
   its HTTP port (`rollout.recreate.ports.http`) → one rule `Host: <host> →
   127.0.0.1:<http port>`.
-- **Run:** per service, `runner.script` (`run` + optional `working_dir`),
-  `environment.static`, and `restart` — what to launch and how to keep it alive.
+- **Run:** per service, a `runner` — either a `runner.script` (`run` + optional
+  `working_dir`) or a `runner.docker` container (see below) — plus `environment.static`
+  and `restart`: what to launch and how to keep it alive.
 
 Everything else (healthcheck, hooks, depends_on, defaults, observability, …) is
 accepted-but-ignored. A service without a `proxy:` block is simply not routed; one
-without a `runner.script` is simply not launched. See [`hive.yaml`](./hive.yaml) for a
-worked example.
+whose `runner` has neither a `script` nor a `docker` block is simply not launched. See
+[`hive.yaml`](./hive.yaml) for a worked example.
 
 ## Running services
 
@@ -49,6 +50,58 @@ supervises it, so the port it proxies to is actually serving — no manual `bun 
 - Each runner runs in its own process group, so on SIGTERM adi-hive tears down the
   whole tree (the shell, the dev server, and anything it forked) — no orphans holding
   a port.
+
+## Docker runners
+
+A service can run as a **container** instead of a host process — an "irregular Docker
+Compose": one container, declared with familiar compose-ish keys, but supervised by
+adi-hive (restart/backoff, hot-reload, SIGTERM teardown) rather than by `docker compose`.
+
+```yaml
+services:
+  web:
+    proxy: { host: web.adi }
+    rollout: { recreate: { ports: { http: 8080 } } }   # host port — leased by adi-hive
+    restart: always
+    environment: { static: { LOG_LEVEL: info } }
+    runner:
+      docker:
+        image: nginx:1.27
+        ports: { http: 80 }          # host port key → container port
+        volumes: ['./site:/usr/share/nginx/html:ro']
+        environment: { LOG_LEVEL: debug }   # overrides environment.static
+        pull: missing                # always | missing | never
+        args: ['--memory=512m']      # raw `docker run` flags — the escape hatch
+        command: ['nginx', '-g', 'daemon off;']   # overrides the image CMD
+```
+
+It compiles to a single foreground command the ordinary supervisor drives:
+
+```sh
+docker rm -f adi-web >/dev/null 2>&1; exec docker run --rm --name adi-web …
+```
+
+- **Host ports stay adi-hive's job.** `rollout.recreate.ports` are the leased host ports
+  (auto-leased for a proxied service, exactly as for a script). `docker.ports` maps each
+  host **port key** to the container port it forwards to, published on loopback
+  (`-p 127.0.0.1:<host>:<container>`) — so the container is reachable only through the
+  front door. The container also gets `PORT` / `PORT_<KEY>` (the *container* ports), so a
+  `$PORT`-aware image works either way.
+- **Lifecycle is the same as a script.** `docker run` runs in the foreground (no `-d`) and
+  `exec`s so it *is* the supervised process: adi-hive's SIGTERM reaches it and it forwards
+  to the container; `--rm` cleans up on exit. The leading `docker rm -f` clears a container
+  a prior hard-kill may have orphaned, so a relaunch never trips a name clash. A changed
+  `docker:` block hot-reloads like any other runner.
+- **Bind mounts** use compose `host:container[:mode]` syntax; a relative host path resolves
+  against the hive.yaml's directory, an absolute path and a named volume pass through.
+- **`args`** is a raw passthrough for anything not modelled first-class (`--network host`,
+  `-w /app`, `--user 1000`, `--gpus all`, …).
+- The container name defaults to `adi-<service>` (unsafe characters mapped to `-`);
+  override with `docker.name`.
+
+Caveat: if a container ignores SIGTERM past the shutdown grace period, adi-hive `SIGKILL`s
+the `docker run` process group but the daemon-managed container may linger — the next
+launch's `docker rm -f` reclaims the name.
 
 ## How it fits
 

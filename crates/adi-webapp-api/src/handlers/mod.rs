@@ -161,6 +161,60 @@ mod tests {
         assert_eq!(status, 404, "an unregistered project is rejected");
     }
 
+    #[test]
+    fn create_service_writes_a_docker_runner() {
+        let store = temp_projects();
+        let Response { status, body } = adi_ports_manager::with_ports(temp_manager(), || {
+            create_service(
+                &store,
+                br#"{"project":"demo","name":"web","host":"web.adi","port":45120,
+                     "docker":{"image":"nginx:1.27","container_port":80,
+                       "volumes":["./site:/usr/share/nginx/html:ro",""],
+                       "environment":{"LOG_LEVEL":"debug"},"pull":"missing",
+                       "args":["--memory=512m"],"command":["nginx","-g","daemon off;"]}}"#,
+                &[],
+            )
+        });
+        assert_eq!(status, 200, "{body}");
+        // The read-back view shows a docker service by its image as the "command".
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["services"][0]["name"], "web");
+        assert_eq!(v["services"][0]["run"], "docker: nginx:1.27");
+
+        let text = std::fs::read_to_string(store.hive_path("demo").unwrap()).unwrap();
+        assert!(text.contains("docker:"), "a docker runner is written: {text}");
+        assert!(text.contains("image: nginx:1.27"), "got: {text}");
+        assert!(text.contains("http: 80"), "container port mapping: {text}");
+        assert!(text.contains("pull: missing"), "got: {text}");
+        assert!(text.contains("LOG_LEVEL: debug"), "got: {text}");
+        assert!(text.contains("--memory=512m"), "got: {text}");
+        assert!(
+            !text.contains("script:"),
+            "a docker service must not also write a script runner: {text}"
+        );
+        // Blank volume entries are dropped.
+        assert!(
+            text.contains("./site:/usr/share/nginx/html:ro"),
+            "got: {text}"
+        );
+    }
+
+    #[test]
+    fn create_service_requires_a_run_or_a_docker_image() {
+        let store = temp_projects();
+        // Neither a run command nor a docker image → 400.
+        let Response { status, .. } =
+            create_service(&store, br#"{"project":"demo","name":"x"}"#, &[]);
+        assert_eq!(status, 400);
+        // A docker block with a blank image → 400.
+        let Response { status, .. } = create_service(
+            &store,
+            br#"{"project":"demo","name":"x","docker":{"image":"  "}}"#,
+            &[],
+        );
+        assert_eq!(status, 400);
+    }
+
     /// An isolated config rooted in a temp dir, so a dashboards test never touches the real store.
     fn temp_dashboards_cfg() -> adi_config::Config {
         let root = std::env::temp_dir().join(format!(

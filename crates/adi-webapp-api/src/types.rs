@@ -221,6 +221,9 @@ pub struct StopResult {
 
 /// Request body for `POST /api/hive/create` — add a service to a project's `.adi/hive.yaml`.
 /// Responds with the fresh [`ProjectDetail`] so the page updates in one round-trip.
+///
+/// A service runs one of two runner kinds: a **script** (`run` is the shell command) or a
+/// **docker** container (`docker` is set). Set exactly one — `docker` wins if both are given.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NewService {
     /// The owning project id (services are always project-scoped; the global front-door
@@ -228,21 +231,58 @@ pub struct NewService {
     pub project: String,
     /// The service name — the key under `services:` and the ports-manager lease segment.
     pub name: String,
-    /// The runner command (`runner.script.run`), executed via `sh -c`.
+    /// The runner command (`runner.script.run`), executed via `sh -c`. Required for a script
+    /// runner; ignored (may be empty) when `docker` is set.
+    #[serde(default)]
     pub run: String,
     /// The proxied host (`proxy.host`, e.g. `demo.adi`); omitted → no front-door route.
     #[serde(default)]
     pub host: Option<String>,
     /// An explicit `http` port; omitted → a `` ports-manager.get('<project>/<name>', 'http') ``
-    /// command is written instead, so the port is leased on read.
+    /// command is written instead, so the port is leased on read. This is the **host** port —
+    /// for a docker runner it maps to the container port in [`NewServiceDocker::container_port`].
     #[serde(default)]
     pub port: Option<u16>,
     /// The runner's working directory, relative to the project dir (`runner.script.working_dir`).
+    /// Script runner only.
     #[serde(default)]
     pub working_dir: Option<String>,
     /// Restart policy (`always` | `on-failure` | `no`); omitted → adi-hive's default.
     #[serde(default)]
     pub restart: Option<String>,
+    /// When set, the service is a **Docker container** runner (`runner.docker`) rather than a
+    /// script — see [`NewServiceDocker`].
+    #[serde(default)]
+    pub docker: Option<NewServiceDocker>,
+}
+
+/// The docker-runner half of a [`NewService`] — the fields the create form collects for a
+/// container service (`runner.docker`). Mirrors adi-hive's `Docker` config; only `image` is
+/// required. Host ports stay adi-hive's job (the service's leased `http` port); `container_port`
+/// is the port inside the container that host `http` port forwards to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NewServiceDocker {
+    /// The image to run, e.g. `nginx:1.27` (required).
+    pub image: String,
+    /// The container port the service's `http` host port forwards to (`docker.ports.http`).
+    #[serde(default)]
+    pub container_port: Option<u16>,
+    /// Bind mounts, compose `host:container[:mode]` syntax (relative host paths resolve against
+    /// the project dir).
+    #[serde(default)]
+    pub volumes: Vec<String>,
+    /// Extra container environment (`docker.environment`), as `KEY=VALUE` entries.
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    /// Image pull policy (`always` | `missing` | `never`), or omitted for docker's default.
+    #[serde(default)]
+    pub pull: Option<String>,
+    /// Raw extra `docker run` flags (`docker.args`) — the escape hatch for anything not modelled.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Override the image's default command (`docker.command`), appended after the image.
+    #[serde(default)]
+    pub command: Vec<String>,
 }
 
 /// One named port a service declares (`rollout.recreate.ports.<key> = <port>`).

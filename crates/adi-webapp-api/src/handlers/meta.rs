@@ -81,8 +81,13 @@ the split `.test`/`.adi` zones and forwards the rest.
 # The pieces you help with
 - Projects — units of work registered under `~/.adi/mono/projects/<id>` with a `config.toml` \
   manifest and an optional `.adi/hive.yaml`. Panel: /projects.
-- Hive services — long-running processes a project declares in its `.adi/hive.yaml` (a run \
-  command, a proxied host, ports). The supervisor keeps them alive. Panel: /settings/hive.
+- Hive services — long-running processes a project declares in its `.adi/hive.yaml` (a proxied \
+  host, ports, and a `runner`). A runner is one of two kinds: `runner.script` (a shell command \
+  run via `sh -c`) or `runner.docker` (a container — `image`, plus `ports` mapping each host \
+  port key to a container port, `volumes`, `environment`, `pull`, `command`, and raw `args`). \
+  Either way the supervisor keeps it alive (restart, backoff, hot-reload) and the front door \
+  proxies to its loopback port. Create either with `POST /api/hive/create` (pass a `docker` block \
+  for a container) or by editing the `.adi/hive.yaml`. Panel: /settings/hive.
 - Ports manager — leases stable local ports to `(service, key)` pairs so nothing collides. \
   Panel: /settings/ports-manager.
 - Dashboards — bun-served frontend+backend pairs under `~/.adi/mono/dashboards/<id>`, authored \

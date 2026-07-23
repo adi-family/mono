@@ -13,7 +13,7 @@ use super::workspaces::{
     NewHookForm, WorkspaceForm, hook_editor_view, hook_log_view, term_view, workspaces_panel,
 };
 use crate::fetch;
-use crate::routing::{ProjectSection, Route, go_projects, open_project};
+use crate::routing::{ProjectSection, Route, go_projects, open_project, open_project_section};
 use crate::state::{
     AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, SecretsForm, State, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
@@ -85,9 +85,15 @@ pub(crate) fn project_detail_view(
     };
     let service_form = QuickServiceForm {
         name: RwSignal::new(String::new()),
+        kind: RwSignal::new("script".to_string()),
         run: RwSignal::new(String::new()),
         host: RwSignal::new(String::new()),
         port: RwSignal::new(String::new()),
+        image: RwSignal::new(String::new()),
+        container_port: RwSignal::new(String::new()),
+        volumes: RwSignal::new(String::new()),
+        env: RwSignal::new(String::new()),
+        pull: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };
     let workspace_form = WorkspaceForm {
@@ -131,7 +137,7 @@ pub(crate) fn project_detail_view(
                 }
                 .into_any(),
                 ProjectSection::Tasks => view! {
-                    {tasks_panel(state, task_form)}
+                    {tasks_panel(state, route, task_form)}
                 }
                 .into_any(),
                 ProjectSection::Agents => view! {
@@ -296,6 +302,62 @@ fn detail_body(
             </div>
         </section>
         })}
+    }
+    .into_any()
+}
+
+/// Every transitive sub-project of `root`, as a map from project id to its display name, read
+/// from the loaded project list. The Agents and Tasks panels fold these projects' items into the
+/// parent's view — so opening "NY" also surfaces the agents and tasks filed under its nested
+/// projects, each marked with its owning sub-project. Empty when the list hasn't loaded yet or
+/// `root` has no sub-projects. Walks the `parent` links breadth-first, guarding against a
+/// malformed cycle so a bad link can't spin forever.
+pub(super) fn descendant_projects(
+    state: State,
+    root: &str,
+) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    let Some(ps) = state.projects.get() else {
+        return out;
+    };
+    let mut stack = vec![root.to_string()];
+    while let Some(cur) = stack.pop() {
+        for p in &ps.projects {
+            if p.parent.as_deref() != Some(cur.as_str()) || out.contains_key(&p.id) {
+                continue;
+            }
+            let display = if p.name.trim().is_empty() {
+                p.id.clone()
+            } else {
+                p.name.clone()
+            };
+            out.insert(p.id.clone(), display);
+            stack.push(p.id.clone());
+        }
+    }
+    out
+}
+
+/// A "belongs to a nested sub-project" marker chip for an item surfaced in a parent project's
+/// panel. Clicking it opens the owning sub-project (`owner_id`/`owner_name`) at `section` — the
+/// Agents section for an agent, Tasks for a task — so the item is one click from where it lives.
+pub(super) fn sub_marker(
+    state: State,
+    route: RwSignal<Route>,
+    owner_id: String,
+    owner_name: String,
+    section: ProjectSection,
+) -> AnyView {
+    let open_id = owner_id.clone();
+    let href = section.path(&owner_id);
+    let title = format!("filed under sub-project {owner_name}");
+    view! {
+        <a class="adi-subchip" href=href title=title
+            on:click=move |ev: web_sys::MouseEvent| {
+                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                ev.prevent_default();
+                open_project_section(state, route, open_id.clone(), section);
+            }>{format!("↳ {owner_name}")}</a>
     }
     .into_any()
 }

@@ -54,7 +54,8 @@ pub struct ServiceSpec {
     pub proxy: Option<ServiceProxy>,
     #[serde(default)]
     pub rollout: Option<Rollout>,
-    /// How to run the service locally; only `type: script` is supported (others parse but are skipped).
+    /// How to run the service locally — a `script` (a shell command) or a `docker` container.
+    /// A runner with neither parses but is skipped (nothing to launch).
     #[serde(default)]
     pub runner: Option<Runner>,
     /// Extra environment for the runner (merged after the injected `PORT*` vars).
@@ -89,11 +90,18 @@ pub struct Recreate {
     pub ports: BTreeMap<String, u16>,
 }
 
-/// The `runner:` block; only the `script` runner is modelled (other types get `script == None`).
+/// The `runner:` block: exactly one kind — a `script` (a shell command) or a `docker`
+/// container. When both are given, `docker` wins. A block with neither is skipped by
+/// [`Hive::runners`] (there is nothing to launch).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Runner {
     #[serde(default)]
     pub script: Option<Script>,
+    /// Run the service as a Docker container instead of a host process. Compiled to a
+    /// foreground `docker run` command the ordinary supervisor drives — so restart, backoff,
+    /// hot-reload, and shutdown work identically to a script runner. See [`Docker`].
+    #[serde(default)]
+    pub docker: Option<Docker>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,6 +111,54 @@ pub struct Script {
     /// Where to run it, relative to the hive.yaml's directory (or absolute); defaults to that directory.
     #[serde(default)]
     pub working_dir: Option<String>,
+}
+
+/// A container runner — an "irregular Docker Compose" service: one container, declared with the
+/// familiar compose-ish keys, but supervised by adi-hive rather than by `docker compose`. It
+/// compiles (see [`Docker::command_line`]) to a single foreground
+/// `docker run --rm` invocation, so the existing supervisor handles its whole lifecycle: a clean
+/// `docker run` (no `-d`) stays attached, forwards adi-hive's `SIGTERM` to the container, and
+/// removes it on exit; a changed spec hot-reloads like any other runner.
+///
+/// Host ports stay adi-hive's job: the service's `rollout.recreate.ports` are the (leased) host
+/// ports, and `ports` here maps each of those **port keys** to the container port it targets —
+/// published on loopback (`127.0.0.1:<host>:<container>`) so the container is reachable only
+/// through the front door, exactly like a script runner listening on `127.0.0.1`.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Docker {
+    /// The image to run, e.g. `nginx:1.27` (required).
+    pub image: String,
+    /// Override the image's default command / entrypoint args (appended after the image).
+    #[serde(default)]
+    pub command: Option<Vec<String>>,
+    /// Map each of the service's host **port keys** (from `rollout.recreate.ports`) to the
+    /// container port it forwards to — e.g. `{ http: 8080 }` publishes the leased `http` host
+    /// port to the container's `8080`. A key with no matching host port is skipped. The
+    /// container also receives the usual `PORT` / `PORT_<KEY>` env (the *container* ports), so a
+    /// `$PORT`-aware image works whether it runs as a script or a container.
+    #[serde(default)]
+    pub ports: BTreeMap<String, u16>,
+    /// Bind mounts, `host:container[:mode]` (compose syntax). A relative or `./`-prefixed host
+    /// path is resolved against the hive.yaml's directory; an absolute path and a named volume
+    /// (no path separator) are passed through untouched.
+    #[serde(default)]
+    pub volumes: Vec<String>,
+    /// Extra environment for the container (passed as `-e KEY=VALUE`). Merged over the service's
+    /// `environment.static`, which the container also receives.
+    #[serde(default)]
+    pub environment: BTreeMap<String, String>,
+    /// Image pull policy (`always` | `missing` | `never`) → `docker run --pull <policy>`.
+    #[serde(default)]
+    pub pull: Option<String>,
+    /// Raw extra flags spliced into the `docker run` invocation before the image — the escape
+    /// hatch for anything not modelled first-class (`--memory=512m`, `-w /app`, `--network host`,
+    /// `--user 1000`, `--gpus all`, …). Each entry is passed as one argument.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Override the container name. Defaults to `adi-<service>` (with unsafe characters, like the
+    /// `/` in a project-scoped `proj/app`, mapped to `-`).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -149,8 +205,7 @@ impl ServiceSpec {
             || self
                 .runner
                 .as_ref()
-                .and_then(|r| r.script.as_ref())
-                .is_some()
+                .is_some_and(|r| r.script.is_some() || r.docker.is_some())
     }
 }
 
@@ -227,22 +282,41 @@ impl Hive {
         }
     }
 
-    /// Every service that declares a `script` runner, resolved for launch; `base_dir` anchors relative `working_dir`s.
+    /// Every service that declares a launchable runner (a `script` or a `docker` container),
+    /// resolved for launch; `base_dir` anchors relative `working_dir`s and bind-mount host paths.
+    /// A runner block with neither kind is skipped. When both are present, `docker` wins.
     #[must_use]
     pub fn runners(&self, base_dir: &Path) -> Vec<RunnerSpec> {
         let mut out = Vec::new();
         for (name, svc) in &self.services {
-            let Some(script) = svc.runner.as_ref().and_then(|r| r.script.as_ref()) else {
+            let Some(runner) = svc.runner.as_ref() else {
                 continue;
             };
             let ports = svc.ports();
-            out.push(RunnerSpec {
-                name: name.clone(),
-                run: expand_templates(&script.run, ports),
-                working_dir: resolve_working_dir(base_dir, script.working_dir.as_deref()),
-                env: build_env(svc, ports),
-                restart: RestartPolicy::parse(svc.restart.as_deref()),
-            });
+            let restart = RestartPolicy::parse(svc.restart.as_deref());
+            let spec = if let Some(docker) = runner.docker.as_ref() {
+                // A container runner compiles to one foreground `docker run` command that the
+                // ordinary supervisor drives; all container state lives in `run`, so the env is
+                // empty (the container's env is baked into the command's `-e` flags).
+                RunnerSpec {
+                    name: name.clone(),
+                    run: docker.command_line(name, svc, ports, base_dir),
+                    working_dir: base_dir.to_path_buf(),
+                    env: Vec::new(),
+                    restart,
+                }
+            } else if let Some(script) = runner.script.as_ref() {
+                RunnerSpec {
+                    name: name.clone(),
+                    run: expand_templates(&script.run, ports),
+                    working_dir: resolve_working_dir(base_dir, script.working_dir.as_deref()),
+                    env: build_env(svc, ports),
+                    restart,
+                }
+            } else {
+                continue;
+            };
+            out.push(spec);
         }
         out
     }
@@ -281,6 +355,161 @@ fn resolve_working_dir(base_dir: &Path, dir: Option<&str>) -> PathBuf {
         }
         None => base_dir.to_path_buf(),
     }
+}
+
+impl Docker {
+    /// Compile this container runner into the single shell command adi-hive's supervisor runs.
+    ///
+    /// Shape: `docker rm -f <name> …; exec docker run --rm --name <name> [flags] <image> [command]`.
+    ///
+    /// - `exec` makes `docker run` replace the shell, so it *is* the supervised process — adi-hive's
+    ///   `SIGTERM` reaches it directly, and `docker run` (foreground) forwards it to the container.
+    /// - The leading `docker rm -f` clears any container the previous run orphaned (if adi-hive had
+    ///   to `SIGKILL` it past the grace period), so a relaunch never trips over a name clash.
+    /// - Every interpolated value is shell-quoted, so image names, env values, and paths with spaces
+    ///   or metacharacters can't break out of the command.
+    ///
+    /// `host_ports` are the service's leased host ports (`svc.ports()`); `base_dir` anchors relative
+    /// bind-mount host paths.
+    fn command_line(
+        &self,
+        service: &str,
+        svc: &ServiceSpec,
+        host_ports: &BTreeMap<String, u16>,
+        base_dir: &Path,
+    ) -> String {
+        let name = container_name(self.name.as_deref(), service);
+        let mut run: Vec<String> = ["docker", "run", "--rm", "--name"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        run.push(shell_quote(&name));
+
+        if let Some(pull) = self.pull.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+            run.push("--pull".to_string());
+            run.push(shell_quote(pull));
+        }
+
+        // Publish each mapped host port key to its container port, on loopback so the container is
+        // reachable only through the front door (as a script runner on 127.0.0.1 would be).
+        for (key, container_port) in &self.ports {
+            if let Some(host_port) = host_ports.get(key) {
+                run.push("-p".to_string());
+                run.push(format!("127.0.0.1:{host_port}:{container_port}"));
+            }
+        }
+
+        for (key, value) in self.container_env(svc) {
+            run.push("-e".to_string());
+            run.push(shell_quote(&format!("{key}={value}")));
+        }
+
+        for volume in &self.volumes {
+            run.push("-v".to_string());
+            run.push(shell_quote(&resolve_volume(base_dir, volume)));
+        }
+
+        // Raw passthrough flags — the escape hatch for anything not modelled first-class.
+        for arg in &self.args {
+            run.push(shell_quote(arg));
+        }
+
+        run.push(shell_quote(&self.image));
+        for arg in self.command.iter().flatten() {
+            run.push(shell_quote(arg));
+        }
+
+        format!(
+            "docker rm -f {} >/dev/null 2>&1; exec {}",
+            shell_quote(&name),
+            run.join(" ")
+        )
+    }
+
+    /// The environment handed to the container, in stable (sorted) order: the `PORT` / `PORT_<KEY>`
+    /// convention pointing at the *container* ports, then the service's `environment.static`, then
+    /// this block's own `environment` — later entries win, so an explicit value overrides a
+    /// convention default.
+    fn container_env(&self, svc: &ServiceSpec) -> BTreeMap<String, String> {
+        let mut env = BTreeMap::new();
+        for (key, container_port) in &self.ports {
+            env.insert(
+                format!("PORT_{}", key.to_ascii_uppercase()),
+                container_port.to_string(),
+            );
+            if key == HTTP_PORT_KEY {
+                env.insert("PORT".to_string(), container_port.to_string());
+            }
+        }
+        if let Some(environment) = &svc.environment {
+            for (key, value) in &environment.static_env {
+                env.insert(key.clone(), value.clone());
+            }
+        }
+        for (key, value) in &self.environment {
+            env.insert(key.clone(), value.clone());
+        }
+        env
+    }
+}
+
+/// The container name for a service: an explicit override, else `adi-<service>` with characters a
+/// Docker name can't hold (notably the `/` in a project-scoped `proj/app`) mapped to `-`. The
+/// `adi-` prefix guarantees the required leading alphanumeric.
+fn container_name(explicit: Option<&str>, service: &str) -> String {
+    if let Some(name) = explicit.map(str::trim).filter(|n| !n.is_empty()) {
+        return name.to_string();
+    }
+    let mut out = String::from("adi-");
+    out.extend(service.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') {
+            c
+        } else {
+            '-'
+        }
+    }));
+    out
+}
+
+/// Resolve the host side of a `host:container[:mode]` bind mount against `base_dir`: a relative
+/// path (starts with `.` or contains a `/`) is joined onto `base_dir`; an absolute path and a
+/// named volume (no separator) are left as-is. A string with no `:` (no container target) is
+/// passed through untouched.
+fn resolve_volume(base_dir: &Path, volume: &str) -> String {
+    let Some((host, rest)) = volume.split_once(':') else {
+        return volume.to_string();
+    };
+    let looks_like_path = host.starts_with('.') || host.contains('/');
+    if !looks_like_path {
+        return volume.to_string();
+    }
+    // A leading `./` is just "here" — drop it so the joined path stays clean (`/base/site`, not
+    // `/base/./site`); both are equivalent to Docker, but the tidy form is what shows in logs.
+    let host = host.strip_prefix("./").unwrap_or(host);
+    let path = Path::new(host);
+    let resolved = if path.is_absolute() {
+        host.to_string()
+    } else {
+        base_dir.join(path).to_string_lossy().into_owned()
+    };
+    format!("{resolved}:{rest}")
+}
+
+/// Quote a value for safe interpolation into an `sh -c` command line. Values made only of a small
+/// safe set are passed through bare; anything else is single-quoted, with embedded single quotes
+/// escaped the POSIX way (`'\''`). An empty string becomes `''`.
+fn shell_quote(value: &str) -> String {
+    const SAFE: &str = "-_./=:@%+,";
+    if value.is_empty() {
+        return "''".to_string();
+    }
+    if value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || SAFE.contains(c))
+    {
+        return value.to_string();
+    }
+    format!("'{}'", value.replace('\'', r"'\''"))
 }
 
 /// Substitute `{{ runtime.port.<key> }}` placeholders with the named port; unknown/malformed left verbatim.
@@ -913,7 +1142,10 @@ services:
     }
 
     #[test]
-    fn a_runner_with_no_script_is_skipped() {
+    fn a_runner_with_neither_script_nor_docker_is_skipped() {
+        // A bare `type: docker` is *not* a docker runner — the runner kind is chosen by the
+        // `script`/`docker` sub-block, and an unknown `type` key is ignored. With neither block
+        // there is nothing to launch, so the service is skipped.
         let hive: Hive = serde_yaml_ng::from_str(
             r"
 services:
@@ -925,5 +1157,154 @@ services:
         )
         .unwrap();
         assert!(hive.runners(Path::new("/x")).is_empty());
+    }
+
+    #[test]
+    fn docker_runner_compiles_to_a_supervised_docker_run() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  web:
+    proxy: { host: web.adi }
+    rollout: { recreate: { ports: { http: 8080 } } }
+    restart: always
+    environment: { static: { LOG_LEVEL: info } }
+    runner:
+      docker:
+        image: nginx:1.27
+        ports: { http: 80 }
+        volumes: ['./site:/usr/share/nginx/html:ro', 'named:/cache']
+        environment: { LOG_LEVEL: debug, EXTRA: '1' }
+        pull: always
+        args: ['--memory=512m']
+        command: ['nginx', '-g', 'daemon off;']
+",
+        )
+        .unwrap();
+
+        let runners = hive.runners(Path::new("/srv/web"));
+        assert_eq!(runners.len(), 1);
+        let spec = &runners[0];
+        assert_eq!(spec.name, "web");
+        assert_eq!(spec.restart, RestartPolicy::Always);
+        // The container is everything — no host-process env is threaded in.
+        assert!(spec.env.is_empty());
+
+        let run = &spec.run;
+        // Pre-clean then exec so `docker run` becomes the supervised process.
+        assert!(
+            run.starts_with("docker rm -f adi-web >/dev/null 2>&1; exec docker run --rm --name adi-web"),
+            "got: {run}"
+        );
+        assert!(run.contains("--pull always"), "got: {run}");
+        // Leased host port 8080 → container 80, on loopback.
+        assert!(run.contains("-p 127.0.0.1:8080:80"), "got: {run}");
+        // Container gets the PORT convention pointing at the *container* port.
+        assert!(run.contains("-e PORT=80"), "got: {run}");
+        assert!(run.contains("-e PORT_HTTP=80"), "got: {run}");
+        // The block's env overrides the service's static env of the same name.
+        assert!(run.contains("-e LOG_LEVEL=debug"), "got: {run}");
+        assert!(!run.contains("LOG_LEVEL=info"), "override should win: {run}");
+        assert!(run.contains("-e EXTRA=1"), "got: {run}");
+        // Relative bind-mount host path resolved against base_dir; a named volume left alone.
+        assert!(
+            run.contains("-v /srv/web/site:/usr/share/nginx/html:ro"),
+            "got: {run}"
+        );
+        assert!(run.contains("-v named:/cache"), "got: {run}");
+        assert!(run.contains("--memory=512m"), "got: {run}");
+        // Image, then the overriding command (with the space-bearing arg quoted).
+        assert!(
+            run.trim_end().ends_with("nginx:1.27 nginx -g 'daemon off;'"),
+            "got: {run}"
+        );
+    }
+
+    #[test]
+    fn docker_runner_gets_a_host_port_allocated_like_a_script() {
+        // A proxied docker service with no declared http port has one leased, just as a script
+        // runner would — so `ports: { http: ... }` has a host side to publish.
+        let registry = std::env::temp_dir().join(format!(
+            "adi-hive-docker-{}-{:?}/registry.json",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(registry.parent().unwrap());
+        let manager = adi_ports_manager::Ports::with_config(adi_ports_manager::Config {
+            registry_path: registry.clone(),
+            ..adi_ports_manager::Config::default()
+        });
+
+        let mut hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  api:
+    proxy: { host: api.adi }
+    runner:
+      docker:
+        image: my/api:latest
+        ports: { http: 3000 }
+",
+        )
+        .unwrap();
+        let allocated = hive.allocate_missing_ports(&manager);
+        assert_eq!(allocated.len(), 1, "one http port leased for the container");
+        let host = allocated[0].1;
+
+        let runners = hive.runners(Path::new("/x"));
+        assert!(
+            runners[0].run.contains(&format!("-p 127.0.0.1:{host}:3000")),
+            "got: {}",
+            runners[0].run
+        );
+        let _ = std::fs::remove_dir_all(registry.parent().unwrap());
+    }
+
+    #[test]
+    fn docker_takes_precedence_when_both_kinds_are_present() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  svc:
+    runner:
+      script: { run: 'echo hi' }
+      docker: { image: busybox }
+",
+        )
+        .unwrap();
+        let runners = hive.runners(Path::new("/x"));
+        assert_eq!(runners.len(), 1);
+        assert!(runners[0].run.contains("docker run"), "docker should win");
+        assert!(!runners[0].run.contains("echo hi"));
+    }
+
+    #[test]
+    fn container_name_sanitizes_and_can_be_overridden() {
+        assert_eq!(container_name(None, "app"), "adi-app");
+        assert_eq!(container_name(None, "proj/app"), "adi-proj-app");
+        assert_eq!(container_name(Some("custom"), "proj/app"), "custom");
+        assert_eq!(container_name(Some("  "), "app"), "adi-app");
+    }
+
+    #[test]
+    fn resolve_volume_only_rewrites_relative_paths() {
+        let base = Path::new("/base");
+        assert_eq!(
+            resolve_volume(base, "./data:/data"),
+            "/base/data:/data"
+        );
+        assert_eq!(resolve_volume(base, "sub/x:/x:ro"), "/base/sub/x:/x:ro");
+        assert_eq!(resolve_volume(base, "/abs:/data"), "/abs:/data");
+        assert_eq!(resolve_volume(base, "named:/data"), "named:/data");
+        assert_eq!(resolve_volume(base, "no-target"), "no-target");
+    }
+
+    #[test]
+    fn shell_quote_passes_safe_and_escapes_the_rest() {
+        assert_eq!(shell_quote("nginx:1.27"), "nginx:1.27");
+        assert_eq!(shell_quote("PORT=80"), "PORT=80");
+        assert_eq!(shell_quote(""), "''");
+        assert_eq!(shell_quote("daemon off;"), "'daemon off;'");
+        assert_eq!(shell_quote("a'b"), r"'a'\''b'");
     }
 }
