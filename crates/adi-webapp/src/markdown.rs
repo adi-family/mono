@@ -3,8 +3,8 @@
 //! Hand-rolled rather than pulled from a crate — the same reasoning as [`crate::highlight`]: a
 //! Markdown crate (pulldown-cmark, comrak) would add real weight to the wasm bundle, and agent
 //! messages use a narrow slice of Markdown. This covers that slice: fenced code blocks, ATX
-//! headings, bullet / numbered lists, blockquotes, paragraphs, and inline **bold**, *italic*,
-//! `code`, and [links](https://example.com).
+//! headings, bullet / numbered lists, blockquotes, GitHub-style tables, paragraphs, and inline
+//! **bold**, *italic*, `code`, and [links](https://example.com).
 //!
 //! It builds Leptos elements directly — never `inner_html` — so every run of text is escaped by the
 //! framework and the renderer cannot inject markup. Link URLs are scheme-checked (`http`/`https`/
@@ -20,7 +20,7 @@ pub(crate) fn render(src: &str) -> AnyView {
 }
 
 /// Block-level parse: walk the lines, grouping them into headings, fenced code, lists, blockquotes,
-/// and paragraphs. A blank line separates blocks.
+/// tables, and paragraphs. A blank line separates blocks.
 fn parse_blocks(src: &str) -> Vec<AnyView> {
     let lines: Vec<&str> = src.lines().collect();
     let mut out: Vec<AnyView> = Vec::new();
@@ -95,6 +95,28 @@ fn parse_blocks(src: &str) -> Vec<AnyView> {
             continue;
         }
 
+        // Table (GitHub-flavored): a header row of `|`-separated cells followed by a delimiter row
+        // (`| --- | :--: |`). Requiring the delimiter on the very next line keeps a paragraph that
+        // merely contains a `|` from being mistaken for a table.
+        if trimmed.contains('|')
+            && i + 1 < lines.len()
+            && let Some(aligns) = table_delimiter(lines[i + 1].trim())
+        {
+            let header = split_table_row(trimmed);
+            i += 2;
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            while i < lines.len() {
+                let t = lines[i].trim();
+                if t.is_empty() || !t.contains('|') {
+                    break;
+                }
+                rows.push(split_table_row(t));
+                i += 1;
+            }
+            out.push(render_table(&header, &rows, &aligns));
+            continue;
+        }
+
         // Paragraph: consecutive lines until a blank line or a block-starter. Soft line breaks
         // become spaces (standard Markdown).
         let mut para = String::new();
@@ -105,6 +127,9 @@ fn parse_blocks(src: &str) -> Vec<AnyView> {
                 || heading(t).is_some()
                 || t.starts_with('>')
                 || list_item(t).is_some()
+                || (t.contains('|')
+                    && i + 1 < lines.len()
+                    && table_delimiter(lines[i + 1].trim()).is_some())
             {
                 break;
             }
@@ -117,6 +142,114 @@ fn parse_blocks(src: &str) -> Vec<AnyView> {
         out.push(view! { <p class="adi-md__p">{parse_inline(&para)}</p> }.into_any());
     }
     out
+}
+
+/// Per-column text alignment declared by a table's delimiter row.
+#[derive(Clone, Copy)]
+enum Align {
+    None,
+    Left,
+    Center,
+    Right,
+}
+
+impl Align {
+    /// The inline `style` value for a cell (empty for the default alignment).
+    fn style(self) -> &'static str {
+        match self {
+            Align::None => "",
+            Align::Left => "text-align:left",
+            Align::Center => "text-align:center",
+            Align::Right => "text-align:right",
+        }
+    }
+}
+
+/// If `line` is a table delimiter row (`| --- | :--: | ---: |`), return the per-column alignment;
+/// else `None`. Every cell must be a run of dashes with optional leading/trailing colons.
+fn table_delimiter(line: &str) -> Option<Vec<Align>> {
+    let cells = split_table_row(line);
+    if cells.is_empty() {
+        return None;
+    }
+    let mut aligns = Vec::with_capacity(cells.len());
+    for cell in &cells {
+        let c = cell.trim();
+        let left = c.starts_with(':');
+        let right = c.ends_with(':');
+        let dashes = c.trim_matches(':');
+        if dashes.is_empty() || !dashes.bytes().all(|b| b == b'-') {
+            return None;
+        }
+        aligns.push(match (left, right) {
+            (true, true) => Align::Center,
+            (true, false) => Align::Left,
+            (false, true) => Align::Right,
+            (false, false) => Align::None,
+        });
+    }
+    Some(aligns)
+}
+
+/// Split a table row into its cells: break on unescaped `|`, unescape `\|`, and drop the empty edge
+/// cells produced by an optional leading / trailing `|`.
+fn split_table_row(line: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut cur = String::new();
+    let mut chars = line.trim().chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cur.push('|');
+                chars.next();
+            }
+            '|' => cells.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    cells.push(cur);
+    if cells.first().is_some_and(|c| c.trim().is_empty()) {
+        cells.remove(0);
+    }
+    if cells.last().is_some_and(|c| c.trim().is_empty()) {
+        cells.pop();
+    }
+    cells
+}
+
+/// Render a parsed table: a header row, the body rows, and per-column alignment. A body row with
+/// more cells than the header still renders them; a shorter row just ends early.
+fn render_table(header: &[String], rows: &[Vec<String>], aligns: &[Align]) -> AnyView {
+    let style = |col: usize| aligns.get(col).copied().unwrap_or(Align::None).style();
+    let head: Vec<AnyView> = header
+        .iter()
+        .enumerate()
+        .map(|(c, cell)| view! { <th style=style(c)>{parse_inline(cell.trim())}</th> }.into_any())
+        .collect();
+    let body: Vec<AnyView> = rows
+        .iter()
+        .map(|row| {
+            let cells: Vec<AnyView> = row
+                .iter()
+                .enumerate()
+                .map(|(c, cell)| {
+                    view! { <td style=style(c)>{parse_inline(cell.trim())}</td> }.into_any()
+                })
+                .collect();
+            view! { <tr>{cells}</tr> }.into_any()
+        })
+        .collect();
+    // Wrapped in a scroll container so a table only ever scrolls (never widens the message bubble)
+    // when its content genuinely needs more room than the message is wide.
+    view! {
+        <div class="adi-md__table-wrap">
+            <table class="adi-md__table">
+                <thead><tr>{head}</tr></thead>
+                <tbody>{body}</tbody>
+            </table>
+        </div>
+    }
+    .into_any()
 }
 
 /// The fence character (`` ` `` or `~`) if `line` opens a fenced code block, else `None`.

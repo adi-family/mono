@@ -2,7 +2,8 @@
 
 use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
-    AgentsState, ApiError, Dashboard, DashboardRef, DashboardsState, DirListing, FileContent,
+    AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardsState, DirListing,
+    FileContent,
     FilesRef,
     FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef,
     MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewProject,
@@ -230,6 +231,11 @@ pub async fn stop_agent(name: String) -> Result<AgentsState, String> {
 /// A headless agent's run history, newest first.
 pub async fn agent_runs(name: String) -> Result<AgentRuns, String> {
     post("/api/agents/runs", &AgentRef { name }).await
+}
+
+/// Every agent's run history in one call — the data behind the cross-agent "All chats" index.
+pub async fn all_agent_runs() -> Result<AllAgentRuns, String> {
+    get("/api/agents/runs/all").await
 }
 
 /// A snapshot of one specific run's log (plus the conversation transcript, for harness runs).

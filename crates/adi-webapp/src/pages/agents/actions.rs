@@ -15,7 +15,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{AgentsWatch, Flash, State};
-use crate::ui::{apply_mutation, data_table};
+use crate::ui::{apply_mutation, data_table, placeholder_row};
 
 use super::send_bar;
 
@@ -192,6 +192,34 @@ fn select_run(watch: AgentsWatch, run_id: String) {
     poll_watch(watch);
 }
 
+/// Prepend the watch's context prefix (if any) to a message before it is sent — how the
+/// dashboard-agent embed tags every message with which dashboard it was opened from. Inert (returns
+/// the message unchanged) whenever no prefix is set, so the normal app is unaffected.
+fn with_context(watch: AgentsWatch, message: String) -> String {
+    let prefix = watch.context_prefix.get_untracked();
+    if prefix.trim().is_empty() {
+        message
+    } else {
+        format!("{prefix}\n\n{message}")
+    }
+}
+
+/// Open a specific conversation from the cross-agent "All chats" index: point the shared live view
+/// at its agent and select that run, so its transcript opens in the panel below (and scrolls into
+/// view). Interactive agents keep no run history, so `run_id` is only selected when present.
+pub(crate) fn open_conversation(
+    watch: AgentsWatch,
+    name: String,
+    run_id: String,
+    interactive: bool,
+) {
+    open_watch(watch, name, interactive);
+    if !run_id.is_empty() {
+        watch.run_id.set(Some(run_id));
+        poll_watch(watch);
+    }
+}
+
 /// Close the expanded log view (the detail row's Close, or a second click on the row's own button):
 /// deselect the run so its detail row collapses, and drop the tail so reopening starts clean. The
 /// run history stays open — this closes only the log, not the whole panel.
@@ -267,6 +295,107 @@ pub(crate) fn live_view(state: State, watch: AgentsWatch) -> Option<AnyView> {
     } else {
         Some(runs_panel(state, watch, name))
     }
+}
+
+/// The cross-agent **All chats** index: every conversation across the agents visible on the page,
+/// newest first, each openable in the shared live view below. `only` restricts it to agents filed
+/// under the given project ids (the project detail page passes its project + sub-projects); `None`
+/// includes every agent (the standalone Agents page). Its own reactive island is the table, so the
+/// 1s/4s polls refresh the list in place without rebuilding the panel.
+pub(crate) fn all_chats_view(state: State, watch: AgentsWatch, only: Option<Vec<String>>) -> AnyView {
+    let only_head = only.clone();
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"All chats"</h2>
+                <span class="adi-chip adi-mono" title="conversations across every agent on this page">
+                    {move || all_chats_flatten(state, &only_head).len().to_string()}
+                </span>
+                <span class="adi-spacer"></span>
+                <span class="adi-updated">"every agent's conversations — open one below"</span>
+            </div>
+            {data_table(&["Agent", "When", "Status", "Conversation", ""],
+                move || all_chats_rows(state, watch, &only))}
+        </section>
+    }
+    .into_any()
+}
+
+/// Flatten every included agent's runs into `(agent, answerable, interactive, run)` tuples, newest
+/// first. `only` (project ids) filters by each agent's project, read from the loaded agents list;
+/// `None` includes them all.
+fn all_chats_flatten(
+    state: State,
+    only: &Option<Vec<String>>,
+) -> Vec<(String, bool, bool, AgentRunInfo)> {
+    let Some(all) = state.all_chats.get() else {
+        return Vec::new();
+    };
+    let project_of: std::collections::HashMap<String, Option<String>> = state
+        .agents
+        .get()
+        .map(|a| a.agents.into_iter().map(|d| (d.name, d.project)).collect())
+        .unwrap_or_default();
+    let included = |name: &str| match only {
+        None => true,
+        Some(ids) => project_of
+            .get(name)
+            .and_then(|p| p.as_deref())
+            .is_some_and(|p| ids.iter().any(|id| id == p)),
+    };
+    let mut rows: Vec<(String, bool, bool, AgentRunInfo)> = Vec::new();
+    for ar in all.agents {
+        if !included(&ar.name) {
+            continue;
+        }
+        for r in ar.runs {
+            rows.push((ar.name.clone(), ar.answerable, ar.interactive, r));
+        }
+    }
+    // Newest conversation first, across all agents.
+    rows.sort_by(|a, b| b.3.started_at.cmp(&a.3.started_at));
+    rows
+}
+
+/// Rows for the All chats table: one per conversation (its agent, age, status, first message, and an
+/// Open that reveals it in the live view below). Loading/empty placeholders otherwise.
+fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) -> AnyView {
+    if state.all_chats.get().is_none() {
+        return placeholder_row("5", "Loading…");
+    }
+    let rows = all_chats_flatten(state, only);
+    if rows.is_empty() {
+        return placeholder_row("5", "No chats yet — start one from an agent below.");
+    }
+    rows.into_iter()
+        .map(|(agent, answerable, interactive, r)| {
+            let when = run_age(r.started_at);
+            let status = match (answerable, r.running) {
+                (true, true) => "\u{25CF} answering",
+                (true, false) => "idle",
+                (false, true) => "\u{25CF} running",
+                (false, false) => "done",
+            };
+            let msg_full = r.message.clone();
+            let msg_short = truncate_task(&msg_full);
+            let (name, run_id) = (agent.clone(), r.run_id.clone());
+            view! {
+                <tr>
+                    <td class="adi-mono">{agent}</td>
+                    <td class="adi-muted" style="white-space:nowrap">{when}</td>
+                    <td>{status}</td>
+                    <td class="adi-mono" title=msg_full>{msg_short}</td>
+                    <td class="adi-table__actions">
+                        <button class="adi-btn adi-btn--link"
+                            on:click=move |_| open_conversation(watch, name.clone(), run_id.clone(), interactive)>
+                            "Open"
+                        </button>
+                    </td>
+                </tr>
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
 }
 
 /// The interactive (tmux) live view: a 1s-refreshed pane capture with a send bar to type into it.
@@ -640,7 +769,7 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                     return;
                 }
                 watch.reply.set(String::new());
-                send_reply(state, watch, message);
+                send_reply(state, watch, with_context(watch, message));
             }>
             <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
                 placeholder="reply…"
@@ -776,7 +905,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                     return;
                 }
                 watch.input.set(String::new());
-                launch_agent(state, watch, name, message);
+                launch_agent(state, watch, name, with_context(watch, message));
             }>
             <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
                 placeholder=placeholder

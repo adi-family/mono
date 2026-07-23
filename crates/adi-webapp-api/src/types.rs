@@ -844,6 +844,14 @@ pub struct AgentRuns {
     pub runs: Vec<AgentRunInfo>,
 }
 
+/// `GET /api/agents/runs/all` — the run history of **every** agent, in one round-trip, for the
+/// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), so the
+/// client can flatten them into a single "all chats" list and open any conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AllAgentRuns {
+    pub agents: Vec<AgentRuns>,
+}
+
 /// A zero capability profile — the `serde` default when an older/absent response omits `caps`.
 fn default_caps() -> AgentCapabilities {
     AgentCapabilities {

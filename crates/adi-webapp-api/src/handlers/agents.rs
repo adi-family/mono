@@ -14,8 +14,8 @@ use crate::types::{
     AgentBackendOption, AgentBuildResult, AgentCapabilities, AgentCode, AgentDto, AgentFormField,
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef,
     AgentRunInfo, AgentRunResult, AgentRuns, AgentStep, AgentToolStatus, AgentTurn,
-    AgentTurnMetrics, AgentsState, ReplyToRun, RunAgent, RunRef, SaveAgent, SaveAgentCode,
-    SecretRef,
+    AgentTurnMetrics, AgentsState, AllAgentRuns, ReplyToRun, RunAgent, RunRef, SaveAgent,
+    SaveAgentCode, SecretRef,
 };
 
 use super::files::MAX_TEXT_BYTES;
@@ -204,6 +204,20 @@ pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
         return Response::from(&e);
     }
     ok_json(&runs_response(store, &agent))
+}
+
+/// `GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the
+/// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), in the
+/// store's list order; the client flattens and sorts them.
+#[must_use]
+pub fn all_agent_runs(store: &Agents) -> Response {
+    match store.list() {
+        Ok(agents) => {
+            let agents = agents.iter().map(|a| runs_response(store, a)).collect();
+            ok_json(&AllAgentRuns { agents })
+        }
+        Err(e) => Response::from(&e),
+    }
 }
 
 /// Build the [`AgentRuns`] history answer for an agent.

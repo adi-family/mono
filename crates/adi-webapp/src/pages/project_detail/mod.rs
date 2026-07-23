@@ -6,7 +6,7 @@ use adi_webapp_api::types::{ProjectDetail, ProjectsState};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use super::agents::live_view as agent_live_view;
+use super::agents::{all_chats_view, live_view as agent_live_view};
 use super::tools::{tool_editor_view, tool_run_view};
 use super::triggers::log_view;
 use super::workspaces::{
@@ -141,6 +141,7 @@ pub(crate) fn project_detail_view(
                 }
                 .into_any(),
                 ProjectSection::Agents => view! {
+                    {all_chats_view(state, agents_watch, Some(project_agent_scope(state)))}
                     {move || agent_live_view(state, agents_watch)}
                     {agents_panel(state, agent_form, agents_watch, agents_form, route)}
                 }
@@ -336,6 +337,16 @@ pub(super) fn descendant_projects(
         }
     }
     out
+}
+
+/// The project ids whose agents count as "visible on this page": the open project plus every
+/// nested sub-project — the same set the Agents panel lists. Passed to the All-chats index so it
+/// shows only conversations from agents filed under this project's tree.
+pub(super) fn project_agent_scope(state: State) -> Vec<String> {
+    let id = state.current_project.get();
+    let mut ids: Vec<String> = descendant_projects(state, &id).into_keys().collect();
+    ids.push(id);
+    ids
 }
 
 /// A "belongs to a nested sub-project" marker chip for an item surfaced in a parent project's

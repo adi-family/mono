@@ -19,7 +19,7 @@ mod code;
 mod form;
 
 use actions::apply_agents;
-pub(crate) use actions::{agent_actions, live_view, poll_watch};
+pub(crate) use actions::{agent_actions, all_chats_view, live_view, poll_watch};
 use code::{code_editor_view, open_code_editor};
 pub(crate) use form::load_agent_into_form;
 use form::{agent_argument_values, agent_form_fields, agent_param_applies, clear_agent_form};
@@ -51,6 +51,8 @@ pub(crate) fn agents_view(
         ..
     } = form;
     view! {
+        {all_chats_view(state, watch, None)}
+
         {move || live_view(state, watch)}
 
         {move || code_editor_view(state, code)}

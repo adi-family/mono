@@ -103,6 +103,25 @@
       // Runtime config injected by frontend/index.ts.
       const config = __ADI_CONFIG__;
 
+      // adi-agent editor launcher — a floating button that opens the control panel's embedded
+      // adi-agent chat, scoped to this dashboard, so you can edit its .ts files by chatting with it.
+      (() => {
+        const btn = document.createElement("button");
+        btn.textContent = "✎ edit";
+        btn.title = "Edit this dashboard with adi-agent";
+        btn.style.cssText =
+          "position:fixed;right:14px;bottom:14px;z-index:2147483647;padding:7px 12px;" +
+          "border-radius:999px;border:1px solid var(--line);background:var(--panel);" +
+          "color:var(--ink);font:600 12px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;" +
+          "box-shadow:0 2px 8px rgba(0,0,0,.18);";
+        btn.addEventListener("click", () => {
+          const url =
+            "//app.adi/embed/dashboard-agent?dashboard=" + encodeURIComponent(config.dashboard);
+          window.open(url, "adi-dashboard-agent", "width=480,height=760");
+        });
+        document.body.append(btn);
+      })();
+
       const app = document.getElementById("app");
       const status = document.getElementById("status");
 

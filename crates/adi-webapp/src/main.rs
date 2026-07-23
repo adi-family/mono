@@ -35,14 +35,14 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, dashboards_view, hive_view, load_dir, load_store_file, mesh_view, meta_view,
-    poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
+    agents_view, dashboards_view, hive_view, live_view, load_dir, load_store_file, mesh_view,
+    meta_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
     project_detail_view, projects_view, secrets_view, store_file_view, tasks_view, tools_view,
     triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
-    project_section_from_path, replace_state, spa_click,
+    project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
@@ -54,7 +54,66 @@ use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 fn main() {
     console_error_panic_hook::set_once();
     apply_saved_theme();
-    mount_to_body(App);
+    // A dashboard's "edit with adi-agent" launcher opens `/embed/dashboard-agent` — a chrome-less
+    // page (no workbench shell) that hosts the global agent chat. Everything else is the full App.
+    if current_path().starts_with("/embed/dashboard-agent") {
+        mount_to_body(EmbedDashboardAgent);
+    } else {
+        mount_to_body(App);
+    }
+}
+
+/// The chrome-less dashboard-agent embed (`/embed/dashboard-agent?dashboard=<id>`): the one global
+/// `adi-agent` chat, opened from a dashboard's launcher. It reuses the agent live view, points it at
+/// `adi-agent`, and sets a context prefix so every message it sends is tagged with which dashboard
+/// it was opened from — the agent then edits that dashboard's `.ts` files. Served by app.adi, so its
+/// API calls are same-origin (no CORS).
+#[component]
+fn EmbedDashboardAgent() -> impl IntoView {
+    let state = State::fresh();
+    let watch = AgentsWatch::new();
+    let dashboard = query_param("dashboard").unwrap_or_default();
+
+    if !dashboard.is_empty() {
+        watch.context_prefix.set(format!(
+            "[Context: you are editing dashboard {dashboard}. Its files are at \
+             ~/.adi/mono/dashboards/{dashboard} — UI panels in frontend/modules/*.ts, endpoints in \
+             backend/routes/*.ts. Edit those .ts files; the dashboard hot-reloads.]"
+        ));
+    }
+
+    // Learn whether adi-agent is interactive (tmux) vs headless, point the live view at it, and poll.
+    spawn_local(async move {
+        if let Ok(a) = fetch::agents().await {
+            let interactive = a
+                .agents
+                .iter()
+                .find(|d| d.name == "adi-agent")
+                .is_some_and(|d| d.executor == "tmux");
+            watch.interactive.set(interactive);
+            state.agents.set(Some(a));
+        }
+        watch.name.set(Some("adi-agent".to_string()));
+        poll_watch(watch);
+    });
+    Interval::new(1_000, move || poll_watch(watch)).forget();
+
+    let ctx_label = dashboard.clone();
+    view! {
+        <div class="adi-embed">
+            <header class="adi-embed__head">
+                <span class="adi-embed__brand">"adi\u{00b7}agent"</span>
+                {(!ctx_label.is_empty()).then(|| view! {
+                    <span class="adi-embed__ctx adi-mono" title=ctx_label.clone()>
+                        {format!("\u{270e} {}", ctx_label.chars().take(8).collect::<String>())}
+                    </span>
+                })}
+            </header>
+            <div class="adi-embed__body">
+                {move || live_view(state, watch)}
+            </div>
+        </div>
+    }
 }
 
 /// The application shell: sidebar navigation, a header, and the routed page body. Shared
@@ -72,6 +131,7 @@ fn App() -> impl IntoView {
     let project_detail = RwSignal::new(None::<ProjectDetail>);
     let tasks = RwSignal::new(None::<TasksState>);
     let agents = RwSignal::new(None::<AgentsState>);
+    let all_chats = RwSignal::new(None::<adi_webapp_api::types::AllAgentRuns>);
     let tools = RwSignal::new(None::<ToolsState>);
     let secrets = RwSignal::new(None::<SecretsState>);
     let meta = RwSignal::new(None::<MetaState>);
@@ -100,6 +160,7 @@ fn App() -> impl IntoView {
         current_section,
         tasks,
         agents,
+        all_chats,
         tools,
         secrets,
         meta,

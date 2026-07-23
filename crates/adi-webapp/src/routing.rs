@@ -221,6 +221,15 @@ pub(crate) fn current_path() -> String {
         .unwrap_or_default()
 }
 
+/// A query-string parameter of the current URL (e.g. `?dashboard=<id>`), or `None` if absent.
+pub(crate) fn query_param(name: &str) -> Option<String> {
+    let search = web_sys::window()?.location().search().ok()?;
+    web_sys::UrlSearchParams::new_with_str(&search)
+        .ok()?
+        .get(name)
+        .filter(|v| !v.is_empty())
+}
+
 /// The project id in a `/projects/<id>` or `/projects/<id>/<section>` path, or `None` for any
 /// other path (including the bare `/projects` list). The id segment must be non-empty.
 pub(crate) fn project_id_from_path(path: &str) -> Option<String> {

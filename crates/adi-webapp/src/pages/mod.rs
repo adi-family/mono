@@ -16,7 +16,7 @@ mod tools;
 mod triggers;
 mod workspaces;
 
-pub(crate) use agents::{agents_view, poll_watch};
+pub(crate) use agents::{agents_view, live_view, poll_watch};
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;

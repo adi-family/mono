@@ -5,10 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_webapp_api::types::{
-    AgentPeek, AgentRunInfo, AgentsState, DashboardsState, DirListing, FileEntry, Health,
-    HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState,
-    SecretsState, TasksState, ToolsState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm,
-    WorkspacesState,
+    AgentPeek, AgentRunInfo, AgentsState, AllAgentRuns, DashboardsState, DirListing, FileEntry,
+    Health, HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
+    ProjectsState, SecretsState, TasksState, ToolsState, TriggerLog, TriggersState, UsedPorts,
+    WorkspaceTerm, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -35,6 +35,9 @@ pub(crate) struct State {
     pub(crate) tasks: RwSignal<Option<TasksState>>,
     /// Agent definitions (`/api/agents`), shown on the Agents page.
     pub(crate) agents: RwSignal<Option<AgentsState>>,
+    /// Every agent's run history (`/api/agents/runs/all`) — the data behind the cross-agent
+    /// "All chats" index shown above the Agents list and the single-agent live view.
+    pub(crate) all_chats: RwSignal<Option<AllAgentRuns>>,
     /// Tool definitions (`/api/tools`), shown on the Tools page and each project's Tools panel.
     pub(crate) tools: RwSignal<Option<ToolsState>>,
     /// Secret metadata across every scope (`/api/secrets`), shown on the Secrets page and each
@@ -59,6 +62,40 @@ pub(crate) struct State {
     pub(crate) store: StoreBrowser,
     /// The open table-row kebab menu, shared by every page's action columns. See [`RowMenu`].
     pub(crate) row_menu: RwSignal<Option<RowMenu>>,
+}
+
+impl State {
+    /// A fresh state with every signal empty. Used by the standalone dashboard-agent embed page,
+    /// which reuses the agent chat components but not the main App shell (which seeds its own
+    /// project/section from the path).
+    pub(crate) fn fresh() -> Self {
+        Self {
+            status: RwSignal::new(Status::Connecting),
+            ports: RwSignal::new(None),
+            health: RwSignal::new(None),
+            flash: RwSignal::new(None),
+            secs_since: RwSignal::new(0),
+            used: RwSignal::new(None),
+            mesh: RwSignal::new(None),
+            projects: RwSignal::new(None),
+            project_detail: RwSignal::new(None),
+            current_project: RwSignal::new(String::new()),
+            current_section: RwSignal::new(ProjectSection::Overview),
+            tasks: RwSignal::new(None),
+            agents: RwSignal::new(None),
+            all_chats: RwSignal::new(None),
+            tools: RwSignal::new(None),
+            secrets: RwSignal::new(None),
+            meta: RwSignal::new(None),
+            triggers: RwSignal::new(None),
+            hive: RwSignal::new(None),
+            dashboards: RwSignal::new(None),
+            workspaces: RwSignal::new(None),
+            files: FilesState::new(),
+            store: StoreBrowser::new(),
+            row_menu: RwSignal::new(None),
+        }
+    }
 }
 
 /// The right rail's store browser: a lazily-expanded tree over `~/.adi/mono` (served through
@@ -718,6 +755,10 @@ pub(crate) struct AgentsWatch {
     /// Text buffer for the chat reply box under a selected answerable (harness) conversation —
     /// kept apart from `input` (the new-conversation composer) so the two don't clobber each other.
     pub(crate) reply: RwSignal<String>,
+    /// A context line prepended to every message this view sends (new run *and* reply). Empty in the
+    /// normal app; the dashboard-agent embed sets it to "editing dashboard <id> …" so the one global
+    /// `adi-agent` session always knows which dashboard it was opened from.
+    pub(crate) context_prefix: RwSignal<String>,
 }
 
 impl AgentsWatch {
@@ -732,6 +773,7 @@ impl AgentsWatch {
             log: RwSignal::new(String::new()),
             input: RwSignal::new(String::new()),
             reply: RwSignal::new(String::new()),
+            context_prefix: RwSignal::new(String::new()),
         }
     }
 
@@ -746,6 +788,7 @@ impl AgentsWatch {
         self.log.set(String::new());
         self.input.set(String::new());
         self.reply.set(String::new());
+        self.context_prefix.set(String::new());
     }
 }
 
@@ -871,6 +914,10 @@ pub(crate) async fn load(s: State) {
         if let Ok(a) = fetch::agents().await {
             set_if_changed(s.agents, a);
         }
+        // The cross-agent "All chats" index above the project's Agents panel.
+        if let Ok(c) = fetch::all_agent_runs().await {
+            set_if_changed(s.all_chats, c);
+        }
         // The project's Tools panel lists the tools filed under it (from the shared list).
         if let Ok(t) = fetch::tools().await {
             set_if_changed(s.tools, t);
@@ -897,6 +944,10 @@ pub(crate) async fn load(s: State) {
     if path == Route::Agents.path() {
         if let Ok(a) = fetch::agents().await {
             set_if_changed(s.agents, a);
+        }
+        // The cross-agent "All chats" index at the top of the Agents page.
+        if let Ok(c) = fetch::all_agent_runs().await {
+            set_if_changed(s.all_chats, c);
         }
         // The agent form's per-tool checkboxes are populated from the tools list.
         if let Ok(t) = fetch::tools().await {
