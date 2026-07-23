@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod fetch;
 mod highlight;
 mod icons;
+mod markdown;
 mod pages;
 mod routing;
 mod state;

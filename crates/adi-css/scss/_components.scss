@@ -487,17 +487,66 @@ $runlog-dim: #8b93a1;
   50%      { opacity: .45; }
 }
 
-// The message text: a <pre> so newlines and code survive, wrapping on long lines.
-.adi-chat__text {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+// The message text, rendered as Markdown (see `crate::markdown`). Sized to the chat: sans body,
+// mono only for code, compact block spacing; long content wraps and code blocks scroll rather than
+// widen the bubble.
+.adi-md {
+  font-size: 12px;
   line-height: 1.5;
-  white-space: pre-wrap;
+  color: $runlog-ink;
   word-break: break-word;
   overflow-wrap: break-word;
-  color: $runlog-ink;
+
+  > :first-child { margin-top: 0; }
+  > :last-child { margin-bottom: 0; }
 }
+
+.adi-md__p { margin: 0 0 6px; }
+
+.adi-md__h { margin: 8px 0 4px; font-weight: 700; line-height: 1.3; }
+.adi-md__h1 { font-size: 15px; }
+.adi-md__h2 { font-size: 14px; }
+.adi-md__h3 { font-size: 13px; }
+.adi-md__h4, .adi-md__h5, .adi-md__h6 { font-size: 12px; color: $runlog-dim; }
+
+.adi-md__list { margin: 0 0 6px; padding-left: 18px; }
+.adi-md__list li { margin: 2px 0; }
+
+.adi-md__quote {
+  margin: 0 0 6px;
+  padding: 2px 0 2px 10px;
+  border-left: 2px solid rgba(255, 255, 255, .15);
+  color: $runlog-dim;
+}
+
+// Inline code.
+.adi-md__code {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .08);
+}
+
+// Fenced code block: mono, scrolls horizontally so a long line never widens the bubble.
+.adi-md__pre {
+  margin: 0 0 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, .28);
+  overflow-x: auto;
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.45;
+    white-space: pre;
+    background: none;
+    padding: 0;
+  }
+}
+
+.adi-md__link { color: var(--accent); text-decoration: underline; }
 
 // The placeholder shown before the first turn lands.
 .adi-chat__empty {
@@ -506,13 +555,14 @@ $runlog-dim: #8b93a1;
   font-size: var(--text-sm);
 }
 
-// The reply box, docked at the bottom of the card on its own bar.
+// The reply box sits above the transcript now, so its divider is on the bottom edge — between it
+// and the messages — rather than the top.
 .adi-chat__replybar {
   gap: var(--space-2);
   padding: 8px 10px;
   margin: 0;
   background: $runlog-bar;
-  border-top: 1px solid rgba(255, 255, 255, .08);
+  border-bottom: 1px solid rgba(255, 255, 255, .08);
 }
 
 // A turn that ended in error gets a red edge so a failed answer reads at a glance.
@@ -520,13 +570,42 @@ $runlog-dim: #8b93a1;
   border-color: rgba(240, 110, 110, .5);
 }
 
-// ---- progress feed (tool calls + thinking) inside an assistant turn ----------------
-// One activity per row, above the answer text. Each row is a <details> that expands its args/output.
-.adi-steps {
+// ---- progress feed (tool calls + thinking) ------------------------------------------
+// The whole activity of a turn is collapsed by default under one disclosure below the answer, so the
+// message reads clean. Expanding it lists each step (newest first) as its own row; each step is
+// itself a <details> that expands its args/output.
+.adi-chat__steps {
+  align-self: stretch;
+  max-width: 100%;
+}
+
+.adi-chat__steps-head {
   display: flex;
-  flex-direction: column;
-  gap: 3px;
-  margin-bottom: 6px;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 4px;
+  cursor: pointer;
+  list-style: none;
+  font-size: var(--text-xs);
+  color: $runlog-dim;
+
+  &::-webkit-details-marker { display: none; }
+  &::marker { content: ""; }
+}
+
+.adi-chat__steps[open] .adi-chat__steps-head { margin-bottom: 4px; }
+.adi-chat__steps-icon { opacity: .8; }
+
+// A step rendered as its own row inside the disclosure: full-width and frameless, so the step's own
+// `.adi-step` border carries it. A small gap separates consecutive steps.
+.adi-chat__turn--step {
+  max-width: 100%;
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+  background: transparent;
+
+  & + & { margin-top: 4px; }
 }
 
 .adi-step {

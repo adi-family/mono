@@ -817,12 +817,24 @@ impl Flash {
     }
 }
 
+/// Write `value` into `sig` only when it differs from what's already there. The 4s poll re-fetches
+/// every page's data and, without this, re-set each signal unconditionally — notifying subscribers
+/// and tearing down their DOM every tick even when nothing changed, which dropped input focus and
+/// reset scroll offsets mid-interaction. Gating on real change keeps a settled page's reactive graph
+/// perfectly still between polls; only genuinely new data re-renders. Reads untracked so `load`
+/// itself never subscribes to anything.
+fn set_if_changed<T: PartialEq + Send + Sync + 'static>(sig: RwSignal<Option<T>>, value: T) {
+    if sig.with_untracked(|current| current.as_ref() != Some(&value)) {
+        sig.set(Some(value));
+    }
+}
+
 /// Fetch `/api/health` + `/api/ports` together and fan the result into the signals.
 pub(crate) async fn load(s: State) {
     match (fetch::health().await, fetch::ports().await) {
         (Ok(h), Ok(p)) => {
-            s.health.set(Some(h));
-            s.ports.set(Some(p));
+            set_if_changed(s.health, h);
+            set_if_changed(s.ports, p);
             s.status.set(Status::Online);
             s.secs_since.set(0);
         }
@@ -835,7 +847,7 @@ pub(crate) async fn load(s: State) {
     // The explorer renders the project tree on every route, so the project list is shell
     // data rather than something an individual page opts into.
     if let Ok(p) = fetch::projects().await {
-        s.projects.set(Some(p));
+        set_if_changed(s.projects, p);
     }
 
     // Page-specific data, fetched only where it's shown.
@@ -843,92 +855,92 @@ pub(crate) async fn load(s: State) {
     if path == Route::Projects.path() {
         // The list shows a per-project open-task count, so it needs the task tree too.
         if let Ok(t) = fetch::tasks().await {
-            s.tasks.set(Some(t));
+            set_if_changed(s.tasks, t);
         }
     }
     if let Some(id) = project_id_from_path(&path) {
         if let Ok(d) = fetch::project_detail(&id).await {
-            s.project_detail.set(Some(d));
+            set_if_changed(s.project_detail, d);
         }
         if let Ok(t) = fetch::tasks().await {
-            s.tasks.set(Some(t));
+            set_if_changed(s.tasks, t);
         }
         if let Ok(t) = fetch::triggers().await {
-            s.triggers.set(Some(t));
+            set_if_changed(s.triggers, t);
         }
         if let Ok(a) = fetch::agents().await {
-            s.agents.set(Some(a));
+            set_if_changed(s.agents, a);
         }
         // The project's Tools panel lists the tools filed under it (from the shared list).
         if let Ok(t) = fetch::tools().await {
-            s.tools.set(Some(t));
+            set_if_changed(s.tools, t);
         }
         // The project's Secrets panel filters the shared secrets list to this project.
         if let Ok(sec) = fetch::secrets().await {
-            s.secrets.set(Some(sec));
+            set_if_changed(s.secrets, sec);
         }
         // The Workspaces panel's snapshot; polling it flips `creating` → `ready` live.
         if let Ok(w) = fetch::workspaces(&id).await {
-            s.workspaces.set(Some(w));
+            set_if_changed(s.workspaces, w);
         }
     }
     if path == Route::Tasks.path() {
         if let Ok(t) = fetch::tasks().await {
-            s.tasks.set(Some(t));
+            set_if_changed(s.tasks, t);
         }
     }
     if path == Route::Meta.path()
         && let Ok(m) = fetch::meta().await
     {
-        s.meta.set(Some(m));
+        set_if_changed(s.meta, m);
     }
     if path == Route::Agents.path() {
         if let Ok(a) = fetch::agents().await {
-            s.agents.set(Some(a));
+            set_if_changed(s.agents, a);
         }
         // The agent form's per-tool checkboxes are populated from the tools list.
         if let Ok(t) = fetch::tools().await {
-            s.tools.set(Some(t));
+            set_if_changed(s.tools, t);
         }
         // The agent form's per-secret checkboxes are populated from the secrets list (metadata
         // only — values are never fetched here).
         if let Ok(sec) = fetch::secrets().await {
-            s.secrets.set(Some(sec));
+            set_if_changed(s.secrets, sec);
         }
     }
     if path == Route::Tools.path()
         && let Ok(t) = fetch::tools().await
     {
-        s.tools.set(Some(t));
+        set_if_changed(s.tools, t);
     }
     if path == Route::Secrets.path()
         && let Ok(sec) = fetch::secrets().await
     {
-        s.secrets.set(Some(sec));
+        set_if_changed(s.secrets, sec);
     }
     if path == Route::Triggers.path() {
         if let Ok(t) = fetch::triggers().await {
-            s.triggers.set(Some(t));
+            set_if_changed(s.triggers, t);
         }
     }
     if path == Route::Hive.path()
         && let Ok(h) = fetch::hive().await
     {
-        s.hive.set(Some(h));
+        set_if_changed(s.hive, h);
     }
     if path == Route::Dashboards.path()
         && let Ok(d) = fetch::dashboards().await
     {
-        s.dashboards.set(Some(d));
+        set_if_changed(s.dashboards, d);
     }
     if path == Route::PortsManager.path()
         && let Ok(u) = fetch::used().await
     {
-        s.used.set(Some(u));
+        set_if_changed(s.used, u);
     }
     if path == Route::Mesh.path()
         && let Ok(m) = fetch::mesh().await
     {
-        s.mesh.set(Some(m));
+        set_if_changed(s.mesh, m);
     }
 }
