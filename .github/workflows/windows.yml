@@ -61,8 +61,10 @@ jobs:
           $null = $json | ConvertFrom-Json   # throws if not valid JSON
           Write-Host "`nOK: status --json is valid; schtasks /Query + tasklist ran on real Windows."
 
-      # Exercises the actual DNS resolver on Windows: run adi-dns.exe on a high loopback port with
-      # a .test override and confirm it answers. No scheduling, no elevation — just the daemon.
+      # Exercises the actual DNS resolver on Windows: run adi-dns.exe with a `.test` override and
+      # confirm it answers. No scheduling, no elevation — just the daemon. On Windows the resolver
+      # always binds :53 (effective_ports forces it — NRPT can't target a custom port), so query
+      # 127.0.0.1:53 directly. Its stdout/stderr are captured and dumped if anything goes wrong.
       - name: DNS resolver smoke test
         shell: pwsh
         run: |
@@ -70,7 +72,6 @@ jobs:
           @"
           domain = "test"
           bind_addr = "127.0.0.1"
-          preferred_port = 45353
           fallback_ports = []
           upstreams = ["1.1.1.1:53"]
           manage_os_routing = false
@@ -79,15 +80,24 @@ jobs:
           suffix = "test"
           address = "127.0.0.9"
           "@ | Set-Content -Encoding utf8 $cfg
-          $p = Start-Process -FilePath "target\release\adi-dns.exe" -ArgumentList $cfg -PassThru
+          $p = Start-Process -FilePath "target\release\adi-dns.exe" -ArgumentList $cfg -PassThru `
+                 -RedirectStandardOutput dns-out.log -RedirectStandardError dns-err.log
           try {
-            Start-Sleep -Seconds 3
-            # Query 127.0.0.1:45353 for foo.test over UDP via raw .NET (Resolve-DnsName has no port arg).
+            # Wait until the resolver is actually listening on UDP :53 (up to ~8s).
+            $listening = $false
+            for ($i = 0; $i -lt 16; $i++) {
+              Start-Sleep -Milliseconds 500
+              if (Get-NetUDPEndpoint -LocalPort 53 -LocalAddress 127.0.0.1 -ErrorAction SilentlyContinue) { $listening = $true; break }
+            }
+            if (-not $listening) { throw "adi-dns.exe never bound 127.0.0.1:53" }
+            Write-Host "adi-dns.exe is listening on 127.0.0.1:53"
+
+            # Raw UDP A-query for foo.test (Resolve-DnsName has no custom-port arg).
             $q = [byte[]](0x12,0x34, 0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
                           0x03,0x66,0x6f,0x6f, 0x04,0x74,0x65,0x73,0x74, 0x00, 0x00,0x01, 0x00,0x01)
             $udp = [System.Net.Sockets.UdpClient]::new()
             $udp.Client.ReceiveTimeout = 3000
-            $udp.Connect("127.0.0.1", 45353)
+            $udp.Connect("127.0.0.1", 53)
             [void]$udp.Send($q, $q.Length)
             $ep = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
             $resp = $udp.Receive([ref]$ep)
@@ -100,6 +110,10 @@ jobs:
               if ($ip -ne "127.0.0.9") { throw ".test override did not resolve to 127.0.0.9 (got $ip)" }
               Write-Host "OK: adi-dns.exe resolved foo.test -> 127.0.0.9 on Windows."
             } else { throw "resolver returned no answer" }
+          } catch {
+            Write-Host "--- adi-dns stdout ---"; Get-Content dns-out.log -ErrorAction SilentlyContinue
+            Write-Host "--- adi-dns stderr ---"; Get-Content dns-err.log -ErrorAction SilentlyContinue
+            throw
           } finally {
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
           }
