@@ -47,10 +47,47 @@ pub fn run<S: AsRef<OsStr>>(argv: &[S]) -> Output {
     }
 }
 
-/// Run a shell command as root behind a single macOS Authorization prompt (via `osascript`).
-pub fn run_admin(shell: &str) -> Output {
+/// Run a privileged command behind a single OS elevation prompt.
+///
+/// - **macOS:** `code` is a `/bin/sh` command line, run as root via `osascript … with
+///   administrator privileges` (one Authorization prompt).
+/// - **Windows:** `code` is a **PowerShell** script, staged to a temp `.ps1` and launched
+///   elevated via `Start-Process -Verb RunAs` (one UAC prompt); the elevated exit code is
+///   propagated back.
+#[cfg(unix)]
+pub fn run_admin(code: &str) -> Output {
     // Escape for AppleScript string literal: backslash first, then double-quote.
-    let escaped = shell.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped = code.replace('\\', "\\\\").replace('"', "\\\"");
     let script = format!("do shell script \"{escaped}\" with administrator privileges");
     run(&["/usr/bin/osascript", "-e", &script])
+}
+
+#[cfg(windows)]
+pub fn run_admin(code: &str) -> Output {
+    let mut path = std::env::temp_dir();
+    path.push(format!("adi-admin-{}.ps1", std::process::id()));
+    if std::fs::write(&path, code).is_err() {
+        return Output {
+            status: -1,
+            text: "failed to stage elevation script".to_string(),
+        };
+    }
+    let file = path.to_string_lossy().replace('\'', "''");
+    // Launch the staged script elevated, wait for it, and surface its exit code. `-PassThru`
+    // yields the process so we can read `.ExitCode`; without RunAs there is no way to elevate
+    // a child from an unprivileged parent.
+    let launcher = format!(
+        "$p = Start-Process -FilePath powershell.exe \
+         -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','{file}' \
+         -Verb RunAs -Wait -PassThru -WindowStyle Hidden; exit $p.ExitCode"
+    );
+    let out = run(&[
+        "powershell",
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        &launcher,
+    ]);
+    let _ = std::fs::remove_file(&path);
+    out
 }

@@ -658,6 +658,7 @@ fn import_namespace(file: &Path) -> String {
 /// Deliberately an effective-uid check rather than `$USER`/`$HOME`: the front-door `LaunchDaemon`
 /// runs as root while still setting `HOME` to the login user, so the environment does not
 /// distinguish the two.
+#[cfg(unix)]
 fn running_as_root() -> bool {
     // SAFETY: POSIX `geteuid` takes no arguments, cannot fail, and reads no caller memory.
     // Declared inline to keep adi-hive free of a `libc` dependency for this single call.
@@ -668,6 +669,14 @@ fn running_as_root() -> bool {
         }
         geteuid() == 0
     }
+}
+
+/// Windows has no root front door: the `.adi` front door runs as an ordinary per-user scheduled
+/// task (see `adi-core`'s `dns` service), so the "am I the privileged daemon?" distinction that
+/// gates route-only behavior never applies here.
+#[cfg(not(unix))]
+fn running_as_root() -> bool {
+    false
 }
 
 /// Whether two paths point at the same file (canonicalized), so a hive never imports itself.

@@ -21,7 +21,9 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// A process that ran at least this long before exiting is treated as healthy, so its backoff resets.
 const STABLE_RUNTIME: Duration = Duration::from_secs(10);
 
-/// How long to wait after `SIGTERM` before escalating to `SIGKILL` at shutdown.
+/// How long to wait after `SIGTERM` before escalating to `SIGKILL` at shutdown. Unix-only: on
+/// Windows shutdown force-terminates the tree with `taskkill /T /F` (no graceful grace period).
+#[cfg(unix)]
 const TERM_GRACE: Duration = Duration::from_secs(5);
 
 /// One supervised runner: the spec it was started from (so a reload can tell whether it
@@ -203,6 +205,12 @@ fn spawn(spec: &RunnerSpec) -> std::io::Result<Child> {
         // Become a process-group leader (pgid == pid) so we can signal the whole tree.
         cmd.process_group(0);
     }
+    #[cfg(windows)]
+    {
+        // Detach from the launcher's console group (CREATE_NEW_PROCESS_GROUP) so a Ctrl-C to
+        // the parent doesn't reach the runner; shutdown kills the tree with `taskkill /T`.
+        cmd.creation_flags(0x0000_0200);
+    }
     cmd.spawn()
 }
 
@@ -220,7 +228,9 @@ fn shell_command(run: &str) -> Command {
     cmd
 }
 
-/// Stop a running child at shutdown: `SIGTERM` its process group, wait a grace period, then `SIGKILL` if still up (direct kill when off unix or no pid).
+/// Stop a running child at shutdown. Unix: `SIGTERM` its process group, wait a grace period, then
+/// `SIGKILL` if still up. Windows: `taskkill /T /F` the tree by pid. Falls back to a direct kill
+/// when there is no pid.
 async fn stop_child(child: &mut Child, pid: Option<u32>) {
     #[cfg(unix)]
     if let Some(pid) = pid {
@@ -233,6 +243,15 @@ async fn stop_child(child: &mut Child, pid: Option<u32>) {
             signal_group(pid, "KILL");
             let _ = child.wait().await;
         }
+        return;
+    }
+    #[cfg(windows)]
+    if let Some(pid) = pid {
+        // No graceful signal on Windows: terminate the whole tree (`/T` reaches grandchildren).
+        let _ = std::process::Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &pid.to_string()])
+            .status();
+        let _ = child.wait().await;
         return;
     }
     let _ = child.start_kill();

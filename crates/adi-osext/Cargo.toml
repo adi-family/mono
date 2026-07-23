@@ -1,0 +1,14 @@
+[package]
+name = "adi-osext"
+description = "Tiny cross-platform OS primitives for the adi platform: detach a spawned child from the launcher's process group, and create symlinks, with Unix and Windows implementations behind one API. Pure std, no dependencies."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

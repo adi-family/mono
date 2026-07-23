@@ -16,6 +16,7 @@ default = []
 # and can't target wasm).
 server = [
     "dep:adi-config",
+    "dep:adi-osext",
     "dep:adi-ports-manager",
     "dep:adi-mesh",
     "dep:adi-projects",
@@ -40,6 +41,7 @@ server = [
 serde = { workspace = true }
 
 adi-config = { workspace = true, optional = true }
+adi-osext = { workspace = true, optional = true }
 adi-ports-manager = { workspace = true, optional = true }
 adi-mesh = { workspace = true, optional = true }
 adi-projects = { workspace = true, optional = true }

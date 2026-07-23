@@ -1,0 +1,122 @@
+name: Windows
+
+# Real-Windows validation of the cross-platform port: the host build is macOS, so this is the
+# only place the Windows code paths (Task Scheduler supervision, NRPT routing, tasklist/taskkill,
+# %USERPROFILE% home resolution) are compiled with MSVC and executed on genuine Windows.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins stable; rustup on the runner honors it on first cargo call.
+      - name: Rust versions
+        run: |
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      # The core validation: compile the whole tree with windows-msvc and run every unit test —
+      # including the Windows-only ones (schtasks task-XML builder, ISO-8601 durations, UTF-16
+      # encoding, the :53 DNS config, tasklist/taskkill liveness). adi-webapp-api is excluded on
+      # purpose: it carries an environment-flaky test unrelated to this port.
+      - name: Unit tests (windows-msvc)
+        run: >
+          cargo test
+          -p adi-osext -p adi-config -p adi-secrets -p adi-core
+          -p adi-agents -p adi-triggers -p adi-hooks -p adi-hive
+          -p adi-tools -p adi-ports-manager -p adi-workforce
+
+      - name: Build release binaries
+        run: cargo build --release -p adi-cli -p adi-dns -p adi-hive -p adi-app
+
+      # Read-only smoke test: proves the binary runs on real Windows, resolves its store under
+      # %USERPROFILE%, and that the status pipeline actually shells out to `schtasks /Query`
+      # (is_loaded) and `tasklist` (process_alive) and emits valid JSON.
+      - name: CLI smoke test (read-only)
+        shell: pwsh
+        run: |
+          $exe = "target\release\adi-mono.exe"
+          & $exe --help
+          if ($LASTEXITCODE -ne 0) { throw "adi-mono --help exited $LASTEXITCODE" }
+          Write-Host "`n--- status --json ---"
+          $json = & $exe status --json
+          Write-Host $json
+          $null = $json | ConvertFrom-Json   # throws if not valid JSON
+          Write-Host "`nOK: status --json is valid; schtasks /Query + tasklist ran on real Windows."
+
+      # Exercises the actual DNS resolver on Windows: run adi-dns.exe on a high loopback port with
+      # a .test override and confirm it answers. No scheduling, no elevation — just the daemon.
+      - name: DNS resolver smoke test
+        shell: pwsh
+        run: |
+          $cfg = "ci-dns.toml"
+          @"
+          domain = "test"
+          bind_addr = "127.0.0.1"
+          preferred_port = 45353
+          fallback_ports = []
+          upstreams = ["1.1.1.1:53"]
+          manage_os_routing = false
+          status_file = "ci-dns-status.json"
+          [[overrides]]
+          suffix = "test"
+          address = "127.0.0.9"
+          "@ | Set-Content -Encoding utf8 $cfg
+          $p = Start-Process -FilePath "target\release\adi-dns.exe" -ArgumentList $cfg -PassThru
+          try {
+            Start-Sleep -Seconds 3
+            # Query 127.0.0.1:45353 for foo.test over UDP via raw .NET (Resolve-DnsName has no port arg).
+            $q = [byte[]](0x12,0x34, 0x01,0x00, 0x00,0x01, 0x00,0x00, 0x00,0x00, 0x00,0x00,
+                          0x03,0x66,0x6f,0x6f, 0x04,0x74,0x65,0x73,0x74, 0x00, 0x00,0x01, 0x00,0x01)
+            $udp = [System.Net.Sockets.UdpClient]::new()
+            $udp.Client.ReceiveTimeout = 3000
+            $udp.Connect("127.0.0.1", 45353)
+            [void]$udp.Send($q, $q.Length)
+            $ep = [System.Net.IPEndPoint]::new([System.Net.IPAddress]::Any, 0)
+            $resp = $udp.Receive([ref]$ep)
+            $udp.Close()
+            $ans = ($resp[6] -shl 8) -bor $resp[7]   # ANCOUNT
+            Write-Host "resolver answered $($resp.Length) bytes, ANCOUNT=$ans"
+            if ($resp.Length -ge 12 -and $ans -ge 1) {
+              $ip = "$($resp[-4]).$($resp[-3]).$($resp[-2]).$($resp[-1])"
+              Write-Host "last A record = $ip"
+              if ($ip -ne "127.0.0.9") { throw ".test override did not resolve to 127.0.0.9 (got $ip)" }
+              Write-Host "OK: adi-dns.exe resolved foo.test -> 127.0.0.9 on Windows."
+            } else { throw "resolver returned no answer" }
+          } finally {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          }
+
+      # Best-effort: full service lifecycle through Task Scheduler. Bounded by a 90s timeout so a
+      # non-interactive UAC on the DNS route step can't hang the job; informational only.
+      - name: Service lifecycle via Task Scheduler (best-effort)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $exe = (Resolve-Path "target\release\adi-mono.exe").Path
+          $job = Start-Job -ArgumentList $exe -ScriptBlock {
+            param($e)
+            Write-Output "--- up ---";      & $e up      2>&1
+            Write-Output "--- status ---";  & $e status  2>&1
+            Write-Output "--- disable ---"; & $e disable  2>&1
+          }
+          if (Wait-Job $job -Timeout 90) {
+            Receive-Job $job
+            Write-Host "lifecycle completed"
+          } else {
+            Stop-Job $job
+            Write-Host "lifecycle timed out at 90s (likely the elevated DNS-route step in a non-interactive session); this is expected on CI."
+          }

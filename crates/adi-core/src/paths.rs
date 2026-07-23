@@ -5,9 +5,10 @@
 
 use std::path::PathBuf;
 
-/// `$HOME`, or `/` if unset (matching `NSHomeDirectory` fallbacks closely enough).
+/// The user's home directory (cross-platform, resolved by [`adi_config::home`]).
+#[cfg(unix)]
 fn home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
+    adi_config::home()
 }
 
 /// The `ADI_DIR` value, trimmed; empty/unset falls back to `.adi`.
@@ -22,16 +23,35 @@ pub fn support_dir() -> PathBuf {
     adi_config::dir()
 }
 
-/// `$HOME/Library/LaunchAgents` — where per-user `LaunchAgent` plists live.
+/// Where per-user service definitions live.
+///
+/// macOS: `$HOME/Library/LaunchAgents` (launchd reads plists from here). Windows: a `tasks`
+/// subdir of the mono store — Task Scheduler imports the XML by path, so it needn't live in a
+/// system-watched location.
 #[must_use]
 pub fn launch_agents_dir() -> PathBuf {
-    home().join("Library").join("LaunchAgents")
+    #[cfg(unix)]
+    {
+        home().join("Library").join("LaunchAgents")
+    }
+    #[cfg(not(unix))]
+    {
+        support_dir().join("tasks")
+    }
 }
 
-/// `$HOME/Library/Logs` — where per-user service logs live.
+/// Where per-user service logs live. macOS: `$HOME/Library/Logs`. Windows: a `logs` subdir of
+/// the mono store.
 #[must_use]
 pub fn logs_dir() -> PathBuf {
-    home().join("Library").join("Logs")
+    #[cfg(unix)]
+    {
+        home().join("Library").join("Logs")
+    }
+    #[cfg(not(unix))]
+    {
+        support_dir().join("logs")
+    }
 }
 
 #[cfg(test)]

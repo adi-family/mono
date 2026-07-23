@@ -35,7 +35,6 @@ mod error;
 mod secret;
 
 use std::collections::BTreeMap;
-use std::os::unix::fs::PermissionsExt as _;
 use std::path::{Path, PathBuf};
 
 use adi_config::{Config, ConfigFile, now_unix};
@@ -437,14 +436,29 @@ fn decode_value(plaintext: Vec<u8>) -> Result<String> {
 }
 
 /// Set a file to `0600` (owner read/write only).
+///
+/// On Windows there is no POSIX mode; files already live under the per-user profile
+/// directory (owner-scoped by default), so this is a no-op there.
 pub(crate) fn harden_file(path: &Path) -> Result<()> {
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
-/// Set a directory to `0700` (owner-only).
+/// Set a directory to `0700` (owner-only). No-op on Windows (see [`harden_file`]).
 pub(crate) fn harden_dir(path: &Path) -> Result<()> {
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
     Ok(())
 }
 
@@ -583,8 +597,12 @@ mod tests {
         );
     }
 
+    // POSIX-only: hardening sets mode bits on Unix; on Windows `harden_*` is a no-op (files
+    // already live under the per-user profile), so there is nothing to assert.
+    #[cfg(unix)]
     #[test]
     fn files_are_0600_and_dirs_are_0700() {
+        use std::os::unix::fs::PermissionsExt as _;
         let store = scratch("perms");
         store.set(Some("proj"), "K", "v", None).expect("set");
 

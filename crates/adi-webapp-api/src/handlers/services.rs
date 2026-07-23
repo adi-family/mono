@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use adi_projects::Projects;
@@ -722,8 +721,9 @@ fn spawn_runner(run: &str, workdir: &Path, port: Option<u16>) -> std::io::Result
     cmd.arg("-c")
         .arg(run)
         .current_dir(workdir)
-        .process_group(0)
         .stdin(Stdio::null());
+    // Detached so the runner survives an app restart (own process group / group-equivalent).
+    adi_osext::detach_process_group(&mut cmd);
     // Env parity (shared in adi-config): augmented PATH (+ HOME) so a runner finds bun/node/docker
     // under launchd's bare environment — the same env adi-hive's supervisor applies.
     for (key, value) in adi_config::launch_env() {

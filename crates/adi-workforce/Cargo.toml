@@ -10,6 +10,7 @@ repository.workspace = true
 
 [dependencies]
 adi-tasks = { workspace = true }
+adi-osext = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # The WASM component host. Pinned to the same major the engine was written

@@ -15,6 +15,7 @@ supervisor = ["dep:tokio", "dep:tracing"]
 
 [dependencies]
 adi-config = { workspace = true }
+adi-osext = { workspace = true }
 
 # An `event` trigger subscribes to platform events; the supervisor's event dispatcher drains the
 # shared event spool (adi-events) and fires the triggers whose patterns match.

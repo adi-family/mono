@@ -8,7 +8,6 @@
 
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -107,10 +106,12 @@ pub(crate) fn spawn_child(
         // a secret can never shadow the tool path.
         .envs(secret_env.iter().map(|(k, v)| (k, v)))
         .env("PATH", augmented_path(bin_dir))
-        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(errlog));
+    // Detach the run from the launcher's process group so a Ctrl-C / signal to the parent
+    // doesn't tear down the agent. Unix: new process group; Windows: the equivalent flag.
+    adi_osext::detach_process_group(&mut command);
     // The agent's own `working_dir` wins; otherwise a run starts in `base_dir` (the ADI mono store
     // root), not the launching daemon's cwd.
     if let Some(d) = working_dir.filter(|d| !d.trim().is_empty()) {
@@ -330,6 +331,7 @@ pub(crate) fn read_pid(path: &Path) -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
+#[cfg(unix)]
 pub(crate) fn pid_alive(pid: u32) -> bool {
     Command::new("/bin/kill")
         .args(["-0", &pid.to_string()])
@@ -339,6 +341,22 @@ pub(crate) fn pid_alive(pid: u32) -> bool {
         .is_ok_and(|status| status.success())
 }
 
+/// Windows liveness: `tasklist` filtered to the pid exits 0 whether or not the process exists, so
+/// read it from the output (the pid appears only when the process is live).
+#[cfg(not(unix))]
+pub(crate) fn pid_alive(pid: u32) -> bool {
+    Command::new("tasklist")
+        .args(["/NH", "/FI", &format!("PID eq {pid}")])
+        .output()
+        .is_ok_and(|out| {
+            out.status.success() && String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
+        })
+}
+
+/// Signal a run's whole process tree. Unix: `kill -<sig> -<pid>` (negative pid = the group the
+/// run leads). Windows: `taskkill /T` reaches the tree; `/F` on a hard kill (there is no graceful
+/// signal for a headless child).
+#[cfg(unix)]
 fn signal_group(pid: u32, signal: &str) -> Result<()> {
     let status = Command::new("/bin/kill")
         .args([format!("-{signal}"), "--".into(), format!("-{pid}")])
@@ -349,6 +367,23 @@ fn signal_group(pid: u32, signal: &str) -> Result<()> {
     } else {
         Err(Error::Process(format!(
             "couldn't send SIG{signal} to process group {pid}"
+        )))
+    }
+}
+
+#[cfg(not(unix))]
+fn signal_group(pid: u32, _signal: &str) -> Result<()> {
+    // Headless agents have no window, so WM_CLOSE (soft `taskkill`) never reaches them — force
+    // the whole tree (`/T /F`). The unix TERM-then-wait grace has no meaningful analog here.
+    let status = Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .status()
+        .map_err(|e| Error::Process(e.to_string()))?;
+    if status.success() || !pid_alive(pid) {
+        Ok(())
+    } else {
+        Err(Error::Process(format!(
+            "couldn't taskkill process tree {pid}"
         )))
     }
 }

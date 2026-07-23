@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+adi-osext = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 

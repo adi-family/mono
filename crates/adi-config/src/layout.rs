@@ -9,9 +9,31 @@ const ADI_DIR_ENV: &str = "ADI_DIR";
 const DEFAULT_ADI_DIR: &str = ".adi";
 const MONO_DIR: &str = "mono";
 
-/// `$HOME`, or `/` if unset (matching `NSHomeDirectory`-style fallbacks).
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/"), PathBuf::from)
+/// The user's home directory. On Unix that's `$HOME` (matching `NSHomeDirectory`-style
+/// fallbacks); on Windows, where `HOME` is usually unset, it's `%USERPROFILE%` (then the
+/// `%HOMEDRIVE%%HOMEPATH%` pair). Falls back to the platform root if nothing is set.
+#[must_use]
+pub fn home() -> PathBuf {
+    if let Some(h) = std::env::var_os("HOME").filter(|h| !h.is_empty()) {
+        return PathBuf::from(h);
+    }
+    #[cfg(windows)]
+    {
+        if let Some(profile) = std::env::var_os("USERPROFILE").filter(|p| !p.is_empty()) {
+            return PathBuf::from(profile);
+        }
+        if let (Some(drive), Some(path)) = (
+            std::env::var_os("HOMEDRIVE").filter(|p| !p.is_empty()),
+            std::env::var_os("HOMEPATH").filter(|p| !p.is_empty()),
+        ) {
+            let mut p = std::path::PathBuf::from(drive);
+            p.push(path);
+            return p;
+        }
+        return PathBuf::from("C:\\");
+    }
+    #[cfg(not(windows))]
+    PathBuf::from("/")
 }
 
 /// The `ADI_DIR` value, trimmed; empty/unset falls back to `.adi`.

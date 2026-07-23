@@ -17,6 +17,7 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "adi-events",
+ "adi-osext",
  "adi-secrets",
  "adi-tasks",
  "adi-tools",
@@ -146,6 +147,7 @@ dependencies = [
 name = "adi-hooks"
 version = "0.1.0"
 dependencies = [
+ "adi-osext",
  "serde",
  "toml 0.8.23",
 ]
@@ -165,6 +167,10 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
+
+[[package]]
+name = "adi-osext"
+version = "0.1.0"
 
 [[package]]
 name = "adi-ports-manager"
@@ -222,6 +228,7 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "adi-events",
+ "adi-osext",
  "adi-secrets",
  "serde",
  "serde_json",
@@ -265,6 +272,7 @@ dependencies = [
  "adi-fs",
  "adi-hooks",
  "adi-mesh",
+ "adi-osext",
  "adi-ports-manager",
  "adi-projects",
  "adi-secrets",
@@ -282,6 +290,7 @@ dependencies = [
 name = "adi-workforce"
 version = "0.1.0"
 dependencies = [
+ "adi-osext",
  "adi-tasks",
  "regex",
  "reqwest 0.12.28",

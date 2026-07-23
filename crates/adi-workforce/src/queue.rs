@@ -119,13 +119,7 @@ fn clear_stale_lock(dir: &Path, lock_name: &str) {
         let _ = std::fs::remove_file(&lock_path);
         return;
     };
-    let alive = std::process::Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let alive = adi_osext::pid_alive(pid);
     if !alive {
         let _ = std::fs::remove_file(&lock_path);
     }

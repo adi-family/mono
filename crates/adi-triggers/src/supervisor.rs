@@ -394,9 +394,14 @@ async fn spawn(store: &Triggers, spec: &Spec) -> crate::Result<(Child, String)> 
         .stderr(std::process::Stdio::from(errlog))
         // Kill the direct child if this task is dropped; the stop path's group-kill covers
         // grandchildren.
-        .kill_on_drop(true)
-        // Become a process-group leader so the whole tree can be signalled.
-        .process_group(0);
+        .kill_on_drop(true);
+    // Detach the supervised child so the whole tree can be signalled and it survives a
+    // supervisor restart. Unix: new process group; Windows: CREATE_NEW_PROCESS_GROUP.
+    // `tokio::process::Command` exposes these as inherent per-OS methods.
+    #[cfg(unix)]
+    cmd.process_group(0);
+    #[cfg(windows)]
+    cmd.creation_flags(0x0000_0200);
     for (key, value) in &launch.env {
         cmd.env(key, value);
     }
@@ -420,12 +425,27 @@ fn command_line(program: &str, args: &[String]) -> String {
         .join(" ")
 }
 
-/// What `pid` is currently running, or `None` if no such process exists. Shelling out to `ps`
-/// keeps this crate free of a libc dependency, matching how the rest of the platform signals
-/// processes; it runs once per orphan at startup, never on a hot path.
+/// What `pid` is currently running, or `None` if no such process exists. Shelling out keeps this
+/// crate free of a libc dependency, matching how the rest of the platform signals processes; it
+/// runs once per orphan at startup, never on a hot path. Unix: `ps -o command=`. Windows: the
+/// process's `CommandLine` via CIM (`Win32_Process`).
+#[cfg(unix)]
 fn running_command(pid: u32) -> Option<String> {
     let out = std::process::Command::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+#[cfg(not(unix))]
+fn running_command(pid: u32) -> Option<String> {
+    let script = format!(
+        "(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
@@ -454,6 +474,7 @@ async fn stop_child(child: &mut Child, pid: u32) {
 /// leader, so a negative pid reaches the whole tree — but that only holds while it *is* the
 /// leader (a shell can move itself), so the process itself is signalled too when the group form
 /// finds nothing. Missing either one is how a `sleep` inside a killed loop keeps running.
+#[cfg(unix)]
 fn signal_group(pid: u32, signal: &str) {
     let group = std::process::Command::new("kill")
         .arg(format!("-{signal}"))
@@ -465,6 +486,15 @@ fn signal_group(pid: u32, signal: &str) {
             .arg(pid.to_string())
             .status();
     }
+}
+
+/// Windows: `taskkill /T` terminates the whole tree the block spawned. `/F` forces it (there is
+/// no graceful-signal analog for a headless child), so the TERM/KILL distinction collapses.
+#[cfg(not(unix))]
+fn signal_group(pid: u32, _signal: &str) {
+    let _ = std::process::Command::new("taskkill")
+        .args(["/T", "/F", "/PID", &pid.to_string()])
+        .status();
 }
 
 fn next_backoff(current: Duration) -> Duration {

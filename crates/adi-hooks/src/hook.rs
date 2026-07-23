@@ -7,7 +7,6 @@
 //! marker line appended to the log so a finished run's status is readable afterwards.
 
 use std::fs;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -249,9 +248,10 @@ impl Hooks {
             .env("ADI_HOOK_CODE", &code)
             .env("ADI_HOOK", name)
             .env("PATH", augmented_path())
-            .process_group(0)
             .stdin(Stdio::null())
             .current_dir(cwd);
+        // Detach so the hook outlives the spawner and its subtree stays killable.
+        adi_osext::detach_process_group(&mut cmd);
         for (key, value) in env {
             cmd.env(key, value);
         }
@@ -382,17 +382,11 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
     }
 }
 
-/// Whether a process with this pid is alive, probed with `kill -0` (spares a libc/unsafe
-/// dependency; wrong answers just degrade a status display).
+/// Whether a process with this pid is alive (cross-platform; wrong answers just degrade a status
+/// display).
 #[must_use]
 pub(crate) fn pid_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .arg("-0")
-        .arg(pid.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
+    adi_osext::pid_alive(pid)
 }
 
 /// A `PATH` that includes the user's common tool directories, so a hook run under a minimal

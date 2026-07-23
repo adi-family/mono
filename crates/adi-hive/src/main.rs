@@ -236,10 +236,25 @@ async fn binary_replaced() {
     }
 }
 
-/// The inode of the file at `path`, if it exists.
+/// A change-token for the file at `path`, if it exists: a value that shifts once the file is
+/// replaced. On Unix that's the inode (a rename swaps it); on Windows, which has no stable inode,
+/// a `(modified-time, length)` pair stands in — the updater's atomic replace changes both.
 fn inode(path: &Path) -> Option<u64> {
-    use std::os::unix::fs::MetadataExt as _;
-    std::fs::metadata(path).ok().map(|m| m.ino())
+    let meta = std::fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        Some(meta.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as u64);
+        Some(mtime ^ meta.len().rotate_left(1))
+    }
 }
 
 /// On macOS a non-`127.0.0.1` loopback address must be aliased onto `lo0` before it can be bound; elsewhere `127.0.0.0/8` already routes to loopback. Best-effort.

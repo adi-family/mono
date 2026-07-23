@@ -10,6 +10,8 @@ repository.workspace = true
 
 [dependencies]
 adi-config = { workspace = true }
+# Cross-platform process/fs primitives (detach a spawned child's process group on Unix/Windows).
+adi-osext = { workspace = true }
 adi-workforce = { workspace = true }
 # Agent lifecycle changes (run started, saved, deleted, stopped) publish `adi.agents.*` events
 # onto the shared bus for event triggers to react to; this crate never learns who subscribes.

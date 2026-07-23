@@ -10,7 +10,6 @@
 
 use std::collections::BTreeMap;
 use std::io::Read as _;
-use std::os::unix::process::CommandExt as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -197,10 +196,11 @@ pub(crate) fn fire(
 
     let mut cmd = Command::new(spec.program);
     cmd.args(&spec.args)
-        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(errlog));
+    // One-off fire outlives the caller in its own process group / group-equivalent.
+    adi_osext::detach_process_group(&mut cmd);
     for (key, value) in &spec.env {
         cmd.env(key, value);
     }

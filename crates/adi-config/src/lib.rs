@@ -45,7 +45,7 @@ use std::path::{Path, PathBuf};
 pub use error::{Error, Result};
 pub use file::{ConfigFile, Timestamped};
 pub use launch::{augmented_path, launch_env};
-pub use layout::{dir, dir_name};
+pub use layout::{dir, dir_name, home};
 pub use module::Module;
 
 /// The extension every store gives its per-entry manifests: one `<name>.toml` file per named

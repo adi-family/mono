@@ -27,11 +27,27 @@ pub fn read(path: &Path) -> Option<DaemonStatus> {
     serde_json::from_slice(&bytes).ok()
 }
 
-/// Whether `pid` is a live process, probed with `kill -0` (signal 0 tests existence).
+/// Whether `pid` is a live process.
+///
+/// Unix: `kill -0` (signal 0 tests existence). Windows: `tasklist` filtered to the pid — it exits
+/// 0 either way, so liveness is read from the output ("No tasks are running…" means gone).
 #[must_use]
 pub fn process_alive(pid: i32) -> bool {
     if pid <= 0 {
         return false;
     }
-    proc::run(&["/bin/kill", "-0", &pid.to_string()]).ok()
+    #[cfg(unix)]
+    {
+        proc::run(&["/bin/kill", "-0", &pid.to_string()]).ok()
+    }
+    #[cfg(not(unix))]
+    {
+        let out = proc::run(&[
+            "tasklist",
+            "/NH",
+            "/FI",
+            &format!("PID eq {pid}"),
+        ]);
+        out.ok() && out.text.contains(&pid.to_string())
+    }
 }

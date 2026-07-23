@@ -50,6 +50,7 @@ adi-events = { path = "crates/adi-events" }
 adi-fs = { path = "crates/adi-fs" }
 adi-hooks = { path = "crates/adi-hooks" }
 adi-mesh = { path = "crates/adi-mesh" }
+adi-osext = { path = "crates/adi-osext" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }
 adi-secrets = { path = "crates/adi-secrets" }
