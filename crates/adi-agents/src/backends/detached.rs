@@ -451,6 +451,32 @@ mod tests {
         }
     }
 
+    /// A long-running child command that exists on the test host. `/bin/sleep` on Unix;
+    /// `ping -n 11 127.0.0.1` (~10s, runs headless with stdin nulled) on Windows.
+    fn sleep_argv() -> Vec<String> {
+        #[cfg(unix)]
+        {
+            vec!["/bin/sleep".into(), "10".into()]
+        }
+        #[cfg(not(unix))]
+        {
+            vec!["ping".into(), "-n".into(), "11".into(), "127.0.0.1".into()]
+        }
+    }
+
+    /// A command that writes its working directory to `file`. `sh -c 'pwd > file'` on Unix;
+    /// `cmd /c 'cd > file'` on Windows (`cd` with no args prints the cwd).
+    fn write_cwd_argv(file: &str) -> Vec<String> {
+        #[cfg(unix)]
+        {
+            vec!["/bin/sh".into(), "-c".into(), format!("pwd > {file}")]
+        }
+        #[cfg(not(unix))]
+        {
+            vec!["cmd".into(), "/c".into(), format!("cd > {file}")]
+        }
+    }
+
     #[test]
     fn each_run_is_independent_and_recorded_in_history() {
         let sessions = scratch_dir("history");
@@ -462,7 +488,7 @@ mod tests {
             &sessions,
             None,
             "harness",
-            &["/bin/sleep".into(), "10".into()],
+            &sleep_argv(),
             None,
             "task one",
             &[],
@@ -474,7 +500,7 @@ mod tests {
             &sessions,
             None,
             "harness",
-            &["/bin/sleep".into(), "10".into()],
+            &sleep_argv(),
             None,
             "task two",
             &[],
@@ -529,7 +555,7 @@ mod tests {
             &base,
             None,
             "harness",
-            &["/bin/sh".into(), "-c".into(), "pwd > cwd.txt".into()],
+            &write_cwd_argv("cwd.txt"),
             None,
             "probe",
             &[],
@@ -588,7 +614,7 @@ mod tests {
             &sessions,
             None,
             "harness",
-            &["/bin/sleep".into(), "10".into()],
+            &sleep_argv(),
             None,
             "go",
             &[],
