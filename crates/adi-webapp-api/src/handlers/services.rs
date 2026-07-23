@@ -70,11 +70,14 @@ struct HiveScript {
     working_dir: Option<String>,
 }
 
-/// The docker runner, mirrored just enough to show *what* a container service runs; adi-hive owns
-/// the full schema. Only the image is surfaced (as the service's displayed command).
+/// The docker runner, mirrored just enough for this crate's needs — adi-hive owns the full schema.
+/// `image` is surfaced as the service's displayed command; `name` is the container to start/stop
+/// (the start/stop endpoints act on the container by name, never on a script or the host port).
 #[derive(Deserialize)]
 struct HiveDocker {
     image: String,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 impl HiveRunner {
@@ -291,10 +294,43 @@ pub fn start_service(store: &Projects, body: &[u8]) -> Response {
     let Some(svc) = doc.services.get(&req.service) else {
         return error(404, &format!("no service `{}` in the hive", req.service));
     };
-    let Some(script) = svc.runner.as_ref().and_then(|r| r.script.as_ref()) else {
+    let Some(runner) = svc.runner.as_ref() else {
         return error(
             400,
-            &format!("service `{}` has no script runner to start", req.service),
+            &format!("service `{}` has no runner to start", req.service),
+        );
+    };
+    // Exactly one runner kind is allowed — the same rule adi-hive enforces. A service declaring
+    // both is ambiguous, so refuse rather than guess (adi-hive would skip it too).
+    if runner.docker.is_some() && runner.script.is_some() {
+        return error(
+            400,
+            &format!(
+                "service `{}` declares both a `docker` and a `script` runner — declare exactly one",
+                req.service
+            ),
+        );
+    }
+
+    // A docker runner: start just its container (`docker start <name>`), never a script and never
+    // the host port.
+    if let Some(docker) = runner.docker.as_ref() {
+        let name = docker_container_name(&req.service, docker);
+        return match docker_container("start", &name) {
+            // The container runs inside the docker daemon, so there is no local pid to report.
+            Ok(()) => ok_json(&StartResult {
+                service: req.service,
+                port: service_http_port(svc),
+                pid: 0,
+            }),
+            Err(e) => error(500, &format!("starting container `{name}`: {e}")),
+        };
+    }
+
+    let Some(script) = runner.script.as_ref() else {
+        return error(
+            400,
+            &format!("service `{}` has no script or docker runner to start", req.service),
         );
     };
 
@@ -346,6 +382,35 @@ pub fn stop_service(store: &Projects, body: &[u8]) -> Response {
     let Some(svc) = doc.services.get(&req.service) else {
         return error(404, &format!("no service `{}` in the hive", req.service));
     };
+    // The same one-kind rule as start (and adi-hive): a service declaring both runner kinds is
+    // ambiguous, so refuse — which also keeps such a service from ever reaching `kill_listener`.
+    if let Some(runner) = svc.runner.as_ref()
+        && runner.docker.is_some()
+        && runner.script.is_some()
+    {
+        return error(
+            400,
+            &format!(
+                "service `{}` declares both a `docker` and a `script` runner — declare exactly one",
+                req.service
+            ),
+        );
+    }
+
+    // A docker runner: stop just its container (`docker stop <name>`). NEVER kill the port's
+    // listener — for a published container that listener is Docker's own host proxy, so a
+    // `kill` on it takes down the Docker daemon (and every other container) instead of this one.
+    if let Some(docker) = svc.runner.as_ref().and_then(|r| r.docker.as_ref()) {
+        let name = docker_container_name(&req.service, docker);
+        return match docker_container("stop", &name) {
+            Ok(()) => ok_json(&StopResult {
+                service: req.service,
+                port: service_http_port(svc),
+            }),
+            Err(e) => error(500, &format!("stopping container `{name}`: {e}")),
+        };
+    }
+
     let Some(port) = service_http_port(svc) else {
         return error(
             400,
@@ -552,6 +617,58 @@ fn valid_service_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
+/// The container name for a docker service — an explicit `docker.name`, else `adi-<service>` with
+/// characters Docker forbids (like the `/` in a project-scoped name) mapped to `-`. Mirrors
+/// adi-hive's own `container_name`, so a container started here and one the hive supervisor runs
+/// resolve to the same name.
+fn docker_container_name(service: &str, docker: &HiveDocker) -> String {
+    if let Some(name) = docker.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        return name.to_string();
+    }
+    let mut out = String::from("adi-");
+    out.extend(service.chars().map(|c| {
+        if c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-') {
+            c
+        } else {
+            '-'
+        }
+    }));
+    out
+}
+
+/// Whether `name` is a valid Docker container name — a leading alphanumeric then `[A-Za-z0-9_.-]`.
+/// Also the safety gate before the name is spliced into the `docker …` shell command: a name that
+/// passes holds no shell metacharacters, so it can't break out of the command.
+fn valid_container_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+}
+
+/// Run `docker <action> <name>` (start / stop) on a single container, under an augmented `PATH` so
+/// `docker` resolves in launchd's minimal environment (same pattern as [`kill_listener`]). The
+/// name is charset-validated first, so acting on one container never touches Docker itself or any
+/// other container.
+fn docker_container(action: &str, name: &str) -> Result<(), String> {
+    if !valid_container_name(name) {
+        return Err(format!("unsafe container name `{name}`"));
+    }
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        // `name` is charset-validated above, so it carries no shell metacharacters.
+        .arg(format!("docker {action} {name}"))
+        .env("PATH", augmented_path())
+        .status()
+        .map_err(|e| e.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("`docker {action} {name}` exited {status}"))
+    }
+}
+
 /// SIGTERM whatever process is listening on `port` (best-effort, via `lsof` + `kill`).
 fn kill_listener(port: u16) -> std::io::Result<()> {
     std::process::Command::new("sh")
@@ -640,4 +757,44 @@ fn augmented_path() -> String {
         parts.push(existing);
     }
     parts.join(":")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn docker(name: Option<&str>) -> HiveDocker {
+        HiveDocker {
+            image: "pgvector/pgvector:pg16".to_string(),
+            name: name.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn container_name_prefers_explicit_then_falls_back_to_sanitized_service() {
+        // An explicit name is used verbatim (the DB's real container name here).
+        assert_eq!(
+            docker_container_name("db", &docker(Some("nosh-guide-postgres"))),
+            "nosh-guide-postgres"
+        );
+        // Blank explicit name → fall back to the default.
+        assert_eq!(docker_container_name("db", &docker(Some("  "))), "adi-db");
+        // No name → `adi-<service>`, with unsafe characters mapped to `-` (matches adi-hive).
+        assert_eq!(docker_container_name("db", &docker(None)), "adi-db");
+        assert_eq!(
+            docker_container_name("proj/api", &docker(None)),
+            "adi-proj-api"
+        );
+    }
+
+    #[test]
+    fn valid_container_name_gates_shell_metacharacters() {
+        for ok in ["adi-db", "nosh-guide-postgres", "a.b_c-1", "A1"] {
+            assert!(valid_container_name(ok), "{ok} should be valid");
+        }
+        // A leading non-alphanumeric, or anything that could break out of the shell command.
+        for bad in ["", "-x", ".x", "a b", "a;rm", "a$(x)", "a|b", "a`b`", "a/b"] {
+            assert!(!valid_container_name(bad), "{bad:?} should be rejected");
+        }
+    }
 }

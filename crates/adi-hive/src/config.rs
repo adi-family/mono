@@ -91,8 +91,9 @@ pub struct Recreate {
 }
 
 /// The `runner:` block: exactly one kind — a `script` (a shell command) or a `docker`
-/// container. When both are given, `docker` wins. A block with neither is skipped by
-/// [`Hive::runners`] (there is nothing to launch).
+/// container. Declaring **both** is a config error: [`Hive::runners`] refuses to launch it (it is
+/// skipped, with a warning) rather than guess which was meant. A block with neither is likewise
+/// skipped (there is nothing to launch).
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct Runner {
     #[serde(default)]
@@ -284,7 +285,8 @@ impl Hive {
 
     /// Every service that declares a launchable runner (a `script` or a `docker` container),
     /// resolved for launch; `base_dir` anchors relative `working_dir`s and bind-mount host paths.
-    /// A runner block with neither kind is skipped. When both are present, `docker` wins.
+    /// A runner block with neither kind is skipped — and so is one that declares **both** (that is
+    /// ambiguous; exactly one kind is required), with a warning, rather than quietly guessing.
     #[must_use]
     pub fn runners(&self, base_dir: &Path) -> Vec<RunnerSpec> {
         let mut out = Vec::new();
@@ -294,27 +296,32 @@ impl Hive {
             };
             let ports = svc.ports();
             let restart = RestartPolicy::parse(svc.restart.as_deref());
-            let spec = if let Some(docker) = runner.docker.as_ref() {
-                // A container runner compiles to one foreground `docker run` command that the
-                // ordinary supervisor drives; all container state lives in `run`, so the env is
-                // empty (the container's env is baked into the command's `-e` flags).
-                RunnerSpec {
+            let spec = match (runner.docker.as_ref(), runner.script.as_ref()) {
+                // Ambiguous: exactly one runner kind is allowed. Refuse to launch either, so a stray
+                // second runner can't silently shadow the intended one — surface it and skip.
+                (Some(_), Some(_)) => {
+                    warn!(service = %name,
+                          "runner declares both `docker` and `script`; declare exactly one — skipping");
+                    continue;
+                }
+                // A container runner compiles to one foreground `docker run` command the ordinary
+                // supervisor drives; all container state lives in `run`, so the env is empty (the
+                // container's env is baked into the command's `-e` flags).
+                (Some(docker), None) => RunnerSpec {
                     name: name.clone(),
                     run: docker.command_line(name, svc, ports, base_dir),
                     working_dir: base_dir.to_path_buf(),
                     env: Vec::new(),
                     restart,
-                }
-            } else if let Some(script) = runner.script.as_ref() {
-                RunnerSpec {
+                },
+                (None, Some(script)) => RunnerSpec {
                     name: name.clone(),
                     run: expand_templates(&script.run, ports),
                     working_dir: resolve_working_dir(base_dir, script.working_dir.as_deref()),
                     env: build_env(svc, ports),
                     restart,
-                }
-            } else {
-                continue;
+                },
+                (None, None) => continue,
             };
             out.push(spec);
         }
@@ -1261,7 +1268,9 @@ services:
     }
 
     #[test]
-    fn docker_takes_precedence_when_both_kinds_are_present() {
+    fn declaring_both_runner_kinds_is_refused() {
+        // Ambiguous: a service with both a `script` and a `docker` runner is skipped (not started),
+        // rather than silently picking one.
         let hive: Hive = serde_yaml_ng::from_str(
             r"
 services:
@@ -1272,10 +1281,7 @@ services:
 ",
         )
         .unwrap();
-        let runners = hive.runners(Path::new("/x"));
-        assert_eq!(runners.len(), 1);
-        assert!(runners[0].run.contains("docker run"), "docker should win");
-        assert!(!runners[0].run.contains("echo hi"));
+        assert!(hive.runners(Path::new("/x")).is_empty());
     }
 
     #[test]
