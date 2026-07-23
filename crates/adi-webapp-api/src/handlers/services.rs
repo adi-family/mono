@@ -659,7 +659,7 @@ fn docker_container(action: &str, name: &str) -> Result<(), String> {
         .arg("-c")
         // `name` is charset-validated above, so it carries no shell metacharacters.
         .arg(format!("docker {action} {name}"))
-        .env("PATH", augmented_path())
+        .env("PATH", adi_config::augmented_path())
         .status()
         .map_err(|e| e.to_string())?;
     if status.success() {
@@ -676,7 +676,7 @@ fn kill_listener(port: u16) -> std::io::Result<()> {
         .arg(format!(
             "pids=$(lsof -ti tcp:{port} -sTCP:LISTEN 2>/dev/null); [ -n \"$pids\" ] && kill $pids || true"
         ))
-        .env("PATH", augmented_path())
+        .env("PATH", adi_config::augmented_path())
         .status()?;
     Ok(())
 }
@@ -722,9 +722,13 @@ fn spawn_runner(run: &str, workdir: &Path, port: Option<u16>) -> std::io::Result
     cmd.arg("-c")
         .arg(run)
         .current_dir(workdir)
-        .env("PATH", augmented_path())
         .process_group(0)
         .stdin(Stdio::null());
+    // Env parity (shared in adi-config): augmented PATH (+ HOME) so a runner finds bun/node/docker
+    // under launchd's bare environment — the same env adi-hive's supervisor applies.
+    for (key, value) in adi_config::launch_env() {
+        cmd.env(key, value);
+    }
     if let Some(p) = port {
         cmd.env("PORT", p.to_string())
             .env("PORT_HTTP", p.to_string());
@@ -739,24 +743,6 @@ fn spawn_runner(run: &str, workdir: &Path, port: Option<u16>) -> std::io::Result
         }
     }
     Ok(cmd.spawn()?.id())
-}
-
-/// A `PATH` that includes the user's common tool directories, so a runner launched under a
-/// minimal launchd environment can still find `bun`, `node`, and Homebrew binaries.
-fn augmented_path() -> String {
-    let mut parts = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        parts.push(format!("{home}/.bun/bin"));
-        parts.push(format!("{home}/.local/bin"));
-    }
-    parts.push("/opt/homebrew/bin".to_string());
-    parts.push("/usr/local/bin".to_string());
-    parts.push("/usr/bin".to_string());
-    parts.push("/bin".to_string());
-    if let Ok(existing) = std::env::var("PATH") {
-        parts.push(existing);
-    }
-    parts.join(":")
 }
 
 #[cfg(test)]

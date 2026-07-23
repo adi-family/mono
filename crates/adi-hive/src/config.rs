@@ -64,6 +64,13 @@ pub struct ServiceSpec {
     /// Restart policy: `always` | `on-failure` | `no`. Defaults to `on-failure`.
     #[serde(default)]
     pub restart: Option<String>,
+    /// The directory this service's runner resolves relative paths against (`working_dir`, docker
+    /// bind-mount host paths). `None` for a service declared in the hive being loaded (it uses the
+    /// loader's `base_dir`); set to the imported file's own directory for an imported service — so an
+    /// imported project's `working_dir: workspaces/main` resolves under *that* project, not under the
+    /// importer (e.g. the per-user supervisor's own dir). Never serialized.
+    #[serde(skip)]
+    pub base_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,10 +123,11 @@ pub struct Script {
 
 /// A container runner — an "irregular Docker Compose" service: one container, declared with the
 /// familiar compose-ish keys, but supervised by adi-hive rather than by `docker compose`. It
-/// compiles (see [`Docker::command_line`]) to a single foreground
-/// `docker run --rm` invocation, so the existing supervisor handles its whole lifecycle: a clean
-/// `docker run` (no `-d`) stays attached, forwards adi-hive's `SIGTERM` to the container, and
-/// removes it on exit; a changed spec hot-reloads like any other runner.
+/// compiles (see [`Docker::command_line`]) to an **attach-to-existing** command: `docker start`
+/// the named container (a running one is a no-op — never a restart), create it only if it doesn't
+/// exist, then `docker wait` it so adi-hive supervises the container's lifetime without owning it.
+/// A supervisor restart leaves the container running (stop it with `docker stop <name>`); a
+/// container that exits on its own is relaunched per the restart policy.
 ///
 /// Host ports stay adi-hive's job: the service's `rollout.recreate.ports` are the (leased) host
 /// ports, and `ports` here maps each of those **port keys** to the container port it targets —
@@ -296,6 +304,9 @@ impl Hive {
             };
             let ports = svc.ports();
             let restart = RestartPolicy::parse(svc.restart.as_deref());
+            // An imported service resolves relative paths against its own file's directory; a service
+            // declared in this hive uses the loader's `base_dir`.
+            let dir = svc.base_dir.as_deref().unwrap_or(base_dir);
             let spec = match (runner.docker.as_ref(), runner.script.as_ref()) {
                 // Ambiguous: exactly one runner kind is allowed. Refuse to launch either, so a stray
                 // second runner can't silently shadow the intended one — surface it and skip.
@@ -309,15 +320,15 @@ impl Hive {
                 // container's env is baked into the command's `-e` flags).
                 (Some(docker), None) => RunnerSpec {
                     name: name.clone(),
-                    run: docker.command_line(name, svc, ports, base_dir),
-                    working_dir: base_dir.to_path_buf(),
+                    run: docker.command_line(name, svc, ports, dir),
+                    working_dir: dir.to_path_buf(),
                     env: Vec::new(),
                     restart,
                 },
                 (None, Some(script)) => RunnerSpec {
                     name: name.clone(),
                     run: expand_templates(&script.run, ports),
-                    working_dir: resolve_working_dir(base_dir, script.working_dir.as_deref()),
+                    working_dir: resolve_working_dir(dir, script.working_dir.as_deref()),
                     env: build_env(svc, ports),
                     restart,
                 },
@@ -367,14 +378,22 @@ fn resolve_working_dir(base_dir: &Path, dir: Option<&str>) -> PathBuf {
 impl Docker {
     /// Compile this container runner into the single shell command adi-hive's supervisor runs.
     ///
-    /// Shape: `docker rm -f <name> …; exec docker run --rm --name <name> [flags] <image> [command]`.
+    /// Shape: `docker start <name> … || docker run -d --name <name> [flags] <image> [command]; exec
+    /// docker wait <name>`.
     ///
-    /// - `exec` makes `docker run` replace the shell, so it *is* the supervised process — adi-hive's
-    ///   `SIGTERM` reaches it directly, and `docker run` (foreground) forwards it to the container.
-    /// - The leading `docker rm -f` clears any container the previous run orphaned (if adi-hive had
-    ///   to `SIGKILL` it past the grace period), so a relaunch never trips over a name clash.
+    /// It **attaches to an existing container** rather than recreating one:
+    /// - `docker start <name>` reuses the container as-is (a running one is a no-op — **no restart**);
+    ///   the `|| docker run -d …` create path fires only when the container doesn't exist yet.
+    /// - `exec docker wait <name>` then makes *this* the supervised foreground process for the
+    ///   container's whole life. A supervisor `SIGTERM` kills the `wait`, **not the container**, so the
+    ///   container survives a supervisor restart untouched — to actually stop it, `docker stop <name>`.
+    ///   If the container exits on its own, `wait` returns and the supervisor's restart policy relaunches
+    ///   this, which `docker start`s it again.
     /// - Every interpolated value is shell-quoted, so image names, env values, and paths with spaces
     ///   or metacharacters can't break out of the command.
+    ///
+    /// Note: the create-time flags (ports, volumes, env, healthcheck) apply only when the container is
+    /// first created; changing them later takes effect after the container is removed and recreated.
     ///
     /// `host_ports` are the service's leased host ports (`svc.ports()`); `base_dir` anchors relative
     /// bind-mount host paths.
@@ -386,50 +405,52 @@ impl Docker {
         base_dir: &Path,
     ) -> String {
         let name = container_name(self.name.as_deref(), service);
-        let mut run: Vec<String> = ["docker", "run", "--rm", "--name"]
+        // The `docker run` that *creates* the container (first launch only) — detached (`-d`) so it is
+        // not `--rm`'d on exit and outlives a supervisor restart.
+        let mut create: Vec<String> = ["docker", "run", "-d", "--name"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
-        run.push(shell_quote(&name));
+        create.push(shell_quote(&name));
 
         if let Some(pull) = self.pull.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
-            run.push("--pull".to_string());
-            run.push(shell_quote(pull));
+            create.push("--pull".to_string());
+            create.push(shell_quote(pull));
         }
 
         // Publish each mapped host port key to its container port, on loopback so the container is
         // reachable only through the front door (as a script runner on 127.0.0.1 would be).
         for (key, container_port) in &self.ports {
             if let Some(host_port) = host_ports.get(key) {
-                run.push("-p".to_string());
-                run.push(format!("127.0.0.1:{host_port}:{container_port}"));
+                create.push("-p".to_string());
+                create.push(format!("127.0.0.1:{host_port}:{container_port}"));
             }
         }
 
         for (key, value) in self.container_env(svc) {
-            run.push("-e".to_string());
-            run.push(shell_quote(&format!("{key}={value}")));
+            create.push("-e".to_string());
+            create.push(shell_quote(&format!("{key}={value}")));
         }
 
         for volume in &self.volumes {
-            run.push("-v".to_string());
-            run.push(shell_quote(&resolve_volume(base_dir, volume)));
+            create.push("-v".to_string());
+            create.push(shell_quote(&resolve_volume(base_dir, volume)));
         }
 
         // Raw passthrough flags — the escape hatch for anything not modelled first-class.
         for arg in &self.args {
-            run.push(shell_quote(arg));
+            create.push(shell_quote(arg));
         }
 
-        run.push(shell_quote(&self.image));
+        create.push(shell_quote(&self.image));
         for arg in self.command.iter().flatten() {
-            run.push(shell_quote(arg));
+            create.push(shell_quote(arg));
         }
 
+        let name = shell_quote(&name);
         format!(
-            "docker rm -f {} >/dev/null 2>&1; exec {}",
-            shell_quote(&name),
-            run.join(" ")
+            "docker start {name} >/dev/null 2>&1 || {create}; exec docker wait {name}",
+            create = create.join(" "),
         )
     }
 
@@ -600,6 +621,21 @@ fn walk_collect(dir: &Path, filename: &str, out: &mut Vec<PathBuf>) {
 
 /// The namespace for an imported hive's services: the project id from
 /// `.../<project>/.adi/hive.yaml`, else the file's parent dir name, else `import`.
+/// The directory an imported hive's runners resolve their relative paths against: the project /
+/// dashboard **root**. A hive.yaml at `<root>/.adi/hive.yaml` has its runners' `working_dir` (e.g.
+/// `workspaces/main`) relative to `<root>`, not the `.adi` dir — so a trailing `.adi` is stripped
+/// (mirroring [`import_namespace`]). Otherwise the file's own directory is used. This is the same
+/// base adi-app resolves against, so a service starts the same whether the supervisor or adi-app
+/// launched it.
+fn import_base_dir(file: &Path) -> Option<PathBuf> {
+    let parent = file.parent()?;
+    if parent.file_name().is_some_and(|n| n == ".adi") {
+        Some(parent.parent().unwrap_or(parent).to_path_buf())
+    } else {
+        Some(parent.to_path_buf())
+    }
+}
+
 fn import_namespace(file: &Path) -> String {
     let parent = file.parent();
     let ns = if parent
@@ -700,7 +736,15 @@ impl Hive {
                 }
                 match Self::parse_file(&file) {
                     Ok(child) => {
-                        self.merge_import(child, &import_namespace(&file), strip_runners);
+                        // Imported services resolve their relative paths against their project root
+                        // (the dir that holds `.adi/`) — the same base adi-app uses, not this
+                        // importer's base_dir. See [`import_base_dir`].
+                        self.merge_import(
+                            child,
+                            &import_namespace(&file),
+                            strip_runners,
+                            import_base_dir(&file),
+                        );
                     }
                     Err(e) => {
                         warn!(file = %file.display(), error = %e, "skipping unreadable import")
@@ -712,11 +756,13 @@ impl Hive {
 
     /// Merge one imported hive's services under `ns`, dropping their runners when
     /// `strip_runners`. An already-present key wins, so a local service is never overridden.
-    fn merge_import(&mut self, child: Self, ns: &str, strip_runners: bool) {
+    fn merge_import(&mut self, child: Self, ns: &str, strip_runners: bool, dir: Option<PathBuf>) {
         for (name, mut svc) in child.services {
             if strip_runners {
                 svc.runner = None;
             }
+            // Remember where this service came from, so its runner's relative paths resolve there.
+            svc.base_dir.clone_from(&dir);
             self.services.entry(format!("{ns}/{name}")).or_insert(svc);
         }
     }
@@ -1001,7 +1047,7 @@ services:
         .expect("parse child hive");
 
         let mut root = Hive::default();
-        root.merge_import(child.clone(), "proj", true);
+        root.merge_import(child.clone(), "proj", true, None);
         let svc = root.services.get("proj/app").expect("service imported");
         assert!(
             svc.runner.is_none(),
@@ -1013,11 +1059,50 @@ services:
             "dropping the runner must not drop the route"
         );
 
+        // An unprivileged import keeps the runner AND records the import's directory, so its runner
+        // resolves relative paths there rather than under the importer.
         let mut user = Hive::default();
-        user.merge_import(child, "proj", false);
+        user.merge_import(child, "proj", false, Some(PathBuf::from("/srv/proj")));
+        let svc = &user.services["proj/app"];
         assert!(
-            user.services["proj/app"].runner.is_some(),
+            svc.runner.is_some(),
             "an unprivileged hive keeps the runner so it can supervise it"
+        );
+        assert_eq!(svc.base_dir.as_deref(), Some(Path::new("/srv/proj")));
+    }
+
+    #[test]
+    fn import_base_dir_strips_a_trailing_dot_adi() {
+        // A project hive.yaml lives in `<project>/.adi/hive.yaml`; its runners resolve against
+        // `<project>` (where `workspaces/` lives), NOT the `.adi` dir.
+        assert_eq!(
+            import_base_dir(Path::new("/x/mono/projects/backend/.adi/hive.yaml")),
+            Some(PathBuf::from("/x/mono/projects/backend")),
+        );
+        // A hive.yaml not in a `.adi` dir just uses its own directory.
+        assert_eq!(
+            import_base_dir(Path::new("/x/mono/hive/hive.yaml")),
+            Some(PathBuf::from("/x/mono/hive")),
+        );
+    }
+
+    #[test]
+    fn an_imported_runner_resolves_its_relative_working_dir_under_its_own_project() {
+        // A project service with a *relative* working_dir, imported by a supervisor rooted elsewhere.
+        let child: Hive = serde_yaml_ng::from_str(
+            "services:\n  api:\n    runner: { script: { run: \"bun run dev\", working_dir: workspaces/main } }\n",
+        )
+        .expect("parse child");
+        let mut sup = Hive::default();
+        sup.merge_import(child, "proj", false, Some(PathBuf::from("/home/u/.adi/mono/projects/proj")));
+
+        // The supervisor's own base_dir is elsewhere; the imported service must ignore it.
+        let runners = sup.runners(Path::new("/home/u/.adi/mono/dashboards"));
+        assert_eq!(runners.len(), 1);
+        assert_eq!(
+            runners[0].working_dir,
+            Path::new("/home/u/.adi/mono/projects/proj/workspaces/main"),
+            "imported relative working_dir must resolve under the project, not the supervisor",
         );
     }
 
@@ -1198,11 +1283,14 @@ services:
         assert!(spec.env.is_empty());
 
         let run = &spec.run;
-        // Pre-clean then exec so `docker run` becomes the supervised process.
+        // Attach to an existing container (start it, no restart); create it only if absent; then
+        // `wait` so this stays the supervised foreground process. Never `--rm` / `rm -f`.
         assert!(
-            run.starts_with("docker rm -f adi-web >/dev/null 2>&1; exec docker run --rm --name adi-web"),
+            run.starts_with("docker start adi-web >/dev/null 2>&1 || docker run -d --name adi-web"),
             "got: {run}"
         );
+        assert!(run.ends_with("; exec docker wait adi-web"), "got: {run}");
+        assert!(!run.contains("--rm"), "no --rm (persistent container): {run}");
         assert!(run.contains("--pull always"), "got: {run}");
         // Leased host port 8080 → container 80, on loopback.
         assert!(run.contains("-p 127.0.0.1:8080:80"), "got: {run}");
@@ -1220,9 +1308,9 @@ services:
         );
         assert!(run.contains("-v named:/cache"), "got: {run}");
         assert!(run.contains("--memory=512m"), "got: {run}");
-        // Image, then the overriding command (with the space-bearing arg quoted).
+        // Image, then the overriding command (with the space-bearing arg quoted), before the `wait`.
         assert!(
-            run.trim_end().ends_with("nginx:1.27 nginx -g 'daemon off;'"),
+            run.contains("nginx:1.27 nginx -g 'daemon off;'; exec docker wait adi-web"),
             "got: {run}"
         );
     }

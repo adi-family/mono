@@ -187,6 +187,12 @@ async fn supervise(spec: RunnerSpec, mut rx: watch::Receiver<bool>) {
 fn spawn(spec: &RunnerSpec) -> std::io::Result<Child> {
     let mut cmd = shell_command(&spec.run);
     cmd.current_dir(&spec.working_dir);
+    // Env parity with adi-app's launcher (shared in adi-config): an augmented PATH (+ HOME) so a
+    // runner spawned under launchd's bare environment still finds bun/node/Homebrew/docker. Applied
+    // before `spec.env`, so a service's own `environment.static` can still override PATH/HOME.
+    for (key, value) in adi_config::launch_env() {
+        cmd.env(key, value);
+    }
     for (key, value) in &spec.env {
         cmd.env(key, value);
     }
