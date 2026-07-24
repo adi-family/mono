@@ -24,9 +24,9 @@ mod tree;
 mod ui;
 
 use adi_webapp_api::types::{
-    AgentBackendOption, AgentDto, AgentsState, DashboardsState, Health, HiveState, MeshState,
-    MetaState, PortsState, ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState,
-    ToolsState, TriggersState, UsedPorts, WorkspacesState,
+    AgentBackendOption, AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState,
+    PortsState, ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState, ToolsState,
+    TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -35,10 +35,10 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, dashboards_view, hive_view, live_view, load_dir, load_store_file, mesh_view,
-    meta_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch, ports_manager_view,
-    project_detail_view, projects_view, secrets_view, store_file_view, tasks_view, tools_view,
-    triggers_view,
+    agents_view, chat_home_view, dashboards_view, hive_view, live_view, load_dir, load_store_file,
+    mesh_view, meta_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
+    ports_manager_view, project_detail_view, projects_view, secrets_view, store_file_view,
+    tasks_view, tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -114,18 +114,21 @@ const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
     },
 ];
 
-/// The root (`/`): a guided onboarding wizard behind a slim `adi. · extended →` bar. Step 1
-/// sets up the default `adi-agent` — the same `/api/meta` + `/api/agents/save` flow the
-/// Extended "Meta" page uses — seeded with the server's default backend and system prompt.
+/// The root (`/`). Before the root agent exists it's a guided onboarding wizard (welcome, stepper,
+/// setup form) behind a slim `adi. · extended →` bar. **Once the agent exists the app becomes the
+/// chat**: its sessions on the left, the conversation in the centre, dashboards on the right (see
+/// [`chat_home_view`]). The bar's "reconfigure" returns to the setup form to change the agent.
 #[component]
 fn Home() -> impl IntoView {
-    let meta = RwSignal::new(None::<MetaState>);
+    let state = State::fresh();
+    let watch = AgentsWatch::new();
+    // The chat and the wizard share one meta signal — it decides which of the two shows.
+    let meta = state.meta;
     let backend = RwSignal::new(String::new());
     let prompt = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
     let error = RwSignal::new(None::<String>);
-    // True while editing an agent that already exists, so step 1 shows the form again rather
-    // than its done summary.
+    // True while editing an existing agent, so the wizard's setup form shows instead of the chat.
     let reconfiguring = RwSignal::new(false);
     // Whether the "help me to choose?" runtime-picker modal is open.
     let show_help = RwSignal::new(false);
@@ -151,46 +154,109 @@ fn Home() -> impl IntoView {
         }
     });
 
-    view! {
-        <div class="adi-onb">
-            <header class="adi-onb__bar">
-                <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
-                <span class="adi-spacer"></span>
-                <a class="adi-onb__ext" href="/extended">
-                    <span>"extended"</span>
-                    <span class="adi-onb__ext-arrow">"\u{2192}"</span>
-                </a>
-            </header>
+    // Keep the chat pointed at the root agent and the dashboards rail fresh: detect the agent's
+    // executor (pty ⇒ interactive) so the live view picks the right shape, point the watch at it the
+    // first time it appears, and refresh the dashboards list. Runs on load, on creation, and on a poll.
+    let refresh = move || {
+        spawn_local(async move {
+            if let Ok(a) = fetch::agents().await {
+                if let Some(d) = a.agents.iter().find(|d| d.name == "adi-agent") {
+                    let interactive = d.executor == "pty";
+                    if watch.interactive.get_untracked() != interactive {
+                        watch.interactive.set(interactive);
+                    }
+                    if watch.name.get_untracked().is_none() {
+                        watch.name.set(Some("adi-agent".to_string()));
+                        poll_watch(watch);
+                    }
+                }
+                state.agents.set(Some(a));
+            }
+            if let Ok(dd) = fetch::dashboards().await
+                && state.dashboards.get_untracked().as_ref() != Some(&dd)
+            {
+                state.dashboards.set(Some(dd));
+            }
+        });
+    };
 
-            <main class="adi-onb__body">
-                <div class="adi-onb__panel">
-                    <div class="adi-onb__intro">
-                        <h1 class="adi-onb__welcome">
-                            "Welcome to adi"<span class="adi-onb__dot">"."</span>
-                        </h1>
-                        <p class="adi-onb__sub">"Let\u{2019}s set up your primary agent."</p>
-                    </div>
+    // Wire up the chat as soon as the agent exists — on load, or right after the setup form creates it.
+    Effect::new(move |_| {
+        if meta.get().is_some_and(|m| m.agent.is_some()) {
+            refresh();
+        }
+    });
+    Interval::new(1_000, move || poll_watch(watch)).forget();
+    Interval::new(4_000, move || refresh()).forget();
 
-                    <ol class="adi-onb__steps">{onb_steps(meta, reconfiguring)}</ol>
+    // Bar "reconfigure": seed the setup form from the stored agent, then flip into reconfigure mode
+    // so the centred wizard shows in place of the chat.
+    let start_reconfigure = move || {
+        if let Some(agent) = meta.get_untracked().and_then(|m| m.agent) {
+            backend.set(agent.backend.clone());
+            prompt.set(arg_text(&agent.arguments, "system_prompt"));
+            reconfiguring.set(true);
+        }
+    };
 
-                    {move || match meta.get() {
-                        None => view! {
-                            <div class="adi-onb__card">
-                                <div class="adi-onb__loading">"Loading…"</div>
-                            </div>
-                        }
-                        .into_any(),
-                        Some(m) => match (m.agent.clone(), reconfiguring.get()) {
-                            (Some(agent), false) => onb_done(backend, prompt, reconfiguring, agent),
-                            _ => onb_setup_form(
-                                meta, backend, prompt, busy, error, reconfiguring, show_help,
-                                show_prompt, m,
-                            ),
-                        },
-                    }}
+    move || {
+        // The chat takes over once the agent exists and we're not mid-reconfigure; otherwise the
+        // onboarding wizard. Reads only `meta`/`reconfiguring`, so a poll never rebuilds the tree.
+        if meta.get().is_some_and(|m| m.agent.is_some()) && !reconfiguring.get() {
+            view! {
+                <div class="adi-chome-root">
+                    <header class="adi-onb__bar">
+                        <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
+                        <span class="adi-spacer"></span>
+                        <button class="adi-onb__ext" type="button"
+                            on:click=move |_| start_reconfigure()>"reconfigure agent"</button>
+                        <a class="adi-onb__ext" href="/extended">
+                            <span>"extended"</span>
+                            <span class="adi-onb__ext-arrow">"\u{2192}"</span>
+                        </a>
+                    </header>
+                    {chat_home_view(state, watch)}
                 </div>
-            </main>
-        </div>
+            }
+            .into_any()
+        } else {
+            view! {
+                <div class="adi-onb">
+                    <header class="adi-onb__bar">
+                        <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
+                        <span class="adi-spacer"></span>
+                        <a class="adi-onb__ext" href="/extended">
+                            <span>"extended"</span>
+                            <span class="adi-onb__ext-arrow">"\u{2192}"</span>
+                        </a>
+                    </header>
+                    <main class="adi-onb__body">
+                        <div class="adi-onb__panel">
+                            <div class="adi-onb__intro">
+                                <h1 class="adi-onb__welcome">
+                                    "Welcome to adi"<span class="adi-onb__dot">"."</span>
+                                </h1>
+                                <p class="adi-onb__sub">"Let\u{2019}s set up your primary agent."</p>
+                            </div>
+                            <ol class="adi-onb__steps">{onb_steps(meta, reconfiguring)}</ol>
+                            {move || match meta.get() {
+                                None => view! {
+                                    <div class="adi-onb__card">
+                                        <div class="adi-onb__loading">"Loading…"</div>
+                                    </div>
+                                }
+                                .into_any(),
+                                Some(m) => onb_setup_form(
+                                    meta, backend, prompt, busy, error, reconfiguring, show_help,
+                                    show_prompt, m,
+                                ),
+                            }}
+                        </div>
+                    </main>
+                </div>
+            }
+            .into_any()
+        }
     }
 }
 
@@ -395,52 +461,6 @@ fn onb_help_modal(
                     " — every runtime is swappable from Extended \u{2192} Meta later."
                 </p>
             </div>
-        </div>
-    }
-    .into_any()
-}
-
-/// Step 1's done summary once `adi-agent` exists: what it runs on, plus Reconfigure and the way
-/// on to Extended.
-fn onb_done(
-    backend: RwSignal<String>,
-    prompt: RwSignal<String>,
-    reconfiguring: RwSignal<bool>,
-    agent: AgentDto,
-) -> AnyView {
-    let name = agent.name.clone();
-    let backend_label = agent.backend.clone();
-    let running = agent.running;
-    let recon_backend = agent.backend.clone();
-    let recon_prompt = arg_text(&agent.arguments, "system_prompt");
-    view! {
-        <div class="adi-onb__card">
-            <span class="adi-onb__eyebrow adi-onb__eyebrow--ok">"Step 1 · Done"</span>
-            <h2 class="adi-onb__title">
-                <span class="adi-onb__check" aria-hidden="true">"\u{2713}"</span>
-                <span>"Your adi agent is ready"</span>
-            </h2>
-            <p class="adi-onb__desc">
-                <strong>{name}</strong>" runs on the "
-                <code class="adi-onb__code">{backend_label}</code>
-                {if running { " backend, and it's running now." } else { " backend." }}
-            </p>
-            <div class="adi-onb__actions">
-                <button class="adi-btn adi-btn--link" type="button"
-                    on:click=move |_| {
-                        backend.set(recon_backend.clone());
-                        prompt.set(recon_prompt.clone());
-                        reconfiguring.set(true);
-                    }>"Reconfigure"</button>
-                <span class="adi-spacer"></span>
-                <a class="adi-btn adi-btn--primary adi-onb__submit" href="/extended">
-                    "Enter Extended \u{2192}"
-                </a>
-            </div>
-            <p class="adi-onb__more">
-                "That's step 1. More onboarding steps are on the way — you're ready to explore in
-                 the meantime."
-            </p>
         </div>
     }
     .into_any()

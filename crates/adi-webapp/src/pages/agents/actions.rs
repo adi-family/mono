@@ -949,3 +949,230 @@ fn truncate_task(task: &str) -> String {
         task.to_string()
     }
 }
+
+// ---- chat home (`/` once the root agent exists) ------------------------------------------------
+// The app *is* the chat: the watched (root) agent's sessions on the left, its conversation in the
+// centre, the dashboards list on the right. Built on the same live-view machinery as the Agents
+// page, so a pty agent shows a live terminal + input and a headless one shows its conversations.
+
+/// The three-pane chat home. `watch` is expected to already point at the root agent (the caller
+/// sets its name + interactive flag and drives the 1s poll); `state.dashboards` feeds the right rail.
+pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
+    view! {
+        <div class="adi-chome">
+            <aside class="adi-chome__side adi-chome__side--left">
+                <div class="adi-chome__side-head">
+                    <span class="adi-chome__side-title">"Sessions"</span>
+                    <span class="adi-spacer"></span>
+                    {move || chat_new_button(state, watch)}
+                </div>
+                <div class="adi-chome__side-body">
+                    {move || chat_sessions(state, watch)}
+                </div>
+            </aside>
+
+            <main class="adi-chome__chat">
+                {move || chat_center(state, watch)}
+            </main>
+
+            <aside class="adi-chome__side adi-chome__side--right">
+                <div class="adi-chome__side-head">
+                    <span class="adi-chome__side-title">"Dashboards"</span>
+                    <span class="adi-spacer"></span>
+                    <a class="adi-chome__side-link" href="/extended/dashboards">"Manage"</a>
+                </div>
+                <div class="adi-chome__side-body">
+                    {move || chat_dashboards(state)}
+                </div>
+            </aside>
+        </div>
+    }
+    .into_any()
+}
+
+/// The sessions rail's "New" action: for a pty agent it (re)starts the live session; for a headless
+/// one it clears the selection so the centre shows the new-conversation composer.
+fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
+    if watch.interactive.get() {
+        let name = watch.name.get().unwrap_or_default();
+        view! {
+            <button class="adi-btn adi-btn--ghost adi-chome__new" type="button"
+                title="start a fresh session"
+                on:click=move |_| run_now(state, name.clone())>"+ New"</button>
+        }
+        .into_any()
+    } else {
+        view! {
+            <button class="adi-btn adi-btn--ghost adi-chome__new" type="button"
+                title="start a new chat"
+                on:click=move |_| close_run_view(watch)>"+ New"</button>
+        }
+        .into_any()
+    }
+}
+
+/// The sessions rail's body: a pty agent has a single live session; a headless one lists its
+/// conversations (newest first), each selectable into the centre.
+fn chat_sessions(state: State, watch: AgentsWatch) -> AnyView {
+    let _ = state;
+    if watch.interactive.get() {
+        let running = watch.peek.get().is_some_and(|p| p.running);
+        let dot = if running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
+        let label = if running { "Live session" } else { "No live session" };
+        return view! {
+            <div class="adi-chome__session is-active">
+                <span class=dot></span>
+                <span class="adi-chome__session-main">
+                    <span class="adi-chome__session-title">{label}</span>
+                    <span class="adi-chome__session-when">"interactive terminal"</span>
+                </span>
+            </div>
+        }
+        .into_any();
+    }
+    let runs = watch.runs.get();
+    if runs.is_empty() {
+        return view! {
+            <div class="adi-chome__empty">"No chats yet — press New to start one."</div>
+        }
+        .into_any();
+    }
+    let selected = watch.run_id.get();
+    runs.into_iter()
+        .map(|r| {
+            let is_sel = selected.as_deref() == Some(r.run_id.as_str());
+            let title = truncate_task(&r.message);
+            let title = if title.trim().is_empty() { "New chat".to_string() } else { title };
+            let when = run_age(r.started_at);
+            let dot = if r.running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
+            let cls = if is_sel { "adi-chome__session is-active" } else { "adi-chome__session" };
+            let rid = r.run_id.clone();
+            view! {
+                <button class=cls type="button" on:click=move |_| select_run(watch, rid.clone())>
+                    <span class=dot></span>
+                    <span class="adi-chome__session-main">
+                        <span class="adi-chome__session-title">{title}</span>
+                        <span class="adi-chome__session-when">{when}</span>
+                    </span>
+                </button>
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+/// The centre pane: a pty agent's live terminal (+ input), or a headless agent's selected
+/// conversation (or the new-conversation composer when nothing is selected).
+fn chat_center(state: State, watch: AgentsWatch) -> AnyView {
+    let Some(name) = watch.name.get() else {
+        return view! { <div class="adi-chome__center-empty">"Connecting…"</div> }.into_any();
+    };
+    if watch.interactive.get() {
+        chat_center_pty(state, watch, name)
+    } else {
+        chat_center_headless(state, watch)
+    }
+}
+
+/// The pty centre: the live pane while a session runs, with the same send bar as the Agents page;
+/// otherwise a Start affordance that launches the session.
+fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
+    view! {
+        <div class="adi-chome__chatwrap">
+            <div class="adi-chome__chatbody">
+                {move || match watch.peek.get() {
+                    Some(p) if p.running => {
+                        view! { <pre class="adi-term adi-chome__term">{p.output}</pre> }.into_any()
+                    }
+                    other => {
+                        let ended = other.is_some();
+                        let msg = if ended {
+                            "The session has ended."
+                        } else {
+                            "No live session yet."
+                        };
+                        let name = name.clone();
+                        view! {
+                            <div class="adi-chome__center-empty">
+                                <p>{msg}</p>
+                                <button class="adi-btn adi-btn--primary" type="button"
+                                    on:click=move |_| run_now(state, name.clone())>
+                                    "\u{25B6} Start session"
+                                </button>
+                            </div>
+                        }
+                        .into_any()
+                    }
+                }}
+            </div>
+            {move || watch.peek.get().is_some_and(|p| p.running).then(|| send_bar(state, watch))}
+        </div>
+    }
+    .into_any()
+}
+
+/// The headless centre: the selected conversation's transcript (+ reply), or a composer to start a
+/// new one when no session is selected.
+fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
+    view! {
+        <div class="adi-chome__chatwrap">
+            {move || match watch.run_id.get() {
+                Some(_) => view! {
+                    <div class="adi-chome__feed">{feed_view(state, watch, watch.answerable.get())}</div>
+                }
+                .into_any(),
+                None => view! {
+                    <div class="adi-chome__compose">
+                        <div class="adi-chome__compose-intro">
+                            <h2 class="adi-chome__compose-title">"Start a chat"</h2>
+                            <p class="adi-chome__compose-sub">
+                                "Ask your agent to set something up — or pick a past session on the left."
+                            </p>
+                        </div>
+                        {run_bar(state, watch)}
+                    </div>
+                }
+                .into_any(),
+            }}
+        </div>
+    }
+    .into_any()
+}
+
+/// The dashboards rail: every live dashboard, each a link to open it (when its frontend is up).
+fn chat_dashboards(state: State) -> AnyView {
+    let Some(ds) = state.dashboards.get() else {
+        return view! { <div class="adi-chome__empty">"Loading…"</div> }.into_any();
+    };
+    let live: Vec<_> = ds.dashboards.into_iter().filter(|d| !d.is_archived()).collect();
+    if live.is_empty() {
+        return view! {
+            <div class="adi-chome__empty">"No dashboards yet — ask your agent to build one."</div>
+        }
+        .into_any();
+    }
+    live.into_iter()
+        .map(|d| {
+            let name = d.name.clone();
+            match d.frontend_port {
+                Some(port) if d.frontend_running => view! {
+                    <a class="adi-chome__dash" href=format!("http://127.0.0.1:{port}")
+                        target="_blank" rel="noreferrer" title=d.name>
+                        <span class="adi-chome__dot adi-chome__dot--on"></span>
+                        <span class="adi-chome__dash-name">{name}</span>
+                        <span class="adi-chome__dash-open">"\u{2197}"</span>
+                    </a>
+                }
+                .into_any(),
+                _ => view! {
+                    <div class="adi-chome__dash is-off" title="not running">
+                        <span class="adi-chome__dot"></span>
+                        <span class="adi-chome__dash-name">{name}</span>
+                    </div>
+                }
+                .into_any(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}

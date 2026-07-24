@@ -334,6 +334,227 @@
   .adi-onb__panel { animation: none; }
 }
 
+// ---- chat home (`/` once the root agent exists) ------------------------------------
+// The app is the chat: a fixed-height frame (slim bar + three columns) that fills the viewport,
+// each column scrolling on its own. Sessions left, conversation centre, dashboards right.
+.adi-chome-root {
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans);
+
+  // The reconfigure control is a button styled like the bar's `extended` pill.
+  .adi-onb__ext { cursor: pointer; }
+}
+
+.adi-chome {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 264px minmax(0, 1fr) 300px;
+
+  // --- the side rails (sessions / dashboards) -------------------------------------
+  &__side {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--surface);
+  }
+  &__side--left  { border-right: 1px solid var(--border); }
+  &__side--right { border-left: 1px solid var(--border); }
+  &__side-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 46px;
+    padding: 0 var(--space-3);
+    border-bottom: 1px solid var(--border);
+  }
+  &__side-title {
+    font-size: var(--text-sm);
+    font-weight: 600;
+    letter-spacing: -.01em;
+  }
+  &__side-link {
+    font-size: var(--text-sm);
+    color: var(--muted);
+    text-decoration: none;
+    &:hover { color: var(--accent); }
+  }
+  &__side-body {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: var(--space-2);
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  &__new {
+    padding: 3px 10px;
+    font-size: var(--text-sm);
+  }
+  &__empty {
+    padding: var(--space-3);
+    color: var(--muted);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+  }
+
+  // --- a session row (left) -------------------------------------------------------
+  &__session {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--ink);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+
+    &:hover { background: var(--surface-2); }
+    &.is-active {
+      background: var(--surface-2);
+      border-color: var(--border);
+    }
+  }
+  &__session-main { display: flex; flex-direction: column; min-width: 0; }
+  &__session-title {
+    font-size: var(--text-sm);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  &__session-when {
+    font-size: var(--text-xs);
+    color: var(--muted);
+  }
+  &__dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    &--on { background: var(--online); }
+  }
+
+  // --- the centre chat ------------------------------------------------------------
+  &__chat {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    min-height: 0;
+    background: var(--bg);
+  }
+  &__chatwrap {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  &__chatbody {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+  }
+  // The pty terminal fills the pane and scrolls in place.
+  &__term {
+    height: 100%;
+    max-height: none;
+    box-sizing: border-box;
+    border-top: none;
+  }
+  // A selected headless conversation: let the transcript grow into the pane (its own scroll).
+  &__feed {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    .adi-chat {
+      flex: 1;
+      min-height: 0;
+      max-height: none;
+    }
+  }
+  &__center-empty {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-3);
+    padding: var(--space-5);
+    color: var(--muted);
+    text-align: center;
+  }
+  // The new-conversation composer, centred in the empty chat pane.
+  &__compose {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-4);
+    padding: clamp(20px, 6vh, 64px);
+
+    .adi-form { width: min(100%, 620px); }
+  }
+  &__compose-intro { text-align: center; }
+  &__compose-title {
+    margin: 0 0 6px;
+    font-size: var(--text-xl);
+    font-weight: 650;
+    letter-spacing: -.02em;
+  }
+  &__compose-sub {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--text-base);
+  }
+
+  // --- a dashboard row (right) ----------------------------------------------------
+  &__dash {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 8px 10px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    color: var(--ink);
+    text-decoration: none;
+    transition: background var(--transition), border-color var(--transition);
+
+    &:hover { background: var(--surface-2); border-color: var(--border); }
+    &.is-off { color: var(--muted); cursor: default; }
+  }
+  &__dash-name {
+    flex: 1;
+    min-width: 0;
+    font-size: var(--text-sm);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  &__dash-open { color: var(--muted); font-size: var(--text-sm); }
+
+  // On a narrow viewport the rails collapse under the chat rather than squeezing it to nothing.
+  @media (max-width: 900px) {
+    grid-template-columns: 1fr;
+    grid-auto-rows: minmax(0, auto);
+    &__side { display: none; }
+    &__chat { min-height: 0; }
+  }
+}
+
 // ---- "help me to choose?" runtime modal --------------------------------------------
 // A centred dialog over a dimmed scrim, opened from step 1's runtime picker. Each row is a
 // "do you have…?" question with the runtime it maps to and a one-tap "Use this".
