@@ -24,9 +24,9 @@ mod tree;
 mod ui;
 
 use adi_webapp_api::types::{
-    AgentDto, AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState, PortsState,
-    ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState, ToolsState, TriggersState,
-    UsedPorts, WorkspacesState,
+    AgentBackendOption, AgentDto, AgentsState, DashboardsState, Health, HiveState, MeshState,
+    MetaState, PortsState, ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState,
+    ToolsState, TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -71,7 +71,33 @@ fn main() {
 
 /// The onboarding steps, in order. Only step 1 is interactive today; the rest scaffold the
 /// wizard so "step 1 of N" reads true and there is somewhere to grow into.
-const ONBOARDING_STEPS: [&str; 3] = ["Set up your adi agent", "Create a project", "You're ready"];
+const ONBOARDING_STEPS: [&str; 2] = ["Set up your primary agent", "You're ready"];
+
+/// The "help me to choose?" guidance: a short "do you have…?" checklist that maps what a user
+/// already has (a subscription, an API key) onto a runtime. Each `id` matches a backend in the
+/// server's form spec, so picking one drops straight into the runtime select.
+const RUNTIME_GUIDE: [(&str, &str, &str); 4] = [
+    (
+        "I have a Claude subscription (Pro / Max), or the Claude CLI already logged in",
+        "pty:claude",
+        "Runs Claude Code in a live terminal session using your existing Claude login — no API key needed.",
+    ),
+    (
+        "I have a ChatGPT / Codex subscription",
+        "pty:codex",
+        "Runs the Codex CLI in a live terminal session using your Codex login.",
+    ),
+    (
+        "I have an Anthropic API key",
+        "harness:claude-sdk",
+        "Talks to the Claude API directly with your key — no CLI to install or log in to.",
+    ),
+    (
+        "I have another provider's API key (OpenAI, Gemini, Kimi, …)",
+        "harness:adi",
+        "ADI's built-in agent loop speaks to many providers with your key.",
+    ),
+];
 
 /// The root (`/`): a guided onboarding wizard behind a slim `adi. · extended →` bar. Step 1
 /// sets up the default `adi-agent` — the same `/api/meta` + `/api/agents/save` flow the
@@ -86,6 +112,8 @@ fn Home() -> impl IntoView {
     // True while editing an agent that already exists, so step 1 shows the form again rather
     // than its done summary.
     let reconfiguring = RwSignal::new(false);
+    // Whether the "help me to choose?" runtime-picker modal is open.
+    let show_help = RwSignal::new(false);
 
     // Load the meta state once, seeding the form from the server's default prompt and first
     // backend when the agent hasn't been created yet.
@@ -119,8 +147,10 @@ fn Home() -> impl IntoView {
             <main class="adi-onb__body">
                 <div class="adi-onb__panel">
                     <div class="adi-onb__intro">
-                        <h1 class="adi-onb__welcome">"Welcome to adi"</h1>
-                        <p class="adi-onb__sub">"A few steps and your environment is ready."</p>
+                        <h1 class="adi-onb__welcome">
+                            "Welcome to adi"<span class="adi-onb__dot">"."</span>
+                        </h1>
+                        <p class="adi-onb__sub">"Let\u{2019}s set up your primary agent."</p>
                     </div>
 
                     <ol class="adi-onb__steps">{onb_steps(meta, reconfiguring)}</ol>
@@ -134,7 +164,9 @@ fn Home() -> impl IntoView {
                         .into_any(),
                         Some(m) => match (m.agent.clone(), reconfiguring.get()) {
                             (Some(agent), false) => onb_done(backend, prompt, reconfiguring, agent),
-                            _ => onb_setup_form(meta, backend, prompt, busy, error, reconfiguring, m),
+                            _ => onb_setup_form(
+                                meta, backend, prompt, busy, error, reconfiguring, show_help, m,
+                            ),
                         },
                     }}
                 </div>
@@ -179,8 +211,9 @@ fn onb_steps(meta: RwSignal<Option<MetaState>>, reconfiguring: RwSignal<bool>) -
         .collect::<Vec<_>>()
 }
 
-/// Step 1's setup form — backend picker + prefilled system prompt. Doubles as create (no agent
-/// yet) and reconfigure (an agent exists and Cancel returns to the summary).
+/// Step 1's setup form — root-runtime picker + prefilled system prompt. Doubles as create (no
+/// agent yet) and reconfigure (an agent exists and Cancel returns to the summary). The runtime
+/// select carries a "help me to choose?" link that opens the [`onb_help_modal`] picker.
 fn onb_setup_form(
     meta: RwSignal<Option<MetaState>>,
     backend: RwSignal<String>,
@@ -188,30 +221,38 @@ fn onb_setup_form(
     busy: RwSignal<bool>,
     error: RwSignal<Option<String>>,
     reconfiguring: RwSignal<bool>,
+    show_help: RwSignal<bool>,
     m: MetaState,
 ) -> AnyView {
     let creating = m.agent.is_none();
     let backends = m.form.backends.clone();
+    let backends_modal = m.form.backends.clone();
     view! {
         <div class="adi-onb__card">
             <span class="adi-onb__eyebrow">"Step 1"</span>
-            <h2 class="adi-onb__title">"Set up your adi agent"</h2>
+            <h2 class="adi-onb__title">"Set up your primary agent"</h2>
             <p class="adi-onb__desc">
                 <strong>"adi-agent"</strong>
-                " is your environment's default agent — a meta-agent that helps you set up and
-                 operate this ADI stack. Pick a backend and give it a system prompt; you can
-                 change all of it later."
+                " is your environment's root agent — a meta-agent that helps you set up and
+                 operate this ADI stack. Pick the runtime it runs on and give it a system prompt;
+                 you can change all of it later."
             </p>
             <form class="adi-onb__form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_onb_agent(meta, backend, prompt, busy, error, reconfiguring);
             }>
                 <div class="adi-field">
-                    <label class="adi-field__label" for="onb-backend">"Backend"</label>
+                    <div class="adi-onb__field-head">
+                        <label class="adi-field__label" for="onb-backend">
+                            "Select your root agent runtime"
+                        </label>
+                        <button class="adi-onb__help-link" type="button"
+                            on:click=move |_| show_help.set(true)>"help me to choose?"</button>
+                    </div>
                     <select class="adi-input" id="onb-backend"
                         prop:value=move || backend.get()
                         on:change=move |ev| backend.set(event_target_value(&ev))>
-                        <option value="">"— pick a backend —"</option>
+                        <option value="">"— pick a runtime —"</option>
                         {backends.into_iter().map(|b| view! {
                             <option value=b.id>{b.label}</option>
                         }).collect::<Vec<_>>()}
@@ -243,6 +284,70 @@ fn onb_setup_form(
                     </button>
                 </div>
             </form>
+        </div>
+
+        {move || show_help.get()
+            .then(|| onb_help_modal(show_help, backend, backends_modal.clone()))}
+    }
+    .into_any()
+}
+
+/// The "help me to choose?" modal: a "do you have…?" checklist (from [`RUNTIME_GUIDE`]) that
+/// recommends a runtime for what the user already has and, on "Use this", writes it into the
+/// select and closes. Clicking the scrim or the ✕ dismisses it. Only rendered while open.
+fn onb_help_modal(
+    show_help: RwSignal<bool>,
+    backend: RwSignal<String>,
+    backends: Vec<AgentBackendOption>,
+) -> AnyView {
+    let rows = RUNTIME_GUIDE
+        .iter()
+        .map(|(question, id, note)| {
+            let id = (*id).to_string();
+            // Show the server's own label for the runtime when it offers one, so the modal never
+            // drifts from the select; fall back to the raw id if the backend list lacks it.
+            let label = backends
+                .iter()
+                .find(|b| b.id == id)
+                .map_or_else(|| id.clone(), |b| b.label.clone());
+            let pick = id.clone();
+            view! {
+                <li class="adi-help__row">
+                    <p class="adi-help__q">{(*question).to_string()}</p>
+                    <p class="adi-help__note">{(*note).to_string()}</p>
+                    <div class="adi-help__pick">
+                        <code class="adi-onb__code">{label}</code>
+                        <span class="adi-spacer"></span>
+                        <button class="adi-btn adi-btn--ghost adi-help__use" type="button"
+                            on:click=move |_| {
+                                backend.set(pick.clone());
+                                show_help.set(false);
+                            }>"Use this"</button>
+                    </div>
+                </li>
+            }
+        })
+        .collect::<Vec<_>>();
+
+    view! {
+        <div class="adi-help" role="dialog" aria-modal="true" aria-label="Choose a runtime"
+            on:click=move |_| show_help.set(false)>
+            <div class="adi-help__panel" on:click=|ev| ev.stop_propagation()>
+                <header class="adi-help__head">
+                    <h3 class="adi-help__title">"Which runtime should I pick?"</h3>
+                    <button class="adi-btn adi-btn--icon-sm" type="button" aria-label="Close"
+                        on:click=move |_| show_help.set(false)>"\u{00d7}"</button>
+                </header>
+                <p class="adi-help__intro">
+                    "Tell us what you already have — we\u{2019}ll point you at a matching runtime.
+                     You can change it any time."
+                </p>
+                <ul class="adi-help__list">{rows}</ul>
+                <p class="adi-help__foot">
+                    "Still unsure? Start with " <strong>"Claude CLI"</strong>
+                    " — every runtime is swappable from Extended \u{2192} Meta later."
+                </p>
+            </div>
         </div>
     }
     .into_any()
