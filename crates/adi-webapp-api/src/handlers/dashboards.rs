@@ -15,7 +15,7 @@ use adi_config::Config;
 use adi_ports_manager::Ports;
 use serde::Deserialize;
 
-use crate::types::{Dashboard, DashboardRef, DashboardsState, NewDashboard};
+use crate::types::{Dashboard, DashboardRef, DashboardsState, NewDashboard, SetDashboardProject};
 
 use super::response::{Response, error, ok_json};
 
@@ -26,6 +26,9 @@ struct Manifest {
     name: Option<String>,
     #[serde(default)]
     description: Option<String>,
+    /// The project this dashboard is filed under (its id), or `None` when unfiled.
+    #[serde(default)]
+    project: Option<String>,
     /// When the dashboard was archived (Unix seconds), or `None` while it is live.
     #[serde(default)]
     archived_at: Option<u64>,
@@ -61,7 +64,13 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
 
     let id = uuid::Uuid::new_v4().to_string();
     let dir = cfg.module("dashboards").dir().join(&id);
-    if let Err(e) = scaffold(&dir, name, req.description.as_deref().unwrap_or("").trim()) {
+    let project = req.project.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    if let Err(e) = scaffold(
+        &dir,
+        name,
+        req.description.as_deref().unwrap_or("").trim(),
+        project,
+    ) {
         // A half-written directory would be picked up by the supervisor as a broken service,
         // so clear it rather than leave the tree in a state nobody asked for.
         let _ = std::fs::remove_dir_all(&dir);
@@ -157,6 +166,31 @@ fn set_archived(
     dashboards(cfg, ports, listening)
 }
 
+/// `POST /api/dashboards/project` — file a dashboard under a project (or unfile it with an empty
+/// `project`), then report the fresh listing. Purely a manifest edit: the dashboard keeps running
+/// on its own port, so nothing is restarted.
+#[must_use]
+pub fn set_dashboard_project(cfg: &Config, ports: &Ports, listening: &[u16], body: &[u8]) -> Response {
+    let req: SetDashboardProject = match serde_json::from_slice(body) {
+        Ok(req) => req,
+        Err(e) => return error(400, &format!("invalid request body: {e}")),
+    };
+    let Some(dir) = dashboard_dir(cfg, &req.id) else {
+        return error(404, &format!("no such dashboard: {}", req.id));
+    };
+    let mut manifest = read_manifest(&dir);
+    manifest.project = req
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string);
+    if let Err(e) = write_manifest(&dir, &manifest) {
+        return error(500, &format!("could not update dashboard manifest: {e}"));
+    }
+    dashboards(cfg, ports, listening)
+}
+
 /// Resolve a client-supplied dashboard id to its directory, refusing anything that isn't a single
 /// path segment naming an existing dashboard — so the id can never climb out of the dashboards
 /// root.
@@ -184,7 +218,7 @@ fn now_secs() -> u64 {
 }
 
 /// Write the full scaffold into `dir`. Any error leaves the caller to clean up.
-fn scaffold(dir: &Path, name: &str, description: &str) -> std::io::Result<()> {
+fn scaffold(dir: &Path, name: &str, description: &str, project: Option<&str>) -> std::io::Result<()> {
     std::fs::create_dir_all(dir.join("frontend").join("modules"))?;
     std::fs::create_dir_all(dir.join("backend").join("routes"))?;
     std::fs::create_dir_all(dir.join(".adi"))?;
@@ -214,6 +248,7 @@ fn scaffold(dir: &Path, name: &str, description: &str) -> std::io::Result<()> {
         &Manifest {
             name: Some(name.to_string()),
             description: Some(description.to_string()),
+            project: project.map(str::to_string),
             archived_at: None,
         },
     )?;
@@ -247,6 +282,9 @@ fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
     }
     if let Some(description) = &manifest.description {
         out.push_str(&format!("description = {}\n", toml_string(description)));
+    }
+    if let Some(project) = &manifest.project {
+        out.push_str(&format!("project = {}\n", toml_string(project)));
     }
     if let Some(ts) = manifest.archived_at {
         out.push_str(&format!("archived_at = {ts}\n"));
@@ -342,6 +380,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, listening: &[u16]) -> Dashboard {
     Dashboard {
         name: manifest.name.unwrap_or_else(|| id.clone()),
         description: manifest.description,
+        project: manifest.project,
         frontend_running: frontend_port.is_some_and(|p| listening.contains(&p)),
         backend_running: backend_port.is_some_and(|p| listening.contains(&p)),
         frontend_port,

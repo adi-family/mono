@@ -1576,6 +1576,10 @@ pub struct Dashboard {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The project this dashboard is filed under (its id), or `None` for an unfiled dashboard.
+    /// Purely organizational — a dashboard still runs on its own port regardless.
+    #[serde(default)]
+    pub project: Option<String>,
     /// Ports leased from the ports manager; `None` until the supervisor has allocated them.
     #[serde(default)]
     pub frontend_port: Option<u16>,
@@ -1609,6 +1613,9 @@ pub struct NewDashboard {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
+    /// The project to file the new dashboard under (its id), or `None` to leave it unfiled.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 /// `GET /api/dashboards` — every dashboard, each with live port and running state.
@@ -1622,6 +1629,15 @@ pub struct DashboardsState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardRef {
     pub id: String,
+}
+
+/// Request body filing a dashboard under a project — `POST /api/dashboards/project`. An empty /
+/// absent `project` unfiles it. Returns a fresh [`DashboardsState`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetDashboardProject {
+    pub id: String,
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 // MARK: secrets — encrypted global / per-project key-values (~/.adi/mono/secrets)

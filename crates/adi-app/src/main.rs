@@ -383,6 +383,13 @@ async fn handle(
                 .collect();
             handlers::unarchive_dashboard(projects.config(), ports, &listening, &req.body)
         }
+        ("POST", "/api/dashboards/project") => {
+            let listening: Vec<u16> = scan::listening_ports()
+                .into_iter()
+                .map(|u| u.port)
+                .collect();
+            handlers::set_dashboard_project(projects.config(), ports, &listening, &req.body)
+        }
         ("POST", "/api/dashboards/delete") => {
             let listening: Vec<u16> = scan::listening_ports()
                 .into_iter()

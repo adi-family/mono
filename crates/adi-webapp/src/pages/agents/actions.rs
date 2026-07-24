@@ -8,6 +8,7 @@
 
 use adi_webapp_api::types::{
     AgentDto, AgentRunInfo, AgentStep, AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState,
+    Dashboard,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -1139,40 +1140,78 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
     .into_any()
 }
 
-/// The dashboards rail: every live dashboard, each a link to open it (when its frontend is up).
+/// The dashboards rail: every live dashboard, **grouped by the project it's filed under** (a
+/// header per project that has at least one, then an "Ungrouped" bucket), each a link to open it
+/// when its frontend is up. Project names come from `state.projects`; an unknown/archived project
+/// id folds into Ungrouped.
 fn chat_dashboards(state: State) -> AnyView {
     let Some(ds) = state.dashboards.get() else {
         return view! { <div class="adi-chome__empty">"Loading…"</div> }.into_any();
     };
-    let live: Vec<_> = ds.dashboards.into_iter().filter(|d| !d.is_archived()).collect();
+    let live: Vec<Dashboard> = ds.dashboards.into_iter().filter(|d| !d.is_archived()).collect();
     if live.is_empty() {
         return view! {
             <div class="adi-chome__empty">"No dashboards yet — ask your agent to build one."</div>
         }
         .into_any();
     }
-    live.into_iter()
-        .map(|d| {
-            let name = d.name.clone();
-            match d.frontend_port {
-                Some(port) if d.frontend_running => view! {
-                    <a class="adi-chome__dash" href=format!("http://127.0.0.1:{port}")
-                        target="_blank" rel="noreferrer" title=d.name>
-                        <span class="adi-chome__dot adi-chome__dot--on"></span>
-                        <span class="adi-chome__dash-name">{name}</span>
-                        <span class="adi-chome__dash-open">"\u{2197}"</span>
-                    </a>
-                }
-                .into_any(),
-                _ => view! {
-                    <div class="adi-chome__dash is-off" title="not running">
-                        <span class="adi-chome__dot"></span>
-                        <span class="adi-chome__dash-name">{name}</span>
-                    </div>
-                }
-                .into_any(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .into_any()
+    let projects = state.projects.get().map(|p| p.projects).unwrap_or_default();
+
+    let mut out: Vec<AnyView> = Vec::new();
+    let mut placed: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // One group per project (in the projects list's order) that owns at least one dashboard.
+    for p in projects.iter().filter(|p| !p.is_archived()) {
+        let items: Vec<&Dashboard> = live
+            .iter()
+            .filter(|d| d.project.as_deref() == Some(p.id.as_str()))
+            .collect();
+        if items.is_empty() {
+            continue;
+        }
+        out.push(chat_dash_group(&p.name));
+        for d in items {
+            placed.insert(d.id.clone());
+            out.push(chat_dash_item(d));
+        }
+    }
+    // Whatever's left — unfiled, or filed under a project that no longer exists — trails as one
+    // Ungrouped bucket. Only labelled when it sits alongside real groups.
+    let rest: Vec<&Dashboard> = live.iter().filter(|d| !placed.contains(&d.id)).collect();
+    if !rest.is_empty() {
+        if !out.is_empty() {
+            out.push(chat_dash_group("Ungrouped"));
+        }
+        for d in rest {
+            out.push(chat_dash_item(d));
+        }
+    }
+    out.into_any()
+}
+
+/// A project header row in the dashboards rail.
+fn chat_dash_group(name: &str) -> AnyView {
+    view! { <div class="adi-chome__group">{name.to_string()}</div> }.into_any()
+}
+
+/// One dashboard row in the rail: a link to its running frontend, or a dimmed row when it's down.
+fn chat_dash_item(d: &Dashboard) -> AnyView {
+    let name = d.name.clone();
+    match d.frontend_port {
+        Some(port) if d.frontend_running => view! {
+            <a class="adi-chome__dash" href=format!("http://127.0.0.1:{port}")
+                target="_blank" rel="noreferrer" title=d.name.clone()>
+                <span class="adi-chome__dot adi-chome__dot--on"></span>
+                <span class="adi-chome__dash-name">{name}</span>
+                <span class="adi-chome__dash-open">"\u{2197}"</span>
+            </a>
+        }
+        .into_any(),
+        _ => view! {
+            <div class="adi-chome__dash is-off" title="not running">
+                <span class="adi-chome__dot"></span>
+                <span class="adi-chome__dash-name">{name}</span>
+            </div>
+        }
+        .into_any(),
+    }
 }

@@ -177,6 +177,12 @@ fn Home() -> impl IntoView {
             {
                 state.dashboards.set(Some(dd));
             }
+            // The dashboards rail groups by project, so it needs the project names.
+            if let Ok(pp) = fetch::projects().await
+                && state.projects.get_untracked().as_ref() != Some(&pp)
+            {
+                state.projects.set(Some(pp));
+            }
         });
     };
 

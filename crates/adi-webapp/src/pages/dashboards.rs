@@ -18,7 +18,7 @@ use crate::ui::{
 
 /// The columns shared by the live table and the archived disclosure — both render one dashboard
 /// per row through [`row_view`], with a trailing archive/restore action.
-const DASH_COLS: &[&str] = &["Dashboard", "Frontend", "Backend", "Modules", "Routes", ""];
+const DASH_COLS: &[&str] = &["Dashboard", "Project", "Frontend", "Backend", "Modules", "Routes", ""];
 
 /// The Dashboards page: summary tiles, one row per dashboard, the create form, and a collapsed
 /// archive of removed dashboards at the foot.
@@ -59,6 +59,8 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                     let body = NewDashboard {
                         name: name.clone(),
                         description: (!description.is_empty()).then_some(description),
+                        // New dashboards start unfiled; file them from the row's Project picker.
+                        project: None,
                     };
                     match fetch::create_dashboard(body).await {
                         Ok(d) => {
@@ -135,7 +137,7 @@ fn archived_section(state: State, show: RwSignal<bool>) -> AnyView {
 /// loading/empty placeholder or one row per matching dashboard.
 fn rows_view(state: State, archived: bool) -> AnyView {
     let Some(loaded) = state.dashboards.get() else {
-        return placeholder_row("6", "Loading…");
+        return placeholder_row("7", "Loading…");
     };
     let rows: Vec<Dashboard> = loaded
         .dashboards
@@ -144,7 +146,7 @@ fn rows_view(state: State, archived: bool) -> AnyView {
         .collect();
     if rows.is_empty() {
         return placeholder_row(
-            "6",
+            "7",
             if archived {
                 "Nothing archived."
             } else {
@@ -165,6 +167,7 @@ fn rows_view(state: State, archived: bool) -> AnyView {
 /// page, so the row can be verified by clicking rather than by reading a port number.
 fn row_view(state: State, d: Dashboard) -> AnyView {
     let action = row_action(state, &d.id, d.is_archived());
+    let project = project_cell(state, &d);
     let name = match d.frontend_port.filter(|_| d.frontend_running) {
         Some(port) => {
             let href = format!("http://127.0.0.1:{port}");
@@ -181,6 +184,7 @@ fn row_view(state: State, d: Dashboard) -> AnyView {
                 <div>{name}</div>
                 <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
             </td>
+            <td>{project}</td>
             // Only the frontend is a link — the backend serves JSON to the page, not the reader.
             <td>{service_cell(d.frontend_port, d.frontend_running, true)}</td>
             <td>{service_cell(d.backend_port, d.backend_running, false)}</td>
@@ -188,6 +192,38 @@ fn row_view(state: State, d: Dashboard) -> AnyView {
             <td class="adi-mono">{summarize(&d.routes)}</td>
             <td class="adi-table__actions">{action}</td>
         </tr>
+    }
+    .into_any()
+}
+
+/// The Project cell: a compact picker filing this dashboard under a project (or none). Choosing an
+/// option posts the change and folds the fresh listing back in, so the grouping updates at once.
+fn project_cell(state: State, d: &Dashboard) -> AnyView {
+    let id = d.id.clone();
+    let current = d.project.clone().unwrap_or_default();
+    let cur_none = current.is_empty();
+    let options = state
+        .projects
+        .get()
+        .map(|p| p.projects)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|p| !p.is_archived())
+        .map(|p| {
+            let selected = p.id == current;
+            view! { <option value=p.id.clone() selected=selected>{p.name}</option> }
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <select class="adi-input adi-dash__proj"
+            on:change=move |ev| {
+                let val = event_target_value(&ev);
+                apply_dashboards(state, "Filed dashboard.".to_string(),
+                    fetch::set_dashboard_project(id.clone(), (!val.is_empty()).then_some(val)));
+            }>
+            <option value="" selected=cur_none>"\u{2014} none \u{2014}"</option>
+            {options}
+        </select>
     }
     .into_any()
 }

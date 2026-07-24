@@ -12,7 +12,8 @@ use adi_webapp_api::types::{
     ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
     ReplyToRun, ReserveResponse, RunAgent, RunRef, RunTool, SaveAgent, SaveAgentCode, SaveTrigger,
     StartResult,
-    RevealedSecret, SecretRef, SecretsState, SetOAuthSecret, SetSecret, StartService, StopResult,
+    RevealedSecret, SecretRef, SecretsState, SetDashboardProject, SetOAuthSecret, SetSecret,
+    StartService, StopResult,
     TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
     TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
@@ -338,6 +339,15 @@ pub async fn unarchive_dashboard(id: String) -> Result<DashboardsState, String> 
 /// refuses unless the dashboard is archived first.
 pub async fn delete_dashboard(id: String) -> Result<DashboardsState, String> {
     post("/api/dashboards/delete", &DashboardRef { id }).await
+}
+
+/// File a dashboard under a project (or unfile it with `None`). A manifest-only edit — the
+/// dashboard keeps running — that returns the fresh listing so the page regroups in one round-trip.
+pub async fn set_dashboard_project(
+    id: String,
+    project: Option<String>,
+) -> Result<DashboardsState, String> {
+    post("/api/dashboards/project", &SetDashboardProject { id, project }).await
 }
 
 /// Every Hive service across all projects, with live running flags.
