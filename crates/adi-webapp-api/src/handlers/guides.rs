@@ -12,6 +12,18 @@ use adi_config::Config;
 /// The store module the guides live under (`~/.adi/mono/guides`).
 const GUIDES_MODULE: &str = "guides";
 
+/// The `~/.adi/mono` shorthand the guide templates and the base prompt are written with. `~`
+/// never expands on Windows, so every occurrence in agent-facing text is rewritten to the real
+/// resolved store root (see [`store_root_display`]) before the agent ever sees it.
+pub const STORE_SHORTHAND: &str = "~/.adi/mono";
+
+/// The real, resolved store root as a display string, with forward slashes so it reads and pastes
+/// cleanly everywhere — Windows accepts `/` in paths and has no `~`, and the API takes `/` too.
+#[must_use]
+pub fn store_root_display(cfg: &Config) -> String {
+    cfg.root().display().to_string().replace('\\', "/")
+}
+
 /// One built-in guide: the file it seeds, a one-line summary for the prompt index, and its body.
 pub struct Guide {
     pub file: &'static str,
@@ -79,10 +91,13 @@ pub fn ensure_guides(cfg: &Config) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
+    // Bake this machine's real store path into the seeded copy, so the guide names a directory
+    // that exists here rather than the unexpandable `~` shorthand.
+    let root = store_root_display(cfg);
     for g in GUIDES {
         let path = dir.join(g.file);
         if !path.exists() {
-            let _ = std::fs::write(&path, g.body);
+            let _ = std::fs::write(&path, g.body.replace(STORE_SHORTHAND, &root));
         }
     }
 }

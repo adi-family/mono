@@ -4,11 +4,12 @@
 //! it exists, its current definition, and the canonical system prompt to seed a new one with.
 
 use adi_agents::Agents;
+use adi_config::Config;
 
 use crate::types::MetaState;
 
 use super::agents::agents_state;
-use super::guides::{ensure_guides, prompt_section};
+use super::guides::{STORE_SHORTHAND, ensure_guides, prompt_section, store_root_display};
 use super::response::{Response, ok_json};
 
 /// The well-known name of the default ADI agent the Meta page manages. Creating the agent is an
@@ -35,7 +36,7 @@ pub fn meta(store: &Agents) -> Response {
         .cloned();
     ok_json(&MetaState {
         name: ADI_AGENT_NAME.to_string(),
-        default_prompt: default_prompt(),
+        default_prompt: default_prompt(store.config()),
         agent,
         form: state.form,
     })
@@ -45,12 +46,12 @@ pub fn meta(store: &Agents) -> Response {
 /// [`adi_agents::event_catalog`], so the agent's orientation always lists exactly the events the
 /// stack currently publishes, each with a concrete example — and points at the reflected JSON
 /// Schema for the exact structure, rather than carrying a hand-written copy that drifts.
-fn default_prompt() -> String {
+fn default_prompt(cfg: &Config) -> String {
     let mut events = String::new();
     for e in adi_agents::event_catalog() {
         events.push_str(&format!("- `{}` — {} · example `{}`\n", e.name, e.summary, e.example));
     }
-    format!(
+    let prompt = format!(
         "{DEFAULT_SYSTEM_PROMPT}\n\n\
 {guides}\n\
 # Events & event triggers\n\
@@ -65,7 +66,10 @@ Events currently published:\n\
 {events}",
         guides = prompt_section(),
         envelope = adi_events::ENVELOPE,
-    )
+    );
+    // `~` has no meaning on Windows, so name the real resolved store path the agent can act on.
+    // Every store reference shares the `~/.adi/mono` prefix, so one substitution rewrites them all.
+    prompt.replace(STORE_SHORTHAND, &store_root_display(cfg))
 }
 
 /// The system prompt a fresh `adi-agent` is seeded with. It orients the agent inside this ADI
