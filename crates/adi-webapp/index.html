@@ -2,10 +2,111 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>adi · control panel</title>
+
+<!-- Installable-app metadata. The theme colour follows the active theme, matching the
+     `bg` token from adi-css so the window chrome is continuous with the page. -->
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#f5f6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0a0b0d" media="(prefers-color-scheme: dark)">
+<meta name="application-name" content="adi">
+<meta name="mobile-web-app-capable" content="yes">
+<!-- iOS installs from Share → "Add to Home Screen"; these are the knobs it reads. The
+     `apple-` capable flag is deprecated in favour of the standard one above, but older iOS
+     still only understands this spelling. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="adi">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="icon" href="/assets/favicon.png" sizes="32x32" type="image/png">
+<link rel="icon" href="/assets/icon-192.png" sizes="192x192" type="image/png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+
 <link data-trunk rel="rust" />
 <link data-trunk rel="scss" href="styles/main.scss" />
+<!-- Copied verbatim (no content hash) so the manifest, the worker and the icons keep the
+     stable URLs the browser and the manifest above expect. -->
+<link data-trunk rel="copy-file" href="manifest.webmanifest" />
+<link data-trunk rel="copy-file" href="sw.js" />
+<link data-trunk rel="copy-dir" href="assets" />
+
+<script>
+// PWA bootstrap. Two jobs, both of which have to happen outside the wasm bundle:
+//
+//   1. Register the service worker (sw.js) — the install criteria require one.
+//   2. Catch `beforeinstallprompt`. It fires once, early, and the saved event is the *only*
+//      way to open the install dialog later; it can't be re-created on demand. So park it
+//      here and expose it as `window.__adiPwa` for the Rust side to drive from a button.
+//
+// Both need a secure context: HTTPS, or a loopback origin like http://localhost:8000. Over
+// plain http://app.adi the browser withholds `serviceWorker` entirely and never fires the
+// install event — so the flags below stay false and the in-app install button stays hidden.
+(function () {
+  var deferred = null;
+  var pwa = {
+    // Whether the browser has offered us an install prompt to open.
+    canInstall: false,
+    // Already launched as an installed app — nothing left to offer.
+    standalone: window.matchMedia("(display-mode: standalone)").matches
+      || window.navigator.standalone === true,
+    // Set by the wasm app; called whenever the flags above change.
+    onchange: null,
+  };
+  window.__adiPwa = pwa;
+
+  function changed() {
+    try {
+      if (typeof pwa.onchange === "function") pwa.onchange();
+    } catch (e) {
+      console.warn("adi: pwa onchange handler failed", e);
+    }
+  }
+
+  window.addEventListener("beforeinstallprompt", function (event) {
+    // Suppress the browser's own mini-infobar; the app's own button drives it instead.
+    event.preventDefault();
+    deferred = event;
+    pwa.canInstall = true;
+    changed();
+  });
+
+  window.addEventListener("appinstalled", function () {
+    deferred = null;
+    pwa.canInstall = false;
+    changed();
+  });
+
+  // Called from the app's install button. Resolves once the user accepts or dismisses.
+  pwa.install = function () {
+    if (!deferred) return Promise.resolve(false);
+    var event = deferred;
+    return Promise.resolve(event.prompt())
+      .then(function () { return event.userChoice; })
+      .then(function (choice) {
+        var accepted = choice && choice.outcome === "accepted";
+        if (accepted) {
+          // The event is single-use, and Chrome won't fire another one.
+          deferred = null;
+          pwa.canInstall = false;
+          changed();
+        }
+        return accepted;
+      })
+      .catch(function (e) {
+        console.warn("adi: install prompt failed", e);
+        return false;
+      });
+  };
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", function () {
+      navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(function (e) {
+        console.warn("adi: service worker registration failed", e);
+      });
+    });
+  }
+})();
+</script>
 </head>
 <body></body>
 </html>

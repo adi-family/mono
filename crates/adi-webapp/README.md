@@ -34,9 +34,45 @@ scripts/build-app.sh    # trunk build --release, then cargo build -p adi-app
 `dist/` is **not** committed. A fresh checkout still compiles adi-app before the UI is
 built (it serves a placeholder until Trunk populates `dist/`).
 
+## Installable app (PWA)
+
+The panel installs as a standalone desktop/mobile app. Four pieces, all copied into `dist/`
+verbatim (`rel="copy-file"` / `copy-dir`, so their URLs stay stable and unhashed):
+
+| File | Role |
+| --- | --- |
+| [`manifest.webmanifest`](./manifest.webmanifest) | name, icons, `display: standalone`, shortcuts |
+| [`sw.js`](./sw.js) | service worker: caches the shell, **never** `/api/*` |
+| [`assets/`](./assets) | icons — `any` + `maskable` at 192/512, apple-touch, favicon |
+| the inline script in [`index.html`](./index.html) | registers the worker, parks `beforeinstallprompt` on `window.__adiPwa` |
+
+[`src/pwa.rs`](./src/pwa.rs) is the Rust side of that last bridge: it drives the **install
+button** in the root bar and the workbench titlebar. The button only renders while the
+browser actually has an install to offer, so it self-hides once installed.
+
+### ⚠️ Install from `http://localhost:8000`, not `http://app.adi`
+
+Service workers — and therefore installing — require a **secure context**. A loopback origin
+counts as one; `http://app.adi` does not, and the front door speaks plain HTTP. So on
+`app.adi` the browser withholds `navigator.serviceWorker` entirely, no install event fires,
+and the install button stays hidden (verified: manifest still parses, nothing errors — it
+just degrades). Open **`http://localhost:8000`** to install. Making `app.adi` installable
+means giving the front door TLS.
+
+The worker caches the shell only. Offline you get the frame and honest failures from the API
+calls inside it — a stale port table or agent list would be worse than an error. Bump `CACHE`
+in `sw.js` to retire every cached file at once.
+
+Icons are derived from the macOS app icon, [`apps/macos/ADI.icns`](../../apps/macos/ADI.icns).
+The `maskable` variants are full-bleed (the plate scaled until its rounded corners reach the
+edge, over its own edge colour) so a platform mask has no transparent gaps to show; the glyph
+stays within the 80%-diameter safe zone.
+
 ## Notes
 
 - Targets `wasm32-unknown-unknown`; **excluded from the workspace's `default-members`**, so
   a bare `cargo build`/`cargo test` skips it. Build with Trunk (or
   `cargo … -p adi-webapp --target wasm32-unknown-unknown`).
-- No JavaScript, no npm — the toolchain is entirely Rust + Trunk.
+- No npm, and the UI itself is Rust end to end. The only JavaScript is the PWA plumbing
+  above — a service worker and the `beforeinstallprompt` bootstrap, neither of which can live
+  in wasm.

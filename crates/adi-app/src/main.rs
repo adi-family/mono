@@ -643,6 +643,8 @@ fn content_type(path: &str) -> &'static str {
         Some("wasm") => "application/wasm",
         Some("css") => "text/css; charset=utf-8",
         Some("json" | "map") => "application/json; charset=utf-8",
+        // The PWA manifest: browsers accept `application/json` but only this type is spec'd.
+        Some("webmanifest") => "application/manifest+json; charset=utf-8",
         Some("svg") => "image/svg+xml",
         Some("ico") => "image/x-icon",
         Some("png") => "image/png",

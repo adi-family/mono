@@ -17,6 +17,7 @@ mod highlight;
 mod icons;
 mod markdown;
 mod pages;
+mod pwa;
 mod routing;
 mod state;
 mod store_browser;
@@ -135,6 +136,8 @@ fn Home() -> impl IntoView {
     // The system prompt is advanced and seeded from a sensible default, so it's collapsed by
     // default; this reveals the in-app editor for it.
     let show_prompt = RwSignal::new(false);
+    // True once the browser will let us offer "install as an app" (see [`pwa`]).
+    let can_install = pwa::installable();
 
     // Load the meta state once, seeding the form from the server's default prompt and first
     // backend when the agent hasn't been created yet.
@@ -214,6 +217,7 @@ fn Home() -> impl IntoView {
                     <header class="adi-onb__bar">
                         <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
                         <span class="adi-spacer"></span>
+                        {install_pill(can_install)}
                         <button class="adi-onb__ext" type="button"
                             on:click=move |_| start_reconfigure()>"reconfigure agent"</button>
                         <a class="adi-onb__ext" href="/extended">
@@ -231,6 +235,7 @@ fn Home() -> impl IntoView {
                     <header class="adi-onb__bar">
                         <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
                         <span class="adi-spacer"></span>
+                        {install_pill(can_install)}
                         <a class="adi-onb__ext" href="/extended">
                             <span>"extended"</span>
                             <span class="adi-onb__ext-arrow">"\u{2192}"</span>
@@ -263,6 +268,24 @@ fn Home() -> impl IntoView {
             }
             .into_any()
         }
+    }
+}
+
+/// The root bar's "install app" pill, styled like its `extended →` neighbour. Rendered only
+/// while the browser actually has an install to offer, so it's absent once the app is
+/// installed and on origins that can't install at all — see [`pwa`].
+fn install_pill(can_install: RwSignal<bool>) -> impl IntoView {
+    move || {
+        can_install.get().then(|| {
+            view! {
+                <button class="adi-onb__ext" type="button"
+                    title="Install adi as an app in its own window"
+                    on:click=move |_| pwa::install()>
+                    <span aria-hidden="true">"\u{2913}"</span>
+                    <span>"install app"</span>
+                </button>
+            }
+        })
     }
 }
 
@@ -617,6 +640,8 @@ fn App() -> impl IntoView {
     let current_project = RwSignal::new(project_id_from_path(&current_path()).unwrap_or_default());
     // Which section of that project is showing; the bare project path is its overview.
     let current_section = RwSignal::new(project_section_from_path(&current_path()));
+    // True once the browser will let us offer "install as an app" (see [`pwa`]).
+    let can_install = pwa::installable();
     let files = FilesState::new();
     let store = state::StoreBrowser::new();
     let state = State {
@@ -944,6 +969,14 @@ fn App() -> impl IntoView {
                 }}
             </nav>
             <span class="adi-spacer"></span>
+            {move || can_install.get().then(|| view! {
+                <button class="adi-install" type="button"
+                    title="Install adi as an app in its own window"
+                    on:click=move |_| pwa::install()>
+                    <span aria-hidden="true">"\u{2913}"</span>
+                    <span>"Install"</span>
+                </button>
+            })}
             <button class="adi-btn adi-btn--icon-sm" title="Toggle theme" aria-label="Toggle theme"
                 on:click=move |_| toggle_theme()>"◐"</button>
         </header>

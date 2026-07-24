@@ -38,6 +38,8 @@
     color: var(--ink);
   }
   &__dot { color: var(--accent); }
+  // Used on both an <a> (extended →) and <button>s (reconfigure, install), so it resets the
+  // button chrome the UA would otherwise supply.
   &__ext {
     display: inline-flex;
     align-items: center;
@@ -45,6 +47,8 @@
     padding: 6px 13px;
     border-radius: var(--radius-pill);
     border: 1px solid var(--border);
+    background: none;
+    cursor: pointer;
     font-family: var(--font-mono);
     font-size: var(--text-sm);
     text-decoration: none;
@@ -345,9 +349,6 @@
   background: var(--bg);
   color: var(--ink);
   font-family: var(--font-sans);
-
-  // The reconfigure control is a button styled like the bar's `extended` pill.
-  .adi-onb__ext { cursor: pointer; }
 }
 
 .adi-chome {
@@ -688,6 +689,31 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .adi-help { animation: none; }
+}
+
+// ---- "install as an app" button (titlebar) ------------------------------------------
+// Only ever rendered while the browser has an install to offer, so it can afford the accent
+// border — it's a one-time invitation, not a permanent control. Sized to sit inside the 38px
+// titlebar next to the theme toggle.
+.adi-install {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border));
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.2;
+  color: var(--accent-ink);
+  transition: background var(--transition), border-color var(--transition);
+
+  &:hover {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
 }
 
 // ---- dashboards page: the inline project picker in a row -----------------------------

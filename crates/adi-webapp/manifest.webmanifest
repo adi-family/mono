@@ -1,0 +1,25 @@
+{
+  "id": "/",
+  "name": "adi · control panel",
+  "short_name": "adi",
+  "description": "The adi control panel: your root agent's chat, projects, agents, tools, secrets and dashboards.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "theme_color": "#f5f6f8",
+  "background_color": "#f5f6f8",
+  "categories": ["developer", "productivity", "utilities"],
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Chat", "short_name": "Chat", "url": "/", "icons": [{ "src": "/assets/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Dashboards", "short_name": "Dashboards", "url": "/extended/dashboards" },
+    { "name": "Projects", "short_name": "Projects", "url": "/extended/projects" },
+    { "name": "Agents", "short_name": "Agents", "url": "/extended/agents" }
+  ]
+}
