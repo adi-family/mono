@@ -49,7 +49,8 @@ use state::{
     MeshForm, MetaForm, ProjectsForm, SecretsForm, State, Status, TasksForm, TermWatch, ToolEditor,
     ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
 };
-use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
+use highlight::Lang;
+use ui::{apply_saved_theme, code_editor, fmt_uptime, toggle_theme};
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -128,6 +129,9 @@ fn Home() -> impl IntoView {
     let reconfiguring = RwSignal::new(false);
     // Whether the "help me to choose?" runtime-picker modal is open.
     let show_help = RwSignal::new(false);
+    // The system prompt is advanced and seeded from a sensible default, so it's collapsed by
+    // default; this reveals the in-app editor for it.
+    let show_prompt = RwSignal::new(false);
 
     // Load the meta state once, seeding the form from the server's default prompt and first
     // backend when the agent hasn't been created yet.
@@ -179,7 +183,8 @@ fn Home() -> impl IntoView {
                         Some(m) => match (m.agent.clone(), reconfiguring.get()) {
                             (Some(agent), false) => onb_done(backend, prompt, reconfiguring, agent),
                             _ => onb_setup_form(
-                                meta, backend, prompt, busy, error, reconfiguring, show_help, m,
+                                meta, backend, prompt, busy, error, reconfiguring, show_help,
+                                show_prompt, m,
                             ),
                         },
                     }}
@@ -236,6 +241,7 @@ fn onb_setup_form(
     error: RwSignal<Option<String>>,
     reconfiguring: RwSignal<bool>,
     show_help: RwSignal<bool>,
+    show_prompt: RwSignal<bool>,
     m: MetaState,
 ) -> AnyView {
     let creating = m.agent.is_none();
@@ -273,11 +279,26 @@ fn onb_setup_form(
                     </select>
                 </div>
                 <div class="adi-field">
-                    <label class="adi-field__label" for="onb-prompt">"System prompt"</label>
-                    <textarea class="adi-textarea adi-mono" id="onb-prompt" rows="12"
-                        placeholder="How this agent should operate your ADI environment…"
-                        prop:value=move || prompt.get()
-                        on:input=move |ev| prompt.set(event_target_value(&ev))></textarea>
+                    <button class="adi-onb__disclosure" type="button"
+                        aria-expanded=move || show_prompt.get().to_string()
+                        on:click=move |_| show_prompt.update(|v| *v = !*v)>
+                        <span class="adi-onb__disclosure-caret"
+                            class:is-open=move || show_prompt.get()>"\u{25b8}"</span>
+                        <span class="adi-onb__disclosure-label">"System prompt"</span>
+                        <span class="adi-onb__disclosure-hint">"optional \u{00b7} advanced"</span>
+                    </button>
+                    {move || show_prompt.get().then(|| view! {
+                        <div class="adi-onb__prompt">
+                            <p class="adi-onb__hint">
+                                "Seeded with a default that orients the agent in your ADI stack and
+                                 points it at the guides in "
+                                <code class="adi-onb__code">"~/.adi/mono/guides"</code>
+                                " (dashboards, tasks, tools, …). Edit freely — you can change it
+                                 later."
+                            </p>
+                            {code_editor(|| Lang::Md, prompt, "adi-code--form", "onb-prompt")}
+                        </div>
+                    })}
                 </div>
 
                 {move || error.get().map(|e| view! { <p class="adi-onb__error">{e}</p> })}

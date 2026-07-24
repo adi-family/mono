@@ -7,6 +7,7 @@ mod agents;
 mod dashboards;
 mod files;
 mod fs;
+mod guides;
 mod health;
 mod mesh;
 mod meta;

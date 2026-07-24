@@ -246,6 +246,51 @@
 
     &:hover { color: var(--accent-ink); }
   }
+  // The collapsed "System prompt" row: a caret + label + hint that toggles the editor below.
+  &__disclosure {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: 8px 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    color: var(--ink);
+    text-align: left;
+
+    &:hover .adi-onb__disclosure-label { color: var(--accent); }
+  }
+  &__disclosure-caret {
+    flex: none;
+    color: var(--muted);
+    font-size: var(--text-xs);
+    transition: transform var(--transition);
+    &.is-open { transform: rotate(90deg); }
+  }
+  &__disclosure-label {
+    font-size: var(--text-base);
+    font-weight: 550;
+    transition: color var(--transition);
+  }
+  &__disclosure-hint {
+    margin-left: auto;
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+  &__prompt {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+  }
+  &__hint {
+    margin: 0;
+    color: var(--muted);
+    font-size: var(--text-sm);
+    line-height: 1.55;
+  }
   &__error {
     margin: 0;
     color: var(--down);

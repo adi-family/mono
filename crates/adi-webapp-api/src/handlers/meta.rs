@@ -8,6 +8,7 @@ use adi_agents::Agents;
 use crate::types::MetaState;
 
 use super::agents::agents_state;
+use super::guides::{ensure_guides, prompt_section};
 use super::response::{Response, ok_json};
 
 /// The well-known name of the default ADI agent the Meta page manages. Creating the agent is an
@@ -20,6 +21,9 @@ pub const ADI_AGENT_NAME: &str = "adi-agent";
 /// (whose backend list drives the setup picker).
 #[must_use]
 pub fn meta(store: &Agents) -> Response {
+    // Scaffold the built-in guides the agent's prompt points at, so they exist on disk by the
+    // time the agent is created. Idempotent and non-destructive — it never overwrites edits.
+    ensure_guides(store.config());
     let state = match agents_state(store) {
         Ok(state) => state,
         Err(e) => return Response::from(&e),
@@ -48,6 +52,7 @@ fn default_prompt() -> String {
     }
     format!(
         "{DEFAULT_SYSTEM_PROMPT}\n\n\
+{guides}\n\
 # Events & event triggers\n\
 The stack publishes platform events — dotted topics like `adi.tasks.created`. An **event trigger** \
 (a trigger of kind `event`, on /triggers) subscribes to name patterns — `*` matches one segment, \
@@ -58,6 +63,7 @@ payload structure, read its JSON Schema with `adi events types <name> --schema` 
 /api/triggers → `event_types[].schema`); `event_types[].example` is a concrete sample.\n\n\
 Events currently published:\n\
 {events}",
+        guides = prompt_section(),
         envelope = adi_events::ENVELOPE,
     )
 }
