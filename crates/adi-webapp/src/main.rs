@@ -73,30 +73,44 @@ fn main() {
 /// wizard so "step 1 of N" reads true and there is somewhere to grow into.
 const ONBOARDING_STEPS: [&str; 2] = ["Set up your primary agent", "You're ready"];
 
+/// One "do you have…?" branch in the runtime picker: the situation, a note on the shared
+/// credential, and the runtimes that fit it. Each option is an `(id, how)` pair — the backend id
+/// (matched against the server form spec for its label) and a short note on how that runtime runs.
+struct RuntimeGuide {
+    question: &'static str,
+    note: &'static str,
+    options: &'static [(&'static str, &'static str)],
+}
+
 /// The "help me to choose?" guidance: a short "do you have…?" checklist that maps what a user
-/// already has (a subscription, an API key) onto a runtime. Each `id` matches a backend in the
-/// server's form spec, so picking one drops straight into the runtime select.
-const RUNTIME_GUIDE: [(&str, &str, &str); 4] = [
-    (
-        "I have a Claude subscription (Pro / Max), or the Claude CLI already logged in",
-        "pty:claude",
-        "Runs Claude Code in a live terminal session using your existing Claude login — no API key needed.",
-    ),
-    (
-        "I have a ChatGPT / Codex subscription",
-        "pty:codex",
-        "Runs the Codex CLI in a live terminal session using your Codex login.",
-    ),
-    (
-        "I have an Anthropic API key",
-        "harness:claude-sdk",
-        "Talks to the Claude API directly with your key — no CLI to install or log in to.",
-    ),
-    (
-        "I have another provider's API key (OpenAI, Gemini, Kimi, …)",
-        "harness:adi",
-        "ADI's built-in agent loop speaks to many providers with your key.",
-    ),
+/// already has (a subscription, an API key) onto one or more runtimes. Every id matches a backend
+/// in the server's form spec, so picking one drops straight into the runtime select. A Claude
+/// login powers both the live-terminal CLI and the headless SDK — same credentials — so it lists
+/// both.
+const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
+    RuntimeGuide {
+        question: "I have a Claude subscription (Pro / Max), or the Claude CLI already logged in",
+        note: "Uses your existing Claude login — no API key needed. Same credentials either way:",
+        options: &[
+            ("pty:claude", "Claude Code in a live terminal session"),
+            ("harness:claude-sdk", "the Claude SDK, headless, on the same login"),
+        ],
+    },
+    RuntimeGuide {
+        question: "I have a ChatGPT / Codex subscription",
+        note: "Uses your Codex login.",
+        options: &[("pty:codex", "the Codex CLI in a live terminal session")],
+    },
+    RuntimeGuide {
+        question: "I have an Anthropic API key",
+        note: "Talks to the Claude API directly with your key — no CLI login required.",
+        options: &[("harness:claude-sdk", "the Claude SDK, headless")],
+    },
+    RuntimeGuide {
+        question: "I have another provider's API key (OpenAI, Gemini, Kimi, …)",
+        note: "ADI's built-in agent loop speaks to many providers with your key.",
+        options: &[("harness:adi", "the ADI agent loop")],
+    },
 ];
 
 /// The root (`/`): a guided onboarding wizard behind a slim `adi. · extended →` bar. Step 1
@@ -302,28 +316,40 @@ fn onb_help_modal(
 ) -> AnyView {
     let rows = RUNTIME_GUIDE
         .iter()
-        .map(|(question, id, note)| {
-            let id = (*id).to_string();
-            // Show the server's own label for the runtime when it offers one, so the modal never
-            // drifts from the select; fall back to the raw id if the backend list lacks it.
-            let label = backends
+        .map(|guide| {
+            let opts = guide
+                .options
                 .iter()
-                .find(|b| b.id == id)
-                .map_or_else(|| id.clone(), |b| b.label.clone());
-            let pick = id.clone();
+                .map(|(id, how)| {
+                    let id = (*id).to_string();
+                    // Show the server's own label for the runtime when it offers one, so the modal
+                    // never drifts from the select; fall back to the raw id if the list lacks it.
+                    let label = backends
+                        .iter()
+                        .find(|b| b.id == id)
+                        .map_or_else(|| id.clone(), |b| b.label.clone());
+                    let pick = id.clone();
+                    view! {
+                        <div class="adi-help__opt">
+                            <div class="adi-help__opt-main">
+                                <code class="adi-onb__code">{label}</code>
+                                <span class="adi-help__how">{(*how).to_string()}</span>
+                            </div>
+                            <span class="adi-spacer"></span>
+                            <button class="adi-btn adi-btn--ghost adi-help__use" type="button"
+                                on:click=move |_| {
+                                    backend.set(pick.clone());
+                                    show_help.set(false);
+                                }>"Use this"</button>
+                        </div>
+                    }
+                })
+                .collect::<Vec<_>>();
             view! {
                 <li class="adi-help__row">
-                    <p class="adi-help__q">{(*question).to_string()}</p>
-                    <p class="adi-help__note">{(*note).to_string()}</p>
-                    <div class="adi-help__pick">
-                        <code class="adi-onb__code">{label}</code>
-                        <span class="adi-spacer"></span>
-                        <button class="adi-btn adi-btn--ghost adi-help__use" type="button"
-                            on:click=move |_| {
-                                backend.set(pick.clone());
-                                show_help.set(false);
-                            }>"Use this"</button>
-                    </div>
+                    <p class="adi-help__q">{guide.question}</p>
+                    <p class="adi-help__note">{guide.note}</p>
+                    <div class="adi-help__opts">{opts}</div>
                 </li>
             }
         })
