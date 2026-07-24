@@ -80,8 +80,7 @@ pub(crate) enum WorkspaceCommand {
     },
     /// Unregister a workspace (never deletes its files).
     Rm { name: String },
-    /// Open (or reuse) a tmux terminal session in the workspace's directory and print the
-    /// attach command.
+    /// Open (or reuse) a terminal session in the workspace's directory.
     Terminal { name: String },
 }
 
@@ -286,7 +285,8 @@ fn run_workspace(
             let session = adi_core::workspace_terminal::open(project, &name, &entry.path)
                 .map_err(|e| e.to_string())?;
             println!("Terminal ready in {}.", entry.path.display());
-            println!("  {}", session.attach);
+            println!("  session: {}", session.session);
+            println!("  view it in the control panel (no external attach).");
         }
     }
     Ok(())

@@ -4,13 +4,13 @@
 //! # let tmp = std::env::temp_dir().join(format!("adi-agents-doctest-{}", std::process::id()));
 //! # let _ = std::fs::remove_dir_all(&tmp);
 //! use adi_agents::{Agents, AgentManifest};
-//! use adi_agents::arguments::TmuxClaudeArguments;
+//! use adi_agents::arguments::PtyClaudeArguments;
 //!
 //! # let store = Agents::with_config(adi_config::Config::with_root(&tmp));
 //! // In real code: let store = Agents::open();
 //! let spec = AgentManifest {
-//!     backend: "tmux:claude".into(),
-//!     arguments: TmuxClaudeArguments {
+//!     backend: "pty:claude".into(),
+//!     arguments: PtyClaudeArguments {
 //!         model: Some("opus".into()),
 //!         ..Default::default()
 //!     },
@@ -18,7 +18,7 @@
 //! };
 //! let saved = store.save("athz-solver", spec)?;
 //! assert_eq!(saved.name, "athz-solver");
-//! assert_eq!(saved.manifest.executor(), "tmux");
+//! assert_eq!(saved.manifest.executor(), "pty");
 //! assert!(saved.manifest.created_at > 0);
 //!
 //! assert_eq!(store.list()?.len(), 1);
@@ -373,7 +373,7 @@ impl Agents {
         is_running_in(agent, &sessions_dir)
     }
 
-    /// A read-only live snapshot of an agent for the live view: a tmux pane capture for interactive
+    /// A read-only live snapshot of an agent for the live view: a pty screen capture for interactive
     /// backends, or the latest run's log tail for the headless backends.
     #[must_use]
     pub fn peek(&self, agent: &StoredAgent) -> Peek {
@@ -389,7 +389,7 @@ impl Agents {
         runs_in(agent, &sessions_dir)
     }
 
-    /// A read-only snapshot of one specific run of a headless agent (or the tmux pane, for an
+    /// A read-only snapshot of one specific run of a headless agent (or the pty screen, for an
     /// interactive backend, where `run_id` is ignored).
     #[must_use]
     pub fn peek_run(&self, agent: &StoredAgent, run_id: &str) -> Peek {
@@ -634,7 +634,7 @@ mod tests {
     #[test]
     fn delete_removes_the_agent() {
         let store = scratch("delete");
-        store.save("gone", spec("tmux:claude")).expect("create");
+        store.save("gone", spec("pty:claude")).expect("create");
         assert!(store.delete("gone").expect("delete"));
         assert!(store.get("gone").expect("get").is_none());
         assert!(!store.delete("gone").expect("delete missing"));
@@ -726,7 +726,7 @@ mod tests {
         let store = scratch("invalid");
         assert!(matches!(store.get("../escape"), Err(Error::InvalidName(_))));
         assert!(matches!(
-            store.save("a/b", spec("tmux:claude")),
+            store.save("a/b", spec("pty:claude")),
             Err(Error::InvalidName(_))
         ));
         assert!(matches!(store.delete(".."), Err(Error::InvalidName(_))));
@@ -735,7 +735,7 @@ mod tests {
     #[test]
     fn rename_moves_the_manifest_and_leaves_no_orphan() {
         let store = scratch("rename");
-        let mut m = spec("tmux:claude");
+        let mut m = spec("pty:claude");
         m.arguments.model = Some("opus".into());
         m.tags = vec!["athz".into()];
         let created = store.save("old", m).expect("save").manifest.created_at;
@@ -757,7 +757,7 @@ mod tests {
     #[test]
     fn rename_refuses_to_clobber_an_existing_agent() {
         let store = scratch("rename-clash");
-        store.save("one", spec("tmux:claude")).expect("save one");
+        store.save("one", spec("pty:claude")).expect("save one");
         store.save("two", spec("process:codex")).expect("save two");
 
         assert!(matches!(
@@ -869,7 +869,7 @@ mod tests {
     #[test]
     fn rename_validates_both_names_and_no_ops_on_self() {
         let store = scratch("rename-names");
-        store.save("keep", spec("tmux:claude")).expect("save");
+        store.save("keep", spec("pty:claude")).expect("save");
 
         assert!(matches!(
             store.rename("keep", "../escape"),

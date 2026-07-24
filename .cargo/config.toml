@@ -1,0 +1,10 @@
+# `iroh-relay` (a transitive dependency via adi-mesh → iroh) declares a `cdylib` crate-type we never
+# use, but Cargo builds it anyway. On the Windows (mingw) target its *debug* cdylib exports more than
+# 65535 symbols and overflows the PE export table, so mingw `ld` fails with "export ordinal too
+# large" — which breaks every `cargo build --target x86_64-pc-windows-gnu` (and `cargo test`) that
+# reaches it (the release ship path only linked because optimization trims the exports under the
+# limit). `--exclude-all-symbols` tells the linker to export nothing from that DLL; that is harmless
+# because nothing links iroh-relay's cdylib — all our own crates are executables or rlibs — and it
+# lets the cross build link in every profile. Scoped to this target, so native builds are untouched.
+[target.x86_64-pc-windows-gnu]
+rustflags = ["-Clink-arg=-Wl,--exclude-all-symbols"]

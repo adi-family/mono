@@ -65,7 +65,7 @@ pub struct Agent<Args> {
 }
 
 impl<Args> AgentManifest<Args> {
-    /// The executor (`tmux` / `process` / `harness`) — the part before the `:` in
+    /// The executor (`pty` / `process` / `harness`) — the part before the `:` in
     /// [`Self::backend`]; empty string if the backend has no `executor:` prefix. Drives how the
     /// agent runs and which params apply.
     #[must_use]
@@ -184,7 +184,7 @@ mod tests {
     #[test]
     fn executor_is_the_prefix_before_the_colon() {
         for (backend, executor) in [
-            ("tmux:claude", "tmux"),
+            ("pty:claude", "pty"),
             ("process:codex", "process"),
             ("harness:claude-sdk", "harness"),
             ("weird", ""),

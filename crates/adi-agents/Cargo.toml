@@ -18,6 +18,9 @@ adi-workforce = { workspace = true }
 adi-events = { workspace = true }
 # An agent materializes its own `.bin` of enabled tools onto its PATH at launch.
 adi-tools = { workspace = true }
+# Interactive agent sessions run under an in-process pty (the cross-platform replacement for the
+# external tmux server) driven through this session manager.
+adi-pty = { workspace = true }
 # Not used at runtime: this crate assembles the *whole* platform event catalog (task events +
 # agent events) in `event_catalog`, so it needs the `adi.tasks.*` payload types + `event_types`.
 # It is the lowest crate that can see every producer's payload type (adi-events sits below both).

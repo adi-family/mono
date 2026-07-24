@@ -10,6 +10,9 @@ repository.workspace = true
 
 [dependencies]
 adi-osext = { workspace = true }
+# Each workspace terminal is an in-process pty session (the cross-platform replacement for the
+# external tmux server), observed and driven the same way agent sessions are.
+adi-pty = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 

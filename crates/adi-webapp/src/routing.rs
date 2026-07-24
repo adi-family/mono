@@ -5,6 +5,12 @@ use leptos::prelude::*;
 
 use crate::state::State;
 
+/// The path prefix every workbench route lives under. The bare root (`/`) is the simple
+/// launcher (see `main`); the whole control panel hangs off `/extended/…`. This is the one
+/// place the prefix is written for the dynamic path helpers — the fixed routes mirror it as
+/// literals in [`Route::path`]/[`Route::from_path`].
+pub(crate) const BASE: &str = "/extended";
+
 /// The pages the sidebar navigates between, each mapped to a URL path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {
@@ -42,7 +48,9 @@ impl Route {
         if store_path_from_path(path).is_some() {
             return Route::StoreFile;
         }
-        match path {
+        // Match the remainder after the `/extended` prefix, so the arms stay the short,
+        // canonical names. A path without the prefix falls through to Projects.
+        match path.strip_prefix(BASE).unwrap_or(path) {
             "/meta" => Route::Meta,
             "/tasks" => Route::Tasks,
             "/agents" => Route::Agents,
@@ -60,20 +68,22 @@ impl Route {
     /// The canonical URL path for this page. `ProjectDetail`'s real path carries an id, so this
     /// returns the list base for it (used only for nav; detail canonicalization is skipped).
     pub(crate) fn path(self) -> &'static str {
+        // Full literals under `/extended` (mirrors the prefix in [`BASE`]); the arms in
+        // [`Route::from_path`] match these with the prefix stripped back off.
         match self {
-            Route::Meta => "/meta",
-            Route::Projects | Route::ProjectDetail => "/projects",
-            Route::Tasks => "/tasks",
-            Route::Agents => "/agents",
-            Route::Tools => "/tools",
-            Route::Secrets => "/secrets",
-            Route::Triggers => "/triggers",
-            Route::Dashboards => "/dashboards",
-            Route::Hive => "/settings/hive",
-            Route::PortsManager => "/settings/ports-manager",
-            Route::Mesh => "/settings/mesh",
+            Route::Meta => "/extended/meta",
+            Route::Projects | Route::ProjectDetail => "/extended/projects",
+            Route::Tasks => "/extended/tasks",
+            Route::Agents => "/extended/agents",
+            Route::Tools => "/extended/tools",
+            Route::Secrets => "/extended/secrets",
+            Route::Triggers => "/extended/triggers",
+            Route::Dashboards => "/extended/dashboards",
+            Route::Hive => "/extended/settings/hive",
+            Route::PortsManager => "/extended/settings/ports-manager",
+            Route::Mesh => "/extended/settings/mesh",
             // The real path carries the file path; this base is only used for nav fallbacks.
-            Route::StoreFile => "/files",
+            Route::StoreFile => "/extended/files",
         }
     }
 
@@ -167,10 +177,16 @@ impl ProjectSection {
     /// This section's path within a project.
     pub(crate) fn path(self, project: &str) -> String {
         match self.slug() {
-            "" => format!("/projects/{project}"),
-            slug => format!("/projects/{project}/{slug}"),
+            "" => format!("{BASE}/projects/{project}"),
+            slug => format!("{BASE}/projects/{project}/{slug}"),
         }
     }
+}
+
+/// The canonical href for a project's detail page (`/extended/projects/<id>`). Keeps the base
+/// prefix in one place for the plain project links scattered across the pages.
+pub(crate) fn project_href(id: &str) -> String {
+    ProjectSection::Overview.path(id)
 }
 
 /// Handle a click on a nav link: navigate client-side for a plain left-click, but let
@@ -233,7 +249,9 @@ pub(crate) fn query_param(name: &str) -> Option<String> {
 /// The project id in a `/projects/<id>` or `/projects/<id>/<section>` path, or `None` for any
 /// other path (including the bare `/projects` list). The id segment must be non-empty.
 pub(crate) fn project_id_from_path(path: &str) -> Option<String> {
-    let rest = path.strip_prefix("/projects/")?;
+    let rest = path
+        .strip_prefix(BASE)
+        .and_then(|p| p.strip_prefix("/projects/"))?;
     let id = rest.split('/').next().unwrap_or_default();
     (!id.is_empty()).then(|| id.to_string())
 }
@@ -241,7 +259,9 @@ pub(crate) fn project_id_from_path(path: &str) -> Option<String> {
 /// The store-relative file path in a `/files/<path>` URL, or `None` for any other path. Each
 /// segment is percent-decoded, so a name with a space or `#` round-trips through the address bar.
 pub(crate) fn store_path_from_path(path: &str) -> Option<String> {
-    let rest = path.strip_prefix("/files/")?;
+    let rest = path
+        .strip_prefix(BASE)
+        .and_then(|p| p.strip_prefix("/files/"))?;
     let decoded: Vec<String> = rest
         .split('/')
         .filter(|seg| !seg.is_empty())
@@ -267,12 +287,15 @@ pub(crate) fn store_file_path(rel: &str) -> String {
                 .unwrap_or_else(|| seg.to_string())
         })
         .collect();
-    format!("/files/{}", encoded.join("/"))
+    format!("{BASE}/files/{}", encoded.join("/"))
 }
 
 /// The section in a `/projects/<id>/<section>` path; the bare project path is its overview.
 pub(crate) fn project_section_from_path(path: &str) -> ProjectSection {
-    let Some(rest) = path.strip_prefix("/projects/") else {
+    let Some(rest) = path
+        .strip_prefix(BASE)
+        .and_then(|p| p.strip_prefix("/projects/"))
+    else {
         return ProjectSection::Overview;
     };
     ProjectSection::from_slug(rest.split('/').nth(1).unwrap_or_default())

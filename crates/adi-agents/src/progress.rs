@@ -85,9 +85,9 @@ pub struct TurnContent {
 /// consolidating the old ad-hoc interactive/answerable flags with the new progress features.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackendCapabilities {
-    /// A live pane you type into (tmux): the session is driven with keystrokes, not turn replies.
+    /// A live pane you type into (pty): the session is driven with keystrokes, not turn replies.
     pub interactive: bool,
-    /// Runs/conversations persist as a browsable history (false for the single ephemeral tmux pane).
+    /// Runs/conversations persist as a browsable history (false for the single ephemeral pty pane).
     pub history: bool,
     /// You can reply into a turn to continue the same thread (conversations only).
     pub answerable: bool,
@@ -101,7 +101,7 @@ pub struct BackendCapabilities {
     pub metrics: bool,
 }
 
-/// The capability profile for a backend. This is the honest matrix: tmux is a live pane with no
+/// The capability profile for a backend. This is the honest matrix: pty is a live pane with no
 /// history/replies/steps; process runs keep history and (for the CLIs that emit events) steps, but
 /// are one-shot; harness runs additionally answer; wasm contributes only dispatch metrics.
 #[must_use]
@@ -116,7 +116,7 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
         metrics: false,
     };
     match backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => BackendCapabilities {
+        Backend::PtyClaude | Backend::PtyCodex => BackendCapabilities {
             interactive: true,
             live_text: true,
             ..base

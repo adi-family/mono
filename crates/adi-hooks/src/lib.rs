@@ -22,7 +22,7 @@
 //! shape as adi-triggers' fire — with an `[adi:hook-exit <code>]` marker appended so a
 //! finished run's status is readable from the log alone.
 //!
-//! Each workspace can also host an interactive tmux terminal rooted at its directory (the
+//! Each workspace can also host an interactive pty terminal rooted at its directory (the
 //! [`terminal`] module), observed and driven like agent sessions.
 
 mod error;

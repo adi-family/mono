@@ -4,7 +4,7 @@ use adi_webapp_api::types::NewProject;
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::routing::{Route, open_project};
+use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, State};
 use crate::ui::{TextField, data_table, fmt_date, placeholder_row};
 
@@ -84,7 +84,7 @@ fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
         .map(|p| {
             let id = p.id.clone();
             let open_id = id.clone();
-            let href = format!("/projects/{id}");
+            let href = project_href(&id);
             let created = fmt_date(p.created_at);
             let title = p.description.clone().unwrap_or_default();
             let status = if p.is_archived() {

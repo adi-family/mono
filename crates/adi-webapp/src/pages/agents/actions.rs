@@ -1,6 +1,6 @@
 //! The Agents page run, stop, and live-view actions.
 //!
-//! An agent definition is a *template*. For interactive (tmux) backends a Run starts a session you
+//! An agent definition is a *template*. For interactive (pty) backends a Run starts a session you
 //! type into and View watches its pane. For headless (`process` / `harness`) backends each Run is an
 //! independent run of the agent's settings (a fresh dialog, never continued): every run keeps its
 //! own log, several may be live at once, and the live view is a browsable run history plus a task
@@ -19,26 +19,26 @@ use crate::ui::{apply_mutation, data_table, placeholder_row};
 
 use super::send_bar;
 
-/// The Run / View / Stop action buttons for one agent row. Interactive Run starts a tmux session
+/// The Run / View / Stop action buttons for one agent row. Interactive Run starts a pty session
 /// straight away; headless "Run…" opens the run panel, where a task is entered before launching — a
 /// headless `--print` run is seeded by one prompt, not typed into. View opens the same panel (a live
-/// pane for tmux, the run history for headless); Stop ends the session, or every live run.
+/// pane for pty, the run history for headless); Stop ends the session, or every live run.
 pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> AnyView {
     let run_name = a.name.clone();
     let show_run = a.runnable && !a.running;
     let running = a.running;
-    let interactive = a.executor == "tmux";
+    let interactive = a.executor == "pty";
     // Harness backends keep answerable conversations; the run controls read as a chat there.
     let answerable = a.executor == "harness";
     let stop_title = if interactive {
-        "kill the tmux session"
+        "kill the session"
     } else if answerable {
         "stop the current answer of every live conversation"
     } else {
         "stop every live run"
     };
     let view_title = if interactive {
-        "watch the live tmux session"
+        "watch the live session"
     } else if answerable {
         "open this agent's conversations"
     } else {
@@ -61,7 +61,7 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
             let run_name = run_name.clone();
             if interactive {
                 view! {
-                    <button class="adi-btn adi-btn--link" title="start an interactive tmux session"
+                    <button class="adi-btn adi-btn--link" title="start an interactive session"
                         on:click=move |_| run_now(state, run_name.clone())>"▶ Run"</button>
                     " "
                 }
@@ -95,7 +95,7 @@ where
     apply_mutation(state, busy, ok_msg, |s, a| s.agents.set(Some(a)), fut);
 }
 
-/// Launch an interactive (tmux) agent straight away — no initial task, since the session is typed
+/// Launch an interactive (pty) agent straight away — no initial task, since the session is typed
 /// into after it starts. The server supplies the executor-specific success message.
 fn run_now(state: State, name: String) {
     spawn_local(async move {
@@ -130,7 +130,7 @@ fn launch_agent(state: State, watch: AgentsWatch, name: String, message: String)
     });
 }
 
-/// Stop the whole agent (the tmux session, or every live run of a headless one), refresh the list,
+/// Stop the whole agent (the pty session, or every live run of a headless one), refresh the list,
 /// and close its live view.
 fn stop_agent(state: State, watch: AgentsWatch, name: String) {
     if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
@@ -291,7 +291,7 @@ pub(crate) fn poll_watch(watch: AgentsWatch) {
 pub(crate) fn live_view(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let name = watch.name.get()?;
     if watch.interactive.get() {
-        Some(tmux_live_view(state, watch, name))
+        Some(pty_live_view(state, watch, name))
     } else {
         Some(runs_panel(state, watch, name))
     }
@@ -398,8 +398,8 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
         .into_any()
 }
 
-/// The interactive (tmux) live view: a 1s-refreshed pane capture with a send bar to type into it.
-fn tmux_live_view(state: State, watch: AgentsWatch, name: String) -> AnyView {
+/// The interactive (pty) live view: a 1s-refreshed pane capture with a send bar to type into it.
+fn pty_live_view(state: State, watch: AgentsWatch, name: String) -> AnyView {
     let peek = watch.peek.get();
     let attach = peek.as_ref().map(|p| p.attach.clone()).unwrap_or_default();
     let running = peek.as_ref().is_some_and(|p| p.running);

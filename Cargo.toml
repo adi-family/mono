@@ -19,6 +19,7 @@ default-members = [
     "crates/adi-mesh",
     "crates/adi-ports-manager",
     "crates/adi-projects",
+    "crates/adi-pty",
     "crates/adi-secrets",
     "crates/adi-tasks",
     "crates/adi-tools",
@@ -53,6 +54,7 @@ adi-mesh = { path = "crates/adi-mesh" }
 adi-osext = { path = "crates/adi-osext" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }
+adi-pty = { path = "crates/adi-pty" }
 adi-secrets = { path = "crates/adi-secrets" }
 adi-tasks = { path = "crates/adi-tasks" }
 adi-tools = { path = "crates/adi-tools" }
@@ -69,6 +71,11 @@ clap = { version = "4", features = ["derive"] }
 # Peer-to-peer QUIC transport with relay-assisted NAT traversal and dial-by-EndpointId
 # discovery; the backbone of adi-mesh.
 iroh = "1"
+# In-process pseudo-terminal session manager (adi-pty): a real pty per session (ConPTY on Windows),
+# a vt100 screen model fed by a reader thread — the cross-platform replacement for the external tmux
+# server that interactive agent runs and workspace terminals used to be driven through.
+portable-pty = "0.9"
+vt100 = "0.16"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Reflects `#[derive(JsonSchema)]` types into JSON Schema — the source of truth for the payload

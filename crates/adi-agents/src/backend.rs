@@ -8,8 +8,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Backend {
-    TmuxClaude,
-    TmuxCodex,
+    PtyClaude,
+    PtyCodex,
     ProcessClaude,
     ProcessCodex,
     /// The `claude` CLI driven headless by ADI's harness (a turn-capped, adi-scoped print run).
@@ -27,8 +27,8 @@ impl Backend {
     /// The wire string for this backend (`process:claude`, `harness:adi`, `""`, …).
     pub(crate) fn as_str(&self) -> &str {
         match self {
-            Self::TmuxClaude => "tmux:claude",
-            Self::TmuxCodex => "tmux:codex",
+            Self::PtyClaude => "pty:claude",
+            Self::PtyCodex => "pty:codex",
             Self::ProcessClaude => "process:claude",
             Self::ProcessCodex => "process:codex",
             Self::HarnessClaudeSdk => "harness:claude-sdk",
@@ -38,11 +38,11 @@ impl Backend {
         }
     }
 
-    /// The executor (`tmux` / `process` / `harness` / `wasm`) — the part before the `:`. An
+    /// The executor (`pty` / `process` / `harness` / `wasm`) — the part before the `:`. An
     /// [`Other`](Self::Other) backend with no `:` (or the empty default) has no executor: `""`.
     pub(crate) fn executor(&self) -> &str {
         match self {
-            Self::TmuxClaude | Self::TmuxCodex => "tmux",
+            Self::PtyClaude | Self::PtyCodex => "pty",
             Self::ProcessClaude | Self::ProcessCodex => "process",
             Self::HarnessClaudeSdk | Self::HarnessAdi => "harness",
             Self::Wasm => "wasm",
@@ -60,8 +60,12 @@ impl Default for Backend {
 impl From<&str> for Backend {
     fn from(value: &str) -> Self {
         match value {
-            "tmux:claude" => Self::TmuxClaude,
-            "tmux:codex" => Self::TmuxCodex,
+            "pty:claude" => Self::PtyClaude,
+            "pty:codex" => Self::PtyCodex,
+            // Back-compat: manifests written before the tmux→pty rename still carry the old wire
+            // strings; map them onto the pty backends so stored agents keep running.
+            "tmux:claude" => Self::PtyClaude,
+            "tmux:codex" => Self::PtyCodex,
             "process:claude" => Self::ProcessClaude,
             "process:codex" => Self::ProcessCodex,
             "harness:claude-sdk" => Self::HarnessClaudeSdk,
@@ -75,8 +79,11 @@ impl From<&str> for Backend {
 impl From<String> for Backend {
     fn from(value: String) -> Self {
         match value.as_str() {
-            "tmux:claude" => Self::TmuxClaude,
-            "tmux:codex" => Self::TmuxCodex,
+            "pty:claude" => Self::PtyClaude,
+            "pty:codex" => Self::PtyCodex,
+            // Back-compat with the legacy tmux wire strings (see the `&str` impl above).
+            "tmux:claude" => Self::PtyClaude,
+            "tmux:codex" => Self::PtyCodex,
             "process:claude" => Self::ProcessClaude,
             "process:codex" => Self::ProcessCodex,
             "harness:claude-sdk" => Self::HarnessClaudeSdk,
@@ -115,8 +122,8 @@ mod tests {
     #[test]
     fn known_backends_round_trip_through_strings() {
         for wire in [
-            "tmux:claude",
-            "tmux:codex",
+            "pty:claude",
+            "pty:codex",
             "process:claude",
             "process:codex",
             "harness:claude-sdk",
@@ -134,11 +141,27 @@ mod tests {
     }
 
     #[test]
+    fn legacy_tmux_wire_strings_map_to_pty() {
+        // Manifests stored before the tmux→pty rename must keep working: the legacy strings decode
+        // onto the pty backends (and re-serialize as the new `pty:*` names), while an unknown
+        // `tmux:*` engine is still kept verbatim as `Other`.
+        assert_eq!(Backend::from("tmux:claude"), Backend::PtyClaude);
+        assert_eq!(Backend::from("tmux:claude").as_str(), "pty:claude");
+        assert_eq!(Backend::from("tmux:codex"), Backend::PtyCodex);
+        assert_eq!(Backend::from("tmux:codex").as_str(), "pty:codex");
+        assert_eq!(Backend::from("tmux:claude".to_string()), Backend::PtyClaude);
+        assert_eq!(
+            Backend::from("tmux:unknown"),
+            Backend::Other("tmux:unknown".to_string())
+        );
+    }
+
+    #[test]
     fn unknown_and_empty_backends_are_kept_verbatim() {
         for wire in [
             "cloud:worker",
             "harness:unknown",
-            "tmux:unknown",
+            "pty:unknown",
             "weird",
             "",
         ] {
@@ -150,7 +173,7 @@ mod tests {
 
     #[test]
     fn executor_is_the_prefix_before_the_colon() {
-        assert_eq!(Backend::TmuxClaude.executor(), "tmux");
+        assert_eq!(Backend::PtyClaude.executor(), "pty");
         assert_eq!(Backend::ProcessCodex.executor(), "process");
         assert_eq!(Backend::HarnessClaudeSdk.executor(), "harness");
         assert_eq!(Backend::HarnessAdi.executor(), "harness");

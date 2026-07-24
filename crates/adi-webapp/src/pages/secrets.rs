@@ -20,6 +20,7 @@ use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
+use crate::routing::Route;
 use crate::state::{Flash, SecretsForm, State};
 use crate::ui::{
     TextField, apply_mutation, confirm, data_table, flash_view, menu_item, placeholder_row,
@@ -472,7 +473,10 @@ fn oauth_initiate(pending: &PendingOAuth, requested_scope: Option<&str>) {
     };
     let loc = win.location();
     let origin = loc.origin().unwrap_or_default();
-    let redirect: String = js_sys::encode_uri_component(&format!("{origin}/secrets")).into();
+    // Return to the Secrets page (now under `/extended`) so the App shell mounts and captures
+    // the token fragment — landing on the bare root would silently drop it.
+    let redirect: String =
+        js_sys::encode_uri_component(&format!("{origin}{}", Route::Secrets.path())).into();
     let mut url = format!("{OAUTH_ROUTER}/login/{}?redirect={redirect}", pending.provider);
     if let Some(scope) = requested_scope.filter(|s| !s.trim().is_empty()) {
         let enc: String = js_sys::encode_uri_component(scope).into();
@@ -548,7 +552,7 @@ fn session_storage() -> Option<web_sys::Storage> {
 /// Strip the token fragment from the URL so a refresh can't replay it and nothing lingers.
 fn clear_fragment(win: &web_sys::Window) {
     if let Ok(history) = win.history() {
-        let _ = history.replace_state_with_url(&JsValue::NULL, "", Some("/secrets"));
+        let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(Route::Secrets.path()));
     }
 }
 

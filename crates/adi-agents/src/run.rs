@@ -1,17 +1,17 @@
 //! Backend-agnostic run dispatch.
 
 use crate::backend::Backend;
-use crate::backends::{harness, process, tmux};
+use crate::backends::{harness, process, pty};
 use crate::error::{Error, Result};
 use crate::{StoredAgent, StoredAgentManifest};
 use std::path::{Path, PathBuf};
 
 pub use harness::Turn;
-pub use tmux::{capture_pane, running_sessions, send_keys, session_name};
+pub use pty::{capture_pane, running_sessions, send_keys, session_name};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
-    Tmux {
+    Pty {
         command: String,
         session: String,
     },
@@ -28,7 +28,7 @@ pub enum Launch {
 /// a headless `--print` run without streaming an unbounded file to the browser each poll.
 pub(crate) const MAX_LOG_TAIL: u64 = 64 * 1024;
 
-/// A read-only snapshot of one run for the live view: the visible output (a tmux pane capture, or the
+/// A read-only snapshot of one run for the live view: the visible output (a pty screen capture, or the
 /// tail of a detached run's log — which persists after the run ends), whether it is still live, a
 /// human attach/tail hint, and whether the backend is interactive (only an interactive one can be
 /// typed into).
@@ -56,17 +56,17 @@ pub struct RunInfo {
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     match &manifest.backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => tmux::is_runnable(manifest),
+        Backend::PtyClaude | Backend::PtyCodex => pty::is_runnable(manifest),
         Backend::ProcessClaude | Backend::ProcessCodex => process::is_runnable(manifest),
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => harness::is_runnable(manifest),
         _ => false,
     }
 }
 
-/// Whether a backend runs an interactive session (a tmux pane you type into) rather than a headless,
+/// Whether a backend runs an interactive session (a pty screen you type into) rather than a headless,
 /// history-keeping run.
 fn is_interactive(backend: &Backend) -> bool {
-    matches!(backend, Backend::TmuxClaude | Backend::TmuxCodex)
+    matches!(backend, Backend::PtyClaude | Backend::PtyCodex)
 }
 
 /// Launch an agent. `base_dir` is the default working directory a run starts in when the agent
@@ -82,8 +82,8 @@ pub(crate) fn launch_in(
     secret_env: &[(String, String)],
 ) -> Result<Launch> {
     match &agent.manifest.backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => {
-            tmux::launch(agent, base_dir, bin_dir, secret_env)
+        Backend::PtyClaude | Backend::PtyCodex => {
+            pty::launch(agent, base_dir, bin_dir, secret_env)
         }
         Backend::ProcessClaude | Backend::ProcessCodex => {
             process::launch(agent, sessions_dir, base_dir, bin_dir, message, secret_env)
@@ -95,7 +95,7 @@ pub(crate) fn launch_in(
     }
 }
 
-/// A headless agent's run history, newest first. Interactive (tmux) backends have no history — their
+/// A headless agent's run history, newest first. Interactive (pty) backends have no history — their
 /// live session *is* the run — so this is empty for them.
 pub(crate) fn runs_in(agent: &StoredAgent, sessions_dir: &Path) -> Vec<RunInfo> {
     match &agent.manifest.backend {
@@ -109,11 +109,11 @@ pub(crate) fn runs_in(agent: &StoredAgent, sessions_dir: &Path) -> Vec<RunInfo> 
     }
 }
 
-/// A snapshot of one specific detached run, or of the tmux pane for an interactive backend
+/// A snapshot of one specific detached run, or of the pty screen for an interactive backend
 /// (`run_id` is ignored there — an interactive agent has a single session, not runs).
 pub(crate) fn peek_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> Peek {
     match &agent.manifest.backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => tmux_peek(agent),
+        Backend::PtyClaude | Backend::PtyCodex => pty_peek(agent),
         Backend::ProcessClaude | Backend::ProcessCodex => detached_peek(
             process::is_running(sessions_dir, &agent.name, run_id),
             process::tail_log(sessions_dir, &agent.name, run_id),
@@ -128,11 +128,11 @@ pub(crate) fn peek_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str
     }
 }
 
-/// A name-based snapshot: the tmux pane for interactive backends, or the latest run for headless
-/// ones — a convenience for callers that don't track a specific run (the tmux live view).
+/// A name-based snapshot: the pty screen for interactive backends, or the latest run for headless
+/// ones — a convenience for callers that don't track a specific run (the pty live view).
 pub(crate) fn peek_in(agent: &StoredAgent, sessions_dir: &Path) -> Peek {
     if is_interactive(&agent.manifest.backend) {
-        return tmux_peek(agent);
+        return pty_peek(agent);
     }
     match runs_in(agent, sessions_dir).first() {
         Some(latest) => peek_run_in(agent, sessions_dir, &latest.run_id),
@@ -140,12 +140,14 @@ pub(crate) fn peek_in(agent: &StoredAgent, sessions_dir: &Path) -> Peek {
     }
 }
 
-fn tmux_peek(agent: &StoredAgent) -> Peek {
-    let pane = tmux::capture_pane(&agent.name);
+fn pty_peek(agent: &StoredAgent) -> Peek {
     Peek {
-        running: pane.is_some(),
-        output: pane.unwrap_or_default(),
-        attach: format!("tmux attach -t {}", tmux::session_name(&agent.name)),
+        // A pty session lives only in-process, so liveness is the child's state — not whether a
+        // capture exists (a dead session keeps its final screen capturable).
+        running: pty::is_running(&agent.name),
+        output: pty::capture_pane(&agent.name).unwrap_or_default(),
+        // A pty session has no external attach command; it is viewed only in the control panel.
+        attach: String::new(),
         interactive: true,
     }
 }
@@ -168,10 +170,10 @@ fn empty_peek() -> Peek {
     }
 }
 
-/// Whether the agent has any live run (any headless run still alive, or a live tmux session).
+/// Whether the agent has any live run (any headless run still alive, or a live pty session).
 pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
     match &agent.manifest.backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => tmux::is_running(&agent.name),
+        Backend::PtyClaude | Backend::PtyCodex => pty::is_running(&agent.name),
         Backend::ProcessClaude | Backend::ProcessCodex => {
             process::any_running(sessions_dir, &agent.name)
         }
@@ -182,11 +184,11 @@ pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
     }
 }
 
-/// Stop one specific detached run, or the tmux session for an interactive backend (`run_id`
+/// Stop one specific detached run, or the pty session for an interactive backend (`run_id`
 /// ignored). Returns whether a live run was found and signalled.
 pub(crate) fn stop_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> Result<bool> {
     match &agent.manifest.backend {
-        Backend::TmuxClaude | Backend::TmuxCodex => tmux::stop(&agent.name),
+        Backend::PtyClaude | Backend::PtyCodex => pty::stop(&agent.name),
         Backend::ProcessClaude | Backend::ProcessCodex => {
             process::stop(sessions_dir, &agent.name, run_id)
         }
@@ -231,7 +233,7 @@ pub(crate) fn adi_turn_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &st
 
 /// A run's turns, oldest first. For a harness backend this is the answerable conversation; for a
 /// one-shot process run it is the task and its single parsed answer (so both render as the same
-/// progress feed). Interactive (tmux) and wasm backends keep no turn transcript.
+/// progress feed). Interactive (pty) and wasm backends keep no turn transcript.
 pub(crate) fn transcript_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> Vec<Turn> {
     match &agent.manifest.backend {
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
@@ -290,10 +292,10 @@ fn read_capped(path: &Path) -> Vec<u8> {
     buf
 }
 
-/// Stop the agent wholesale: the tmux session, or every live run of a headless agent.
+/// Stop the agent wholesale: the pty session, or every live run of a headless agent.
 pub(crate) fn stop_in(agent: &StoredAgent, sessions_dir: &Path) -> Result<bool> {
     if is_interactive(&agent.manifest.backend) {
-        return tmux::stop(&agent.name);
+        return pty::stop(&agent.name);
     }
     let mut stopped = false;
     for run in runs_in(agent, sessions_dir) {
@@ -317,13 +319,13 @@ mod tests {
 
     #[test]
     fn only_implemented_backends_are_runnable() {
-        assert!(is_runnable(&manifest("tmux:claude")));
-        assert!(is_runnable(&manifest("tmux:codex")));
+        assert!(is_runnable(&manifest("pty:claude")));
+        assert!(is_runnable(&manifest("pty:codex")));
         assert!(is_runnable(&manifest("process:claude")));
         assert!(is_runnable(&manifest("process:codex")));
         assert!(is_runnable(&manifest("harness:claude-sdk")));
         for backend in [
-            "tmux:unknown",
+            "pty:unknown",
             "process:unknown",
             "harness:adi",
             "harness:unknown",

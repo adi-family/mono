@@ -5,7 +5,7 @@ use adi_webapp_api::types::{NewProject, Project, ProjectsState, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::routing::{Route, open_project};
+use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, ProjectsForm, State};
 use crate::ui::{
     TextField, apply_mutation, confirm, data_table, flash_view, fmt_date, menu_item,
@@ -232,7 +232,7 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
             });
             let title = p.description.clone().unwrap_or_default();
             let open_id = id.clone();
-            let href = format!("/projects/{id}");
+            let href = project_href(&id);
             // A computed per-row indent — the one thing here that genuinely varies per row.
             let indent = format!("padding-left:{}px", depth * 16);
             view! {

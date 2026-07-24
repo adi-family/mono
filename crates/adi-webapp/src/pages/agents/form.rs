@@ -706,7 +706,7 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.editing.set(None);
 }
 
-/// The executor (`tmux`/`process`/`harness`) — the part before the `:` in a backend id; `""` if
+/// The executor (`pty`/`process`/`harness`) — the part before the `:` in a backend id; `""` if
 /// none.
 fn agent_executor(backend: &str) -> &str {
     match backend.split_once(':') {

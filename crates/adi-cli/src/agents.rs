@@ -25,7 +25,7 @@ pub(crate) enum AgentsCommand {
     /// Create or replace an agent definition.
     Save {
         name: String,
-        /// The `executor:what` backend, e.g. `tmux:claude`, `process:codex`,
+        /// The `executor:what` backend, e.g. `pty:claude`, `process:codex`,
         /// `harness:claude-sdk`, `harness:adi`, `wasm:loop-script`.
         #[arg(long)]
         backend: String,
@@ -66,12 +66,12 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Launch an agent in its backend. Tmux executors open a detached interactive session,
+    /// Launch an agent in its backend. Pty executors open an interactive session,
     /// process executors run a headless CLI in the background, and `wasm:*` agents dispatch
     /// synchronously.
     Run {
         name: String,
-        /// The task sent to a process backend or wasm handler (ignored by tmux backends).
+        /// The task sent to a process backend or wasm handler (ignored by pty backends).
         #[arg(short, long, default_value = "run")]
         message: String,
         /// The trigger handler to dispatch into (wasm backends only); defaults to the
@@ -199,10 +199,10 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     .run_with_message(&name, &message)
                     .map_err(|e| e.to_string())?;
                 match launch {
-                    Launch::Tmux { command, session } => {
-                        println!("Started agent {name} in tmux session {session}.");
+                    Launch::Pty { command, session } => {
+                        println!("Started agent {name} in session {session}.");
                         println!("  command: {command}");
-                        println!("  attach:  tmux attach -t {session}");
+                        println!("  view:    in the control panel's live view (no external attach)");
                     }
                     Launch::Process {
                         command,

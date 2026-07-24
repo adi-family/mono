@@ -1,10 +1,10 @@
-//! `tmux:claude` command construction.
+//! `pty:claude` command construction.
 
-use crate::arguments::{ClaudeEffort, ClaudePermissionMode, TmuxClaudeArguments};
+use crate::arguments::{ClaudeEffort, ClaudePermissionMode, PtyClaudeArguments};
 use crate::backends::push_option;
 
-/// Build the Claude CLI command run by the shared tmux executor.
-pub(super) fn argv(config: &TmuxClaudeArguments) -> Vec<String> {
+/// Build the Claude CLI command run by the shared pty executor.
+pub(super) fn argv(config: &PtyClaudeArguments) -> Vec<String> {
     let mut argv = vec!["claude".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -54,8 +54,8 @@ mod tests {
     #[test]
     fn argv_honors_model_permission_mode_and_prompt() {
         let manifest = AgentManifest {
-            backend: "tmux:claude".into(),
-            arguments: TmuxClaudeArguments {
+            backend: "pty:claude".into(),
+            arguments: PtyClaudeArguments {
                 model: Some("opus".into()),
                 permission_mode: Some(ClaudePermissionMode::Plan),
                 effort: Some(ClaudeEffort::High),

@@ -13,7 +13,9 @@ use super::workspaces::{
     NewHookForm, WorkspaceForm, hook_editor_view, hook_log_view, term_view, workspaces_panel,
 };
 use crate::fetch;
-use crate::routing::{ProjectSection, Route, go_projects, open_project, open_project_section};
+use crate::routing::{
+    ProjectSection, Route, go_projects, open_project, open_project_section, project_href,
+};
 use crate::state::{
     AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, SecretsForm, State, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
@@ -377,7 +379,7 @@ pub(super) fn sub_marker(
 fn parent_link(state: State, route: RwSignal<Route>, parent: Option<String>) -> Option<AnyView> {
     let pid = parent?;
     let open_pid = pid.clone();
-    let href = format!("/projects/{pid}");
+    let href = project_href(&pid);
     Some(
         view! {
             <a class="adi-btn adi-btn--link" href=href title="open the parent project"

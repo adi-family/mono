@@ -1,6 +1,6 @@
 //! The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
 //! pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
-//! params. ▶ Run starts either an interactive tmux session or a headless background process;
+//! params. ▶ Run starts either an interactive pty session or a headless background process;
 //! deeper orchestration is future work. The form adapts its params to the chosen backend, and
 //! for the `harness:adi` backend also to its chosen provider.
 
@@ -26,7 +26,7 @@ use form::{agent_argument_values, agent_form_fields, agent_param_applies, clear_
 
 /// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
 /// pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
-/// params. ▶ Run starts either an interactive tmux session or a headless background process;
+/// params. ▶ Run starts either an interactive pty session or a headless background process;
 /// deeper orchestration is future work. The form adapts its params to the chosen backend, and
 /// for the `harness:adi` backend also to its chosen provider.
 pub(crate) fn agents_view(
@@ -137,7 +137,7 @@ pub(crate) fn agents_view(
             </form>
             {flash_view(flash)}
             <div class="adi-hint">
-                "▶ Run launches tmux backends in an interactive " <code>"adi-agent-<name>"</code>
+                "▶ Run launches pty backends in an interactive " <code>"adi-agent-<name>"</code>
                 " session you type into. A "<code>"process"</code>" backend is a template: ▶ Run…
                  starts an independent one-shot run from a task you give it — one "<code>"--print"</code>
                 " turn, never continued — and several can run at once. A "<code>"harness"</code>"
@@ -394,7 +394,7 @@ fn send_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     }
 }
 
-/// One special-key button in the send bar, pressing a single tmux key in the session.
+/// One special-key button in the send bar, pressing a single key in the session.
 fn quick_key(
     state: State,
     watch: AgentsWatch,

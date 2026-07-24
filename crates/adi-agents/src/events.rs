@@ -31,20 +31,20 @@ pub struct AgentDeleted {
     pub agent: String,
 }
 
-/// `adi.agents.run.started` — a run was launched, identified by its backend-specific handle (a tmux
+/// `adi.agents.run.started` — a run was launched, identified by its backend-specific handle (a pty
 /// session, or a detached run's pid + run id) so a subscriber can follow the run it just heard
-/// about. Tagged by `backend`: `{"backend":"tmux",…}` or `{"backend":"process",…}`.
+/// about. Tagged by `backend`: `{"backend":"pty",…}` or `{"backend":"process",…}`.
 // Internally tagged so the serialized shape matches what the emit site builds from `Launch`.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(tag = "backend", rename_all = "snake_case")]
 pub enum AgentRunStarted {
-    /// An interactive tmux-backed run, reachable by its tmux session name.
-    Tmux {
+    /// An interactive pty-backed run, reachable by its pty session name.
+    Pty {
         /// The agent's name.
         agent: String,
         /// The task the run was launched with.
         message: String,
-        /// The tmux session hosting the run.
+        /// The pty session hosting the run.
         session: String,
     },
     /// A detached headless run, reachable by pid and its own run id.
@@ -64,7 +64,7 @@ impl AgentRunStarted {
     /// Build the payload for a launched run from its backend handle.
     pub(crate) fn of(name: &str, message: &str, launch: &Launch) -> Self {
         match launch {
-            Launch::Tmux { session, .. } => Self::Tmux {
+            Launch::Pty { session, .. } => Self::Pty {
                 agent: name.to_string(),
                 message: message.to_string(),
                 session: session.clone(),
@@ -183,16 +183,16 @@ mod tests {
 
     #[test]
     fn run_started_matches_launch_variants() {
-        // The typed payload must serialize to exactly the historical wire shapes.
-        let tmux = serde_json::to_value(AgentRunStarted::Tmux {
+        // The typed payload must serialize to exactly the expected wire shapes.
+        let pty = serde_json::to_value(AgentRunStarted::Pty {
             agent: "a".into(),
             message: "run".into(),
             session: "adi-agent-a".into(),
         })
         .unwrap();
-        assert_eq!(tmux["backend"], "tmux");
-        assert_eq!(tmux["session"], "adi-agent-a");
-        assert!(tmux.get("pid").is_none());
+        assert_eq!(pty["backend"], "pty");
+        assert_eq!(pty["session"], "adi-agent-a");
+        assert!(pty.get("pid").is_none());
 
         let process = serde_json::to_value(AgentRunStarted::Process {
             agent: "a".into(),

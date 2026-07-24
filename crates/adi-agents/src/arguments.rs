@@ -128,11 +128,11 @@ string_enum! {
 /// [`crate::Agents::get_typed`].
 pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()> {
     match &manifest.backend {
-        Backend::TmuxClaude => manifest.typed_arguments::<TmuxClaudeArguments>().map(drop),
+        Backend::PtyClaude => manifest.typed_arguments::<PtyClaudeArguments>().map(drop),
         Backend::ProcessClaude => manifest
             .typed_arguments::<ProcessClaudeArguments>()
             .map(drop),
-        Backend::TmuxCodex => manifest.typed_arguments::<TmuxCodexArguments>().map(drop),
+        Backend::PtyCodex => manifest.typed_arguments::<PtyCodexArguments>().map(drop),
         Backend::ProcessCodex => manifest
             .typed_arguments::<ProcessCodexArguments>()
             .map(drop),
@@ -145,10 +145,10 @@ pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()
     }
 }
 
-/// Arguments accepted by the interactive `tmux:claude` backend.
+/// Arguments accepted by the interactive `pty:claude` backend.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct TmuxClaudeArguments {
+pub struct PtyClaudeArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -201,10 +201,10 @@ pub struct ProcessClaudeArguments {
     pub working_dir: Option<String>,
 }
 
-/// Arguments accepted by the interactive `tmux:codex` backend.
+/// Arguments accepted by the interactive `pty:codex` backend.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub struct TmuxCodexArguments {
+pub struct PtyCodexArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -250,7 +250,7 @@ pub struct ProcessCodexArguments {
 }
 
 /// Arguments accepted by the `harness:claude-sdk` backend: the `claude` CLI run headless by ADI's
-/// harness. It shares the Claude engine knobs with the tmux/process Claude backends, but adds a
+/// harness. It shares the Claude engine knobs with the pty/process Claude backends, but adds a
 /// harness turn cap (`max_turns`) and the adi-mono command scope (`tools`), and drops the
 /// process-only options (`output_format`, `max_budget_usd`, `add_dir`).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]

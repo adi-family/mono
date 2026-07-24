@@ -508,7 +508,7 @@ pub(crate) struct AgentsForm {
 /// [`crate::App`]).
 #[derive(Clone, Copy)]
 pub(crate) struct MetaForm {
-    /// The selected backend id (`tmux:claude`, `process:codex`, …).
+    /// The selected backend id (`pty:claude`, `process:codex`, …).
     pub(crate) backend: RwSignal<String>,
     /// The system prompt buffer — prefilled with the server's default, then editable.
     pub(crate) prompt: RwSignal<String>,
@@ -612,7 +612,7 @@ impl HookLogView {
     }
 }
 
-/// The project detail page's workspace terminal view: which workspace's tmux terminal is
+/// The project detail page's workspace terminal view: which workspace's pty terminal is
 /// being watched (`None` = closed) — keyed by (project id, workspace name) — the latest pane
 /// snapshot, and the send-bar input buffer. The shell polls a fresh peek every second while
 /// open; leaving the page closes it. The workspace twin of [`AgentsWatch`]. `Copy` so it
@@ -637,7 +637,7 @@ impl TermWatch {
     }
 
     /// Close the terminal view (stops the polling; the poll no-ops while `watched` is
-    /// `None`). The tmux session itself keeps running — closing the view never kills it.
+    /// `None`). The pty session itself keeps running — closing the view never kills it.
     pub(crate) fn close(self) {
         self.watched.set(None);
         self.peek.set(None);
@@ -726,7 +726,7 @@ impl AgentCodeEditor {
     }
 }
 
-/// The Agents page's live view: which agent's tmux pane is being watched (`None` = closed), the
+/// The Agents page's live view: which agent's pty pane is being watched (`None` = closed), the
 /// latest snapshot, and the send-bar input buffer. The shell polls a fresh peek every second
 /// while open; leaving the page closes it. `Copy` so it threads into the poll closure and
 /// handlers.
@@ -734,7 +734,7 @@ impl AgentCodeEditor {
 pub(crate) struct AgentsWatch {
     /// The watched agent's name, or `None` while the live view is closed.
     pub(crate) name: RwSignal<Option<String>>,
-    /// Whether the watched agent is interactive (tmux) — it then shows a live pane and a send bar.
+    /// Whether the watched agent is interactive (pty) — it then shows a live pane and a send bar.
     /// A headless agent shows its run history and a task composer instead.
     pub(crate) interactive: RwSignal<bool>,
     /// For a headless agent, the run whose log the view is showing (or `None` = none selected yet).
@@ -750,7 +750,7 @@ pub(crate) struct AgentsWatch {
     /// `String` signal and the poll only touches it when the log actually grew — the log follows
     /// (`tail -f`) without the whole panel re-rendering each second.
     pub(crate) log: RwSignal<String>,
-    /// Text buffer: the send bar (tmux) or the run composer's task (headless).
+    /// Text buffer: the send bar (pty) or the run composer's task (headless).
     pub(crate) input: RwSignal<String>,
     /// Text buffer for the chat reply box under a selected answerable (harness) conversation —
     /// kept apart from `input` (the new-conversation composer) so the two don't clobber each other.

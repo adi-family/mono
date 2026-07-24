@@ -73,7 +73,7 @@ Two hive services, both supervised by the per-user `family.adi.dashboards` Launc
 
 Neither has a hostname: a dashboard depends only on its own supervisor, not on the root front
 door or DNS, so adding one never needs a privileged restart. The Dashboards page in the control
-panel (<http://app.adi/dashboards>) lists both ports and links the frontend.
+panel (<http://app.adi/extended/dashboards>) lists both ports and links the frontend.
 
 Neither port is hardcoded. adi-hive reserves one per service from the ports manager and injects
 it as `$PORT`; the frontend looks the backend's port up in the same registry and hands it to

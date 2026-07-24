@@ -439,7 +439,7 @@ mod tests {
         assert!(
             backends
                 .iter()
-                .any(|b| b["id"] == "tmux:claude" && b["executor"] == "tmux")
+                .any(|b| b["id"] == "pty:claude" && b["executor"] == "pty")
         );
         assert!(
             backends
@@ -468,7 +468,7 @@ mod tests {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|id| id == "tmux:claude")
+                    .any(|id| id == "pty:claude")
         }));
         for name in [
             "effort",
@@ -484,10 +484,10 @@ mod tests {
             );
         }
         for (field, excluded_backend) in [
-            ("tools", "tmux:codex"),
+            ("tools", "pty:codex"),
             ("max_turns", "process:claude"),
-            ("fallback_model", "tmux:claude"),
-            ("skip_git_repo_check", "tmux:codex"),
+            ("fallback_model", "pty:claude"),
+            ("skip_git_repo_check", "pty:codex"),
         ] {
             let ids = fields.iter().find(|f| f["name"] == field).unwrap()["backend_ids"]
                 .as_array()
@@ -503,9 +503,9 @@ mod tests {
     }
 
     #[test]
-    fn agents_report_runnable_for_tmux_and_process_backends() {
+    fn agents_report_runnable_for_pty_and_process_backends() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
         let _ = save_agent(&store, br#"{"name":"reviewer","backend":"process:codex"}"#);
         let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
 
@@ -565,14 +565,15 @@ mod tests {
     #[test]
     fn peek_reports_not_running_for_a_sessionless_agent() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
 
         let Response { status, body } = peek_agent(&store, br#"{"name":"solver"}"#);
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["running"], false);
         assert_eq!(v["output"], "");
-        assert_eq!(v["attach"], "tmux attach -t adi-agent-solver");
+        // A pty session has no external attach command; the live view is the control panel.
+        assert_eq!(v["attach"], "");
 
         assert_eq!(peek_agent(&store, br#"{"name":"ghost"}"#).status, 404);
     }
@@ -580,7 +581,7 @@ mod tests {
     #[test]
     fn send_keys_validates_body_and_run_state() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
 
         assert_eq!(
             send_agent_keys(&store, br#"{"name":"ghost","key":"Enter"}"#).status,
@@ -598,7 +599,7 @@ mod tests {
     #[test]
     fn stop_is_idempotent_and_404s_unknown() {
         let store = temp_agents();
-        let _ = save_agent(&store, br#"{"name":"solver","backend":"tmux:claude"}"#);
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"pty:claude"}"#);
 
         let Response { status, body } = stop_agent(&store, br#"{"name":"solver"}"#);
         assert_eq!(status, 200);
@@ -1196,13 +1197,8 @@ mod tests {
         assert_eq!(status, 200, "{body}");
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["running"], false);
-        assert!(
-            v["attach"]
-                .as_str()
-                .unwrap()
-                .starts_with("tmux attach -t adi-ws-"),
-            "{body}"
-        );
+        // A pty session has no external attach command — the terminal is viewed in the panel.
+        assert_eq!(v["attach"], "", "{body}");
     }
 
     #[test]

@@ -205,7 +205,7 @@ pub fn create_project_hook(store: &Projects, body: &[u8]) -> Response {
     }
 }
 
-/// `POST /api/projects/workspaces/terminal/open` — ensure a tmux terminal session exists for
+/// `POST /api/projects/workspaces/terminal/open` — ensure a pty terminal session exists for
 /// the workspace, started in its directory (idempotent — reopening attaches the view to the
 /// live session), and reply with the first pane snapshot.
 #[must_use]
@@ -240,7 +240,7 @@ pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
 }
 
 /// `POST /api/projects/workspaces/terminal/send` — type into the workspace terminal (`text`
-/// literally, then the `key` tmux key name), replying with a fresh pane snapshot so the
+/// literally, then the `key` key name), replying with a fresh pane snapshot so the
 /// keystrokes show without waiting for the next poll.
 #[must_use]
 pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> Response {
@@ -277,8 +277,9 @@ pub fn kill_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
     ok_json(&workspace_term(id, name))
 }
 
-/// The current [`WorkspaceTerm`] snapshot for a workspace (live-session flag, pane text,
-/// attach command).
+/// The current [`WorkspaceTerm`] snapshot for a workspace (live-session flag and pane text). A pty
+/// session has no external attach command — it is viewed only in the control panel — so `attach`
+/// is always empty.
 fn workspace_term(id: &str, name: &str) -> WorkspaceTerm {
     let running = terminal::is_running(id, name);
     WorkspaceTerm {
@@ -286,7 +287,7 @@ fn workspace_term(id: &str, name: &str) -> WorkspaceTerm {
         name: name.to_string(),
         running,
         output: terminal::capture(id, name).unwrap_or_default(),
-        attach: format!("tmux attach -t {}", terminal::session_name(id, name)),
+        attach: String::new(),
     }
 }
 
@@ -406,7 +407,7 @@ impl From<&HookStoreError> for Response {
             | HookStoreError::NotRunning(_) => 409,
             HookStoreError::NotFound(_) => 404,
             HookStoreError::Launch(_)
-            | HookStoreError::Tmux(_)
+            | HookStoreError::Terminal(_)
             | HookStoreError::Registry(_)
             | HookStoreError::Io(_) => 500,
         };

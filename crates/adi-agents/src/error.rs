@@ -15,7 +15,7 @@ pub enum Error {
     Launch(String),
     NotRunning(String),
     InvalidKey(String),
-    Tmux(String),
+    Session(String),
     Process(String),
     /// A conversation reply arrived while the previous answer was still being produced — one turn
     /// runs at a time. Carries a ready-to-show message; maps to HTTP 409.
@@ -39,16 +39,16 @@ impl fmt::Display for Error {
             Self::Io(e) => write!(f, "agent store I/O error: {e}"),
             Self::NotRunnable(backend) => write!(
                 f,
-                "backend {backend:?} can't be run yet — tmux/process Claude and Codex agents, harness:claude-sdk, and wasm agents launch today"
+                "backend {backend:?} can't be run yet — process/pty Claude and Codex agents, harness:claude-sdk, and wasm agents launch today"
             ),
             Self::AlreadyRunning(name) => write!(f, "agent {name} is already running"),
             Self::Launch(msg) => write!(f, "failed to launch agent: {msg}"),
             Self::NotRunning(name) => write!(f, "agent {name} isn't running"),
             Self::InvalidKey(key) => write!(
                 f,
-                "invalid key name {key:?}: use a single tmux key token like Enter, Escape, Up, or C-c"
+                "invalid key name {key:?}: use a single key token like Enter, Escape, Up, or C-c"
             ),
-            Self::Tmux(msg) => write!(f, "tmux error: {msg}"),
+            Self::Session(msg) => write!(f, "session error: {msg}"),
             Self::Process(msg) => write!(f, "process error: {msg}"),
             // Both carry a ready-to-show sentence, so no prefix is added.
             Self::Busy(msg) | Self::Unsupported(msg) => write!(f, "{msg}"),
@@ -70,7 +70,7 @@ impl std::error::Error for Error {
             | Self::Launch(_)
             | Self::NotRunning(_)
             | Self::InvalidKey(_)
-            | Self::Tmux(_)
+            | Self::Session(_)
             | Self::Process(_)
             | Self::Busy(_)
             | Self::Unsupported(_) => None,

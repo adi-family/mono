@@ -24,9 +24,9 @@ mod tree;
 mod ui;
 
 use adi_webapp_api::types::{
-    AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState, PortsState,
-    ProjectDetail, ProjectsState, SecretsState, TasksState, ToolsState, TriggersState, UsedPorts,
-    WorkspacesState,
+    AgentDto, AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState, PortsState,
+    ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState, ToolsState, TriggersState,
+    UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
 use leptos::prelude::*;
@@ -54,12 +54,307 @@ use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 fn main() {
     console_error_panic_hook::set_once();
     apply_saved_theme();
-    // A dashboard's "edit with adi-agent" launcher opens `/embed/dashboard-agent` — a chrome-less
-    // page (no workbench shell) that hosts the global agent chat. Everything else is the full App.
-    if current_path().starts_with("/embed/dashboard-agent") {
+    let path = current_path();
+    // Three doors into the one wasm bundle:
+    //   * `/embed/dashboard-agent` — a chrome-less page (no workbench shell) hosting the global
+    //     agent chat, opened from a dashboard's "edit with adi-agent" launcher.
+    //   * `/extended/…` — the full control panel (the App shell + every workbench route).
+    //   * anything else (notably the bare `/`) — the minimal launcher that just points at it.
+    if path.starts_with("/embed/dashboard-agent") {
         mount_to_body(EmbedDashboardAgent);
-    } else {
+    } else if path == "/extended" || path.starts_with("/extended/") {
         mount_to_body(App);
+    } else {
+        mount_to_body(Home);
+    }
+}
+
+/// The onboarding steps, in order. Only step 1 is interactive today; the rest scaffold the
+/// wizard so "step 1 of N" reads true and there is somewhere to grow into.
+const ONBOARDING_STEPS: [&str; 3] = ["Set up your adi agent", "Create a project", "You're ready"];
+
+/// The root (`/`): a guided onboarding wizard behind a slim `adi. · extended →` bar. Step 1
+/// sets up the default `adi-agent` — the same `/api/meta` + `/api/agents/save` flow the
+/// Extended "Meta" page uses — seeded with the server's default backend and system prompt.
+#[component]
+fn Home() -> impl IntoView {
+    let meta = RwSignal::new(None::<MetaState>);
+    let backend = RwSignal::new(String::new());
+    let prompt = RwSignal::new(String::new());
+    let busy = RwSignal::new(false);
+    let error = RwSignal::new(None::<String>);
+    // True while editing an agent that already exists, so step 1 shows the form again rather
+    // than its done summary.
+    let reconfiguring = RwSignal::new(false);
+
+    // Load the meta state once, seeding the form from the server's default prompt and first
+    // backend when the agent hasn't been created yet.
+    spawn_local(async move {
+        if let Ok(m) = fetch::meta().await {
+            if m.agent.is_none() {
+                if prompt.get_untracked().is_empty() {
+                    prompt.set(m.default_prompt.clone());
+                }
+                if backend.get_untracked().is_empty()
+                    && let Some(first) = m.form.backends.first()
+                {
+                    backend.set(first.id.clone());
+                }
+            }
+            meta.set(Some(m));
+        }
+    });
+
+    view! {
+        <div class="adi-onb">
+            <header class="adi-onb__bar">
+                <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
+                <span class="adi-spacer"></span>
+                <a class="adi-onb__ext" href="/extended">
+                    <span>"extended"</span>
+                    <span class="adi-onb__ext-arrow">"\u{2192}"</span>
+                </a>
+            </header>
+
+            <main class="adi-onb__body">
+                <div class="adi-onb__panel">
+                    <div class="adi-onb__intro">
+                        <h1 class="adi-onb__welcome">"Welcome to adi"</h1>
+                        <p class="adi-onb__sub">"A few steps and your environment is ready."</p>
+                    </div>
+
+                    <ol class="adi-onb__steps">{onb_steps(meta, reconfiguring)}</ol>
+
+                    {move || match meta.get() {
+                        None => view! {
+                            <div class="adi-onb__card">
+                                <div class="adi-onb__loading">"Loading…"</div>
+                            </div>
+                        }
+                        .into_any(),
+                        Some(m) => match (m.agent.clone(), reconfiguring.get()) {
+                            (Some(agent), false) => onb_done(backend, prompt, reconfiguring, agent),
+                            _ => onb_setup_form(meta, backend, prompt, busy, error, reconfiguring, m),
+                        },
+                    }}
+                </div>
+            </main>
+        </div>
+    }
+}
+
+/// The stepper row: one node per onboarding step. Step 1 is `done` once `adi-agent` exists
+/// (and we aren't mid-reconfigure), otherwise `active`; later steps are `upcoming`.
+fn onb_steps(meta: RwSignal<Option<MetaState>>, reconfiguring: RwSignal<bool>) -> impl IntoView {
+    let done_first =
+        move || meta.get().is_some_and(|m| m.agent.is_some()) && !reconfiguring.get();
+    ONBOARDING_STEPS
+        .iter()
+        .enumerate()
+        .map(|(i, label)| {
+            let label = (*label).to_string();
+            let num = (i + 1).to_string();
+            let is_first = i == 0;
+            let state = move || {
+                if is_first {
+                    if done_first() { "done" } else { "active" }
+                } else {
+                    "upcoming"
+                }
+            };
+            let num_view = move || {
+                if is_first && done_first() {
+                    "\u{2713}".to_string()
+                } else {
+                    num.clone()
+                }
+            };
+            view! {
+                <li class="adi-onb__step" data-state=state>
+                    <span class="adi-onb__step-num">{num_view}</span>
+                    <span class="adi-onb__step-label">{label}</span>
+                </li>
+            }
+        })
+        .collect::<Vec<_>>()
+}
+
+/// Step 1's setup form — backend picker + prefilled system prompt. Doubles as create (no agent
+/// yet) and reconfigure (an agent exists and Cancel returns to the summary).
+fn onb_setup_form(
+    meta: RwSignal<Option<MetaState>>,
+    backend: RwSignal<String>,
+    prompt: RwSignal<String>,
+    busy: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+    reconfiguring: RwSignal<bool>,
+    m: MetaState,
+) -> AnyView {
+    let creating = m.agent.is_none();
+    let backends = m.form.backends.clone();
+    view! {
+        <div class="adi-onb__card">
+            <span class="adi-onb__eyebrow">"Step 1"</span>
+            <h2 class="adi-onb__title">"Set up your adi agent"</h2>
+            <p class="adi-onb__desc">
+                <strong>"adi-agent"</strong>
+                " is your environment's default agent — a meta-agent that helps you set up and
+                 operate this ADI stack. Pick a backend and give it a system prompt; you can
+                 change all of it later."
+            </p>
+            <form class="adi-onb__form" on:submit=move |ev| {
+                ev.prevent_default();
+                submit_onb_agent(meta, backend, prompt, busy, error, reconfiguring);
+            }>
+                <div class="adi-field">
+                    <label class="adi-field__label" for="onb-backend">"Backend"</label>
+                    <select class="adi-input" id="onb-backend"
+                        prop:value=move || backend.get()
+                        on:change=move |ev| backend.set(event_target_value(&ev))>
+                        <option value="">"— pick a backend —"</option>
+                        {backends.into_iter().map(|b| view! {
+                            <option value=b.id>{b.label}</option>
+                        }).collect::<Vec<_>>()}
+                    </select>
+                </div>
+                <div class="adi-field">
+                    <label class="adi-field__label" for="onb-prompt">"System prompt"</label>
+                    <textarea class="adi-textarea adi-mono" id="onb-prompt" rows="12"
+                        placeholder="How this agent should operate your ADI environment…"
+                        prop:value=move || prompt.get()
+                        on:input=move |ev| prompt.set(event_target_value(&ev))></textarea>
+                </div>
+
+                {move || error.get().map(|e| view! { <p class="adi-onb__error">{e}</p> })}
+
+                <div class="adi-onb__actions">
+                    {(!creating).then(|| view! {
+                        <button class="adi-btn adi-btn--link" type="button"
+                            on:click=move |_| reconfiguring.set(false)>"Cancel"</button>
+                    })}
+                    <span class="adi-spacer"></span>
+                    <button class="adi-btn adi-btn--primary adi-onb__submit" type="submit"
+                        prop:disabled=move || busy.get()>
+                        {move || match (busy.get(), creating) {
+                            (true, _) => "Saving…",
+                            (false, true) => "Create adi-agent",
+                            (false, false) => "Save changes",
+                        }}
+                    </button>
+                </div>
+            </form>
+        </div>
+    }
+    .into_any()
+}
+
+/// Step 1's done summary once `adi-agent` exists: what it runs on, plus Reconfigure and the way
+/// on to Extended.
+fn onb_done(
+    backend: RwSignal<String>,
+    prompt: RwSignal<String>,
+    reconfiguring: RwSignal<bool>,
+    agent: AgentDto,
+) -> AnyView {
+    let name = agent.name.clone();
+    let backend_label = agent.backend.clone();
+    let running = agent.running;
+    let recon_backend = agent.backend.clone();
+    let recon_prompt = arg_text(&agent.arguments, "system_prompt");
+    view! {
+        <div class="adi-onb__card">
+            <span class="adi-onb__eyebrow adi-onb__eyebrow--ok">"Step 1 · Done"</span>
+            <h2 class="adi-onb__title">
+                <span class="adi-onb__check" aria-hidden="true">"\u{2713}"</span>
+                <span>"Your adi agent is ready"</span>
+            </h2>
+            <p class="adi-onb__desc">
+                <strong>{name}</strong>" runs on the "
+                <code class="adi-onb__code">{backend_label}</code>
+                {if running { " backend, and it's running now." } else { " backend." }}
+            </p>
+            <div class="adi-onb__actions">
+                <button class="adi-btn adi-btn--link" type="button"
+                    on:click=move |_| {
+                        backend.set(recon_backend.clone());
+                        prompt.set(recon_prompt.clone());
+                        reconfiguring.set(true);
+                    }>"Reconfigure"</button>
+                <span class="adi-spacer"></span>
+                <a class="adi-btn adi-btn--primary adi-onb__submit" href="/extended">
+                    "Enter Extended \u{2192}"
+                </a>
+            </div>
+            <p class="adi-onb__more">
+                "That's step 1. More onboarding steps are on the way — you're ready to explore in
+                 the meantime."
+            </p>
+        </div>
+    }
+    .into_any()
+}
+
+/// Save the setup form as the `adi-agent` definition (create or update), preserving any other
+/// arguments (model, tools, …) the agent already carries. Refreshes `/api/meta` on success.
+fn submit_onb_agent(
+    meta: RwSignal<Option<MetaState>>,
+    backend: RwSignal<String>,
+    prompt: RwSignal<String>,
+    busy: RwSignal<bool>,
+    error: RwSignal<Option<String>>,
+    reconfiguring: RwSignal<bool>,
+) {
+    let chosen = backend.get_untracked().trim().to_string();
+    if chosen.is_empty() {
+        error.set(Some("Pick a backend for the agent.".to_string()));
+        return;
+    }
+    let text = prompt.get_untracked();
+    let current = meta.get_untracked();
+    let name = current
+        .as_ref()
+        .map_or_else(|| "adi-agent".to_string(), |m| m.name.clone());
+    let mut arguments = current
+        .and_then(|m| m.agent)
+        .map(|a| a.arguments)
+        .unwrap_or_default();
+    if text.trim().is_empty() {
+        arguments.remove("system_prompt");
+    } else {
+        arguments.insert("system_prompt".to_string(), serde_json::Value::String(text));
+    }
+    let body = SaveAgent {
+        name,
+        backend: chosen,
+        arguments,
+        tags: Vec::new(),
+        starred: false,
+        project: None,
+        bin_tools: Vec::new(),
+        secrets: Vec::new(),
+        rename_from: None,
+    };
+    busy.set(true);
+    error.set(None);
+    spawn_local(async move {
+        match fetch::save_agent(body).await {
+            Ok(_) => {
+                reconfiguring.set(false);
+                if let Ok(m) = fetch::meta().await {
+                    meta.set(Some(m));
+                }
+            }
+            Err(e) => error.set(Some(e)),
+        }
+        busy.set(false);
+    });
+}
+
+/// A scalar string argument as text, or empty when absent/structured.
+fn arg_text(arguments: &BTreeMap<String, serde_json::Value>, name: &str) -> String {
+    match arguments.get(name) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        _ => String::new(),
     }
 }
 
@@ -82,14 +377,14 @@ fn EmbedDashboardAgent() -> impl IntoView {
         ));
     }
 
-    // Learn whether adi-agent is interactive (tmux) vs headless, point the live view at it, and poll.
+    // Learn whether adi-agent is interactive (pty) vs headless, point the live view at it, and poll.
     spawn_local(async move {
         if let Ok(a) = fetch::agents().await {
             let interactive = a
                 .agents
                 .iter()
                 .find(|d| d.name == "adi-agent")
-                .is_some_and(|d| d.executor == "tmux");
+                .is_some_and(|d| d.executor == "pty");
             watch.interactive.set(interactive);
             state.agents.set(Some(a));
         }
@@ -390,7 +685,7 @@ fn App() -> impl IntoView {
             triggers_log.close();
         }
         // The hook-log and workspace-terminal views only render on a project's detail page.
-        // Closing the terminal view never kills the tmux session — it just stops the poll.
+        // Closing the terminal view never kills the pty session — it just stops the poll.
         if !matches!(route.get(), Route::ProjectDetail) {
             hook_log.close();
             term_watch.close();

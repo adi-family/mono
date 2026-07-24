@@ -551,7 +551,7 @@ pub struct AgentFormSpec {
 }
 
 /// One selectable agent backend in the form: an `executor:what` pair, where the executor is the
-/// run mechanism (`tmux` / `process` / `harness` / `wasm`) and the suffix is what it runs.
+/// run mechanism (`pty` / `process` / `harness` / `wasm`) and the suffix is what it runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentBackendOption {
     pub id: String,
@@ -653,7 +653,7 @@ pub struct AgentDto {
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
     #[serde(default)]
     pub runnable: bool,
-    /// Whether this agent has a live tmux session or detached process right now.
+    /// Whether this agent has a live pty session or detached process right now.
     #[serde(default)]
     pub running: bool,
 }
@@ -707,7 +707,7 @@ pub struct AgentRef {
 /// `POST /api/agents/run` request: the agent to launch and its initial task. The agent is only a
 /// template — each launch is an independent run from those settings, never a continuation. Headless
 /// backends (`process` / `harness`) run one `--print` turn with `message` as the prompt (required
-/// there — see the handler); interactive (tmux) backends ignore it and type into the session.
+/// there — see the handler); interactive (pty) backends ignore it and type into the session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunAgent {
     pub name: String,
@@ -826,7 +826,7 @@ pub struct AgentRunInfo {
 }
 
 /// `POST /api/agents/runs` — a headless agent's run history, newest first. `interactive` is true for
-/// tmux backends, which keep no run history (their live session is the run) and so return `runs: []`.
+/// pty backends, which keep no run history (their live session is the run) and so return `runs: []`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRuns {
     pub name: String,
@@ -875,8 +875,8 @@ pub struct AgentRunResult {
     pub state: AgentsState,
 }
 
-/// Request body for `POST /api/agents/send-keys` — type into a running agent's tmux session:
-/// `text` is sent literally, then `key` (a tmux key name: `Enter`, `Escape`, `Up`, `C-c`, …)
+/// Request body for `POST /api/agents/send-keys` — type into a running agent's pty session:
+/// `text` is sent literally, then `key` (a key name: `Enter`, `Escape`, `Up`, `C-c`, …)
 /// is pressed. At least one of the two must be non-empty. Replies with a fresh [`AgentPeek`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentKeys {
@@ -916,21 +916,21 @@ pub struct AgentBuildResult {
     pub state: AgentsState,
 }
 
-/// `POST /api/agents/peek` — a read-only snapshot of a running agent's tmux pane (the text
-/// `tmux attach` would show), polled by the Agents page's live view.
+/// `POST /api/agents/peek` — a read-only snapshot of a running agent's pty screen (the text the
+/// live view shows), polled by the Agents page's live view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentPeek {
     pub name: String,
-    /// Whether the agent's tmux session is live; `output` is empty when it isn't.
+    /// Whether the agent's pty session is live; `output` is empty when it isn't.
     pub running: bool,
     /// The visible pane text (trailing whitespace trimmed).
     #[serde(default)]
     pub output: String,
-    /// The command a human runs to follow the run: `tmux attach -t adi-agent-<name>` for an
-    /// interactive session, or `tail -f <log>` for a headless detached run.
+    /// The command a human runs to follow the run: empty for an interactive pty session (viewed
+    /// in the control panel, no external attach), or `tail -f <log>` for a headless detached run.
     #[serde(default)]
     pub attach: String,
-    /// Whether this is an interactive (tmux) session — only then can the live view type into it.
+    /// Whether this is an interactive (pty) session — only then can the live view type into it.
     /// Headless `process` / `harness` runs are log-only, and their `output` persists after they end.
     #[serde(default)]
     pub interactive: bool,
@@ -1482,7 +1482,7 @@ pub struct WorkspaceTermRef {
 }
 
 /// Request body for `POST /api/projects/workspaces/terminal/send` — type `text` literally
-/// into the terminal, then press `key` (a tmux key name). Either part may be empty.
+/// into the terminal, then press `key` (a key name). Either part may be empty.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceTermKeys {
     pub id: String,
@@ -1493,18 +1493,19 @@ pub struct WorkspaceTermKeys {
     pub key: String,
 }
 
-/// A workspace terminal snapshot: whether its tmux session is live, the visible pane text,
-/// and the takeover command — the workspace twin of `AgentPeek`, polled by the live view.
+/// A workspace terminal snapshot: whether its pty session is live and the visible pane text —
+/// the workspace twin of `AgentPeek`, polled by the live view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceTerm {
     pub id: String,
     pub name: String,
-    /// Whether the terminal's tmux session is live; `output` is empty when it isn't.
+    /// Whether the terminal's pty session is live; `output` is empty when it isn't.
     pub running: bool,
     /// The visible pane text (trailing whitespace trimmed).
     #[serde(default)]
     pub output: String,
-    /// The command a human runs to take the session over: `tmux attach -t adi-ws-…`.
+    /// A pty session has no external attach command — it is viewed only in the control panel —
+    /// so this is always empty. Kept for wire compatibility.
     #[serde(default)]
     pub attach: String,
 }

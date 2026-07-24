@@ -173,7 +173,7 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
             // by definition; a creating/failed workspace has nothing to open a shell in.
             let can_term = matches!(w.status.as_str(), "ready" | "local");
             let terminal = can_term.then(|| view! {
-                <button class="adi-btn adi-btn--link" title="open a tmux terminal in this directory"
+                <button class="adi-btn adi-btn--link" title="open a terminal in this directory"
                     on:click=move |_| open_terminal(state, term, term_name.clone())>"⌨ Terminal"</button>
             });
             let unregister = menu_item(state, "Unregister", true, move || {
@@ -569,7 +569,7 @@ pub(crate) fn hook_editor_view(state: State, editor: HookEditor) -> Option<AnyVi
     .into()
 }
 
-/// Open the terminal view on a workspace (the ⌨ Terminal action): ensure the tmux session
+/// Open the terminal view on a workspace (the ⌨ Terminal action): ensure the pty session
 /// exists (started in the workspace directory), show the panel with the first snapshot, and
 /// scroll up to where it renders. Reopening an open terminal just reattaches the view.
 fn open_terminal(state: State, term: TermWatch, name: String) {
@@ -618,7 +618,7 @@ pub(crate) fn poll_term(term: TermWatch) {
     });
 }
 
-/// The terminal panel: a 1s-refreshed capture of the workspace's tmux pane, with a send bar
+/// The terminal panel: a 1s-refreshed capture of the workspace's pty pane, with a send bar
 /// to type into the session. Renders nothing while no terminal is being watched. Close only
 /// hides the view (the session lives on); Kill ends the session itself.
 pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
@@ -644,7 +644,7 @@ pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
                         <code class="adi-mono adi-muted" style="font-size:var(--text-sm)">{attach}</code>
                     })}
                     {running.then(|| view! {
-                        <button class="adi-btn adi-btn--link" title="kill the tmux session"
+                        <button class="adi-btn adi-btn--link" title="kill the session"
                             on:click=move |_| kill_terminal(state, term)>"Kill"</button>
                     })}
                     <button class="adi-btn adi-btn--link" title="hide the view — the session keeps running"
@@ -685,7 +685,7 @@ fn term_send_bar(state: State, term: TermWatch) -> impl IntoView {
     }
 }
 
-/// One special-key button in the terminal send bar, pressing a single tmux key.
+/// One special-key button in the terminal send bar, pressing a single key.
 fn term_quick_key(
     state: State,
     term: TermWatch,
@@ -726,7 +726,7 @@ fn send_to_terminal(state: State, term: TermWatch, text: String, key: &'static s
     });
 }
 
-/// Kill the watched terminal's tmux session (the Kill action). The view stays open showing
+/// Kill the watched terminal's pty session (the Kill action). The view stays open showing
 /// the not-running snapshot, so the kill is visibly confirmed.
 fn kill_terminal(state: State, term: TermWatch) {
     let Some((id, name)) = term.watched.get_untracked() else {

@@ -7,7 +7,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::routing::{Route, open_project, push_state};
+use crate::routing::{Route, open_project, project_href, push_state};
 use crate::state::{Flash, State};
 use crate::ui::{dash, data_table, fmt_ports, placeholder_row};
 
@@ -88,7 +88,7 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
                 (_, Some(id)) => {
                     let short = id.split('-').next().unwrap_or(id).to_string();
                     view! {
-                        <a class="adi-btn adi-btn--link adi-mono" href="/dashboards"
+                        <a class="adi-btn adi-btn--link adi-mono" href=Route::Dashboards.path()
                             title=format!("dashboard {id}")
                             on:click=move |ev: web_sys::MouseEvent| {
                                 if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
@@ -101,7 +101,7 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
                 (None, None) => view! { <span class="adi-chip">"front-door"</span> }.into_any(),
                 (Some(id), None) => {
                     let open_id = id.clone();
-                    let href = format!("/projects/{id}");
+                    let href = project_href(id);
                     view! {
                         <a class="adi-btn adi-btn--link adi-mono" href=href
                             on:click=move |ev: web_sys::MouseEvent| {

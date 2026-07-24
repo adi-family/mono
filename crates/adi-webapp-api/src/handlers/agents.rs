@@ -32,7 +32,7 @@ pub fn agents(store: &Agents) -> Response {
 }
 
 /// The full [`AgentsState`]: the stored definitions decorated with live run state, plus the form
-/// schema. Tmux sessions are listed once; process agents consult their recorded PID. Shared with
+/// schema. Pty sessions are listed once; process agents consult their recorded PID. Shared with
 /// the meta-handler, which reuses it to find the well-known `adi-agent` and reads back the schema.
 pub(crate) fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
     let sessions = adi_agents::running_sessions();
@@ -46,7 +46,7 @@ pub(crate) fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreErro
     })
 }
 
-/// `POST /api/agents/run` — launch an agent in its backend. Tmux engines start an interactive
+/// `POST /api/agents/run` — launch an agent in its backend. Pty engines start an interactive
 /// session you type into, so the `message` is optional there. Headless engines (`process` /
 /// `harness`) get one shot: they run a single `--print` turn on `message` as the prompt and exit,
 /// so a task is **required** — launching one with no message would just have it act on a placeholder
@@ -62,7 +62,7 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
     };
-    let interactive = agent.manifest.executor() == "tmux";
+    let interactive = agent.manifest.executor() == "pty";
     if !interactive && message.is_empty() {
         return error(
             400,
@@ -79,8 +79,8 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
         Err(e) => return Response::from(&e),
     };
     let (message, run_id) = match launch {
-        adi_agents::Launch::Tmux { session, .. } => (
-            format!("Started “{name}” — attach: tmux attach -t {session}"),
+        adi_agents::Launch::Pty { session, .. } => (
+            format!("Started “{name}” in session {session} — watch it in the live view."),
             String::new(),
         ),
         adi_agents::Launch::Process {
@@ -104,7 +104,7 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
 }
 
 /// `POST /api/agents/runs` — a headless agent's run history, newest first (each Run is an independent
-/// run of the agent's settings). Interactive (tmux) agents keep no history and answer `runs: []`.
+/// run of the agent's settings). Interactive (pty) agents keep no history and answer `runs: []`.
 #[must_use]
 pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_ref(body) else {
@@ -116,7 +116,7 @@ pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
     }
 }
 
-/// `POST /api/agents/run/peek` — a read-only snapshot of one specific run's log (or the tmux pane
+/// `POST /api/agents/run/peek` — a read-only snapshot of one specific run's log (or the pty screen
 /// for an interactive backend). A run that has produced nothing answers with empty output, not 404.
 /// For a harness backend the run is an answerable conversation, so the snapshot also carries its
 /// turn-by-turn transcript (`turns`) and `answerable: true`.
@@ -133,7 +133,7 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     let peek = store.peek_run(&agent, run_id);
     let caps = agent_caps(&agent);
     // Any backend that produces turns (conversations, or one-shot runs synthesized as one answered
-    // turn) feeds the same progress view; the transcript is empty for the rest (e.g. tmux).
+    // turn) feeds the same progress view; the transcript is empty for the rest (e.g. pty).
     let turns = store
         .transcript(&agent, run_id)
         .into_iter()
@@ -373,7 +373,7 @@ pub fn delete_agent(store: &Agents, body: &[u8]) -> Response {
     }
 }
 
-/// `POST /api/agents/peek` — a read-only snapshot of a running agent's tmux pane, for the live
+/// `POST /api/agents/peek` — a read-only snapshot of a running agent's pty screen, for the live
 /// view. A registered agent without a live session answers `running: false` (200, not an error);
 /// only an unknown name is a 404.
 #[must_use]
@@ -387,9 +387,9 @@ pub fn peek_agent(store: &Agents, body: &[u8]) -> Response {
     }
 }
 
-/// `POST /api/agents/send-keys` — type into a running agent's tmux session (the interactive
+/// `POST /api/agents/send-keys` — type into a running agent's pty session (the interactive
 /// half of the live view): `text` is sent literally, then `key` is pressed. Replies with a
-/// fresh pane snapshot after a short settle delay, so the sender sees the effect immediately.
+/// fresh screen snapshot after a short settle delay, so the sender sees the effect immediately.
 #[must_use]
 pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_agent_keys(body) else {
@@ -407,7 +407,7 @@ pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
     peek_response(store, &agent)
 }
 
-/// `POST /api/agents/stop` — stop a live tmux session or detached process, then report the fresh
+/// `POST /api/agents/stop` — stop a live pty session or detached process, then report the fresh
 /// list. Idempotent for an already-stopped agent; only an unknown definition is a 404.
 #[must_use]
 pub fn stop_agent(store: &Agents, body: &[u8]) -> Response {
@@ -651,7 +651,7 @@ fn get_agent(store: &Agents, name: &str) -> Result<StoredAgent, AgentStoreError>
         .ok_or_else(|| AgentStoreError::NotFound(name.to_string()))
 }
 
-/// The [`AgentPeek`] answer for an agent: a tmux pane capture for interactive backends, or the tail
+/// The [`AgentPeek`] answer for an agent: a pty screen capture for interactive backends, or the tail
 /// of the detached run's log for the headless backends (which persists after the run ends). A
 /// registered agent with nothing to show answers `running: false` with empty output, not an error.
 fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
@@ -679,7 +679,7 @@ fn agent_dto(
 ) -> AgentDto {
     let executor = agent.manifest.executor().to_string();
     let runnable = adi_agents::is_runnable(&agent.manifest);
-    let running = if executor == "tmux" {
+    let running = if executor == "pty" {
         sessions.contains(&adi_agents::session_name(&agent.name))
     } else {
         store.is_running(&agent)
@@ -732,10 +732,10 @@ const ADI_HARNESS: &str = "harness:adi";
 const WASM_LOOP: &str = "wasm:loop-script";
 
 /// The backends whose engine is the Claude CLI/SDK, whatever the executor.
-const CLAUDE_BACKENDS: &[&str] = &["tmux:claude", "process:claude", "harness:claude-sdk"];
+const CLAUDE_BACKENDS: &[&str] = &["pty:claude", "process:claude", "harness:claude-sdk"];
 
 /// The backends whose engine is the Codex CLI.
-const CODEX_BACKENDS: &[&str] = &["tmux:codex", "process:codex"];
+const CODEX_BACKENDS: &[&str] = &["pty:codex", "process:codex"];
 
 /// The built-in Claude Code tools offered as one-tap toggles on the allow/deny tool pickers.
 /// These are the bare tool names; a scoped specifier (e.g. `Bash(git *)`) is still typed by hand
@@ -768,7 +768,7 @@ const ADI_MODELS: &[&str] = &["kimi-k2.6", "gemini-2.5-pro"];
 
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
 /// both the selectable backends and the field shape the client renders. Backends are
-/// `executor:what` pairs — the executor (`tmux` / `process` / `harness` / `wasm`) is the run
+/// `executor:what` pairs — the executor (`pty` / `process` / `harness` / `wasm`) is the run
 /// mechanism, the suffix is what it runs.
 #[allow(clippy::too_many_lines)]
 fn agent_form_spec() -> AgentFormSpec {
@@ -986,12 +986,12 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(chk_field("web_search", "Web search", CODEX_BACKENDS));
     fields.push(chk_field("json_events", "JSONL events", &["process:codex"]));
 
-    // ---- tmux/process shared (a vendor CLI runs either way) ----
+    // ---- pty/process shared (a vendor CLI runs either way) ----
     let mut add_dir = field_executors(
         "add_dir",
         "Add dir",
         AgentFormFieldKind::Text,
-        &["tmux", "process"],
+        &["pty", "process"],
     );
     add_dir.placeholder = "/extra/writable/dir".into();
     add_dir.hint = "additional writable directory".into();
@@ -1220,16 +1220,16 @@ fn agent_form_spec() -> AgentFormSpec {
     AgentFormSpec {
         backends: vec![
             agent_backend(
-                "tmux:claude",
-                "tmux · Claude CLI",
-                "tmux",
+                "pty:claude",
+                "pty · Claude CLI",
+                "pty",
                 "opus / sonnet / fable / haiku",
                 CLAUDE_CLI_MODELS,
             ),
             agent_backend(
-                "tmux:codex",
-                "tmux · Codex CLI",
-                "tmux",
+                "pty:codex",
+                "pty · Codex CLI",
+                "pty",
                 "gpt-5-codex",
                 CODEX_MODELS,
             ),
@@ -1318,14 +1318,14 @@ fn strings(values: &[&str]) -> Vec<String> {
     values.iter().map(|v| (*v).to_string()).collect()
 }
 
-/// A field visible only for specific backend ids (e.g. `tmux:claude`).
+/// A field visible only for specific backend ids (e.g. `pty:claude`).
 fn field_ids(name: &str, label: &str, kind: AgentFormFieldKind, ids: &[&str]) -> AgentFormField {
     let mut f = agent_field(name, label, kind);
     f.backend_ids = strings(ids);
     f
 }
 
-/// A field visible for whole executors (`tmux` / `process` / `harness`).
+/// A field visible for whole executors (`pty` / `process` / `harness`).
 fn field_executors(
     name: &str,
     label: &str,
@@ -1428,7 +1428,7 @@ impl From<&AgentStoreError> for Response {
             AgentStoreError::Config(_)
             | AgentStoreError::Io(_)
             | AgentStoreError::Launch(_)
-            | AgentStoreError::Tmux(_)
+            | AgentStoreError::Session(_)
             | AgentStoreError::Process(_) => 500,
         };
         error(status, &e.to_string())

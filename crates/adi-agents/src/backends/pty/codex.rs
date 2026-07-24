@@ -1,10 +1,10 @@
-//! `tmux:codex` command construction.
+//! `pty:codex` command construction.
 
-use crate::arguments::{CodexApproval, CodexSandbox, TmuxCodexArguments};
+use crate::arguments::{CodexApproval, CodexSandbox, PtyCodexArguments};
 use crate::backends::push_option;
 
-/// Build the Codex CLI command run by the shared tmux executor.
-pub(super) fn argv(config: &TmuxCodexArguments) -> Vec<String> {
+/// Build the Codex CLI command run by the shared pty executor.
+pub(super) fn argv(config: &PtyCodexArguments) -> Vec<String> {
     let mut argv = vec!["codex".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -48,8 +48,8 @@ mod tests {
     #[test]
     fn argv_honors_model_and_sandbox() {
         let manifest = AgentManifest {
-            backend: "tmux:codex".into(),
-            arguments: TmuxCodexArguments {
+            backend: "pty:codex".into(),
+            arguments: PtyCodexArguments {
                 model: Some("gpt-5-codex".into()),
                 sandbox: Some(CodexSandbox::WorkspaceWrite),
                 approval: Some(CodexApproval::Never),

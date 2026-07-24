@@ -31,11 +31,11 @@ pub enum Error {
     NotADir(PathBuf),
     /// Spawning the hook's shell failed (shell missing, log unwritable, …).
     Launch(String),
-    /// A tmux invocation failed (binary missing, server error, …).
-    Tmux(String),
+    /// A workspace terminal (pty) operation failed (couldn't start the shell, write failed, …).
+    Terminal(String),
     /// The workspace has no live terminal session to talk to.
     NotRunning(String),
-    /// A send-keys key name isn't a single tmux key token.
+    /// A send-keys key name isn't a single key token.
     InvalidKey(String),
     /// The workspaces registry (`.adi/workspaces.toml`) failed to parse or serialize.
     Registry(String),
@@ -63,13 +63,13 @@ impl fmt::Display for Error {
             Self::NotAbsolute(p) => write!(f, "workspace path must be absolute: {}", p.display()),
             Self::NotADir(p) => write!(f, "not an existing directory: {}", p.display()),
             Self::Launch(msg) => write!(f, "failed to run hook: {msg}"),
-            Self::Tmux(msg) => write!(f, "tmux error: {msg}"),
+            Self::Terminal(msg) => write!(f, "terminal error: {msg}"),
             Self::NotRunning(name) => {
                 write!(f, "workspace {name} has no live terminal session")
             }
             Self::InvalidKey(key) => write!(
                 f,
-                "invalid key {key:?}: use a single tmux key name like Enter, Escape, Up, or C-c"
+                "invalid key {key:?}: use a single key name like Enter, Escape, Up, or C-c"
             ),
             Self::Registry(msg) => write!(f, "workspaces registry error: {msg}"),
             Self::Io(e) => write!(f, "hooks I/O error: {e}"),
