@@ -642,41 +642,39 @@ $runlog-dim: #8b93a1;
 }
 
 // ---- progress feed (tool calls + thinking) ------------------------------------------
-// The whole activity of a turn is collapsed by default under one disclosure below the answer, so the
-// message reads clean. Expanding it lists each step (newest first) as its own row; each step is
-// itself a <details> that expands its args/output.
+// A turn's activity sits directly below its message as a plain stack of rows — nothing hidden
+// behind a disclosure, so the feed reads straight down as message → tool calls → message → tool
+// calls. Rows are newest-first (the last step to run is nearest its message), and each step is
+// itself a <details> that expands its args/output in place.
 .adi-chat__steps {
   align-self: stretch;
   max-width: 100%;
-}
-
-.adi-chat__steps-head {
   display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 4px;
-  cursor: pointer;
-  list-style: none;
-  font-size: var(--text-xs);
-  color: $runlog-dim;
-
-  &::-webkit-details-marker { display: none; }
-  &::marker { content: ""; }
+  flex-direction: column;
+  gap: 4px;
+  // A hairline rail on the left ties the run of tool calls back to the message above them.
+  padding-left: 10px;
+  border-left: 2px solid rgba(255, 255, 255, .08);
 }
 
-.adi-chat__steps[open] .adi-chat__steps-head { margin-bottom: 4px; }
-.adi-chat__steps-icon { opacity: .8; }
-
-// A step rendered as its own row inside the disclosure: full-width and frameless, so the step's own
-// `.adi-step` border carries it. A small gap separates consecutive steps.
+// A step rendered as its own row: full-width and frameless, so the step's own `.adi-step` border
+// carries it.
 .adi-chat__turn--step {
   max-width: 100%;
   align-self: stretch;
   padding: 0;
   border: 0;
   background: transparent;
+}
 
-  & + & { margin-top: 4px; }
+// Something the agent said *during* the turn, between tool calls. A real message bubble — it is
+// prose, not activity — but softened so the turn's final answer still leads the eye.
+.adi-chat__turn--mid {
+  background: transparent;
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, .10);
+
+  .adi-md { color: $runlog-dim; }
 }
 
 .adi-step {

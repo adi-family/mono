@@ -7,9 +7,15 @@
 //! - `result` — the terminal event: authoritative final `result` text plus metrics (`usage`,
 //!   `total_cost_usd`, `duration_ms`, `num_turns`, `permission_denials`, `is_error`).
 //!
+//! **Order is content.** A turn typically says something, runs tools, says something else, runs
+//! more tools, then answers. Each `text` block is therefore kept as its own [`Step::Message`] *at
+//! its place in the sequence* — never glued onto the neighbouring ones — and only the turn's last
+//! message becomes [`TurnContent::text`]. Concatenating them would produce exactly the unreadable
+//! wall this parser exists to avoid.
+//!
 //! Partial streams (a turn still in flight) parse fine: a `tool_use` with no matching `tool_result`
-//! yet stays [`ToolStatus::Running`], and with no `result` event the answer is the text blocks so
-//! far and metrics are absent. A log that is *not* this stream (plain text, an old log) falls back
+//! yet stays [`ToolStatus::Running`], with no `result` event the answer is the latest text block so
+//! far, and metrics are absent. A log that is *not* this stream (plain text, an old log) falls back
 //! to text-only content, so this is safe to run on any claude-backend log.
 
 use std::collections::HashMap;
@@ -23,9 +29,11 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
     let mut steps: Vec<Step> = Vec::new();
     // tool_use id → index into `steps`, so its later `tool_result` attaches to the right tool.
     let mut tool_index: HashMap<String, usize> = HashMap::new();
-    let mut answer = String::new();
     let mut metrics: Option<TurnMetrics> = None;
     let mut saw_event = false;
+    // The authoritative final answer, from the terminal `result` event. Absent while streaming, in
+    // which case the turn's last `Message` step stands in as the answer so far.
+    let mut result_text: Option<String> = None;
 
     for line in text.lines() {
         let line = line.trim();
@@ -40,14 +48,13 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
         };
         saw_event = true;
         match kind {
-            "assistant" => absorb_assistant(&event, &mut steps, &mut tool_index, &mut answer),
+            "assistant" => absorb_assistant(&event, &mut steps, &mut tool_index),
             "user" => absorb_tool_results(&event, &mut steps, &tool_index),
             "result" => {
-                if let Some(final_text) = event.get("result").and_then(Value::as_str) {
-                    if !final_text.trim().is_empty() {
-                        // The result event's text is authoritative for the final answer.
-                        answer = final_text.to_string();
-                    }
+                if let Some(final_text) = event.get("result").and_then(Value::as_str)
+                    && !final_text.trim().is_empty()
+                {
+                    result_text = Some(final_text.trim().to_string());
                 }
                 metrics = Some(parse_metrics(&event));
             }
@@ -64,20 +71,45 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
         };
     }
 
+    // The turn's *final* message is its answer and is rendered as the turn's message, so it is
+    // lifted out of the timeline — leaving only the commentary that came before it as steps. The
+    // `result` event wins when present; otherwise the last message written so far stands in.
+    let text = match result_text {
+        Some(final_text) => {
+            pop_trailing_message_if(&mut steps, |last| last == final_text);
+            final_text
+        }
+        None => pop_trailing_message_if(&mut steps, |_| true).unwrap_or_default(),
+    };
+
     TurnContent {
-        text: answer.trim().to_string(),
+        text,
         steps,
         metrics: metrics.filter(|m| !m.is_empty()),
     }
 }
 
-/// Fold an `assistant` message's content blocks into thinking/tool steps and answer text.
-fn absorb_assistant(
-    event: &Value,
+/// Lift the timeline's trailing [`Step::Message`] out of `steps` when it satisfies `want`, returning
+/// its text. Only a *trailing* message is a candidate: a message with tool calls after it is
+/// commentary the agent wrote mid-turn, and belongs where it happened.
+fn pop_trailing_message_if(
     steps: &mut Vec<Step>,
-    tool_index: &mut HashMap<String, usize>,
-    answer: &mut String,
-) {
+    want: impl FnOnce(&str) -> bool,
+) -> Option<String> {
+    let Some(Step::Message { text }) = steps.last() else {
+        return None;
+    };
+    if !want(text) {
+        return None;
+    }
+    match steps.pop() {
+        Some(Step::Message { text }) => Some(text),
+        _ => None,
+    }
+}
+
+/// Fold an `assistant` message's content blocks onto the turn's timeline, in emission order.
+fn absorb_assistant(event: &Value, steps: &mut Vec<Step>, tool_index: &mut HashMap<String, usize>) {
     for block in content_blocks(event) {
         match block.get("type").and_then(Value::as_str) {
             Some("thinking") => {
@@ -92,8 +124,24 @@ fn absorb_assistant(
                 }
             }
             Some("text") => {
-                if let Some(t) = block.get("text").and_then(Value::as_str) {
-                    answer.push_str(t);
+                let text = block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                // The engine splits one message across several `text` blocks, so consecutive blocks
+                // with no tool call between them are one message and are joined; a block that
+                // follows a tool call starts a new one.
+                if text.is_empty() {
+                    continue;
+                }
+                match steps.last_mut() {
+                    Some(Step::Message { text: prev }) => {
+                        prev.push_str("\n\n");
+                        prev.push_str(&text);
+                    }
+                    _ => steps.push(Step::Message { text }),
                 }
             }
             Some("tool_use") => {
@@ -260,6 +308,96 @@ mod tests {
         assert!(c.metrics.is_none());
         assert_eq!(c.steps.len(), 2);
         assert!(matches!(c.steps[1], Step::Tool { status: ToolStatus::Running, .. }));
+    }
+
+    // A turn that talks *between* tool calls: says something, runs a tool, says something else, runs
+    // another, then answers — the shape that used to collapse into one glued-together blob.
+    const CHATTY_TURN: &str = concat!(
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Let me look at the config."}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"path":"a.toml"}}]}}"#,
+        "\n",
+        r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"port = 80"}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Port 80 is taken. Trying another."}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"lsof -i:81"}}]}}"#,
+        "\n",
+        r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":""}]}}"#,
+        "\n",
+        r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Moved it to 81."}]}}"#,
+        "\n",
+        r#"{"type":"result","is_error":false,"result":"Moved it to 81.","duration_ms":10}"#,
+    );
+
+    /// The heart of it: mid-turn commentary keeps its place on the timeline instead of being glued
+    /// into one chunk, and only the final message is lifted out as the turn's answer.
+    #[test]
+    fn commentary_between_tool_calls_stays_in_place_and_is_never_merged() {
+        let c = parse(CHATTY_TURN.as_bytes());
+        assert_eq!(c.text, "Moved it to 81.", "the last message is the answer");
+        assert_eq!(
+            c.steps,
+            vec![
+                Step::Message { text: "Let me look at the config.".into() },
+                Step::Tool {
+                    name: "Read".into(),
+                    input: r#"{"path":"a.toml"}"#.into(),
+                    status: ToolStatus::Ok,
+                    output: "port = 80".into(),
+                },
+                Step::Message { text: "Port 80 is taken. Trying another.".into() },
+                Step::Tool {
+                    name: "Bash".into(),
+                    input: r#"{"command":"lsof -i:81"}"#.into(),
+                    status: ToolStatus::Ok,
+                    output: String::new(),
+                },
+            ],
+            "each message sits where it was written, between the tools it separates"
+        );
+    }
+
+    /// While the turn streams there is no `result` event, so the latest message stands in as the
+    /// answer — and the earlier commentary still holds its place rather than being appended to it.
+    #[test]
+    fn a_streaming_turn_answers_with_its_latest_message_not_all_of_them_glued() {
+        let partial: Vec<&str> = CHATTY_TURN.lines().take(4).collect();
+        let c = parse(partial.join("\n").as_bytes());
+        assert_eq!(c.text, "Port 80 is taken. Trying another.");
+        assert_eq!(c.steps.len(), 2, "the first message and the tool it introduced");
+        assert_eq!(c.steps[0], Step::Message { text: "Let me look at the config.".into() });
+    }
+
+    /// One message split by the engine across several `text` blocks (no tool call between them) is
+    /// one message, joined — not two bubbles mid-sentence.
+    #[test]
+    fn consecutive_text_blocks_are_one_message() {
+        let log = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"First half."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Second half."}]}}"#,
+        );
+        let c = parse(log.as_bytes());
+        assert_eq!(c.text, "First half.\n\nSecond half.");
+        assert!(c.steps.is_empty());
+    }
+
+    /// A turn whose final message is only commentary — it ended on a tool call — keeps that
+    /// commentary on the timeline and takes the `result` event's text as the answer.
+    #[test]
+    fn a_final_message_that_precedes_a_tool_call_is_not_lifted_out() {
+        let log = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Running it now."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Bash","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"result","is_error":false,"result":"Done.","duration_ms":5}"#,
+        );
+        let c = parse(log.as_bytes());
+        assert_eq!(c.text, "Done.");
+        assert_eq!(c.steps.len(), 2);
+        assert_eq!(c.steps[0], Step::Message { text: "Running it now.".into() });
     }
 
     #[test]

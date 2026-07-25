@@ -406,6 +406,56 @@ mod tests {
         let _ = std::fs::remove_dir_all(&sessions);
     }
 
+    /// A turn that talked between its tool calls settles with that commentary intact — each message
+    /// a [`Step::Message`] at its place in the timeline, only the last one lifted out as the answer.
+    /// Covers the whole path a real turn takes: stream-json log → settle → committed transcript.
+    #[test]
+    fn a_settled_turn_keeps_its_mid_turn_commentary_in_order() {
+        let sessions = scratch("timeline");
+        let conv = "0000000000003-0000";
+        let dir = seed(&sessions, "chat", conv);
+        append_turn(&dir, conv, ROLE_USER, "set the port");
+        let log = concat!(
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Checking the config."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"port = 80"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"80 is taken."}]}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"Edit","input":{}}]}}"#,
+            "\n",
+            r#"{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}}"#,
+            "\n",
+            r#"{"type":"result","is_error":false,"result":"Moved it to 81.","duration_ms":12}"#,
+        );
+        std::fs::write(detached::log_path_in(&dir, conv), log).unwrap();
+
+        let turns = transcript(&sessions, "chat", conv, &Backend::HarnessClaudeSdk);
+        assert_eq!(turns.len(), 2);
+        let answer = &turns[1];
+        assert_eq!(answer.text, "Moved it to 81.", "the final message is the answer");
+        let kinds: Vec<&str> = answer
+            .steps
+            .iter()
+            .map(|s| match s {
+                Step::Message { .. } => "message",
+                Step::Thinking { .. } => "thinking",
+                Step::Tool { .. } => "tool",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["message", "tool", "message", "tool"],
+            "the turn alternates message → tool → message → tool, not one merged blob"
+        );
+        // And it survives the jsonl round-trip, so a reload reads the same timeline.
+        assert_eq!(load_transcript(&dir, conv), turns);
+
+        let _ = std::fs::remove_dir_all(&sessions);
+    }
+
     /// End-to-end: a real `harness:claude-sdk` conversation must carry context across a reply — the
     /// whole point of being answerable. Ignored by default: it spawns the real `claude` CLI and hits
     /// the network. Run with `cargo test -p adi-agents -- --ignored claude_sdk_conversation`.

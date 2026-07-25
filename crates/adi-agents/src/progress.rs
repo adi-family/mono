@@ -14,10 +14,19 @@ use crate::backend::Backend;
 /// stream is larger than a plain answer but still bounded.
 pub(crate) const MAX_PARSE_BYTES: u64 = 2 * 1024 * 1024;
 
-/// One activity within a turn. The answer *text* is not a step — it lands in [`TurnContent::text`].
+/// One item on a turn's timeline, in the order the engine emitted it.
+///
+/// An agent's turn is not "one answer plus a pile of tool calls" — it is a *sequence*: it says
+/// something, runs tools, says something else, runs more tools, and finally answers. [`Step`] keeps
+/// that sequence intact, so a reader can follow what happened rather than reading a single blob of
+/// glued-together commentary. The turn's **final** message lands in [`TurnContent::text`]; every
+/// message it wrote *before* that one stays here as a [`Step::Message`], in place.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Step {
+    /// Something the agent said mid-turn, between tool calls — its running commentary. The last
+    /// such message is the turn's answer and lives in [`TurnContent::text`] instead, never here.
+    Message { text: String },
     /// A model reasoning block (shown dim/collapsed).
     Thinking { text: String },
     /// A tool invocation and, once it returns, its result.

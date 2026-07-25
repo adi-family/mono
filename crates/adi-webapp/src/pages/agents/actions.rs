@@ -529,13 +529,15 @@ fn run_detail_row(state: State, watch: AgentsWatch, run_id: String, answerable: 
 /// The progress feed under a selected run: the turns (each with its tool/thinking steps and metrics)
 /// which the poll refreshes as they stream in — plus, for answerable backends, the reply box.
 ///
+/// The transcript reads as one alternating stream — message, that turn's tool calls, the message
+/// before it, its tool calls, and so on — **newest first**, so the latest answer is at the top.
+///
 /// The reply box sits at the **top**, above the transcript — new turns land at the top of the
 /// transcript, right beneath where you type. The scroll container (`.adi-chat`) is built **once**
 /// here, never inside the 1s poll's reactive island — so its scroll offset survives a refresh
 /// instead of snapping to the top every second. Inside it, a keyed [`For`] reconciles the transcript:
 /// a settled turn keeps its exact DOM (and the scroll position with it); only the still-streaming
-/// turn — whose key folds in its growth — re-renders as it updates. Turns render **newest-first**
-/// (the latest turn at the top).
+/// turn — whose key folds in its growth — re-renders as it updates.
 fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
     view! {
         {answerable.then(|| reply_bar(state, watch))}
@@ -552,7 +554,11 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
                     // A settled turn is keyed by its stable index, so its bubble is never rebuilt. The
                     // live turn folds its growth into the key, so it — and only it — re-renders as it streams.
                     if turn.pending {
-                        format!("{idx}:live:{}:{}", turn.text.len(), turn.steps.len())
+                        format!(
+                            "{idx}:live:{}:{}",
+                            turn.text.len(),
+                            steps_fingerprint(&turn.steps)
+                        )
                     } else {
                         idx.to_string()
                     }
@@ -581,11 +587,38 @@ fn chat_placeholder(watch: AgentsWatch) -> Option<AnyView> {
     Some(view! { <div class="adi-chat__empty">{msg}</div> }.into_any())
 }
 
-/// One transcript turn, rendered as **separate message bubbles**: the answer text first (with the
-/// role label and, for an assistant turn, its metrics footer), then — for an assistant turn — each
-/// tool call / thinking block as its own bubble below the answer, in **reverse** order (newest
-/// activity nearest the answer). The still-streaming answer is tagged and, while it has no body yet,
-/// shows a typing ellipsis.
+/// A cheap fingerprint of a still-streaming turn's activity: how many steps there are, each one's
+/// status, and how much detail has landed. Folded into the [`For`] key so a tool flipping ⟳ → ✓ —
+/// which leaves the step *count* unchanged — still re-renders the live turn.
+fn steps_fingerprint(steps: &[AgentStep]) -> String {
+    let mut out = String::with_capacity(steps.len() * 6);
+    for s in steps {
+        let (mark, len) = match s {
+            AgentStep::Message { text } => ('m', text.len()),
+            AgentStep::Thinking { text } => ('t', text.len()),
+            AgentStep::Tool { status, output, .. } => {
+                let mark = match status {
+                    AgentToolStatus::Running => 'r',
+                    AgentToolStatus::Ok => 'o',
+                    AgentToolStatus::Error => 'e',
+                };
+                (mark, output.len())
+            }
+        };
+        out.push(mark);
+        out.push_str(&len.to_string());
+        out.push('.');
+    }
+    out
+}
+
+/// One transcript turn, laid out **newest-first** down the feed: the turn's final message on top
+/// (with the role label and, for an assistant turn, its metrics footer), then its timeline in
+/// reverse — the tool calls it ran, the message it wrote before those, the tools before *that*, and
+/// so on. So a turn reads as `message → toolcall ×N → message → toolcall ×N`, with the most recent
+/// thing at the top and every mid-turn message left where it was written rather than merged into the
+/// answer. Nothing is hidden behind a disclosure. The still-streaming answer is tagged and, while it
+/// has no body yet, shows a typing ellipsis.
 fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
     let is_user = turn.role == "user";
     // Only an assistant turn on a conversation backend may carry an `adi-form` block to render.
@@ -607,7 +640,7 @@ fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
     };
     let who = if is_user { "you" } else { "agent" };
 
-    // The answer/message bubble comes first (on top); the text renders as Markdown, and the metrics
+    // The turn's final message comes first (on top); the text renders as Markdown, and the metrics
     // footer rides with it.
     let message = view! {
         <div class=turn_class data-error=errored.then_some("1")>
@@ -620,31 +653,56 @@ fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
         </div>
     };
 
-    // The activity — tool calls and thinking — is collapsed by default under a single disclosure, so
-    // the message reads clean; expanding it reveals each step (newest first) as its own row.
-    let step_count = steps.len();
-    let activity = steps.into_iter().rev().map(step_bubble).collect::<Vec<_>>();
-    let activity_group = (step_count > 0).then(|| {
-        let label = format!("{step_count} step{}", if step_count == 1 { "" } else { "s" });
-        view! {
-            <details class="adi-chat__steps">
-                <summary class="adi-chat__steps-head">
-                    <span class="adi-chat__steps-icon">"🔧"</span>
-                    {label}
-                </summary>
-                {activity}
-            </details>
-        }
-    });
-
     view! {
         {message}
-        {activity_group}
+        {timeline_views(state, steps)}
     }
     .into_any()
 }
 
-/// One activity step as its own message bubble beneath the answer — a tool call or a thinking block.
+/// The turn's timeline below its final message, in reverse (newest first). A run of tool/thinking
+/// steps becomes one stack of rows; a message the agent wrote mid-turn breaks that stack and renders
+/// as its own bubble — which is what makes the feed alternate `message → toolcall ×N → message`
+/// instead of showing one merged wall of text above an undifferentiated pile of tool calls.
+fn timeline_views(state: State, steps: Vec<AgentStep>) -> Vec<AnyView> {
+    let mut out: Vec<AnyView> = Vec::new();
+    let mut run: Vec<AnyView> = Vec::new();
+    for step in steps.into_iter().rev() {
+        match step {
+            AgentStep::Message { text } => {
+                flush_steps(&mut run, &mut out);
+                out.push(mid_turn_message(state, &text));
+            }
+            other => run.push(step_bubble(other)),
+        }
+    }
+    flush_steps(&mut run, &mut out);
+    out
+}
+
+/// Close off the current run of tool/thinking rows into one stack, if it has any.
+fn flush_steps(run: &mut Vec<AnyView>, out: &mut Vec<AnyView>) {
+    if run.is_empty() {
+        return;
+    }
+    let rows = std::mem::take(run);
+    out.push(view! { <div class="adi-chat__steps">{rows}</div> }.into_any());
+}
+
+/// Something the agent said *during* the turn, between tool calls: a normal agent bubble, dimmed a
+/// touch so the turn's final answer still leads. Rendered as plain Markdown — an emitted form is an
+/// ask, and only the turn's final message is the live one, so a superseded mid-turn form must not
+/// come back as a second interactive card.
+fn mid_turn_message(state: State, text: &str) -> AnyView {
+    view! {
+        <div class="adi-chat__turn adi-chat__turn--agent adi-chat__turn--mid">
+            {super::emitted_form::render_message(state, text, false)}
+        </div>
+    }
+    .into_any()
+}
+
+/// One activity step as its own row beneath the message — a tool call or a thinking block.
 fn step_bubble(step: AgentStep) -> AnyView {
     view! {
         <div class="adi-chat__turn adi-chat__turn--agent adi-chat__turn--step">
@@ -655,8 +713,11 @@ fn step_bubble(step: AgentStep) -> AnyView {
 }
 
 /// One activity row. A `<details>` so its arguments/output (or reasoning) expand in place — no JS.
+/// A [`AgentStep::Message`] never reaches here — [`timeline_views`] renders it as its own bubble —
+/// but it is handled rather than dropped so a message can never silently vanish from the feed.
 fn step_row(step: AgentStep) -> AnyView {
     match step {
+        AgentStep::Message { text } => crate::markdown::render(&text),
         AgentStep::Thinking { text } => view! {
             <details class="adi-step adi-step--thinking">
                 <summary class="adi-step__head">

@@ -270,6 +270,7 @@ fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
 /// Map a store [`adi_agents::Step`] onto its wire [`AgentStep`].
 fn agent_step(s: adi_agents::Step) -> AgentStep {
     match s {
+        adi_agents::Step::Message { text } => AgentStep::Message { text },
         adi_agents::Step::Thinking { text } => AgentStep::Thinking { text },
         adi_agents::Step::Tool {
             name,

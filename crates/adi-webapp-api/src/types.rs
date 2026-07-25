@@ -762,11 +762,14 @@ pub enum AgentToolStatus {
     Error,
 }
 
-/// One activity step within an assistant turn — a tool call or a thinking block. The answer text is
-/// not a step; it lives in [`AgentTurn::text`].
+/// One item on an assistant turn's timeline, in the order it happened: something the agent said, a
+/// thinking block, or a tool call. The turn's *final* message is not a step — it lives in
+/// [`AgentTurn::text`]. Mirrors `adi_agents::Step`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentStep {
+    /// Something the agent said mid-turn, between tool calls.
+    Message { text: String },
     /// A model reasoning block (shown dim/collapsed).
     Thinking { text: String },
     /// A tool invocation and, once it returns, its result.
