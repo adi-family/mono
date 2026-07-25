@@ -74,6 +74,16 @@ pub const GUIDES: &[Guide] = &[
         summary: "defining and running agents",
         body: include_str!("../../templates/guides/agents.md"),
     },
+    Guide {
+        file: "secrets.md",
+        summary: "encrypted secrets, Gmail/Google OAuth, agent-emitted create forms",
+        body: include_str!("../../templates/guides/secrets.md"),
+    },
+    Guide {
+        file: "db.md",
+        summary: "the shared SQLite database — storing data agents and dashboards both read",
+        body: include_str!("../../templates/guides/db.md"),
+    },
 ];
 
 /// The directory guides live in: `~/.adi/mono/guides`.

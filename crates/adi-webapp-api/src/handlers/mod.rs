@@ -5,6 +5,7 @@
 
 mod agents;
 mod dashboards;
+mod db;
 mod files;
 mod fs;
 mod guides;
@@ -23,6 +24,7 @@ mod workspaces;
 
 pub use agents::*;
 pub use dashboards::*;
+pub use db::*;
 pub use files::*;
 pub use fs::*;
 pub use health::*;

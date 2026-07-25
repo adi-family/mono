@@ -50,6 +50,16 @@ pub(crate) enum SecretsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Print one secret's decrypted value — the raw bytes, nothing else — so it can be consumed
+    /// directly (`GMAIL=$(adi-mono secrets read GMAIL_TOKEN)`), the way `op read` works. This is
+    /// the value-returning primitive an agent uses; unlike `get`, no `--reveal` flag is needed.
+    Read {
+        name: String,
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        project: Option<String>,
+    },
     /// Delete a secret from a scope.
     Rm {
         name: String,
@@ -134,6 +144,21 @@ pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), Strin
                     print_secret(&secret);
                 }
             }
+        }
+        SecretsCommand::Read {
+            name,
+            global,
+            project,
+        } => {
+            use std::io::Write as _;
+            let scope = resolve_scope(global, project)?;
+            let value = store
+                .reveal(scope.as_deref(), &name)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("no such secret: {name}"))?;
+            // The exact bytes, no added newline — faithful for a shell capture or an agent read.
+            print!("{value}");
+            let _ = std::io::stdout().flush();
         }
         SecretsCommand::Rm {
             name,

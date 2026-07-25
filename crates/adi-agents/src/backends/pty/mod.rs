@@ -62,7 +62,7 @@ pub fn launch(
     agent: &StoredAgent,
     base_dir: &Path,
     bin_dir: Option<&Path>,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     let argv = engine_argv(&agent.manifest)?;
     let session = session_name(&agent.name);
@@ -72,7 +72,7 @@ pub fn launch(
 
     // Inject the agent's secrets under their literal names, then the augmented PATH so its own
     // `.bin` and the standard tool dirs resolve even under launchd's minimal environment.
-    let mut env = secret_env.to_vec();
+    let mut env = run_env.to_vec();
     env.push(("PATH".into(), augmented_path(bin_dir)));
 
     adi_pty::launch(&session, &argv, base_dir, &env).map_err(|e| Error::Launch(e.to_string()))?;

@@ -27,6 +27,10 @@ pub use adi_agents::{
     event_catalog,
 };
 
+pub use adi_db::{
+    ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo,
+};
+
 pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
 
 pub use adi_secrets::{Error as SecretsError, Secret, Secrets};

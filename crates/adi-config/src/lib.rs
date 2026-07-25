@@ -93,7 +93,57 @@ impl Config {
     pub fn module(&self, name: &str) -> Module {
         Module::new(self.root.join(name))
     }
+
+    /// The shared database directory: `<root>/db`.
+    #[must_use]
+    pub fn db_dir(&self) -> PathBuf {
+        self.root.join(DB_MODULE)
+    }
+
+    /// Where a scope's SQLite database lives — `db/global.db` for `None`, else
+    /// `db/projects/<project>.db`. Returns `None` for a project id that isn't a safe path segment.
+    ///
+    /// The *format* belongs to `adi-db`; the store only decides **where**, which is why the rule
+    /// lives here: the crates that merely point a run at its database (tools, agents, triggers)
+    /// need this path without taking on a SQLite dependency to get it.
+    #[must_use]
+    pub fn db_path(&self, project: Option<&str>) -> Option<PathBuf> {
+        match project {
+            None => Some(self.db_dir().join(DB_GLOBAL_FILE)),
+            Some(id) if valid_name(id) => Some(
+                self.db_dir()
+                    .join(DB_PROJECTS_DIR)
+                    .join(format!("{id}.{DB_EXT}")),
+            ),
+            Some(_) => None,
+        }
+    }
+
+    /// The database environment a run is launched with: `ADI_DB` (this scope's file) and
+    /// `ADI_DB_DIR` (the store's `db/`). Exporting these is what lets an agent's shell, its `ts`
+    /// tools, and the `@adi/db` Bun client all land on the same database without being configured.
+    ///
+    /// An unusable project id degrades to the global database rather than failing — this feeds
+    /// process launches, where a bad id must not be the reason a run won't start.
+    #[must_use]
+    pub fn db_env(&self, project: Option<&str>) -> Vec<(String, String)> {
+        let path = self
+            .db_path(project)
+            .unwrap_or_else(|| self.db_dir().join(DB_GLOBAL_FILE));
+        vec![
+            ("ADI_DB".to_string(), path.display().to_string()),
+            ("ADI_DB_DIR".to_string(), self.db_dir().display().to_string()),
+        ]
+    }
 }
+
+/// The store module the shared databases live under, the global database's filename, the
+/// subdirectory per-project databases live in, and the extension they all carry. See
+/// [`Config::db_path`].
+const DB_MODULE: &str = "db";
+const DB_GLOBAL_FILE: &str = "global.db";
+const DB_PROJECTS_DIR: &str = "projects";
+const DB_EXT: &str = "db";
 
 /// Whether `name` is a single, filesystem-safe path segment — the rule every store applies
 /// before joining `<name>.toml` onto a [`Module`] directory. This is a security boundary: names

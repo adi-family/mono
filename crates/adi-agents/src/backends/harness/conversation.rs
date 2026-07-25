@@ -72,7 +72,7 @@ pub(crate) fn start(
     base_dir: &Path,
     bin_dir: Option<&Path>,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     // Validate the backend before touching disk, so an unrunnable/unconfigured harness fails fast
     // without leaving a stray conversation behind.
@@ -103,7 +103,7 @@ pub(crate) fn start(
     let _ = std::fs::write(detached::meta_path(&dir, &conv_id), meta.to_string());
     append_turn(&dir, &conv_id, ROLE_USER, message);
 
-    let launch = spawn_turn(&dir, &conv_id, base_dir, bin_dir, &argv, working_dir, secret_env)?;
+    let launch = spawn_turn(&dir, &conv_id, base_dir, bin_dir, &argv, working_dir, run_env)?;
     detached::prune_old_runs(&dir);
     Ok(launch)
 }
@@ -118,7 +118,7 @@ pub(crate) fn reply(
     bin_dir: Option<&Path>,
     conv_id: &str,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, &agent.name);
     if !detached::meta_path(&dir, conv_id).exists() {
@@ -146,7 +146,7 @@ pub(crate) fn reply(
         },
     )?;
     append_turn(&dir, conv_id, ROLE_USER, message);
-    spawn_turn(&dir, conv_id, base_dir, bin_dir, &argv, working_dir, secret_env)
+    spawn_turn(&dir, conv_id, base_dir, bin_dir, &argv, working_dir, run_env)
 }
 
 /// The conversation's transcript, oldest first. Folds a just-finished turn's captured stdout into a
@@ -195,7 +195,7 @@ fn spawn_turn(
     bin_dir: Option<&Path>,
     argv: &[String],
     working_dir: Option<String>,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     let log = detached::log_path_in(dir, conv_id);
     let pid = detached::spawn_child(
@@ -206,7 +206,7 @@ fn spawn_turn(
         bin_dir,
         argv,
         working_dir.as_deref(),
-        secret_env,
+        run_env,
     )?;
     Ok(Launch::Process {
         command: detached::display_command(argv),

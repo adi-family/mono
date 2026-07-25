@@ -62,6 +62,12 @@ impl Adi {
         adi_secrets::Secrets::open()
     }
 
+    /// The shared SQLite store backed by the standard store — `Adi::new().db().query(...)`.
+    #[must_use]
+    pub fn db(self) -> adi_db::Db {
+        adi_db::Db::open()
+    }
+
     /// The agent-definition registry backed by the standard store.
     #[must_use]
     pub fn agents(self) -> adi_agents::Agents {

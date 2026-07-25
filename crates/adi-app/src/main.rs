@@ -17,6 +17,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adi_agents::Agents;
+use adi_db::Db;
 use adi_events::Events;
 use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
@@ -103,6 +104,13 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = tools.seed_system().and_then(|_| tools.sync_bin().map(|_| ())) {
         warn!(error = %e, "seeding system tools failed");
     }
+    // Create the global database (so it exists in WAL mode before anything races to make it) and
+    // seed the `@adi/db` Bun client into the store's node_modules, so `import … from "@adi/db"`
+    // resolves from every `.ts` the platform runs. Best-effort, like the tools above.
+    let db = Arc::new(Db::open());
+    if let Err(e) = db.bootstrap() {
+        warn!(error = %e, "bootstrapping the shared database failed");
+    }
     let agents = Arc::new(Agents::open());
     let triggers = Arc::new(Triggers::open());
     let events = Arc::new(Events::open());
@@ -140,6 +148,7 @@ async fn main() -> anyhow::Result<()> {
                     let ports = Arc::clone(&ports);
                     let projects = Arc::clone(&projects);
                     let secrets = Arc::clone(&secrets);
+                    let db = Arc::clone(&db);
                     let tasks = Arc::clone(&tasks);
                     let tools = Arc::clone(&tools);
                     let agents = Arc::clone(&agents);
@@ -154,6 +163,7 @@ async fn main() -> anyhow::Result<()> {
                             &ports,
                             &projects,
                             &secrets,
+                            &db,
                             &tasks,
                             &tools,
                             &agents,
@@ -216,6 +226,7 @@ async fn handle(
     ports: &Ports,
     projects: &Projects,
     secrets: &Secrets,
+    db: &Db,
     tasks: &Tasks,
     tools: &Tools,
     agents: &Agents,
@@ -302,6 +313,14 @@ async fn handle(
         ("POST", "/api/tools/script/write") => handlers::write_tool_script(tools, &req.body),
         // A run resolves a project-scoped tool's cwd from the project registry.
         ("POST", "/api/tools/run") => handlers::run_tool(tools, projects, &req.body),
+
+        // The shared SQLite store. `query` runs on a read-only connection and `exec` on a
+        // read-write one, so browsing can never write — see handlers::db.
+        ("GET", "/api/db") => handlers::db_state(db),
+        ("POST", "/api/db/tables") => handlers::db_tables(db, &req.body),
+        ("POST", "/api/db/schema") => handlers::db_schema(db, &req.body),
+        ("POST", "/api/db/query") => handlers::db_query(db, &req.body),
+        ("POST", "/api/db/exec") => handlers::db_exec(db, &req.body),
 
         ("GET", "/api/secrets") => handlers::secrets(secrets),
         ("POST", "/api/secrets/set") => handlers::set_secret(secrets, &req.body),

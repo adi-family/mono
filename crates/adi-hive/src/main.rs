@@ -7,6 +7,7 @@ mod notfound;
 mod proxy;
 mod runner;
 mod status;
+mod tls;
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
@@ -79,6 +80,48 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     }
+
+    // The HTTPS front door, when the config asks for one. Everything about it is best-effort: a
+    // certificate we can't mint or a port we can't take is a warning, never a reason to drop the
+    // plain-HTTP front door that `app.adi` already depends on.
+    if !resolved.tls_binds.is_empty() {
+        let hosts: Vec<String> = resolved.routes.iter().map(|r| r.host.clone()).collect();
+        match tls::prepare(&path.with_file_name("tls"), &hosts) {
+            Ok(ready) => {
+                if ready.ca_is_new {
+                    warn!(
+                        ca = %ready.ca_path.display(),
+                        "generated a new local CA — nothing trusts it yet, so HTTPS will warn until you {}",
+                        tls::trust_hint(&ready.ca_path),
+                    );
+                } else {
+                    info!(ca = %ready.ca_path.display(), "using the existing local CA");
+                }
+                let acceptor = tokio_rustls::TlsAcceptor::from(ready.config);
+                for addr in &resolved.tls_binds {
+                    ensure_loopback_alias(addr.ip());
+                    match TcpListener::bind(addr).await {
+                        Ok(listener) => {
+                            let local = listener.local_addr().unwrap_or(*addr);
+                            info!(%local, "listening (TLS)");
+                            bound.push(format!("{local} (tls)"));
+                            tasks.push(tokio::spawn(proxy::serve_tls(
+                                listener,
+                                acceptor.clone(),
+                                route_rx.clone(),
+                            )));
+                        }
+                        Err(e) => warn!(
+                            %addr, error = %e,
+                            "could not bind for TLS (privileged port needs root, or in use?); skipping"
+                        ),
+                    }
+                }
+            }
+            Err(e) => warn!(error = %e, "TLS unavailable; serving plain HTTP only"),
+        }
+    }
+
     if tasks.is_empty() {
         anyhow::bail!("no proxy address could be bound");
     }

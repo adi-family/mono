@@ -25,6 +25,13 @@ proxy:
     - "127.0.0.53:80"
     # Unprivileged dev fallback — always bindable without root.
     - "127.0.0.1:8080"
+  # HTTPS, terminated here with a certificate adi-hive mints itself (see `src/tls.rs`): a local CA
+  # in `./tls/ca.pem` plus a leaf covering every routed host. Trust that CA once and
+  # `https://app.adi` becomes a *secure context* — which is what a service worker requires, and so
+  # what lets the control panel install as an app. Additive: the plain binds above keep serving, so
+  # nothing that speaks HTTP to the front door breaks. Omit the key entirely for no HTTPS.
+  tls_bind:
+    - "127.0.0.53:443"
 
 services:
   # A proxied service: Host: app.adi -> 127.0.0.1:8010

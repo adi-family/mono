@@ -375,7 +375,7 @@ impl Tools {
         let script = self.script_path_of(&tool);
         let root = self.config.root().to_path_buf();
         let cwd = working_dir.unwrap_or(&root);
-        run::run_capture(&tool, &script, args, cwd)
+        run::run_capture(&tool, &script, args, cwd, &self.config)
     }
 
     /// Build the ready-to-spawn [`std::process::Command`] for a tool — the CLI's `tools run` path,
@@ -394,7 +394,7 @@ impl Tools {
         let script = self.script_path_of(&tool);
         let root = self.config.root().to_path_buf();
         let cwd = working_dir.unwrap_or(&root);
-        run::command(&tool, &script, args, cwd)
+        run::command(&tool, &script, args, cwd, &self.config)
     }
 
     /// Ensure the built-in **system tools** exist — the adi-ecosystem CLIs (`adi-tasks`,

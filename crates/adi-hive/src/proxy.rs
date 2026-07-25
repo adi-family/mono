@@ -6,10 +6,17 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
+use tokio_rustls::TlsAcceptor;
 use tracing::{debug, info, warn};
+
+/// What the proxy needs of a client connection: bytes both ways, and nothing else. Implemented by
+/// [`TcpStream`] for the plain front door and by `TlsStream` for the HTTPS one, so both share every
+/// line of routing, error-page and splicing logic below.
+pub trait ClientStream: AsyncRead + AsyncWrite + Unpin + Send {}
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> ClientStream for T {}
 
 use crate::config::ResolvedRoute;
 
@@ -73,7 +80,51 @@ pub async fn serve(listener: TcpListener, routes: watch::Receiver<Arc<Router>>) 
     }
 }
 
-async fn handle(mut client: TcpStream, router: &Router) -> anyhow::Result<()> {
+/// Accept loop for a TLS listener: complete the handshake, then hand the decrypted stream to the
+/// same [`handle`] the plain front door uses.
+///
+/// A failed handshake is logged at debug and dropped. That is deliberately quiet — a browser that
+/// hasn't been given the CA, a health probe speaking plain HTTP to the TLS port, or a port scanner
+/// all land here, and none of them is an operational problem worth a warning per connection.
+pub async fn serve_tls(
+    listener: TcpListener,
+    acceptor: TlsAcceptor,
+    routes: watch::Receiver<Arc<Router>>,
+) {
+    loop {
+        match listener.accept().await {
+            Ok((stream, peer)) => {
+                let router = routes.borrow().clone();
+                let acceptor = acceptor.clone();
+                tokio::spawn(async move {
+                    // Bound the handshake too: an idle client that opens a socket and says nothing
+                    // would otherwise hold the task open indefinitely.
+                    let accepted = tokio::time::timeout(READ_TIMEOUT, acceptor.accept(stream)).await;
+                    let tls = match accepted {
+                        Ok(Ok(tls)) => tls,
+                        Ok(Err(e)) => {
+                            debug!(%peer, error = %e, "TLS handshake failed");
+                            return;
+                        }
+                        Err(_) => {
+                            debug!(%peer, "TLS handshake timed out");
+                            return;
+                        }
+                    };
+                    if let Err(e) = handle(tls, &router).await {
+                        debug!(%peer, error = %e, "proxy connection error");
+                    }
+                });
+            }
+            Err(e) => {
+                warn!(error = %e, "accept failed");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
+    }
+}
+
+async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Result<()> {
     let head = read_head(&mut client).await?;
 
     let Some(host) = extract_host(&head) else {
@@ -99,7 +150,9 @@ async fn handle(mut client: TcpStream, router: &Router) -> anyhow::Result<()> {
     // Forward the head bytes we already consumed, then splice the rest both ways.
     server.write_all(&head).await?;
 
-    let (mut cread, mut cwrite) = client.split();
+    // `tokio::io::split` rather than TcpStream's inherent borrow-split: the client half is generic
+    // now, and this is the one form that works for any stream (TLS included).
+    let (mut cread, mut cwrite) = tokio::io::split(client);
     let (mut sread, mut swrite) = server.split();
     let client_to_server = async {
         let _ = tokio::io::copy(&mut cread, &mut swrite).await;
@@ -114,7 +167,7 @@ async fn handle(mut client: TcpStream, router: &Router) -> anyhow::Result<()> {
 }
 
 /// Read until the blank line ending the head, a size cap, or a timeout; the returned buffer is forwarded verbatim (may include first body bytes).
-async fn read_head(stream: &mut TcpStream) -> anyhow::Result<Vec<u8>> {
+async fn read_head<S: ClientStream>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
     use anyhow::Context as _;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
@@ -158,7 +211,7 @@ fn extract_host(head: &[u8]) -> Option<String> {
 }
 
 /// Serve the animated `4XX` fallback page with a `404` — `Host` matched no configured route.
-async fn respond_not_found(stream: &mut TcpStream) -> anyhow::Result<()> {
+async fn respond_not_found<S: ClientStream>(stream: &mut S) -> anyhow::Result<()> {
     let body = crate::notfound::PAGE;
     let response = format!(
         "HTTP/1.1 404 Not Found\r\n\
@@ -177,8 +230,8 @@ async fn respond_not_found(stream: &mut TcpStream) -> anyhow::Result<()> {
 }
 
 /// Write a small self-contained HTML error page and close (used for `502` upstream-down or `400` malformed).
-async fn respond_error(
-    stream: &mut TcpStream,
+async fn respond_error<S: ClientStream>(
+    stream: &mut S,
     code: u16,
     reason: &str,
     message: &str,

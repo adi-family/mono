@@ -207,8 +207,8 @@ impl Triggers {
         let trigger = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        let secret_env = self.secret_env(trigger.manifest.project.as_deref());
-        fire::fire(&self.dir(), &trigger, payload, None, &secret_env)
+        let run_env = self.run_env(trigger.manifest.project.as_deref());
+        fire::fire(&self.dir(), &trigger, payload, None, &run_env)
     }
 
     /// Fire a registered trigger *because a platform event matched it*: like [`fire`](Self::fire),
@@ -223,21 +223,30 @@ impl Triggers {
         let trigger = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        let secret_env = self.secret_env(trigger.manifest.project.as_deref());
-        fire::fire(&self.dir(), &trigger, payload, Some(event), &secret_env)
+        let run_env = self.run_env(trigger.manifest.project.as_deref());
+        fire::fire(&self.dir(), &trigger, payload, Some(event), &run_env)
     }
 
-    /// The secret environment a trigger's code block runs with: every global secret plus the
-    /// trigger's project's, resolved (project overrides global) into literal `KEY=value` pairs
-    /// — a namespace distinct from the `ADI_<KEY>` settings. Resolved against **this store's**
-    /// [`Config`], so a test store stays isolated. Best-effort: if the secrets store can't be
-    /// read or decrypted, the launch proceeds with no injected secrets rather than failing.
-    pub(crate) fn secret_env(&self, project: Option<&str>) -> Vec<(String, String)> {
-        adi_secrets::Secrets::with_config(self.config.clone())
+    /// The environment a trigger's code block runs with.
+    ///
+    /// Two things go in. First the secrets: every global secret plus the trigger's project's,
+    /// resolved (project overrides global) into literal `KEY=value` pairs — a namespace distinct
+    /// from the `ADI_<KEY>` settings. Then the pointer to the trigger's scope of the shared
+    /// database (`ADI_DB`), so a `ts` block's `import … from "@adi/db"` and a `sh` block's `adi-db`
+    /// reach the right file with no setup. The database pair goes last, so it wins over a secret
+    /// that happens to be named `ADI_DB` rather than being silently redirected by one.
+    ///
+    /// Resolved against **this store's** [`Config`], so a test store stays isolated. Best-effort:
+    /// if the secrets store can't be read or decrypted, the launch proceeds with no injected
+    /// secrets rather than failing.
+    pub(crate) fn run_env(&self, project: Option<&str>) -> Vec<(String, String)> {
+        let mut env: Vec<(String, String)> = adi_secrets::Secrets::with_config(self.config.clone())
             .resolve(project)
             .unwrap_or_default()
             .into_iter()
-            .collect()
+            .collect();
+        env.extend(self.config.db_env(project));
+        env
     }
 
     /// When the trigger last fired (Unix epoch seconds, from its log's mtime), or `None` if it

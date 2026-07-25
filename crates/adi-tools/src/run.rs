@@ -41,6 +41,7 @@ pub(crate) fn command(
     script_path: &Path,
     args: &[String],
     working_dir: &Path,
+    config: &adi_config::Config,
 ) -> Result<Command> {
     if !script_path.exists() {
         return Err(Error::LinkedMissing(script_path.display().to_string()));
@@ -62,6 +63,10 @@ pub(crate) fn command(
     if let Some(project) = &tool.manifest.project {
         cmd.env("ADI_TOOL_PROJECT", project);
     }
+    // Point the tool at its scope's database (a project-filed tool gets that project's), so a `ts`
+    // tool's `import … from "@adi/db"` and a `sh` tool's `adi-db` both land on the same file
+    // without the tool's author configuring anything.
+    cmd.envs(config.db_env(tool.manifest.project.as_deref()));
     Ok(cmd)
 }
 
@@ -76,8 +81,9 @@ pub(crate) fn run_capture(
     script_path: &Path,
     args: &[String],
     working_dir: &Path,
+    config: &adi_config::Config,
 ) -> Result<RunOutput> {
-    let mut cmd = command(tool, script_path, args, working_dir)?;
+    let mut cmd = command(tool, script_path, args, working_dir, config)?;
     cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -134,13 +140,20 @@ mod tests {
         }
     }
 
+    /// A store rooted in a scratch dir, so a run's `ADI_DB` points somewhere disposable.
+    fn config(tag: &str) -> adi_config::Config {
+        adi_config::Config::with_root(
+            std::env::temp_dir().join(format!("adi-tools-run-cfg-{tag}-{}", std::process::id())),
+        )
+    }
+
     #[test]
     fn a_missing_script_is_refused() {
         let tool = owned(RUNTIME_SH);
         let path = std::env::temp_dir().join("adi-tools-nope-does-not-exist.sh");
         let _ = std::fs::remove_file(&path);
         assert!(matches!(
-            command(&tool, &path, &[], &std::env::temp_dir()),
+            command(&tool, &path, &[], &std::env::temp_dir(), &config("missing")),
             Err(Error::LinkedMissing(_))
         ));
     }
@@ -152,7 +165,7 @@ mod tests {
         let script = dir.join("script.sh");
         std::fs::write(&script, "printf '%s:%s' \"$ADI_TOOL_NAME\" \"$1\"\n").expect("write");
         let tool = owned(RUNTIME_SH);
-        let out = run_capture(&tool, &script, &["hi".to_string()], &dir).expect("run");
+        let out = run_capture(&tool, &script, &["hi".to_string()], &dir, &config("sh")).expect("run");
         assert!(out.ok(), "expected clean exit, got {out:?}");
         assert_eq!(out.output, "greet:hi");
         let _ = std::fs::remove_dir_all(&dir);
@@ -165,7 +178,7 @@ mod tests {
         let script = dir.join("script.sh");
         std::fs::write(&script, "echo boom >&2; exit 3\n").expect("write");
         let tool = owned(RUNTIME_SH);
-        let out = run_capture(&tool, &script, &[], &dir).expect("run");
+        let out = run_capture(&tool, &script, &[], &dir, &config("fail")).expect("run");
         assert_eq!(out.code, Some(3));
         assert!(out.output.contains("boom"), "stderr captured: {out:?}");
         let _ = std::fs::remove_dir_all(&dir);
@@ -179,8 +192,33 @@ mod tests {
         std::fs::create_dir_all(&dir).expect("mkdir");
         let script = dir.join("script.ts");
         std::fs::write(&script, "console.log('hi')\n").expect("write");
-        let cmd = command(&tool, &script, &[], &dir).expect("command");
+        let cmd = command(&tool, &script, &[], &dir, &config("ts")).expect("command");
         assert_eq!(cmd.get_program(), "bun");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_run_is_pointed_at_its_scope_database() {
+        // What makes `adi-db` and `import … from "@adi/db"` work inside a tool without any setup:
+        // the run is launched already pointed at the right file.
+        let dir = std::env::temp_dir().join(format!("adi-tools-run-db-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let script = dir.join("script.sh");
+        std::fs::write(&script, "printf '%s' \"$ADI_DB\"\n").expect("write");
+
+        let mut tool = owned(RUNTIME_SH);
+        let store = config("db");
+        let global = run_capture(&tool, &script, &[], &dir, &store).expect("global run");
+        assert!(global.output.ends_with("db/global.db"), "got {:?}", global.output);
+
+        // A tool filed under a project gets that project's database instead.
+        tool.manifest.project = Some("acme".to_string());
+        let scoped = run_capture(&tool, &script, &[], &dir, &store).expect("project run");
+        assert!(
+            scoped.output.ends_with("db/projects/acme.db"),
+            "got {:?}",
+            scoped.output
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

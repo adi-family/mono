@@ -79,4 +79,16 @@ pub(crate) const SYSTEM_TOOLS: &[SystemTool] = &[
         description: "Control the adi DNS resolver (status/enable/…).",
         subcommand: "dns",
     },
+    SystemTool {
+        id: "sys-db",
+        name: "adi-db",
+        description: "Run SQL against the shared SQLite store (query/exec/tables/schema/list). `--project P` for a project's database.",
+        subcommand: "db",
+    },
+    SystemTool {
+        id: "sys-secrets",
+        name: "adi-secrets",
+        description: "Read and manage secrets (list/read/set/rm). `adi-secrets read <NAME>` prints the value.",
+        subcommand: "secrets",
+    },
 ];

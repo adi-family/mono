@@ -55,9 +55,9 @@ pub fn launch(
     base_dir: &Path,
     bin_dir: Option<&Path>,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
-    conversation::start(agent, sessions_dir, base_dir, bin_dir, message, secret_env)
+    conversation::start(agent, sessions_dir, base_dir, bin_dir, message, run_env)
 }
 
 /// Answer into an existing conversation, spawning the next turn. Rejected while the previous answer
@@ -69,7 +69,7 @@ pub fn reply(
     bin_dir: Option<&Path>,
     conv_id: &str,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     conversation::reply(
         agent,
@@ -78,7 +78,7 @@ pub fn reply(
         bin_dir,
         conv_id,
         message,
-        secret_env,
+        run_env,
     )
 }
 

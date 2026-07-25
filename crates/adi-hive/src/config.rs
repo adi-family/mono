@@ -43,6 +43,14 @@ pub struct Hive {
 pub struct ProxyBinds {
     #[serde(default)]
     pub bind: Vec<SocketAddr>,
+    /// HTTPS front-door binds. Routed exactly like [`Self::bind`], but TLS-terminated with a
+    /// locally-trusted certificate the daemon mints itself (see [`crate::tls`]). Empty means no
+    /// HTTPS — plain HTTP keeps working either way, so adding this never takes the front door away.
+    ///
+    /// This is what makes `https://app.adi` a *secure context*, and so installable as an app: a
+    /// service worker is refused over `http://` on any hostname but `localhost`.
+    #[serde(default)]
+    pub tls_bind: Vec<SocketAddr>,
     /// Optional front-door name; the ports-manager lease key when the bind port is manager-allocated.
     #[serde(default)]
     pub name: Option<String>,
@@ -700,6 +708,10 @@ pub struct ResolvedRoute {
 #[derive(Debug, Clone)]
 pub struct Resolved {
     pub binds: Vec<SocketAddr>,
+    /// TLS binds, verbatim from the config — never defaulted. HTTPS is opt-in: inventing a 443
+    /// listener for a hive that didn't ask for one would try to take a privileged port on every
+    /// unprivileged dev run.
+    pub tls_binds: Vec<SocketAddr>,
     pub routes: Vec<ResolvedRoute>,
     pub skipped: Vec<String>,
 }
@@ -800,6 +812,7 @@ impl Hive {
         }
         Resolved {
             binds,
+            tls_binds: self.proxy.tls_bind.clone(),
             routes,
             skipped,
         }

@@ -22,6 +22,8 @@ adi-projects = { workspace = true }
 
 adi-secrets = { workspace = true }
 
+adi-db = { workspace = true }
+
 adi-tasks = { workspace = true }
 
 adi-tools = { workspace = true }

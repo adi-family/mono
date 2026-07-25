@@ -2,23 +2,19 @@
 
 use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
-    AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardsState, DirListing,
-    FileContent,
-    FilesRef,
-    FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef, MeshForwardRef,
-    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewProject,
-    NewProjectHook,
-    LinkTool, NewService, NewTask, NewTool, NewWorkspace, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectHookRunResult, ProjectRef, ProjectsState, ReleaseResponse,
-    ReplyToRun, ReserveResponse, RunAgent, RunRef, RunTool, SaveAgent, SaveAgentCode, SaveTrigger,
-    StartResult,
-    RevealedSecret, SecretRef, SecretsState, SetDashboardProject, SetOAuthSecret, SetSecret,
-    StartService, StopResult,
-    TaskRef,
-    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
-    TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceCreateResult,
-    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
-    WorkspacesState, WriteFile, WriteToolScript,
+    AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardsState, DbExecResult,
+    DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
+    FilesRef, FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef,
+    LinkTool, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState,
+    NewDashboard, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
+    PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
+    ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, RunAgent, RunRef,
+    RunTool, SaveAgent, SaveAgentCode, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
+    SetOAuthSecret, SetSecret, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
+    ToolRunResult, ToolScript, ToolsState, TriggerFireResult, TriggerLog, TriggerRef,
+    TriggersState, UsedPorts, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
+    WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -192,7 +188,10 @@ pub async fn remove_secret(project: Option<String>, name: String) -> Result<Secr
     post("/api/secrets/remove", &SecretRef { project, name }).await
 }
 
-pub async fn reveal_secret(project: Option<String>, name: String) -> Result<RevealedSecret, String> {
+pub async fn reveal_secret(
+    project: Option<String>,
+    name: String,
+) -> Result<RevealedSecret, String> {
     post("/api/secrets/reveal", &SecretRef { project, name }).await
 }
 
@@ -205,6 +204,54 @@ pub async fn set_oauth_secret(body: SetOAuthSecret) -> Result<SecretsState, Stri
 /// refresh token never reaches the browser.
 pub async fn refresh_secret(project: Option<String>, name: String) -> Result<SecretsState, String> {
     post("/api/secrets/refresh", &SecretRef { project, name }).await
+}
+
+// The shared SQLite store. `query` and `exec` are separate endpoints because the server holds a
+// read-only connection for one and a read-write connection for the other — browsing can't write.
+
+pub async fn db() -> Result<DbState, String> {
+    get("/api/db").await
+}
+
+pub async fn db_tables(project: Option<String>) -> Result<DbTablesState, String> {
+    post(
+        "/api/db/tables",
+        &DbScope {
+            project,
+            table: None,
+        },
+    )
+    .await
+}
+
+pub async fn db_schema(project: Option<String>, table: Option<String>) -> Result<DbSchema, String> {
+    post("/api/db/schema", &DbScope { project, table }).await
+}
+
+/// Run a read-only statement and get its rows back.
+pub async fn db_query(project: Option<String>, sql: String) -> Result<DbQueryResult, String> {
+    post(
+        "/api/db/query",
+        &DbQuery {
+            project,
+            sql,
+            params: Vec::new(),
+        },
+    )
+    .await
+}
+
+/// Run a statement for its effect — DDL, or insert/update/delete.
+pub async fn db_exec(project: Option<String>, sql: String) -> Result<DbExecResult, String> {
+    post(
+        "/api/db/exec",
+        &DbQuery {
+            project,
+            sql,
+            params: Vec::new(),
+        },
+    )
+    .await
 }
 
 // Agents: every endpoint returns the fresh AgentsState so the page updates in one round-trip.
@@ -347,7 +394,11 @@ pub async fn set_dashboard_project(
     id: String,
     project: Option<String>,
 ) -> Result<DashboardsState, String> {
-    post("/api/dashboards/project", &SetDashboardProject { id, project }).await
+    post(
+        "/api/dashboards/project",
+        &SetDashboardProject { id, project },
+    )
+    .await
 }
 
 /// Every Hive service across all projects, with live running flags.

@@ -30,8 +30,12 @@ use crate::ui::{
 /// The OAuth router that runs the provider flow and returns the token in the redirect fragment.
 const OAUTH_ROUTER: &str = "https://oauth-router.withadi.dev";
 
-/// The sessionStorage key holding the secret we're mid-OAuth for, across the provider round-trip.
+/// The localStorage key holding the secret we're mid-OAuth for, across the provider round-trip.
 const PENDING_KEY: &str = "adi.oauth.pending";
+
+/// The localStorage key the OAuth tab writes (the stored secret's name) once the secret lands, so a
+/// chat tab that launched an agent-emitted form learns the flow completed. See [`read_oauth_done`].
+pub(crate) const OAUTH_DONE_KEY: &str = "adi.oauth.done";
 
 /// The columns of the global secrets table (the project panel drops the Project column).
 const SECRET_COLS: &[&str] = &["Name", "Value", "Description", "Project", ""];
@@ -277,6 +281,28 @@ fn start_oauth(state: State, form: SecretsForm, scoped: Option<String>) {
     );
 }
 
+// ── Entry points for agent-emitted inline forms ─────────────────────────────────────────────
+//
+// An agent can emit a "create a secret" form into the chat (see `pages::agents::emitted_form`); its
+// submit calls straight into these, so a button in the conversation behaves exactly like the Set /
+// Authorize on this page and reuses the same OAuth capture on return.
+
+/// Begin the OAuth authorize flow for a secret from an agent-emitted form: park the intent and
+/// leave for the provider, requesting `scope` (space-joined) when given. On return the Secrets page
+/// captures the token (see [`handle_oauth_return`]). `scope` empty ⇒ the provider's default scopes.
+pub(crate) fn begin_oauth_secret(
+    name: String,
+    project: Option<String>,
+    description: Option<String>,
+    provider: String,
+    scope: Option<String>,
+) {
+    oauth_initiate(
+        &PendingOAuth { name, project, description, provider },
+        scope.as_deref(),
+    );
+}
+
 /// The scope a form submit targets: a panel-fixed project wins, else the typed project field
 /// (blank ⇒ global).
 fn resolve_scope(form: SecretsForm, scoped: Option<&String>) -> Option<String> {
@@ -435,7 +461,7 @@ fn expiry_text(expires_at: Option<u64>) -> Option<String> {
 }
 
 /// A display name for a provider id.
-fn provider_label(provider: &str) -> String {
+pub(crate) fn provider_label(provider: &str) -> String {
     match provider {
         "google" => "Google".to_string(),
         "github" => "GitHub".to_string(),
@@ -461,18 +487,28 @@ struct PendingOAuth {
     provider: String,
 }
 
-/// Park `pending`, then navigate the whole page to the router's login for its provider,
-/// requesting `requested_scope` (the ticked access scopes) when given. The router returns to
-/// `<origin>/secrets` with the token in the URL fragment.
+/// Park `pending`, then open the router's login for its provider in a **new tab**, requesting
+/// `requested_scope` (the ticked access scopes) when given. The new tab runs the whole round-trip
+/// and returns to `<origin>/secrets` with the token in its URL fragment, where the Secrets page
+/// captures it; the tab you started from stays put.
+///
+/// Two reasons this opens a new tab rather than navigating in place:
+/// - the flow no longer hijacks the chat/page you launched it from; and
+/// - the new tab visits `oauth-router.withadi.dev` as its own top-level site instead of a transient
+///   redirect hop out of `app.adi`, which keeps browsers (Safari ITP "bounce tracking" in
+///   particular) from purging the router's CSRF nonce cookie mid-flow — the cause of a
+///   `state / cookie mismatch` on return.
+///
+/// Because the new tab is a fresh browsing context, the parked intent must be readable there — so
+/// it lives in **localStorage** (shared across the origin's tabs), not tab-scoped sessionStorage.
 fn oauth_initiate(pending: &PendingOAuth, requested_scope: Option<&str>) {
-    if let (Some(store), Ok(json)) = (session_storage(), serde_json::to_string(pending)) {
+    if let (Some(store), Ok(json)) = (oauth_store(), serde_json::to_string(pending)) {
         let _ = store.set_item(PENDING_KEY, &json);
     }
     let Some(win) = web_sys::window() else {
         return;
     };
-    let loc = win.location();
-    let origin = loc.origin().unwrap_or_default();
+    let origin = win.location().origin().unwrap_or_default();
     // Return to the Secrets page (now under `/extended`) so the App shell mounts and captures
     // the token fragment — landing on the bare root would silently drop it.
     let redirect: String =
@@ -483,7 +519,8 @@ fn oauth_initiate(pending: &PendingOAuth, requested_scope: Option<&str>) {
         url.push_str("&scope=");
         url.push_str(&enc);
     }
-    let _ = loc.assign(&url);
+    // A synchronous open in the click/submit handler counts as a user gesture, so it isn't blocked.
+    let _ = win.open_with_url_and_target(&url, "_blank");
 }
 
 /// If this page load is a return from the router (token or error in the fragment), store the
@@ -532,21 +569,49 @@ fn handle_oauth_return(state: State) {
         expires_in: params.get("expires_in").and_then(|s| s.parse::<u64>().ok()),
         scope: params.get("scope").filter(|s| !s.is_empty()),
     };
-    apply_mutation(state, None, format!("Stored OAuth secret \u{201c}{}\u{201d}.", pending.name),
-        |s: State, sec: SecretsState| s.secrets.set(Some(sec)), fetch::set_oauth_secret(body));
+    // Store the secret; on success drop a cross-tab "done" marker (this runs in the OAuth tab, so
+    // the chat tab that launched the form learns it completed — see `emitted_form`).
+    let name = pending.name.clone();
+    spawn_local(async move {
+        match fetch::set_oauth_secret(body).await {
+            Ok(sec) => {
+                state.secrets.set(Some(sec));
+                state.flash.set(Some(Flash::ok(format!("Stored OAuth secret \u{201c}{name}\u{201d}."))));
+                if let Some(store) = oauth_store() {
+                    let _ = store.set_item(OAUTH_DONE_KEY, &name);
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
 }
 
 /// Read and remove the parked OAuth intent (one-shot).
 fn take_pending() -> Option<PendingOAuth> {
-    let store = session_storage()?;
+    let store = oauth_store()?;
     let json = store.get_item(PENDING_KEY).ok().flatten()?;
     let _ = store.remove_item(PENDING_KEY);
     serde_json::from_str(&json).ok()
 }
 
-/// The tab-scoped sessionStorage, if available.
-fn session_storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.session_storage().ok().flatten()
+/// Where the mid-OAuth intent is parked: **localStorage**, so the new tab that runs the flow (a
+/// separate browsing context) can read it — sessionStorage is per-tab and wouldn't carry across.
+/// Consumed one-shot by [`take_pending`] on return.
+fn oauth_store() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok().flatten()
+}
+
+/// Peek at the cross-tab OAuth "done" marker (the stored secret's name), without consuming it — a
+/// chat-form listener matches it against its own secret before clearing. `None` when absent.
+pub(crate) fn read_oauth_done() -> Option<String> {
+    oauth_store()?.get_item(OAUTH_DONE_KEY).ok().flatten()
+}
+
+/// Clear the cross-tab OAuth "done" marker once a form has consumed it.
+pub(crate) fn clear_oauth_done() {
+    if let Some(store) = oauth_store() {
+        let _ = store.remove_item(OAUTH_DONE_KEY);
+    }
 }
 
 /// Strip the token fragment from the URL so a refresh can't replay it and nothing lingers.

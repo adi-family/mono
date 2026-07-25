@@ -1,0 +1,3 @@
+# Words that look like code to clippy's `doc_markdown` heuristic but are ordinary prose here.
+# `..` keeps clippy's own defaults (TypeScript, JavaScript, …) rather than replacing them.
+doc-valid-idents = ["SQLite", ".."]

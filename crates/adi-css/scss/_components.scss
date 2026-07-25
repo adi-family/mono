@@ -466,6 +466,37 @@ $runlog-dim: #8b93a1;
   background: rgba(255, 255, 255, .06);
 }
 
+// An agent-emitted inline form (see `emitted_form.rs`): a bordered card inside the agent's
+// message, stacking its title over the prefilled fields the human confirms and submits. The
+// combined selector out-specifies `.adi-form` so these win regardless of source order.
+.adi-form.adi-chatform {
+  flex-direction: column;
+  align-items: stretch;
+  margin-top: 8px;
+  padding: 10px 11px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, .03);
+}
+
+.adi-chatform__title {
+  font-weight: 600;
+}
+
+// The form footer once acted on: a muted pending line, or a green terminal ✓.
+.adi-chatform__status {
+  margin: 0;
+  color: $runlog-dim;
+  font-size: var(--text-sm);
+}
+
+.adi-chatform__done {
+  margin: 0;
+  color: var(--online);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
 // The speaker label above the message text.
 .adi-chat__role {
   font-size: var(--text-xs);

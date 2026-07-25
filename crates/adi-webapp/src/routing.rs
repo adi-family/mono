@@ -27,6 +27,8 @@ pub(crate) enum Route {
     Tools,
     /// Encrypted secrets — global & per-project key-values (`/secrets`).
     Secrets,
+    /// The shared SQLite store — browse tables and run SQL (`/database`).
+    Database,
     /// Trigger definitions (`/triggers`).
     Triggers,
     /// Agent-authored dashboards (`/dashboards`).
@@ -56,6 +58,7 @@ impl Route {
             "/agents" => Route::Agents,
             "/tools" => Route::Tools,
             "/secrets" => Route::Secrets,
+            "/database" => Route::Database,
             "/triggers" => Route::Triggers,
             "/dashboards" => Route::Dashboards,
             "/settings/hive" => Route::Hive,
@@ -77,6 +80,7 @@ impl Route {
             Route::Agents => "/extended/agents",
             Route::Tools => "/extended/tools",
             Route::Secrets => "/extended/secrets",
+            Route::Database => "/extended/database",
             Route::Triggers => "/extended/triggers",
             Route::Dashboards => "/extended/dashboards",
             Route::Hive => "/extended/settings/hive",
@@ -97,6 +101,7 @@ impl Route {
             Route::Agents => "Agents",
             Route::Tools => "Tools",
             Route::Secrets => "Secrets",
+            Route::Database => "Database",
             Route::Triggers => "Triggers",
             Route::Dashboards => "Dashboards",
             Route::Hive => "Hive",

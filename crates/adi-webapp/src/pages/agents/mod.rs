@@ -16,6 +16,7 @@ use crate::ui::{data_table, flash_view, menu_item, placeholder_row, row_actions,
 
 mod actions;
 mod code;
+mod emitted_form;
 mod form;
 
 use actions::apply_agents;

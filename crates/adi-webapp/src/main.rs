@@ -25,7 +25,8 @@ mod tree;
 mod ui;
 
 use adi_webapp_api::types::{
-    AgentBackendOption, AgentsState, DashboardsState, Health, HiveState, MeshState, MetaState,
+    AgentBackendOption, AgentsState, DashboardsState, DbState, Health, HiveState, MeshState,
+    MetaState,
     PortsState, ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState, ToolsState,
     TriggersState, UsedPorts, WorkspacesState,
 };
@@ -36,7 +37,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, chat_home_view, dashboards_view, hive_view, live_view, load_dir, load_store_file,
+    agents_view, chat_home_view, dashboards_view, database_view, hive_view, live_view, load_dir,
+    load_store_file,
     mesh_view, meta_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, secrets_view, store_file_view,
     tasks_view, tools_view, triggers_view,
@@ -46,7 +48,8 @@ use routing::{
     project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
-    AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, FilesState, Flash, Form, HookLogView,
+    AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, Form,
+    HookLogView,
     MeshForm, MetaForm, ProjectsForm, SecretsForm, State, Status, TasksForm, TermWatch, ToolEditor,
     ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
 };
@@ -630,6 +633,7 @@ fn App() -> impl IntoView {
     let all_chats = RwSignal::new(None::<adi_webapp_api::types::AllAgentRuns>);
     let tools = RwSignal::new(None::<ToolsState>);
     let secrets = RwSignal::new(None::<SecretsState>);
+    let db = RwSignal::new(None::<DbState>);
     let meta = RwSignal::new(None::<MetaState>);
     let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
@@ -661,6 +665,7 @@ fn App() -> impl IntoView {
         all_chats,
         tools,
         secrets,
+        db,
         meta,
         triggers,
         hive,
@@ -751,6 +756,7 @@ fn App() -> impl IntoView {
     let tools_form = ToolsForm::new();
     let tool_editor = ToolEditor::new();
     let tool_run = ToolRunView::new();
+    let db_console = DbConsole::new();
 
     // The Secrets page's create form + reveal cache, shared with a project's Secrets panel.
     let secrets_form = SecretsForm::new();
@@ -1022,6 +1028,7 @@ fn App() -> impl IntoView {
                         Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),
                         Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
                         Route::Secrets => secrets_view(state, secrets_form),
+                        Route::Database => database_view(state, db_console),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
                         Route::Hive => hive_view(state, route),
@@ -1068,6 +1075,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Agents,
             Route::Tools,
             Route::Secrets,
+            Route::Database,
             Route::Triggers,
             Route::Dashboards,
         ],

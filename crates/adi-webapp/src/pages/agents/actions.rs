@@ -557,7 +557,7 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
                         idx.to_string()
                     }
                 }
-                children=move |(_, turn)| chat_bubble(turn)
+                children=move |(_, turn)| chat_bubble(state, turn, answerable)
             />
             {move || chat_placeholder(watch)}
         </div>
@@ -586,8 +586,10 @@ fn chat_placeholder(watch: AgentsWatch) -> Option<AnyView> {
 /// tool call / thinking block as its own bubble below the answer, in **reverse** order (newest
 /// activity nearest the answer). The still-streaming answer is tagged and, while it has no body yet,
 /// shows a typing ellipsis.
-fn chat_bubble(turn: AgentTurn) -> AnyView {
+fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
     let is_user = turn.role == "user";
+    // Only an assistant turn on a conversation backend may carry an `adi-form` block to render.
+    let forms = answerable && !is_user;
     let pending = turn.pending;
     let errored = turn.metrics.as_ref().is_some_and(|m| m.is_error);
     let has_body = !turn.text.trim().is_empty() || !turn.steps.is_empty();
@@ -613,7 +615,7 @@ fn chat_bubble(turn: AgentTurn) -> AnyView {
                 {who}
                 {pending.then(|| view! { <span class="adi-chat__typing">" · answering…"</span> })}
             </div>
-            {(!text.trim().is_empty()).then(|| crate::markdown::render(&text))}
+            {(!text.trim().is_empty()).then(|| super::emitted_form::render_message(state, &text, forms))}
             {metrics.map(metrics_view)}
         </div>
     };

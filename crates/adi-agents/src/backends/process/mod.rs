@@ -27,7 +27,7 @@ pub fn launch(
     base_dir: &Path,
     bin_dir: Option<&Path>,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     let (argv, working_dir) = engine_run(&agent.manifest, message)?;
     detached::launch(
@@ -39,7 +39,7 @@ pub fn launch(
         &argv,
         working_dir,
         message,
-        secret_env,
+        run_env,
     )
 }
 

@@ -53,7 +53,7 @@ pub(crate) fn launch(
     argv: &[String],
     working_dir: Option<String>,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     let dir = agent_dir(sessions_dir, subdir, &agent.name);
     std::fs::create_dir_all(&dir)?;
@@ -64,7 +64,7 @@ pub(crate) fn launch(
     let _ = std::fs::write(meta_path(&dir, &run_id), meta.to_string());
 
     let log = log_path_in(&dir, &run_id);
-    let pid = spawn_child(&dir, &run_id, &log, base_dir, bin_dir, argv, working_dir.as_deref(), secret_env)?;
+    let pid = spawn_child(&dir, &run_id, &log, base_dir, bin_dir, argv, working_dir.as_deref(), run_env)?;
 
     prune_old_runs(&dir);
 
@@ -91,7 +91,7 @@ pub(crate) fn spawn_child(
     bin_dir: Option<&Path>,
     argv: &[String],
     working_dir: Option<&str>,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<u32> {
     let log_file = File::create(log)?;
     let errlog = log_file.try_clone()?;
@@ -104,7 +104,7 @@ pub(crate) fn spawn_child(
         .args(command_args)
         // Injected secrets go in first, under their literal names; `PATH` is set right after so
         // a secret can never shadow the tool path.
-        .envs(secret_env.iter().map(|(k, v)| (k, v)))
+        .envs(run_env.iter().map(|(k, v)| (k, v)))
         .env("PATH", augmented_path(bin_dir))
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))

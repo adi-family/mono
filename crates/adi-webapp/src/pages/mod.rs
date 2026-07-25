@@ -3,6 +3,7 @@
 
 mod agents;
 mod dashboards;
+mod db;
 mod hive;
 mod mesh;
 mod meta;
@@ -18,6 +19,7 @@ mod workspaces;
 
 pub(crate) use agents::{agents_view, chat_home_view, live_view, poll_watch};
 pub(crate) use dashboards::dashboards_view;
+pub(crate) use db::database_view;
 pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use meta::meta_view;

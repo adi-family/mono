@@ -27,6 +27,7 @@ pub(crate) enum Icon {
     Spark,
     Wrench,
     Key,
+    Database,
 }
 
 impl Icon {
@@ -112,6 +113,11 @@ impl Icon {
                 r#"<circle cx="5.25" cy="10.75" r="3"/><path d="M7.4 8.6l5.35-5.35"/>
                    <path d="M10.5 5.5l1.5 1.5M12.75 3.25l1.5 1.5"/>"#
             }
+            Icon::Database => {
+                r#"<ellipse cx="8" cy="3.75" rx="5.25" ry="2"/>
+                   <path d="M2.75 3.75v8.5c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2v-8.5"/>
+                   <path d="M2.75 8c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2"/>"#
+            }
         }
     }
 }
@@ -125,6 +131,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Agents => Icon::Agent,
         Route::Tools => Icon::Wrench,
         Route::Secrets => Icon::Key,
+        Route::Database => Icon::Database,
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,
         Route::Hive => Icon::Server,

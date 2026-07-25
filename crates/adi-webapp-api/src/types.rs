@@ -1732,6 +1732,204 @@ pub struct RevealedSecret {
     pub value: String,
 }
 
+// ---- the shared database -------------------------------------------------------------
+//
+// Mirrors `adi_db`'s types as plain DTOs. The store crate itself compiles SQLite in and so is
+// native-only; these travel to the wasm frontend, which is why they're restated here rather
+// than re-exported.
+
+/// One database in the store — the global one, or a project's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbInfoDto {
+    /// The project this database belongs to, or `None` for the global database.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Its absolute path on disk.
+    pub path: String,
+    /// The size of the main database file in bytes (excluding the `-wal`/`-shm` sidecars).
+    pub bytes: u64,
+    /// How many tables and views it holds.
+    pub tables: usize,
+}
+
+/// `GET /api/db` — every database that exists in the store. A scope nothing has written to yet
+/// has no file, so it is simply absent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbState {
+    pub databases: Vec<DbInfoDto>,
+}
+
+/// Request body naming a scope — `POST /api/db/tables` and `/schema`. Omitted/blank = global.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct DbScope {
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Narrow a schema read to one table. Ignored by `/tables`.
+    #[serde(default)]
+    pub table: Option<String>,
+}
+
+/// One column of a table or view.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbColumnDto {
+    pub name: String,
+    /// The declared type (`TEXT`, `INTEGER`, …) — empty when declared without one.
+    pub decl_type: String,
+    pub notnull: bool,
+    pub pk: bool,
+}
+
+/// One table or view, with its shape and current row count.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbTableDto {
+    pub name: String,
+    /// `"table"` or `"view"`.
+    pub kind: String,
+    pub rows: i64,
+    pub columns: Vec<DbColumnDto>,
+}
+
+/// `POST /api/db/tables` response — a scope's tables and views.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbTablesState {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub tables: Vec<DbTableDto>,
+}
+
+/// `POST /api/db/schema` response — the `create` statements for a scope (or one table).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbSchema {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub schema: String,
+}
+
+/// Request body running SQL — `POST /api/db/query` (read-only) and `/exec` (read-write).
+// Not `Eq`: `params` carries `serde_json::Value`, which is `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct DbQuery {
+    #[serde(default)]
+    pub project: Option<String>,
+    pub sql: String,
+    /// Values bound to the statement's `?` placeholders, in order.
+    ///
+    /// Each binds as the JSON type it already is — `42` an integer, `"007"` text — so a caller
+    /// never has to encode its types into strings just to get them across the wire.
+    #[serde(default)]
+    pub params: Vec<serde_json::Value>,
+}
+
+/// `POST /api/db/query` response — a result set. Columns sit beside the rows so a table can be
+/// laid out without re-deriving the header, and a zero-row result still reports its shape.
+// Not `Eq`: cells carry `serde_json::Value`, which is `PartialEq` but not `Eq`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DbQueryResult {
+    pub columns: Vec<String>,
+    /// One entry per row, each aligned to `columns`.
+    pub rows: Vec<Vec<serde_json::Value>>,
+}
+
+/// `POST /api/db/exec` response — what a statement run for its effect did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DbExecResult {
+    pub changes: u64,
+    pub last_insert_rowid: i64,
+}
+
+// ---- agent-emitted inline forms -----------------------------------------------------
+
+/// A form an agent emits **inline into a conversation** for the human to fill in and submit. The
+/// agent writes it as a fenced ```` ```adi-form <json> ``` ```` block in its reply; the chat feed
+/// parses that block out and renders it as a live form (the schema and an example live in the
+/// `secrets` guide). This keeps the agent's side to plain text — no tool loop required — so it works
+/// on today's harness backends; once the harness gains a tool loop an `emit_form` tool would produce
+/// the very same shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentForm {
+    /// A short heading for the form (e.g. "Create the Gmail secret").
+    pub title: String,
+    /// An optional sentence under the title explaining what submitting does.
+    #[serde(default)]
+    pub description: String,
+    /// The submit button's label; a sensible per-action default is used when empty.
+    #[serde(default)]
+    pub submit_label: String,
+    /// What pressing submit does.
+    pub action: AgentFormAction,
+    /// The editable controls, in render order.
+    #[serde(default)]
+    pub fields: Vec<AgentFormInput>,
+}
+
+/// One control in an [`AgentForm`]. `value` is the agent's prefill — the whole point of the feature
+/// is that the human lands on an already-filled form and only has to confirm.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFormInput {
+    /// The field key read on submit. For the secret actions the well-known keys are `name`,
+    /// `value`, `description`, and `project`.
+    pub name: String,
+    /// The visible label.
+    pub label: String,
+    #[serde(rename = "type", default)]
+    pub kind: AgentFormInputKind,
+    /// The prefilled value.
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub placeholder: String,
+    #[serde(default)]
+    pub hint: String,
+    /// The options for a `select` field (ignored by other kinds).
+    #[serde(default)]
+    pub options: Vec<AgentFormChoice>,
+    #[serde(default)]
+    pub required: bool,
+    /// Render in a monospace input (for identifiers / keys).
+    #[serde(default)]
+    pub mono: bool,
+}
+
+/// A select option in an [`AgentFormInput`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentFormChoice {
+    pub value: String,
+    pub label: String,
+}
+
+/// The small set of controls a client renders from an [`AgentFormInput`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentFormInputKind {
+    #[default]
+    Text,
+    Textarea,
+    Number,
+    Select,
+    Checkbox,
+    /// A masked value input — the typed secret value.
+    Secret,
+}
+
+/// What an [`AgentForm`]'s submit does. Internally tagged by `type` so the JSON reads naturally,
+/// e.g. `{"type":"oauth_secret","provider":"google","scopes":["…"]}`. Both current actions target
+/// the secrets store and reuse the Secrets page's flows wholesale.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentFormAction {
+    /// Create/replace a **text** secret from the `name` / `value` / `description` / `project`
+    /// fields (`POST /api/secrets/set`).
+    SetSecret,
+    /// Begin the **OAuth** authorize flow for a secret: the value comes from the provider, while
+    /// `provider` and the requested `scopes` are fixed by the action and `name` / `description` /
+    /// `project` stay editable fields. Empty `scopes` ⇒ the provider's default scopes.
+    OauthSecret {
+        provider: String,
+        #[serde(default)]
+        scopes: Vec<String>,
+    },
+}
+
 /// A JSON error body: `{ "ok": false, "error": "…" }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiError {
@@ -1747,5 +1945,52 @@ impl ApiError {
             ok: false,
             error: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two `adi-form` blocks documented in `templates/guides/secrets.md` must deserialize into
+    /// [`AgentForm`] — this pins the guide's schema examples to the actual types, so a field rename
+    /// can't quietly break what agents are told to emit.
+    #[test]
+    fn guide_form_examples_deserialize() {
+        // The Gmail OAuth example.
+        let gmail = r#"{
+          "title": "Create the Gmail secret",
+          "description": "Read access to your Gmail.",
+          "action": { "type": "oauth_secret", "provider": "google", "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "email"] },
+          "fields": [
+            { "name": "name", "label": "Secret name", "type": "text", "value": "GMAIL_TOKEN", "mono": true, "hint": "the env-var name it injects as" },
+            { "name": "project", "label": "Project", "type": "text", "value": "", "placeholder": "(global — a project id scopes it)", "mono": true },
+            { "name": "description", "label": "What it's for", "type": "text", "value": "Gmail read access for the mail client" }
+          ]
+        }"#;
+        let form: AgentForm = serde_json::from_str(gmail).expect("gmail form parses");
+        assert_eq!(form.fields.len(), 3);
+        match form.action {
+            AgentFormAction::OauthSecret { provider, scopes } => {
+                assert_eq!(provider, "google");
+                assert_eq!(scopes.len(), 2);
+            }
+            AgentFormAction::SetSecret => panic!("expected oauth_secret action"),
+        }
+
+        // The typed-secret example, plus a masked `secret` field kind.
+        let api_key = r#"{
+          "title": "Save the API key",
+          "action": { "type": "set_secret" },
+          "fields": [
+            { "name": "name", "label": "Secret name", "type": "text", "value": "OPENAI_API_KEY", "mono": true },
+            { "name": "value", "label": "Value", "type": "secret", "placeholder": "paste the key" }
+          ]
+        }"#;
+        let form: AgentForm = serde_json::from_str(api_key).expect("api-key form parses");
+        assert!(matches!(form.action, AgentFormAction::SetSecret));
+        assert_eq!(form.fields[1].kind, AgentFormInputKind::Secret);
+        // An omitted `type` defaults to Text (an agent may leave it off).
+        assert_eq!(form.fields[0].kind, AgentFormInputKind::Text);
     }
 }

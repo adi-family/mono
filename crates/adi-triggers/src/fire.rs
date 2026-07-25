@@ -79,7 +79,7 @@ pub(crate) fn launch(
     trigger: &Trigger,
     payload: Option<&[u8]>,
     event: Option<&str>,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     let code = trigger.manifest.code.trim();
     if code.is_empty() {
@@ -98,7 +98,7 @@ pub(crate) fn launch(
     // Resolved secrets go in FIRST, under their literal key names, so the platform's own
     // reserved vars pushed below (PATH, ADI_TRIGGER*) win if a secret is unwisely named after
     // one — the injection can never break a launch by shadowing `PATH`.
-    let mut env: Vec<(String, String)> = secret_env.to_vec();
+    let mut env: Vec<(String, String)> = run_env.to_vec();
     env.push(("PATH".to_string(), augmented_path()));
     env.push(("ADI_TRIGGER".to_string(), trigger.name.clone()));
     env.push((
@@ -188,9 +188,9 @@ pub(crate) fn fire(
     trigger: &Trigger,
     payload: Option<&[u8]>,
     event: Option<&str>,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Firing> {
-    let spec = launch(module_dir, trigger, payload, event, secret_env)?;
+    let spec = launch(module_dir, trigger, payload, event, run_env)?;
     let log_file = open_log(module_dir, &trigger.name, false)?;
     let errlog = log_file.try_clone()?;
 
@@ -416,12 +416,12 @@ mod tests {
     fn secret_env_injects_by_literal_name_and_never_shadows_platform_vars() {
         let dir = scratch_dir("secretenv");
         let t = trigger("reader", "printf '%s|%s' \"$MY_SECRET\" \"$ADI_TRIGGER\"");
-        let secret_env = vec![
+        let run_env = vec![
             ("MY_SECRET".to_string(), "s3cr3t".to_string()),
             // A secret unwisely named after a platform var must lose to the real one.
             ("ADI_TRIGGER".to_string(), "hijacked".to_string()),
         ];
-        let firing = fire(&dir, &t, None, None, &secret_env).expect("fire");
+        let firing = fire(&dir, &t, None, None, &run_env).expect("fire");
         assert_eq!(
             wait_for_log(&firing.log, |s| s.contains('|')),
             "s3cr3t|reader"

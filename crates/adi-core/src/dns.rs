@@ -38,6 +38,9 @@ pub(crate) const LABEL: &str = "family.adi.app.dns";
 /// Kept off `127.0.0.1` so `:80` never collides with anything else serving there.
 const FRONTDOOR_ADDR: &str = "127.0.0.53";
 const FRONTDOOR_PORT: u16 = 80;
+/// The HTTPS front door. Same privileged-port story as [`FRONTDOOR_PORT`] — fine, because the
+/// front-door daemon already runs as root; an unprivileged hive just logs a skipped bind.
+const FRONTDOOR_TLS_PORT: u16 = 443;
 const FRONTDOOR_LABEL: &str = "family.adi.app.dns-landing";
 
 // macOS-only: the root front-door LaunchDaemon lives at a system path with a system log.
@@ -206,6 +209,11 @@ fn render_frontdoor_hive(hosts: &[String], app_port: u16) -> String {
 proxy:
   bind:
     - \"{FRONTDOOR_ADDR}:{FRONTDOOR_PORT}\"
+  # HTTPS alongside (never instead of) plain HTTP. adi-hive mints a locally-trusted certificate
+  # for the hosts below; trusting its CA once makes https://app.adi a secure context, which is
+  # what lets the control panel be installed as an app. See adi-hive's `tls` module.
+  tls_bind:
+    - \"{FRONTDOOR_ADDR}:{FRONTDOOR_TLS_PORT}\"
 services:
 {routes}"
     )
@@ -540,6 +548,9 @@ mod tests {
 
         let v: serde_yaml_ng::Value = serde_yaml_ng::from_str(&cfg).expect("valid YAML");
         assert_eq!(v["proxy"]["bind"][0].as_str(), Some("127.0.0.53:80"));
+        // HTTPS is additive: :443 is offered *and* :80 stays, so nothing that speaks plain HTTP to
+        // the front door breaks when TLS lands.
+        assert_eq!(v["proxy"]["tls_bind"][0].as_str(), Some("127.0.0.53:443"));
 
         for (name, host) in [("app", "app.adi"), ("api", "api.adi")] {
             let svc = &v["services"][name];

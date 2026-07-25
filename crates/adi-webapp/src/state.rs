@@ -5,10 +5,10 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_webapp_api::types::{
-    AgentPeek, AgentRunInfo, AgentsState, AllAgentRuns, DashboardsState, DirListing, FileEntry,
-    Health, HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectsState, SecretsState, TasksState, ToolsState, TriggerLog, TriggersState, UsedPorts,
-    WorkspaceTerm, WorkspacesState,
+    AgentPeek, AgentRunInfo, AgentsState, AllAgentRuns, DashboardsState, DbExecResult,
+    DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, Health, HiveState, MeshState,
+    MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState, SecretsState, TasksState,
+    ToolsState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -44,6 +44,10 @@ pub(crate) struct State {
     /// project's Secrets panel — never the values, which are fetched on demand by an explicit
     /// reveal.
     pub(crate) secrets: RwSignal<Option<SecretsState>>,
+    /// Which databases exist in the shared SQLite store (`/api/db`), shown on the Database page.
+    /// Only the listing lives here — a scope's tables and any query result are page-local, fetched
+    /// on demand, because they're too big and too transient to belong to the polled shell state.
+    pub(crate) db: RwSignal<Option<DbState>>,
     /// The Meta page's state (`/api/meta`): the well-known `adi-agent`, the default system prompt
     /// to seed a new one with, and the agent form schema.
     pub(crate) meta: RwSignal<Option<MetaState>>,
@@ -86,6 +90,7 @@ impl State {
             all_chats: RwSignal::new(None),
             tools: RwSignal::new(None),
             secrets: RwSignal::new(None),
+            db: RwSignal::new(None),
             meta: RwSignal::new(None),
             triggers: RwSignal::new(None),
             hive: RwSignal::new(None),
@@ -370,6 +375,64 @@ impl SecretsForm {
     /// memory across a navigation.
     pub(crate) fn clear_revealed(self) {
         self.revealed.set(BTreeMap::new());
+    }
+}
+
+/// The Database page's console: which scope is open, that scope's tables, the SQL buffer, and
+/// whatever the last run produced.
+///
+/// Reading and writing are separate actions here for the same reason they're separate endpoints —
+/// `Run` holds a read-only connection server-side, so browsing can't mutate — and the two results
+/// are different shapes, hence both `rows` and `exec`. `Copy` so it threads into the view and
+/// async handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct DbConsole {
+    /// The open scope: a project id, or empty for the global database.
+    pub(crate) project: RwSignal<String>,
+    /// The open scope's tables and views, or `None` before the first load.
+    pub(crate) tables: RwSignal<Option<DbTablesState>>,
+    /// The `create` statements for the open scope (or one table), or empty when the schema panel
+    /// is closed. Reading this before querying a table someone else made is the advice the guide
+    /// gives agents, so the panel offers it too.
+    pub(crate) schema: RwSignal<String>,
+    /// The SQL buffer.
+    pub(crate) sql: RwSignal<String>,
+    /// The last `Run`'s result set, or `None` if the last action wrote (or nothing ran yet).
+    pub(crate) rows: RwSignal<Option<DbQueryResult>>,
+    /// The last `Execute`'s counts, or `None` if the last action read.
+    pub(crate) exec: RwSignal<Option<DbExecResult>>,
+    /// Why the last statement failed, or `None`. Kept beside the results rather than in the shared
+    /// flash: a SQL error belongs next to the SQL that caused it.
+    pub(crate) error: RwSignal<Option<String>>,
+    /// Whether a statement is in flight.
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl DbConsole {
+    pub(crate) fn new() -> Self {
+        Self {
+            project: RwSignal::new(String::new()),
+            tables: RwSignal::new(None),
+            schema: RwSignal::new(String::new()),
+            sql: RwSignal::new(String::new()),
+            rows: RwSignal::new(None),
+            exec: RwSignal::new(None),
+            error: RwSignal::new(None),
+            busy: RwSignal::new(false),
+        }
+    }
+
+    /// The open scope as the API wants it — `None` for global.
+    pub(crate) fn scope(self) -> Option<String> {
+        let project = self.project.get_untracked();
+        (!project.is_empty()).then_some(project)
+    }
+
+    /// Drop whatever the last statement produced, before running the next one.
+    pub(crate) fn clear_result(self) {
+        self.rows.set(None);
+        self.exec.set(None);
+        self.error.set(None);
     }
 }
 
@@ -968,6 +1031,11 @@ pub(crate) async fn load(s: State) {
         && let Ok(sec) = fetch::secrets().await
     {
         set_if_changed(s.secrets, sec);
+    }
+    if path == Route::Database.path()
+        && let Ok(d) = fetch::db().await
+    {
+        set_if_changed(s.db, d);
     }
     if path == Route::Triggers.path() {
         if let Ok(t) = fetch::triggers().await {

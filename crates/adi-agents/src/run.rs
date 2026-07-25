@@ -79,17 +79,17 @@ pub(crate) fn launch_in(
     base_dir: &Path,
     bin_dir: Option<&Path>,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     match &agent.manifest.backend {
         Backend::PtyClaude | Backend::PtyCodex => {
-            pty::launch(agent, base_dir, bin_dir, secret_env)
+            pty::launch(agent, base_dir, bin_dir, run_env)
         }
         Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::launch(agent, sessions_dir, base_dir, bin_dir, message, secret_env)
+            process::launch(agent, sessions_dir, base_dir, bin_dir, message, run_env)
         }
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::launch(agent, sessions_dir, base_dir, bin_dir, message, secret_env)
+            harness::launch(agent, sessions_dir, base_dir, bin_dir, message, run_env)
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -208,11 +208,11 @@ pub(crate) fn reply_in(
     bin_dir: Option<&Path>,
     conv_id: &str,
     message: &str,
-    secret_env: &[(String, String)],
+    run_env: &[(String, String)],
 ) -> Result<Launch> {
     match &agent.manifest.backend {
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::reply(agent, sessions_dir, base_dir, bin_dir, conv_id, message, secret_env)
+            harness::reply(agent, sessions_dir, base_dir, bin_dir, conv_id, message, run_env)
         }
         other => Err(Error::Unsupported(format!(
             "backend {other} isn't answerable — only harness backends keep conversations you can reply to"

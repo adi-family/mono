@@ -77,12 +77,13 @@ pub struct Agents {
 }
 
 /// The resolved inputs a launch or reply needs from the store: the sessions/runs dir, the default
-/// working directory, the agent's `.bin` of enabled tools, and its injected secret env.
+/// working directory, the agent's `.bin` of enabled tools, and the environment its run is launched
+/// with (its attached secrets, plus the pointer to its scope's database).
 struct LaunchContext {
     sessions_dir: PathBuf,
     base_dir: PathBuf,
     bin_dir: Option<PathBuf>,
-    secret_env: Vec<(String, String)>,
+    run_env: Vec<(String, String)>,
 }
 
 impl Default for Agents {
@@ -262,7 +263,7 @@ impl Agents {
             &ctx.base_dir,
             ctx.bin_dir.as_deref(),
             message,
-            &ctx.secret_env,
+            &ctx.run_env,
         )?;
         self.emit(
             "adi.agents.run.started",
@@ -289,7 +290,7 @@ impl Agents {
             ctx.bin_dir.as_deref(),
             conv_id,
             message,
-            &ctx.secret_env,
+            &ctx.run_env,
         )?;
         self.emit(
             "adi.agents.run.started",
@@ -325,8 +326,9 @@ impl Agents {
         adi_turn_in(&agent, &sessions_dir, conv_id)
     }
 
-    /// The shared per-launch context: where runs live, the default cwd, the agent's `.bin`, and its
-    /// injected secrets — resolved the same way whether launching a fresh run or answering a reply.
+    /// The shared per-launch context: where runs live, the default cwd, the agent's `.bin`, and the
+    /// environment its run gets — resolved the same way whether launching a fresh run or answering
+    /// a reply.
     fn launch_context(&self, agent: &StoredAgent) -> LaunchContext {
         // Default cwd is the ADI store root (`~/.adi/mono`), not the daemon's cwd or $HOME. An
         // agent's explicit `working_dir` still overrides this. A conversation's replies must run in
@@ -338,12 +340,17 @@ impl Agents {
             .ok();
         // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
         // store's Config (test stores stay isolated). Best-effort: a missing/undecryptable secret is skipped.
-        let secret_env = attached_secret_env(&self.config, &agent.manifest.secrets);
+        let mut run_env = attached_secret_env(&self.config, &agent.manifest.secrets);
+        // Point the run at its scope's shared database (a project agent gets that project's), so
+        // `adi-db` in its shell and `import … from "@adi/db"` in its `ts` code both resolve without
+        // the agent being told where the file is. Secrets are listed first, so a secret named
+        // `ADI_DB` would be overridden here rather than silently redirecting the run's database.
+        run_env.extend(self.config.db_env(agent.manifest.project.as_deref()));
         LaunchContext {
             sessions_dir: self.config.module(SESSIONS_MODULE).dir().to_path_buf(),
             base_dir,
             bin_dir,
-            secret_env,
+            run_env,
         }
     }
 

@@ -17,6 +17,8 @@ a later run of the agent picks up the changes.
 | `triggers.md` | wire a webhook / background / event code block |
 | `tools.md` | give agents a small `sh`/`ts` CLI to run |
 | `agents.md` | define or run an agent |
+| `secrets.md` | store a secret, connect Gmail/Google via OAuth, or send a create form |
+| `db.md` | store data that outlives a run, or that another agent or a dashboard reads |
 
 Everything is under the mono store at `~/.adi/mono` and browsable in the control panel at
 `http://app.adi`. Prefer the `adi` CLI and the `/api/*` endpoints over editing store files by

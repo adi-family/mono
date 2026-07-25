@@ -3,6 +3,7 @@
 //! platform actions by running this binary.
 
 mod agents;
+mod db;
 mod dns;
 mod format;
 mod projects;
@@ -17,6 +18,7 @@ use adi_core::{Adi, Service};
 use clap::{Parser, Subcommand};
 
 use crate::agents::{AgentsCommand, run_agents};
+use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
 use crate::projects::{ProjectsCommand, run_projects};
@@ -73,6 +75,11 @@ enum Command {
     Secrets {
         #[command(subcommand)]
         command: SecretsCommand,
+    },
+    /// Database commands: run SQL against the shared SQLite store (global or per-project).
+    Db {
+        #[command(subcommand)]
+        command: DbCommand,
     },
     /// Agent definition commands.
     Agents {
@@ -142,6 +149,12 @@ fn main() {
         }
         Command::Secrets { command } => {
             if let Err(e) = run_secrets(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Db { command } => {
+            if let Err(e) = run_db(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }

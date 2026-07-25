@@ -51,6 +51,7 @@ pub(crate) enum Lang {
     Yaml,
     Ts,
     Sh,
+    Sql,
     Md,
     None,
 }
@@ -69,6 +70,7 @@ impl Lang {
             "yaml" | "yml" => Lang::Yaml,
             "ts" | "tsx" | "js" | "mjs" | "jsx" => Lang::Ts,
             "sh" | "bash" | "zsh" => Lang::Sh,
+            "sql" => Lang::Sql,
             "md" | "markdown" => Lang::Md,
             _ => Lang::None,
         }
@@ -84,6 +86,7 @@ pub(crate) fn highlight(lang: Lang, src: &str) -> Vec<(Tok, String)> {
         Lang::Yaml => scan_yaml(src),
         Lang::Ts => scan_ts(src),
         Lang::Sh => scan_sh(src),
+        Lang::Sql => scan_sql(src),
         Lang::Md => scan_md(src),
         Lang::None => vec![(Tok::Plain, src.to_string())],
     };
@@ -404,6 +407,172 @@ const SH_KEYWORDS: &[&str] = &[
     "case", "do", "done", "elif", "else", "esac", "exit", "export", "fi", "for", "function", "if",
     "in", "local", "read", "return", "select", "shift", "then", "until", "while",
 ];
+
+/// SQL keywords, lowercase — [`scan_sql`] folds case before matching, so `SELECT` and `select`
+/// paint the same. Types (`integer`, `text`, …) are in here too: in a `create table` they read as
+/// part of the statement's shape, which is most of what a schema is scanned for.
+const SQL_KEYWORDS: &[&str] = &[
+    "add",
+    "all",
+    "alter",
+    "and",
+    "as",
+    "asc",
+    "autoincrement",
+    "begin",
+    "between",
+    "blob",
+    "by",
+    "case",
+    "cast",
+    "check",
+    "collate",
+    "column",
+    "commit",
+    "conflict",
+    "constraint",
+    "create",
+    "cross",
+    "default",
+    "delete",
+    "desc",
+    "distinct",
+    "drop",
+    "else",
+    "end",
+    "escape",
+    "except",
+    "exists",
+    "explain",
+    "foreign",
+    "from",
+    "full",
+    "group",
+    "having",
+    "if",
+    "immediate",
+    "in",
+    "index",
+    "inner",
+    "insert",
+    "int",
+    "integer",
+    "intersect",
+    "into",
+    "is",
+    "join",
+    "key",
+    "left",
+    "like",
+    "limit",
+    "not",
+    "null",
+    "nulls",
+    "numeric",
+    "offset",
+    "on",
+    "or",
+    "order",
+    "outer",
+    "pragma",
+    "primary",
+    "real",
+    "references",
+    "replace",
+    "returning",
+    "right",
+    "rollback",
+    "row",
+    "select",
+    "set",
+    "table",
+    "text",
+    "then",
+    "transaction",
+    "trigger",
+    "union",
+    "unique",
+    "update",
+    "using",
+    "vacuum",
+    "values",
+    "view",
+    "when",
+    "where",
+    "with",
+];
+
+/// Paint SQL: `--` and `/* … */` comments, single-quoted strings (SQL escapes a quote by doubling
+/// it, which [`take_string`]'s backslash rule doesn't cover, so this scans them itself),
+/// double-quoted identifiers, numbers, keywords, and `?`/`?1` placeholders.
+fn scan_sql(src: &str) -> Vec<(Tok, String)> {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '-' && chars.get(i + 1) == Some(&'-') {
+            let (s, next) = take_while(&chars, i, |c| c != '\n');
+            out.push((Tok::Comment, s));
+            i = next;
+        } else if c == '/' && chars.get(i + 1) == Some(&'*') {
+            let mut j = i + 2;
+            while j < chars.len() && !(chars[j] == '*' && chars.get(j + 1) == Some(&'/')) {
+                j += 1;
+            }
+            // An unterminated block comment runs to the end of input, like the other scanners.
+            let end = (j + 2).min(chars.len());
+            out.push((Tok::Comment, chars[i..end].iter().collect()));
+            i = end;
+        } else if c == '\'' {
+            // `'it''s'` is one string: a doubled quote is an escaped quote, not a terminator.
+            let mut j = i + 1;
+            while j < chars.len() {
+                if chars[j] == '\'' {
+                    if chars.get(j + 1) == Some(&'\'') {
+                        j += 2;
+                        continue;
+                    }
+                    j += 1;
+                    break;
+                }
+                j += 1;
+            }
+            out.push((Tok::Str, chars[i..j.min(chars.len())].iter().collect()));
+            i = j.min(chars.len());
+        } else if c == '"' {
+            // A quoted identifier — a column or table name, so it reads as a key, not a string.
+            let (s, next) = take_string(&chars, i);
+            out.push((Tok::Key, s));
+            i = next;
+        } else if c == '?' {
+            // A bind placeholder, `?` or `?1` — worth seeing at a glance.
+            let (s, next) = take_while(&chars, i + 1, |c| c.is_ascii_digit());
+            out.push((Tok::Func, format!("?{s}")));
+            i = next;
+        } else if c.is_ascii_digit() {
+            let (s, next) = take_while(&chars, i, |c| c.is_ascii_digit() || c == '.');
+            out.push((Tok::Num, s));
+            i = next;
+        } else if c.is_ascii_alphabetic() || c == '_' {
+            let (s, next) = take_while(&chars, i, |c| c.is_ascii_alphanumeric() || c == '_');
+            let tok = if SQL_KEYWORDS.contains(&s.to_ascii_lowercase().as_str()) {
+                Tok::Kw
+            } else {
+                Tok::Plain
+            };
+            out.push((tok, s));
+            i = next;
+        } else if "(),;*=<>!+-/%|".contains(c) {
+            out.push((Tok::Punct, c.to_string()));
+            i += 1;
+        } else {
+            out.push((Tok::Plain, c.to_string()));
+            i += 1;
+        }
+    }
+    out
+}
 
 /// Shell. The one thing worth getting right beyond comments and strings is `$VARIABLE`
 /// expansion — a trigger's settings arrive that way, so seeing them stand out is the point.
