@@ -9,7 +9,7 @@ SCSS source lives in [`scss/`](scss), compiled in `@use` order (which sets the c
 
 | File | Layer | Holds |
 | ---- | ----- | ----- |
-| `_tokens.scss`     | tokens     | Colour/space/type/radius/shadow as CSS custom properties; light + dark, plus explicit `data-theme` overrides |
+| `_tokens.scss`     | tokens     | Colour/space/type/radius/shadow as CSS custom properties; light + dark, explicit `data-theme` overrides, and the run-log console's dark island |
 | `_base.scss`       | base       | Minimal reset, document defaults, the focus ring |
 | `_mixins.scss`     | (helpers)  | Sass mixins: `card`, `eyebrow`, `focus-ring`, `narrow` breakpoint |
 | `_components.scss` | components | `adi-*` BEM classes: shell/sidebar/nav, bar, status pill, buttons, card/tiles, panel, table, chip, form, flash, footer |
