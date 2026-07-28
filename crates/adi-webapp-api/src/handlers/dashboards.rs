@@ -15,9 +15,12 @@ use adi_config::Config;
 use adi_ports_manager::Ports;
 use serde::Deserialize;
 
-use crate::types::{Dashboard, DashboardRef, DashboardsState, NewDashboard, SetDashboardProject};
+use crate::types::{
+    Dashboard, DashboardRef, DashboardsState, NewDashboard, SetDashboardProject, UsedPort,
+};
 
 use super::response::{Response, error, ok_json};
+use super::services::is_listening;
 
 /// The metadata file each dashboard directory carries.
 #[derive(Deserialize, Default)]
@@ -86,8 +89,8 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
 /// import glob no longer matches it — both bun servers stop within a few seconds — without
 /// deleting anything. The row moves to the page's Archived disclosure, from where Restore undoes it.
 #[must_use]
-pub fn archive_dashboard(cfg: &Config, ports: &Ports, listening: &[u16], body: &[u8]) -> Response {
-    set_archived(cfg, ports, listening, body, true)
+pub fn archive_dashboard(cfg: &Config, ports: &Ports, live: &[UsedPort], body: &[u8]) -> Response {
+    set_archived(cfg, ports, live, body, true)
 }
 
 /// `POST /api/dashboards/unarchive` — restore an archived dashboard, then report the fresh
@@ -97,10 +100,10 @@ pub fn archive_dashboard(cfg: &Config, ports: &Ports, listening: &[u16], body: &
 pub fn unarchive_dashboard(
     cfg: &Config,
     ports: &Ports,
-    listening: &[u16],
+    live: &[UsedPort],
     body: &[u8],
 ) -> Response {
-    set_archived(cfg, ports, listening, body, false)
+    set_archived(cfg, ports, live, body, false)
 }
 
 /// `POST /api/dashboards/delete` — permanently delete an archived dashboard's directory (all its
@@ -108,7 +111,7 @@ pub fn unarchive_dashboard(
 /// first, so a live, supervised dashboard is never pulled out from under its running bun servers.
 /// Irreversible — the UI gates it behind a confirm.
 #[must_use]
-pub fn delete_dashboard(cfg: &Config, ports: &Ports, listening: &[u16], body: &[u8]) -> Response {
+pub fn delete_dashboard(cfg: &Config, ports: &Ports, live: &[UsedPort], body: &[u8]) -> Response {
     let Some(id) = parse_dashboard_ref(body) else {
         return error(400, "expected JSON body { \"id\": \"…\" }");
     };
@@ -121,7 +124,7 @@ pub fn delete_dashboard(cfg: &Config, ports: &Ports, listening: &[u16], body: &[
     if let Err(e) = std::fs::remove_dir_all(&dir) {
         return error(500, &format!("could not delete dashboard: {e}"));
     }
-    dashboards(cfg, ports, listening)
+    dashboards(cfg, ports, live)
 }
 
 /// Shared body of archive/unarchive: validate the id, flip the manifest's `archived_at`, move the
@@ -129,7 +132,7 @@ pub fn delete_dashboard(cfg: &Config, ports: &Ports, listening: &[u16], body: &[
 fn set_archived(
     cfg: &Config,
     ports: &Ports,
-    listening: &[u16],
+    live: &[UsedPort],
     body: &[u8],
     archived: bool,
 ) -> Response {
@@ -148,12 +151,12 @@ fn set_archived(
 
     // Park the hive file aside (archive) or move it back (restore). Renaming it out of the
     // `**/hive.yaml` glob is what actually stops the supervised servers.
-    let live = dir.join(".adi").join(HIVE_LIVE);
+    let supervised = dir.join(".adi").join(HIVE_LIVE);
     let parked = dir.join(".adi").join(HIVE_ARCHIVED);
     let (from, to) = if archived {
-        (&live, &parked)
+        (&supervised, &parked)
     } else {
-        (&parked, &live)
+        (&parked, &supervised)
     };
     // Best-effort: a dashboard with no hive file (or already in the target state) has nothing to
     // move, which is not an error — the manifest flag above is the source of truth.
@@ -163,14 +166,19 @@ fn set_archived(
         return error(500, &format!("could not move dashboard hive file: {e}"));
     }
 
-    dashboards(cfg, ports, listening)
+    dashboards(cfg, ports, live)
 }
 
 /// `POST /api/dashboards/project` — file a dashboard under a project (or unfile it with an empty
 /// `project`), then report the fresh listing. Purely a manifest edit: the dashboard keeps running
 /// on its own port, so nothing is restarted.
 #[must_use]
-pub fn set_dashboard_project(cfg: &Config, ports: &Ports, listening: &[u16], body: &[u8]) -> Response {
+pub fn set_dashboard_project(
+    cfg: &Config,
+    ports: &Ports,
+    live: &[UsedPort],
+    body: &[u8],
+) -> Response {
     let req: SetDashboardProject = match serde_json::from_slice(body) {
         Ok(req) => req,
         Err(e) => return error(400, &format!("invalid request body: {e}")),
@@ -188,7 +196,7 @@ pub fn set_dashboard_project(cfg: &Config, ports: &Ports, listening: &[u16], bod
     if let Err(e) = write_manifest(&dir, &manifest) {
         return error(500, &format!("could not update dashboard manifest: {e}"));
     }
-    dashboards(cfg, ports, listening)
+    dashboards(cfg, ports, live)
 }
 
 /// Resolve a client-supplied dashboard id to its directory, refusing anything that isn't a single
@@ -340,10 +348,10 @@ fn toml_string(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Every dashboard, sorted by name, with live ports and running flags. `listening` is the set
-/// of currently-listening TCP ports (the host does the platform scan and passes it in).
+/// Every dashboard, sorted by name, with live ports and running flags. `live` is the machine's
+/// listening TCP ports (the host does the platform scan and passes it in).
 #[must_use]
-pub fn dashboards(cfg: &Config, ports: &Ports, listening: &[u16]) -> Response {
+pub fn dashboards(cfg: &Config, ports: &Ports, live: &[UsedPort]) -> Response {
     let root = cfg.module("dashboards").dir().to_path_buf();
 
     let mut dashboards: Vec<Dashboard> = match std::fs::read_dir(&root) {
@@ -351,7 +359,7 @@ pub fn dashboards(cfg: &Config, ports: &Ports, listening: &[u16]) -> Response {
             .flatten()
             // The supervisor's own `hive.yaml` lives beside the dashboards; only dirs count.
             .filter(|e| e.path().is_dir())
-            .map(|e| read_dashboard(&e.path(), ports, listening))
+            .map(|e| read_dashboard(&e.path(), ports, live))
             .collect(),
         // No dashboards directory yet is an empty list, not an error.
         Err(_) => Vec::new(),
@@ -364,7 +372,7 @@ pub fn dashboards(cfg: &Config, ports: &Ports, listening: &[u16]) -> Response {
 /// Read one dashboard directory into its DTO. Every field degrades independently: a missing
 /// manifest, an unleased port, or an absent `modules/` dir each fall back rather than failing
 /// the whole listing.
-fn read_dashboard(dir: &Path, ports: &Ports, listening: &[u16]) -> Dashboard {
+fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
     let id = dir
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
@@ -381,8 +389,8 @@ fn read_dashboard(dir: &Path, ports: &Ports, listening: &[u16]) -> Dashboard {
         name: manifest.name.unwrap_or_else(|| id.clone()),
         description: manifest.description,
         project: manifest.project,
-        frontend_running: frontend_port.is_some_and(|p| listening.contains(&p)),
-        backend_running: backend_port.is_some_and(|p| listening.contains(&p)),
+        frontend_running: frontend_port.is_some_and(|p| is_listening(live, p)),
+        backend_running: backend_port.is_some_and(|p| is_listening(live, p)),
         frontend_port,
         backend_port,
         modules: ts_stems(&dir.join("frontend").join("modules")),

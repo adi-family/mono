@@ -1152,6 +1152,50 @@ $runlog-dim: #8b93a1;
     background: var(--surface-2);
   }
 
+  // A click-to-sort header. The button fills the cell (hence the cell's own padding moves onto
+  // it), so the whole header is the target and the keyboard gets it without a custom handler.
+  th.adi-table__sort {
+    padding: 0;
+
+    > button {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      width: 100%;
+      padding: 7px 14px;
+      border: 0;
+      background: none;
+      // Inherit the eyebrow treatment the `th` already carries.
+      font: inherit;
+      color: inherit;
+      letter-spacing: inherit;
+      text-transform: inherit;
+      text-align: left;
+      cursor: pointer;
+
+      // The caret always occupies its space — only its ink changes — so switching the active
+      // column never reflows the header row.
+      &::after {
+        content: "\2191";
+        opacity: 0;
+      }
+
+      &:hover { color: var(--ink); }
+      &:hover::after { opacity: .4; }
+    }
+
+    // Ties on specificity with the `:hover` rules above and wins on source order, so the active
+    // column stays lit while the pointer is over a neighbouring header.
+    &[aria-sort="ascending"] > button,
+    &[aria-sort="descending"] > button {
+      color: var(--accent-ink);
+
+      &::after { opacity: 1; }
+    }
+
+    &[aria-sort="descending"] > button::after { content: "\2193"; }
+  }
+
   td {
     border-top: 1px solid var(--border);
     font-size: var(--text-md);

@@ -1,7 +1,7 @@
 use adi_projects::Error as ProjectStoreError;
 use adi_projects::Projects;
 
-use crate::types::{NewProject, Project, ProjectDetail, ProjectRef, ProjectsState};
+use crate::types::{NewProject, Project, ProjectDetail, ProjectRef, ProjectsState, UsedPort};
 
 use super::response::{Response, error, ok_json};
 use super::services::read_hive_services;
@@ -55,17 +55,18 @@ pub fn unarchive_project(store: &Projects, body: &[u8]) -> Response {
 }
 
 /// `GET /api/projects/<id>` — one project's manifest plus the services parsed from its
-/// `.adi/hive.yaml` (what's "inside" the project). `listening` is the set of currently-listening
-/// TCP ports (the host scans the platform and passes it), so each service gets a live running flag.
+/// `.adi/hive.yaml` (what's "inside" the project). `live` is the machine's listening TCP ports
+/// with their sampled process usage (the host scans the platform and passes it), so each service
+/// gets a live running flag and, when it's up, its CPU/memory.
 #[must_use]
-pub fn project_detail(store: &Projects, id: &str, listening: &[u16]) -> Response {
+pub fn project_detail(store: &Projects, id: &str, live: &[UsedPort]) -> Response {
     let project = match store.get(id) {
         Ok(Some(project)) => project,
         Ok(None) => return error(404, &format!("no such project: {id}")),
         Err(e) => return Response::from(&e),
     };
     let (has_hive, services) = match store.hive_path(id) {
-        Ok(path) => read_hive_services(&path, listening),
+        Ok(path) => read_hive_services(&path, live),
         Err(e) => return Response::from(&e),
     };
     let subprojects = match store.children(id) {

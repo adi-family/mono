@@ -6,7 +6,13 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, State};
-use crate::ui::{TextField, apply_mutation, dash, fmt_ports, placeholder_row};
+use crate::ui::{Sort, TextField, apply_mutation, dash, fmt_ports, placeholder_row, usage_cells};
+
+/// The Services panel's columns; the trailing blank one holds the row's Start/Stop control and
+/// does not sort. As on the Hive page, the sort keys match on header text, not index.
+pub(crate) const SERVICE_COLS: &[&str] = &[
+    "Service", "Host", "Ports", "Command", "Restart", "CPU", "Memory", "",
+];
 
 use super::reload_project;
 
@@ -44,16 +50,17 @@ pub(crate) struct QuickServiceForm {
 pub(crate) fn service_rows(
     state: State,
     project: String,
-    services: Vec<ProjectService>,
+    mut services: Vec<ProjectService>,
     has_hive: bool,
 ) -> AnyView {
+    sort_services(&mut services, state.service_sort.get());
     if services.is_empty() {
         let msg = if has_hive {
             "This project's .adi/hive.yaml declares no services."
         } else {
             "No .adi/hive.yaml — this project has no runtime services yet."
         };
-        return placeholder_row("6", msg);
+        return placeholder_row("8", msg);
     }
     services
         .into_iter()
@@ -61,6 +68,7 @@ pub(crate) fn service_rows(
             let name = s.name.clone();
             let host = dash(s.host);
             let ports = fmt_ports(&s.ports);
+            let usage = usage_cells(s.usage.as_ref());
             let has_runner = s.run.is_some();
             let running = s.running;
             let run = dash(s.run);
@@ -95,12 +103,54 @@ pub(crate) fn service_rows(
                     <td class="adi-mono adi-table__port">{ports}</td>
                     <td class="adi-mono adi-muted">{run}</td>
                     <td class="adi-muted">{restart}</td>
+                    {usage}
                     <td>{action}</td>
                 </tr>
             }
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// Order the panel's rows by the clicked column, tiebreaking on the service name so equal keys
+/// (every stopped service's blank usage, say) hold the file's own order. Absent values sort as
+/// empty/zero — see the Hive page, which sorts the same way over the same data.
+fn sort_services(services: &mut [ProjectService], sort: Sort) {
+    /// An optional text cell as a sort key.
+    fn text(value: Option<&String>) -> &str {
+        value.map_or("", String::as_str)
+    }
+    /// The port a service's row leads with — the `http` slot, else the first declared.
+    fn port(s: &ProjectService) -> u16 {
+        s.ports
+            .iter()
+            .find(|p| p.key == "http")
+            .or_else(|| s.ports.first())
+            .map_or(0, |p| p.port)
+    }
+    services.sort_by(|a, b| {
+        let ord = match SERVICE_COLS.get(sort.col).copied().unwrap_or_default() {
+            "Host" => text(a.host.as_ref()).cmp(text(b.host.as_ref())),
+            "Ports" => port(a).cmp(&port(b)),
+            "Command" => text(a.run.as_ref()).cmp(text(b.run.as_ref())),
+            "Restart" => text(a.restart.as_ref()).cmp(text(b.restart.as_ref())),
+            "CPU" => cpu(a).total_cmp(&cpu(b)),
+            "Memory" => mem(a).cmp(&mem(b)),
+            // "Service", and the blank action column, which the header never lets you click.
+            _ => a.name.cmp(&b.name),
+        };
+        sort.dir(ord).then_with(|| a.name.cmp(&b.name))
+    });
+}
+
+/// A service's sampled CPU share, or zero when it isn't running.
+fn cpu(s: &ProjectService) -> f32 {
+    s.usage.as_ref().map_or(0.0, |u| u.cpu_percent)
+}
+
+/// A service's sampled resident memory, or zero when it isn't running.
+fn mem(s: &ProjectService) -> u64 {
+    s.usage.as_ref().map_or(0, |u| u.memory_bytes)
 }
 
 /// The quick service create form under the Services table. A **Kind** toggle picks the runner: a

@@ -20,7 +20,7 @@ use crate::state::{
     AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, SecretsForm, State, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
 };
-use crate::ui::{data_table, flash_view, fmt_date};
+use crate::ui::{flash_view, fmt_date, sortable_table};
 
 mod agents_panel;
 mod files;
@@ -34,7 +34,7 @@ mod triggers;
 use agents_panel::{QuickAgentForm, agents_panel};
 use files::files_view;
 use secrets_panel::secrets_panel;
-use services::{QuickServiceForm, service_create_form, service_rows};
+use services::{QuickServiceForm, SERVICE_COLS, service_create_form, service_rows};
 use subprojects::{QuickSubprojectForm, subprojects_panel};
 use tasks::{TaskForm, tasks_panel};
 use tools_panel::tools_panel;
@@ -296,8 +296,10 @@ fn detail_body(
                     on:click=move |_| reload_project(state, reload_id.clone())>"Reload config"</button>
                 <span class="adi-updated">"the project's .adi/hive.yaml"</span>
             </div>
-            {data_table(&["Service", "Host", "Ports", "Command", "Restart", ""],
-                service_rows(state, rows_id, services, has_hive))}
+            // A closure, not a rendered value: re-sorting then redraws just this tbody instead of
+            // the whole panel around it.
+            {sortable_table(SERVICE_COLS, state.service_sort,
+                move || service_rows(state, rows_id.clone(), services.clone(), has_hive))}
             {service_create_form(state, service_form)}
             <div class="adi-hint">
                 "Written to the project's " <code>".adi/hive.yaml"</code> " — the front door picks the "

@@ -5,8 +5,8 @@ use adi_projects::Projects;
 use serde::Deserialize;
 
 use crate::types::{
-    HiveService, HiveState, NewService, ProjectService, ServicePort, StartResult, StartService,
-    StopResult,
+    HiveService, HiveState, NewService, ProcessUsage, ProjectService, ServicePort, StartResult,
+    StartService, StopResult, UsedPort,
 };
 
 use super::projects::project_detail;
@@ -90,11 +90,22 @@ impl HiveRunner {
     }
 }
 
+/// Whether `port` is one the host's scan found listening.
+pub(crate) fn is_listening(live: &[UsedPort], port: u16) -> bool {
+    live.iter().any(|u| u.port == port)
+}
+
+/// What the process holding `port` costs, when the host sampled it.
+fn usage_at(live: &[UsedPort], port: Option<u16>) -> Option<ProcessUsage> {
+    let port = port?;
+    live.iter().find(|u| u.port == port)?.usage.clone()
+}
+
 /// Read a project's `.adi/hive.yaml` into `(has_hive, services)`, tagging each service with a live
-/// running flag (its primary port is in `listening`). A missing file is `(false, [])`; a
-/// present-but-unparseable file is `(true, [])` — the project has a hive config, just not one we
-/// can summarize.
-pub(crate) fn read_hive_services(path: &Path, listening: &[u16]) -> (bool, Vec<ProjectService>) {
+/// running flag (its primary port is one of the `live` listeners) and that listener's CPU/memory.
+/// A missing file is `(false, [])`; a present-but-unparseable file is `(true, [])` — the project
+/// has a hive config, just not one we can summarize.
+pub(crate) fn read_hive_services(path: &Path, live: &[UsedPort]) -> (bool, Vec<ProjectService>) {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return (false, Vec::new());
     };
@@ -120,14 +131,15 @@ pub(crate) fn read_hive_services(path: &Path, listening: &[u16]) -> (bool, Vec<P
                         .collect()
                 })
                 .unwrap_or_default();
-            let running = primary_port(&ports).is_some_and(|p| listening.contains(&p));
+            let port = primary_port(&ports);
             ProjectService {
                 name,
                 host: svc.proxy.map(|p| p.host),
-                ports,
                 run: svc.runner.and_then(HiveRunner::display_command),
                 restart: svc.restart,
-                running,
+                running: port.is_some_and(|p| is_listening(live, p)),
+                usage: usage_at(live, port),
+                ports,
             }
         })
         .collect();
@@ -151,21 +163,22 @@ fn primary_port(ports: &[ServicePort]) -> Option<u16> {
 }
 
 /// `GET /api/hive` — aggregate every service declared across all projects' `.adi/hive.yaml`
-/// plus the global `~/.adi/mono/hive/hive.yaml`, tagged with a live running flag. `listening`
-/// is the set of currently-listening TCP ports (the host does the platform scan and passes it).
+/// plus the global `~/.adi/mono/hive/hive.yaml`, tagged with a live running flag and what the
+/// running ones cost. `live` is the machine's listening TCP ports with their sampled process
+/// usage (the host does the platform scan and passes it).
 #[must_use]
-pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, listening: &[u16]) -> Response {
+pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, live: &[UsedPort]) -> Response {
     let mut services = Vec::new();
 
     // The global front-door hive lives in the `hive` module of the same store the projects use.
     let global = store.config().module("hive").raw_path("hive.yaml");
-    collect_hive_services(None, &global, listening, &mut services);
+    collect_hive_services(None, &global, live, &mut services);
 
     match store.list() {
         Ok(projects) => {
             for project in projects {
                 if let Ok(path) = store.hive_path(&project.id) {
-                    collect_hive_services(Some(&project.id), &path, listening, &mut services);
+                    collect_hive_services(Some(&project.id), &path, live, &mut services);
                 }
             }
         }
@@ -174,7 +187,7 @@ pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, listening: &[u16
 
     // Dashboards are supervised by their own (per-user) adi-hive, but they are hive services all
     // the same — this view is meant to be the one place every service is visible.
-    collect_dashboard_services(store.config(), ports, listening, &mut services);
+    collect_dashboard_services(store.config(), ports, live, &mut services);
 
     ok_json(&HiveState { services })
 }
@@ -187,7 +200,7 @@ pub fn hive(store: &Projects, ports: &adi_ports_manager::Ports, listening: &[u16
 fn collect_dashboard_services(
     cfg: &adi_config::Config,
     ports: &adi_ports_manager::Ports,
-    listening: &[u16],
+    live: &[UsedPort],
     out: &mut Vec<HiveService>,
 ) {
     let root = cfg.module("dashboards").dir().to_path_buf();
@@ -206,8 +219,7 @@ fn collect_dashboard_services(
         let Some(id) = dir.file_name().map(|n| n.to_string_lossy().into_owned()) else {
             continue;
         };
-        let (_has_hive, parsed) =
-            read_hive_services(&dir.join(".adi").join("hive.yaml"), listening);
+        let (_has_hive, parsed) = read_hive_services(&dir.join(".adi").join("hive.yaml"), live);
         for svc in parsed {
             let port = ports
                 .get(&format!("{id}/{}", svc.name), "http")
@@ -229,24 +241,26 @@ fn collect_dashboard_services(
                 run: svc.run,
                 restart: svc.restart,
                 primary_port: port,
-                running: port.is_some_and(|p| listening.contains(&p)),
+                running: port.is_some_and(|p| is_listening(live, p)),
+                // A dashboard's port comes from the registry, not its YAML, so `read_hive_services`
+                // could not have charged it — resolve the usage against the leased port here.
+                usage: usage_at(live, port),
             });
         }
     }
 }
 
-/// Parse one hive.yaml and append its services to `out`, tagged with `project` and a running
-/// flag (its primary port is in `listening`).
+/// Parse one hive.yaml and append its services to `out`, tagged with `project`, a running flag
+/// (its primary port is one of the `live` listeners), and that listener's usage.
 fn collect_hive_services(
     project: Option<&str>,
     path: &Path,
-    listening: &[u16],
+    live: &[UsedPort],
     out: &mut Vec<HiveService>,
 ) {
-    let (_has_hive, parsed) = read_hive_services(path, listening);
+    let (_has_hive, parsed) = read_hive_services(path, live);
     for svc in parsed {
         let port = primary_port(&svc.ports);
-        let running = port.is_some_and(|p| listening.contains(&p));
         out.push(HiveService {
             project: project.map(str::to_string),
             dashboard: None,
@@ -256,7 +270,8 @@ fn collect_hive_services(
             run: svc.run,
             restart: svc.restart,
             primary_port: port,
-            running,
+            running: svc.running,
+            usage: svc.usage,
         });
     }
 }
@@ -433,7 +448,7 @@ pub fn stop_service(store: &Projects, body: &[u8]) -> Response {
 /// `` ports-manager.get('<project>/<name>', 'http') `` command — the same lease the hive
 /// daemon resolves for the imported service, so both sides agree on the port.
 #[must_use]
-pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Response {
+pub fn create_service(store: &Projects, body: &[u8], live: &[UsedPort]) -> Response {
     use serde_yaml_ng::{Mapping, Value as Yaml};
 
     fn ystr(s: &str) -> Yaml {
@@ -602,7 +617,7 @@ pub fn create_service(store: &Projects, body: &[u8], listening: &[u16]) -> Respo
     if let Err(e) = std::fs::write(&path, text) {
         return error(500, &format!("writing {}: {e}", path.display()));
     }
-    project_detail(store, project, listening)
+    project_detail(store, project, live)
 }
 
 /// Validate a service name: a single YAML key that is also safe as a ports-manager lease

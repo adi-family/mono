@@ -40,18 +40,42 @@ pub struct PortsState {
     pub leases: Vec<Lease>,
 }
 
+/// What the process behind a port is costing the machine, rolled up over its whole process
+/// tree — a service is usually a shell that spawned the real server, so charging the listener
+/// alone would under-report almost everything.
+///
+/// Sampled by the host from the OS process table; absent when it could not be read (no `ps`,
+/// or the process exited between the port scan and the sample).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessUsage {
+    /// The process the numbers are rooted at — the one holding the port.
+    pub pid: u32,
+    /// CPU share as a percentage of **one** core, summed over the tree, so a busy
+    /// multi-threaded service can exceed 100.
+    pub cpu_percent: f32,
+    /// Resident set size in bytes, summed over the tree.
+    pub memory_bytes: u64,
+    /// How many processes the sample covers: the listener plus its descendants.
+    pub processes: u32,
+    /// How long the listener has been up, in seconds.
+    pub uptime_secs: u64,
+}
+
 /// One TCP port observed in the `LISTEN` state on the machine, with the owning process
 /// where the OS reports it. Whether it's ADI-managed is decided by the client, which joins
 /// these against the registry [`Lease`]s by port.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsedPort {
     pub port: u16,
     pub process: Option<String>,
     pub pid: Option<u32>,
+    /// What that process tree currently costs, when the host could sample it.
+    #[serde(default)]
+    pub usage: Option<ProcessUsage>,
 }
 
 /// `GET /api/ports/used` — every listening TCP port on the machine, sorted by port.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UsedPorts {
     pub ports: Vec<UsedPort>,
 }
@@ -293,7 +317,7 @@ pub struct ServicePort {
 }
 
 /// A service read from a project's `.adi/hive.yaml` — a read-only summary for the detail view.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectService {
     pub name: String,
     /// The proxied host (`proxy.host`), e.g. `demo.adi`.
@@ -311,12 +335,16 @@ pub struct ProjectService {
     /// Whether the service's primary port is currently listening.
     #[serde(default)]
     pub running: bool,
+    /// What the process holding that port costs right now; `None` when the service is down
+    /// or the host could not sample it.
+    #[serde(default)]
+    pub usage: Option<ProcessUsage>,
 }
 
 /// `GET /api/projects/<id>` — one project's manifest plus the services parsed from its
 /// `.adi/hive.yaml` ("inside" the project). `has_hive` distinguishes "no hive.yaml" from
 /// "hive.yaml with no services".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProjectDetail {
     pub id: String,
     pub name: String,
@@ -1534,7 +1562,7 @@ pub struct ProjectHookLog {
 
 /// One service in the aggregated Hive view: where it's declared, its config, and whether it's
 /// currently up. Collected from each project's `.adi/hive.yaml` and the global front-door hive.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HiveService {
     /// The project id this service belongs to, or `None` when it comes from the global
     /// `~/.adi/mono/hive/hive.yaml` or from a dashboard (see `dashboard`).
@@ -1558,11 +1586,15 @@ pub struct HiveService {
     pub primary_port: Option<u16>,
     /// Whether `primary_port` is currently listening on the machine.
     pub running: bool,
+    /// CPU and memory of the process tree behind `primary_port`; `None` while the service is
+    /// down or when the host could not sample it.
+    #[serde(default)]
+    pub usage: Option<ProcessUsage>,
 }
 
 /// `GET /api/hive` — every Hive service across all projects plus the global front-door hive,
-/// each with a live running/stopped flag.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// each with a live running/stopped flag and, when it is up, what it costs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HiveState {
     pub services: Vec<HiveService>,
 }

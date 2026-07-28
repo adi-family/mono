@@ -3,7 +3,7 @@
 //! the generic mutation runner, and the theme toggle live in one place instead of at every call
 //! site.
 
-use adi_webapp_api::types::{ServicePort, TaskRow};
+use adi_webapp_api::types::{ProcessUsage, ServicePort, TaskRow};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -154,6 +154,92 @@ pub(crate) fn data_table(
                 <thead>
                     <tr>{headers.iter().map(|h| view! { <th>{*h}</th> }).collect::<Vec<_>>()}</tr>
                 </thead>
+                <tbody>{body}</tbody>
+            </table>
+        </div>
+    }
+}
+
+/// How a [`sortable_table`] is ordered: which column, and which way.
+///
+/// `col` indexes the table's `headers`, but no caller hard-codes that index — each page matches
+/// on the *header text* when it builds its comparator, so adding or moving a column can't
+/// silently re-point a sort key at the wrong data.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Sort {
+    pub(crate) col: usize,
+    pub(crate) desc: bool,
+}
+
+impl Sort {
+    /// A table's opening order: `col`, ascending.
+    pub(crate) const fn new(col: usize) -> Self {
+        Self { col, desc: false }
+    }
+
+    /// The result of clicking `col`'s header: a different column starts ascending, the active
+    /// one flips direction.
+    const fn toggled(self, col: usize) -> Self {
+        if self.col == col {
+            Self {
+                col,
+                desc: !self.desc,
+            }
+        } else {
+            Self::new(col)
+        }
+    }
+
+    /// Turn a key comparison into the ordering this sort asks for. Apply it to the *sort key*
+    /// only — a page's tiebreaks should stay ascending, so equal rows hold a stable order in
+    /// both directions.
+    pub(crate) fn dir(self, ord: std::cmp::Ordering) -> std::cmp::Ordering {
+        if self.desc { ord.reverse() } else { ord }
+    }
+
+    /// The `aria-sort` value for column `col` — also what the caret styling keys off.
+    fn aria(self, col: usize) -> &'static str {
+        match self {
+            s if s.col != col => "none",
+            s if s.desc => "descending",
+            _ => "ascending",
+        }
+    }
+}
+
+/// A [`data_table`] whose headers are click-to-sort controls over a shared `sort` signal. The
+/// page reads that same signal when it builds `body`, so this owns only the header UI and the
+/// state — never the comparison, which is per-table.
+///
+/// Every named header sorts; a blank one (the trailing action column) stays inert.
+pub(crate) fn sortable_table(
+    headers: &'static [&'static str],
+    sort: RwSignal<Sort>,
+    body: impl IntoView + 'static,
+) -> impl IntoView {
+    let cells = headers
+        .iter()
+        .enumerate()
+        .map(|(col, header)| {
+            if header.is_empty() {
+                return view! { <th></th> }.into_any();
+            }
+            view! {
+                <th class="adi-table__sort" aria-sort=move || sort.get().aria(col)>
+                    // A real button, so the header is reachable and operable by keyboard for free.
+                    <button type="button" title=format!("Sort by {header}")
+                        on:click=move |_| sort.update(|s| *s = s.toggled(col))>
+                        {*header}
+                    </button>
+                </th>
+            }
+            .into_any()
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <div class="adi-tablewrap">
+            <table class="adi-table">
+                <thead><tr>{cells}</tr></thead>
                 <tbody>{body}</tbody>
             </table>
         </div>
@@ -424,6 +510,55 @@ pub(crate) fn fmt_ports(ports: &[ServicePort]) -> String {
 /// An optional string for a table cell, falling back to an em dash when it's absent.
 pub(crate) fn dash(value: Option<String>) -> String {
     value.unwrap_or_else(|| "—".to_string())
+}
+
+/// Format a byte count as `N KB` / `N.N MB` / `N.NN GB` — decimal units, so the numbers read the
+/// same as Activity Monitor's.
+pub(crate) fn fmt_bytes(bytes: u64) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let n = bytes as f64;
+    if bytes < 1_000_000 {
+        format!("{:.0} KB", n / 1_000.0)
+    } else if bytes < 1_000_000_000 {
+        format!("{:.1} MB", n / 1_000_000.0)
+    } else {
+        format!("{:.2} GB", n / 1_000_000_000.0)
+    }
+}
+
+/// Format a CPU share (percent of one core, so it can exceed 100) for a table cell: whole
+/// percents once it's past 10, one decimal below that, where the difference between idle and
+/// slightly busy actually matters.
+pub(crate) fn fmt_cpu(percent: f32) -> String {
+    if percent >= 10.0 {
+        format!("{percent:.0}%")
+    } else {
+        format!("{percent:.1}%")
+    }
+}
+
+/// The CPU and memory cells for a service row: its sampled usage, or a muted em dash pair when
+/// it's down (or the host could not sample it). The `title` spells out what the numbers cover,
+/// since they roll up the listener's whole process tree.
+pub(crate) fn usage_cells(usage: Option<&ProcessUsage>) -> AnyView {
+    let Some(u) = usage else {
+        return view! {
+            <td class="adi-mono adi-muted">"—"</td>
+            <td class="adi-mono adi-muted">"—"</td>
+        }
+        .into_any();
+    };
+    let procs = if u.processes == 1 {
+        format!("pid {}", u.pid)
+    } else {
+        format!("pid {} + {} child processes", u.pid, u.processes - 1)
+    };
+    let title = format!("{procs}, up {}", fmt_uptime(u.uptime_secs));
+    view! {
+        <td class="adi-mono" title=title.clone()>{fmt_cpu(u.cpu_percent)}</td>
+        <td class="adi-mono" title=title>{fmt_bytes(u.memory_bytes)}</td>
+    }
+    .into_any()
 }
 
 /// The capitalized display label for a task's computed effective status (`ready`/`blocked`/

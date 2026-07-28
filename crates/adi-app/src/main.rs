@@ -290,11 +290,8 @@ async fn handle(
         // A single project's detail (manifest + its .adi/hive.yaml services). The id is the
         // trailing path segment; the exact routes above (all POST, or the bare GET) win first.
         ("GET", p) if p.starts_with("/api/projects/") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::project_detail(projects, &p["/api/projects/".len()..], &listening)
+            let live = scan::listening_ports();
+            handlers::project_detail(projects, &p["/api/projects/".len()..], &live)
         }
         ("GET", "/api/tasks") => handlers::tasks(tasks),
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),
@@ -372,58 +369,37 @@ async fn handle(
             handlers::hook_trigger(triggers, name, query, &req.body)
         }
         ("GET", "/api/hive") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::hive(projects, ports, &listening)
+            let live = scan::listening_ports();
+            handlers::hive(projects, ports, &live)
         }
         ("GET", "/api/dashboards") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::dashboards(projects.config(), ports, &listening)
+            let live = scan::listening_ports();
+            handlers::dashboards(projects.config(), ports, &live)
         }
         ("POST", "/api/dashboards/create") => {
             handlers::create_dashboard(projects.config(), ports, &req.body)
         }
         ("POST", "/api/dashboards/archive") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::archive_dashboard(projects.config(), ports, &listening, &req.body)
+            let live = scan::listening_ports();
+            handlers::archive_dashboard(projects.config(), ports, &live, &req.body)
         }
         ("POST", "/api/dashboards/unarchive") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::unarchive_dashboard(projects.config(), ports, &listening, &req.body)
+            let live = scan::listening_ports();
+            handlers::unarchive_dashboard(projects.config(), ports, &live, &req.body)
         }
         ("POST", "/api/dashboards/project") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::set_dashboard_project(projects.config(), ports, &listening, &req.body)
+            let live = scan::listening_ports();
+            handlers::set_dashboard_project(projects.config(), ports, &live, &req.body)
         }
         ("POST", "/api/dashboards/delete") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::delete_dashboard(projects.config(), ports, &listening, &req.body)
+            let live = scan::listening_ports();
+            handlers::delete_dashboard(projects.config(), ports, &live, &req.body)
         }
         ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
         ("POST", "/api/hive/stop") => handlers::stop_service(projects, &req.body),
         ("POST", "/api/hive/create") => {
-            let listening: Vec<u16> = scan::listening_ports()
-                .into_iter()
-                .map(|u| u.port)
-                .collect();
-            handlers::create_service(projects, &req.body, &listening)
+            let live = scan::listening_ports();
+            handlers::create_service(projects, &req.body, &live)
         }
         ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),
         ("POST", "/api/mesh/start") => mesh_start(mesh).await,
