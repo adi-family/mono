@@ -123,11 +123,11 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
 /// The databases table: one row per scope, the open one marked. Clicking a row opens that scope.
 fn scope_rows(state: State, console: DbConsole) -> AnyView {
     let Some(listing) = state.db.get() else {
-        return placeholder_row("4", "Loading…");
+        return placeholder_row(4, "Loading…");
     };
     if listing.databases.is_empty() {
         return placeholder_row(
-            "4",
+            4,
             "No databases yet — the first write creates one. Try a `create table` below.",
         );
     }
@@ -166,10 +166,10 @@ fn scope_rows(state: State, console: DbConsole) -> AnyView {
 /// The open scope's tables: shape, live row count, and a preview button per table.
 fn table_rows(console: DbConsole) -> AnyView {
     let Some(state) = console.tables.get() else {
-        return placeholder_row("4", "Loading…");
+        return placeholder_row(4, "Loading…");
     };
     if state.tables.is_empty() {
-        return placeholder_row("4", "This database has no tables yet.");
+        return placeholder_row(4, "This database has no tables yet.");
     }
 
     state
@@ -289,7 +289,7 @@ fn result_table(result: DbQueryResult) -> AnyView {
                 </thead>
                 <tbody>
                     {if count == 0 {
-                        placeholder_row("99", "No rows.")
+                        placeholder_row(99, "No rows.")
                     } else {
                         result.rows.into_iter()
                             .map(|row| view! {

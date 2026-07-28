@@ -133,13 +133,13 @@ fn project_task_tree(
 /// rollup. Loading/empty placeholders otherwise.
 fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
     if state.tasks.get().is_none() {
-        return placeholder_row("6", "Loading…");
+        return placeholder_row(6, "Loading…");
     }
     let id = state.current_project.get();
     let subs = super::descendant_projects(state, &id);
     let tree = project_task_tree(state, true);
     if tree.is_empty() {
-        return placeholder_row("6", "No tasks in this project yet — add one below.");
+        return placeholder_row(6, "No tasks in this project yet — add one below.");
     }
     tree.into_iter()
         .map(|(depth, t)| {

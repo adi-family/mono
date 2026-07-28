@@ -125,7 +125,7 @@ fn project_agent_rows(
     // The sub-projects nested under this one — their agents fold into this panel, marked as such.
     let subs = super::descendant_projects(state, &id);
     let Some(st) = state.agents.get() else {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row(5, "Loading…");
     };
     let mine: Vec<_> = st
         .agents
@@ -136,7 +136,7 @@ fn project_agent_rows(
         })
         .collect();
     if mine.is_empty() {
-        return placeholder_row("5", "No agents in this project yet — add one below.");
+        return placeholder_row(5, "No agents in this project yet — add one below.");
     }
     mine.into_iter()
         .map(|a| {

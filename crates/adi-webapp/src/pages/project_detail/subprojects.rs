@@ -74,10 +74,10 @@ pub(crate) fn subprojects_panel(
 /// Loading/empty placeholders otherwise.
 fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
     let Some(d) = state.project_detail.get() else {
-        return placeholder_row("4", "Loading…");
+        return placeholder_row(4, "Loading…");
     };
     if d.subprojects.is_empty() {
-        return placeholder_row("4", "No sub-projects yet — add one below.");
+        return placeholder_row(4, "No sub-projects yet — add one below.");
     }
     d.subprojects
         .into_iter()

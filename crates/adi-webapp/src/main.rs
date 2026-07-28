@@ -674,9 +674,9 @@ fn App() -> impl IntoView {
         files,
         store,
         row_menu: RwSignal::new(None),
-        // Both tables open on their first column ascending — the order each has always shown.
-        hive_sort: RwSignal::new(ui::Sort::new(0)),
-        service_sort: RwSignal::new(ui::Sort::new(0)),
+        // Each restores the arrangement its user last left, else the declared column order.
+        hive_table: ui::TableState::new("hive", pages::HIVE_COLS),
+        service_table: ui::TableState::new("services", pages::SERVICE_COLS),
     };
 
     let projects_form = ProjectsForm {

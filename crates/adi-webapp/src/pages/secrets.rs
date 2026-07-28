@@ -69,13 +69,6 @@ pub(crate) fn secrets_view(state: State, form: SecretsForm) -> AnyView {
             </div>
             {secret_create_form(state, form, None)}
             {flash_view(state.flash)}
-            <footer class="adi-footer">
-                "Secrets are encrypted at rest and injected into a run's environment under their "
-                "literal names. A value can be typed or obtained through an OAuth flow. A trigger "
-                "or agent filed under a project sees that project's secrets (overriding a global of "
-                "the same name) plus every global one. "
-                "Or set one with " <code>"adi-mono secrets set <NAME> <value>"</code> "."
-            </footer>
         </section>
     }
     .into_any()
@@ -328,7 +321,7 @@ pub(crate) fn rows_view(
     project: Option<String>,
     show_project: bool,
 ) -> AnyView {
-    let cols = if show_project { "5" } else { "4" };
+    let cols = if show_project { 5 } else { 4 };
     let Some(loaded) = state.secrets.get() else {
         return placeholder_row(cols, "Loading…");
     };

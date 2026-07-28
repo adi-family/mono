@@ -104,9 +104,9 @@ pub(crate) fn ports_manager_view(
 /// by port. Reads `ports` reactively, so it re-renders on every refresh.
 fn rows_view(state: State) -> AnyView {
     match state.ports.get() {
-        None => placeholder_row("4", "Loading…"),
+        None => placeholder_row(4, "Loading…"),
         Some(p) if p.leases.is_empty() => {
-            placeholder_row("4", "No ports reserved yet — reserve one below.")
+            placeholder_row(4, "No ports reserved yet — reserve one below.")
         }
         Some(p) => {
             let mut leases = p.leases;
@@ -154,7 +154,7 @@ fn rows_view(state: State) -> AnyView {
 /// ones when `managed_only`. A port is ADI-managed when a registry lease binds it.
 fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
     let Some(used) = state.used.get() else {
-        return placeholder_row("4", "Scanning…");
+        return placeholder_row(4, "Scanning…");
     };
     let leases = state.ports.get().map(|p| p.leases).unwrap_or_default();
     let managed = managed_only.get();
@@ -180,7 +180,7 @@ fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
         } else {
             "No listening ports found."
         };
-        return placeholder_row("4", msg);
+        return placeholder_row(4, msg);
     }
 
     rows.into_iter()

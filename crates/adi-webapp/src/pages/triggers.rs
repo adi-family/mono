@@ -502,10 +502,10 @@ fn current_extras(state: State, form: TriggersForm) -> BTreeMap<String, String> 
 /// Render the triggers table body: a loading/empty placeholder, or one row per trigger.
 fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyView {
     let Some(st) = state.triggers.get() else {
-        return placeholder_row("6", "Loading…");
+        return placeholder_row(6, "Loading…");
     };
     if st.triggers.is_empty() {
-        return placeholder_row("6", "No triggers yet — define one below.");
+        return placeholder_row(6, "No triggers yet — define one below.");
     }
     st.triggers
         .into_iter()

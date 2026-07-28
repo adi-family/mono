@@ -165,11 +165,11 @@ fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
 /// button to stop exposing it.
 fn mesh_allow_rows(state: State) -> AnyView {
     let Some(mesh) = state.mesh.get() else {
-        return placeholder_row("2", "Loading…");
+        return placeholder_row(2, "Loading…");
     };
     if mesh.allow.is_empty() {
         return placeholder_row(
-            "2",
+            2,
             "No ports exposed — add one below to let peers reach it.",
         );
     }
@@ -197,11 +197,11 @@ fn mesh_allow_rows(state: State) -> AnyView {
 /// Rows for the authorized-peers table: a note when open to any peer, else one row per id.
 fn mesh_peer_rows(state: State) -> AnyView {
     let Some(mesh) = state.mesh.get() else {
-        return placeholder_row("2", "Loading…");
+        return placeholder_row(2, "Loading…");
     };
     if mesh.authorized_peers.is_empty() {
         return placeholder_row(
-            "2",
+            2,
             "Any peer may use the exposed ports. Add one to restrict access.",
         );
     }
@@ -228,11 +228,11 @@ fn mesh_peer_rows(state: State) -> AnyView {
 /// Rows for the forwards table: a placeholder, or one row per forward with a remove button.
 fn mesh_forward_rows(state: State) -> AnyView {
     let Some(mesh) = state.mesh.get() else {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row(5, "Loading…");
     };
     if mesh.forwards.is_empty() {
         return placeholder_row(
-            "5",
+            5,
             "No forwards — add one below to reach a peer's port locally.",
         );
     }

@@ -312,10 +312,10 @@ fn agent_rows(
     code: AgentCodeEditor,
 ) -> AnyView {
     let Some(st) = state.agents.get() else {
-        return placeholder_row("6", "Loading…");
+        return placeholder_row(6, "Loading…");
     };
     if st.agents.is_empty() {
-        return placeholder_row("6", "No agents yet — define one below.");
+        return placeholder_row(6, "No agents yet — define one below.");
     }
     st.agents
         .into_iter()

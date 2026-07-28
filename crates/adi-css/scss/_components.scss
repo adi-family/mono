@@ -1132,8 +1132,96 @@ $runlog-dim: #8b93a1;
 }
 
 // ---- table -------------------------------------------------------------------------
+// A configurable table's outer box: it exists so the settings gear can be pinned to the header
+// row's right edge. The gear can't live inside `.adi-tablewrap` — that scrolls — nor in a column
+// of its own, which every row would then owe a matching empty cell.
+.adi-tablebox {
+  position: relative;
+
+  &__cog {
+    position: absolute;
+    top: 4px;
+    right: 6px;
+    z-index: 2;
+  }
+
+  // Keep the last header clear of the gear floating over it. Only the header row: the body's
+  // last column has the full width to itself.
+  .adi-table thead th:last-child { padding-right: 32px; }
+}
+
 .adi-tablewrap {
   overflow-x: auto;
+}
+
+// The gear's panel: the shared menu chrome, laid out as one row per column.
+.adi-colmenu {
+  // Anchored under the gear rather than at a click point (the kebab menu's model), since this
+  // control sits in a fixed corner.
+  position: absolute;
+  top: 28px;
+  right: 6px;
+  min-width: 220px;
+  padding-bottom: var(--space-1);
+
+  .adi-menu__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  &__row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 0 6px 0 4px;
+  }
+
+  // The show/hide half of a row: takes the free space so the move buttons stay right-aligned.
+  &__pick {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 1;
+    min-width: 0;
+    padding: 4px 6px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: inherit;
+    font: inherit;
+    text-align: left;
+    white-space: nowrap;
+    cursor: pointer;
+
+    &:hover:not(:disabled) { background: var(--surface-2); }
+
+    // The one column that can't be hidden — the table would have nothing left to show.
+    &:disabled { cursor: default; }
+  }
+
+  &__box {
+    display: inline-grid;
+    place-items: center;
+    width: 14px;
+    height: 14px;
+    flex: none;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-size: 10px;
+    line-height: 1;
+
+    &[data-on="true"] {
+      border-color: var(--accent-ink);
+      color: var(--accent-ink);
+    }
+  }
+
+  .adi-btn--icon-sm:disabled {
+    opacity: .3;
+    cursor: default;
+  }
 }
 
 .adi-table {
@@ -1657,12 +1745,3 @@ textarea.adi-input {
   }
 }
 
-// ---- page footer -------------------------------------------------------------------
-.adi-footer {
-  margin-top: 20px;
-  color: var(--muted);
-  font-size: var(--text-sm);
-  text-align: center;
-
-  code { font-family: var(--font-mono); }
-}

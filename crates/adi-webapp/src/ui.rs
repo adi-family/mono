@@ -12,8 +12,9 @@ use crate::state::{Flash, RowMenu, State};
 
 /// A single full-width placeholder row spanning `colspan` columns — the
 /// `<tr><td class="adi-empty">…</td></tr>` every table body falls back to for its loading, empty,
-/// or error state.
-pub(crate) fn placeholder_row(colspan: &'static str, msg: &str) -> AnyView {
+/// or error state. A [`configurable_table`]'s span is whatever its user left showing, so those
+/// callers pass [`Layout::span`] rather than a literal.
+pub(crate) fn placeholder_row(colspan: usize, msg: &str) -> AnyView {
     view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
 }
 
@@ -143,43 +144,38 @@ pub(crate) fn tile(
 }
 
 /// The standard table shell: the `adi-tablewrap` scroll box, a header row built from `headers`
-/// (an empty string yields a blank action column), and `body` as the `<tbody>`.
+/// (an empty string yields a blank action column), and `body` as the `<tbody>`. For a table the
+/// user can sort and rearrange, see [`configurable_table`].
 pub(crate) fn data_table(
     headers: &'static [&'static str],
     body: impl IntoView + 'static,
 ) -> impl IntoView {
-    view! {
-        <div class="adi-tablewrap">
-            <table class="adi-table">
-                <thead>
-                    <tr>{headers.iter().map(|h| view! { <th>{*h}</th> }).collect::<Vec<_>>()}</tr>
-                </thead>
-                <tbody>{body}</tbody>
-            </table>
-        </div>
-    }
+    let cells = headers
+        .iter()
+        .map(|h| view! { <th>{*h}</th> })
+        .collect::<Vec<_>>();
+    table_shell(cells, body)
 }
 
-/// How a [`sortable_table`] is ordered: which column, and which way.
+/// How a [`configurable_table`] is ordered: which column, and which way.
 ///
-/// `col` indexes the table's `headers`, but no caller hard-codes that index — each page matches
-/// on the *header text* when it builds its comparator, so adding or moving a column can't
-/// silently re-point a sort key at the wrong data.
+/// The column is named by its *header text*, not an index — indices stop meaning anything once
+/// the user can reorder columns, and a page's comparator matches on the same text.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) struct Sort {
-    pub(crate) col: usize,
+    pub(crate) col: &'static str,
     pub(crate) desc: bool,
 }
 
 impl Sort {
     /// A table's opening order: `col`, ascending.
-    pub(crate) const fn new(col: usize) -> Self {
+    pub(crate) const fn new(col: &'static str) -> Self {
         Self { col, desc: false }
     }
 
     /// The result of clicking `col`'s header: a different column starts ascending, the active
     /// one flips direction.
-    const fn toggled(self, col: usize) -> Self {
+    fn toggled(self, col: &'static str) -> Self {
         if self.col == col {
             Self {
                 col,
@@ -198,7 +194,7 @@ impl Sort {
     }
 
     /// The `aria-sort` value for column `col` — also what the caret styling keys off.
-    fn aria(self, col: usize) -> &'static str {
+    fn aria(self, col: &str) -> &'static str {
         match self {
             s if s.col != col => "none",
             s if s.desc => "descending",
@@ -207,43 +203,356 @@ impl Sort {
     }
 }
 
-/// A [`data_table`] whose headers are click-to-sort controls over a shared `sort` signal. The
-/// page reads that same signal when it builds `body`, so this owns only the header UI and the
-/// state — never the comparison, which is per-table.
+/// One configurable column: the header it renders under, and whether the user is showing it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct Column {
+    pub(crate) header: &'static str,
+    pub(crate) shown: bool,
+}
+
+/// A table's column arrangement: every column it *can* show, in the user's order, each flagged
+/// shown or hidden.
 ///
-/// Every named header sorts; a blank one (the trailing action column) stays inert.
-pub(crate) fn sortable_table(
+/// Only named columns are configurable. A trailing blank header — the action column, by the
+/// convention [`data_table`] already documents — is neither reorderable nor hideable, since it
+/// holds the row's controls rather than data; [`Layout`] just remembers that the table has one.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub(crate) struct Layout {
+    columns: Vec<Column>,
+    has_actions: bool,
+}
+
+impl Layout {
+    /// The table as its page declared it: every named column shown, in source order.
+    pub(crate) fn new(headers: &'static [&'static str]) -> Self {
+        Self {
+            columns: headers
+                .iter()
+                .filter(|h| !h.is_empty())
+                .map(|h| Column {
+                    header: h,
+                    shown: true,
+                })
+                .collect(),
+            has_actions: headers.iter().any(|h| h.is_empty()),
+        }
+    }
+
+    /// Every configurable column, in display order — what the settings menu lists.
+    pub(crate) fn columns(&self) -> &[Column] {
+        &self.columns
+    }
+
+    /// The headers to render, in order: what a row builder walks to emit its cells.
+    pub(crate) fn shown(&self) -> Vec<&'static str> {
+        self.columns
+            .iter()
+            .filter(|c| c.shown)
+            .map(|c| c.header)
+            .collect()
+    }
+
+    /// How many cells a full-width row spans — for [`placeholder_row`], which has to match a
+    /// column count the user can now change.
+    pub(crate) fn span(&self) -> usize {
+        self.columns.iter().filter(|c| c.shown).count() + usize::from(self.has_actions)
+    }
+
+    /// Whether `col` is the sole remaining column — the one a table may not hide, since an
+    /// all-hidden table is unrecoverable without the settings menu it would also have swallowed.
+    fn is_last_shown(&self, col: usize) -> bool {
+        self.columns.iter().filter(|c| c.shown).count() == 1
+            && self.columns.get(col).is_some_and(|c| c.shown)
+    }
+
+    fn toggle(&mut self, col: usize) {
+        if self.is_last_shown(col) {
+            return;
+        }
+        if let Some(c) = self.columns.get_mut(col) {
+            c.shown = !c.shown;
+        }
+    }
+
+    /// Move a column one place towards the front (`up`) or the back.
+    fn shift(&mut self, col: usize, up: bool) {
+        let other = if up {
+            col.checked_sub(1)
+        } else {
+            Some(col + 1).filter(|i| *i < self.columns.len())
+        };
+        if let Some(other) = other {
+            self.columns.swap(col, other);
+        }
+    }
+
+    /// Serialize as `Header` / `!Header` (hidden), comma-separated. A compact form rather than
+    /// JSON because it is written to `localStorage` on every tweak and read back on every load.
+    fn encode(&self) -> String {
+        self.columns
+            .iter()
+            .map(|c| {
+                if c.shown {
+                    c.header.to_string()
+                } else {
+                    format!("!{}", c.header)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+
+    /// Rebuild a saved arrangement against the table's *current* headers.
+    ///
+    /// The two can disagree — a stored layout outlives the code that wrote it. Headers the build
+    /// no longer declares are dropped, and headers the save doesn't mention are appended, shown:
+    /// a column added in a later release appears for everyone instead of staying invisible until
+    /// they find Reset.
+    fn decode(headers: &'static [&'static str], raw: &str) -> Self {
+        let mut layout = Self {
+            columns: Vec::new(),
+            has_actions: headers.iter().any(|h| h.is_empty()),
+        };
+        for entry in raw.split(',').filter(|e| !e.is_empty()) {
+            let (shown, name) = match entry.strip_prefix('!') {
+                Some(name) => (false, name),
+                None => (true, entry),
+            };
+            let Some(header) = headers.iter().find(|h| **h == name && !h.is_empty()) else {
+                continue;
+            };
+            if layout.columns.iter().any(|c| c.header == *header) {
+                continue;
+            }
+            layout.columns.push(Column { header, shown });
+        }
+        for header in headers.iter().filter(|h| !h.is_empty()) {
+            if !layout.columns.iter().any(|c| c.header == *header) {
+                layout.columns.push(Column {
+                    header,
+                    shown: true,
+                });
+            }
+        }
+        layout
+    }
+}
+
+/// One [`configurable_table`]'s user-owned view of itself: how it's sorted, how its columns are
+/// arranged, and whether its settings menu is open.
+///
+/// Sort and layout are persisted to `localStorage` under `key`, so a table stays the way it was
+/// left across reloads. `Copy` (arena signal handles), so it threads into views and handlers as
+/// cheaply as the rest of [`State`](crate::state::State).
+#[derive(Clone, Copy)]
+pub(crate) struct TableState {
+    key: &'static str,
     headers: &'static [&'static str],
-    sort: RwSignal<Sort>,
+    pub(crate) sort: RwSignal<Sort>,
+    pub(crate) layout: RwSignal<Layout>,
+    /// Whether the column settings menu is showing.
+    open: RwSignal<bool>,
+}
+
+impl TableState {
+    /// Restore this table from storage, falling back to `headers`' declared order sorted by its
+    /// first named column.
+    pub(crate) fn new(key: &'static str, headers: &'static [&'static str]) -> Self {
+        let default_col = headers
+            .iter()
+            .find(|h| !h.is_empty())
+            .copied()
+            .unwrap_or("");
+        let sort = read(key, "sort")
+            .and_then(|raw| {
+                let (name, dir) = raw.split_once('|')?;
+                let col = headers.iter().find(|h| **h == name && !h.is_empty())?;
+                Some(Sort {
+                    col,
+                    desc: dir == "desc",
+                })
+            })
+            .unwrap_or_else(|| Sort::new(default_col));
+        let layout = read(key, "cols")
+            .map_or_else(|| Layout::new(headers), |raw| Layout::decode(headers, &raw));
+        Self {
+            key,
+            headers,
+            sort: RwSignal::new(sort),
+            layout: RwSignal::new(layout),
+            open: RwSignal::new(false),
+        }
+    }
+
+    fn set_sort(self, sort: Sort) {
+        self.sort.set(sort);
+        write(
+            self.key,
+            "sort",
+            &format!("{}|{}", sort.col, if sort.desc { "desc" } else { "asc" }),
+        );
+    }
+
+    /// Apply `edit` to the layout and persist the result.
+    fn edit_layout(self, edit: impl FnOnce(&mut Layout)) {
+        self.layout.update(edit);
+        write(self.key, "cols", &self.layout.get_untracked().encode());
+    }
+
+    fn reset(self) {
+        self.edit_layout(|l| *l = Layout::new(self.headers));
+        self.set_sort(Sort::new(
+            self.headers
+                .iter()
+                .find(|h| !h.is_empty())
+                .copied()
+                .unwrap_or(""),
+        ));
+    }
+}
+
+/// Read one of a table's persisted settings. Storage being unavailable (private mode, a
+/// disabled origin) is not an error — the table just opens in its declared state.
+fn read(key: &str, field: &str) -> Option<String> {
+    storage()?
+        .get_item(&format!("adi-table:{key}:{field}"))
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+}
+
+fn write(key: &str, field: &str, value: &str) {
+    if let Some(s) = storage() {
+        let _ = s.set_item(&format!("adi-table:{key}:{field}"), value);
+    }
+}
+
+/// The reusable table: [`data_table`]'s shell, plus click-to-sort headers and a gear that opens
+/// a menu for showing, hiding, and reordering columns.
+///
+/// This owns the chrome and the state, never the data: the page reads the same `table.sort` and
+/// `table.layout` signals when it builds `body`, emitting one cell per [`Layout::shown`] header.
+/// `headers` is the full set the table can ever show — the user's subset and order live in the
+/// layout.
+pub(crate) fn configurable_table(
+    table: TableState,
+    headers: &'static [&'static str],
     body: impl IntoView + 'static,
 ) -> impl IntoView {
-    let cells = headers
-        .iter()
-        .enumerate()
-        .map(|(col, header)| {
-            if header.is_empty() {
-                return view! { <th></th> }.into_any();
-            }
-            view! {
-                <th class="adi-table__sort" aria-sort=move || sort.get().aria(col)>
-                    // A real button, so the header is reachable and operable by keyboard for free.
-                    <button type="button" title=format!("Sort by {header}")
-                        on:click=move |_| sort.update(|s| *s = s.toggled(col))>
-                        {*header}
-                    </button>
-                </th>
-            }
-            .into_any()
-        })
-        .collect::<Vec<_>>();
+    let sort = table.sort;
+    let cells = move || {
+        let mut cells: Vec<AnyView> = table
+            .layout
+            .get()
+            .shown()
+            .into_iter()
+            .map(|header| {
+                view! {
+                    <th class="adi-table__sort" aria-sort=move || sort.get().aria(header)>
+                        // A real button, so the header is reachable and operable by keyboard.
+                        <button type="button" title=format!("Sort by {header}")
+                            on:click=move |_| table.set_sort(sort.get_untracked().toggled(header))>
+                            {header}
+                        </button>
+                    </th>
+                }
+                .into_any()
+            })
+            .collect();
+        if headers.iter().any(|h| h.is_empty()) {
+            cells.push(view! { <th></th> }.into_any());
+        }
+        cells
+    };
+    view! {
+        <div class="adi-tablebox">
+            {column_menu(table)}
+            {table_shell(cells, body)}
+        </div>
+    }
+}
+
+/// The shared scroll box + table markup behind both [`data_table`] and [`configurable_table`],
+/// so the shell exists once.
+fn table_shell(header_cells: impl IntoView + 'static, body: impl IntoView + 'static) -> AnyView {
     view! {
         <div class="adi-tablewrap">
             <table class="adi-table">
-                <thead><tr>{cells}</tr></thead>
+                <thead><tr>{header_cells}</tr></thead>
                 <tbody>{body}</tbody>
             </table>
         </div>
     }
+    .into_any()
+}
+
+/// The gear and the panel it opens: one row per column with a show/hide toggle and a pair of
+/// move buttons, plus Reset. Buttons rather than drag-and-drop — the list is short, and this
+/// works from the keyboard without a custom drop target.
+fn column_menu(table: TableState) -> AnyView {
+    let open = table.open;
+    let rows = move || {
+        let layout = table.layout.get();
+        let last = layout.columns().len().saturating_sub(1);
+        layout
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let (header, shown) = (c.header, c.shown);
+                let locked = layout.is_last_shown(i);
+                view! {
+                    <div class="adi-colmenu__row">
+                        <button class="adi-colmenu__pick" type="button"
+                            role="checkbox" aria-checked=shown.to_string()
+                            prop:disabled=locked
+                            title=if locked { "A table keeps at least one column" }
+                                  else if shown { "Hide this column" } else { "Show this column" }
+                            on:click=move |_| table.edit_layout(|l| l.toggle(i))>
+                            <span class="adi-colmenu__box" data-on=shown.to_string()>
+                                {if shown { "\u{2713}" } else { "" }}
+                            </span>
+                            <span>{header}</span>
+                        </button>
+                        <button class="adi-btn adi-btn--icon-sm" type="button"
+                            title="Move up" aria-label=format!("Move {header} up")
+                            prop:disabled=i == 0
+                            on:click=move |_| table.edit_layout(|l| l.shift(i, true))>"\u{2191}"</button>
+                        <button class="adi-btn adi-btn--icon-sm" type="button"
+                            title="Move down" aria-label=format!("Move {header} down")
+                            prop:disabled=i == last
+                            on:click=move |_| table.edit_layout(|l| l.shift(i, false))>"\u{2193}"</button>
+                    </div>
+                }
+                .into_any()
+            })
+            .collect::<Vec<_>>()
+    };
+    view! {
+        <button class="adi-btn adi-btn--icon-sm adi-tablebox__cog" type="button"
+            title="Columns" aria-label="Configure columns"
+            aria-expanded=move || open.get().to_string()
+            on:click=move |_| open.update(|o| *o = !*o)>
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
+                inner_html=crate::icons::Icon::Gear.path()></svg>
+        </button>
+        // Mounted but hidden until opened, matching the row kebab: the scrim makes the next
+        // click anywhere a dismiss.
+        <div class="adi-menu__scrim"
+            style=move || if open.get() { String::new() } else { "display:none".to_string() }
+            on:click=move |_| open.set(false)></div>
+        <div class="adi-menu adi-colmenu"
+            style=move || if open.get() { String::new() } else { "display:none".to_string() }>
+            <div class="adi-menu__head">
+                <span>"Columns"</span>
+                <button class="adi-btn adi-btn--link" type="button"
+                    on:click=move |_| table.reset()>"Reset"</button>
+            </div>
+            {rows}
+        </div>
+    }
+    .into_any()
 }
 
 /// The one-line status message shown under a form: reads the shared `flash` signal, colouring
@@ -537,16 +846,23 @@ pub(crate) fn fmt_cpu(percent: f32) -> String {
     }
 }
 
-/// The CPU and memory cells for a service row: its sampled usage, or a muted em dash pair when
-/// it's down (or the host could not sample it). The `title` spells out what the numbers cover,
-/// since they roll up the listener's whole process tree.
-pub(crate) fn usage_cells(usage: Option<&ProcessUsage>) -> AnyView {
+/// The CPU cell for a service row. Separate from [`memory_cell`] rather than one two-`<td>`
+/// helper, because a [`configurable_table`] lets the user hide or reorder either independently.
+pub(crate) fn cpu_cell(usage: Option<&ProcessUsage>) -> AnyView {
+    usage_cell(usage, |u| fmt_cpu(u.cpu_percent))
+}
+
+/// The memory cell for a service row. See [`cpu_cell`].
+pub(crate) fn memory_cell(usage: Option<&ProcessUsage>) -> AnyView {
+    usage_cell(usage, |u| fmt_bytes(u.memory_bytes))
+}
+
+/// One sampled-usage cell: `value` of the sample, or a muted em dash when the service is down
+/// (or the host could not sample it). The `title` spells out what the number covers, since it
+/// rolls up the listener's whole process tree.
+fn usage_cell(usage: Option<&ProcessUsage>, value: impl Fn(&ProcessUsage) -> String) -> AnyView {
     let Some(u) = usage else {
-        return view! {
-            <td class="adi-mono adi-muted">"—"</td>
-            <td class="adi-mono adi-muted">"—"</td>
-        }
-        .into_any();
+        return view! { <td class="adi-mono adi-muted">"—"</td> }.into_any();
     };
     let procs = if u.processes == 1 {
         format!("pid {}", u.pid)
@@ -554,11 +870,7 @@ pub(crate) fn usage_cells(usage: Option<&ProcessUsage>) -> AnyView {
         format!("pid {} + {} child processes", u.pid, u.processes - 1)
     };
     let title = format!("{procs}, up {}", fmt_uptime(u.uptime_secs));
-    view! {
-        <td class="adi-mono" title=title.clone()>{fmt_cpu(u.cpu_percent)}</td>
-        <td class="adi-mono" title=title>{fmt_bytes(u.memory_bytes)}</td>
-    }
-    .into_any()
+    view! { <td class="adi-mono" title=title>{value(u)}</td> }.into_any()
 }
 
 /// The capitalized display label for a task's computed effective status (`ready`/`blocked`/
@@ -674,4 +986,129 @@ fn prefers_dark() -> bool {
     web_sys::window()
         .and_then(|w| w.match_media("(prefers-color-scheme: dark)").ok().flatten())
         .is_some_and(|m| m.matches())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A table with an action column, so the tests cover the blank-header rule too.
+    const COLS: &[&str] = &["Source", "Service", "CPU", "Memory", ""];
+
+    fn headers(layout: &Layout) -> Vec<&'static str> {
+        layout.columns().iter().map(|c| c.header).collect()
+    }
+
+    /// The action column is the row's controls, not data: it is never offered in the menu, never
+    /// moves, and never hides — but it still counts towards a placeholder's span.
+    #[test]
+    fn the_action_column_is_not_configurable_but_is_still_a_column() {
+        let layout = Layout::new(COLS);
+        assert_eq!(headers(&layout), ["Source", "Service", "CPU", "Memory"]);
+        assert_eq!(layout.shown().len(), 4);
+        assert_eq!(layout.span(), 5, "four shown, plus the action column");
+
+        // A table without one spans only what it shows.
+        assert_eq!(Layout::new(&["A", "B"]).span(), 2);
+    }
+
+    #[test]
+    fn hiding_a_column_drops_it_from_the_row_and_the_span() {
+        let mut layout = Layout::new(COLS);
+        layout.toggle(1); // Service
+        assert_eq!(layout.shown(), ["Source", "CPU", "Memory"]);
+        assert_eq!(layout.span(), 4);
+        assert_eq!(
+            headers(&layout),
+            ["Source", "Service", "CPU", "Memory"],
+            "a hidden column keeps its place in the menu, so re-showing it returns it there"
+        );
+
+        layout.toggle(1);
+        assert_eq!(layout.shown().len(), 4, "and toggles back");
+    }
+
+    /// An all-hidden table would swallow its own settings menu, so the last one is pinned.
+    #[test]
+    fn the_final_visible_column_cannot_be_hidden() {
+        let mut layout = Layout::new(&["A", "B"]);
+        layout.toggle(1);
+        assert_eq!(layout.shown(), ["A"]);
+        layout.toggle(0);
+        assert_eq!(layout.shown(), ["A"], "the last column ignores the toggle");
+    }
+
+    #[test]
+    fn moving_a_column_reorders_it_and_stops_at_the_ends() {
+        let mut layout = Layout::new(COLS);
+        layout.shift(3, true); // Memory up, past CPU
+        assert_eq!(layout.shown(), ["Source", "Service", "Memory", "CPU"]);
+
+        layout.shift(0, true);
+        assert_eq!(
+            layout.shown()[0],
+            "Source",
+            "the first column can't move further up"
+        );
+        layout.shift(3, false);
+        assert_eq!(layout.shown()[3], "CPU", "nor the last one further down");
+    }
+
+    #[test]
+    fn an_arrangement_survives_a_round_trip_through_storage() {
+        let mut layout = Layout::new(COLS);
+        layout.shift(3, true);
+        layout.toggle(0);
+
+        let restored = Layout::decode(COLS, &layout.encode());
+        assert_eq!(restored, layout);
+        assert_eq!(restored.shown(), ["Service", "Memory", "CPU"]);
+    }
+
+    /// A stored arrangement outlives the build that wrote it. Neither a dropped column nor a new
+    /// one may strand the user: the first is forgotten, the second appears rather than hiding
+    /// until someone finds Reset.
+    #[test]
+    fn a_saved_arrangement_reconciles_with_changed_headers() {
+        // Saved when the table still had a "Ports" column and no "Memory".
+        let saved = "Ports,!Service,Source,CPU";
+        let layout = Layout::decode(COLS, saved);
+
+        assert_eq!(
+            headers(&layout),
+            ["Service", "Source", "CPU", "Memory"],
+            "`Ports` is gone; `Memory` is appended"
+        );
+        assert_eq!(
+            layout.shown(),
+            ["Source", "CPU", "Memory"],
+            "the saved hidden flag survives, and the new column arrives shown"
+        );
+    }
+
+    #[test]
+    fn a_corrupt_saved_arrangement_still_yields_every_column() {
+        for raw in ["", ",,,", "!!!", "Nonsense,Source,Source"] {
+            let layout = Layout::decode(COLS, raw);
+            assert_eq!(
+                headers(&layout).len(),
+                4,
+                "{raw:?} must still produce the full column set"
+            );
+        }
+    }
+
+    #[test]
+    fn sort_toggles_direction_only_on_the_active_column() {
+        let sort = Sort::new("CPU");
+        assert!(!sort.desc);
+        assert!(sort.toggled("CPU").desc, "a second click flips it");
+        assert!(
+            !sort.toggled("CPU").toggled("Memory").desc,
+            "a different column starts ascending again"
+        );
+        assert_eq!(sort.aria("CPU"), "ascending");
+        assert_eq!(sort.aria("Memory"), "none");
+        assert_eq!(sort.toggled("CPU").aria("CPU"), "descending");
+    }
 }

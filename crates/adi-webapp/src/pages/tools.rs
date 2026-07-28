@@ -59,12 +59,6 @@ pub(crate) fn tools_view(
             </div>
             {tool_create_form(state, form, None)}
             {flash_view(state.flash)}
-            <footer class="adi-footer">
-                "Every active tool is a shim in "
-                {move || view! { <code>{tools.get().map(|t| t.bin_dir).unwrap_or_else(|| "~/.adi/mono/tools/.bin".to_string())}</code> }}
-                " — add that directory to an agent's " <code>"PATH"</code> " and it runs a tool by name. "
-                "Or run one directly with " <code>"adi-mono tools run <id> [args…]"</code> "."
-            </footer>
         </section>
 
         {archived_section(state, editor, run, form.show_archived)}
@@ -208,7 +202,7 @@ pub(crate) fn rows_view(
     project: Option<String>,
     show_project: bool,
 ) -> AnyView {
-    let cols = if show_project { "5" } else { "4" };
+    let cols = if show_project { 5 } else { 4 };
     let Some(loaded) = state.tools.get() else {
         return placeholder_row(cols, "Loading…");
     };

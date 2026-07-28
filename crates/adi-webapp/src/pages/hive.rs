@@ -11,12 +11,14 @@ use crate::fetch;
 use crate::routing::{Route, open_project, project_href, push_state};
 use crate::state::{Flash, State};
 use crate::ui::{
-    Sort, dash, fmt_bytes, fmt_cpu, fmt_ports, placeholder_row, sortable_table, usage_cells,
+    Sort, configurable_table, cpu_cell, dash, fmt_bytes, fmt_cpu, fmt_ports, memory_cell,
+    placeholder_row,
 };
 
-/// The Hive table's columns. Every sort key below matches on the header *text* rather than an
-/// index, so reordering this array reorders the table and nothing else.
-const COLS: &[&str] = &[
+/// Every column the Hive table can show, in its declared order — the set the settings menu
+/// offers, and the order a user who has never rearranged it sees. Sort keys and cell builders
+/// both match on the header *text*, so a column can move or hide without either noticing.
+pub(crate) const COLS: &[&str] = &[
     "Source", "Service", "Host", "Ports", "Command", "Restart", "CPU", "Memory", "Status",
 ];
 
@@ -64,14 +66,7 @@ pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
                     title="Re-read every project's .adi/hive.yaml and the global hive from disk"
                     on:click=move |_| reload_hive(state)>"Reload config"</button>
             </div>
-            {sortable_table(COLS, state.hive_sort, move || hive_rows(state, route))}
-            <footer class="adi-footer">
-                "Read from each project's and dashboard's " <code>".adi/hive.yaml"</code> " and the global "
-                <code>"~/.adi/mono/hive/hive.yaml"</code> ". Dashboard services are supervised by the "
-                "per-user dashboards hive. Status = the service's primary port is listening. "
-                "CPU (share of one core) and memory cover the whole process tree behind that port — "
-                "for a docker service that is Docker's host proxy, not the container."
-            </footer>
+            {configurable_table(state.hive_table, COLS, move || hive_rows(state, route))}
         </section>
     }
     .into_any()
@@ -162,7 +157,7 @@ fn sort_rows(rows: &mut [(HiveService, Source)], sort: Sort) {
         value.map_or("", String::as_str)
     }
     rows.sort_by(|(a, a_src), (b, b_src)| {
-        let ord = match COLS.get(sort.col).copied().unwrap_or_default() {
+        let ord = match sort.col {
             "Service" => a.name.cmp(&b.name),
             "Host" => text(a.host.as_ref()).cmp(text(b.host.as_ref())),
             // By the port itself, not its `key:port` rendering — `http:9` belongs before `http:80`.
@@ -197,15 +192,15 @@ fn mem(s: &HiveService) -> u64 {
     s.usage.as_ref().map_or(0, |u| u.memory_bytes)
 }
 
-/// Rows for the aggregated hive table, in the order the header controls select; the source cell
-/// links into the owning project's detail page.
+/// Rows for the aggregated hive table, in the order and arrangement the header controls select.
 fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
+    let layout = state.hive_table.layout.get();
     let Some(h) = state.hive.get() else {
-        return placeholder_row("9", "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if h.services.is_empty() {
         return placeholder_row(
-            "9",
+            layout.span(),
             "No hive services declared in any project or the global hive.",
         );
     }
@@ -226,65 +221,89 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
             (s, source)
         })
         .collect();
-    sort_rows(&mut rows, state.hive_sort.get());
+    sort_rows(&mut rows, state.hive_table.sort.get());
+    let shown = layout.shown();
     rows.into_iter()
         .map(|(s, src)| {
-            // The id stays in the `title`, since it is what the YAML and the store paths use.
-            let source = match (&s.project, &s.dashboard) {
-                // Supervised by the per-user dashboards hive, not the front door.
-                (_, Some(id)) => {
-                    let title = format!("dashboard {id}");
-                    view! {
-                        <a class="adi-btn adi-btn--link" href=Route::Dashboards.path()
-                            title=title
-                            on:click=move |ev: web_sys::MouseEvent| {
-                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
-                                ev.prevent_default();
-                                push_state(Route::Dashboards.path());
-                                route.set(Route::Dashboards);
-                            }>{src.label}</a>
-                    }.into_any()
-                }
-                (None, None) => view! { <span class="adi-chip">"front-door"</span> }.into_any(),
-                (Some(id), None) => {
-                    let open_id = id.clone();
-                    let href = project_href(id);
-                    let title = format!("project {id}");
-                    view! {
-                        <a class="adi-btn adi-btn--link" href=href title=title
-                            on:click=move |ev: web_sys::MouseEvent| {
-                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
-                                ev.prevent_default();
-                                open_project(state, route, open_id.clone());
-                            }>{src.label}</a>
-                    }.into_any()
-                }
-            };
-            let host = dash(s.host);
-            let ports = fmt_ports(&s.ports);
-            let run = dash(s.run);
-            let restart = dash(s.restart);
-            let usage = usage_cells(s.usage.as_ref());
-            let (state_attr, label) = if s.running { ("online", "Running") } else { ("down", "Stopped") };
-            view! {
-                <tr>
-                    <td>{source}</td>
-                    <td class="adi-mono">{s.name}</td>
-                    <td class="adi-mono">{host}</td>
-                    <td class="adi-mono adi-table__port">{ports}</td>
-                    <td class="adi-mono adi-muted">{run}</td>
-                    <td class="adi-muted">{restart}</td>
-                    {usage}
-                    <td>
-                        <span class="adi-status" data-state=state_attr>
-                            <span class="adi-status__led"></span><span>{label}</span>
-                        </span>
-                    </td>
-                </tr>
-            }
+            let cells: Vec<AnyView> = shown
+                .iter()
+                .map(|col| cell(col, &s, &src, state, route))
+                .collect();
+            view! { <tr>{cells}</tr> }
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// One service's cell under `col`. Matching the header text — the same key the sort uses — is
+/// what lets the user hide and reorder columns without the row builder knowing about it.
+fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<Route>) -> AnyView {
+    match col {
+        "Service" => view! { <td class="adi-mono">{s.name.clone()}</td> }.into_any(),
+        "Host" => view! { <td class="adi-mono">{dash(s.host.clone())}</td> }.into_any(),
+        "Ports" => {
+            view! { <td class="adi-mono adi-table__port">{fmt_ports(&s.ports)}</td> }.into_any()
+        }
+        "Command" => view! { <td class="adi-mono adi-muted">{dash(s.run.clone())}</td> }.into_any(),
+        "Restart" => view! { <td class="adi-muted">{dash(s.restart.clone())}</td> }.into_any(),
+        "CPU" => cpu_cell(s.usage.as_ref()),
+        "Memory" => memory_cell(s.usage.as_ref()),
+        "Status" => {
+            let (attr, label) = if s.running {
+                ("online", "Running")
+            } else {
+                ("down", "Stopped")
+            };
+            view! {
+                <td>
+                    <span class="adi-status" data-state=attr>
+                        <span class="adi-status__led"></span><span>{label}</span>
+                    </span>
+                </td>
+            }
+            .into_any()
+        }
+        // "Source", and anything the layout offers that this match doesn't name.
+        _ => view! { <td>{source_cell(s, src, state, route)}</td> }.into_any(),
+    }
+}
+
+/// The Source cell's contents: the resolved name path, linking into the project detail page or
+/// the dashboards listing. The id stays in the `title`, since it is what the YAML and the store
+/// paths use.
+fn source_cell(s: &HiveService, src: &Source, state: State, route: RwSignal<Route>) -> AnyView {
+    let label = src.label.clone();
+    match (&s.project, &s.dashboard) {
+        // Supervised by the per-user dashboards hive, not the front door.
+        (_, Some(id)) => {
+            let title = format!("dashboard {id}");
+            view! {
+                <a class="adi-btn adi-btn--link" href=Route::Dashboards.path() title=title
+                    on:click=move |ev: web_sys::MouseEvent| {
+                        if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                        ev.prevent_default();
+                        push_state(Route::Dashboards.path());
+                        route.set(Route::Dashboards);
+                    }>{label}</a>
+            }
+            .into_any()
+        }
+        (None, None) => view! { <span class="adi-chip">"front-door"</span> }.into_any(),
+        (Some(id), None) => {
+            let open_id = id.clone();
+            let href = project_href(id);
+            let title = format!("project {id}");
+            view! {
+                <a class="adi-btn adi-btn--link" href=href title=title
+                    on:click=move |ev: web_sys::MouseEvent| {
+                        if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                        ev.prevent_default();
+                        open_project(state, route, open_id.clone());
+                    }>{label}</a>
+            }
+            .into_any()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -293,19 +312,23 @@ mod tests {
 
     use super::*;
 
-    /// The index of a header in [`COLS`] — the tests name columns the way the UI does.
-    fn col(header: &str) -> usize {
-        COLS.iter()
-            .position(|h| *h == header)
-            .expect("known column")
+    /// Ascending by `header`, asserting the table actually declares it — so a renamed column
+    /// breaks its tests instead of silently falling through the comparator's catch-all.
+    fn asc(header: &'static str) -> Sort {
+        Sort::new(known(header))
     }
 
     /// The sort a second click on `header` produces: that column, descending.
-    fn desc(header: &str) -> Sort {
+    fn desc(header: &'static str) -> Sort {
         Sort {
-            col: col(header),
+            col: known(header),
             desc: true,
         }
+    }
+
+    fn known(header: &'static str) -> &'static str {
+        assert!(COLS.contains(&header), "{header} is not a column");
+        header
     }
 
     /// A service with just the fields the sorts read; `cpu`/`mem` of `None` means "not running",
@@ -455,7 +478,7 @@ mod tests {
             &[proj("proj", "Web Project", None)],
         );
 
-        sort_rows(&mut services, Sort::new(col("Source")));
+        sort_rows(&mut services, asc("Source"));
         assert_eq!(names(&services), ["api", "app", "frontend", "web"]);
     }
 
@@ -470,7 +493,7 @@ mod tests {
             ],
             &[],
         );
-        sort_rows(&mut services, Sort::new(col("Memory")));
+        sort_rows(&mut services, asc("Memory"));
         assert_eq!(names(&services), ["small", "mid", "huge"]);
 
         sort_rows(&mut services, desc("Memory"));
@@ -493,7 +516,7 @@ mod tests {
             ],
             &[],
         );
-        sort_rows(&mut services, Sort::new(col("CPU")));
+        sort_rows(&mut services, asc("CPU"));
         assert_eq!(names(&services), ["stopped", "idle", "busy"]);
 
         sort_rows(&mut services, desc("CPU"));
@@ -516,7 +539,7 @@ mod tests {
         };
         // Every row's Restart is None, so all three tie on the key.
         let mut ascending = tied();
-        sort_rows(&mut ascending, Sort::new(col("Restart")));
+        sort_rows(&mut ascending, asc("Restart"));
         let mut descending = tied();
         sort_rows(&mut descending, desc("Restart"));
 

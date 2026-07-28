@@ -151,7 +151,7 @@ fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) 
 /// side of the split renders as a root rather than vanishing.
 fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView {
     // The archive drops the Status column, so its rows are one cell narrower.
-    let cols = if archived { "5" } else { "6" };
+    let cols = if archived { 5 } else { 6 };
     let Some(loaded) = state.projects.get() else {
         return placeholder_row(cols, "Loading\u{2026}");
     };

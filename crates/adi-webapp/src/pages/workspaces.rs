@@ -132,7 +132,7 @@ pub(crate) fn workspaces_panel(
 /// Unregister action in the kebab (behind a confirm; files stay on disk).
 fn workspace_rows(state: State, term: TermWatch) -> AnyView {
     let Some(snapshot) = current_snapshot(state) else {
-        return placeholder_row("6", "Loading…");
+        return placeholder_row(6, "Loading…");
     };
     if snapshot.workspaces.is_empty() {
         let hint = if snapshot.has_init_hook {
@@ -140,7 +140,7 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
         } else {
             "No workspaces yet — create an init hook below first, then press ⚡ Initialize."
         };
-        return placeholder_row("6", hint);
+        return placeholder_row(6, hint);
     }
     snapshot
         .workspaces
@@ -212,10 +212,10 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
 /// Rows for the hooks table: each hook file with Run / Log / Edit actions.
 fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
     let Some(snapshot) = current_snapshot(state) else {
-        return placeholder_row("4", "Loading…");
+        return placeholder_row(4, "Loading…");
     };
     if snapshot.hooks.is_empty() {
-        return placeholder_row("4", "No hooks yet — add one below.");
+        return placeholder_row(4, "No hooks yet — add one below.");
     }
     snapshot
         .hooks

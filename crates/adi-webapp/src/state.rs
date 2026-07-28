@@ -14,7 +14,7 @@ use leptos::prelude::*;
 
 use crate::fetch;
 use crate::routing::{ProjectSection, Route, current_path, project_id_from_path};
-use crate::ui::Sort;
+use crate::ui::TableState;
 
 /// Signals a data refresh writes to; `Copy` (each field is an arena handle) so it threads
 /// cheaply through async tasks and event handlers.
@@ -67,12 +67,12 @@ pub(crate) struct State {
     pub(crate) store: StoreBrowser,
     /// The open table-row kebab menu, shared by every page's action columns. See [`RowMenu`].
     pub(crate) row_menu: RwSignal<Option<RowMenu>>,
-    /// Which column the Hive table is sorted by. Lives here, beside [`State::row_menu`], rather
-    /// than in the view: the page function is re-run on every route render, so a signal created
-    /// inside it would reset the sort on each redraw.
-    pub(crate) hive_sort: RwSignal<Sort>,
+    /// How the Hive table is sorted and arranged. Lives here, beside [`State::row_menu`], rather
+    /// than in the view: the page function is re-run on every route render, so signals created
+    /// inside it would reset the user's arrangement on each redraw.
+    pub(crate) hive_table: TableState,
     /// The same, for a project detail page's Services panel.
-    pub(crate) service_sort: RwSignal<Sort>,
+    pub(crate) service_table: TableState,
 }
 
 impl State {
@@ -106,8 +106,8 @@ impl State {
             files: FilesState::new(),
             store: StoreBrowser::new(),
             row_menu: RwSignal::new(None),
-            hive_sort: RwSignal::new(Sort::new(0)),
-            service_sort: RwSignal::new(Sort::new(0)),
+            hive_table: TableState::new("hive", crate::pages::HIVE_COLS),
+            service_table: TableState::new("services", crate::pages::SERVICE_COLS),
         }
     }
 }

@@ -116,7 +116,7 @@ pub(crate) fn triggers_panel(
 fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
     let id = state.current_project.get();
     let Some(st) = state.triggers.get() else {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row(5, "Loading…");
     };
     let mine: Vec<_> = st
         .triggers
@@ -124,7 +124,7 @@ fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
         .filter(|t| t.project.as_deref() == Some(id.as_str()))
         .collect();
     if mine.is_empty() {
-        return placeholder_row("5", "No triggers in this project yet — add one below.");
+        return placeholder_row(5, "No triggers in this project yet — add one below.");
     }
     mine.into_iter()
         .map(|t| {

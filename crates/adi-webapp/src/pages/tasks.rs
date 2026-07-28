@@ -182,7 +182,7 @@ where
 /// re-roots into the main tree rather than disappearing with its parent.
 fn task_rows(state: State, finished: bool) -> AnyView {
     let Some(state_tasks) = state.tasks.get() else {
-        return placeholder_row("7", "Loading…");
+        return placeholder_row(7, "Loading…");
     };
     let rows: Vec<_> = state_tasks
         .tasks
@@ -191,7 +191,7 @@ fn task_rows(state: State, finished: bool) -> AnyView {
         .collect();
     if rows.is_empty() {
         return placeholder_row(
-            "7",
+            7,
             if finished {
                 "Nothing finished yet."
             } else {

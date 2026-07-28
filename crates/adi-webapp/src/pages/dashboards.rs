@@ -90,12 +90,6 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
             </form>
             {flash_view(state.flash)}
 
-            <footer class="adi-footer">
-                "Each dashboard is two bun services in " <code>"~/.adi/mono/dashboards/<id>/"</code>
-                ", supervised by the per-user dashboards hive — it picks up a new one within a few "
-                "seconds, no restart. Agents extend a dashboard by dropping "<code>".ts"</code>
-                " files into its " <code>"frontend/modules/"</code> " and " <code>"backend/routes/"</code> "."
-            </footer>
         </section>
 
         {archived_section(state, form.show_archived)}
@@ -137,7 +131,7 @@ fn archived_section(state: State, show: RwSignal<bool>) -> AnyView {
 /// loading/empty placeholder or one row per matching dashboard.
 fn rows_view(state: State, archived: bool) -> AnyView {
     let Some(loaded) = state.dashboards.get() else {
-        return placeholder_row("7", "Loading…");
+        return placeholder_row(7, "Loading…");
     };
     let rows: Vec<Dashboard> = loaded
         .dashboards
@@ -146,7 +140,7 @@ fn rows_view(state: State, archived: bool) -> AnyView {
         .collect();
     if rows.is_empty() {
         return placeholder_row(
-            "7",
+            7,
             if archived {
                 "Nothing archived."
             } else {

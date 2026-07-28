@@ -6,7 +6,9 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, State};
-use crate::ui::{Sort, TextField, apply_mutation, dash, fmt_ports, placeholder_row, usage_cells};
+use crate::ui::{
+    Sort, TextField, apply_mutation, cpu_cell, dash, fmt_ports, memory_cell, placeholder_row,
+};
 
 /// The Services panel's columns; the trailing blank one holds the row's Start/Stop control and
 /// does not sort. As on the Hive page, the sort keys match on header text, not index.
@@ -53,26 +55,24 @@ pub(crate) fn service_rows(
     mut services: Vec<ProjectService>,
     has_hive: bool,
 ) -> AnyView {
-    sort_services(&mut services, state.service_sort.get());
+    let layout = state.service_table.layout.get();
+    sort_services(&mut services, state.service_table.sort.get());
     if services.is_empty() {
         let msg = if has_hive {
             "This project's .adi/hive.yaml declares no services."
         } else {
             "No .adi/hive.yaml — this project has no runtime services yet."
         };
-        return placeholder_row("8", msg);
+        return placeholder_row(layout.span(), msg);
     }
+    let shown = layout.shown();
     services
         .into_iter()
         .map(|s| {
             let name = s.name.clone();
-            let host = dash(s.host);
-            let ports = fmt_ports(&s.ports);
-            let usage = usage_cells(s.usage.as_ref());
+            let cells: Vec<AnyView> = shown.iter().map(|col| cell(col, &s)).collect();
             let has_runner = s.run.is_some();
             let running = s.running;
-            let run = dash(s.run);
-            let restart = dash(s.restart);
             let action = if !has_runner {
                 view! { <span class="adi-muted">"—"</span> }.into_any()
             } else if running {
@@ -96,20 +96,27 @@ pub(crate) fn service_rows(
                 }
                 .into_any()
             };
-            view! {
-                <tr>
-                    <td class="adi-mono">{name}</td>
-                    <td class="adi-mono">{host}</td>
-                    <td class="adi-mono adi-table__port">{ports}</td>
-                    <td class="adi-mono adi-muted">{run}</td>
-                    <td class="adi-muted">{restart}</td>
-                    {usage}
-                    <td>{action}</td>
-                </tr>
-            }
+            view! { <tr>{cells}<td>{action}</td></tr> }
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// One service's cell under `col`. Matching the header text — the same key the sort uses — is
+/// what lets the user hide and reorder columns without the row builder knowing about it.
+fn cell(col: &str, s: &ProjectService) -> AnyView {
+    match col {
+        "Host" => view! { <td class="adi-mono">{dash(s.host.clone())}</td> }.into_any(),
+        "Ports" => {
+            view! { <td class="adi-mono adi-table__port">{fmt_ports(&s.ports)}</td> }.into_any()
+        }
+        "Command" => view! { <td class="adi-mono adi-muted">{dash(s.run.clone())}</td> }.into_any(),
+        "Restart" => view! { <td class="adi-muted">{dash(s.restart.clone())}</td> }.into_any(),
+        "CPU" => cpu_cell(s.usage.as_ref()),
+        "Memory" => memory_cell(s.usage.as_ref()),
+        // "Service", and anything the layout offers that this match doesn't name.
+        _ => view! { <td class="adi-mono">{s.name.clone()}</td> }.into_any(),
+    }
 }
 
 /// Order the panel's rows by the clicked column, tiebreaking on the service name so equal keys
@@ -129,7 +136,7 @@ fn sort_services(services: &mut [ProjectService], sort: Sort) {
             .map_or(0, |p| p.port)
     }
     services.sort_by(|a, b| {
-        let ord = match SERVICE_COLS.get(sort.col).copied().unwrap_or_default() {
+        let ord = match sort.col {
             "Host" => text(a.host.as_ref()).cmp(text(b.host.as_ref())),
             "Ports" => port(a).cmp(&port(b)),
             "Command" => text(a.run.as_ref()).cmp(text(b.run.as_ref())),

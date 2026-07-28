@@ -362,11 +362,11 @@ fn all_chats_flatten(
 /// Open that reveals it in the live view below). Loading/empty placeholders otherwise.
 fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) -> AnyView {
     if state.all_chats.get().is_none() {
-        return placeholder_row("5", "Loading…");
+        return placeholder_row(5, "Loading…");
     }
     let rows = all_chats_flatten(state, only);
     if rows.is_empty() {
-        return placeholder_row("5", "No chats yet — start one from an agent below.");
+        return placeholder_row(5, "No chats yet — start one from an agent below.");
     }
     rows.into_iter()
         .map(|(agent, answerable, interactive, r)| {

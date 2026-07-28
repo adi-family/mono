@@ -151,7 +151,7 @@ fn crumbs_view(state: State) -> AnyView {
 fn file_rows(state: State) -> AnyView {
     let files = state.files;
     let Some(listing) = files.listing.get() else {
-        return placeholder_row("3", "Loading…");
+        return placeholder_row(3, "Loading…");
     };
     let dir = listing.path.clone();
     let mut rows: Vec<AnyView> = Vec::new();
@@ -178,7 +178,7 @@ fn file_rows(state: State) -> AnyView {
     }
 
     if listing.entries.is_empty() && listing.parent.is_none() {
-        return placeholder_row("3", "This project directory is empty.");
+        return placeholder_row(3, "This project directory is empty.");
     }
 
     for entry in listing.entries {
