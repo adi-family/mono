@@ -35,6 +35,7 @@ mod error;
 mod events;
 pub mod progress;
 mod run;
+mod tool_help;
 pub mod wasm;
 
 use std::path::PathBuf;
@@ -81,6 +82,10 @@ pub struct Agents {
 /// working directory, the agent's `.bin` of enabled tools, and the environment its run is launched
 /// with (its attached secrets, plus the pointer to its scope's database).
 struct LaunchContext {
+    /// The agent as it is *launched* — the stored definition with its tools' own help folded into
+    /// the system prompt (see [`tool_help`]). Launch from this, never from the stored agent, or the
+    /// run's `.bin` holds commands its prompt never mentions.
+    agent: StoredAgent,
     sessions_dir: PathBuf,
     base_dir: PathBuf,
     bin_dir: Option<PathBuf>,
@@ -259,7 +264,7 @@ impl Agents {
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let ctx = self.launch_context(&agent);
         let launch = launch_in(
-            &agent,
+            &ctx.agent,
             &ctx.sessions_dir,
             &ctx.base_dir,
             ctx.bin_dir.as_deref(),
@@ -286,7 +291,7 @@ impl Agents {
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let ctx = self.launch_context(&agent);
         let sent = reply_in(
-            &agent,
+            &ctx.agent,
             &ctx.sessions_dir,
             &ctx.base_dir,
             ctx.bin_dir.as_deref(),
@@ -341,7 +346,7 @@ impl Agents {
         }
         let ctx = self.launch_context(agent);
         let Some((message, launch)) = advance_in(
-            agent,
+            &ctx.agent,
             &ctx.sessions_dir,
             &ctx.base_dir,
             ctx.bin_dir.as_deref(),
@@ -373,7 +378,9 @@ impl Agents {
             .get(agent_name)?
             .ok_or_else(|| Error::NotFound(agent_name.to_string()))?;
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        adi_turn_in(&agent, &sessions_dir, conv_id)
+        // The `adi` loop builds its own system message here, in the turn child — not from the argv
+        // the launch assembled — so this is where its tool help has to be folded in.
+        adi_turn_in(&self.with_tool_help(&agent), &sessions_dir, conv_id)
     }
 
     /// The shared per-launch context: where runs live, the default cwd, the agent's `.bin`, and the
@@ -397,11 +404,39 @@ impl Agents {
         // `ADI_DB` would be overridden here rather than silently redirecting the run's database.
         run_env.extend(self.config.db_env(agent.manifest.project.as_deref()));
         LaunchContext {
+            agent: self.with_tool_help(agent),
             sessions_dir: self.config.module(SESSIONS_MODULE).dir().to_path_buf(),
             base_dir,
             bin_dir,
             run_env,
         }
+    }
+
+    /// The agent as it should be launched: its stored definition with the enabled tools' own help
+    /// appended to its system prompt, so a run knows what the commands on its `PATH` are and how to
+    /// call them. The user's prompt is untouched and leads; nothing is written back to the store.
+    ///
+    /// Best-effort at every step — this decorates a prompt and must never cost a run. An agent with
+    /// no tools, a backend whose `system_prompt` isn't one (see [`tool_help::applies_to`]), tools
+    /// with nothing to say, or a decorated manifest its own backend would reject: each falls back to
+    /// launching the agent exactly as stored.
+    fn with_tool_help(&self, agent: &StoredAgent) -> StoredAgent {
+        if agent.manifest.bin_tools.is_empty() || !tool_help::applies_to(&agent.manifest.backend) {
+            return agent.clone();
+        }
+        let tools = adi_tools::Tools::with_config(self.config.clone());
+        let Some(block) = tool_help::block(&tools.help_for(&agent.manifest.bin_tools)) else {
+            return agent.clone();
+        };
+        let mut decorated = agent.clone();
+        tool_help::fold_into(&mut decorated.manifest.arguments, &block);
+        // A backend whose arguments are `deny_unknown_fields` would reject a `system_prompt` it has
+        // no field for. None do today; if one ever doesn't, its runs keep working undecorated
+        // rather than failing at launch.
+        if arguments::validate_builtin(&decorated.manifest).is_err() {
+            return agent.clone();
+        }
+        decorated
     }
 
     /// Dispatches a message synchronously to a `wasm:*` agent.
@@ -992,5 +1027,97 @@ mod tests {
             .rename("keep", "keep")
             .expect("self rename is a no-op");
         assert!(store.get("keep").expect("still there").is_some());
+    }
+
+    /// Register a tool in `store`'s registry that answers `llm help` and nothing else — the
+    /// convention a tool documents itself by. Returns its id, for an agent's `bin_tools`.
+    fn tool_answering_llm_help(store: &Agents, name: &str, help: &str) -> String {
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"llm\" ] && [ \"$2\" = \"help\" ]; then\n\
+             printf '%s' '{help}'\nelse\n  exit 1\nfi\n"
+        );
+        adi_tools::Tools::with_config(store.config.clone())
+            .create_file(name, None, "sh", None, Some(script))
+            .expect("register the tool")
+            .id
+    }
+
+    fn agent_with_tools(store: &Agents, name: &str, backend: &str, tools: Vec<String>) -> StoredAgent {
+        let mut manifest = spec(backend);
+        manifest.arguments.system_prompt = Some("You are a careful operator.".into());
+        manifest.bin_tools = tools;
+        store.save(name, manifest).expect("save");
+        store.get(name).expect("read back").expect("the agent")
+    }
+
+    /// The whole seam, end to end: a tool that answers `llm help` is asked at launch, and what it
+    /// said arrives in the prompt the agent is launched with — behind the agent's own instructions,
+    /// which are left exactly as written.
+    #[test]
+    fn a_launch_carries_the_enabled_tools_own_help() {
+        let store = scratch("tool-help");
+        let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
+        let agent = agent_with_tools(&store, "helper", "harness:claude-sdk", vec![id]);
+
+        let launched = store.with_tool_help(&agent);
+        let prompt = launched.manifest.arguments["system_prompt"]
+            .as_str()
+            .expect("a prompt");
+
+        assert!(prompt.starts_with("You are a careful operator."), "{prompt}");
+        assert!(prompt.contains("# Your tools"), "{prompt}");
+        assert!(prompt.contains("## greet"), "{prompt}");
+        assert!(prompt.contains("Usage: greet <name>"), "{prompt}");
+
+        // And it survives the typed decode every backend performs before building its argv — where
+        // `deny_unknown_fields` would reject a key the backend has no field for. For claude-sdk
+        // this value goes straight into `--append-system-prompt`.
+        let typed: arguments::HarnessClaudeSdkArguments =
+            launched.manifest.typed_arguments().expect("typed arguments");
+        assert!(
+            typed
+                .system_prompt
+                .expect("a system prompt")
+                .contains("Usage: greet <name>")
+        );
+        // Derived, never stored: the manifest on disk still holds only what the user wrote.
+        let stored = store.get("helper").expect("read back").expect("the agent");
+        assert_eq!(
+            stored.manifest.arguments["system_prompt"].as_str(),
+            Some("You are a careful operator.")
+        );
+    }
+
+    /// An agent with no tools ticked on is launched exactly as stored — no heading, no section,
+    /// and no tool registry read at all.
+    #[test]
+    fn an_agent_without_tools_is_launched_untouched() {
+        let store = scratch("tool-help-none");
+        let agent = agent_with_tools(&store, "bare", "harness:claude-sdk", Vec::new());
+        assert_eq!(store.with_tool_help(&agent), agent);
+    }
+
+    /// Codex takes its `system_prompt` as the opening user turn, so tool help would land there as a
+    /// question. Its agents keep the prompt they were given, tools or not.
+    #[test]
+    fn a_codex_agent_keeps_its_prompt_as_written() {
+        let store = scratch("tool-help-codex");
+        let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
+        let agent = agent_with_tools(&store, "coder", "pty:codex", vec![id]);
+        assert_eq!(store.with_tool_help(&agent), agent);
+    }
+
+    /// A tool ticked on but no longer registered (deleted, or archived out from under the agent)
+    /// contributes nothing — and, being the only one, leaves the prompt as written.
+    #[test]
+    fn an_unregistered_tool_adds_nothing() {
+        let store = scratch("tool-help-ghost");
+        let agent = agent_with_tools(
+            &store,
+            "haunted",
+            "harness:claude-sdk",
+            vec!["no-such-tool".into()],
+        );
+        assert_eq!(store.with_tool_help(&agent), agent);
     }
 }

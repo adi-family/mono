@@ -32,6 +32,7 @@
 //! ```
 
 mod error;
+mod help;
 mod run;
 mod system;
 mod tool;
@@ -41,6 +42,7 @@ use std::path::{Path, PathBuf};
 use adi_config::{Config, ConfigFile, now_unix};
 
 pub use error::{Error, Result};
+pub use help::ToolHelp;
 pub use run::RunOutput;
 pub use tool::{
     Manifest, RUNTIME_SH, RUNTIME_TS, Tool, normalize_runtime, runtime_ext, runtime_from_path,
@@ -478,6 +480,56 @@ impl Tools {
         Ok(dir)
     }
 
+    /// What the tools in `enabled` say about themselves — one entry per tool an agent actually gets
+    /// a shim for, in the same order and under the same names as [`sync_agent_bin`](Self::sync_agent_bin)
+    /// writes them, so what the agent is told matches what it can run. Each tool is asked
+    /// `llm help`, then `help`, then `--help`; see [`ToolHelp`].
+    ///
+    /// Best-effort throughout, because this feeds a prompt and must never fail a launch: an
+    /// unreadable registry yields no entries, a tool that answers nothing is listed by name alone,
+    /// and the whole sweep is bounded — tools not yet cached when the budget runs out are left for
+    /// the next launch to pick up.
+    #[must_use]
+    pub fn help_for(&self, enabled: &[String]) -> Vec<ToolHelp> {
+        let Ok(tools) = self.list() else {
+            return Vec::new();
+        };
+        let enabled: std::collections::HashSet<&str> =
+            enabled.iter().map(String::as_str).collect();
+        let deadline = std::time::Instant::now() + help::TOTAL_BUDGET;
+        let tools_dir = self.dir();
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for tool in tools
+            .iter()
+            .filter(|t| !t.is_archived() && enabled.contains(t.id.as_str()))
+        {
+            let name = tool.bin_name();
+            // The same first-wins rule the shims are written under: a colliding second tool has no
+            // shim, so telling the agent about it would name something it can't run.
+            if !seen.insert(name.clone()) {
+                continue;
+            }
+            let script = self.script_path_of(tool);
+            let text = help::text(
+                &tools_dir,
+                tool,
+                &script,
+                |args| {
+                    let args: Vec<String> = args.iter().map(ToString::to_string).collect();
+                    run::command(tool, &script, &args, self.config.root(), &self.config).ok()
+                },
+                deadline,
+            );
+            out.push(ToolHelp {
+                name,
+                description: tool.manifest.description.clone(),
+                help: text,
+            });
+        }
+        out
+    }
+
     /// Rebuild `dir` from scratch with one shim per tool in `tools` (assumed already filtered and
     /// sorted by id), first-wins on a slug collision. Returns the written map (`shim name` → id).
     fn write_shims(
@@ -522,18 +574,44 @@ fn shim(tool: &Tool) -> String {
 }
 
 /// The starter script a freshly created owned tool gets, so ▶ Run does something on the first click.
+///
+/// It answers `llm help` from the outset, because that answer is what every agent enabling this
+/// tool will be told about it (see [`help`]). Starting with the branch in place makes describing
+/// the tool an edit rather than a thing to remember.
 fn starter(runtime: &str, name: &str) -> String {
     match normalize_runtime(runtime) {
         RUNTIME_TS => format!(
             "#!/usr/bin/env bun\n\
              // {name} — an adi tool. Arguments arrive in Bun.argv.slice(2).\n\
              const args = Bun.argv.slice(2);\n\
+             \n\
+             // What agents are told about this tool: describe what it does, its commands and\n\
+             // flags, what it prints, and one example. Keep it short.\n\
+             if (args[0] === \"llm\" && args[1] === \"help\") {{\n\
+             \x20 console.log(`{name} — TODO: say what this tool does.\n\
+             \n\
+             Usage: {name} <args…>`);\n\
+             \x20 process.exit(0);\n\
+             }}\n\
+             \n\
              console.log(`hello from {name}`, args);\n"
         ),
         _ => format!(
             "#!/bin/sh\n\
              # {name} — an adi tool. Arguments arrive in \"$@\".\n\
              set -eu\n\
+             \n\
+             # What agents are told about this tool: describe what it does, its commands and\n\
+             # flags, what it prints, and one example. Keep it short.\n\
+             if [ \"${{1:-}}\" = \"llm\" ] && [ \"${{2:-}}\" = \"help\" ]; then\n\
+             \x20 cat <<'HELP'\n\
+             {name} — TODO: say what this tool does.\n\
+             \n\
+             Usage: {name} <args…>\n\
+             HELP\n\
+             \x20 exit 0\n\
+             fi\n\
+             \n\
              echo \"hello from {name} $*\"\n"
         ),
     }
@@ -769,6 +847,48 @@ mod tests {
             .expect("run");
         assert!(out.ok());
         assert_eq!(out.output, "ran:ok");
+    }
+
+    /// A tool describes itself from the moment it is created: the starter answers `llm help`, so
+    /// enabling a brand-new tool on an agent already puts something real in that agent's prompt —
+    /// a `TODO` to replace, rather than silence to notice.
+    #[test]
+    fn a_new_tool_answers_llm_help_out_of_the_box() {
+        let store = scratch("starter-help");
+        let tool = store
+            .create_file("greet", Some("Say hello.".into()), "sh", None, None)
+            .expect("create");
+
+        let described = store.help_for(&[tool.id.clone()]);
+        assert_eq!(described.len(), 1);
+        assert_eq!(described[0].name, "greet");
+        assert_eq!(described[0].description.as_deref(), Some("Say hello."));
+        let help = described[0].help.as_deref().expect("the starter's own help");
+        assert!(help.starts_with("greet —"), "{help}");
+        assert!(help.contains("Usage: greet"), "{help}");
+
+        // The `ts` starter carries the same branch; running it would need bun, so read the script.
+        let ts = store
+            .create_file("greet-ts", None, "ts", None, None)
+            .expect("create");
+        let script = store.read_script(&ts.id).expect("read");
+        assert!(script.contains(r#"args[0] === "llm""#), "{script}");
+    }
+
+    /// A tool enabled on nothing is asked nothing, and an unregistered id contributes no entry —
+    /// the two ways a prompt would otherwise gain a command that isn't there.
+    #[test]
+    fn help_covers_exactly_the_enabled_registered_tools() {
+        let store = scratch("help-scope");
+        let tool = store.create_file("greet", None, "sh", None, None).expect("create");
+        assert!(store.help_for(&[]).is_empty());
+        assert!(store.help_for(&["ghost".to_string()]).is_empty());
+
+        store.archive(&tool.id).expect("archive");
+        assert!(
+            store.help_for(&[tool.id]).is_empty(),
+            "an archived tool has no shim, so it must not be described"
+        );
     }
 
     #[test]

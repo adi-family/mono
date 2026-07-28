@@ -229,6 +229,11 @@ fn agent_tool_checkboxes(state: State, form: AgentsForm) -> AnyView {
             <div style="display:flex; flex-wrap:wrap; align-items:center; padding:var(--space-1) 0">
                 {boxes}
             </div>
+            <div class="adi-hint">
+                "Each one is asked " <code>"llm help"</code> " (then " <code>"help"</code> ", then "
+                <code>"--help"</code> ") at launch, and what it answers is appended to this agent's "
+                "system prompt — so it knows what the commands are without being told twice."
+            </div>
         </div>
     }
     .into_any()
