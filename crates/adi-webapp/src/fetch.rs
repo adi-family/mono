@@ -12,7 +12,7 @@ use adi_webapp_api::types::{
     RunTool, SaveAgent, SaveAgentCode, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
     SetOAuthSecret, SetSecret, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
     ToolRunResult, ToolScript, ToolsState, TriggerFireResult, TriggerLog, TriggerRef,
-    TriggersState, UsedPorts, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
+    TriggersState, UnqueueFromRun, UsedPorts, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
     WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
 };
@@ -291,8 +291,9 @@ pub async fn peek_run(name: String, run_id: String) -> Result<AgentPeek, String>
     post("/api/agents/run/peek", &RunRef { name, run_id }).await
 }
 
-/// Answer into one of a harness agent's conversations, spawning the next turn. Returns a fresh
-/// snapshot with the updated transcript (including the streaming answer).
+/// Say something into one of a harness agent's conversations: it starts the next turn, or queues
+/// behind the answer still in flight. Returns a fresh snapshot with the updated transcript
+/// (including the streaming answer and anything queued).
 pub async fn reply_to_run(
     name: String,
     run_id: String,
@@ -304,6 +305,23 @@ pub async fn reply_to_run(
             name,
             run_id,
             message,
+        },
+    )
+    .await
+}
+
+/// Drop the message at `index` from a conversation's queue, returning the fresh snapshot.
+pub async fn unqueue_from_run(
+    name: String,
+    run_id: String,
+    index: usize,
+) -> Result<AgentPeek, String> {
+    post(
+        "/api/agents/run/unqueue",
+        &UnqueueFromRun {
+            name,
+            run_id,
+            index,
         },
     )
     .await

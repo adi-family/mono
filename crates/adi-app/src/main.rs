@@ -338,6 +338,7 @@ async fn handle(
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(agents),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
         ("POST", "/api/agents/run/reply") => handlers::reply_run(agents, &req.body),
+        ("POST", "/api/agents/run/unqueue") => handlers::unqueue_run(agents, &req.body),
         ("POST", "/api/agents/run/stop") => handlers::stop_run(agents, &req.body),
         ("POST", "/api/agents/stop") => handlers::stop_agent(agents, &req.body),
         ("POST", "/api/agents/code") => handlers::agent_code(agents, &req.body),

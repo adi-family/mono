@@ -15,7 +15,7 @@ use crate::types::{
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef,
     AgentRunInfo, AgentRunResult, AgentRuns, AgentStep, AgentToolStatus, AgentTurn,
     AgentTurnMetrics, AgentsState, AllAgentRuns, ReplyToRun, RunAgent, RunRef, SaveAgent,
-    SaveAgentCode, SecretRef,
+    SaveAgentCode, SecretRef, UnqueueFromRun,
 };
 
 use super::files::MAX_TEXT_BYTES;
@@ -152,9 +152,11 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
     })
 }
 
-/// `POST /api/agents/run/reply` — answer into one of a harness agent's conversations, spawning the
-/// next turn, and reply with a fresh snapshot (transcript included). Rejected (409) while the
-/// previous answer is still being produced, and (400) for a backend that keeps no conversation.
+/// `POST /api/agents/run/reply` — say something into one of a harness agent's conversations and
+/// reply with a fresh snapshot (transcript included). One turn runs at a time, so the message either
+/// starts the next turn or joins that conversation's queue — either way it lands in the returned
+/// transcript, a queued one flagged as such. Only a backend that keeps no conversation is refused
+/// (400).
 #[must_use]
 pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_reply_to_run(body) else {
@@ -168,11 +170,34 @@ pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
     if let Err(e) = store.reply(&agent.name, run_id, req.message.trim()) {
         return Response::from(&e);
     }
-    // Snapshot the conversation right away so the sender sees their turn (and the streaming answer)
-    // without waiting for the next poll.
-    let peek = store.peek_run(&agent, run_id);
+    conversation_snapshot(store, &agent, run_id)
+}
+
+/// `POST /api/agents/run/unqueue` — drop one message from a conversation's queue before it is asked,
+/// and reply with a fresh snapshot. Idempotent: an index that is no longer queued (it started its
+/// turn a moment ago) simply changes nothing.
+#[must_use]
+pub fn unqueue_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_unqueue_from_run(body) else {
+        return bad_unqueue_from_run();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    if let Err(e) = store.unqueue(&agent.name, run_id, req.index) {
+        return Response::from(&e);
+    }
+    conversation_snapshot(store, &agent, run_id)
+}
+
+/// A conversation's fresh snapshot — the answer to every write into it, so the sender sees their
+/// message (and the answer already streaming under it) without waiting for the next poll.
+fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> Response {
+    let peek = store.peek_run(agent, run_id);
     let turns = store
-        .transcript(&agent, run_id)
+        .transcript(agent, run_id)
         .into_iter()
         .map(agent_turn)
         .collect();
@@ -184,13 +209,14 @@ pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
         interactive: peek.interactive,
         run_id: run_id.to_string(),
         answerable: true,
-        caps: agent_caps(&agent),
+        caps: agent_caps(agent),
         turns,
     })
 }
 
-/// `POST /api/agents/run/stop` — stop one specific run, then report the fresh run history. Idempotent
-/// for an already-finished run; only an unknown agent is a 404.
+/// `POST /api/agents/run/stop` — stop one specific run, then report the fresh run history. For a
+/// conversation this also drops anything queued behind the answer being cut short. Idempotent for an
+/// already-finished run; only an unknown agent is a 404.
 #[must_use]
 pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
     let Some(req) = parse_run_ref(body) else {
@@ -262,6 +288,7 @@ fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
         text: t.text,
         at: t.at,
         pending: t.pending,
+        queued: t.queued,
         steps: t.steps.into_iter().map(agent_step).collect(),
         metrics: t.metrics.map(agent_metrics),
     }
@@ -1482,6 +1509,18 @@ fn bad_reply_to_run() -> Response {
     error(
         400,
         "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"message\": \"…\" } with all three non-empty",
+    )
+}
+
+fn parse_unqueue_from_run(body: &[u8]) -> Option<UnqueueFromRun> {
+    let req: UnqueueFromRun = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty()).then_some(req)
+}
+
+fn bad_unqueue_from_run() -> Response {
+    error(
+        400,
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"index\": 0 } with a non-empty name and run_id",
     )
 }
 

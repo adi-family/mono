@@ -24,6 +24,17 @@ pub enum Launch {
     },
 }
 
+/// What became of a message said into a conversation. One turn runs at a time, so a message sent
+/// while the agent is still answering is not refused — it takes its place in the queue and starts
+/// when the current answer lands.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Sent {
+    /// It started a turn of its own, right away.
+    Started(Launch),
+    /// It is waiting: `place` is its 1-based position in the queue.
+    Queued { place: usize },
+}
+
 /// How much of a detached run's log the live view tails — the last 64 KiB, enough for the tail of
 /// a headless `--print` run without streaming an unbounded file to the browser each poll.
 pub(crate) const MAX_LOG_TAIL: u64 = 64 * 1024;
@@ -199,8 +210,9 @@ pub(crate) fn stop_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str
     }
 }
 
-/// Answer into one of an agent's conversations, spawning the next turn. Only harness backends keep
-/// conversations; anything else has no thread to continue.
+/// Say something into one of an agent's conversations: start the next turn, or queue the message
+/// behind the answer still in flight. Only harness backends keep conversations; anything else has no
+/// thread to continue.
 pub(crate) fn reply_in(
     agent: &StoredAgent,
     sessions_dir: &Path,
@@ -209,7 +221,7 @@ pub(crate) fn reply_in(
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
-) -> Result<Launch> {
+) -> Result<Sent> {
     match &agent.manifest.backend {
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
             harness::reply(agent, sessions_dir, base_dir, bin_dir, conv_id, message, run_env)
@@ -217,6 +229,50 @@ pub(crate) fn reply_in(
         other => Err(Error::Unsupported(format!(
             "backend {other} isn't answerable — only harness backends keep conversations you can reply to"
         ))),
+    }
+}
+
+/// Start a conversation's next queued message when it is idle and one is waiting. Only harness
+/// backends have a queue; for anything else there is nothing to advance.
+pub(crate) fn advance_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    base_dir: &Path,
+    bin_dir: Option<&Path>,
+    conv_id: &str,
+    run_env: &[(String, String)],
+) -> Option<(String, Launch)> {
+    match &agent.manifest.backend {
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::advance(agent, sessions_dir, base_dir, bin_dir, conv_id, run_env)
+        }
+        _ => None,
+    }
+}
+
+/// Whether [`advance_in`] would start anything — the cheap gate a poll asks before paying for a
+/// launch context.
+pub(crate) fn can_advance_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> bool {
+    match &agent.manifest.backend {
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::can_advance(sessions_dir, &agent.name, conv_id)
+        }
+        _ => false,
+    }
+}
+
+/// Drop one queued message of a conversation, by its position in the queue.
+pub(crate) fn unqueue_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    conv_id: &str,
+    index: usize,
+) -> bool {
+    match &agent.manifest.backend {
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::unqueue(sessions_dir, &agent.name, conv_id, index)
+        }
+        _ => false,
     }
 }
 
@@ -266,6 +322,7 @@ fn process_run_turns(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> 
             text: task,
             at: 0,
             pending: false,
+            queued: false,
             steps: Vec::new(),
             metrics: None,
         });
@@ -275,6 +332,7 @@ fn process_run_turns(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> 
         text: content.text,
         at: 0,
         pending: running,
+        queued: false,
         steps: content.steps,
         metrics: content.metrics,
     });

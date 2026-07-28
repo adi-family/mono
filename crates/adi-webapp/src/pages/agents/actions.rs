@@ -163,17 +163,23 @@ fn stop_agent(state: State, watch: AgentsWatch, name: String) {
     );
 }
 
-/// Stop one specific run of a headless agent, then refresh the run history and the agent list (so
-/// the row's running flag settles).
+/// Stop one specific run of a headless agent — for a conversation, the answer being produced, and
+/// with it anything queued behind that answer. Then refresh the run history and the agent list (so
+/// the row's running flag settles), and re-poll so the cut-short turn appears settled at once rather
+/// than a second later.
 fn stop_one_run(state: State, watch: AgentsWatch, run_id: String) {
     let Some(name) = watch.name.get_untracked() else {
         return;
     };
+    if run_id.is_empty() {
+        return;
+    }
     spawn_local(async move {
         match fetch::stop_run(name.clone(), run_id).await {
             Ok(runs) => {
                 if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
                     watch.runs.set(runs.runs);
+                    poll_watch(watch);
                 }
                 if let Ok(st) = fetch::agents().await {
                     state.agents.set(Some(st));
@@ -625,6 +631,9 @@ fn run_detail_row(
 /// instead of snapping to the top every second. Inside it, a keyed [`For`] reconciles the transcript:
 /// a settled turn keeps its exact DOM (and the scroll position with it); only the still-streaming
 /// turn — whose key folds in its growth — re-renders as it updates.
+///
+/// Messages still waiting in the queue trail the transcript, so in a newest-first feed they sit at
+/// the very top: what you have already said is nearest the box you said it in.
 fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
     view! {
         {answerable.then(|| reply_bar(state, watch))}
@@ -632,15 +641,33 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
             <For
                 each=move || {
                     let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
-                    // Enumerate first (stable keys), then reverse so the newest turn renders at the top.
-                    let mut indexed: Vec<(usize, AgentTurn)> = turns.into_iter().enumerate().collect();
+                    // Number the queued messages as they go past: a queued turn's place in the queue
+                    // is exactly what unqueueing it sends back.
+                    let mut place = 0usize;
+                    let mut indexed: Vec<(usize, Option<usize>, AgentTurn)> = turns
+                        .into_iter()
+                        .enumerate()
+                        .map(|(idx, turn)| {
+                            let queued = turn.queued.then(|| {
+                                let at = place;
+                                place += 1;
+                                at
+                            });
+                            (idx, queued, turn)
+                        })
+                        .collect();
+                    // Enumerated first (stable keys), then reversed so the newest renders at the top.
                     indexed.reverse();
                     indexed
                 }
-                key=|(idx, turn): &(usize, AgentTurn)| {
+                key=|(idx, queued, turn): &(usize, Option<usize>, AgentTurn)| {
                     // A settled turn is keyed by its stable index, so its bubble is never rebuilt. The
-                    // live turn folds its growth into the key, so it — and only it — re-renders as it streams.
-                    if turn.pending {
+                    // live turn folds its growth into the key, so it — and only it — re-renders as it
+                    // streams. A queued one folds in its place, so a bubble that moves up the queue —
+                    // or leaves it for the transcript proper — is rebuilt rather than left stale.
+                    if let Some(place) = queued {
+                        format!("{idx}:queued:{place}:{}", turn.text.len())
+                    } else if turn.pending {
                         format!(
                             "{idx}:live:{}:{}",
                             turn.text.len(),
@@ -650,9 +677,29 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
                         idx.to_string()
                     }
                 }
-                children=move |(_, turn)| chat_bubble(state, turn, answerable)
+                children=move |(_, queued, turn)| match queued {
+                    Some(place) => queued_bubble(state, watch, turn, place),
+                    None => chat_bubble(state, turn, answerable),
+                }
             />
             {move || chat_placeholder(watch)}
+        </div>
+    }
+    .into_any()
+}
+
+/// A message still waiting its turn: your own bubble, dashed and dimmed — said, but not yet asked —
+/// carrying an × that takes it back before the agent ever sees it.
+fn queued_bubble(state: State, watch: AgentsWatch, turn: AgentTurn, place: usize) -> AnyView {
+    view! {
+        <div class="adi-chat__turn adi-chat__turn--user adi-chat__turn--queued">
+            <div class="adi-chat__role">
+                "you"
+                <span class="adi-chat__queued">" · queued"</span>
+                <button class="adi-chat__unqueue" type="button" title="don't send this after all"
+                    on:click=move |_| unqueue_message(state, watch, place)>"\u{2715}"</button>
+            </div>
+            {crate::markdown::render(&turn.text)}
         </div>
     }
     .into_any()
@@ -736,6 +783,11 @@ fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
                 {pending.then(|| view! { <span class="adi-chat__typing">" · answering…"</span> })}
             </div>
             {(!text.trim().is_empty()).then(|| super::emitted_form::render_message(state, &text, forms))}
+            // A settled answer with nothing in it at all — most often a turn stopped before it spoke.
+            // Say so, rather than leaving an empty box the reader has to interpret.
+            {(!is_user && !pending && !has_body).then(|| view! {
+                <div class="adi-chat__none">"no answer"</div>
+            })}
             {metrics.map(metrics_view)}
         </div>
     };
@@ -907,8 +959,10 @@ fn fmt_duration(ms: u64) -> String {
     }
 }
 
-/// The reply box: sends the next turn into the selected conversation. Disabled (and no-ops) while a
-/// turn is still being answered — one turn runs at a time — and while empty.
+/// The reply box: says the next thing into the selected conversation. It never locks you out while
+/// the agent is working — one turn runs at a time, so a message sent mid-answer is *queued* and
+/// starts when the current turn lands (the button says so). Beside it, while an answer is streaming,
+/// a Stop that cuts the turn short and drops anything lined up behind it.
 fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let answering = move || watch.peek.get().is_some_and(|p| p.running);
     view! {
@@ -916,26 +970,39 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
             on:submit=move |ev| {
                 ev.prevent_default();
                 let message = watch.reply.get();
-                if message.trim().is_empty() || answering() {
+                if message.trim().is_empty() {
                     return;
                 }
                 watch.reply.set(String::new());
                 send_reply(state, watch, with_context(watch, message));
             }>
             <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
-                placeholder="reply…"
+                placeholder=move || if answering() { "queue the next message…" } else { "reply…" }
                 prop:value=move || watch.reply.get()
                 on:input=move |ev| watch.reply.set(event_target_value(&ev)) />
             <button class="adi-btn adi-btn--primary" type="submit"
-                prop:disabled=move || watch.reply.get().trim().is_empty() || answering()>
-                {move || if answering() { "Answering…" } else { "Send" }}
+                title=move || if answering() {
+                    "send this once the current answer lands"
+                } else {
+                    "send this now"
+                }
+                prop:disabled=move || watch.reply.get().trim().is_empty()>
+                {move || if answering() { "Queue" } else { "Send" }}
             </button>
+            {move || answering().then(|| view! {
+                <button class="adi-btn adi-chat__stop" type="button"
+                    title="stop this answer, and drop anything queued behind it"
+                    on:click=move |_| stop_one_run(
+                        state, watch, watch.run_id.get_untracked().unwrap_or_default(),
+                    )>"\u{25A0} Stop"</button>
+            })}
         </form>
     }
 }
 
-/// Send the reply box's message as the next turn, applying the returned snapshot at once (so the
-/// question and the streaming answer appear immediately) and resuming the poll. Errors go to flash.
+/// Say the reply box's message into the conversation, applying the returned snapshot at once (so the
+/// message — asked or queued — and any streaming answer appear immediately) and resuming the poll.
+/// Errors go to flash.
 fn send_reply(state: State, watch: AgentsWatch, message: String) {
     let Some(name) = watch.name.get_untracked() else {
         return;
@@ -952,6 +1019,29 @@ fn send_reply(state: State, watch: AgentsWatch, message: String) {
                 {
                     watch.peek.set(Some(peek));
                     poll_watch(watch);
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
+}
+
+/// Take back a message still waiting in the open conversation's queue, before it is ever asked. The
+/// answer is a fresh snapshot, so the bubble disappears without waiting for the next poll.
+fn unqueue_message(state: State, watch: AgentsWatch, index: usize) {
+    let Some(name) = watch.name.get_untracked() else {
+        return;
+    };
+    let Some(run_id) = watch.run_id.get_untracked() else {
+        return;
+    };
+    spawn_local(async move {
+        match fetch::unqueue_from_run(name.clone(), run_id.clone(), index).await {
+            Ok(peek) => {
+                if watch.name.get_untracked().as_deref() == Some(name.as_str())
+                    && watch.run_id.get_untracked().as_deref() == Some(run_id.as_str())
+                {
+                    watch.peek.set(Some(peek));
                 }
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),

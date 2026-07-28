@@ -643,6 +643,49 @@ $runlog-dim: #8b93a1;
   border-color: color-mix(in srgb, var(--down) 55%, transparent);
 }
 
+// Stop: the one destructive control in the bar, so it wears the down colour as an outline rather
+// than a fill — present, but never competing with Send for the eye.
+.adi-chat__stop {
+  color: var(--down);
+  border-color: color-mix(in srgb, var(--down) 45%, transparent);
+  background: transparent;
+
+  &:hover { background: color-mix(in srgb, var(--down) 12%, transparent); }
+}
+
+// A message said but not yet asked: your own bubble, hollowed out — dashed edge, no fill — so the
+// queue reads as intent rather than history. Same treatment as a mid-turn message, one column over.
+.adi-chat__turn--queued {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--chat-line-2);
+
+  .adi-md { color: var(--chat-dim); }
+}
+
+// A settled answer that said nothing — a turn stopped before it spoke.
+.adi-chat__none {
+  color: var(--chat-dim);
+  font-size: var(--text-sm);
+  font-style: italic;
+}
+
+// The "queued" tag and the × that takes the message back, both riding the role line.
+.adi-chat__queued { color: var(--chat-dim); font-weight: 500; }
+
+.adi-chat__unqueue {
+  margin-left: 6px;
+  padding: 0 4px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  color: var(--chat-dim);
+  font: inherit;
+  line-height: 1;
+
+  &:hover { color: var(--down); }
+}
+
 // ---- progress feed (tool calls + thinking) ------------------------------------------
 // A turn's activity sits directly below its message as a plain stack of rows — nothing hidden
 // behind a disclosure, so the feed reads straight down as message → tool calls → message → tool

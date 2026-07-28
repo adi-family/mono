@@ -3,8 +3,10 @@
 //!
 //! A harness run is a *conversation* you can answer, not a fire-and-forget `--print` run: the first
 //! turn is the initial task, and each reply spawns another detached child that continues the same
-//! thread and prints its answer. The conversation machinery (transcript, turn spawning, settling)
-//! lives in [`conversation`]; each engine only supplies the per-turn command and how it continues.
+//! thread and prints its answer. One turn runs at a time, so a message sent mid-answer waits in the
+//! conversation's queue and starts when the current turn lands. The conversation machinery
+//! (transcript, queue, turn spawning, settling) lives in [`conversation`]; each engine only supplies
+//! the per-turn command and how it continues.
 //!
 //! - `harness:claude-sdk` runs the `claude` CLI headless (a turn-capped, adi-scoped `--print` turn),
 //!   establishing a session id on the first turn (`--session-id`) and resuming it on each reply
@@ -24,7 +26,7 @@ use crate::arguments::{HarnessAdiArguments, HarnessClaudeSdkArguments};
 use crate::backend::Backend;
 use crate::backends::detached;
 use crate::error::{Error, Result};
-use crate::run::Launch;
+use crate::run::{Launch, Sent};
 use crate::{StoredAgent, StoredAgentManifest};
 
 use conversation::Continuation;
@@ -60,8 +62,8 @@ pub fn launch(
     conversation::start(agent, sessions_dir, base_dir, bin_dir, message, run_env)
 }
 
-/// Answer into an existing conversation, spawning the next turn. Rejected while the previous answer
-/// is still being produced.
+/// Say something into an existing conversation: start the next turn, or queue the message when the
+/// previous answer is still being produced.
 pub fn reply(
     agent: &StoredAgent,
     sessions_dir: &Path,
@@ -70,7 +72,7 @@ pub fn reply(
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
-) -> Result<Launch> {
+) -> Result<Sent> {
     conversation::reply(
         agent,
         sessions_dir,
@@ -80,6 +82,31 @@ pub fn reply(
         message,
         run_env,
     )
+}
+
+/// Start a conversation's next queued message if it is idle and one is waiting, returning that
+/// message and its launch. Nothing else moves the queue, so every read of a conversation calls this.
+pub fn advance(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    base_dir: &Path,
+    bin_dir: Option<&Path>,
+    conv_id: &str,
+    run_env: &[(String, String)],
+) -> Option<(String, Launch)> {
+    conversation::advance(agent, sessions_dir, base_dir, bin_dir, conv_id, run_env)
+}
+
+/// Whether [`advance`] would start anything — asked before building a launch context, so an idle
+/// poll costs one `exists` rather than a tool sync.
+#[must_use]
+pub fn can_advance(sessions_dir: &Path, agent_name: &str, conv_id: &str) -> bool {
+    conversation::can_advance(sessions_dir, agent_name, conv_id)
+}
+
+/// Drop one queued message of a conversation by its position in the queue.
+pub fn unqueue(sessions_dir: &Path, agent_name: &str, conv_id: &str, index: usize) -> bool {
+    conversation::unqueue(sessions_dir, agent_name, conv_id, index)
 }
 
 /// A conversation's transcript (oldest first), including the still-streaming answer — with its parsed
@@ -112,8 +139,11 @@ pub fn is_running(sessions_dir: &Path, agent_name: &str, run_id: &str) -> bool {
     detached::is_running(sessions_dir, HARNESS_DIR, agent_name, run_id)
 }
 
-/// Stop one specific run.
+/// Stop one specific run, and forget anything queued behind it. A queued message was written
+/// expecting the answer that is being cut short, so stopping drops the whole line rather than
+/// marching on into a conversation the human has just interrupted.
 pub fn stop(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Result<bool> {
+    conversation::clear_queue(sessions_dir, agent_name, run_id);
     detached::stop(sessions_dir, HARNESS_DIR, agent_name, run_id)
 }
 

@@ -750,14 +750,25 @@ pub struct RunRef {
     pub run_id: String,
 }
 
-/// `POST /api/agents/run/reply` request — answer into one of a harness agent's conversations
-/// (`run_id` is the conversation id), appending `message` as the next turn. Only harness backends
-/// keep answerable conversations; anything else rejects it.
+/// `POST /api/agents/run/reply` request — say `message` into one of a harness agent's conversations
+/// (`run_id` is the conversation id). It becomes the next turn, or — while the agent is still
+/// answering — waits in that conversation's queue. Only harness backends keep answerable
+/// conversations; anything else rejects it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReplyToRun {
     pub name: String,
     pub run_id: String,
     pub message: String,
+}
+
+/// `POST /api/agents/run/unqueue` request — drop the message at `index` from a conversation's queue,
+/// before it is ever asked. Out-of-range is a no-op, not an error: a queued message that started its
+/// turn between the click and the request is simply gone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnqueueFromRun {
+    pub name: String,
+    pub run_id: String,
+    pub index: usize,
 }
 
 /// One message in a harness conversation's transcript: a `user` question or an `assistant` answer.
@@ -772,6 +783,11 @@ pub struct AgentTurn {
     /// True only for the provisional, still-streaming answer of a turn still in flight.
     #[serde(default)]
     pub pending: bool,
+    /// True only for a user message still waiting in the conversation's queue — typed while the
+    /// agent was answering, and not yet asked. Its index among the queued turns is its place in the
+    /// queue, which is what `/api/agents/run/unqueue` takes.
+    #[serde(default)]
+    pub queued: bool,
     /// The assistant turn's activity — tool calls and thinking — parsed from the engine's output.
     /// Empty for user turns and engines that emit no structured progress.
     #[serde(default)]

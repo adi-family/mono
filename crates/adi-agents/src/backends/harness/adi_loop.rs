@@ -323,6 +323,7 @@ mod tests {
             text: text.into(),
             at,
             pending: false,
+            queued: false,
             steps: Vec::new(),
             metrics: None,
         };

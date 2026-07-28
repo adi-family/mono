@@ -14,9 +14,17 @@
 //! An answer is captured as the turn child's stdout in `<conv_id>.log`. It is folded into the
 //! transcript lazily, on the next read after the child exits ([`settle`]) — so a mid-turn app-server
 //! restart never loses the last answer, and no reaper bookkeeping is needed beyond dropping the PID.
+//!
+//! One turn runs at a time, so anything you say while the agent is still answering waits in the
+//! conversation's **queue** — `<conv_id>.queue.json`, a plain list of messages beside the transcript.
+//! It is on disk rather than in the browser for the same reason the transcript is: you can queue
+//! three things, close the tab, and come back to find them answered. The queue moves on the same
+//! lazy clock as [`settle`] — every read of a conversation [`advance`]s it — so no reaper is needed
+//! here either.
 
 use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -26,13 +34,28 @@ use crate::Backend;
 use crate::backends::detached;
 use crate::error::{Error, Result};
 use crate::progress::{self, Step, TurnMetrics};
-use crate::run::Launch;
+use crate::run::{Launch, Sent};
 use crate::{StoredAgent, StoredAgentManifest};
 
 use super::{HARNESS_DIR, engine_supported, engine_turn};
 
 const ROLE_USER: &str = "user";
 const ROLE_ASSISTANT: &str = "assistant";
+
+/// Serializes "is a turn running?" with the spawn that follows it.
+///
+/// A conversation has exactly one pid/log slot, so exactly one turn may be in flight. The app server
+/// answers requests concurrently and the open chat polls *two* endpoints a second — the run list and
+/// the transcript, both of which advance the queue — so without this the check and the spawn could
+/// interleave and start two children into the same slot, each clobbering the other's log. Turn
+/// starts are rare and take milliseconds, so one global gate costs nothing; reads never take it.
+static TURN_GATE: Mutex<()> = Mutex::new(());
+
+/// Hold the turn gate. A previous panic while holding it says nothing about the queue on disk, so a
+/// poisoned lock is taken anyway rather than propagating the panic into every later turn.
+fn turn_gate() -> MutexGuard<'static, ()> {
+    TURN_GATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
 
 /// One message in a conversation's transcript.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,6 +70,10 @@ pub struct Turn {
     /// never written to disk (a committed turn is settled and final).
     #[serde(default, skip_serializing_if = "is_false")]
     pub pending: bool,
+    /// True only for a user message still waiting in the queue — said, but not yet asked. Synthesized
+    /// from the queue file on read; it becomes a real transcript turn when its turn starts.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub queued: bool,
     /// The assistant turn's activity — tool calls and thinking — parsed from the engine's output.
     /// Empty for user turns and for engines that emit no structured progress.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -108,9 +135,9 @@ pub(crate) fn start(
     Ok(launch)
 }
 
-/// Answer into an existing conversation: append `message` as the next user turn and spawn a child
-/// that continues the thread. Rejected while the previous answer is still being produced — one turn
-/// runs at a time.
+/// Say `message` into an existing conversation. One turn runs at a time, so this either starts the
+/// next turn straight away or — while the agent is still answering — puts the message in the
+/// conversation's queue, to be started by the first [`advance`] after the current answer lands.
 pub(crate) fn reply(
     agent: &StoredAgent,
     sessions_dir: &Path,
@@ -119,22 +146,107 @@ pub(crate) fn reply(
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
-) -> Result<Launch> {
+) -> Result<Sent> {
     let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, &agent.name);
     if !detached::meta_path(&dir, conv_id).exists() {
         return Err(Error::NotFound(format!("{}: no conversation {conv_id}", agent.name)));
     }
+    let _gate = turn_gate();
+    let mut queue = load_queue(&dir, conv_id);
     if turn_running(&dir, conv_id) {
-        return Err(Error::Busy(format!(
-            "“{}” is still answering — wait for the current reply to finish before sending another.",
-            agent.name
-        )));
+        queue.push(message.to_string());
+        let place = queue.len();
+        save_queue(&dir, conv_id, &queue);
+        return Ok(Sent::Queued { place });
     }
+    // Idle, but with a queue that no read has drained yet: join the back of the line and start its
+    // head instead, so messages are always answered in the order they were typed.
+    if !queue.is_empty() {
+        queue.push(message.to_string());
+        let head = queue.remove(0);
+        save_queue(&dir, conv_id, &queue);
+        return start_turn(agent, &dir, base_dir, bin_dir, conv_id, &head, run_env)
+            .map(Sent::Started);
+    }
+    start_turn(agent, &dir, base_dir, bin_dir, conv_id, message, run_env).map(Sent::Started)
+}
+
+/// Start the conversation's next queued message, if it is idle and something is waiting. This is the
+/// only thing that moves the queue: there is no reaper, so every read of a conversation advances it.
+/// Returns the launch when a turn was started, and `None` when there was nothing to start.
+pub(crate) fn advance(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    base_dir: &Path,
+    bin_dir: Option<&Path>,
+    conv_id: &str,
+    run_env: &[(String, String)],
+) -> Option<(String, Launch)> {
+    let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, &agent.name);
+    // Under the gate: `can_advance` may have said yes to several pollers at once, so the decision
+    // that actually starts a turn is re-taken here, where only one of them can be holding it.
+    let _gate = turn_gate();
+    if turn_running(&dir, conv_id) {
+        return None;
+    }
+    let mut queue = load_queue(&dir, conv_id);
+    if queue.is_empty() {
+        return None;
+    }
+    let head = queue.remove(0);
+    // Drop it from the queue *before* spawning: a message that fails to launch has still had its
+    // turn, and leaving it at the head would retry it on every poll for ever.
+    save_queue(&dir, conv_id, &queue);
+    let launch = start_turn(agent, &dir, base_dir, bin_dir, conv_id, &head, run_env).ok()?;
+    Some((head, launch))
+}
+
+/// Whether [`advance`] is worth calling — an idle conversation with a queue. Only a hint, taken
+/// without the gate and re-decided under it; it exists so an idle poll (nearly every poll) costs one
+/// `exists` instead of the launch context a real advance needs.
+pub(crate) fn can_advance(sessions_dir: &Path, agent_name: &str, conv_id: &str) -> bool {
+    let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, agent_name);
+    queue_path(&dir, conv_id).exists() && !turn_running(&dir, conv_id) && !load_queue(&dir, conv_id).is_empty()
+}
+
+/// Drop the queued message at `index`, for a message you have thought better of. Returns whether
+/// there was one there to drop. Gated: this is a read-modify-write of the same file [`advance`]
+/// pops from, and an ungated pair could write back an entry that has just been asked.
+pub(crate) fn unqueue(sessions_dir: &Path, agent_name: &str, conv_id: &str, index: usize) -> bool {
+    let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, agent_name);
+    let _gate = turn_gate();
+    let mut queue = load_queue(&dir, conv_id);
+    if index >= queue.len() {
+        return false;
+    }
+    queue.remove(index);
+    save_queue(&dir, conv_id, &queue);
+    true
+}
+
+/// Forget everything waiting in a conversation's queue — what stopping the current answer does. A
+/// queued message was written expecting the answer you just cut short, so it goes with it.
+pub(crate) fn clear_queue(sessions_dir: &Path, agent_name: &str, conv_id: &str) {
+    let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, agent_name);
+    let _gate = turn_gate();
+    save_queue(&dir, conv_id, &[]);
+}
+
+/// Append `message` as the next user turn and spawn the child that answers it.
+fn start_turn(
+    agent: &StoredAgent,
+    dir: &Path,
+    base_dir: &Path,
+    bin_dir: Option<&Path>,
+    conv_id: &str,
+    message: &str,
+    run_env: &[(String, String)],
+) -> Result<Launch> {
     // Commit the previous turn's captured answer before appending the new question, so the
     // transcript stays a clean user/assistant/user/assistant sequence and the live log can be reused.
-    settle(&dir, conv_id, &agent.manifest.backend);
+    settle(dir, conv_id, &agent.manifest.backend);
 
-    let session_id = read_session_id(&dir, conv_id);
+    let session_id = read_session_id(dir, conv_id);
     // Build the command before appending the question, so a failure doesn't strand a dangling
     // unanswered user turn in the transcript.
     let (argv, working_dir) = engine_turn(
@@ -145,13 +257,14 @@ pub(crate) fn reply(
             session_id: &session_id,
         },
     )?;
-    append_turn(&dir, conv_id, ROLE_USER, message);
-    spawn_turn(&dir, conv_id, base_dir, bin_dir, &argv, working_dir, run_env)
+    append_turn(dir, conv_id, ROLE_USER, message);
+    spawn_turn(dir, conv_id, base_dir, bin_dir, &argv, working_dir, run_env)
 }
 
 /// The conversation's transcript, oldest first. Folds a just-finished turn's captured stdout into a
 /// committed assistant turn, and — while a turn is still in flight — appends a provisional assistant
-/// turn from the live log so the answer streams into the view before it settles.
+/// turn from the live log so the answer streams into the view before it settles. Anything still
+/// waiting in the queue trails the transcript as `queued` user turns, in the order it will be asked.
 pub(crate) fn transcript(
     sessions_dir: &Path,
     agent_name: &str,
@@ -170,10 +283,20 @@ pub(crate) fn transcript(
             text: content.text,
             at: 0,
             pending: true,
+            queued: false,
             steps: content.steps,
             metrics: content.metrics,
         });
     }
+    turns.extend(load_queue(&dir, conv_id).into_iter().map(|text| Turn {
+        role: ROLE_USER.to_string(),
+        text,
+        at: 0,
+        pending: false,
+        queued: true,
+        steps: Vec::new(),
+        metrics: None,
+    }));
     turns
 }
 
@@ -236,6 +359,32 @@ fn transcript_path(dir: &Path, conv_id: &str) -> PathBuf {
     dir.join(format!("{conv_id}.jsonl"))
 }
 
+fn queue_path(dir: &Path, conv_id: &str) -> PathBuf {
+    dir.join(format!("{conv_id}.queue.json"))
+}
+
+/// The messages waiting their turn, oldest first. An absent or unreadable file is an empty queue —
+/// a queue is a convenience, never something worth failing a read over.
+fn load_queue(dir: &Path, conv_id: &str) -> Vec<String> {
+    std::fs::read_to_string(queue_path(dir, conv_id))
+        .ok()
+        .and_then(|text| serde_json::from_str::<Vec<String>>(&text).ok())
+        .unwrap_or_default()
+}
+
+/// Write the queue back, removing the file once it empties — so `can_advance` can rule out the
+/// common case with a single `exists`.
+fn save_queue(dir: &Path, conv_id: &str, queue: &[String]) {
+    let path = queue_path(dir, conv_id);
+    if queue.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(queue) {
+        let _ = std::fs::write(&path, text);
+    }
+}
+
 /// Append a plain (user) turn — text only, no steps or metrics.
 fn append_turn(dir: &Path, conv_id: &str, role: &str, text: &str) {
     write_turn(
@@ -246,6 +395,7 @@ fn append_turn(dir: &Path, conv_id: &str, role: &str, text: &str) {
             text: text.to_string(),
             at: now_ms(),
             pending: false,
+            queued: false,
             steps: Vec::new(),
             metrics: None,
         },
@@ -263,6 +413,7 @@ fn append_assistant(dir: &Path, conv_id: &str, content: &progress::TurnContent) 
             text: content.text.clone(),
             at: now_ms(),
             pending: false,
+            queued: false,
             steps: content.steps.clone(),
             metrics: content.metrics.clone(),
         },
@@ -530,6 +681,90 @@ mod tests {
             );
             std::thread::sleep(Duration::from_millis(200));
         }
+    }
+
+    /// Build a `claude-sdk` agent for the queue tests. They never reach a spawn — everything here
+    /// either queues, takes back, or only *decides* whether a turn would start.
+    fn chatty(name: &str) -> StoredAgent {
+        StoredAgent {
+            name: name.into(),
+            manifest: StoredAgentManifest {
+                backend: "harness:claude-sdk".into(),
+                ..StoredAgentManifest::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_message_said_mid_answer_waits_its_turn_in_the_queue() {
+        let sessions = scratch("queue");
+        let conv = "0000000000004-0000";
+        let dir = seed(&sessions, "chat", conv);
+        append_turn(&dir, conv, ROLE_USER, "first");
+        std::fs::write(detached::log_path_in(&dir, conv), "answering…").unwrap();
+        // A live pid (our own process) marks the turn as still being answered.
+        std::fs::write(
+            detached::pid_path_in(&dir, conv),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
+
+        let agent = chatty("chat");
+        let sent = reply(&agent, &sessions, &sessions, None, conv, "second", &[]).expect("reply");
+        assert_eq!(sent, Sent::Queued { place: 1 }, "it waits rather than failing");
+        let sent = reply(&agent, &sessions, &sessions, None, conv, "third", &[]).expect("reply");
+        assert_eq!(sent, Sent::Queued { place: 2 });
+
+        // Nothing was asked: the transcript still holds only the first question.
+        assert_eq!(load_transcript(&dir, conv).len(), 1);
+        // …but the view shows them, flagged, in the order they will be asked.
+        let turns = transcript(&sessions, "chat", conv, &Backend::HarnessClaudeSdk);
+        let queued: Vec<&str> = turns
+            .iter()
+            .filter(|t| t.queued)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(queued, ["second", "third"]);
+        assert!(
+            turns.iter().all(|t| !(t.queued && t.pending)),
+            "a queued message is not a streaming answer"
+        );
+        // A queue behind a live turn is not something a poll should start.
+        assert!(!can_advance(&sessions, "chat", conv));
+
+        // Taking one back leaves the rest, in order.
+        assert!(unqueue(&sessions, "chat", conv, 0));
+        assert_eq!(load_queue(&dir, conv), ["third"]);
+        assert!(
+            !unqueue(&sessions, "chat", conv, 5),
+            "an index past the end changes nothing"
+        );
+
+        // Once the answer lands, that queue is exactly what the next read advances.
+        std::fs::remove_file(detached::pid_path_in(&dir, conv)).unwrap();
+        assert!(can_advance(&sessions, "chat", conv));
+
+        let _ = std::fs::remove_dir_all(&sessions);
+    }
+
+    #[test]
+    fn stopping_an_answer_forgets_what_was_queued_behind_it() {
+        let sessions = scratch("stopqueue");
+        let conv = "0000000000005-0000";
+        let dir = seed(&sessions, "chat", conv);
+        append_turn(&dir, conv, ROLE_USER, "first");
+        save_queue(&dir, conv, &["second".to_string()]);
+
+        // No pid, so there is nothing live to signal — but the queue goes with the answer regardless.
+        crate::backends::harness::stop(&sessions, "chat", conv).expect("stop");
+        assert!(load_queue(&dir, conv).is_empty());
+        assert!(
+            !queue_path(&dir, conv).exists(),
+            "an emptied queue leaves no file behind, so the poll's gate stays one `exists`"
+        );
+        assert!(!can_advance(&sessions, "chat", conv));
+
+        let _ = std::fs::remove_dir_all(&sessions);
     }
 
     #[test]

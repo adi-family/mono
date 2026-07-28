@@ -54,15 +54,15 @@ pub use progress::{
     BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities,
 };
 pub use run::{
-    Launch, Peek, RunInfo, Turn, capture_pane, is_runnable, running_sessions, send_keys,
+    Launch, Peek, RunInfo, Sent, Turn, capture_pane, is_runnable, running_sessions, send_keys,
     session_name,
 };
 pub use wasm::DispatchOutcome;
 
 use agent::validate_name;
 use run::{
-    adi_turn_in, is_running_in, launch_in, peek_in, peek_run_in, reply_in, runs_in, stop_in,
-    stop_run_in, transcript_in,
+    adi_turn_in, advance_in, can_advance_in, is_running_in, launch_in, peek_in, peek_run_in,
+    reply_in, runs_in, stop_in, stop_run_in, transcript_in, unqueue_in,
 };
 
 const AGENTS_MODULE: &str = "agents";
@@ -272,18 +272,19 @@ impl Agents {
         Ok(launch)
     }
 
-    /// Answer into one of a harness agent's conversations (`run_id` is the conversation id), spawning
-    /// the next turn. Rejected while the previous answer is still being produced.
+    /// Say something into one of a harness agent's conversations (`run_id` is the conversation id).
+    /// One turn runs at a time, so this either starts the next turn or queues the message behind the
+    /// answer still in flight — see [`Sent`].
     ///
     /// # Errors
-    /// Returns [`Error::NotFound`], [`Error::AlreadyRunning`] (still answering), or backend launch
-    /// errors — including [`Error::NotRunnable`] for a backend that keeps no conversation.
-    pub fn reply(&self, name: &str, conv_id: &str, message: &str) -> Result<Launch> {
+    /// Returns [`Error::NotFound`] or backend launch errors — including [`Error::NotRunnable`] for a
+    /// backend that keeps no conversation.
+    pub fn reply(&self, name: &str, conv_id: &str, message: &str) -> Result<Sent> {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let ctx = self.launch_context(&agent);
-        let launch = reply_in(
+        let sent = reply_in(
             &agent,
             &ctx.sessions_dir,
             &ctx.base_dir,
@@ -292,19 +293,67 @@ impl Agents {
             message,
             &ctx.run_env,
         )?;
-        self.emit(
-            "adi.agents.run.started",
-            &AgentRunStarted::of(name, message, &launch),
-        );
-        Ok(launch)
+        if let Sent::Started(launch) = &sent {
+            self.emit(
+                "adi.agents.run.started",
+                &AgentRunStarted::of(name, message, launch),
+            );
+        }
+        Ok(sent)
     }
 
     /// A harness conversation's transcript, oldest first (empty for backends that keep no
-    /// conversation, or for an unknown conversation id).
+    /// conversation, or for an unknown conversation id). Trailing `queued` turns are the messages
+    /// still waiting their place in the queue.
+    ///
+    /// Reading a conversation also *advances* it: if the last answer has landed and something is
+    /// queued behind it, that message's turn starts here. Nothing else moves the queue — the same
+    /// lazy clock that settles a finished answer.
     #[must_use]
     pub fn transcript(&self, agent: &StoredAgent, conv_id: &str) -> Vec<Turn> {
+        self.advance_queue(agent, conv_id);
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         transcript_in(agent, &sessions_dir, conv_id)
+    }
+
+    /// Drop one message from a conversation's queue by its position, for something you have thought
+    /// better of before it was ever asked. Returns whether there was one there to drop.
+    ///
+    /// # Errors
+    /// Returns name validation errors.
+    pub fn unqueue(&self, name: &str, conv_id: &str, index: usize) -> Result<bool> {
+        validate_name(name)?;
+        let Some(agent) = self.get(name)? else {
+            return Ok(false);
+        };
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        Ok(unqueue_in(&agent, &sessions_dir, conv_id, index))
+    }
+
+    /// Start a conversation's next queued message, if it is idle and one is waiting; reports whether
+    /// a turn started. The cheap gate comes first so an idle poll — which is nearly every poll —
+    /// costs one `exists` rather than the tool sync a launch context pays for.
+    fn advance_queue(&self, agent: &StoredAgent, conv_id: &str) -> bool {
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        if !can_advance_in(agent, &sessions_dir, conv_id) {
+            return false;
+        }
+        let ctx = self.launch_context(agent);
+        let Some((message, launch)) = advance_in(
+            agent,
+            &ctx.sessions_dir,
+            &ctx.base_dir,
+            ctx.bin_dir.as_deref(),
+            conv_id,
+            &ctx.run_env,
+        ) else {
+            return false;
+        };
+        self.emit(
+            "adi.agents.run.started",
+            &AgentRunStarted::of(&agent.name, &message, &launch),
+        );
+        true
     }
 
     /// Run one turn of a `harness:adi` conversation: read its transcript, call the configured model
@@ -390,10 +439,28 @@ impl Agents {
 
     /// The run history of a headless agent, newest first (empty for interactive backends, whose
     /// live session is their only "run").
+    ///
+    /// Like [`Self::transcript`], listing advances any conversation whose answer has landed with
+    /// something still queued behind it — so a queue keeps moving while you are reading some *other*
+    /// chat, not only the one you have open.
     #[must_use]
     pub fn runs(&self, agent: &StoredAgent) -> Vec<RunInfo> {
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        runs_in(agent, &sessions_dir)
+        let runs = runs_in(agent, &sessions_dir);
+        let idle: Vec<String> = runs
+            .iter()
+            .filter(|r| !r.running)
+            .map(|r| r.run_id.clone())
+            .collect();
+        let advanced = idle
+            .iter()
+            .fold(false, |any, conv_id| self.advance_queue(agent, conv_id) || any);
+        // Only re-read when something actually started — the answer must not report a conversation
+        // as idle in the very breath it started its next turn.
+        if advanced {
+            return runs_in(agent, &sessions_dir);
+        }
+        runs
     }
 
     /// A read-only snapshot of one specific run of a headless agent (or the pty screen, for an
