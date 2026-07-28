@@ -67,12 +67,108 @@ pub(crate) struct State {
     pub(crate) store: StoreBrowser,
     /// The open table-row kebab menu, shared by every page's action columns. See [`RowMenu`].
     pub(crate) row_menu: RwSignal<Option<RowMenu>>,
-    /// How the Hive table is sorted and arranged. Lives here, beside [`State::row_menu`], rather
-    /// than in the view: the page function is re-run on every route render, so signals created
-    /// inside it would reset the user's arrangement on each redraw.
-    pub(crate) hive_table: TableState,
-    /// The same, for a project detail page's Services panel.
-    pub(crate) service_table: TableState,
+    /// How every table on the site is sorted and arranged. See [`Tables`].
+    pub(crate) tables: Tables,
+}
+
+/// One [`TableState`] per table in the control panel: how each is sorted, which columns it shows,
+/// and in what order.
+///
+/// These live on [`State`], beside [`State::row_menu`], rather than in the views: a page function
+/// is re-run on every route render, so signals created inside it would reset the user's
+/// arrangement on each redraw. Each field's storage key is what its layout persists under, so
+/// renaming one forgets that table's saved arrangement — which is the right outcome when a table
+/// changes enough to warrant a new name, and a bug otherwise.
+///
+/// A table shown in two places with different columns (the global Tools page and a project's
+/// Tools panel, say) gets a state each: they are the same rows but not the same table, and one
+/// arrangement can't describe both. Live and archived halves of a page are split for the same
+/// reason, plus a practical one — sharing a state would open both settings menus at once.
+///
+/// `Copy` (every [`TableState`] is a bundle of arena handles), so it threads into views and
+/// handlers as cheaply as the rest of [`State`].
+#[derive(Clone, Copy)]
+pub(crate) struct Tables {
+    pub(crate) agents: TableState,
+    /// The cross-agent "All chats" index.
+    pub(crate) chats: TableState,
+    /// One agent's run history, for a backend whose runs read as a conversation…
+    pub(crate) chat_runs: TableState,
+    /// …and for a one-shot backend, where a run is a task.
+    pub(crate) runs: TableState,
+    pub(crate) dashboards: TableState,
+    pub(crate) dashboards_archived: TableState,
+    pub(crate) db_scopes: TableState,
+    pub(crate) db_tables: TableState,
+    pub(crate) hive: TableState,
+    /// The port registry's active leases.
+    pub(crate) leases: TableState,
+    /// The scan of every listening port on the machine.
+    pub(crate) used_ports: TableState,
+    pub(crate) mesh_allow: TableState,
+    pub(crate) mesh_peers: TableState,
+    pub(crate) mesh_forwards: TableState,
+    pub(crate) projects: TableState,
+    pub(crate) projects_archived: TableState,
+    pub(crate) secrets: TableState,
+    pub(crate) tasks: TableState,
+    pub(crate) tasks_done: TableState,
+    pub(crate) tools: TableState,
+    pub(crate) tools_archived: TableState,
+    pub(crate) triggers: TableState,
+    pub(crate) workspaces: TableState,
+    pub(crate) hooks: TableState,
+    // ---- a project detail page's panels ----
+    pub(crate) project_agents: TableState,
+    pub(crate) project_secrets: TableState,
+    pub(crate) project_tasks: TableState,
+    pub(crate) project_tools: TableState,
+    pub(crate) project_triggers: TableState,
+    pub(crate) files: TableState,
+    pub(crate) services: TableState,
+    pub(crate) subprojects: TableState,
+}
+
+impl Tables {
+    /// Restore every table from storage, each falling back to its page's declared columns.
+    pub(crate) fn new() -> Self {
+        use crate::pages::columns as c;
+
+        Self {
+            agents: TableState::new("agents", c::AGENT_COLS),
+            chats: TableState::sorted("chats", c::CHAT_COLS, c::NEWEST_FIRST),
+            chat_runs: TableState::sorted("chat-runs", c::CHAT_RUN_COLS, c::NEWEST_FIRST),
+            runs: TableState::sorted("runs", c::RUN_COLS, c::NEWEST_FIRST),
+            dashboards: TableState::new("dashboards", c::DASHBOARD_COLS),
+            dashboards_archived: TableState::new("dashboards-archived", c::DASHBOARD_COLS),
+            db_scopes: TableState::new("db-scopes", c::DB_SCOPE_COLS),
+            db_tables: TableState::new("db-tables", c::DB_TABLE_COLS),
+            hive: TableState::new("hive", c::HIVE_COLS),
+            leases: TableState::new("leases", c::LEASE_COLS),
+            used_ports: TableState::new("used-ports", c::USED_PORT_COLS),
+            mesh_allow: TableState::new("mesh-allow", c::MESH_ALLOW_COLS),
+            mesh_peers: TableState::new("mesh-peers", c::MESH_PEER_COLS),
+            mesh_forwards: TableState::new("mesh-forwards", c::MESH_FORWARD_COLS),
+            projects: TableState::new("projects", c::PROJECT_COLS),
+            projects_archived: TableState::new("projects-archived", c::PROJECT_ARCHIVED_COLS),
+            secrets: TableState::new("secrets", c::SECRET_COLS),
+            tasks: TableState::new("tasks", c::TASK_COLS),
+            tasks_done: TableState::new("tasks-done", c::TASK_COLS),
+            tools: TableState::new("tools", c::TOOL_COLS),
+            tools_archived: TableState::new("tools-archived", c::TOOL_COLS),
+            triggers: TableState::new("triggers", c::TRIGGER_COLS),
+            workspaces: TableState::new("workspaces", c::WORKSPACE_COLS),
+            hooks: TableState::new("hooks", c::HOOK_COLS),
+            project_agents: TableState::new("project-agents", c::PROJECT_AGENT_COLS),
+            project_secrets: TableState::new("project-secrets", c::PROJECT_SECRET_COLS),
+            project_tasks: TableState::new("project-tasks", c::PROJECT_TASK_COLS),
+            project_tools: TableState::new("project-tools", c::PROJECT_TOOL_COLS),
+            project_triggers: TableState::new("project-triggers", c::PROJECT_TRIGGER_COLS),
+            files: TableState::new("files", c::FILE_COLS),
+            services: TableState::new("services", c::SERVICE_COLS),
+            subprojects: TableState::new("subprojects", c::SUBPROJECT_COLS),
+        }
+    }
 }
 
 impl State {
@@ -106,8 +202,7 @@ impl State {
             files: FilesState::new(),
             store: StoreBrowser::new(),
             row_menu: RwSignal::new(None),
-            hive_table: TableState::new("hive", crate::pages::HIVE_COLS),
-            service_table: TableState::new("services", crate::pages::SERVICE_COLS),
+            tables: Tables::new(),
         }
     }
 }

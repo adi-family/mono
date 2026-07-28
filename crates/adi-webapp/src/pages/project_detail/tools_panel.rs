@@ -4,9 +4,9 @@
 
 use leptos::prelude::*;
 
-use crate::pages::tools::{rows_view, tool_create_form};
+use crate::pages::tools::{PROJECT_COLS, rows_view, tool_create_form};
 use crate::state::{State, ToolEditor, ToolRunView, ToolsForm};
-use crate::ui::data_table;
+use crate::ui::configurable_table;
 
 /// The Tools panel on a project's detail page. The run panel and script editor render above it
 /// (in `project_detail_view`, as the triggers log does); this is the table + create form.
@@ -22,9 +22,9 @@ pub(crate) fn tools_panel(
                 <h2 class="adi-panel__title">"Tools"</h2>
                 <span class="adi-updated">"filed under this project"</span>
             </div>
-            {data_table(&["Tool", "Runtime", "Invoke", ""], move || {
+            {configurable_table(state.tables.project_tools, PROJECT_COLS, move || {
                 let project = state.current_project.get();
-                rows_view(state, editor, run, false, Some(project), false)
+                rows_view(state, state.tables.project_tools, editor, run, false, Some(project))
             })}
             {move || {
                 // Fix the create/link form to the open project.

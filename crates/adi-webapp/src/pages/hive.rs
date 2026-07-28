@@ -66,7 +66,7 @@ pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
                     title="Re-read every project's .adi/hive.yaml and the global hive from disk"
                     on:click=move |_| reload_hive(state)>"Reload config"</button>
             </div>
-            {configurable_table(state.hive_table, COLS, move || hive_rows(state, route))}
+            {configurable_table(state.tables.hive, COLS, move || hive_rows(state, route))}
         </section>
     }
     .into_any()
@@ -151,6 +151,10 @@ fn dashboard_path(d: &Dashboard, projects: &[Project]) -> String {
 /// Order the rows by the clicked column. Absent values sort as empty/zero, which puts a stopped
 /// service's blank usage at the bottom of a descending CPU or Memory sort — where "what is
 /// costing me the most?" wants it.
+///
+/// Written out rather than handed to [`ui::sort_rows`](crate::ui::sort_rows) like every other
+/// table's: this one tiebreaks twice, on the source grouping and then the name, and a
+/// [`Key`](crate::ui::Key) describes a single value.
 fn sort_rows(rows: &mut [(HiveService, Source)], sort: Sort) {
     /// An optional text cell as a sort key.
     fn text(value: Option<&String>) -> &str {
@@ -194,7 +198,7 @@ fn mem(s: &HiveService) -> u64 {
 
 /// Rows for the aggregated hive table, in the order and arrangement the header controls select.
 fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
-    let layout = state.hive_table.layout.get();
+    let layout = state.tables.hive.layout.get();
     let Some(h) = state.hive.get() else {
         return placeholder_row(layout.span(), "Loading…");
     };
@@ -221,7 +225,7 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
             (s, source)
         })
         .collect();
-    sort_rows(&mut rows, state.hive_table.sort.get());
+    sort_rows(&mut rows, state.tables.hive.sort.get());
     let shown = layout.shown();
     rows.into_iter()
         .map(|(s, src)| {

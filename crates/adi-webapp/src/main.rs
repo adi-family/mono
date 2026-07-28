@@ -674,9 +674,8 @@ fn App() -> impl IntoView {
         files,
         store,
         row_menu: RwSignal::new(None),
-        // Each restores the arrangement its user last left, else the declared column order.
-        hive_table: ui::TableState::new("hive", pages::HIVE_COLS),
-        service_table: ui::TableState::new("services", pages::SERVICE_COLS),
+        // Each table restores the arrangement its user last left, else its declared columns.
+        tables: state::Tables::new(),
     };
 
     let projects_form = ProjectsForm {

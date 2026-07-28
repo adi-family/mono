@@ -3,7 +3,9 @@
 //! themselves with Run/Log/Edit actions. Hooks are plain files at `.adi/hooks/<name>`; the
 //! Edit action opens them in a dedicated hook editor panel rendered right above this one.
 
-use adi_webapp_api::types::{NewProjectHook, NewWorkspace, WorkspacesState};
+use adi_webapp_api::types::{
+    NewProjectHook, NewWorkspace, ProjectHookDto, WorkspaceDto, WorkspacesState,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -12,8 +14,15 @@ use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
 use crate::ui::{
-    TextField, code_editor, confirm, data_table, fmt_date, menu_item, placeholder_row, row_actions,
+    Key, TextField, body_row, code_editor, configurable_table, confirm, fmt_date, menu_item,
+    placeholder_row, row_actions, sort_rows,
 };
+
+/// The workspaces table's columns; the trailing blank one holds ⌨ Terminal and Unregister.
+pub(crate) const WORKSPACE_COLS: &[&str] = &["Name", "Path", "Kind", "Status", "Created", ""];
+
+/// The hooks table's columns; the trailing blank one holds ▶ Run, Log, and Edit.
+pub(crate) const HOOK_COLS: &[&str] = &["Hook", "Status", "Last run", ""];
 
 /// A hook's path inside the project, as the file API sees it.
 fn hook_rel_path(name: &str) -> String {
@@ -70,7 +79,8 @@ pub(crate) fn workspaces_panel(
                 <span class="adi-spacer"></span>
                 {move || initialize_button(state, form)}
             </div>
-            {data_table(&["Name", "Path", "Kind", "Status", "Created", ""], move || workspace_rows(state, term))}
+            {configurable_table(state.tables.workspaces, WORKSPACE_COLS,
+                move || workspace_rows(state, term))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_workspace(state, form);
@@ -97,7 +107,8 @@ pub(crate) fn workspaces_panel(
                 <h2 class="adi-panel__title">"Hooks"</h2>
                 <span class="adi-updated">"plain files under " <code>".adi/hooks"</code></span>
             </div>
-            {data_table(&["Hook", "Status", "Last run", ""], move || hook_rows(state, log, editor))}
+            {configurable_table(state.tables.hooks, HOOK_COLS,
+                move || hook_rows(state, log, editor))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_hook(state, hook_form);
@@ -131,8 +142,10 @@ pub(crate) fn workspaces_panel(
 /// Rows for the workspaces table: **⌨ Terminal** inline (when the directory exists), with the
 /// Unregister action in the kebab (behind a confirm; files stay on disk).
 fn workspace_rows(state: State, term: TermWatch) -> AnyView {
+    let table = state.tables.workspaces;
+    let layout = table.layout.get();
     let Some(snapshot) = current_snapshot(state) else {
-        return placeholder_row(6, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if snapshot.workspaces.is_empty() {
         let hint = if snapshot.has_init_hook {
@@ -140,32 +153,25 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
         } else {
             "No workspaces yet — create an init hook below first, then press ⚡ Initialize."
         };
-        return placeholder_row(6, hint);
+        return placeholder_row(layout.span(), hint);
     }
-    snapshot
-        .workspaces
+    let mut workspaces = snapshot.workspaces;
+    sort_rows(
+        &mut workspaces,
+        table.sort.get(),
+        |w, col| match col {
+            "Path" => Key::text(&w.path),
+            "Kind" => Key::text(&w.kind),
+            "Status" => Key::text(&w.status),
+            "Created" => Key::num(w.created_at),
+            _ => Key::text(&w.name),
+        },
+        |w| Key::text(&w.name),
+    );
+    let shown = layout.shown();
+    workspaces
         .into_iter()
         .map(|w| {
-            let status_data = match w.status.as_str() {
-                "ready" => "ready",
-                "failed" => "blocked",
-                _ => "",
-            };
-            let status_label = match w.status.as_str() {
-                "creating" => "Creating…".to_string(),
-                s => {
-                    let mut label = s.to_string();
-                    if let Some(first) = label.get_mut(0..1) {
-                        first.make_ascii_uppercase();
-                    }
-                    label
-                }
-            };
-            let created = if w.created_at > 0 {
-                fmt_date(w.created_at)
-            } else {
-                "—".to_string()
-            };
             let del_name = w.name.clone();
             let del_display = w.name.clone();
             let term_name = w.name.clone();
@@ -182,45 +188,139 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
                 }
                 remove_workspace(state, del_name.clone());
             });
-            view! {
-                <tr>
-                    <td>
-                        <span class="adi-mono">{w.name.clone()}</span>
-                        {w.primary.then(|| view! {
-                            <span class="adi-muted" style="font-size:var(--text-sm); display:block">"★ primary"</span>
-                        })}
-                    </td>
-                    <td class="adi-mono adi-muted" style="font-size:var(--text-sm); word-break:break-all">{w.path.clone()}</td>
-                    <td class="adi-mono">{w.kind.clone()}</td>
-                    <td>
-                        <span class="adi-tstatus" data-status=status_data
-                            title=w.hook.map(|h| format!("created by the {h} hook")).unwrap_or_default()>
-                            {status_label}
-                        </span>
-                    </td>
-                    <td class="adi-mono adi-muted">{created}</td>
-                    <td class="adi-table__actions">
-                        {row_actions(state, format!("workspace:{}", w.name), terminal, vec![unregister])}
-                    </td>
-                </tr>
-            }
+            let actions = row_actions(
+                state,
+                format!("workspace:{}", w.name),
+                terminal,
+                vec![unregister],
+            );
+            body_row(&shown, |col| workspace_cell(col, &w), Some(actions))
         })
         .collect::<Vec<_>>()
         .into_any()
 }
 
+/// One workspace's cell under `col`. Matching the header text — the same key the sort uses — is
+/// what lets the user hide and reorder columns without the row builder knowing about it.
+fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
+    match col {
+        "Path" => view! {
+            <td class="adi-mono adi-muted" style="font-size:var(--text-sm); word-break:break-all">
+                {w.path.clone()}
+            </td>
+        }
+        .into_any(),
+        "Kind" => view! { <td class="adi-mono">{w.kind.clone()}</td> }.into_any(),
+        "Status" => {
+            let status_data = match w.status.as_str() {
+                "ready" => "ready",
+                "failed" => "blocked",
+                _ => "",
+            };
+            let status_label = match w.status.as_str() {
+                "creating" => "Creating…".to_string(),
+                s => {
+                    let mut label = s.to_string();
+                    if let Some(first) = label.get_mut(0..1) {
+                        first.make_ascii_uppercase();
+                    }
+                    label
+                }
+            };
+            let title = w
+                .hook
+                .as_ref()
+                .map(|h| format!("created by the {h} hook"))
+                .unwrap_or_default();
+            view! {
+                <td>
+                    <span class="adi-tstatus" data-status=status_data title=title>{status_label}</span>
+                </td>
+            }
+            .into_any()
+        }
+        "Created" => {
+            let created = if w.created_at > 0 {
+                fmt_date(w.created_at)
+            } else {
+                "—".to_string()
+            };
+            view! { <td class="adi-mono adi-muted">{created}</td> }.into_any()
+        }
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ => view! {
+            <td>
+                <span class="adi-mono">{w.name.clone()}</span>
+                {w.primary.then(|| view! {
+                    <span class="adi-muted" style="font-size:var(--text-sm); display:block">"★ primary"</span>
+                })}
+            </td>
+        }
+        .into_any(),
+    }
+}
+
 /// Rows for the hooks table: each hook file with Run / Log / Edit actions.
 fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
+    let table = state.tables.hooks;
+    let layout = table.layout.get();
     let Some(snapshot) = current_snapshot(state) else {
-        return placeholder_row(4, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if snapshot.hooks.is_empty() {
-        return placeholder_row(4, "No hooks yet — add one below.");
+        return placeholder_row(layout.span(), "No hooks yet — add one below.");
     }
-    snapshot
-        .hooks
+    let mut hooks = snapshot.hooks;
+    sort_rows(
+        &mut hooks,
+        table.sort.get(),
+        |h, col| match col {
+            "Status" => Key::text(&h.status),
+            "Last run" => Key::num(h.last_run_at.unwrap_or(0)),
+            _ => Key::text(&h.name),
+        },
+        |h| Key::text(&h.name),
+    );
+    let shown = layout.shown();
+    hooks
         .into_iter()
         .map(|h| {
+            let run_name = h.name.clone();
+            let log_name = h.name.clone();
+            let edit_name = h.name.clone();
+            // init/workspace only make sense with the ADI_WORKSPACE_* env a workspace
+            // create provides — no manual Run for them (the API refuses it anyway).
+            let lifecycle = h.name == "init" || h.name == "workspace";
+            // ▶ Run inline for a runnable hook (a lifecycle hook shows why it can't be run by
+            // hand instead); Log + Edit live in the kebab.
+            let inline = if lifecycle {
+                view! {
+                    <span class="adi-muted" style="font-size:var(--text-sm)"
+                        title="lifecycle hooks run when a workspace is created — use Add workspace">
+                        "via Add workspace"
+                    </span>
+                }.into_any()
+            } else {
+                view! {
+                    <button class="adi-btn adi-btn--link" title="run the hook now, detached"
+                        on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
+                }.into_any()
+            };
+            let items = vec![
+                menu_item(state, "Log", false, move || open_hook_log(state, log, log_name.clone())),
+                menu_item(state, "Edit", false, move || open_hook_editor(state, editor, edit_name.clone())),
+            ];
+            let actions = row_actions(state, format!("hook:{}", h.name), inline, items);
+            body_row(&shown, |col| hook_cell(col, &h), Some(actions))
+        })
+        .collect::<Vec<_>>()
+        .into_any()
+}
+
+/// One hook's cell under `col`. See [`workspace_cell`] on why this matches header text.
+fn hook_cell(col: &str, h: &ProjectHookDto) -> AnyView {
+    match col {
+        "Status" => {
             let status_data = match h.status.as_str() {
                 "ok" => "ready",
                 "failed" => "blocked",
@@ -233,52 +333,26 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
                 (_, Some(code)) => format!("Failed ({code})"),
                 (_, None) => "Failed".to_string(),
             };
-            let ran = h.last_run_at.map_or_else(|| "—".to_string(), fmt_date);
-            let run_name = h.name.clone();
-            let log_name = h.name.clone();
-            let edit_name = h.name.clone();
-            // init/workspace only make sense with the ADI_WORKSPACE_* env a workspace
-            // create provides — no manual Run for them (the API refuses it anyway).
-            let lifecycle = h.name == "init" || h.name == "workspace";
             view! {
-                <tr>
-                    <td>
-                        <span class="adi-mono">{h.name.clone()}</span>
-                        <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">
-                            {format!(".adi/hooks/{}", h.name)}
-                        </span>
-                    </td>
-                    <td><span class="adi-tstatus" data-status=status_data>{status_label}</span></td>
-                    <td class="adi-mono adi-muted">{ran}</td>
-                    <td class="adi-table__actions">
-                        {
-                            // ▶ Run inline for a runnable hook (a lifecycle hook shows why it can't
-                            // be run by hand instead); Log + Edit live in the kebab.
-                            let inline = if lifecycle {
-                                view! {
-                                    <span class="adi-muted" style="font-size:var(--text-sm)"
-                                        title="lifecycle hooks run when a workspace is created — use Add workspace">
-                                        "via Add workspace"
-                                    </span>
-                                }.into_any()
-                            } else {
-                                view! {
-                                    <button class="adi-btn adi-btn--link" title="run the hook now, detached"
-                                        on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
-                                }.into_any()
-                            };
-                            let items = vec![
-                                menu_item(state, "Log", false, move || open_hook_log(state, log, log_name.clone())),
-                                menu_item(state, "Edit", false, move || open_hook_editor(state, editor, edit_name.clone())),
-                            ];
-                            row_actions(state, format!("hook:{}", h.name), inline, items)
-                        }
-                    </td>
-                </tr>
+                <td><span class="adi-tstatus" data-status=status_data>{status_label}</span></td>
             }
-        })
-        .collect::<Vec<_>>()
-        .into_any()
+            .into_any()
+        }
+        "Last run" => {
+            let ran = h.last_run_at.map_or_else(|| "—".to_string(), fmt_date);
+            view! { <td class="adi-mono adi-muted">{ran}</td> }.into_any()
+        }
+        // "Hook", and anything the layout offers that this match doesn't name.
+        _ => view! {
+            <td>
+                <span class="adi-mono">{h.name.clone()}</span>
+                <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">
+                    {hook_rel_path(&h.name)}
+                </span>
+            </td>
+        }
+        .into_any(),
+    }
 }
 
 /// The hint under the workspace create form: which lifecycle hook the next create would run,

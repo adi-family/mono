@@ -21,9 +21,17 @@ use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView};
 use crate::ui::{
-    TextField, apply_mutation, code_editor, data_table, field_hint, flash_view, fmt_date,
-    fmt_uptime, menu_item, placeholder_row, row_actions, updated_text,
+    Key, TextField, apply_mutation, body_row, code_editor, configurable_table, field_hint,
+    flash_view, fmt_date, fmt_uptime, menu_item, placeholder_row, row_actions, sort_rows,
+    updated_text,
 };
+
+/// The Triggers page's columns; the trailing blank one holds Fire / Log / Enable.
+pub(crate) const COLS: &[&str] = &["Name", "Launches", "Project", "Status", "Last run", ""];
+
+/// The same in a project's own Triggers panel, which drops the Project column — every row there
+/// is filed under the open project, so it would say the same thing all the way down.
+pub(crate) const PROJECT_COLS: &[&str] = &["Name", "Launches", "Status", "Last run", ""];
 
 /// The settings input every webhook offers regardless of preset — the platform itself reads it
 /// to guard the endpoint, so it isn't any preset's business.
@@ -65,7 +73,8 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                 <span class="adi-updated">{move || updated_text(triggers, secs_since)}</span>
             </div>
 
-            {data_table(&["Name", "Launches", "Project", "Status", "Last run", ""], move || trigger_rows(state, form, log))}
+            {configurable_table(state.tables.triggers, COLS,
+                move || trigger_rows(state, form, log))}
         </section>
 
         <section class="adi-panel">
@@ -501,13 +510,20 @@ fn current_extras(state: State, form: TriggersForm) -> BTreeMap<String, String> 
 
 /// Render the triggers table body: a loading/empty placeholder, or one row per trigger.
 fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyView {
+    let table = state.tables.triggers;
+    let layout = table.layout.get();
     let Some(st) = state.triggers.get() else {
-        return placeholder_row(6, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if st.triggers.is_empty() {
-        return placeholder_row(6, "No triggers yet — define one below.");
+        return placeholder_row(layout.span(), "No triggers yet — define one below.");
     }
-    st.triggers
+    let mut triggers = st.triggers;
+    sort_rows(&mut triggers, table.sort.get(), trigger_key, |t| {
+        Key::text(&t.name)
+    });
+    let shown = layout.shown();
+    triggers
         .into_iter()
         .map(|t| {
             let del_name = t.name.clone();
@@ -519,35 +535,58 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
             });
             let actions = row_actions(state, format!("trigger:{}", t.name),
                 trigger_actions(state, log, &t), vec![trigger_toggle_item(state, &t), edit, delete]);
-            let launches = launch_label(&t);
-            let project_cell = match &t.project {
-                Some(p) if !p.trim().is_empty() => {
-                    let p = p.clone();
-                    view! { <span class="adi-chip adi-mono">{p}</span> }.into_any()
-                }
-                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
-            };
-            let hook_hint = (t.kind == "webhook").then(|| format!("/api/hooks/{}", t.name));
-            let fired = t.last_fired_at.map_or_else(|| "—".to_string(), fmt_date);
-            let description = t.description.clone();
-            view! {
-                <tr>
-                    <td title=description>
-                        <span>{t.name.clone()}</span>
-                        {hook_hint.map(|h| view! {
-                            <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{h}</span>
-                        })}
-                    </td>
-                    <td class="adi-mono">{launches}</td>
-                    <td>{project_cell}</td>
-                    <td>{status_cell(&t)}</td>
-                    <td class="adi-mono adi-muted">{fired}</td>
-                    <td class="adi-table__actions">{actions}</td>
-                </tr>
-            }
+            body_row(&shown, |col| trigger_cell(col, &t), Some(actions))
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// A trigger's sort key under `col`. Shared with a project's Triggers panel, which shows a subset
+/// of the same columns over the same rows.
+pub(crate) fn trigger_key(t: &TriggerDto, col: &str) -> Key {
+    match col {
+        "Launches" => Key::text(launch_label(t)),
+        "Project" => Key::maybe(t.project.as_deref()),
+        // Running first on a descending sort — "what is actually up?" is the question this column
+        // gets clicked for. A disabled trigger sorts below a merely-stopped one.
+        "Status" => Key::Int(i64::from(t.running) + i64::from(t.enabled)),
+        "Last run" => Key::num(t.last_fired_at.unwrap_or(0)),
+        // "Name", and any header without a key of its own.
+        _ => Key::text(&t.name),
+    }
+}
+
+/// One trigger's cell under `col`. Matching the header text — the same key the sort uses — is
+/// what lets the user hide and reorder columns without the row builder knowing about it, and is
+/// also how a project's narrower panel works from the same code. Shared with that panel.
+pub(crate) fn trigger_cell(col: &str, t: &TriggerDto) -> AnyView {
+    match col {
+        "Launches" => view! { <td class="adi-mono">{launch_label(t)}</td> }.into_any(),
+        "Project" => match &t.project {
+            Some(p) if !p.trim().is_empty() => {
+                view! { <td><span class="adi-chip adi-mono">{p.clone()}</span></td> }.into_any()
+            }
+            _ => view! { <td><span class="adi-muted">"—"</span></td> }.into_any(),
+        },
+        "Status" => view! { <td>{status_cell(t)}</td> }.into_any(),
+        "Last run" => {
+            let fired = t.last_fired_at.map_or_else(|| "—".to_string(), fmt_date);
+            view! { <td class="adi-mono adi-muted">{fired}</td> }.into_any()
+        }
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ => {
+            let hook_hint = (t.kind == "webhook").then(|| format!("/api/hooks/{}", t.name));
+            view! {
+                <td title=t.description.clone()>
+                    <span>{t.name.clone()}</span>
+                    {hook_hint.map(|h| view! {
+                        <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{h}</span>
+                    })}
+                </td>
+            }
+            .into_any()
+        }
+    }
 }
 
 /// How a trigger launches, and in what language — the two facts its kind and runtime carry.

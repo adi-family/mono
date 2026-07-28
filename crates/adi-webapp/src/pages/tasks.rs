@@ -2,15 +2,19 @@
 //! a create form, and a collapsed block of finished tasks; deeper mutations stay in the
 //! `adi-mono tasks ...` CLI surface.
 
-use adi_webapp_api::types::{NewTask, TasksState};
+use adi_webapp_api::types::{NewTask, TaskRow, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
-    TextField, apply_mutation, confirm, data_table, effective_label_title, flash_view,
-    placeholder_row, task_tree_rows, updated_text,
+    Key, TextField, apply_mutation, body_row, configurable_table, confirm, effective_label_title,
+    flash_view, placeholder_row, sort_rows, task_tree_rows, updated_text,
 };
+
+/// The columns of both task tables — the open tree and the collapsed Done block, which are the
+/// same rows split by status. The trailing blank one holds the row's Archive / Reopen controls.
+pub(crate) const COLS: &[&str] = &["Task", "ID", "Project", "Tag", "Status", "Subtasks", ""];
 
 /// The Tasks page: a view of the task tree (`~/.adi/mono/tasks/tasks.json`) as a nested table,
 /// a create form, and a collapsed block of finished tasks; deeper mutations stay in the
@@ -39,8 +43,7 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(tasks, secs_since)}</span>
             </div>
 
-            {data_table(&["Task", "ID", "Project", "Tag", "Status", "Subtasks", ""],
-                move || task_rows(state, false))}
+            {configurable_table(state.tables.tasks, COLS, move || task_rows(state, false))}
         </section>
 
         <section class="adi-panel">
@@ -152,8 +155,7 @@ fn done_section(state: State, show: RwSignal<bool>) -> AnyView {
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        {open.then(|| data_table(
-                            &["Task", "ID", "Project", "Tag", "Status", "Subtasks", ""],
+                        {open.then(|| configurable_table(state.tables.tasks_done, COLS,
                             move || task_rows(state, true)))}
                     </section>
                 }
@@ -180,18 +182,27 @@ where
 ///
 /// Each side is tree-flattened over its own subset, so an open subtask of a finished parent
 /// re-roots into the main tree rather than disappearing with its parent.
+///
+/// The sort orders the flat list *before* flattening, so it reorders siblings and the tree
+/// survives — sorting by status shouldn't tear subtasks away from the task they belong to.
 fn task_rows(state: State, finished: bool) -> AnyView {
-    let Some(state_tasks) = state.tasks.get() else {
-        return placeholder_row(7, "Loading…");
+    let table = if finished {
+        state.tables.tasks_done
+    } else {
+        state.tables.tasks
     };
-    let rows: Vec<_> = state_tasks
+    let layout = table.layout.get();
+    let Some(state_tasks) = state.tasks.get() else {
+        return placeholder_row(layout.span(), "Loading…");
+    };
+    let mut rows: Vec<_> = state_tasks
         .tasks
         .into_iter()
         .filter(|t| is_finished(&t.effective) == finished)
         .collect();
     if rows.is_empty() {
         return placeholder_row(
-            7,
+            layout.span(),
             if finished {
                 "Nothing finished yet."
             } else {
@@ -199,18 +210,14 @@ fn task_rows(state: State, finished: bool) -> AnyView {
             },
         );
     }
+    sort_rows(&mut rows, table.sort.get(), task_key, |t| {
+        Key::text(&t.title)
+    });
+    let shown = layout.shown();
 
     task_tree_rows(rows)
         .into_iter()
         .map(|(depth, t)| {
-            let indent = format!("padding-left:{}px", depth * 20);
-            let subtasks = if t.children_total > 0 {
-                format!("{}/{} open", t.children_open, t.children_total)
-            } else {
-                String::new()
-            };
-            let details = t.details.unwrap_or_default();
-            let label = effective_label_title(&t.effective);
             let action = {
                 let id = t.id.clone();
                 if finished {
@@ -243,30 +250,66 @@ fn task_rows(state: State, finished: bool) -> AnyView {
                     .into_any()
                 }
             };
-            let project_cell = match t.project {
-                Some(p) if !p.trim().is_empty() => {
-                    view! { <span class="adi-chip adi-mono">{p}</span> }.into_any()
-                }
-                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
-            };
-            let tag_cell = match t.tag {
-                Some(tg) if !tg.trim().is_empty() => {
-                    view! { <span class="adi-chip adi-mono">{tg}</span> }.into_any()
-                }
-                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
-            };
-            view! {
-                <tr>
-                    <td title=details><span style=indent>{t.title}</span></td>
-                    <td class="adi-mono adi-muted">{t.id}</td>
-                    <td>{project_cell}</td>
-                    <td>{tag_cell}</td>
-                    <td><span class="adi-tstatus" data-status=t.effective>{label}</span></td>
-                    <td class="adi-mono adi-muted">{subtasks}</td>
-                    <td>{action}</td>
-                </tr>
-            }
+            body_row(&shown, |col| task_cell(col, &t, depth), Some(action))
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// A task's sort key under `col`. Shared with a project's Tasks panel, which shows a subset of
+/// the same columns over the same rows.
+pub(crate) fn task_key(t: &TaskRow, col: &str) -> Key {
+    match col {
+        "ID" => Key::text(&t.id),
+        "Project" => Key::maybe(t.project.as_deref()),
+        "Tag" => Key::maybe(t.tag.as_deref()),
+        "Status" => Key::text(&t.effective),
+        "Subtasks" => Key::count(t.children_open),
+        // "Task", and any header without a key of its own.
+        _ => Key::text(&t.title),
+    }
+}
+
+/// One task's cell under `col`, indented by its `depth` in the tree. Matching the header text —
+/// the same key the sort uses — is what lets the user hide and reorder columns without the row
+/// builder knowing about it. Shared with a project's Tasks panel.
+pub(crate) fn task_cell(col: &str, t: &TaskRow, depth: usize) -> AnyView {
+    /// An optional chip cell — the shape both Project and Tag render as.
+    fn chip(value: Option<&String>) -> AnyView {
+        match value {
+            Some(v) if !v.trim().is_empty() => {
+                view! { <td><span class="adi-chip adi-mono">{v.clone()}</span></td> }.into_any()
+            }
+            _ => view! { <td><span class="adi-muted">"—"</span></td> }.into_any(),
+        }
+    }
+    match col {
+        "ID" => view! { <td class="adi-mono adi-muted">{t.id.clone()}</td> }.into_any(),
+        "Project" => chip(t.project.as_ref()),
+        "Tag" => chip(t.tag.as_ref()),
+        "Status" => {
+            let label = effective_label_title(&t.effective);
+            view! {
+                <td><span class="adi-tstatus" data-status=t.effective.clone()>{label}</span></td>
+            }
+            .into_any()
+        }
+        "Subtasks" => {
+            let subtasks = if t.children_total > 0 {
+                format!("{}/{} open", t.children_open, t.children_total)
+            } else {
+                String::new()
+            };
+            view! { <td class="adi-mono adi-muted">{subtasks}</td> }.into_any()
+        }
+        // "Task", and anything the layout offers that this match doesn't name.
+        _ => {
+            let indent = format!("padding-left:{}px", depth * 20);
+            let details = t.details.clone().unwrap_or_default();
+            view! {
+                <td title=details><span style=indent>{t.title.clone()}</span></td>
+            }
+            .into_any()
+        }
+    }
 }

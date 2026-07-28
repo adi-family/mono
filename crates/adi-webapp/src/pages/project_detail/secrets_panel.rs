@@ -4,9 +4,9 @@
 
 use leptos::prelude::*;
 
-use crate::pages::secrets::{rows_view, secret_create_form};
+use crate::pages::secrets::{PROJECT_COLS, rows_view, secret_create_form};
 use crate::state::{SecretsForm, State};
-use crate::ui::data_table;
+use crate::ui::configurable_table;
 
 /// The Secrets panel on a project's detail page: the project's secrets table + a create form
 /// fixed to this project.
@@ -17,9 +17,9 @@ pub(crate) fn secrets_panel(state: State, form: SecretsForm) -> AnyView {
                 <h2 class="adi-panel__title">"Secrets"</h2>
                 <span class="adi-updated">"filed under this project"</span>
             </div>
-            {data_table(&["Name", "Value", "Description", ""], move || {
+            {configurable_table(state.tables.project_secrets, PROJECT_COLS, move || {
                 let project = state.current_project.get();
-                rows_view(state, form, Some(project), false)
+                rows_view(state, state.tables.project_secrets, form, Some(project))
             })}
             {move || {
                 // Fix the create form to the open project.

@@ -4,10 +4,18 @@ use adi_webapp_api::types::{AgentsState, SaveAgent};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::agents::{agent_actions, load_agent_into_form};
+use crate::pages::agents::{agent_actions, agent_cell, agent_key, load_agent_into_form};
 use crate::routing::{ProjectSection, Route, push_state, scroll_top};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
-use crate::ui::{TextField, apply_mutation, data_table, menu_item, placeholder_row, row_actions};
+use crate::ui::{
+    Key, TextField, apply_mutation, body_row, configurable_table, menu_item, placeholder_row,
+    row_actions, sort_rows,
+};
+
+/// The panel's columns. No Project column — every row is this project's (or a sub-project's,
+/// which the Name cell marks inline) — and a Status one the global page doesn't carry, since
+/// this panel is where a project's agents are actually watched running.
+pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Status", ""];
 
 /// The project detail page's quick agent create form (name, backend, system prompt; the project
 /// is fixed to the open project). Full editing — models, permission modes, backend params —
@@ -43,7 +51,8 @@ pub(crate) fn agents_panel(
                 <h2 class="adi-panel__title">"Agents"</h2>
                 <span class="adi-updated">"filed under this project & its sub-projects"</span>
             </div>
-            {data_table(&["Name", "Backend", "Model", "Status", ""], move || project_agent_rows(state, watch, edit_form, route))}
+            {configurable_table(state.tables.project_agents, COLS,
+                move || project_agent_rows(state, watch, edit_form, route))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -124,10 +133,12 @@ fn project_agent_rows(
     let id = state.current_project.get();
     // The sub-projects nested under this one — their agents fold into this panel, marked as such.
     let subs = super::descendant_projects(state, &id);
+    let table = state.tables.project_agents;
+    let layout = table.layout.get();
     let Some(st) = state.agents.get() else {
-        return placeholder_row(5, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
-    let mine: Vec<_> = st
+    let mut mine: Vec<_> = st
         .agents
         .into_iter()
         .filter(|a| {
@@ -136,37 +147,33 @@ fn project_agent_rows(
         })
         .collect();
     if mine.is_empty() {
-        return placeholder_row(5, "No agents in this project yet — add one below.");
+        return placeholder_row(
+            layout.span(),
+            "No agents in this project yet — add one below.",
+        );
     }
+    sort_rows(
+        &mut mine,
+        table.sort.get(),
+        |a, col| match col {
+            // The panel's own column: running agents first on a descending sort.
+            "Status" => Key::Bool(a.running),
+            other => agent_key(a, other),
+        },
+        |a| Key::text(&a.name),
+    );
+    let shown = layout.shown();
     mine.into_iter()
         .map(|a| {
-            let name_disp = if a.starred {
-                format!("★ {}", a.name)
-            } else {
-                a.name.clone()
-            };
-            // If the agent belongs to a sub-project rather than this one, mark it with a chip that
-            // opens that sub-project's Agents section.
-            let sub_marker = a
+            // If the agent belongs to a sub-project rather than this one, mark it with a chip
+            // that opens that sub-project's Agents section. Kept as its ids, not a built view:
+            // the cell builder is called per column, so it renders the marker rather than
+            // consuming one.
+            let owner = a
                 .project
                 .as_deref()
                 .filter(|p| *p != id.as_str())
-                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())))
-                .map(|(oid, oname)| {
-                    super::sub_marker(state, route, oid, oname, ProjectSection::Agents)
-                });
-            let backend = a.backend.clone();
-            let model = a
-                .arguments
-                .get("model")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let status = if a.running {
-                view! { <span class="adi-tstatus" data-status="ready">"Running"</span> }.into_any()
-            } else {
-                view! { <span class="adi-muted">"—"</span> }.into_any()
-            };
+                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())));
             // The full 49-field form lives on the Agents page; Edit loads this agent into it and
             // takes you there, rather than duplicating the schema-driven form in this panel.
             let a_edit = a.clone();
@@ -178,15 +185,36 @@ fn project_agent_rows(
             });
             let actions = row_actions(state, format!("agent:{}", a.name),
                 agent_actions(state, watch, &a), vec![edit]);
-            view! {
-                <tr>
-                    <td>{name_disp}{sub_marker}</td>
-                    <td class="adi-mono">{backend}</td>
-                    <td class="adi-mono adi-muted">{model}</td>
-                    <td>{status}</td>
-                    <td class="adi-table__actions">{actions}</td>
-                </tr>
-            }
+            body_row(
+                &shown,
+                |col| match col {
+                    "Status" => {
+                        if a.running {
+                            view! {
+                                <td><span class="adi-tstatus" data-status="ready">"Running"</span></td>
+                            }
+                            .into_any()
+                        } else {
+                            view! { <td><span class="adi-muted">"—"</span></td> }.into_any()
+                        }
+                    }
+                    // Only the Name cell differs from the global page's, by carrying the owning
+                    // sub-project's marker.
+                    "Name" => {
+                        let name = if a.starred {
+                            format!("★ {}", a.name)
+                        } else {
+                            a.name.clone()
+                        };
+                        let marker = owner.clone().map(|(oid, oname)| {
+                            super::sub_marker(state, route, oid, oname, ProjectSection::Agents)
+                        });
+                        view! { <td>{name}{marker}</td> }.into_any()
+                    }
+                    other => agent_cell(other, &a),
+                },
+                Some(actions),
+            )
         })
         .collect::<Vec<_>>()
         .into_any()

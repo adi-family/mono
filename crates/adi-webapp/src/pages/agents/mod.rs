@@ -6,13 +6,19 @@
 
 use std::collections::BTreeMap;
 
-use adi_webapp_api::types::{SaveAgent, SecretDto, SecretRef, ToolDto};
+use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{AgentCodeEditor, AgentsForm, AgentsWatch, Flash, State};
-use crate::ui::{data_table, flash_view, menu_item, placeholder_row, row_actions, updated_text};
+use crate::ui::{
+    Key, body_row, configurable_table, flash_view, menu_item, placeholder_row, row_actions,
+    sort_rows, updated_text,
+};
+
+/// The Agents page's columns; the trailing blank one holds Run / View / Stop and the kebab.
+pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags", ""];
 
 mod actions;
 mod code;
@@ -20,7 +26,10 @@ mod emitted_form;
 mod form;
 
 use actions::apply_agents;
-pub(crate) use actions::{agent_actions, all_chats_view, chat_home_view, live_view, poll_watch};
+pub(crate) use actions::{
+    CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, agent_actions, all_chats_view,
+    chat_home_view, live_view, poll_watch,
+};
 use code::{code_editor_view, open_code_editor};
 pub(crate) use form::load_agent_into_form;
 use form::{agent_argument_values, agent_form_fields, agent_param_applies, clear_agent_form};
@@ -67,7 +76,8 @@ pub(crate) fn agents_view(
                 <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
             </div>
 
-            {data_table(&["Name", "Backend", "Model", "Project", "Tags", ""], move || agent_rows(state, form, watch, code))}
+            {configurable_table(state.tables.agents, COLS,
+                move || agent_rows(state, form, watch, code))}
         </section>
 
         <section class="adi-panel">
@@ -311,30 +321,22 @@ fn agent_rows(
     watch: AgentsWatch,
     code: AgentCodeEditor,
 ) -> AnyView {
+    let table = state.tables.agents;
+    let layout = table.layout.get();
     let Some(st) = state.agents.get() else {
-        return placeholder_row(6, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if st.agents.is_empty() {
-        return placeholder_row(6, "No agents yet — define one below.");
+        return placeholder_row(layout.span(), "No agents yet — define one below.");
     }
-    st.agents
+    let mut agents = st.agents;
+    sort_rows(&mut agents, table.sort.get(), agent_key, |a| {
+        Key::text(&a.name)
+    });
+    let shown = layout.shown();
+    agents
         .into_iter()
         .map(|a| {
-            let name_disp = if a.starred {
-                format!("★ {}", a.name)
-            } else {
-                a.name.clone()
-            };
-            let backend = a.backend.clone();
-            let model = argument_text(&a.arguments, "model");
-            let project_cell = match &a.project {
-                Some(p) if !p.trim().is_empty() => {
-                    let p = p.clone();
-                    view! { <span class="adi-chip adi-mono">{p}</span> }.into_any()
-                }
-                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
-            };
-            let tags = a.tags.join(", ");
             let is_wasm = a.executor == "wasm";
             let code_name = a.name.clone();
             let del_name = a.name.clone();
@@ -353,19 +355,53 @@ fn agent_rows(
                     fetch::delete_agent(del_name.clone()));
             }));
             let actions = row_actions(state, format!("agent:{}", a.name), agent_actions(state, watch, &a), items);
-            view! {
-                <tr>
-                    <td>{name_disp}</td>
-                    <td class="adi-mono">{backend}</td>
-                    <td class="adi-mono adi-muted">{model}</td>
-                    <td>{project_cell}</td>
-                    <td class="adi-muted">{tags}</td>
-                    <td class="adi-table__actions">{actions}</td>
-                </tr>
-            }
+            body_row(&shown, |col| agent_cell(col, &a), Some(actions))
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// An agent's sort key under `col`. Shared with a project's Agents panel, which shows a subset of
+/// the same columns over the same rows.
+pub(crate) fn agent_key(a: &AgentDto, col: &str) -> Key {
+    match col {
+        "Backend" => Key::text(&a.backend),
+        "Model" => Key::text(argument_text(&a.arguments, "model")),
+        "Project" => Key::maybe(a.project.as_deref()),
+        "Tags" => Key::text(a.tags.join(", ")),
+        // "Name", and any header without a key of its own. Starred agents sort with their name,
+        // not ahead of it — the star is a marker on the row, not a separate rank.
+        _ => Key::text(&a.name),
+    }
+}
+
+/// One agent's cell under `col`. Matching the header text — the same key the sort uses — is what
+/// lets the user hide and reorder columns without the row builder knowing about it. The Status
+/// column belongs to a project's panel, which builds it there from the live watch.
+pub(crate) fn agent_cell(col: &str, a: &AgentDto) -> AnyView {
+    match col {
+        "Backend" => view! { <td class="adi-mono">{a.backend.clone()}</td> }.into_any(),
+        "Model" => view! {
+            <td class="adi-mono adi-muted">{argument_text(&a.arguments, "model")}</td>
+        }
+        .into_any(),
+        "Project" => match &a.project {
+            Some(p) if !p.trim().is_empty() => {
+                view! { <td><span class="adi-chip adi-mono">{p.clone()}</span></td> }.into_any()
+            }
+            _ => view! { <td><span class="adi-muted">"—"</span></td> }.into_any(),
+        },
+        "Tags" => view! { <td class="adi-muted">{a.tags.join(", ")}</td> }.into_any(),
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ => {
+            let name = if a.starred {
+                format!("★ {}", a.name)
+            } else {
+                a.name.clone()
+            };
+            view! { <td>{name}</td> }.into_any()
+        }
+    }
 }
 
 /// The live view's input row: a text field (submit types it into the session, without a trailing

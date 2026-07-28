@@ -23,8 +23,8 @@ use crate::fetch;
 use crate::routing::Route;
 use crate::state::{Flash, SecretsForm, State};
 use crate::ui::{
-    TextField, apply_mutation, confirm, data_table, flash_view, menu_item, placeholder_row,
-    row_actions, updated_text,
+    Key, TableState, TextField, apply_mutation, body_row, configurable_table, confirm, flash_view,
+    menu_item, placeholder_row, row_actions, sort_rows, updated_text,
 };
 
 /// The OAuth router that runs the provider flow and returns the token in the redirect fragment.
@@ -37,8 +37,12 @@ const PENDING_KEY: &str = "adi.oauth.pending";
 /// chat tab that launched an agent-emitted form learns the flow completed. See [`read_oauth_done`].
 pub(crate) const OAUTH_DONE_KEY: &str = "adi.oauth.done";
 
-/// The columns of the global secrets table (the project panel drops the Project column).
-const SECRET_COLS: &[&str] = &["Name", "Value", "Description", "Project", ""];
+/// The columns of the global secrets table.
+pub(crate) const COLS: &[&str] = &["Name", "Value", "Description", "Project", ""];
+
+/// The same in a project's own Secrets panel, which drops the Project column — every row there is
+/// scoped to the open project, so it would say the same thing all the way down.
+pub(crate) const PROJECT_COLS: &[&str] = &["Name", "Value", "Description", ""];
 
 /// The Secrets page: the live secrets table (global scope), then the create form.
 pub(crate) fn secrets_view(state: State, form: SecretsForm) -> AnyView {
@@ -60,7 +64,8 @@ pub(crate) fn secrets_view(state: State, form: SecretsForm) -> AnyView {
                 </span>
                 <span class="adi-updated">{move || updated_text(secrets, secs_since)}</span>
             </div>
-            {data_table(SECRET_COLS, move || rows_view(state, form, None, true))}
+            {configurable_table(state.tables.secrets, COLS,
+                move || rows_view(state, state.tables.secrets, form, None))}
         </section>
 
         <section class="adi-panel">
@@ -312,61 +317,95 @@ fn current_provider(form: SecretsForm) -> String {
     if p.is_empty() { "google".to_string() } else { p }
 }
 
-/// Render a secrets table body: the loading/empty placeholder, or one row per matching secret.
-/// `project` (when `Some`) filters to that project; `None` shows global secrets only.
-/// `show_project` adds the Project column (off in a project's own panel).
+/// Render a secrets table body: the loading/empty placeholder, or one row per matching secret, in
+/// the order and arrangement `table`'s header controls select. `project` (when `Some`) filters to
+/// that project, as a project's own panel does; `None` shows global secrets only.
 pub(crate) fn rows_view(
     state: State,
+    table: TableState,
     form: SecretsForm,
     project: Option<String>,
-    show_project: bool,
 ) -> AnyView {
-    let cols = if show_project { 5 } else { 4 };
+    let layout = table.layout.get();
     let Some(loaded) = state.secrets.get() else {
-        return placeholder_row(cols, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     let want = project;
-    let rows: Vec<SecretDto> = loaded
+    let mut rows: Vec<SecretDto> = loaded
         .secrets
         .into_iter()
         .filter(|s| s.project.as_deref() == want.as_deref())
         .collect();
     if rows.is_empty() {
-        return placeholder_row(cols, "No secrets yet — set one below.");
+        return placeholder_row(layout.span(), "No secrets yet — set one below.");
     }
+    sort_rows(
+        &mut rows,
+        table.sort.get(),
+        |s, col| match col {
+            // Never by the value — it isn't held here, and sorting by a masked cell would order
+            // by nothing at all. Grouping the OAuth-sourced secrets is the useful order instead.
+            "Value" => Key::maybe(s.oauth.as_ref().map(|o| o.provider.as_str())),
+            "Description" => Key::maybe(s.description.as_deref()),
+            "Project" => Key::maybe(s.project.as_deref()),
+            _ => Key::text(&s.name),
+        },
+        |s| Key::text(&s.name),
+    );
+    let shown = layout.shown();
     rows.into_iter()
-        .map(|s| row_view(state, form, s, show_project))
+        .map(|s| {
+            let action = secret_actions(state, form, &s);
+            body_row(&shown, |col| cell(col, &s, form), Some(action))
+        })
         .collect::<Vec<_>>()
         .into_any()
 }
 
-/// One secret row: name (with an OAuth badge when applicable), a masked-or-revealed value, its
-/// description, the project (when shown), and the Reveal/Hide + OAuth + Remove actions.
-fn row_view(state: State, form: SecretsForm, s: SecretDto, show_project: bool) -> AnyView {
-    let value_key = reveal_key(s.project.as_deref(), &s.name);
-    let project_cell = show_project.then(|| {
-        view! { <td class="adi-mono adi-muted">{s.project.clone().unwrap_or_else(|| "—".to_string())}</td> }
-    });
-    let desc = s.description.clone().unwrap_or_default();
-    let badge = s.oauth.as_ref().map(oauth_badge);
-    view! {
-        <tr>
-            <td>
-                <div class="adi-mono">{s.name.clone()}</div>
-                {badge}
-            </td>
-            <td class="adi-mono">
-                {move || match form.revealed.get().get(&value_key) {
-                    Some(v) => view! { <span>{v.clone()}</span> }.into_any(),
-                    None => view! { <span class="adi-muted">"••••••••"</span> }.into_any(),
-                }}
-            </td>
-            <td class="adi-muted">{if desc.is_empty() { "—".to_string() } else { desc }}</td>
-            {project_cell}
-            <td class="adi-table__actions">{secret_actions(state, form, &s)}</td>
-        </tr>
+/// One secret's cell under `col`: the name (with an OAuth badge when applicable), a
+/// masked-or-revealed value, its description, and the project it is scoped to. Matching the
+/// header text — the same key the sort uses — is what lets the user hide and reorder columns
+/// without the row builder knowing about it, and is also how the project panel's narrower column
+/// set works from the same code.
+fn cell(col: &str, s: &SecretDto, form: SecretsForm) -> AnyView {
+    match col {
+        "Value" => {
+            let value_key = reveal_key(s.project.as_deref(), &s.name);
+            view! {
+                <td class="adi-mono">
+                    {move || match form.revealed.get().get(&value_key) {
+                        Some(v) => view! { <span>{v.clone()}</span> }.into_any(),
+                        None => view! { <span class="adi-muted">"••••••••"</span> }.into_any(),
+                    }}
+                </td>
+            }
+            .into_any()
+        }
+        "Description" => {
+            let desc = s.description.clone().unwrap_or_default();
+            let text = if desc.is_empty() {
+                "—".to_string()
+            } else {
+                desc
+            };
+            view! { <td class="adi-muted">{text}</td> }.into_any()
+        }
+        "Project" => {
+            let project = s.project.clone().unwrap_or_else(|| "—".to_string());
+            view! { <td class="adi-mono adi-muted">{project}</td> }.into_any()
+        }
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ => {
+            let badge = s.oauth.as_ref().map(oauth_badge);
+            view! {
+                <td>
+                    <div class="adi-mono">{s.name.clone()}</div>
+                    {badge}
+                </td>
+            }
+            .into_any()
+        }
     }
-    .into_any()
 }
 
 /// The trailing actions for a secret row — shared by the global table and a project's panel. The

@@ -4,9 +4,14 @@ use adi_webapp_api::types::{SaveTrigger, TriggersState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::triggers::{status_cell, trigger_actions, trigger_toggle_item};
+use crate::pages::triggers::{
+    PROJECT_COLS, trigger_actions, trigger_cell, trigger_key, trigger_toggle_item,
+};
 use crate::state::{Flash, State, TriggersLogView};
-use crate::ui::{TextField, apply_mutation, data_table, fmt_date, placeholder_row, row_actions};
+use crate::ui::{
+    Key, TextField, apply_mutation, body_row, configurable_table, placeholder_row, row_actions,
+    sort_rows,
+};
 
 /// The project detail page's quick trigger create form (name, kind, code; the project is fixed
 /// to the open project). Full editing — presets, runtimes, settings, enable/disable — lives on
@@ -40,7 +45,8 @@ pub(crate) fn triggers_panel(
                 <h2 class="adi-panel__title">"Triggers"</h2>
                 <span class="adi-updated">"filed under this project"</span>
             </div>
-            {data_table(&["Name", "Launches", "Status", "Last run", ""], move || project_trigger_rows(state, log))}
+            {configurable_table(state.tables.project_triggers, PROJECT_COLS,
+                move || project_trigger_rows(state, log))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -114,45 +120,36 @@ pub(crate) fn triggers_panel(
 /// Rows for the project's trigger table: this project's triggers with the shared
 /// Fire/Log/Enable-Disable actions. Loading/empty placeholders otherwise.
 fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
+    let table = state.tables.project_triggers;
+    let layout = table.layout.get();
     let id = state.current_project.get();
     let Some(st) = state.triggers.get() else {
-        return placeholder_row(5, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
-    let mine: Vec<_> = st
+    let mut mine: Vec<_> = st
         .triggers
         .into_iter()
         .filter(|t| t.project.as_deref() == Some(id.as_str()))
         .collect();
     if mine.is_empty() {
-        return placeholder_row(5, "No triggers in this project yet — add one below.");
+        return placeholder_row(
+            layout.span(),
+            "No triggers in this project yet — add one below.",
+        );
     }
+    sort_rows(&mut mine, table.sort.get(), trigger_key, |t| {
+        Key::text(&t.name)
+    });
+    let shown = layout.shown();
     mine.into_iter()
         .map(|t| {
-            let launches = if t.runtime.trim().is_empty() {
-                format!("{} · sh", t.kind)
-            } else {
-                format!("{} · {}", t.kind, t.runtime)
-            };
-            let hook_hint = (t.kind == "webhook").then(|| format!("/api/hooks/{}", t.name));
-            let fired = t.last_fired_at.map_or_else(|| "—".to_string(), fmt_date);
-            let description = t.description.clone();
-            view! {
-                <tr>
-                    <td title=description>
-                        <span>{t.name.clone()}</span>
-                        {hook_hint.map(|h| view! {
-                            <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{h}</span>
-                        })}
-                    </td>
-                    <td class="adi-mono">{launches}</td>
-                    <td>{status_cell(&t)}</td>
-                    <td class="adi-mono adi-muted">{fired}</td>
-                    <td class="adi-table__actions">
-                        {row_actions(state, format!("trigger:{}", t.name),
-                            trigger_actions(state, log, &t), vec![trigger_toggle_item(state, &t)])}
-                    </td>
-                </tr>
-            }
+            let actions = row_actions(
+                state,
+                format!("trigger:{}", t.name),
+                trigger_actions(state, log, &t),
+                vec![trigger_toggle_item(state, &t)],
+            );
+            body_row(&shown, |col| trigger_cell(col, &t), Some(actions))
         })
         .collect::<Vec<_>>()
         .into_any()

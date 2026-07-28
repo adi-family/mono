@@ -1,13 +1,18 @@
 //! The Files panel of the project detail page.
 
+use adi_webapp_api::types::FileEntry;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, State};
-use crate::ui::{data_table, fmt_date, placeholder_row};
+use crate::ui::{Key, body_row, configurable_table, fmt_date, placeholder_row, sort_rows};
 
 use super::load_dir;
+
+/// The file listing's columns. No action column — a row's control is its Name cell, which opens
+/// the directory in place or the file in the editor below.
+pub(crate) const COLS: &[&str] = &["Name", "Size", "Modified"];
 
 /// Navigate the browser into directory `path` (a dir click or the "up" control).
 fn open_dir(state: State, path: String) {
@@ -96,7 +101,7 @@ pub(crate) fn files_view(state: State) -> AnyView {
             <div class="adi-panel__body">
                 {move || crumbs_view(state)}
             </div>
-            {data_table(&["Name", "Size", "Modified"], move || file_rows(state))}
+            {configurable_table(state.tables.files, COLS, move || file_rows(state))}
             {move || match files.open.get() {
                 None => view! {
                     <div class="adi-panel__body">
@@ -150,82 +155,117 @@ fn crumbs_view(state: State) -> AnyView {
 /// place) and files (which open in the editor), with size and modified date.
 fn file_rows(state: State) -> AnyView {
     let files = state.files;
+    let table = state.tables.files;
+    let layout = table.layout.get();
     let Some(listing) = files.listing.get() else {
-        return placeholder_row(3, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     let dir = listing.path.clone();
+    let shown = layout.shown();
     let mut rows: Vec<AnyView> = Vec::new();
 
+    // The way out stays pinned at the top whatever the sort says — it is navigation, not an entry.
     if let Some(parent) = listing.parent.clone() {
-        rows.push(
-            view! {
-                <tr>
-                    <td>
-                        <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
-                            on:click=move |ev: web_sys::MouseEvent| {
-                                ev.prevent_default();
-                                open_dir(state, parent.clone());
-                            }>
-                            <span class="adi-filerow__icon">"↑"</span><span>".."</span>
-                        </a>
-                    </td>
-                    <td class="adi-muted">"—"</td>
-                    <td class="adi-muted">"—"</td>
-                </tr>
-            }
-            .into_any(),
-        );
+        rows.push(body_row(
+            &shown,
+            |col| match col {
+                "Name" => {
+                    let parent = parent.clone();
+                    view! {
+                        <td>
+                            <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
+                                on:click=move |ev: web_sys::MouseEvent| {
+                                    ev.prevent_default();
+                                    open_dir(state, parent.clone());
+                                }>
+                                <span class="adi-filerow__icon">"↑"</span><span>".."</span>
+                            </a>
+                        </td>
+                    }
+                    .into_any()
+                }
+                _ => view! { <td class="adi-muted">"—"</td> }.into_any(),
+            },
+            None,
+        ));
     }
 
     if listing.entries.is_empty() && listing.parent.is_none() {
-        return placeholder_row(3, "This project directory is empty.");
+        return placeholder_row(layout.span(), "This project directory is empty.");
     }
 
-    for entry in listing.entries {
+    let mut entries = listing.entries;
+    // Directories first whichever way the sort runs — a browser you navigate reads as folders
+    // then files, and a directory has no size to order by in any case.
+    sort_rows(
+        &mut entries,
+        table.sort.get(),
+        |e, col| match col {
+            "Size" => Key::num(if e.is_dir { 0 } else { e.size }),
+            "Modified" => Key::num(e.modified.unwrap_or(0)),
+            _ => Key::text(&e.name),
+        },
+        |e| Key::text(&e.name),
+    );
+    entries.sort_by_key(|e| !e.is_dir);
+
+    for entry in entries {
         let path = join_rel(&dir, &entry.name);
-        let modified = entry.modified.map_or_else(|| "—".to_string(), fmt_date);
-        let open = state.files.open.get();
-        let is_open = open.as_deref() == Some(path.as_str());
-        if entry.is_dir {
-            rows.push(view! {
-                <tr>
-                    <td>
-                        <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
-                            on:click=move |ev: web_sys::MouseEvent| {
-                                ev.prevent_default();
-                                open_dir(state, path.clone());
-                            }>
-                            <span class="adi-filerow__icon">"▸"</span><span>{entry.name}"/"</span>
-                        </a>
-                    </td>
-                    <td class="adi-muted">"—"</td>
-                    <td class="adi-mono adi-muted">{modified}</td>
-                </tr>
-            }.into_any());
-        } else {
-            let size = fmt_size(entry.size);
-            rows.push(
-                view! {
-                    <tr>
-                        <td>
-                            <a class="adi-btn adi-btn--link adi-filerow" href="#"
-                                aria-current=move || if is_open { "true" } else { "false" }
-                                on:click=move |ev: web_sys::MouseEvent| {
-                                    ev.prevent_default();
-                                    open_file(state, path.clone());
-                                }>
-                                <span class="adi-filerow__icon">"·"</span><span>{entry.name}</span>
-                            </a>
-                        </td>
-                        <td class="adi-mono adi-muted">{size}</td>
-                        <td class="adi-mono adi-muted">{modified}</td>
-                    </tr>
-                }
-                .into_any(),
-            );
-        }
+        let is_open = state.files.open.get().as_deref() == Some(path.as_str());
+        rows.push(body_row(
+            &shown,
+            |col| file_cell(col, &entry, &path, is_open, state),
+            None,
+        ));
     }
     rows.into_any()
+}
+
+/// One entry's cell under `col`. Matching the header text — the same key the sort uses — is what
+/// lets the user hide and reorder columns without the row builder knowing about it.
+fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: State) -> AnyView {
+    match col {
+        // A directory has no meaningful size, so it shows a dash rather than a misleading zero.
+        "Size" if entry.is_dir => view! { <td class="adi-muted">"—"</td> }.into_any(),
+        "Size" => view! { <td class="adi-mono adi-muted">{fmt_size(entry.size)}</td> }.into_any(),
+        "Modified" => {
+            let modified = entry.modified.map_or_else(|| "—".to_string(), fmt_date);
+            view! { <td class="adi-mono adi-muted">{modified}</td> }.into_any()
+        }
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ if entry.is_dir => {
+            let path = path.to_string();
+            view! {
+                <td>
+                    <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
+                        on:click=move |ev: web_sys::MouseEvent| {
+                            ev.prevent_default();
+                            open_dir(state, path.clone());
+                        }>
+                        <span class="adi-filerow__icon">"▸"</span>
+                        <span>{entry.name.clone()}"/"</span>
+                    </a>
+                </td>
+            }
+            .into_any()
+        }
+        _ => {
+            let path = path.to_string();
+            view! {
+                <td>
+                    <a class="adi-btn adi-btn--link adi-filerow" href="#"
+                        aria-current=move || if is_open { "true" } else { "false" }
+                        on:click=move |ev: web_sys::MouseEvent| {
+                            ev.prevent_default();
+                            open_file(state, path.clone());
+                        }>
+                        <span class="adi-filerow__icon">"·"</span><span>{entry.name.clone()}</span>
+                    </a>
+                </td>
+            }
+            .into_any()
+        }
+    }
 }
 
 /// The in-place editor for the open file: a toolbar (path, dirty state, Save/Reload/Close) and a

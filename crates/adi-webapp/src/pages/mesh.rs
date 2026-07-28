@@ -1,13 +1,25 @@
 //! The Mesh page: this machine's id/ticket to share, the ports it exposes to peers, the peers
 //! authorized to reach them, and the local→peer forwards.
 
-use adi_webapp_api::types::{MeshForwardRef, MeshState};
+use adi_webapp_api::types::{MeshForward, MeshForwardRef, MeshState};
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::fetch;
 use crate::state::{MeshForm, State};
-use crate::ui::{TextField, apply_mutation, data_table, placeholder_row};
+use crate::ui::{
+    Key, TextField, apply_mutation, body_row, configurable_table, placeholder_row, sort_rows,
+};
+
+/// The exposed-ports table: one port per row, with a Remove control. A single named column, so
+/// it sorts but has no settings gear — there is nothing to hide or reorder.
+pub(crate) const ALLOW_COLS: &[&str] = &["Port", ""];
+
+/// The authorized-peers table. As with [`ALLOW_COLS`], one column and a Revoke control.
+pub(crate) const PEER_COLS: &[&str] = &["Endpoint ID", ""];
+
+/// The forwards table: a local listener, the peer it dials, and the port it reaches there.
+pub(crate) const FORWARD_COLS: &[&str] = &["Name", "Local", "Peer", "Remote", ""];
 
 /// The Mesh page: this machine's id/ticket to share, the ports it exposes to peers, the
 /// peers authorized to reach them, and the local→peer forwards.
@@ -74,7 +86,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Ports exposed to peers"</h2>
             </div>
-            {data_table(&["Port", ""], move || mesh_allow_rows(state))}
+            {configurable_table(state.tables.mesh_allow, ALLOW_COLS, move || mesh_allow_rows(state))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 if let Some(port) = parse_port(&form.allow_port.get()) {
@@ -99,7 +111,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                     |m| if m.authorized_peers.is_empty() { "any peer allowed".to_string() }
                         else { format!("{} allowed", m.authorized_peers.len()) })}</span>
             </div>
-            {data_table(&["Endpoint ID", ""], move || mesh_peer_rows(state))}
+            {configurable_table(state.tables.mesh_peers, PEER_COLS, move || mesh_peer_rows(state))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let peer = form.peer.get().trim().to_string();
@@ -123,7 +135,8 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">"local 127.0.0.1:port → a peer's port"</span>
             </div>
-            {data_table(&["Name", "Local", "Peer", "Remote", ""], move || mesh_forward_rows(state))}
+            {configurable_table(state.tables.mesh_forwards, FORWARD_COLS,
+                move || mesh_forward_rows(state))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let peer = form.fwd_peer.get().trim().to_string();
@@ -164,31 +177,40 @@ fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
 /// Rows for the exposed-ports table: a placeholder, or one row per allowed port with a
 /// button to stop exposing it.
 fn mesh_allow_rows(state: State) -> AnyView {
+    let table = state.tables.mesh_allow;
+    let layout = table.layout.get();
     let Some(mesh) = state.mesh.get() else {
-        return placeholder_row(2, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if mesh.allow.is_empty() {
         return placeholder_row(
-            2,
+            layout.span(),
             "No ports exposed — add one below to let peers reach it.",
         );
     }
     let mut ports = mesh.allow;
-    ports.sort_unstable();
+    sort_rows(
+        &mut ports,
+        table.sort.get(),
+        |p: &u16, _| Key::Int(i64::from(*p)),
+        |p: &u16| Key::Int(i64::from(*p)),
+    );
+    let shown = layout.shown();
     ports
         .into_iter()
         .map(|port| {
-            view! {
-                <tr>
-                    <td class="adi-mono adi-table__port">{port.to_string()}</td>
-                    <td class="adi-table__actions">
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_mesh(state, None, format!("Stopped exposing port {port}."),
-                                fetch::mesh_deny(port));
-                        }>"Remove"</button>
-                    </td>
-                </tr>
+            let remove = view! {
+                <button class="adi-btn adi-btn--link" on:click=move |_| {
+                    apply_mesh(state, None, format!("Stopped exposing port {port}."),
+                        fetch::mesh_deny(port));
+                }>"Remove"</button>
             }
+            .into_any();
+            body_row(
+                &shown,
+                |_| view! { <td class="adi-mono adi-table__port">{port.to_string()}</td> }.into_any(),
+                Some(remove),
+            )
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -196,30 +218,45 @@ fn mesh_allow_rows(state: State) -> AnyView {
 
 /// Rows for the authorized-peers table: a note when open to any peer, else one row per id.
 fn mesh_peer_rows(state: State) -> AnyView {
+    let table = state.tables.mesh_peers;
+    let layout = table.layout.get();
     let Some(mesh) = state.mesh.get() else {
-        return placeholder_row(2, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if mesh.authorized_peers.is_empty() {
         return placeholder_row(
-            2,
+            layout.span(),
             "Any peer may use the exposed ports. Add one to restrict access.",
         );
     }
-    mesh.authorized_peers
+    let mut peers = mesh.authorized_peers;
+    // By the full token, not its shortened rendering — two ids that abbreviate alike still order.
+    sort_rows(
+        &mut peers,
+        table.sort.get(),
+        |p: &String, _| Key::text(p),
+        |p: &String| Key::text(p),
+    );
+    let shown = layout.shown();
+    peers
         .into_iter()
         .map(|peer| {
             let full = peer.clone();
-            view! {
-                <tr>
-                    <td class="adi-mono" title=full.clone()>{short_id(&peer)}</td>
-                    <td class="adi-table__actions">
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_mesh(state, None, "Revoked the peer.".to_string(),
-                                fetch::mesh_deny_peer(full.clone()));
-                        }>"Revoke"</button>
-                    </td>
-                </tr>
+            let revoke = view! {
+                <button class="adi-btn adi-btn--link" on:click=move |_| {
+                    apply_mesh(state, None, "Revoked the peer.".to_string(),
+                        fetch::mesh_deny_peer(full.clone()));
+                }>"Revoke"</button>
             }
+            .into_any();
+            body_row(
+                &shown,
+                |_| {
+                    view! { <td class="adi-mono" title=peer.clone()>{short_id(&peer)}</td> }
+                        .into_any()
+                },
+                Some(revoke),
+            )
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -227,36 +264,62 @@ fn mesh_peer_rows(state: State) -> AnyView {
 
 /// Rows for the forwards table: a placeholder, or one row per forward with a remove button.
 fn mesh_forward_rows(state: State) -> AnyView {
+    let table = state.tables.mesh_forwards;
+    let layout = table.layout.get();
     let Some(mesh) = state.mesh.get() else {
-        return placeholder_row(5, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if mesh.forwards.is_empty() {
         return placeholder_row(
-            5,
+            layout.span(),
             "No forwards — add one below to reach a peer's port locally.",
         );
     }
-    mesh.forwards
+    let mut forwards = mesh.forwards;
+    sort_rows(
+        &mut forwards,
+        table.sort.get(),
+        |f, col| match col {
+            "Local" => Key::Int(i64::from(f.listen)),
+            "Peer" => Key::text(&f.peer),
+            "Remote" => Key::Int(i64::from(f.port)),
+            _ => Key::text(&f.name),
+        },
+        |f| Key::Int(i64::from(f.listen)),
+    );
+    let shown = layout.shown();
+    forwards
         .into_iter()
         .map(|f| {
             let listen = f.listen;
-            view! {
-                <tr>
-                    <td>{f.name}</td>
-                    <td class="adi-mono adi-table__port">{format!("127.0.0.1:{}", f.listen)}</td>
-                    <td class="adi-mono" title=f.peer.clone()>{short_id(&f.peer)}</td>
-                    <td class="adi-mono">{format!(":{}", f.port)}</td>
-                    <td class="adi-table__actions">
-                        <button class="adi-btn adi-btn--link" on:click=move |_| {
-                            apply_mesh(state, None, format!("Removed the forward on 127.0.0.1:{listen}."),
-                                fetch::mesh_remove_forward(listen));
-                        }>"Remove"</button>
-                    </td>
-                </tr>
+            let remove = view! {
+                <button class="adi-btn adi-btn--link" on:click=move |_| {
+                    apply_mesh(state, None, format!("Removed the forward on 127.0.0.1:{listen}."),
+                        fetch::mesh_remove_forward(listen));
+                }>"Remove"</button>
             }
+            .into_any();
+            body_row(&shown, |col| forward_cell(col, &f), Some(remove))
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// One forward's cell under `col`. Matching the header text — the same key the sort uses — is
+/// what lets the user hide and reorder columns without the row builder knowing about it.
+fn forward_cell(col: &str, f: &MeshForward) -> AnyView {
+    match col {
+        "Local" => view! {
+            <td class="adi-mono adi-table__port">{format!("127.0.0.1:{}", f.listen)}</td>
+        }
+        .into_any(),
+        "Peer" => {
+            view! { <td class="adi-mono" title=f.peer.clone()>{short_id(&f.peer)}</td> }.into_any()
+        }
+        "Remote" => view! { <td class="adi-mono">{format!(":{}", f.port)}</td> }.into_any(),
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ => view! { <td>{f.name.clone()}</td> }.into_any(),
+    }
 }
 
 /// Run a mesh mutation: set the returned state and a success flash, or an error flash;

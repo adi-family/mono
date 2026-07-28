@@ -31,12 +31,16 @@ mod tasks;
 mod tools_panel;
 mod triggers;
 
+pub(crate) use agents_panel::COLS as PROJECT_AGENT_COLS;
 use agents_panel::{QuickAgentForm, agents_panel};
+pub(crate) use files::COLS as FILE_COLS;
 use files::files_view;
 use secrets_panel::secrets_panel;
-use services::{QuickServiceForm, service_create_form, service_rows};
 pub(crate) use services::SERVICE_COLS;
+use services::{QuickServiceForm, service_create_form, service_rows};
+pub(crate) use subprojects::COLS as SUBPROJECT_COLS;
 use subprojects::{QuickSubprojectForm, subprojects_panel};
+pub(crate) use tasks::COLS as PROJECT_TASK_COLS;
 use tasks::{TaskForm, tasks_panel};
 use tools_panel::tools_panel;
 use triggers::{QuickTriggerForm, triggers_panel};
@@ -299,7 +303,7 @@ fn detail_body(
             </div>
             // A closure, not a rendered value: re-sorting or rearranging then redraws just this
             // tbody instead of the whole panel around it.
-            {configurable_table(state.service_table, SERVICE_COLS,
+            {configurable_table(state.tables.services, SERVICE_COLS,
                 move || service_rows(state, rows_id.clone(), services.clone(), has_hive))}
             {service_create_form(state, service_form)}
             <div class="adi-hint">

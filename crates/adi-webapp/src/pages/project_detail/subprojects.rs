@@ -1,12 +1,18 @@
 //! The Sub-projects panel of the project detail page.
 
-use adi_webapp_api::types::NewProject;
+use adi_webapp_api::types::{NewProject, Project};
 use leptos::prelude::*;
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, State};
-use crate::ui::{TextField, data_table, fmt_date, placeholder_row};
+use crate::ui::{
+    Key, TextField, body_row, configurable_table, fmt_date, placeholder_row, sort_rows,
+};
+
+/// The panel's columns. No action column — archive and restore live on the Projects page; a row
+/// here is a way in, not a thing to manage.
+pub(crate) const COLS: &[&str] = &["Name", "ID", "Created", "Status"];
 
 use super::apply_detail_mutation;
 
@@ -34,7 +40,8 @@ pub(crate) fn subprojects_panel(
                 <h2 class="adi-panel__title">"Sub-projects"</h2>
                 <span class="adi-updated">"nested under this project"</span>
             </div>
-            {data_table(&["Name", "ID", "Created", "Status"], move || subproject_rows(state, route))}
+            {configurable_table(state.tables.subprojects, COLS,
+                move || subproject_rows(state, route))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let parent = state.current_project.get_untracked();
@@ -73,41 +80,65 @@ pub(crate) fn subprojects_panel(
 /// Rows for the sub-projects table: one per nested project, its name opening the detail page.
 /// Loading/empty placeholders otherwise.
 fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
+    let table = state.tables.subprojects;
+    let layout = table.layout.get();
     let Some(d) = state.project_detail.get() else {
-        return placeholder_row(4, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
     if d.subprojects.is_empty() {
-        return placeholder_row(4, "No sub-projects yet — add one below.");
+        return placeholder_row(layout.span(), "No sub-projects yet — add one below.");
     }
-    d.subprojects
+    let mut subprojects = d.subprojects;
+    sort_rows(
+        &mut subprojects,
+        table.sort.get(),
+        |p, col| match col {
+            "ID" => Key::text(&p.id),
+            "Created" => Key::num(p.created_at),
+            "Status" => Key::Bool(p.is_archived()),
+            _ => Key::text(&p.name),
+        },
+        |p| Key::text(&p.name),
+    );
+    let shown = layout.shown();
+    subprojects
         .into_iter()
-        .map(|p| {
-            let id = p.id.clone();
-            let open_id = id.clone();
-            let href = project_href(&id);
-            let created = fmt_date(p.created_at);
-            let title = p.description.clone().unwrap_or_default();
-            let status = if p.is_archived() {
-                view! { <span class="adi-chip">"Archived"</span> }.into_any()
-            } else {
-                view! { <span class="adi-muted">"Active"</span> }.into_any()
-            };
-            view! {
-                <tr>
-                    <td title=title>
-                        <a class="adi-btn adi-btn--link" href=href
-                            on:click=move |ev: web_sys::MouseEvent| {
-                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
-                                ev.prevent_default();
-                                open_project(state, route, open_id.clone());
-                            }>{p.name}</a>
-                    </td>
-                    <td class="adi-mono">{id}</td>
-                    <td class="adi-mono adi-muted">{created}</td>
-                    <td>{status}</td>
-                </tr>
-            }
-        })
+        .map(|p| body_row(&shown, |col| subproject_cell(col, &p, state, route), None))
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// One sub-project's cell under `col`. Matching the header text — the same key the sort uses —
+/// is what lets the user hide and reorder columns without the row builder knowing about it.
+fn subproject_cell(col: &str, p: &Project, state: State, route: RwSignal<Route>) -> AnyView {
+    match col {
+        "ID" => view! { <td class="adi-mono">{p.id.clone()}</td> }.into_any(),
+        "Created" => {
+            view! { <td class="adi-mono adi-muted">{fmt_date(p.created_at)}</td> }.into_any()
+        }
+        "Status" => {
+            if p.is_archived() {
+                view! { <td><span class="adi-chip">"Archived"</span></td> }.into_any()
+            } else {
+                view! { <td><span class="adi-muted">"Active"</span></td> }.into_any()
+            }
+        }
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ => {
+            let open_id = p.id.clone();
+            let href = project_href(&p.id);
+            let title = p.description.clone().unwrap_or_default();
+            view! {
+                <td title=title>
+                    <a class="adi-btn adi-btn--link" href=href
+                        on:click=move |ev: web_sys::MouseEvent| {
+                            if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                            ev.prevent_default();
+                            open_project(state, route, open_id.clone());
+                        }>{p.name.clone()}</a>
+                </td>
+            }
+            .into_any()
+        }
+    }
 }

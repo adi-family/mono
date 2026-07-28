@@ -7,7 +7,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::state::{Flash, State};
 use crate::ui::{
-    Sort, TextField, apply_mutation, cpu_cell, dash, fmt_ports, memory_cell, placeholder_row,
+    Key, TextField, apply_mutation, body_row, cpu_cell, dash, fmt_ports, memory_cell,
+    placeholder_row, sort_rows,
 };
 
 /// The Services panel's columns; the trailing blank one holds the row's Start/Stop control and
@@ -55,8 +56,13 @@ pub(crate) fn service_rows(
     mut services: Vec<ProjectService>,
     has_hive: bool,
 ) -> AnyView {
-    let layout = state.service_table.layout.get();
-    sort_services(&mut services, state.service_table.sort.get());
+    let layout = state.tables.services.layout.get();
+    sort_rows(
+        &mut services,
+        state.tables.services.sort.get(),
+        service_key,
+        |s| Key::text(&s.name),
+    );
     if services.is_empty() {
         let msg = if has_hive {
             "This project's .adi/hive.yaml declares no services."
@@ -70,7 +76,6 @@ pub(crate) fn service_rows(
         .into_iter()
         .map(|s| {
             let name = s.name.clone();
-            let cells: Vec<AnyView> = shown.iter().map(|col| cell(col, &s)).collect();
             let has_runner = s.run.is_some();
             let running = s.running;
             let action = if !has_runner {
@@ -96,7 +101,7 @@ pub(crate) fn service_rows(
                 }
                 .into_any()
             };
-            view! { <tr>{cells}<td>{action}</td></tr> }
+            body_row(&shown, |col| cell(col, &s), Some(action))
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -119,35 +124,29 @@ fn cell(col: &str, s: &ProjectService) -> AnyView {
     }
 }
 
-/// Order the panel's rows by the clicked column, tiebreaking on the service name so equal keys
-/// (every stopped service's blank usage, say) hold the file's own order. Absent values sort as
-/// empty/zero — see the Hive page, which sorts the same way over the same data.
-fn sort_services(services: &mut [ProjectService], sort: Sort) {
-    /// An optional text cell as a sort key.
-    fn text(value: Option<&String>) -> &str {
-        value.map_or("", String::as_str)
+/// A service's sort key under `col`. Absent values sort as empty/zero, which puts a stopped
+/// service's blank usage at the bottom of a descending CPU or Memory sort — where "what is
+/// costing me the most?" wants it. See the Hive page, which sorts the same way over the same data.
+fn service_key(s: &ProjectService, col: &str) -> Key {
+    match col {
+        "Host" => Key::maybe(s.host.as_deref()),
+        // By the port itself, not its `key:port` rendering — `http:9` belongs before `http:80`.
+        "Ports" => {
+            let port = s
+                .ports
+                .iter()
+                .find(|p| p.key == "http")
+                .or_else(|| s.ports.first())
+                .map_or(0, |p| p.port);
+            Key::Int(i64::from(port))
+        }
+        "Command" => Key::maybe(s.run.as_deref()),
+        "Restart" => Key::maybe(s.restart.as_deref()),
+        "CPU" => Key::Float(f64::from(cpu(s))),
+        "Memory" => Key::num(mem(s)),
+        // "Service", and the blank action column, which the header never lets you click.
+        _ => Key::text(&s.name),
     }
-    /// The port a service's row leads with — the `http` slot, else the first declared.
-    fn port(s: &ProjectService) -> u16 {
-        s.ports
-            .iter()
-            .find(|p| p.key == "http")
-            .or_else(|| s.ports.first())
-            .map_or(0, |p| p.port)
-    }
-    services.sort_by(|a, b| {
-        let ord = match sort.col {
-            "Host" => text(a.host.as_ref()).cmp(text(b.host.as_ref())),
-            "Ports" => port(a).cmp(&port(b)),
-            "Command" => text(a.run.as_ref()).cmp(text(b.run.as_ref())),
-            "Restart" => text(a.restart.as_ref()).cmp(text(b.restart.as_ref())),
-            "CPU" => cpu(a).total_cmp(&cpu(b)),
-            "Memory" => mem(a).cmp(&mem(b)),
-            // "Service", and the blank action column, which the header never lets you click.
-            _ => a.name.cmp(&b.name),
-        };
-        sort.dir(ord).then_with(|| a.name.cmp(&b.name))
-    });
 }
 
 /// A service's sampled CPU share, or zero when it isn't running.

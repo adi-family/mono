@@ -12,13 +12,21 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::state::{DashboardsForm, Flash, State, load};
 use crate::ui::{
-    TextField, apply_mutation, confirm, data_table, flash_view, menu_item, placeholder_row,
-    row_actions, updated_text,
+    Key, TableState, TextField, apply_mutation, body_row, configurable_table, confirm, flash_view,
+    menu_item, placeholder_row, row_actions, sort_rows, updated_text,
 };
 
 /// The columns shared by the live table and the archived disclosure — both render one dashboard
 /// per row through [`row_view`], with a trailing archive/restore action.
-const DASH_COLS: &[&str] = &["Dashboard", "Project", "Frontend", "Backend", "Modules", "Routes", ""];
+pub(crate) const COLS: &[&str] = &[
+    "Dashboard",
+    "Project",
+    "Frontend",
+    "Backend",
+    "Modules",
+    "Routes",
+    "",
+];
 
 /// The Dashboards page: summary tiles, one row per dashboard, the create form, and a collapsed
 /// archive of removed dashboards at the foot.
@@ -39,7 +47,7 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(dashboards, secs_since)}</span>
             </div>
 
-            {data_table(DASH_COLS, move || rows_view(state, false))}
+            {configurable_table(state.tables.dashboards, COLS, move || rows_view(state, false))}
         </section>
 
         <section class="adi-panel">
@@ -117,7 +125,8 @@ fn archived_section(state: State, show: RwSignal<bool>) -> AnyView {
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        {open.then(|| data_table(DASH_COLS, move || rows_view(state, true)))}
+                        {open.then(|| configurable_table(state.tables.dashboards_archived, COLS,
+                            move || rows_view(state, true)))}
                     </section>
                 }
                 .into_any()
@@ -130,17 +139,23 @@ fn archived_section(state: State, show: RwSignal<bool>) -> AnyView {
 /// Render a table body — the live dashboards (`archived = false`) or the archived ones — as a
 /// loading/empty placeholder or one row per matching dashboard.
 fn rows_view(state: State, archived: bool) -> AnyView {
-    let Some(loaded) = state.dashboards.get() else {
-        return placeholder_row(7, "Loading…");
+    let table: TableState = if archived {
+        state.tables.dashboards_archived
+    } else {
+        state.tables.dashboards
     };
-    let rows: Vec<Dashboard> = loaded
+    let layout = table.layout.get();
+    let Some(loaded) = state.dashboards.get() else {
+        return placeholder_row(layout.span(), "Loading…");
+    };
+    let mut rows: Vec<Dashboard> = loaded
         .dashboards
         .into_iter()
         .filter(|d| d.is_archived() == archived)
         .collect();
     if rows.is_empty() {
         return placeholder_row(
-            7,
+            layout.span(),
             if archived {
                 "Nothing archived."
             } else {
@@ -148,46 +163,82 @@ fn rows_view(state: State, archived: bool) -> AnyView {
             },
         );
     }
+    // A dead service sorts below every live one at the same port, so a descending Frontend sort
+    // answers "what is actually up?" rather than interleaving the stopped ones.
+    let service_key = |port: Option<u16>, running: bool| {
+        Key::Int(i64::from(port.unwrap_or(0)) + if running { 1 << 20 } else { 0 })
+    };
+    // The Project cell shows a name, so the column orders by the name, not the id behind it.
+    let names: std::collections::HashMap<String, String> = state
+        .projects
+        .get()
+        .map(|p| p.projects.into_iter().map(|p| (p.id, p.name)).collect())
+        .unwrap_or_default();
+    sort_rows(
+        &mut rows,
+        table.sort.get(),
+        |d, col| match col {
+            "Project" => Key::maybe(d.project.as_deref().and_then(|id| names.get(id)).map(String::as_str)),
+            "Frontend" => service_key(d.frontend_port, d.frontend_running),
+            "Backend" => service_key(d.backend_port, d.backend_running),
+            "Modules" => Key::count(d.modules.len()),
+            "Routes" => Key::count(d.routes.len()),
+            _ => Key::text(&d.name),
+        },
+        |d| Key::text(&d.name),
+    );
+    let shown = layout.shown();
     rows.into_iter()
-        .map(|d| row_view(state, d))
+        .map(|d| {
+            let action = row_action(state, &d.id, d.is_archived());
+            body_row(&shown, |col| cell(col, &d, state), Some(action))
+        })
         .collect::<Vec<_>>()
         .into_any()
 }
 
-/// One dashboard row: identity, both services' state, what it serves, and the archive/restore
-/// action.
+/// One dashboard's cell under `col`: identity, both services' state, and what it serves. Matching
+/// the header text — the same key the sort uses — is what lets the user hide and reorder columns
+/// without the row builder knowing about it.
 ///
 /// The name is the primary way in: while the dashboard is up it is a real link to the running
 /// page, so the row can be verified by clicking rather than by reading a port number.
-fn row_view(state: State, d: Dashboard) -> AnyView {
-    let action = row_action(state, &d.id, d.is_archived());
-    let project = project_cell(state, &d);
-    let name = match d.frontend_port.filter(|_| d.frontend_running) {
-        Some(port) => {
-            let href = format!("http://127.0.0.1:{port}");
-            view! { <a href=href.clone() target="_blank" rel="noreferrer" title=href>{d.name}</a> }
-                .into_any()
+fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
+    match col {
+        "Project" => view! { <td>{project_cell(state, d)}</td> }.into_any(),
+        // Only the frontend is a link — the backend serves JSON to the page, not the reader.
+        "Frontend" => {
+            view! { <td>{service_cell(d.frontend_port, d.frontend_running, true)}</td> }.into_any()
         }
-        // Nothing is listening, so a link would only 404 — show the name plainly instead.
-        None => view! { <span>{d.name}</span> }.into_any(),
-    };
-
-    view! {
-        <tr>
-            <td>
-                <div>{name}</div>
-                <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
-            </td>
-            <td>{project}</td>
-            // Only the frontend is a link — the backend serves JSON to the page, not the reader.
-            <td>{service_cell(d.frontend_port, d.frontend_running, true)}</td>
-            <td>{service_cell(d.backend_port, d.backend_running, false)}</td>
-            <td class="adi-mono">{summarize(&d.modules)}</td>
-            <td class="adi-mono">{summarize(&d.routes)}</td>
-            <td class="adi-table__actions">{action}</td>
-        </tr>
+        "Backend" => {
+            view! { <td>{service_cell(d.backend_port, d.backend_running, false)}</td> }.into_any()
+        }
+        "Modules" => view! { <td class="adi-mono">{summarize(&d.modules)}</td> }.into_any(),
+        "Routes" => view! { <td class="adi-mono">{summarize(&d.routes)}</td> }.into_any(),
+        // "Dashboard", and anything the layout offers that this match doesn't name.
+        _ => {
+            let name = match d.frontend_port.filter(|_| d.frontend_running) {
+                Some(port) => {
+                    let href = format!("http://127.0.0.1:{port}");
+                    view! {
+                        <a href=href.clone() target="_blank" rel="noreferrer" title=href>
+                            {d.name.clone()}
+                        </a>
+                    }
+                    .into_any()
+                }
+                // Nothing is listening, so a link would only 404 — show the name plainly.
+                None => view! { <span>{d.name.clone()}</span> }.into_any(),
+            };
+            view! {
+                <td>
+                    <div>{name}</div>
+                    <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
+                </td>
+            }
+            .into_any()
+        }
     }
-    .into_any()
 }
 
 /// The Project cell: a compact picker filing this dashboard under a project (or none). Choosing an

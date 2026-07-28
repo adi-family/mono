@@ -12,8 +12,8 @@ use crate::state::{Flash, RowMenu, State};
 
 /// A single full-width placeholder row spanning `colspan` columns — the
 /// `<tr><td class="adi-empty">…</td></tr>` every table body falls back to for its loading, empty,
-/// or error state. A [`configurable_table`]'s span is whatever its user left showing, so those
-/// callers pass [`Layout::span`] rather than a literal.
+/// or error state. A table's span is whatever its user left showing, so callers pass
+/// [`Layout::span`] rather than a literal.
 pub(crate) fn placeholder_row(colspan: usize, msg: &str) -> AnyView {
     view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
 }
@@ -143,20 +143,6 @@ pub(crate) fn tile(
     }
 }
 
-/// The standard table shell: the `adi-tablewrap` scroll box, a header row built from `headers`
-/// (an empty string yields a blank action column), and `body` as the `<tbody>`. For a table the
-/// user can sort and rearrange, see [`configurable_table`].
-pub(crate) fn data_table(
-    headers: &'static [&'static str],
-    body: impl IntoView + 'static,
-) -> impl IntoView {
-    let cells = headers
-        .iter()
-        .map(|h| view! { <th>{*h}</th> })
-        .collect::<Vec<_>>();
-    table_shell(cells, body)
-}
-
 /// How a [`configurable_table`] is ordered: which column, and which way.
 ///
 /// The column is named by its *header text*, not an index — indices stop meaning anything once
@@ -213,9 +199,9 @@ pub(crate) struct Column {
 /// A table's column arrangement: every column it *can* show, in the user's order, each flagged
 /// shown or hidden.
 ///
-/// Only named columns are configurable. A trailing blank header — the action column, by the
-/// convention [`data_table`] already documents — is neither reorderable nor hideable, since it
-/// holds the row's controls rather than data; [`Layout`] just remembers that the table has one.
+/// Only named columns are configurable. A trailing blank header is the action column — it holds
+/// the row's controls rather than data, so it is neither reorderable nor hideable; [`Layout`]
+/// just remembers that the table has one, and [`body_row`] fills it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Layout {
     columns: Vec<Column>,
@@ -348,6 +334,8 @@ impl Layout {
 pub(crate) struct TableState {
     key: &'static str,
     headers: &'static [&'static str],
+    /// The order the table opens in before the user has sorted it, and what Reset returns to.
+    default_sort: Sort,
     pub(crate) sort: RwSignal<Sort>,
     pub(crate) layout: RwSignal<Layout>,
     /// Whether the column settings menu is showing.
@@ -355,14 +343,25 @@ pub(crate) struct TableState {
 }
 
 impl TableState {
-    /// Restore this table from storage, falling back to `headers`' declared order sorted by its
-    /// first named column.
+    /// Restore this table from storage, falling back to `headers`' declared order sorted
+    /// ascending by its first named column.
     pub(crate) fn new(key: &'static str, headers: &'static [&'static str]) -> Self {
-        let default_col = headers
+        let first = headers
             .iter()
             .find(|h| !h.is_empty())
             .copied()
             .unwrap_or("");
+        Self::sorted(key, headers, Sort::new(first))
+    }
+
+    /// The same, for a table whose natural opening order isn't its first column ascending — a run
+    /// history reads newest-first, so it declares `When` descending rather than inheriting a rule
+    /// that would silently reverse it.
+    pub(crate) fn sorted(
+        key: &'static str,
+        headers: &'static [&'static str],
+        default_sort: Sort,
+    ) -> Self {
         let sort = read(key, "sort")
             .and_then(|raw| {
                 let (name, dir) = raw.split_once('|')?;
@@ -372,12 +371,13 @@ impl TableState {
                     desc: dir == "desc",
                 })
             })
-            .unwrap_or_else(|| Sort::new(default_col));
+            .unwrap_or(default_sort);
         let layout = read(key, "cols")
             .map_or_else(|| Layout::new(headers), |raw| Layout::decode(headers, &raw));
         Self {
             key,
             headers,
+            default_sort,
             sort: RwSignal::new(sort),
             layout: RwSignal::new(layout),
             open: RwSignal::new(false),
@@ -401,14 +401,110 @@ impl TableState {
 
     fn reset(self) {
         self.edit_layout(|l| *l = Layout::new(self.headers));
-        self.set_sort(Sort::new(
-            self.headers
-                .iter()
-                .find(|h| !h.is_empty())
-                .copied()
-                .unwrap_or(""),
-        ));
+        self.set_sort(self.default_sort);
     }
+}
+
+/// One row's value under one column, reduced to something orderable.
+///
+/// A page's comparator is a single `fn(&Row, &str) -> Key` naming the header it is asked about,
+/// which is what lets [`sort_rows`] be shared: every table differs only in that mapping. Sorting
+/// on the key rather than the rendered cell is the point — `4 GB` belongs after `900 KB`, and
+/// `http:9` before `http:80`.
+#[derive(Clone, Debug)]
+pub(crate) enum Key {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(String),
+}
+
+impl Key {
+    /// A text key from anything string-like.
+    pub(crate) fn text(value: impl Into<String>) -> Self {
+        Self::Text(value.into())
+    }
+
+    /// An optional text cell, absent sorting as empty — which puts the dashes at one end rather
+    /// than scattering them.
+    pub(crate) fn maybe(value: Option<&str>) -> Self {
+        Self::Text(value.unwrap_or_default().to_string())
+    }
+
+    /// A count. Saturates rather than wrapping, so an absurd length can't invert an ordering.
+    pub(crate) fn count(n: usize) -> Self {
+        Self::Int(i64::try_from(n).unwrap_or(i64::MAX))
+    }
+
+    /// An unsigned quantity — a timestamp, a byte count, a row count.
+    pub(crate) fn num(n: u64) -> Self {
+        Self::Int(i64::try_from(n).unwrap_or(i64::MAX))
+    }
+}
+
+impl Ord for Key {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match (self, other) {
+            (Self::Bool(a), Self::Bool(b)) => a.cmp(b),
+            (Self::Int(a), Self::Int(b)) => a.cmp(b),
+            (Self::Float(a), Self::Float(b)) => a.total_cmp(b),
+            (Self::Text(a), Self::Text(b)) => a.cmp(b),
+            // One column always yields one kind of key, so mismatched variants mean the two rows
+            // were asked different questions — nothing sensible to compare.
+            _ => std::cmp::Ordering::Equal,
+        }
+    }
+}
+
+impl PartialOrd for Key {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl PartialEq for Key {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+impl Eq for Key {}
+
+/// Order `rows` by the column `sort` names, using the page's `key` mapping, then `tiebreak`.
+///
+/// Only the key flips with the direction — `tiebreak` stays ascending — so a descending sort is
+/// the exact mirror of its ascending self and a mostly-tied table doesn't reshuffle on every poll.
+pub(crate) fn sort_rows<T>(
+    rows: &mut [T],
+    sort: Sort,
+    key: impl Fn(&T, &'static str) -> Key,
+    tiebreak: impl Fn(&T) -> Key,
+) {
+    rows.sort_by(|a, b| {
+        sort.dir(key(a, sort.col).cmp(&key(b, sort.col)))
+            .then_with(|| tiebreak(a).cmp(&tiebreak(b)))
+    });
+}
+
+/// One body row: a cell per shown column, in the user's order, then the row's controls in the
+/// trailing action cell when the table declares one (`action` of `None` for a table without).
+///
+/// `shown` is [`Layout::shown`], hoisted out of the row loop by the caller. Building cells by
+/// asking for a header rather than emitting a fixed sequence is what makes hiding and reordering
+/// invisible to a page's row builder.
+pub(crate) fn body_row(
+    shown: &[&'static str],
+    cell: impl Fn(&'static str) -> AnyView,
+    action: Option<AnyView>,
+) -> AnyView {
+    let cells: Vec<AnyView> = shown.iter().map(|col| cell(col)).collect();
+    view! {
+        <tr>
+            {cells}
+            {action.map(|a| view! { <td class="adi-table__actions">{a}</td> })}
+        </tr>
+    }
+    .into_any()
 }
 
 /// Read one of a table's persisted settings. Storage being unavailable (private mode, a
@@ -427,18 +523,21 @@ fn write(key: &str, field: &str, value: &str) {
     }
 }
 
-/// The reusable table: [`data_table`]'s shell, plus click-to-sort headers and a gear that opens
-/// a menu for showing, hiding, and reordering columns.
+/// The app's one table: the `adi-tablewrap` scroll box, click-to-sort headers, and a gear that
+/// opens a menu for showing, hiding, and reordering columns.
 ///
 /// This owns the chrome and the state, never the data: the page reads the same `table.sort` and
-/// `table.layout` signals when it builds `body`, emitting one cell per [`Layout::shown`] header.
-/// `headers` is the full set the table can ever show — the user's subset and order live in the
-/// layout.
+/// `table.layout` signals when it builds `body`, emitting one cell per [`Layout::shown`] header
+/// (see [`body_row`]). `headers` is the full set the table can ever show — the user's subset and
+/// order live in the layout.
+///
+/// A table with a single named column gets sorting but no gear: there is nothing to reorder, and
+/// its one column may not be hidden, so the menu would offer only disabled controls.
 pub(crate) fn configurable_table(
     table: TableState,
     headers: &'static [&'static str],
     body: impl IntoView + 'static,
-) -> impl IntoView {
+) -> AnyView {
     let sort = table.sort;
     let cells = move || {
         let mut cells: Vec<AnyView> = table
@@ -464,16 +563,21 @@ pub(crate) fn configurable_table(
         }
         cells
     };
+    // Without a gear there is no absolute box to anchor and no header padding to reserve, so the
+    // shell is rendered bare rather than wrapped in a `.adi-tablebox` that does nothing.
+    if headers.iter().filter(|h| !h.is_empty()).count() < 2 {
+        return table_shell(cells, body);
+    }
     view! {
         <div class="adi-tablebox">
             {column_menu(table)}
             {table_shell(cells, body)}
         </div>
     }
+    .into_any()
 }
 
-/// The shared scroll box + table markup behind both [`data_table`] and [`configurable_table`],
-/// so the shell exists once.
+/// The shared scroll box + table markup, so the shell exists once.
 fn table_shell(header_cells: impl IntoView + 'static, body: impl IntoView + 'static) -> AnyView {
     view! {
         <div class="adi-tablewrap">
@@ -978,8 +1082,18 @@ fn document_element() -> Option<web_sys::Element> {
     web_sys::window()?.document()?.document_element()
 }
 
+/// The origin's `localStorage`, when there is one. `None` covers private mode and a disabled
+/// origin — and, off wasm, the absence of a browser at all, which is what lets the unit tests
+/// build a [`TableState`] without reaching for a `window` that isn't there.
 fn storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.local_storage().ok().flatten()
+    #[cfg(target_arch = "wasm32")]
+    {
+        web_sys::window()?.local_storage().ok().flatten()
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        None
+    }
 }
 
 fn prefers_dark() -> bool {
@@ -1096,6 +1210,132 @@ mod tests {
                 "{raw:?} must still produce the full column set"
             );
         }
+    }
+
+    /// A row of the toy table the sort tests order.
+    #[derive(Debug, PartialEq)]
+    struct Row {
+        name: &'static str,
+        bytes: u64,
+        cpu: f64,
+        up: bool,
+    }
+
+    fn row(name: &'static str, bytes: u64, cpu: f64, up: bool) -> Row {
+        Row {
+            name,
+            bytes,
+            cpu,
+            up,
+        }
+    }
+
+    fn rows() -> Vec<Row> {
+        vec![
+            row("web", 900_000, 4.0, false),
+            row("api", 4_000_000_000, 0.5, true),
+            row("app", 30_000_000, 45.0, true),
+        ]
+    }
+
+    fn key(r: &Row, col: &str) -> Key {
+        match col {
+            "Memory" => Key::num(r.bytes),
+            "CPU" => Key::Float(r.cpu),
+            "Status" => Key::Bool(r.up),
+            _ => Key::text(r.name),
+        }
+    }
+
+    fn names(rows: &[Row]) -> Vec<&str> {
+        rows.iter().map(|r| r.name).collect()
+    }
+
+    /// The sort a second click on `col` produces: that column, descending.
+    fn desc(col: &'static str) -> Sort {
+        Sort { col, desc: true }
+    }
+
+    /// The point of sorting on a key rather than the rendered cell: `4 GB` belongs after
+    /// `900 KB`, however the two are spelled in their column.
+    #[test]
+    fn a_column_orders_by_its_value_not_its_formatted_cell() {
+        let mut rows = rows();
+        sort_rows(&mut rows, Sort::new("Memory"), key, |r| Key::text(r.name));
+        assert_eq!(names(&rows), ["web", "app", "api"]);
+
+        sort_rows(&mut rows, desc("Memory"), key, |r| Key::text(r.name));
+        assert_eq!(
+            names(&rows),
+            ["api", "app", "web"],
+            "descending is the exact mirror"
+        );
+    }
+
+    /// Only the key flips with the direction — the tiebreak stays ascending, so a mostly-tied
+    /// table holds one order instead of reshuffling as the poll redraws it.
+    #[test]
+    fn ties_hold_the_same_order_in_both_directions() {
+        // Every row's Status ties within its group, so the tiebreak decides each group's order.
+        let mut ascending = rows();
+        sort_rows(&mut ascending, Sort::new("Status"), key, |r| {
+            Key::text(r.name)
+        });
+        assert_eq!(names(&ascending), ["web", "api", "app"]);
+
+        let mut descending = rows();
+        sort_rows(&mut descending, desc("Status"), key, |r| Key::text(r.name));
+        assert_eq!(
+            names(&descending),
+            ["api", "app", "web"],
+            "the groups swap, but each keeps its ascending tiebreak"
+        );
+    }
+
+    /// A header the comparator doesn't name — one a page hides, renames, or has yet to key —
+    /// falls to its catch-all rather than leaving the rows in an arbitrary order.
+    #[test]
+    fn an_unkeyed_column_falls_through_to_the_comparators_default() {
+        let mut rows = rows();
+        sort_rows(&mut rows, Sort::new("Nonsense"), key, |r| Key::text(r.name));
+        assert_eq!(names(&rows), ["api", "app", "web"], "by name, the default");
+    }
+
+    /// Floats order by value, including against each other — `total_cmp`, so a comparator can't
+    /// be handed a partial ordering.
+    #[test]
+    fn every_key_kind_orders_within_itself() {
+        let mut rows = rows();
+        sort_rows(&mut rows, Sort::new("CPU"), key, |r| Key::text(r.name));
+        assert_eq!(names(&rows), ["api", "web", "app"]);
+
+        assert!(Key::Bool(false) < Key::Bool(true));
+        assert!(Key::num(0) < Key::count(1));
+        assert!(Key::maybe(None) < Key::text("a"), "absent sorts as empty");
+        assert_eq!(
+            Key::text("a").cmp(&Key::Int(1)),
+            std::cmp::Ordering::Equal,
+            "two kinds means two different questions — nothing to compare"
+        );
+    }
+
+    /// A table opens the way its page declared, and Reset returns it there — not to the
+    /// first-column-ascending rule, which would silently reverse a newest-first history.
+    #[test]
+    fn reset_restores_the_declared_default_sort() {
+        let newest_first = Sort {
+            col: "Memory",
+            desc: true,
+        };
+        let table = TableState::sorted("test-reset", COLS, newest_first);
+        assert_eq!(table.sort.get_untracked(), newest_first);
+
+        table.set_sort(Sort::new("Source"));
+        table.edit_layout(|l| l.toggle(1));
+        table.reset();
+
+        assert_eq!(table.sort.get_untracked(), newest_first);
+        assert_eq!(table.layout.get_untracked(), Layout::new(COLS));
     }
 
     #[test]

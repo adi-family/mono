@@ -17,12 +17,17 @@ use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, ToolEditor, ToolRunView, ToolsForm};
 use crate::ui::{
-    TextField, apply_mutation, code_editor, code_viewer, confirm, data_table, flash_view, menu_item,
-    placeholder_row, row_actions, segmented, updated_text,
+    Key, TableState, TextField, apply_mutation, body_row, code_editor, code_viewer,
+    configurable_table, confirm, flash_view, menu_item, placeholder_row, row_actions, segmented,
+    sort_rows, updated_text,
 };
 
-/// The columns of the global tools table (the project panel uses its own, project-free set).
-const TOOL_COLS: &[&str] = &["Tool", "Runtime", "Invoke", "Project", ""];
+/// The columns of the global tools table.
+pub(crate) const COLS: &[&str] = &["Tool", "Runtime", "Invoke", "Project", ""];
+
+/// The same in a project's own Tools panel, which drops the Project column — every row there is
+/// filed under the open project, so it would say the same thing all the way down.
+pub(crate) const PROJECT_COLS: &[&str] = &["Tool", "Runtime", "Invoke", ""];
 
 /// The Tools page: the run panel and script editor (when open), the live tools table, the
 /// create/link form, and a collapsed archive of removed tools at the foot.
@@ -48,7 +53,8 @@ pub(crate) fn tools_view(
                 </span>
                 <span class="adi-updated">{move || updated_text(tools, secs_since)}</span>
             </div>
-            {data_table(TOOL_COLS, move || rows_view(state, editor, run, false, None, true))}
+            {configurable_table(state.tables.tools, COLS,
+                move || rows_view(state, state.tables.tools, editor, run, false, None))}
         </section>
 
         <section class="adi-panel">
@@ -181,7 +187,8 @@ fn archived_section(
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        {open.then(|| data_table(TOOL_COLS, move || rows_view(state, editor, run, true, None, true)))}
+                        {open.then(|| configurable_table(state.tables.tools_archived, COLS,
+                            move || rows_view(state, state.tables.tools_archived, editor, run, true, None)))}
                     </section>
                 }
                 .into_any()
@@ -191,22 +198,22 @@ fn archived_section(
     .into_any()
 }
 
-/// Render a tools table body: the loading/empty placeholder, or one row per matching tool.
-/// `archived` picks live vs. archived; `project` (when `Some`) filters to that project;
-/// `show_project` adds the Project column (off in a project's own panel).
+/// Render a tools table body: the loading/empty placeholder, or one row per matching tool, in the
+/// order and arrangement `table`'s header controls select. `archived` picks live vs. archived;
+/// `project` (when `Some`) filters to that project, as a project's own panel does.
 pub(crate) fn rows_view(
     state: State,
+    table: TableState,
     editor: ToolEditor,
     run: ToolRunView,
     archived: bool,
     project: Option<String>,
-    show_project: bool,
 ) -> AnyView {
-    let cols = if show_project { 5 } else { 4 };
+    let layout = table.layout.get();
     let Some(loaded) = state.tools.get() else {
-        return placeholder_row(cols, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     };
-    let rows: Vec<ToolDto> = loaded
+    let mut rows: Vec<ToolDto> = loaded
         .tools
         .into_iter()
         .filter(|t| t.is_archived() == archived)
@@ -214,7 +221,7 @@ pub(crate) fn rows_view(
         .collect();
     if rows.is_empty() {
         return placeholder_row(
-            cols,
+            layout.span(),
             if archived {
                 "Nothing archived."
             } else {
@@ -222,48 +229,66 @@ pub(crate) fn rows_view(
             },
         );
     }
+    sort_rows(
+        &mut rows,
+        table.sort.get(),
+        |t, col| match col {
+            "Runtime" => Key::text(&t.runtime),
+            "Invoke" => Key::text(&t.bin_name),
+            "Project" => Key::maybe(t.project.as_deref()),
+            _ => Key::text(&t.name),
+        },
+        |t| Key::text(&t.name),
+    );
+    let shown = layout.shown();
     rows.into_iter()
-        .map(|t| row_view(state, editor, run, t, show_project))
+        .map(|t| {
+            let action = tool_actions(state, editor, run, &t);
+            body_row(&shown, |col| cell(col, &t), Some(action))
+        })
         .collect::<Vec<_>>()
         .into_any()
 }
 
-/// One tool row: identity (name, short id, source/path), runtime, its `.bin` invocation, the
-/// project (when shown), and the Run / Edit / Archive-or-Restore/Delete actions.
-fn row_view(
-    state: State,
-    editor: ToolEditor,
-    run: ToolRunView,
-    t: ToolDto,
-    show_project: bool,
-) -> AnyView {
-    let source = if t.system {
-        "system"
-    } else if t.linked {
-        "linked"
-    } else {
-        "owned"
-    };
-    let sub = match &t.path {
-        Some(path) => format!("{source} · {path}"),
-        None => format!("{source} · {}", short_id(&t.id)),
-    };
-    let project_cell = show_project.then(|| {
-        view! { <td class="adi-mono adi-muted">{t.project.clone().unwrap_or_else(|| "—".to_string())}</td> }
-    });
-    view! {
-        <tr>
-            <td title=t.id.clone()>
-                <div>{t.name.clone()}</div>
-                <div class="adi-mono adi-muted" style="font-size:var(--text-sm)">{sub}</div>
+/// One tool's cell under `col`: identity (name, short id, source/path), runtime, its `.bin`
+/// invocation, and the project it is filed under. Matching the header text — the same key the
+/// sort uses — is what lets the user hide and reorder columns without the row builder knowing
+/// about it, and is also how the project panel's narrower column set works from the same code.
+fn cell(col: &str, t: &ToolDto) -> AnyView {
+    match col {
+        "Runtime" => view! { <td class="adi-mono">{t.runtime.clone()}</td> }.into_any(),
+        "Invoke" => view! {
+            <td class="adi-mono" title=format!("adi-mono tools run {}", t.id)>
+                {format!(".bin/{}", t.bin_name)}
             </td>
-            <td class="adi-mono">{t.runtime.clone()}</td>
-            <td class="adi-mono" title=format!("adi-mono tools run {}", t.id)>{format!(".bin/{}", t.bin_name)}</td>
-            {project_cell}
-            <td class="adi-table__actions">{tool_actions(state, editor, run, &t)}</td>
-        </tr>
+        }
+        .into_any(),
+        "Project" => {
+            let project = t.project.clone().unwrap_or_else(|| "—".to_string());
+            view! { <td class="adi-mono adi-muted">{project}</td> }.into_any()
+        }
+        // "Tool", and anything the layout offers that this match doesn't name.
+        _ => {
+            let source = if t.system {
+                "system"
+            } else if t.linked {
+                "linked"
+            } else {
+                "owned"
+            };
+            let sub = match &t.path {
+                Some(path) => format!("{source} · {path}"),
+                None => format!("{source} · {}", short_id(&t.id)),
+            };
+            view! {
+                <td title=t.id.clone()>
+                    <div>{t.name.clone()}</div>
+                    <div class="adi-mono adi-muted" style="font-size:var(--text-sm)">{sub}</div>
+                </td>
+            }
+            .into_any()
+        }
     }
-    .into_any()
 }
 
 /// The trailing actions for a tool row — shared by the global table and a project's panel. Active:

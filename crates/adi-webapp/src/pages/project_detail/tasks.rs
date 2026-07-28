@@ -4,12 +4,17 @@ use adi_webapp_api::types::{NewTask, TasksState};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::tasks::is_finished;
+use crate::pages::tasks::{is_finished, task_cell, task_key};
 use crate::routing::{ProjectSection, Route};
 use crate::state::{Flash, State};
 use crate::ui::{
-    TextField, apply_mutation, data_table, effective_label_title, placeholder_row, task_tree_rows,
+    Key, Sort, TextField, apply_mutation, body_row, configurable_table, placeholder_row, sort_rows,
+    task_tree_rows,
 };
+
+/// The panel's columns. No Project column — every row is this project's (or a sub-project's,
+/// which the Task cell marks inline), so it would say the same thing all the way down.
+pub(crate) const COLS: &[&str] = &["Task", "ID", "Tag", "Status", "Subtasks", ""];
 
 /// The project detail page's local task create form (title, an optional parent to nest under, and
 /// optional tag/details; the project is fixed to the open project). `Copy` so it threads into the
@@ -42,7 +47,8 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
                 <h2 class="adi-panel__title">"Tasks"</h2>
                 <span class="adi-updated">"filed under this project & its sub-projects"</span>
             </div>
-            {data_table(&["Task", "ID", "Tag", "Status", "Subtasks", ""], move || project_task_rows(state, route))}
+            {configurable_table(state.tables.project_tasks, COLS,
+                move || project_task_rows(state, route))}
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -105,9 +111,13 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
 /// their own subtree, since their `parent` links point within the same sub-project. Off for the
 /// parent picker (a task created here files under *this* project, so it should nest only under
 /// this project's own tasks); on for the display table.
+/// `sort` orders the flat list before flattening, so it reorders siblings and the tree survives.
+/// The parent picker passes the panel's declared default, since an `<option>` list has no headers
+/// to sort by.
 fn project_task_tree(
     state: State,
     include_subs: bool,
+    sort: Sort,
 ) -> Vec<(usize, adi_webapp_api::types::TaskRow)> {
     let id = state.current_project.get();
     let subs = include_subs
@@ -116,7 +126,7 @@ fn project_task_tree(
     let Some(tasks) = state.tasks.get() else {
         return Vec::new();
     };
-    let mine: Vec<_> = tasks
+    let mut mine: Vec<_> = tasks
         .tasks
         .into_iter()
         .filter(|t| {
@@ -124,6 +134,7 @@ fn project_task_tree(
             p == Some(id.as_str()) || p.is_some_and(|p| subs.contains_key(p))
         })
         .collect();
+    sort_rows(&mut mine, sort, task_key, |t| Key::text(&t.title));
     task_tree_rows(mine)
 }
 
@@ -132,35 +143,31 @@ fn project_task_tree(
 /// each row indented by its depth, with its title, Jira id, tag, effective status, and subtask
 /// rollup. Loading/empty placeholders otherwise.
 fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
+    let table = state.tables.project_tasks;
+    let layout = table.layout.get();
     if state.tasks.get().is_none() {
-        return placeholder_row(6, "Loading…");
+        return placeholder_row(layout.span(), "Loading…");
     }
     let id = state.current_project.get();
     let subs = super::descendant_projects(state, &id);
-    let tree = project_task_tree(state, true);
+    let tree = project_task_tree(state, true, table.sort.get());
     if tree.is_empty() {
-        return placeholder_row(6, "No tasks in this project yet — add one below.");
+        return placeholder_row(
+            layout.span(),
+            "No tasks in this project yet — add one below.",
+        );
     }
+    let shown = layout.shown();
     tree.into_iter()
         .map(|(depth, t)| {
-            let indent = format!("padding-left:{}px", depth * 20);
             // A task belonging to a sub-project is marked with a chip opening that sub-project's
-            // Tasks section.
-            let sub_marker = t
+            // Tasks section. Kept as its ids, not a built view: the cell builder is called per
+            // column, so it has to be able to render the marker rather than consume one.
+            let owner = t
                 .project
                 .as_deref()
                 .filter(|p| *p != id.as_str())
-                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())))
-                .map(|(oid, oname)| {
-                    super::sub_marker(state, route, oid, oname, ProjectSection::Tasks)
-                });
-            let subtasks = if t.children_total > 0 {
-                format!("{}/{} open", t.children_open, t.children_total)
-            } else {
-                String::new()
-            };
-            let details = t.details.unwrap_or_default();
-            let label = effective_label_title(&t.effective);
+                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())));
             let action = {
                 let id = t.id.clone();
                 let store = |s: State, ts: TasksState| s.tasks.set(Some(ts));
@@ -182,22 +189,28 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                     .into_any()
                 }
             };
-            let tag_cell = match t.tag {
-                Some(tg) if !tg.trim().is_empty() => {
-                    view! { <span class="adi-chip adi-mono">{tg}</span> }.into_any()
-                }
-                _ => view! { <span class="adi-muted">"—"</span> }.into_any(),
-            };
-            view! {
-                <tr>
-                    <td title=details><span style=indent>{t.title}</span>{sub_marker}</td>
-                    <td class="adi-mono adi-muted">{t.id}</td>
-                    <td>{tag_cell}</td>
-                    <td><span class="adi-tstatus" data-status=t.effective>{label}</span></td>
-                    <td class="adi-mono adi-muted">{subtasks}</td>
-                    <td>{action}</td>
-                </tr>
-            }
+            body_row(
+                &shown,
+                |col| {
+                    // Every column but Task renders exactly as it does on the global page; only
+                    // this one differs, by carrying the owning sub-project's marker.
+                    if col != "Task" {
+                        return task_cell(col, &t, depth);
+                    }
+                    let indent = format!("padding-left:{}px", depth * 20);
+                    let details = t.details.clone().unwrap_or_default();
+                    let marker = owner.clone().map(|(oid, oname)| {
+                        super::sub_marker(state, route, oid, oname, ProjectSection::Tasks)
+                    });
+                    view! {
+                        <td title=details>
+                            <span style=indent>{t.title.clone()}</span>{marker}
+                        </td>
+                    }
+                    .into_any()
+                },
+                Some(action),
+            )
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -207,7 +220,7 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
 /// subtask can be nested under any node at any level. Sub-project tasks are deliberately excluded
 /// — a task added here files under this project, so it should only nest under this project's own.
 fn project_task_options(state: State) -> AnyView {
-    project_task_tree(state, false)
+    project_task_tree(state, false, Sort::new("Task"))
         .into_iter()
         .map(|(depth, t)| {
             // Non-breaking spaces so the depth indent survives inside <option> text.

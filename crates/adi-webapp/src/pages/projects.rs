@@ -1,6 +1,8 @@
 //! The Projects page: the registry of project metadata manifests, with a create form and
 //! per-project archive/restore controls.
 
+use std::collections::HashMap;
+
 use adi_webapp_api::types::{NewProject, Project, ProjectsState, TasksState};
 use leptos::prelude::*;
 
@@ -8,9 +10,17 @@ use crate::fetch;
 use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, ProjectsForm, State};
 use crate::ui::{
-    TextField, apply_mutation, confirm, data_table, flash_view, fmt_date, menu_item,
-    placeholder_row, row_actions, updated_text,
+    Key, TextField, apply_mutation, body_row, configurable_table, confirm, flash_view, fmt_date,
+    menu_item, placeholder_row, row_actions, sort_rows, updated_text,
 };
+
+/// The live projects table's columns; the trailing blank one holds the row's Archive control.
+pub(crate) const COLS: &[&str] = &["Name", "ID", "Tasks", "Created", "Status", ""];
+
+/// The archive's columns. No Status — every row there is archived, so it would say the same thing
+/// all the way down — and the date column is when it *was* archived, which is what you sort by
+/// when hunting for something to restore.
+pub(crate) const ARCHIVED_COLS: &[&str] = &["Name", "ID", "Tasks", "Archived", ""];
 
 /// The Projects page: the registry of project metadata manifests, with a create form and
 /// per-project archive/restore controls. A project's runtime config lives in its own
@@ -39,7 +49,7 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                 <span class="adi-updated">{move || updated_text(projects, secs_since)}</span>
             </div>
 
-            {data_table(&["Name", "ID", "Tasks", "Created", "Status", ""],
+            {configurable_table(state.tables.projects, COLS,
                 move || project_rows(state, route, false))}
         </section>
 
@@ -129,10 +139,8 @@ fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) 
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        // No Status column: every row here is archived, so it would say the
-                        // same thing all the way down.
-                        {open.then(|| data_table(&["Name", "ID", "Tasks", "Archived", ""],
-                            move || project_rows(state, route, true)))}
+                        {open.then(|| configurable_table(state.tables.projects_archived,
+                            ARCHIVED_COLS, move || project_rows(state, route, true)))}
                     </section>
                 }
                 .into_any()
@@ -149,22 +157,45 @@ fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) 
 ///
 /// Each side is tree-flattened over its own subset, so a project whose parent fell on the other
 /// side of the split renders as a root rather than vanishing.
+///
+/// The sort is applied to the flat list *before* flattening, so it orders siblings and the tree
+/// survives: sorting a nested registry by date shouldn't tear sub-projects away from their parents.
 fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView {
-    // The archive drops the Status column, so its rows are one cell narrower.
-    let cols = if archived { 5 } else { 6 };
-    let Some(loaded) = state.projects.get() else {
-        return placeholder_row(cols, "Loading\u{2026}");
+    let table = if archived {
+        state.tables.projects_archived
+    } else {
+        state.tables.projects
     };
-    let rows = project_tree_rows(
-        loaded
-            .projects
-            .into_iter()
-            .filter(|p| p.is_archived() == archived)
-            .collect(),
+    let layout = table.layout.get();
+    let Some(loaded) = state.projects.get() else {
+        return placeholder_row(layout.span(), "Loading\u{2026}");
+    };
+    // Rolled up once, not per comparison: the Tasks column is both a sort key and a cell, and
+    // both would otherwise rescan the whole task list for every project they touch.
+    let counts = task_counts(state.tasks.get().as_ref());
+    let mut mine: Vec<Project> = loaded
+        .projects
+        .into_iter()
+        .filter(|p| p.is_archived() == archived)
+        .collect();
+    sort_rows(
+        &mut mine,
+        table.sort.get(),
+        |p, col| match col {
+            "ID" => Key::text(&p.id),
+            "Tasks" => Key::count(counts.get(&p.id).map_or(0, |(open, _)| *open)),
+            // Both date columns read the same field the cell renders.
+            "Created" => Key::num(p.created_at),
+            "Archived" => Key::num(p.archived_at.unwrap_or(p.created_at)),
+            "Status" => Key::Bool(p.is_archived()),
+            _ => Key::text(&p.name),
+        },
+        |p| Key::text(&p.name),
     );
+    let rows = project_tree_rows(mine);
     if rows.is_empty() {
         return placeholder_row(
-            cols,
+            layout.span(),
             if archived {
                 "Nothing archived."
             } else {
@@ -172,16 +203,15 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
             },
         );
     }
-    let tasks = state.tasks.get();
+    let shown = layout.shown();
 
     rows.into_iter()
         .map(|(depth, p)| {
             let archived = p.is_archived();
-            let id = p.id.clone();
             // Archived rows keep Restore inline with Delete in the kebab; a live row's lone Archive
             // stays inline (no overflow ⇒ `row_actions` drops the kebab).
             let action = {
-                let id = id.clone();
+                let id = p.id.clone();
                 let key = format!("project:{id}");
                 if archived {
                     let del_id = id.clone();
@@ -210,53 +240,79 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
                     row_actions(state, key, archive, Vec::new())
                 }
             };
-            // Only the live table carries a Status column; in the archive every row would
-            // read "Archived", so the cell is dropped rather than repeated.
-            let status = (!archived)
-                .then(|| view! { <td><span class="adi-muted">"Active"</span></td> })
-                .into_any();
-            let tasks_cell = match open_tasks(tasks.as_ref(), &p.id) {
-                Some((open, total)) => {
-                    let tip = format!("{open} open \u{b7} {total} total");
-                    view! { <span class="adi-chip adi-mono" title=tip>{format!("{open} open")}</span> }
-                        .into_any()
-                }
-                None => view! { <span class="adi-muted">"\u{2014}"</span> }.into_any(),
-            };
-            // The archive dates rows by when they were archived, which is what you sort by
-            // when hunting for something to restore; the live table dates them by creation.
-            let date = fmt_date(if archived {
-                p.archived_at.unwrap_or(p.created_at)
-            } else {
-                p.created_at
-            });
-            let title = p.description.clone().unwrap_or_default();
-            let open_id = id.clone();
-            let href = project_href(&id);
-            // A computed per-row indent — the one thing here that genuinely varies per row.
-            let indent = format!("padding-left:{}px", depth * 16);
-            view! {
-                <tr>
-                    <td title=title>
-                        <span style=indent>
-                            <a class="adi-btn adi-btn--link" href=href
-                                on:click=move |ev: web_sys::MouseEvent| {
-                                    if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
-                                    ev.prevent_default();
-                                    open_project(state, route, open_id.clone());
-                                }>{p.name}</a>
-                        </span>
-                    </td>
-                    <td class="adi-mono">{p.id}</td>
-                    <td>{tasks_cell}</td>
-                    <td class="adi-mono adi-muted">{date}</td>
-                    {status}
-                    <td class="adi-table__actions">{action}</td>
-                </tr>
-            }
+            let tasks = counts.get(&p.id).copied();
+            body_row(
+                &shown,
+                |col| project_cell(col, &p, depth, tasks, state, route),
+                Some(action),
+            )
         })
         .collect::<Vec<_>>()
         .into_any()
+}
+
+/// One project's cell under `col`. Matching the header text — the same key the sort uses — is
+/// what lets the user hide and reorder columns without the row builder knowing about it.
+fn project_cell(
+    col: &str,
+    p: &Project,
+    depth: usize,
+    counts: Option<(usize, usize)>,
+    state: State,
+    route: RwSignal<Route>,
+) -> AnyView {
+    match col {
+        "ID" => view! { <td class="adi-mono">{p.id.clone()}</td> }.into_any(),
+        "Tasks" => match counts {
+            Some((open, total)) => {
+                let tip = format!("{open} open \u{b7} {total} total");
+                view! {
+                    <td>
+                        <span class="adi-chip adi-mono" title=tip>{format!("{open} open")}</span>
+                    </td>
+                }
+                .into_any()
+            }
+            None => view! { <td><span class="adi-muted">"\u{2014}"</span></td> }.into_any(),
+        },
+        // The archive dates rows by when they were archived; the live table by creation.
+        "Created" => {
+            view! { <td class="adi-mono adi-muted">{fmt_date(p.created_at)}</td> }.into_any()
+        }
+        "Archived" => {
+            let at = fmt_date(p.archived_at.unwrap_or(p.created_at));
+            view! { <td class="adi-mono adi-muted">{at}</td> }.into_any()
+        }
+        "Status" => {
+            let label = if p.is_archived() {
+                "Archived"
+            } else {
+                "Active"
+            };
+            view! { <td><span class="adi-muted">{label}</span></td> }.into_any()
+        }
+        // "Name", and anything the layout offers that this match doesn't name.
+        _ => {
+            let open_id = p.id.clone();
+            let href = project_href(&p.id);
+            let title = p.description.clone().unwrap_or_default();
+            // A computed per-row indent — the one thing here that genuinely varies per row.
+            let indent = format!("padding-left:{}px", depth * 16);
+            view! {
+                <td title=title>
+                    <span style=indent>
+                        <a class="adi-btn adi-btn--link" href=href
+                            on:click=move |ev: web_sys::MouseEvent| {
+                                if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
+                                ev.prevent_default();
+                                open_project(state, route, open_id.clone());
+                            }>{p.name.clone()}</a>
+                    </span>
+                </td>
+            }
+            .into_any()
+        }
+    }
 }
 
 /// Flatten projects into depth-annotated tree order by their `parent` links: every root followed
@@ -264,12 +320,12 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
 /// whose parent isn't in the list (filtered out, or removed) renders as a root — nothing is lost.
 /// Mirrors `task_tree_rows` for the task tree.
 pub(crate) fn project_tree_rows(rows: Vec<Project>) -> Vec<(usize, Project)> {
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     fn walk(
         node: Project,
         depth: usize,
-        children: &mut std::collections::HashMap<String, Vec<Project>>,
+        children: &mut HashMap<String, Vec<Project>>,
         out: &mut Vec<(usize, Project)>,
     ) {
         let id = node.id.clone();
@@ -298,23 +354,25 @@ pub(crate) fn project_tree_rows(rows: Vec<Project>) -> Vec<(usize, Project)> {
     out
 }
 
-/// A project's `(open, total)` task counts, or `None` when tasks are still loading or the
-/// project has none — both of which render as a dash rather than a zero.
-fn open_tasks(tasks: Option<&TasksState>, project_id: &str) -> Option<(usize, usize)> {
-    let tasks = tasks?;
-    let mut open = 0usize;
-    let mut total = 0usize;
-    for t in tasks
-        .tasks
-        .iter()
-        .filter(|t| t.project.as_deref() == Some(project_id))
-    {
-        total += 1;
+/// Every project's `(open, total)` task counts, keyed by project id, in one pass over the tree.
+/// A project absent from the map has no tasks (or the tree is still loading) and renders as a
+/// dash rather than a zero.
+fn task_counts(tasks: Option<&TasksState>) -> HashMap<String, (usize, usize)> {
+    let mut counts: HashMap<String, (usize, usize)> = HashMap::new();
+    let Some(tasks) = tasks else {
+        return counts;
+    };
+    for t in &tasks.tasks {
+        let Some(project) = t.project.as_deref() else {
+            continue;
+        };
+        let entry = counts.entry(project.to_string()).or_default();
+        entry.1 += 1;
         if t.status == "open" {
-            open += 1;
+            entry.0 += 1;
         }
     }
-    (total > 0).then_some((open, total))
+    counts
 }
 
 /// Run a projects mutation: set the returned state and a success flash, or an error flash;
