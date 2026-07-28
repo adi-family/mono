@@ -16,6 +16,11 @@ use crate::fetch;
 use crate::routing::{ProjectSection, Route, current_path, project_id_from_path};
 use crate::ui::TableState;
 
+/// The well-known root agent: the one onboarding sets up, the one the chat home opens on, and the
+/// one a dashboard's "edit with adi-agent" launcher talks to. Every other agent is reached from the
+/// chat home's agent picker.
+pub(crate) const ROOT_AGENT: &str = "adi-agent";
+
 /// Signals a data refresh writes to; `Copy` (each field is an arena handle) so it threads
 /// cheaply through async tasks and event handlers.
 #[derive(Clone, Copy)]

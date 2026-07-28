@@ -50,8 +50,8 @@ use routing::{
 use state::{
     AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, Form,
     HookLogView,
-    MeshForm, MetaForm, ProjectsForm, SecretsForm, State, Status, TasksForm, TermWatch, ToolEditor,
-    ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
+    MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, State, Status, TasksForm, TermWatch,
+    ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
 };
 use highlight::Lang;
 use ui::{apply_saved_theme, code_editor, fmt_uptime, toggle_theme};
@@ -160,23 +160,37 @@ fn Home() -> impl IntoView {
         }
     });
 
-    // Keep the chat pointed at the root agent and the dashboards rail fresh: detect the agent's
-    // executor (pty ⇒ interactive) so the live view picks the right shape, point the watch at it the
-    // first time it appears, and refresh the dashboards list. Runs on load, on creation, and on a poll.
+    // Keep the chat pointed at *the agent it is on* and the rails fresh: detect that agent's
+    // executor (pty ⇒ interactive) so the live view picks the right shape, point the watch at the
+    // root agent the first time it appears, and refresh the sessions/dashboards lists. Runs on load,
+    // on creation, and on a poll. The watched agent is whichever one the rail's picker chose — the
+    // root agent only until then — so this follows a switch instead of dragging the view back.
     let refresh = move || {
         spawn_local(async move {
             if let Ok(a) = fetch::agents().await {
-                if let Some(d) = a.agents.iter().find(|d| d.name == "adi-agent") {
+                let watched = watch.name.get_untracked();
+                let on = watched.clone().unwrap_or_else(|| ROOT_AGENT.to_string());
+                if let Some(d) = a.agents.iter().find(|d| d.name == on) {
                     let interactive = d.executor == "pty";
                     if watch.interactive.get_untracked() != interactive {
                         watch.interactive.set(interactive);
                     }
-                    if watch.name.get_untracked().is_none() {
-                        watch.name.set(Some("adi-agent".to_string()));
+                    if watched.is_none() {
+                        watch.name.set(Some(on));
                         poll_watch(watch);
                     }
                 }
-                state.agents.set(Some(a));
+                // Only on change: the picker and the sessions rail read this list, and a select
+                // rebuilt every 4s would drop an open dropdown on the floor.
+                if state.agents.get_untracked().as_ref() != Some(&a) {
+                    state.agents.set(Some(a));
+                }
+            }
+            // Every agent's sessions in one round-trip — what the rail lists under "Other agents".
+            if let Ok(c) = fetch::all_agent_runs().await
+                && state.all_chats.get_untracked().as_ref() != Some(&c)
+            {
+                state.all_chats.set(Some(c));
             }
             if let Ok(dd) = fetch::dashboards().await
                 && state.dashboards.get_untracked().as_ref() != Some(&dd)
@@ -517,7 +531,7 @@ fn submit_onb_agent(
     let current = meta.get_untracked();
     let name = current
         .as_ref()
-        .map_or_else(|| "adi-agent".to_string(), |m| m.name.clone());
+        .map_or_else(|| ROOT_AGENT.to_string(), |m| m.name.clone());
     let mut arguments = current
         .and_then(|m| m.agent)
         .map(|a| a.arguments)
@@ -587,12 +601,12 @@ fn EmbedDashboardAgent() -> impl IntoView {
             let interactive = a
                 .agents
                 .iter()
-                .find(|d| d.name == "adi-agent")
+                .find(|d| d.name == ROOT_AGENT)
                 .is_some_and(|d| d.executor == "pty");
             watch.interactive.set(interactive);
             state.agents.set(Some(a));
         }
-        watch.name.set(Some("adi-agent".to_string()));
+        watch.name.set(Some(ROOT_AGENT.to_string()));
         poll_watch(watch);
     });
     Interval::new(1_000, move || poll_watch(watch)).forget();

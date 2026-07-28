@@ -395,6 +395,7 @@
     flex-direction: column;
     gap: 3px;
   }
+
   &__new {
     padding: 3px 10px;
     font-size: var(--text-sm);
@@ -404,6 +405,36 @@
     color: var(--muted);
     font-size: var(--text-sm);
     line-height: 1.5;
+  }
+
+  // --- the agent picker (left, under the head) ------------------------------------
+  // Which agent this screen is a chat with. Sits above the sessions it governs, so the list below
+  // always reads as "this agent's".
+  &__pickrow {
+    flex: none;
+    padding: var(--space-2) var(--space-3);
+    border-bottom: 1px solid var(--border);
+  }
+  &__pick {
+    width: 100%;
+    padding: 5px 8px;
+    font-size: var(--text-sm);
+  }
+  &__pickhint {
+    color: var(--muted);
+    font-size: var(--text-sm);
+  }
+
+  // The rule between the picked agent's sessions and every other agent's.
+  &__divider {
+    margin-top: var(--space-3);
+    padding: 10px 10px 4px;
+    border-top: 1px solid var(--border);
+    font-size: var(--text-xs);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
   }
 
   // --- a session row (left) -------------------------------------------------------
@@ -433,6 +464,15 @@
     &.is-active {
       background: var(--surface-2);
       border-color: var(--border);
+    }
+    // Another agent's session: indented under its agent's name and dimmed, so the picked agent's
+    // own sessions stay the ones the eye lands on. No delete rides these rows — clicking one
+    // switches the screen to that agent, which is where a chat can be acted on.
+    &--other {
+      padding-left: 20px;
+      padding-right: 10px;
+      color: var(--muted);
+      &:hover { color: var(--ink); }
     }
   }
   &__session-main { display: flex; flex-direction: column; min-width: 0; }
@@ -553,6 +593,12 @@
     font-size: var(--text-xl);
     font-weight: 650;
     letter-spacing: -.02em;
+  }
+  // The agent the composer would start the chat on — set in the mono face the rest of the app
+  // names agents in, so it reads as a name rather than as part of the sentence.
+  &__compose-agent {
+    font-family: var(--font-mono);
+    font-size: .92em;
   }
   &__compose-sub {
     margin: 0;
