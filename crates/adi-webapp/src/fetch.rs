@@ -332,6 +332,12 @@ pub async fn stop_run(name: String, run_id: String) -> Result<AgentRuns, String>
     post("/api/agents/run/stop", &RunRef { name, run_id }).await
 }
 
+/// Delete one run outright — for a harness agent, the whole conversation — returning the fresh run
+/// history without it.
+pub async fn delete_run(name: String, run_id: String) -> Result<AgentRuns, String> {
+    post("/api/agents/run/delete", &RunRef { name, run_id }).await
+}
+
 pub async fn peek_agent(name: String) -> Result<AgentPeek, String> {
     post("/api/agents/peek", &AgentRef { name }).await
 }

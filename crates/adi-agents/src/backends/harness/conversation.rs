@@ -767,6 +767,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&sessions);
     }
 
+    /// Deleting a conversation must take *everything* with it — the transcript and queue included,
+    /// not just the log/meta/pid a plain run keeps. That is the whole reason the sweep goes by
+    /// `<conv_id>.` prefix rather than a list of extensions.
+    #[test]
+    fn deleting_a_conversation_leaves_none_of_its_files_behind() {
+        let sessions = scratch("delete");
+        let conv = "0000000000006-0000";
+        let other = "0000000000007-0000";
+        let dir = seed(&sessions, "chat", conv);
+        seed(&sessions, "chat", other);
+        append_turn(&dir, conv, ROLE_USER, "hello");
+        std::fs::write(detached::log_path_in(&dir, conv), "an answer").unwrap();
+        std::fs::write(detached::log_path_in(&dir, other), "the neighbour").unwrap();
+        save_queue(&dir, conv, &["waiting".to_string()]);
+        append_turn(&dir, other, ROLE_USER, "not this one");
+
+        assert!(crate::backends::harness::delete(&sessions, "chat", conv).expect("delete"));
+
+        for path in [
+            detached::log_path_in(&dir, conv),
+            detached::meta_path(&dir, conv),
+            detached::pid_path_in(&dir, conv),
+            transcript_path(&dir, conv),
+            queue_path(&dir, conv),
+        ] {
+            assert!(!path.exists(), "{} survived the delete", path.display());
+        }
+        // …and only its own: the conversation beside it is untouched.
+        assert!(detached::log_path_in(&dir, other).exists());
+        assert_eq!(load_transcript(&dir, other).len(), 1);
+
+        // Deleting what is already gone is quiet, so a second click is not an error.
+        assert!(!crate::backends::harness::delete(&sessions, "chat", conv).expect("delete again"));
+
+        let _ = std::fs::remove_dir_all(&sessions);
+    }
+
     #[test]
     fn an_in_flight_turn_streams_a_pending_answer_without_committing() {
         let sessions = scratch("pending");

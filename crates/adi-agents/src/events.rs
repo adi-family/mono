@@ -90,6 +90,17 @@ pub struct AgentRunStopped {
     pub run_id: Option<String>,
 }
 
+/// `adi.agents.run.deleted` — one run of an agent was deleted outright: it was stopped if still
+/// live, and its log, metadata and any transcript are gone. Distinct from `stopped`, which ends a
+/// run but leaves it in the history to read.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunDeleted {
+    /// The agent's name.
+    pub agent: String,
+    /// The deleted run's id.
+    pub run_id: String,
+}
+
 /// The JSON Schema of `T` as a plain `serde_json::Value` for a catalog entry — `to_value` of the
 /// reflected schema, so nothing in the catalog is hand-written.
 fn schema<T: JsonSchema>() -> Value {
@@ -135,6 +146,15 @@ pub fn event_types() -> Vec<EventType> {
             &AgentRunStopped {
                 agent: "my-agent".into(),
                 run_id: Some("r-1a2b3c".into()),
+            },
+        ),
+        EventType::of(
+            "adi.agents.run.deleted",
+            "One run of an agent was deleted, along with everything it kept.",
+            schema::<AgentRunDeleted>(),
+            &AgentRunDeleted {
+                agent: "my-agent".into(),
+                run_id: "r-1a2b3c".into(),
             },
         ),
     ]

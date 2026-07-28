@@ -1021,6 +1021,10 @@ $runlog-dim: #8b93a1;
 
     &:hover { background: var(--surface-2); }
   }
+
+  // A destructive action sitting among ordinary ones — red at rest, not only under the cursor.
+  // Every `--link` already reddens on hover, so hover alone would not mark this one out.
+  &--danger { color: var(--down); }
 }
 
 // ---- segmented toggle (two+ options, one active via `aria-pressed`) ----------------

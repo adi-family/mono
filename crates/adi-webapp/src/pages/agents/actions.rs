@@ -190,6 +190,46 @@ fn stop_one_run(state: State, watch: AgentsWatch, run_id: String) {
     });
 }
 
+/// Delete one run — for a harness agent, the whole conversation, transcript and all — behind an
+/// explicit confirmation, since nothing here is recoverable. A live run is stopped by the server
+/// first. If the deleted run is the one on screen, its detail view closes rather than polling a
+/// conversation that no longer exists.
+fn delete_one_run(state: State, watch: AgentsWatch, run_id: String, title: String) {
+    let Some(name) = watch.name.get_untracked() else {
+        return;
+    };
+    if run_id.is_empty() {
+        return;
+    }
+    let what = if title.trim().is_empty() {
+        "this chat".to_string()
+    } else {
+        format!("“{}”", title.trim())
+    };
+    if !crate::ui::confirm(&format!(
+        "Permanently delete {what}? Its whole transcript goes with it, and this cannot be undone."
+    )) {
+        return;
+    }
+    if watch.run_id.get_untracked().as_deref() == Some(run_id.as_str()) {
+        close_run_view(watch);
+    }
+    spawn_local(async move {
+        match fetch::delete_run(name.clone(), run_id).await {
+            Ok(runs) => {
+                if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
+                    watch.runs.set(runs.runs);
+                }
+                // The agent list carries a running flag that a deleted live run may have settled.
+                if let Ok(st) = fetch::agents().await {
+                    state.agents.set(Some(st));
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
+}
+
 /// Open the run panel on an agent (View / Run…): remember whether it is interactive, clear any
 /// previous run selection, fetch the first snapshot (the 1s poll takes over), and scroll to it.
 fn open_watch(watch: AgentsWatch, name: String, interactive: bool) {
@@ -1073,6 +1113,9 @@ fn run_row(
     let running = r.running;
     let view_id = run_id.clone();
     let stop_id = run_id.clone();
+    let del_id = run_id.clone();
+    // Truncated, because it goes into a confirm dialog — not the whole first message.
+    let del_title = truncate_task(&r.message);
     // Built by hand rather than through `body_row`: the selected row tints itself, so its `<tr>`
     // carries a style the shared helper has no business knowing about.
     let row_style = if is_selected {
@@ -1094,6 +1137,11 @@ fn run_row(
     } else {
         "stop this run"
     };
+    let delete_title = if answerable {
+        "delete this chat and its transcript"
+    } else {
+        "delete this run and its log"
+    };
     let cells: Vec<AnyView> = shown
         .iter()
         .map(|col| run_cell(col, r, answerable))
@@ -1112,7 +1160,12 @@ fn run_row(
                 {running.then(|| { let stop_id = stop_id.clone(); view! {
                     <button class="adi-btn adi-btn--link" title=stop_title
                         on:click=move |_| stop_one_run(state, watch, stop_id.clone())>"Stop"</button>
+                    " "
                 }})}
+                <button class="adi-btn adi-btn--link adi-btn--danger" title=delete_title
+                    on:click=move |_| delete_one_run(
+                        state, watch, del_id.clone(), del_title.clone(),
+                    )>"Delete"</button>
             </td>
         </tr>
     }
@@ -1250,7 +1303,6 @@ fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
 /// The sessions rail's body: a pty agent has a single live session; a headless one lists its
 /// conversations (newest first), each selectable into the centre.
 fn chat_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    let _ = state;
     if watch.interactive.get() {
         let running = watch.peek.get().is_some_and(|p| p.running);
         let dot = if running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
@@ -1283,14 +1335,25 @@ fn chat_sessions(state: State, watch: AgentsWatch) -> AnyView {
             let dot = if r.running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
             let cls = if is_sel { "adi-chome__session is-active" } else { "adi-chome__session" };
             let rid = r.run_id.clone();
+            let del_id = r.run_id.clone();
+            let del_title = title.clone();
+            // A row, not a bare button: the strip selects the chat and a delete rides at its right
+            // edge — and one button may not nest inside another, so they are siblings.
             view! {
-                <button class=cls type="button" on:click=move |_| select_run(watch, rid.clone())>
-                    <span class=dot></span>
-                    <span class="adi-chome__session-main">
-                        <span class="adi-chome__session-title">{title}</span>
-                        <span class="adi-chome__session-when">{when}</span>
-                    </span>
-                </button>
+                <div class="adi-chome__sessionrow">
+                    <button class=cls type="button" on:click=move |_| select_run(watch, rid.clone())>
+                        <span class=dot></span>
+                        <span class="adi-chome__session-main">
+                            <span class="adi-chome__session-title">{title}</span>
+                            <span class="adi-chome__session-when">{when}</span>
+                        </span>
+                    </button>
+                    <button class="adi-chome__session-del" type="button"
+                        title="delete this chat and its transcript"
+                        on:click=move |_| delete_one_run(
+                            state, watch, del_id.clone(), del_title.clone(),
+                        )>"\u{2715}"</button>
+                </div>
             }
         })
         .collect::<Vec<_>>()

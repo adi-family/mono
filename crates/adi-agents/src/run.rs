@@ -210,6 +210,26 @@ pub(crate) fn stop_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str
     }
 }
 
+/// Delete one specific run of a headless agent, removing it and everything it kept. Interactive
+/// (pty) backends keep no run history, so there is nothing there to delete.
+pub(crate) fn delete_run_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    run_id: &str,
+) -> Result<bool> {
+    match &agent.manifest.backend {
+        Backend::ProcessClaude | Backend::ProcessCodex => {
+            process::delete(sessions_dir, &agent.name, run_id)
+        }
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::delete(sessions_dir, &agent.name, run_id)
+        }
+        other => Err(Error::Unsupported(format!(
+            "backend {other} keeps no run history, so it has no run to delete"
+        ))),
+    }
+}
+
 /// Say something into one of an agent's conversations: start the next turn, or queue the message
 /// behind the answer still in flight. Only harness backends keep conversations; anything else has no
 /// thread to continue.

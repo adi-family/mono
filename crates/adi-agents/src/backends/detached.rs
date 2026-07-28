@@ -3,8 +3,9 @@
 //! Each launch is an independent *run*: the agent definition is only a template, so a fresh run is
 //! spawned every time (never continuing a prior one), several runs of the same agent may be live at
 //! once, and every run keeps its own PID, log, and metadata under a per-agent directory —
-//! `<sessions>/<subdir>/<agent>/<run_id>.{pid,log,json}`. Finished runs persist so their output
-//! stays browsable as history; the oldest are pruned once the count passes `MAX_RUNS`.
+//! `<sessions>/<subdir>/<agent>/<run_id>.{pid,log,json}`. A run owns that whole `<run_id>.*`
+//! namespace, sidecars included, which is what deleting and pruning sweep. Finished runs persist so
+//! their output stays browsable as history; the oldest are pruned once the count passes `MAX_RUNS`.
 
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
@@ -321,9 +322,45 @@ pub(crate) fn prune_old_runs(dir: &Path) {
         if read_pid(&pid_path_in(dir, &run_id)).is_some_and(pid_alive) {
             continue;
         }
-        let _ = std::fs::remove_file(log_path_in(dir, &run_id));
-        let _ = std::fs::remove_file(meta_path(dir, &run_id));
-        let _ = std::fs::remove_file(pid_path_in(dir, &run_id));
+        remove_run_files(dir, &run_id);
+    }
+}
+
+/// Delete one run outright: stop it if it is still live, then remove everything it owns. Returns
+/// whether there was a run there to delete — an id with no files is `false`, so a double-click on
+/// Delete is idempotent rather than an error.
+pub(crate) fn delete(
+    sessions_dir: &Path,
+    subdir: &str,
+    agent_name: &str,
+    run_id: &str,
+) -> Result<bool> {
+    let dir = agent_dir(sessions_dir, subdir, agent_name);
+    if !log_path_in(&dir, run_id).exists() && !meta_path(&dir, run_id).exists() {
+        return Ok(false);
+    }
+    // Kill first, or the child outlives its own log and writes into a slot nothing is reading.
+    stop(sessions_dir, subdir, agent_name, run_id)?;
+    remove_run_files(&dir, run_id);
+    Ok(true)
+}
+
+/// Remove every file a run owns. A run holds the whole `<run_id>.*` namespace of its agent dir —
+/// `.log`, `.json`, `.pid`, and whatever sidecars a backend keeps beside them (a harness
+/// conversation's `.jsonl` transcript and `.queue.json`) — so the sweep is by prefix rather than a
+/// list of extensions that a new sidecar would silently fall off the end of.
+fn remove_run_files(dir: &Path, run_id: &str) {
+    let prefix = format!("{run_id}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if name.starts_with(&prefix) {
+            let _ = std::fs::remove_file(entry.path());
+        }
     }
 }
 

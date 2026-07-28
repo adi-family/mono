@@ -407,12 +407,19 @@
   }
 
   // --- a session row (left) -------------------------------------------------------
+  // The row wraps two siblings — the strip that selects the chat, and a delete laid over its right
+  // edge. Siblings rather than nested, because a button may not contain another button.
+  &__sessionrow {
+    position: relative;
+    display: flex;
+  }
   &__session {
     display: flex;
     align-items: center;
     gap: var(--space-2);
     width: 100%;
-    padding: 8px 10px;
+    // Room on the right for the delete, so a long title never runs under it.
+    padding: 8px 26px 8px 10px;
     border: 1px solid transparent;
     border-radius: var(--radius-sm);
     background: none;
@@ -438,6 +445,37 @@
   &__session-when {
     font-size: var(--text-xs);
     color: var(--muted);
+  }
+  // Hidden until the row is under the cursor (or holds focus), so the rail reads as a list of
+  // chats rather than a column of × marks. `visibility` rather than opacity alone, so an unseen
+  // delete is also unclickable.
+  &__session-del {
+    position: absolute;
+    right: 4px;
+    top: 50%;
+    transform: translateY(-50%);
+    padding: 2px 5px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    line-height: 1;
+    cursor: pointer;
+    visibility: hidden;
+    opacity: 0;
+    transition: opacity var(--transition);
+
+    &:hover {
+      color: var(--down);
+      background: color-mix(in srgb, var(--down) 12%, transparent);
+    }
+  }
+  &__sessionrow:hover &__session-del,
+  &__sessionrow:focus-within &__session-del {
+    visibility: visible;
+    opacity: 1;
   }
   &__dot {
     flex: none;

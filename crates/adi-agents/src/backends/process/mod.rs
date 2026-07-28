@@ -66,6 +66,11 @@ pub fn stop(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Result<bool>
     detached::stop(sessions_dir, PROCESS_DIR, agent_name, run_id)
 }
 
+/// Delete one run: stop it if it is still live, then remove its log and metadata.
+pub fn delete(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Result<bool> {
+    detached::delete(sessions_dir, PROCESS_DIR, agent_name, run_id)
+}
+
 /// The tail of one run's log, for the live view.
 #[must_use]
 pub fn tail_log(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Option<String> {

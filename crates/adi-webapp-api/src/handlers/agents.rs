@@ -232,6 +232,25 @@ pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
     ok_json(&runs_response(store, &agent))
 }
 
+/// `POST /api/agents/run/delete` — delete one run outright and report the fresh run history. For a
+/// harness agent this is the whole conversation: transcript, log, queue and all. A live run is
+/// stopped first. Idempotent for a run that is already gone; only an unknown agent is a 404, and a
+/// backend that keeps no run history is a 400.
+#[must_use]
+pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_run_ref(body) else {
+        return bad_run_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    if let Err(e) = store.delete_run(&agent.name, req.run_id.trim()) {
+        return Response::from(&e);
+    }
+    ok_json(&runs_response(store, &agent))
+}
+
 /// `GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the
 /// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), in the
 /// store's list order; the client flattens and sorts them.

@@ -48,7 +48,8 @@ pub use agent::{
 pub use backend::Backend;
 pub use error::{Error, Result};
 pub use events::{
-    AgentDeleted, AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog, event_types,
+    AgentDeleted, AgentRunDeleted, AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog,
+    event_types,
 };
 pub use progress::{
     BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities,
@@ -61,8 +62,8 @@ pub use wasm::DispatchOutcome;
 
 use agent::validate_name;
 use run::{
-    adi_turn_in, advance_in, can_advance_in, is_running_in, launch_in, peek_in, peek_run_in,
-    reply_in, runs_in, stop_in, stop_run_in, transcript_in, unqueue_in,
+    adi_turn_in, advance_in, can_advance_in, delete_run_in, is_running_in, launch_in, peek_in,
+    peek_run_in, reply_in, runs_in, stop_in, stop_run_in, transcript_in, unqueue_in,
 };
 
 const AGENTS_MODULE: &str = "agents";
@@ -492,6 +493,36 @@ impl Agents {
             );
         }
         Ok(stopped)
+    }
+
+    /// Delete one run of an agent outright — for a harness backend, a whole conversation: its
+    /// transcript, its log, its queue, all of it. A live run is stopped first, so nothing is left
+    /// writing into a slot that no longer exists. Returns whether there was a run there to delete;
+    /// deleting one that is already gone is not an error, so a repeated click settles quietly.
+    ///
+    /// This is not [`Self::stop_run`]: stopping ends a run but leaves it in the history to read,
+    /// while this removes it from the history entirely.
+    ///
+    /// # Errors
+    /// Returns name validation errors, [`Error::Unsupported`] for a backend that keeps no run
+    /// history, or lifecycle errors from stopping a live run.
+    pub fn delete_run(&self, name: &str, run_id: &str) -> Result<bool> {
+        validate_name(name)?;
+        let Some(agent) = self.get(name)? else {
+            return Ok(false);
+        };
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        let deleted = delete_run_in(&agent, &sessions_dir, run_id)?;
+        if deleted {
+            self.emit(
+                "adi.agents.run.deleted",
+                &AgentRunDeleted {
+                    agent: name.to_string(),
+                    run_id: run_id.to_string(),
+                },
+            );
+        }
+        Ok(deleted)
     }
 
     /// Stops a run, returning whether one was found.

@@ -147,6 +147,13 @@ pub fn stop(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Result<bool>
     detached::stop(sessions_dir, HARNESS_DIR, agent_name, run_id)
 }
 
+/// Delete one conversation: stop whatever it is doing, then remove it and everything it kept —
+/// transcript, log, queue and all.
+pub fn delete(sessions_dir: &Path, agent_name: &str, conv_id: &str) -> Result<bool> {
+    conversation::clear_queue(sessions_dir, agent_name, conv_id);
+    detached::delete(sessions_dir, HARNESS_DIR, agent_name, conv_id)
+}
+
 /// The tail of one run's log, for the live view.
 #[must_use]
 pub fn tail_log(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Option<String> {
