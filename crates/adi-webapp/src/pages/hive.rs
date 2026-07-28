@@ -240,7 +240,7 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
 fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<Route>) -> AnyView {
     match col {
         "Service" => view! { <td class="adi-mono">{s.name.clone()}</td> }.into_any(),
-        "Host" => view! { <td class="adi-mono">{dash(s.host.clone())}</td> }.into_any(),
+        "Host" => host_cell(s.host.as_deref()),
         "Ports" => {
             view! { <td class="adi-mono adi-table__port">{fmt_ports(&s.ports)}</td> }.into_any()
         }
@@ -266,6 +266,21 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
         // "Source", and anything the layout offers that this match doesn't name.
         _ => view! { <td>{source_cell(s, src, state, route)}</td> }.into_any(),
     }
+}
+
+/// The Host cell: the front door serves every declared host over plain HTTP, so the name doubles
+/// as the way in. A new tab, since leaving the panel to visit a service is rarely what was meant.
+fn host_cell(host: Option<&str>) -> AnyView {
+    let Some(host) = host else {
+        return view! { <td class="adi-mono">{dash(None)}</td> }.into_any();
+    };
+    let href = format!("http://{host}/");
+    view! {
+        <td class="adi-mono">
+            <a href=href.clone() target="_blank" rel="noreferrer" title=href>{host.to_string()}</a>
+        </td>
+    }
+    .into_any()
 }
 
 /// The Source cell's contents: the resolved name path, linking into the project detail page or
