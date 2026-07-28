@@ -327,9 +327,10 @@ async fn handle(
         // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async
         // because it makes an outbound call, so it can't be a plain sync handler.
         ("POST", "/api/secrets/refresh") => refresh_secret(secrets, &req.body).await,
-        // The Meta page's state: the well-known `adi-agent` (if set up), the default system
-        // prompt to seed a new one with, and the agent form schema. Reads the same agents store.
-        ("GET", "/api/meta") => handlers::meta(agents),
+        // The Meta page's state: the well-known `adi-agent` (if set up), the defaults to seed a
+        // new one with (system prompt + every active tool), and the agent form schema. Reads the
+        // same agents store; the tools store supplies the default tool set.
+        ("GET", "/api/meta") => handlers::meta(agents, tools),
         ("GET", "/api/agents") => handlers::agents(agents),
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),

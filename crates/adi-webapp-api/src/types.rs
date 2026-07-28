@@ -1015,6 +1015,12 @@ pub struct MetaState {
     /// agent how to operate this ADI environment (the store, projects, services, dashboards,
     /// ports, DNS). The setup form opens prefilled with it, still editable.
     pub default_prompt: String,
+    /// The tool ids to enable on the meta-agent: **every active tool** in the store. The setup
+    /// form saves these (unioned with whatever the agent already has), so the one agent that
+    /// operates the whole environment always carries the full tool set — including tools
+    /// registered after it was created.
+    #[serde(default)]
+    pub default_bin_tools: Vec<String>,
     /// The `adi-agent` definition, or `None` when it hasn't been set up yet.
     #[serde(default)]
     pub agent: Option<AgentDto>,

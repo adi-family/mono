@@ -54,7 +54,8 @@ fn intro_panel() -> AnyView {
                 " is your environment's default agent — a meta-agent that helps you set up and run
                  this ADI stack. Pick a backend (Claude, Codex, the ADI loop, …); it comes preloaded
                  with a system prompt that teaches it how ADI works — projects, hive services,
-                 dashboards, ports, and DNS. Edit the prompt to taste, then run it right here."
+                 dashboards, ports, and DNS — and with every tool in your store enabled on it.
+                 Edit the prompt to taste, then run it right here."
             </p>
         </section>
     }
@@ -139,6 +140,7 @@ fn ready_panel(
     let backend = a.backend.clone();
     let model = arg_text(&a.arguments, "model");
     let running = a.running;
+    let tool_count = a.bin_tools.len();
     let prompt = arg_text(&a.arguments, "system_prompt");
     let has_prompt = !prompt.trim().is_empty();
     let a_for_actions = a.clone();
@@ -152,6 +154,11 @@ fn ready_panel(
                     <span class="adi-chip adi-mono" title="model">{model}</span>
                 })}
                 <span class="adi-chip">{if running { "● running" } else { "idle" }}</span>
+                {(tool_count > 0).then(|| view! {
+                    <span class="adi-chip" title="adi tools enabled on this agent">
+                        {format!("{tool_count} tools")}
+                    </span>
+                })}
                 <span class="adi-spacer"></span>
                 {agent_actions(state, watch, &a_for_actions)}
                 <button class="adi-btn adi-btn--link" type="button"
@@ -192,7 +199,11 @@ fn submit_setup(state: State, form: MetaForm) {
     let name = meta
         .as_ref()
         .map_or_else(|| "adi-agent".to_string(), |m| m.name.clone());
-    // Start from the agent's existing arguments so a reconfigure keeps its model/tools/etc.
+    // The meta-agent runs the whole environment, so it gets every tool the store has: the
+    // server's default set unioned with whatever is already enabled. `bin_tools` is a top-level
+    // field, not an argument — sending an empty one here would silently un-tick the agent's tools.
+    let bin_tools = meta_bin_tools(meta.as_ref());
+    // Start from the agent's existing arguments so a reconfigure keeps its model/etc.
     let mut arguments = meta
         .and_then(|m| m.agent)
         .map(|a| a.arguments)
@@ -212,7 +223,7 @@ fn submit_setup(state: State, form: MetaForm) {
         tags: Vec::new(),
         starred: false,
         project: None,
-        bin_tools: Vec::new(),
+        bin_tools,
         secrets: Vec::new(),
         rename_from: None,
     };
@@ -233,6 +244,21 @@ fn submit_setup(state: State, form: MetaForm) {
         }
         form.busy.set(false);
     });
+}
+
+/// The tools to save the meta-agent with: the server's default set (every active tool) unioned
+/// with the ones it already has enabled. The union is what keeps a save additive — a tool the user
+/// ticked on the Agents page survives, and a tool registered since the agent was created gets
+/// picked up. Sorted and deduped, so the saved list is stable across saves.
+pub(crate) fn meta_bin_tools(meta: Option<&MetaState>) -> Vec<String> {
+    let Some(m) = meta else {
+        return Vec::new();
+    };
+    let mut ids: std::collections::BTreeSet<String> = m.default_bin_tools.iter().cloned().collect();
+    if let Some(agent) = m.agent.as_ref() {
+        ids.extend(agent.bin_tools.iter().cloned());
+    }
+    ids.into_iter().collect()
 }
 
 /// Load the current agent's backend + system prompt into the form and switch to the setup view.

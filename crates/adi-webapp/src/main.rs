@@ -367,7 +367,7 @@ fn onb_setup_form(
                 <strong>"adi-agent"</strong>
                 " is your environment's root agent — a meta-agent that helps you set up and
                  operate this ADI stack. Pick the runtime it runs on and give it a system prompt;
-                 you can change all of it later."
+                 every tool in your store is enabled on it. You can change all of it later."
             </p>
             <form class="adi-onb__form" on:submit=move |ev| {
                 ev.prevent_default();
@@ -532,6 +532,9 @@ fn submit_onb_agent(
     let name = current
         .as_ref()
         .map_or_else(|| ROOT_AGENT.to_string(), |m| m.name.clone());
+    // The root agent is created with every tool the store has (see `meta_bin_tools`); sending an
+    // empty `bin_tools` would instead un-tick the ones it has.
+    let bin_tools = pages::meta_bin_tools(current.as_ref());
     let mut arguments = current
         .and_then(|m| m.agent)
         .map(|a| a.arguments)
@@ -548,7 +551,7 @@ fn submit_onb_agent(
         tags: Vec::new(),
         starred: false,
         project: None,
-        bin_tools: Vec::new(),
+        bin_tools,
         secrets: Vec::new(),
         rename_from: None,
     };

@@ -18,3 +18,6 @@ manifest and an optional `.adi/hive.yaml` (see `services.md`).
   with its open-task count.
 - Keep a project's files under its own directory — don't scatter its state elsewhere in the
   store.
+- A capability that only serves this project belongs in a tool filed under it —
+  `adi tools add <name> --project <id>`; it runs in the project's directory, against the
+  project's database. See `tools.md`.

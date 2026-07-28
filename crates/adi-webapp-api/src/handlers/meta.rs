@@ -1,10 +1,12 @@
 //! The `/api/meta` surface: the state of the Meta page, which manages a single well-known global
 //! agent named `adi-agent` — the default ADI agent. The page reuses the agents endpoints
 //! (`/api/agents/save`, `/run`, `/peek`) to create and run it; this endpoint only reports whether
-//! it exists, its current definition, and the canonical system prompt to seed a new one with.
+//! it exists, its current definition, and the defaults to seed a new one with (its system prompt
+//! and the tools to enable on it).
 
 use adi_agents::Agents;
 use adi_config::Config;
+use adi_tools::Tools;
 
 use crate::types::MetaState;
 
@@ -18,10 +20,10 @@ use super::response::{Response, ok_json};
 pub const ADI_AGENT_NAME: &str = "adi-agent";
 
 /// `GET /api/meta` — report the Meta page's state: the `adi-agent` definition (if it has been set
-/// up), the canonical default system prompt to seed a new one with, and the agent form schema
-/// (whose backend list drives the setup picker).
+/// up), the defaults to seed a new one with (system prompt + enabled tools), and the agent form
+/// schema (whose backend list drives the setup picker).
 #[must_use]
-pub fn meta(store: &Agents) -> Response {
+pub fn meta(store: &Agents, tools: &Tools) -> Response {
     // Scaffold the built-in guides the agent's prompt points at, so they exist on disk by the
     // time the agent is created. Idempotent and non-destructive — it never overwrites edits.
     ensure_guides(store.config());
@@ -37,9 +39,30 @@ pub fn meta(store: &Agents) -> Response {
     ok_json(&MetaState {
         name: ADI_AGENT_NAME.to_string(),
         default_prompt: default_prompt(store.config()),
+        default_bin_tools: default_bin_tools(tools),
         agent,
         form: state.form,
     })
+}
+
+/// The tools a saved `adi-agent` gets enabled: **every active tool** in the store — the seeded
+/// system CLIs (`adi-tasks`, `adi-projects`, …) and every user tool, project-scoped ones included.
+/// The meta-agent operates the whole environment, so it is the one agent that should never be
+/// missing a capability someone registered; the setup form unions this with whatever is already
+/// enabled, so a save keeps up with tools created since.
+///
+/// Archived tools are left out — an archive is a deliberate "stop offering this". A store read
+/// failure degrades to "no defaults" rather than failing the page.
+fn default_bin_tools(tools: &Tools) -> Vec<String> {
+    tools.list().map_or_else(
+        |_| Vec::new(),
+        |list| {
+            list.into_iter()
+                .filter(|t| !t.is_archived())
+                .map(|t| t.id)
+                .collect()
+        },
+    )
 }
 
 /// The seed system prompt: the static base plus an **Events** section generated from the live
@@ -102,6 +125,14 @@ the split `.test`/`.adi` zones and forwards the rest.
   Panel: /settings/ports-manager.
 - Dashboards — bun-served frontend+backend pairs under `~/.adi/mono/dashboards/<id>`, authored \
   as loose `.ts` files. Panel: /dashboards.
+- Tools — small `sh`/`ts` CLIs that agents run, kept under `~/.adi/mono/tools/` and handed to an \
+  agent as `.bin/<name>` shims on its PATH. A tool is either global or **filed under a project** \
+  (`adi tools add <name> --project <id>`, or `\"project\"` in `POST /api/tools/create`); a \
+  project-scoped tool runs in that project's directory, against that project's database. \
+  Creating a tool gives it to nobody — an agent gets it only once it is **enabled on that \
+  agent** (`bin_tools`: tick it on /agents, `adi agents save <name> --tool <id>`, or the \
+  `bin_tools` field of `POST /api/agents/save`), which is what puts the shim on its PATH and its \
+  help in its prompt. You yourself carry every tool in the store. Panel: /tools.
 - Tasks — a simple task tree (/tasks). Agents — agent definitions like yourself (/agents). \
   Triggers — webhook or supervised background code blocks (/triggers). Mesh — peer-to-peer port \
   forwarding (/settings/mesh).
@@ -112,6 +143,12 @@ the split `.test`/`.adi` zones and forwards the rest.
   Read state with the GET endpoints before changing anything.
 - Prefer the ADI CLI (`adi …`) and the control-panel API over editing store files by hand; when \
   you do edit files, keep them under `~/.adi/mono`.
+- **When a job needs a capability you don't have, make it a tool** rather than a one-off you \
+  redo every run — a shell incantation you'd repeat, a query you keep retyping, an API you keep \
+  curl-ing. File it under the project it serves (`--project <id>`), keep it global only when it \
+  is genuinely environment-wide, give it an `llm help` so the next agent learns it without being \
+  told, and then **enable it on every agent that should have it** — a tool nobody has enabled is \
+  a tool nobody can run. Read `guides/tools.md` before you write one.
 - Never touch ADI DNS: do not stop, kill, or restart the `adi.hive` service, and never bind the \
   `15353` port range. When you need a scratch port, pick a clearly free high port.
 
@@ -119,3 +156,47 @@ the split `.test`/`.adi` zones and forwards the rest.
 Work in small, verifiable steps. State what you're about to do, do it, then confirm the result \
 (hit the relevant health/list endpoint or CLI command and report what changed). Ask before doing \
 anything destructive or hard to reverse.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scratch(tag: &str) -> Tools {
+        let root = std::env::temp_dir().join(format!(
+            "adi-meta-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Tools::with_config(Config::with_root(root))
+    }
+
+    #[test]
+    fn the_meta_agent_defaults_to_every_active_tool() {
+        let tools = scratch("all");
+        tools.seed_system().expect("seed");
+        let mine = tools
+            .create_file("scraper", None, "sh", None, None)
+            .expect("create");
+        let scoped = tools
+            .create_file("acme-deploy", None, "sh", Some("acme".into()), None)
+            .expect("create scoped");
+
+        let ids = default_bin_tools(&tools);
+        // Every system CLI, the user's own tool, and a project-scoped one — the meta-agent runs
+        // the whole environment, so nothing registered is withheld from it.
+        assert!(ids.contains(&"sys-tasks".to_string()), "{ids:?}");
+        assert!(ids.contains(&mine.id), "{ids:?}");
+        assert!(ids.contains(&scoped.id), "{ids:?}");
+    }
+
+    #[test]
+    fn an_archived_tool_is_not_a_default() {
+        let tools = scratch("archived");
+        let tool = tools
+            .create_file("retired", None, "sh", None, None)
+            .expect("create");
+        tools.archive(&tool.id).expect("archive");
+        assert!(!default_bin_tools(&tools).contains(&tool.id));
+    }
+}

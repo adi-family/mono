@@ -50,7 +50,7 @@ pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
 pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;
-pub(crate) use meta::meta_view;
+pub(crate) use meta::{meta_bin_tools, meta_view};
 pub(crate) use ports::ports_manager_view;
 pub(crate) use project_detail::{load_dir, project_detail_view};
 pub(crate) use projects::{project_tree_rows, projects_view};
