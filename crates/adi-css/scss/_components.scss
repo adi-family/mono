@@ -1698,6 +1698,12 @@ $runlog-dim: #8b93a1;
     flex: 1;
     min-width: 0;
   }
+
+  // A number that is only ever a couple of digits (the agents page's run limit): narrow enough to
+  // sit in a panel head without pushing everything else off the row.
+  &--num {
+    width: 72px;
+  }
 }
 
 // Selects reuse `.adi-input` for their frame, but the fixed input width clips the longest

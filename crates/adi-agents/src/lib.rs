@@ -34,6 +34,7 @@ mod backends;
 mod error;
 mod events;
 mod launch;
+mod limits;
 pub mod progress;
 mod run;
 mod tool_help;
@@ -54,6 +55,7 @@ pub use events::{
     AgentDeleted, AgentRunDeleted, AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog,
     event_types,
 };
+pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
 pub use progress::{
     BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities,
 };
@@ -261,14 +263,112 @@ impl Agents {
         std::fs::rename(self.agent_file(from).path(), self.agent_file(to).path()).map_err(Error::Io)
     }
 
+    /// How many runs may be live at once — overall and per project — read from
+    /// `sessions/settings.toml`. See [`RunLimits`].
+    #[must_use]
+    pub fn limits(&self) -> RunLimits {
+        RunLimits::load(&self.config.module(SESSIONS_MODULE))
+    }
+
+    /// Set how many runs may be live at once, returning what was stored.
+    ///
     /// # Errors
-    /// Returns [`Error::NotFound`] or backend launch errors.
+    /// [`Error::Config`] if the settings file can't be written.
+    pub fn set_limits(&self, limits: RunLimits) -> Result<RunLimits> {
+        limits.save(&self.config.module(SESSIONS_MODULE))?;
+        Ok(limits)
+    }
+
+    /// Set (or, with `0`, clear) one project's own cap, leaving the global one alone. Returns the
+    /// whole updated set, so a caller sees what it now has.
+    ///
+    /// # Errors
+    /// [`Error::Config`] if the settings file can't be written.
+    pub fn set_project_limit(&self, project: &str, max_concurrent_runs: u32) -> Result<RunLimits> {
+        let mut limits = self.limits();
+        limits.set_project(project, max_concurrent_runs);
+        self.set_limits(limits)
+    }
+
+    /// What is running right now, totalled and divided between projects — one walk of the run
+    /// directories, weighed against [`Self::limits`].
+    ///
+    /// The agent list is only read when something is actually running, so the common case (an idle
+    /// machine asking whether it may start something) costs a directory scan and nothing else. A pty
+    /// session keeps no run directory to name an agent from, so live sessions are matched against
+    /// the agent list instead — again, only when a session is up.
+    #[must_use]
+    pub fn run_load(&self) -> RunLoad {
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        let mut by_agent = run::running_by_agent_in(&sessions_dir);
+        let sessions = run::running_sessions();
+        if by_agent.is_empty() && sessions.is_empty() {
+            return RunLoad::default();
+        }
+        let agents = self.list().unwrap_or_default();
+        for agent in &agents {
+            if sessions.contains(&run::session_name(&agent.name)) {
+                *by_agent.entry(agent.name.clone()).or_default() += 1;
+            }
+        }
+        RunLoad::new(
+            &by_agent,
+            agents
+                .into_iter()
+                .map(|a| (a.name, a.manifest.project.clone())),
+        )
+    }
+
+    /// How many runs are live right now, across every agent and backend.
+    #[must_use]
+    pub fn running_count(&self) -> usize {
+        self.run_load().total()
+    }
+
+    /// Whether a run of `agent` would be refused right now — the global cap is full, or its
+    /// project's is. Best-effort by construction: runs are launched from several processes (the app,
+    /// the CLI, a trigger's `adi-agents run`), so two launches racing at the boundary can both see a
+    /// free slot. The caps throttle the steady state; they are not semaphores.
+    #[must_use]
+    pub fn at_capacity_for(&self, agent: &StoredAgent) -> bool {
+        self.full_cap_for(agent, &self.limits(), &self.run_load())
+            .is_some()
+    }
+
+    /// Which cap `agent` is up against, if either — the global one (`None` project) or its own
+    /// project's. The single place both gates are decided, so a launch, a reply, and a page render
+    /// can never disagree about what is full.
+    fn full_cap_for(
+        &self,
+        agent: &StoredAgent,
+        limits: &RunLimits,
+        load: &RunLoad,
+    ) -> Option<Error> {
+        if limits.is_full(load.total()) {
+            return Some(Error::TooManyRunning {
+                project: None,
+                running: load.total(),
+                limit: limits.max_concurrent_runs,
+            });
+        }
+        let project = agent.manifest.project.as_deref()?;
+        let limit = limits.project_limit(project)?;
+        let running = load.in_project(project);
+        (running >= limit as usize).then(|| Error::TooManyRunning {
+            project: Some(project.to_string()),
+            running,
+            limit,
+        })
+    }
+
+    /// # Errors
+    /// Returns [`Error::NotFound`], [`Error::TooManyRunning`], or backend launch errors.
     pub fn run(&self, name: &str) -> Result<Launch> {
         self.run_with_message(name, "run")
     }
 
     /// # Errors
-    /// Returns [`Error::NotFound`] or backend launch errors.
+    /// Returns [`Error::NotFound`], [`Error::TooManyRunning`], or backend launch errors.
     pub fn run_with_message(&self, name: &str, message: &str) -> Result<Launch> {
         self.run_in(name, message, None)
     }
@@ -279,12 +379,47 @@ impl Agents {
     /// field can hold it. `None` behaves exactly like [`Self::run_with_message`]; a harness
     /// conversation pins whatever is resolved here, so its replies re-enter the same directory.
     ///
+    /// Subject to the [run cap](RunLimits): with as many runs already live as the store allows, this
+    /// refuses rather than adding one more. [`Self::force_run_in`] is the same launch with the cap
+    /// waived — what a human who has read the refusal and asked again gets.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`], [`Error::TooManyRunning`], or backend launch errors.
+    pub fn run_in(&self, name: &str, message: &str, working_dir: Option<&str>) -> Result<Launch> {
+        self.launch_run(name, message, working_dir, false)
+    }
+
+    /// Launch a run whatever else is running — the deliberate override of the [run cap](RunLimits),
+    /// for a human who wants this one now. Never taken automatically: a trigger, a queued turn, or
+    /// anything else the platform starts on its own goes through [`Self::run_in`] and waits its turn.
+    ///
     /// # Errors
     /// Returns [`Error::NotFound`] or backend launch errors.
-    pub fn run_in(&self, name: &str, message: &str, working_dir: Option<&str>) -> Result<Launch> {
+    pub fn force_run_in(
+        &self,
+        name: &str,
+        message: &str,
+        working_dir: Option<&str>,
+    ) -> Result<Launch> {
+        self.launch_run(name, message, working_dir, true)
+    }
+
+    /// The one launch path: resolve the agent, weigh the cap unless `force`, spawn, announce.
+    fn launch_run(
+        &self,
+        name: &str,
+        message: &str,
+        working_dir: Option<&str>,
+        force: bool,
+    ) -> Result<Launch> {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        if !force
+            && let Some(full) = self.full_cap_for(&agent, &self.limits(), &self.run_load())
+        {
+            return Err(full);
+        }
         let ctx = self.launch_context(&agent, working_dir);
         let launch = launch_in(
             &ctx.agent,
@@ -305,6 +440,10 @@ impl Agents {
     /// One turn runs at a time, so this either starts the next turn or queues the message behind the
     /// answer still in flight — see [`Sent`].
     ///
+    /// A full [run cap](RunLimits) queues rather than refuses: the message keeps its place and
+    /// starts when a slot frees, which is what a conversation's queue already does for the answer in
+    /// flight. Nothing typed into a chat is ever lost to the limit.
+    ///
     /// # Errors
     /// Returns [`Error::NotFound`] or backend launch errors — including [`Error::NotRunnable`] for a
     /// backend that keeps no conversation.
@@ -312,6 +451,7 @@ impl Agents {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let may_start = !self.at_capacity_for(&agent);
         let dir = self.conversation_dir(&agent, conv_id);
         let ctx = self.launch_context(&agent, dir.to_str());
         let sent = reply_in(
@@ -322,6 +462,7 @@ impl Agents {
             conv_id,
             message,
             &ctx.run_env,
+            may_start,
         )?;
         if let Sent::Started(launch) = &sent {
             self.emit(
@@ -363,9 +504,15 @@ impl Agents {
     /// Start a conversation's next queued message, if it is idle and one is waiting; reports whether
     /// a turn started. The cheap gate comes first so an idle poll — which is nearly every poll —
     /// costs one `exists` rather than the tool sync a launch context pays for.
+    ///
+    /// This is the platform starting a run by itself, so the [run cap](RunLimits) binds absolutely:
+    /// at capacity the message stays at the head of its queue and the next poll asks again.
     fn advance_queue(&self, agent: &StoredAgent, conv_id: &str) -> bool {
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         if !can_advance_in(agent, &sessions_dir, conv_id) {
+            return false;
+        }
+        if self.at_capacity_for(agent) {
             return false;
         }
         let dir = self.conversation_dir(agent, conv_id);
@@ -1329,6 +1476,230 @@ mod tests {
         }
         std::fs::write(dir.join(format!("{conv_id}.json")), meta.to_string()).expect("write meta");
         conv_id.to_string()
+    }
+
+    /// Seed a live run of `agent` under `subdir`: a PID file naming *this* process, which is exactly
+    /// what a running run looks like to the counter.
+    fn seed_live_run(store: &Agents, subdir: &str, agent: &str, run_id: &str) {
+        let dir = store
+            .config
+            .module(SESSIONS_MODULE)
+            .dir()
+            .join(subdir)
+            .join(agent);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(
+            dir.join(format!("{run_id}.pid")),
+            format!("{}\n", std::process::id()),
+        )
+        .expect("write pid");
+    }
+
+    /// Live runs are counted across agents and across backends — one number, whoever started them.
+    #[test]
+    fn the_run_count_spans_every_agent_and_backend() {
+        let store = scratch("run-count");
+        assert_eq!(store.running_count(), 0);
+
+        seed_live_run(&store, "process", "recon", "0000000000001-0000");
+        seed_live_run(&store, "process", "recon", "0000000000002-0000");
+        seed_live_run(&store, "harness", "chatty", "0000000000003-0000");
+        assert_eq!(store.running_count(), 3);
+
+        // A finished run drops its PID file, and a stale one naming a dead process doesn't count.
+        std::fs::write(
+            store
+                .config
+                .module(SESSIONS_MODULE)
+                .dir()
+                .join("process/recon/0000000000004-0000.pid"),
+            "4294967294\n",
+        )
+        .expect("write stale pid");
+        assert_eq!(store.running_count(), 3);
+    }
+
+    /// The cap refuses a launch before anything is spawned — and `force` is the way past it. The
+    /// forced launch still fails here (the `adi` harness has no provider configured in a scratch
+    /// store), but it fails *at the backend*, which is the whole point: the cap no longer stopped it.
+    #[test]
+    fn the_run_cap_refuses_a_launch_and_force_gets_past_it() {
+        let store = scratch("run-cap");
+        store
+            .save("solver", spec("harness:adi"))
+            .expect("save an agent");
+        store
+            .set_limits(RunLimits {
+                max_concurrent_runs: 2,
+                ..RunLimits::default()
+            })
+            .expect("set the limit");
+
+        seed_live_run(&store, "process", "other", "0000000000001-0000");
+        assert!(
+            store.run_in("solver", "go", None).is_ok()
+                || matches!(store.run_in("solver", "go", None), Err(Error::NotRunnable(_))),
+            "one live run of two is below the cap, so the launch reaches the backend"
+        );
+
+        seed_live_run(&store, "harness", "other", "0000000000002-0000");
+        assert!(
+            matches!(
+                store.run_in("solver", "go", None),
+                Err(Error::TooManyRunning {
+                    project: None,
+                    running: 2,
+                    limit: 2
+                })
+            ),
+            "at the cap the launch is refused, naming what is running and what is allowed"
+        );
+        assert!(
+            !matches!(
+                store.force_run_in("solver", "go", None),
+                Err(Error::TooManyRunning { .. })
+            ),
+            "force is the human's way past the cap"
+        );
+
+        // Lifting the limit lets it through again.
+        store
+            .set_limits(RunLimits {
+                max_concurrent_runs: 0,
+                ..RunLimits::default()
+            })
+            .expect("lift the limit");
+        assert!(!matches!(
+            store.run_in("solver", "go", None),
+            Err(Error::TooManyRunning { .. })
+        ));
+    }
+
+    /// A project's own cap narrows the global one: its agents stop at it while the rest of the
+    /// machine — still below the global cap — carries on launching.
+    #[test]
+    fn a_project_cap_binds_only_that_projects_agents() {
+        let store = scratch("project-cap");
+        let mut scoped = spec("harness:adi");
+        scoped.project = Some("bugbounty".into());
+        store.save("solver", scoped).expect("save a project agent");
+        let mut other_project = spec("harness:adi");
+        other_project.project = Some("mono".into());
+        store
+            .save("builder", other_project)
+            .expect("save another project's agent");
+        store.save("loose", spec("harness:adi")).expect("save");
+
+        store
+            .set_limits(RunLimits {
+                max_concurrent_runs: 10,
+                ..RunLimits::default()
+            })
+            .expect("a global cap well above the project one");
+        store
+            .set_project_limit("bugbounty", 1)
+            .expect("set the project cap");
+
+        // One live run of the project fills its cap…
+        seed_live_run(&store, "harness", "solver", "0000000000001-0000");
+        assert_eq!(store.run_load().in_project("bugbounty"), 1);
+        assert!(
+            matches!(
+                store.run_in("solver", "go", None),
+                Err(Error::TooManyRunning { project: Some(p), running: 1, limit: 1 }) if p == "bugbounty"
+            ),
+            "the refusal names the project whose cap is full"
+        );
+        // …and nobody else's: another project and an unfiled agent are only bound by the global cap.
+        for name in ["builder", "loose"] {
+            assert!(
+                !matches!(
+                    store.run_in(name, "go", None),
+                    Err(Error::TooManyRunning { .. })
+                ),
+                "{name} is outside the capped project"
+            );
+        }
+        // Force still gets through, and clearing the project's cap leaves only the global one.
+        assert!(!matches!(
+            store.force_run_in("solver", "go", None),
+            Err(Error::TooManyRunning { .. })
+        ));
+        store
+            .set_project_limit("bugbounty", 0)
+            .expect("clear the project cap");
+        assert!(!matches!(
+            store.run_in("solver", "go", None),
+            Err(Error::TooManyRunning { .. })
+        ));
+    }
+
+    /// The global cap is a ceiling, not a default: a project allowed more than the machine is still
+    /// stopped by the machine's number.
+    #[test]
+    fn the_global_cap_still_binds_a_project_allowed_more() {
+        let store = scratch("ceiling");
+        let mut scoped = spec("harness:adi");
+        scoped.project = Some("bugbounty".into());
+        store.save("solver", scoped).expect("save");
+        store
+            .set_limits(RunLimits {
+                max_concurrent_runs: 1,
+                ..RunLimits::default()
+            })
+            .expect("set the global cap");
+        store
+            .set_project_limit("bugbounty", 5)
+            .expect("a roomier project cap");
+
+        seed_live_run(&store, "process", "other", "0000000000001-0000");
+        assert!(
+            matches!(
+                store.run_in("solver", "go", None),
+                Err(Error::TooManyRunning {
+                    project: None,
+                    running: 1,
+                    limit: 1
+                })
+            ),
+            "the global cap is reported, since it is the one that is full"
+        );
+    }
+
+    /// Nothing typed into a chat is lost to the cap: a message to an idle conversation queues
+    /// instead of being refused, and starts when a slot frees.
+    #[test]
+    fn a_reply_queues_rather_than_being_refused_at_the_cap() {
+        let store = scratch("reply-cap");
+        store
+            .save("chatty", spec("harness:claude-sdk"))
+            .expect("save");
+        let agent = store.get("chatty").expect("get").expect("present");
+        let conv = seed_conversation(&store, "chatty", None);
+        store
+            .set_limits(RunLimits {
+                max_concurrent_runs: 1,
+                ..RunLimits::default()
+            })
+            .expect("set the limit");
+        seed_live_run(&store, "process", "other", "0000000000001-0000");
+
+        assert_eq!(
+            store.reply("chatty", &conv, "and then?").expect("reply"),
+            Sent::Queued { place: 1 },
+            "a full cap queues the message rather than refusing it"
+        );
+        // And the platform does not start it by itself while the cap is still full, even though the
+        // conversation is idle and the message is waiting.
+        let sessions_dir = store.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        assert!(
+            can_advance_in(&agent, &sessions_dir, &conv),
+            "the queued message is otherwise ready to start"
+        );
+        assert!(
+            !store.advance_queue(&agent, &conv),
+            "an automatic start waits for a free slot"
+        );
     }
 
     /// A conversation answers from the directory it started in, however the manifest resolves now.

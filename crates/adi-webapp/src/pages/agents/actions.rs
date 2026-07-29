@@ -38,6 +38,119 @@ pub(crate) const NEWEST_FIRST: Sort = Sort {
     desc: true,
 };
 
+/// Whether a launch of `name` would be refused right now. The verdict is the server's own, carried
+/// per agent, so a project's cap is honoured as exactly as the global one — a launch button can say
+/// "anyway" *before* anything has to be refused.
+pub(crate) fn at_run_limit(agents: Option<&AgentsState>, name: &str) -> bool {
+    agents.is_some_and(|s| s.agents.iter().any(|a| a.name == name && a.at_run_limit))
+}
+
+/// The global run cap, stated and editable: how many runs are live against how many may be. It is
+/// what holds *automatic* launches back — a trigger firing, a queued chat turn — so it belongs next
+/// to the agents rather than in a settings screen. `0` lifts it.
+pub(crate) fn run_limit_view(state: State) -> impl IntoView {
+    let agents = state.agents;
+    let load = Memo::new(move |_| {
+        agents
+            .get()
+            .map(|a| (a.running_runs, a.max_concurrent_runs))
+    });
+    limit_control(
+        state,
+        "Runs live now, against the most allowed at once",
+        "How many agent runs may be live at once (0 lifts it). Automatic launches — a trigger firing, a queued chat turn — wait for a free slot; you can always run one anyway.",
+        load,
+        move |max| {
+            let msg = if max == 0 {
+                "No overall limit — runs start whenever they are asked for.".to_string()
+            } else {
+                format!("At most {max} agent runs at once.")
+            };
+            apply_agents(state, None, msg, fetch::set_run_limit(max, None));
+        },
+    )
+}
+
+/// The open project's own run cap: at most this many of the global allowance may be its agents'.
+/// `0` clears it, leaving the project bound only by the global number.
+pub(crate) fn project_run_limit_view(state: State) -> impl IntoView {
+    let agents = state.agents;
+    let project = state.current_project;
+    let load = Memo::new(move |_| {
+        let id = project.get();
+        let state = agents.get()?;
+        // A project with neither a cap nor anything running has no row of its own — that is zero of
+        // an unset limit, not "unknown".
+        Some(
+            state
+                .project_run_limits
+                .iter()
+                .find(|p| p.project == id)
+                .map_or((0, 0), |p| (p.running_runs, p.max_concurrent_runs)),
+        )
+    });
+    limit_control(
+        state,
+        "This project's runs live now, against its own limit",
+        "How many of this project's agents may run at once (0 = no limit of its own). It narrows the global limit, never lifts it — an automatic launch waits for a free slot, and you can always run one anyway.",
+        load,
+        move |max| {
+            let id = project.get_untracked();
+            let msg = if max == 0 {
+                format!("“{id}” is bound only by the overall limit now.")
+            } else {
+                format!("At most {max} runs of “{id}” at once.")
+            };
+            apply_agents(state, None, msg, fetch::set_run_limit(max, Some(id)));
+        },
+    )
+}
+
+/// The shape both caps are read and edited by: a "N/M running" chip and a box that sets M. `load`
+/// is `(running, limit)` — `None` while the agents state is still loading, and a `0` limit reads as
+/// "no limit" rather than a cap of nothing.
+fn limit_control(
+    state: State,
+    chip_title: &'static str,
+    hint: &'static str,
+    load: Memo<Option<(u32, u32)>>,
+    save: impl Fn(u32) + Copy + 'static,
+) -> impl IntoView {
+    // `None` follows the server's value; typing pins a draft until it is saved.
+    let draft: RwSignal<Option<String>> = RwSignal::new(None);
+    let value = move || {
+        draft
+            .get()
+            .unwrap_or_else(|| load.get().map_or_else(String::new, |(_, max)| max.to_string()))
+    };
+    let submit = move || {
+        let Ok(max) = value().trim().parse::<u32>() else {
+            state.flash.set(Some(Flash::err(
+                "Enter a whole number of runs — 0 lifts the limit.".to_string(),
+            )));
+            return;
+        };
+        draft.set(None);
+        save(max);
+    };
+    view! {
+        <span class="adi-chip adi-mono" title=chip_title>
+            {move || load.get().map_or_else(|| "\u{2014}".to_string(), |(running, max)| if max == 0 {
+                format!("{running} running")
+            } else {
+                format!("{running}/{max} running")
+            })}
+        </span>
+        <input class="adi-input adi-input--num adi-mono" type="number" min="0" step="1"
+            title=hint
+            prop:value=value
+            on:input=move |ev| draft.set(Some(event_target_value(&ev)))
+            on:keydown=move |ev| if ev.key() == "Enter" { ev.prevent_default(); submit(); } />
+        <button class="adi-btn adi-btn--link" type="button" title="save the run limit"
+            on:click=move |_| submit()>"Set limit"</button>
+    }
+}
+
 /// The Run / View / Stop action buttons for one agent row. Interactive Run starts a pty session
 /// straight away; headless "Run…" opens the run panel, where a task is entered before launching — a
 /// headless `--print` run is seeded by one prompt, not typed into. View opens the same panel (a live
@@ -45,6 +158,9 @@ pub(crate) const NEWEST_FIRST: Sort = Sort {
 pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> AnyView {
     let run_name = a.name.clone();
     let show_run = a.runnable && !a.running;
+    // At a cap — the machine's or this agent's project's — a pty Run would be refused, so the
+    // button asks for the override instead of pretending nothing is in the way.
+    let full = a.at_run_limit;
     let running = a.running;
     let interactive = a.executor == "pty";
     // Harness backends keep answerable conversations; the run controls read as a chat there.
@@ -79,9 +195,16 @@ pub(crate) fn agent_actions(state: State, watch: AgentsWatch, a: &AgentDto) -> A
         {show_run.then(|| {
             let run_name = run_name.clone();
             if interactive {
+                let title = if full {
+                    "as many runs are live as the limit allows — start this session anyway"
+                } else {
+                    "start an interactive session"
+                };
                 view! {
-                    <button class="adi-btn adi-btn--link" title="start an interactive session"
-                        on:click=move |_| run_now(state, run_name.clone())>"▶ Run"</button>
+                    <button class="adi-btn adi-btn--link" title=title
+                        on:click=move |_| run_now(state, run_name.clone(), full)>
+                        {if full { "▶ Run anyway" } else { "▶ Run" }}
+                    </button>
                     " "
                 }
                 .into_any()
@@ -115,10 +238,11 @@ where
 }
 
 /// Launch an interactive (pty) agent straight away — no initial task, since the session is typed
-/// into after it starts. The server supplies the executor-specific success message.
-fn run_now(state: State, name: String) {
+/// into after it starts. The server supplies the executor-specific success message. `force` is the
+/// human's "run it anyway" past a full concurrency limit.
+fn run_now(state: State, name: String, force: bool) {
     spawn_local(async move {
-        match fetch::run_agent(name, String::new(), None).await {
+        match fetch::run_agent(name, String::new(), None, force).await {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -131,9 +255,11 @@ fn run_now(state: State, name: String) {
 /// Launch a new headless run of the agent with `message` as its task, then select that run in the
 /// panel so its log streams in. Each launch is independent — never a continuation of a prior run.
 /// `working_dir` is the composer's optional "run here"; `None` starts the agent where it is defined.
-fn launch_agent(state: State, watch: AgentsWatch, name: String, message: String, working_dir: Option<String>) {
+/// `force` launches past a full concurrency limit — the composer sends it once the cap is reached,
+/// where the button already reads "Run anyway".
+fn launch_agent(state: State, watch: AgentsWatch, name: String, message: String, working_dir: Option<String>, force: bool) {
     spawn_local(async move {
-        match fetch::run_agent(name.clone(), message, working_dir).await {
+        match fetch::run_agent(name.clone(), message, working_dir, force).await {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -1289,9 +1415,24 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
         let dir = watch.run_dir.get_untracked();
         let dir = dir.trim();
         let working_dir = (!dir.is_empty()).then(|| dir.to_string());
+        // A launch typed here is a human asking, so a full cap is an override to offer rather than
+        // a refusal to hand back — the button says so before it is pressed.
+        let force = at_run_limit(state.agents.get_untracked().as_ref(), &name);
         watch.input.set(String::new());
         clear_composer(area);
-        launch_agent(state, watch, name, with_context(watch, message), working_dir);
+        launch_agent(state, watch, name, with_context(watch, message), working_dir, force);
+    };
+    let label = move || match (
+        watch.answerable.get(),
+        watch
+            .name
+            .get()
+            .is_some_and(|name| at_run_limit(state.agents.get().as_ref(), &name)),
+    ) {
+        (true, false) => "▶ Start",
+        (true, true) => "▶ Start anyway",
+        (false, false) => "▶ Run",
+        (false, true) => "▶ Run anyway",
     };
     view! {
         <form class="adi-form"
@@ -1316,7 +1457,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 on:input=move |ev| watch.run_dir.set(event_target_value(&ev)) />
             <button class="adi-btn adi-btn--primary" type="submit"
                 prop:disabled=move || watch.input.get().trim().is_empty()>
-                {move || if watch.answerable.get() { "▶ Start" } else { "▶ Run" }}
+                {label}
             </button>
         </form>
     }
@@ -1563,7 +1704,8 @@ fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
         view! {
             <button class="adi-btn adi-btn--ghost adi-chome__new" type="button"
                 title="start a fresh session"
-                on:click=move |_| run_now(state, name.clone())>"+ New"</button>
+                on:click=move |_| run_now(state, name.clone(),
+                    at_run_limit(state.agents.get_untracked().as_ref(), &name))>"+ New"</button>
         }
         .into_any()
     } else {
@@ -1674,7 +1816,8 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
                             <div class="adi-chome__center-empty">
                                 <p>{msg}</p>
                                 <button class="adi-btn adi-btn--primary" type="button"
-                                    on:click=move |_| run_now(state, name.clone())>
+                                    on:click=move |_| run_now(state, name.clone(),
+                                        at_run_limit(state.agents.get_untracked().as_ref(), &name))>
                                     "\u{25B6} Start session"
                                 </button>
                             </div>

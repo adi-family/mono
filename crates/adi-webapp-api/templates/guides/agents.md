@@ -59,6 +59,30 @@ NODE_ENV = "development"
   these keeps what the agent has** — only the full agent form states them — so send `[]` / `{}` to
   clear.
 
+## How many may run at once
+Runs are launched from everywhere — a click, a trigger firing, a chat queue draining — and nothing
+about a *definition* bounds how many exist. Two numbers do, both in
+`~/.adi/mono/sessions/settings.toml`:
+
+```toml
+max_concurrent_runs = 3   # the ceiling, across every agent (0 lifts it)
+
+[projects]
+bugbounty = 2             # …and at most 2 of those may be this project's (0 = no cap of its own)
+```
+
+- The global number counts every live run, across agents and backends. A project's number counts
+  the runs of the agents filed **directly** under it — a sub-project's runs weigh on that
+  sub-project, which sets its own. A project cap narrows the global one; it never lifts it.
+- **Automatic** launches wait: a queued chat turn stays queued, and a trigger's
+  `adi-agents run` is refused (HTTP 429) rather than piling on. The refusal says *which* cap is
+  full.
+- **You** are never blocked, only told: run it anyway with `{{cli}} agents run <name> --force`, or
+  the panel's **▶ Run anyway** — the Run button says so once a cap that binds this agent is full.
+- Read or set: `{{cli}} agents limit [N] [--project <id>]`, `POST /api/agents/limit`
+  (`{"max_concurrent_runs":N,"project":"<id>"?}`), the box in `/agents` (global) or in a project's
+  **Agents** panel (that project's).
+
 ## Notes
 - pty backends keep no run history — their live session *is* the run. harness/process backends
   produce answerable turns you can reply to.

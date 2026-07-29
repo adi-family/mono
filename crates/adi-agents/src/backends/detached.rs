@@ -7,6 +7,7 @@
 //! namespace, sidecars included, which is what deleting and pruning sweep. Finished runs persist so
 //! their output stays browsable as history; the oldest are pruned once the count passes `MAX_RUNS`.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{Read as _, Seek as _, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -160,6 +161,40 @@ pub(crate) fn list_runs(sessions_dir: &Path, subdir: &str, agent_name: &str) -> 
             }
         })
         .collect()
+}
+
+/// How many runs under `subdir` are alive right now, per agent — what the concurrency caps count.
+/// Read from the PID files themselves rather than per-agent run lists: a finished run drops its PID
+/// file, so the live ones are exactly the files still naming a living process. An agent with nothing
+/// running is left out, so the map is as small as the load is.
+#[must_use]
+pub(crate) fn running_by_agent(sessions_dir: &Path, subdir: &str) -> BTreeMap<String, usize> {
+    let Ok(agents) = std::fs::read_dir(sessions_dir.join(subdir)) else {
+        return BTreeMap::new();
+    };
+    agents
+        .flatten()
+        .filter(|entry| entry.path().is_dir())
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let live = count_running_in(&entry.path());
+            (live > 0).then_some((name, live))
+        })
+        .collect()
+}
+
+/// The live runs in one agent's run directory.
+fn count_running_in(dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension().is_some_and(|ext| ext == "pid") && read_pid(path).is_some_and(pid_alive)
+        })
+        .count()
 }
 
 /// Whether any run of `agent` is still alive.

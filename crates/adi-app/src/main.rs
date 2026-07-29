@@ -335,6 +335,7 @@ async fn handle(
         ("POST", "/api/agents/save") => handlers::save_agent(agents, &req.body),
         ("POST", "/api/agents/delete") => handlers::delete_agent(agents, &req.body),
         ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body),
+        ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
         ("POST", "/api/agents/runs") => handlers::agent_runs(agents, &req.body),
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(agents),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),

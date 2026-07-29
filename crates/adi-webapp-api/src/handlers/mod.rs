@@ -627,6 +627,126 @@ mod tests {
         assert!(v["error"].as_str().unwrap().contains("can't be run yet"));
     }
 
+    /// The run cap over the wire: stated with the agents, settable, and a launch past it is a 429 —
+    /// unless the caller says `force`, which lands on the backend's own verdict instead (a 400 here,
+    /// since `harness:adi` has no provider configured in a scratch store).
+    #[test]
+    fn the_run_limit_is_stated_settable_and_refuses_a_launch_past_it() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+
+        let Response { status, body } = agents(&store);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["max_concurrent_runs"], 3, "the default cap is stated");
+        assert_eq!(v["running_runs"], 0);
+
+        let Response { status, body } = set_run_limit(&store, br#"{"max_concurrent_runs":1}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["max_concurrent_runs"], 1);
+
+        // One live run — a PID file naming this process — fills a cap of one.
+        let runs = store
+            .config()
+            .module("sessions")
+            .dir()
+            .join("process")
+            .join("other");
+        std::fs::create_dir_all(&runs).unwrap();
+        std::fs::write(
+            runs.join("0000000000001-0000.pid"),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
+
+        let Response { status, body } = run_agent(&store, br#"{"name":"looper","message":"go"}"#);
+        assert_eq!(status, 429, "a launch past the cap is refused");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["error"].as_str().unwrap().contains("limit is 1"),
+            "the refusal says what the limit is: {body}"
+        );
+
+        let Response { status, .. } =
+            run_agent(&store, br#"{"name":"looper","message":"go","force":true}"#);
+        assert_eq!(status, 400, "force gets past the cap, to the backend's verdict");
+    }
+
+    /// A project's own cap: set through the same endpoint, reported per project, and enforced on
+    /// that project's agents only — while the global cap still has room.
+    #[test]
+    fn a_project_run_limit_is_set_reported_and_enforced() {
+        let store = temp_agents();
+        let _ = save_agent(
+            &store,
+            br#"{"name":"solver","backend":"harness:adi","project":"bugbounty"}"#,
+        );
+        let _ = save_agent(&store, br#"{"name":"loose","backend":"harness:adi"}"#);
+
+        let Response { status, body } =
+            set_run_limit(&store, br#"{"max_concurrent_runs":1,"project":"bugbounty"}"#);
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["max_concurrent_runs"], 3, "the global cap is untouched");
+        let row = &v["project_run_limits"].as_array().unwrap()[0];
+        assert_eq!(row["project"], "bugbounty");
+        assert_eq!(row["max_concurrent_runs"], 1);
+        assert_eq!(row["running_runs"], 0);
+
+        // One live run of the project fills its cap, while the machine as a whole is still idle.
+        let runs = store
+            .config()
+            .module("sessions")
+            .dir()
+            .join("harness")
+            .join("solver");
+        std::fs::create_dir_all(&runs).unwrap();
+        std::fs::write(
+            runs.join("0000000000001-0000.pid"),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
+
+        let Response { status, body } = run_agent(&store, br#"{"name":"solver","message":"go"}"#);
+        assert_eq!(status, 429);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["error"].as_str().unwrap().contains("bugbounty"),
+            "the refusal names the project whose cap is full: {body}"
+        );
+
+        // The unfiled agent is untouched by it, and the state says which rows are at their cap.
+        let Response { status, .. } = run_agent(&store, br#"{"name":"loose","message":"go"}"#);
+        assert_eq!(status, 400, "no cap applies, so the backend answers");
+        let Response { body, .. } = agents(&store);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let flags: Vec<(&str, bool)> = v["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| {
+                (
+                    a["name"].as_str().unwrap(),
+                    a["at_run_limit"].as_bool().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(flags, [("loose", false), ("solver", true)]);
+
+        // Clearing it (a 0) leaves the project bound only by the global cap.
+        let Response { body, .. } =
+            set_run_limit(&store, br#"{"max_concurrent_runs":0,"project":"bugbounty"}"#);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["project_run_limits"].as_array().unwrap()[0]["max_concurrent_runs"],
+            0,
+            "the row stays while runs are live, now with no cap of its own"
+        );
+        let Response { status, .. } = run_agent(&store, br#"{"name":"solver","message":"go"}"#);
+        assert_eq!(status, 400);
+    }
+
     #[test]
     fn save_agent_round_trips_backend_settings() {
         let store = temp_agents();

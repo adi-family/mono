@@ -63,7 +63,7 @@ pub fn launch(
 }
 
 /// Say something into an existing conversation: start the next turn, or queue the message when the
-/// previous answer is still being produced.
+/// previous answer is still being produced — or when `may_start` says the platform is at its run cap.
 pub fn reply(
     agent: &StoredAgent,
     sessions_dir: &Path,
@@ -72,6 +72,7 @@ pub fn reply(
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
+    may_start: bool,
 ) -> Result<Sent> {
     conversation::reply(
         agent,
@@ -81,6 +82,7 @@ pub fn reply(
         conv_id,
         message,
         run_env,
+        may_start,
     )
 }
 
@@ -141,6 +143,12 @@ pub fn list_runs(sessions_dir: &Path, agent_name: &str) -> Vec<crate::run::RunIn
 #[must_use]
 pub fn any_running(sessions_dir: &Path, agent_name: &str) -> bool {
     detached::any_running(sessions_dir, HARNESS_DIR, agent_name)
+}
+
+/// The conversation turns being answered right now, per agent.
+#[must_use]
+pub fn running_by_agent(sessions_dir: &Path) -> std::collections::BTreeMap<String, usize> {
+    detached::running_by_agent(sessions_dir, HARNESS_DIR)
 }
 
 /// Whether one specific run is still alive.

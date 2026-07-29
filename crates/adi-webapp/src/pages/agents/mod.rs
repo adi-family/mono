@@ -28,7 +28,7 @@ mod form;
 use actions::apply_agents;
 pub(crate) use actions::{
     CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, agent_actions, all_chats_view,
-    chat_home_view, live_view, poll_watch,
+    chat_home_view, live_view, poll_watch, project_run_limit_view, run_limit_view,
 };
 use code::{code_editor_view, open_code_editor};
 pub(crate) use form::load_agent_into_form;
@@ -76,6 +76,8 @@ pub(crate) fn agents_view(
                     {move || agents.get().map_or_else(|| "\u{2014}".to_string(),
                         |a| a.agents.len().to_string())}
                 </span>
+                {run_limit_view(state)}
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
             </div>
 

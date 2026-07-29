@@ -54,6 +54,12 @@ pub fn any_running(sessions_dir: &Path, agent_name: &str) -> bool {
     detached::any_running(sessions_dir, PROCESS_DIR, agent_name)
 }
 
+/// The live process runs of each agent that has any.
+#[must_use]
+pub fn running_by_agent(sessions_dir: &Path) -> std::collections::BTreeMap<String, usize> {
+    detached::running_by_agent(sessions_dir, PROCESS_DIR)
+}
+
 /// Whether one specific run is still alive.
 #[must_use]
 pub fn is_running(sessions_dir: &Path, agent_name: &str, run_id: &str) -> bool {

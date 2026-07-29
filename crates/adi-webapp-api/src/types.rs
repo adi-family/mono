@@ -693,6 +693,10 @@ pub struct AgentDto {
     /// Whether this agent has a live pty session or detached process right now.
     #[serde(default)]
     pub running: bool,
+    /// Whether a run of *this* agent would be refused right now — the global cap is full, or its
+    /// project's is. The client uses it to offer "Run anyway" instead of walking into a 429.
+    #[serde(default)]
+    pub at_run_limit: bool,
 }
 
 /// `GET /api/agents` — every registered agent definition, sorted by name. Each mutation endpoint
@@ -701,6 +705,41 @@ pub struct AgentDto {
 pub struct AgentsState {
     pub agents: Vec<AgentDto>,
     pub form: AgentFormSpec,
+    /// How many runs may be live at once before an unforced launch is refused; `0` means no limit.
+    #[serde(default)]
+    pub max_concurrent_runs: u32,
+    /// How many runs are live right now, across every agent — the number weighed against the limit,
+    /// so the client can say "at the limit" before it asks.
+    #[serde(default)]
+    pub running_runs: u32,
+    /// The per-project caps and loads: one entry for every project that has a cap of its own or
+    /// something running. A project not listed here has no cap of its own and nothing live.
+    #[serde(default)]
+    pub project_run_limits: Vec<ProjectRunLimit>,
+}
+
+/// One project's slice of the run caps: what it is allowed and what it is using.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRunLimit {
+    pub project: String,
+    /// This project's own cap; `0` means it has none and is bounded only by the global limit.
+    #[serde(default)]
+    pub max_concurrent_runs: u32,
+    /// How many of this project's runs are live right now.
+    #[serde(default)]
+    pub running_runs: u32,
+}
+
+/// Request body for `POST /api/agents/limit` — set how many runs may be live at once. With
+/// `project` set it is that project's own cap (`0` clears it, leaving only the global limit);
+/// without, the global one (`0` lifts it). A project cap narrows the global number, never lifts it.
+/// Both bind automatic launches (a trigger, a queued chat turn); a human overrides them per run
+/// with `force`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SetRunLimit {
+    pub max_concurrent_runs: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// Request body for `POST /api/agents/save` — create or update an agent definition (an upsert
@@ -766,6 +805,11 @@ pub struct RunAgent {
     /// the agent's project to decide.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    /// Launch even when the concurrency limit is full — a human's deliberate "run it anyway", after
+    /// a refusal or straight from a UI that can already see the cap is full. Never set by anything
+    /// the platform starts on its own.
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// Request naming one specific run of an agent — `POST /api/agents/run/peek` and `/run/stop`.

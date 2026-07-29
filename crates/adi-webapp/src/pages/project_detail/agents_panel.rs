@@ -4,7 +4,9 @@ use adi_webapp_api::types::{AgentsState, SaveAgent};
 use leptos::prelude::*;
 
 use crate::fetch;
-use crate::pages::agents::{agent_actions, agent_cell, agent_key, load_agent_into_form};
+use crate::pages::agents::{
+    agent_actions, agent_cell, agent_key, load_agent_into_form, project_run_limit_view,
+};
 use crate::routing::{ProjectSection, Route, push_state, scroll_top};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{
@@ -49,6 +51,10 @@ pub(crate) fn agents_panel(
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Agents"</h2>
+                // This project's own run cap. It counts the agents filed *directly* under it — a
+                // sub-project's runs weigh on that sub-project, which sets its own number.
+                {project_run_limit_view(state)}
+                <span class="adi-spacer"></span>
                 <span class="adi-updated">"filed under this project & its sub-projects"</span>
             </div>
             {configurable_table(state.tables.project_agents, COLS,

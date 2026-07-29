@@ -23,6 +23,15 @@ pub enum Error {
     /// An operation doesn't apply to this backend (e.g. replying to a one-shot / interactive
     /// backend that keeps no conversation). Carries a ready-to-show message; maps to HTTP 400.
     Unsupported(String),
+    /// A launch was refused because as many runs are already live as the store allows — globally
+    /// (`project` is `None`) or within the agent's own project. Maps to HTTP 429. A human can ask
+    /// again with force (see [`Agents::force_run_in`](crate::Agents::force_run_in)); an automatic
+    /// launch waits instead.
+    TooManyRunning {
+        project: Option<String>,
+        running: usize,
+        limit: u32,
+    },
 }
 
 impl fmt::Display for Error {
@@ -52,6 +61,22 @@ impl fmt::Display for Error {
             Self::Process(msg) => write!(f, "process error: {msg}"),
             // Both carry a ready-to-show sentence, so no prefix is added.
             Self::Busy(msg) | Self::Unsupported(msg) => write!(f, "{msg}"),
+            Self::TooManyRunning {
+                project: None,
+                running,
+                limit,
+            } => write!(
+                f,
+                "{running} agent runs are already live and the limit is {limit} — stop one, raise the limit, or run it anyway"
+            ),
+            Self::TooManyRunning {
+                project: Some(project),
+                running,
+                limit,
+            } => write!(
+                f,
+                "{running} runs of project {project} are already live and its limit is {limit} — stop one, raise the project's limit, or run it anyway"
+            ),
         }
     }
 }
@@ -73,7 +98,8 @@ impl std::error::Error for Error {
             | Self::Session(_)
             | Self::Process(_)
             | Self::Busy(_)
-            | Self::Unsupported(_) => None,
+            | Self::Unsupported(_)
+            | Self::TooManyRunning { .. } => None,
         }
     }
 }

@@ -27,6 +27,16 @@ event — and runs whenever a match fires.
 verbatim as `$ADI_PAYLOAD`, so it is JSON only by convention. The CLI takes it the same way:
 `{{cli}} events emit adi.test.probe --payload '{"from":"me"}'`.
 
+## A trigger that launches agents is capped
+A block that calls `adi-agents run` is an *automatic* launch, so it is bound by the run caps (see
+`agents.md`): the global `max_concurrent_runs` (3 by default) and, if the agent is filed under a
+project, that project's own. At a cap the run is refused rather than added, and the block sees a
+non-zero exit with the reason — including which cap is full — on stderr. Retry on the next event,
+or raise the limit; `--force` belongs to a human at a keyboard, not to a trigger firing unattended.
+
+A per-project cap is the usual way to keep one noisy pipeline from eating the whole machine: give
+the project 2 and the rest of the stack keeps its slots.
+
 ## Do it
 - Create, edit, and enable/disable triggers on the `/triggers` panel. Read `GET /api/triggers`
   for the current set and the event catalog before wiring a new one.

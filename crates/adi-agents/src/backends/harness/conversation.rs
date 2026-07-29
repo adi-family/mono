@@ -140,6 +140,11 @@ pub(crate) fn start(
 /// Say `message` into an existing conversation. One turn runs at a time, so this either starts the
 /// next turn straight away or — while the agent is still answering — puts the message in the
 /// conversation's queue, to be started by the first [`advance`] after the current answer lands.
+///
+/// `may_start` is the caller's concurrency verdict (see [`crate::Agents::reply`]): `false` means the
+/// platform is at its run cap, so the message queues even though this conversation is idle. Nothing
+/// is refused — a queued message is answered as soon as a slot frees, which is what the queue is
+/// already for.
 pub(crate) fn reply(
     agent: &StoredAgent,
     sessions_dir: &Path,
@@ -148,6 +153,7 @@ pub(crate) fn reply(
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
+    may_start: bool,
 ) -> Result<Sent> {
     let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, &agent.name);
     if !detached::meta_path(&dir, conv_id).exists() {
@@ -155,7 +161,7 @@ pub(crate) fn reply(
     }
     let _gate = turn_gate();
     let mut queue = load_queue(&dir, conv_id);
-    if turn_running(&dir, conv_id) {
+    if !may_start || turn_running(&dir, conv_id) {
         queue.push(message.to_string());
         let place = queue.len();
         save_queue(&dir, conv_id, &queue);
@@ -724,9 +730,9 @@ mod tests {
         .unwrap();
 
         let agent = chatty("chat");
-        let sent = reply(&agent, &sessions, &sessions, "", conv, "second", &[]).expect("reply");
+        let sent = reply(&agent, &sessions, &sessions, "", conv, "second", &[], true).expect("reply");
         assert_eq!(sent, Sent::Queued { place: 1 }, "it waits rather than failing");
-        let sent = reply(&agent, &sessions, &sessions, "", conv, "third", &[]).expect("reply");
+        let sent = reply(&agent, &sessions, &sessions, "", conv, "third", &[], true).expect("reply");
         assert_eq!(sent, Sent::Queued { place: 2 });
 
         // Nothing was asked: the transcript still holds only the first question.

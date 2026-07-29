@@ -10,10 +10,10 @@ use adi_webapp_api::types::{
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
     ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, RunAgent, RunRef,
     RunTool, SaveAgent, SaveAgentCode, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
-    SetOAuthSecret, SetSecret, StartResult, StartService, StopResult, TaskRef, TasksState, ToolRef,
-    ToolRunResult, ToolScript, ToolsState, TriggerFireResult, TriggerLog, TriggerRef,
-    TriggersState, UnqueueFromRun, UsedPorts, WorkspaceCreateResult, WorkspaceRef, WorkspaceTerm,
-    WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
+    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TriggerFireResult, TriggerLog,
+    TriggerRef, TriggersState, UnqueueFromRun, UsedPorts, WorkspaceCreateResult, WorkspaceRef,
+    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
@@ -269,11 +269,13 @@ pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
 }
 
 /// Launch a run. `working_dir` is the composer's optional "run here" — blank means "run this agent
-/// as defined", so it starts where its manifest and its project say.
+/// as defined", so it starts where its manifest and its project say. `force` launches past a full
+/// concurrency limit — what the "Run anyway" affordance sends.
 pub async fn run_agent(
     name: String,
     message: String,
     working_dir: Option<String>,
+    force: bool,
 ) -> Result<AgentRunResult, String> {
     post(
         "/api/agents/run",
@@ -281,6 +283,23 @@ pub async fn run_agent(
             name,
             message,
             working_dir,
+            force,
+        },
+    )
+    .await
+}
+
+/// Set how many agent runs may be live at once: the global cap, or one project's own when
+/// `project` names one (`0` lifts / clears).
+pub async fn set_run_limit(
+    max_concurrent_runs: u32,
+    project: Option<String>,
+) -> Result<AgentsState, String> {
+    post(
+        "/api/agents/limit",
+        &SetRunLimit {
+            max_concurrent_runs,
+            project,
         },
     )
     .await

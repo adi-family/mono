@@ -106,6 +106,22 @@ pub(crate) fn launch_in(
     }
 }
 
+/// The live detached runs of every agent that has any, keyed by agent name — the raw material both
+/// concurrency caps are computed from (the global one sums it; the per-project one sums the agents
+/// filed under that project).
+///
+/// Read from PID files, so a run started by another process (the CLI, a trigger's `adi-agents run`)
+/// counts too. Pty sessions are not here: they live inside the process that opened them and keep no
+/// run directory to name an agent from — see [`running_sessions`], which the caller matches against
+/// the agents it already holds.
+pub(crate) fn running_by_agent_in(sessions_dir: &Path) -> std::collections::BTreeMap<String, usize> {
+    let mut by_agent = process::running_by_agent(sessions_dir);
+    for (agent, live) in harness::running_by_agent(sessions_dir) {
+        *by_agent.entry(agent).or_default() += live;
+    }
+    by_agent
+}
+
 /// A headless agent's run history, newest first. Interactive (pty) backends have no history — their
 /// live session *is* the run — so this is empty for them.
 pub(crate) fn runs_in(agent: &StoredAgent, sessions_dir: &Path) -> Vec<RunInfo> {
@@ -231,8 +247,8 @@ pub(crate) fn delete_run_in(
 }
 
 /// Say something into one of an agent's conversations: start the next turn, or queue the message
-/// behind the answer still in flight. Only harness backends keep conversations; anything else has no
-/// thread to continue.
+/// behind the answer still in flight — or, when `may_start` is false, behind the run cap. Only
+/// harness backends keep conversations; anything else has no thread to continue.
 pub(crate) fn reply_in(
     agent: &StoredAgent,
     sessions_dir: &Path,
@@ -241,11 +257,19 @@ pub(crate) fn reply_in(
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
+    may_start: bool,
 ) -> Result<Sent> {
     match &agent.manifest.backend {
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::reply(agent, sessions_dir, base_dir, run_path, conv_id, message, run_env)
-        }
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => harness::reply(
+            agent,
+            sessions_dir,
+            base_dir,
+            run_path,
+            conv_id,
+            message,
+            run_env,
+            may_start,
+        ),
         other => Err(Error::Unsupported(format!(
             "backend {other} isn't answerable — only harness backends keep conversations you can reply to"
         ))),

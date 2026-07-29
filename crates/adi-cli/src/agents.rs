@@ -3,7 +3,9 @@
 
 use std::collections::BTreeMap;
 
-use adi_core::{Adi, AgentManifest, AgentSummaryArguments, Launch, SecretAttachment, StoredAgent};
+use adi_core::{
+    Adi, AgentManifest, AgentSummaryArguments, AgentsError, Launch, SecretAttachment, StoredAgent,
+};
 use clap::Subcommand;
 
 use crate::format::{clean, clean_required, clean_tags, parse_arguments, print_json};
@@ -101,6 +103,24 @@ pub(crate) enum AgentsCommand {
         /// directory. For pointing one agent at a different target each run.
         #[arg(long, value_name = "PATH")]
         dir: Option<String>,
+        /// Launch even when as many runs are already live as the store allows. The deliberate
+        /// override of the concurrency limit — for a human who wants this one now.
+        #[arg(long)]
+        force: bool,
+    },
+    /// Show, or set, how many agent runs may be live at once — overall, or (with `--project`) for
+    /// one project's agents. The caps bind every launch the platform makes on its own (a trigger
+    /// firing, a queued chat turn); a human overrides them per run with `agents run --force`.
+    Limit {
+        /// The new cap. `0` lifts it (for a project: clears its own cap). Omit to read the
+        /// current ones.
+        max: Option<u32>,
+        /// Set this project's cap instead of the global one. A project cap narrows the global
+        /// number, it never lifts it.
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        json: bool,
     },
     /// Stop a running agent using its executor's lifecycle.
     Stop { name: String },
@@ -225,6 +245,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             message,
             handler,
             dir,
+            force,
         } => {
             let is_wasm = store
                 .get(&name)
@@ -246,9 +267,18 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     outcome.output_tokens,
                 );
             } else {
-                let launch = store
-                    .run_in(&name, &message, dir.as_deref())
-                    .map_err(|e| e.to_string())?;
+                let launch = if force {
+                    store.force_run_in(&name, &message, dir.as_deref())
+                } else {
+                    store.run_in(&name, &message, dir.as_deref())
+                }
+                .map_err(|e| match e {
+                    // The refusal is the one error a human can act on from here, so it says how.
+                    AgentsError::TooManyRunning { .. } => {
+                        format!("{e}: re-run with --force to launch it anyway")
+                    }
+                    other => other.to_string(),
+                })?;
                 match launch {
                     Launch::Pty { command, session } => {
                         println!("Started agent {name} in session {session}.");
@@ -266,6 +296,51 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                         println!("  command: {command}");
                         println!("  log:     {}", log.display());
                     }
+                }
+            }
+        }
+        AgentsCommand::Limit {
+            max,
+            project,
+            json,
+        } => {
+            let limits = match (max, project.as_deref()) {
+                (Some(max), Some(project)) => store
+                    .set_project_limit(project, max)
+                    .map_err(|e| e.to_string())?,
+                (Some(max_concurrent_runs), None) => {
+                    let mut limits = store.limits();
+                    limits.max_concurrent_runs = max_concurrent_runs;
+                    store.set_limits(limits).map_err(|e| e.to_string())?
+                }
+                (None, _) => store.limits(),
+            };
+            let load = store.run_load();
+            if json {
+                print_json(&serde_json::json!({
+                    "max_concurrent_runs": limits.max_concurrent_runs,
+                    "running": load.total(),
+                    "projects": limits.projects.iter().map(|(id, max)| serde_json::json!({
+                        "project": id,
+                        "max_concurrent_runs": max,
+                        "running": load.in_project(id),
+                    })).collect::<Vec<_>>(),
+                }));
+            } else {
+                if limits.max_concurrent_runs == 0 {
+                    println!("No overall limit ({} running).", load.total());
+                } else {
+                    println!(
+                        "At most {} agent runs at once ({} running).",
+                        limits.max_concurrent_runs,
+                        load.total()
+                    );
+                }
+                for (id, max) in &limits.projects {
+                    println!(
+                        "  {id}: at most {max} ({} running)",
+                        load.in_project(id)
+                    );
                 }
             }
         }

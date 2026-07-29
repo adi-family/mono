@@ -14,8 +14,8 @@ use crate::types::{
     AgentBackendOption, AgentBuildResult, AgentCapabilities, AgentCode, AgentDto, AgentFormField,
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef,
     AgentRunInfo, AgentRunResult, AgentRuns, AgentStep, AgentToolStatus, AgentTurn,
-    AgentTurnMetrics, AgentsState, AllAgentRuns, ReplyToRun, RunAgent, RunRef, SaveAgent,
-    SaveAgentCode, SecretRef, UnqueueFromRun,
+    AgentTurnMetrics, AgentsState, AllAgentRuns, ProjectRunLimit, ReplyToRun, RunAgent, RunRef,
+    SaveAgent, SaveAgentCode, SecretRef, SetRunLimit, UnqueueFromRun,
 };
 
 use super::files::MAX_TEXT_BYTES;
@@ -36,14 +36,88 @@ pub fn agents(store: &Agents) -> Response {
 /// the meta-handler, which reuses it to find the well-known `adi-agent` and reads back the schema.
 pub(crate) fn agents_state(store: &Agents) -> Result<AgentsState, AgentStoreError> {
     let sessions = adi_agents::running_sessions();
+    // Both caps and the load behind them, taken once: every row's "would this be refused?" and the
+    // per-project rows below are answered from this one snapshot.
+    let caps = RunCaps {
+        limits: store.limits(),
+        load: store.run_load(),
+    };
+    let project_run_limits = caps.rows();
     Ok(AgentsState {
         agents: store
             .list()?
             .into_iter()
-            .map(|a| agent_dto(store, a, &sessions))
+            .map(|a| agent_dto(store, a, &sessions, &caps))
             .collect(),
         form: agent_form_spec(),
+        max_concurrent_runs: caps.limits.max_concurrent_runs,
+        running_runs: count(caps.load.total()),
+        project_run_limits,
     })
+}
+
+/// The run caps as one page render sees them: what is allowed, and what is live.
+struct RunCaps {
+    limits: adi_agents::RunLimits,
+    load: adi_agents::RunLoad,
+}
+
+impl RunCaps {
+    /// Whether an agent filed under `project` (or none) would be refused a launch right now.
+    fn blocks(&self, project: Option<&str>) -> bool {
+        self.limits.is_full(self.load.total())
+            || project.is_some_and(|p| self.limits.project_is_full(p, self.load.in_project(p)))
+    }
+
+    /// One row per project that has a cap of its own or something running — capped-and-idle and
+    /// running-but-uncapped are both worth showing, so the page can state either.
+    fn rows(&self) -> Vec<ProjectRunLimit> {
+        let mut projects: std::collections::BTreeSet<&String> =
+            self.limits.projects.keys().collect();
+        projects.extend(self.load.projects().keys());
+        projects
+            .into_iter()
+            .map(|project| ProjectRunLimit {
+                max_concurrent_runs: self.limits.project_limit(project).unwrap_or(0),
+                running_runs: count(self.load.in_project(project)),
+                project: project.clone(),
+            })
+            .collect()
+    }
+}
+
+/// A live-run tally as the wire carries it. Saturating: a machine with four billion live runs has
+/// worse problems than a rounded number.
+fn count(runs: usize) -> u32 {
+    u32::try_from(runs).unwrap_or(u32::MAX)
+}
+
+/// `POST /api/agents/limit` — set how many runs may be live at once: the global cap, or one
+/// project's own when `project` names one (`0` lifts / clears). Answers with the fresh state, so
+/// the page's counters settle in the same round-trip.
+#[must_use]
+pub fn set_run_limit(store: &Agents, body: &[u8]) -> Response {
+    let Ok(req) = serde_json::from_slice::<SetRunLimit>(body) else {
+        return error(
+            400,
+            "expected JSON body { \"max_concurrent_runs\": <number>, \"project\"?: \"…\" } — 0 lifts the limit",
+        );
+    };
+    let stored = match req.project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(project) => store.set_project_limit(project, req.max_concurrent_runs),
+        None => {
+            let mut limits = store.limits();
+            limits.max_concurrent_runs = req.max_concurrent_runs;
+            store.set_limits(limits)
+        }
+    };
+    if let Err(e) = stored {
+        return Response::from(&e);
+    }
+    match agents_state(store) {
+        Ok(state) => ok_json(&state),
+        Err(e) => Response::from(&e),
+    }
 }
 
 /// `POST /api/agents/run` — launch an agent in its backend. Pty engines start an interactive
@@ -76,7 +150,13 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
         .as_deref()
         .map(str::trim)
         .filter(|d| !d.is_empty());
-    let launch = store.run_in(name, message, working_dir);
+    // `force` is the human's "run it anyway" after a refusal — the only way past the concurrency
+    // limit, and never something an automatic launch sends.
+    let launch = if req.force {
+        store.force_run_in(name, message, working_dir)
+    } else {
+        store.run_in(name, message, working_dir)
+    };
     let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return Response::from(&e),
@@ -749,6 +829,7 @@ fn agent_dto(
     store: &Agents,
     agent: StoredAgent,
     sessions: &std::collections::BTreeSet<String>,
+    caps: &RunCaps,
 ) -> AgentDto {
     let executor = agent.manifest.executor().to_string();
     let runnable = adi_agents::is_runnable(&agent.manifest);
@@ -757,6 +838,9 @@ fn agent_dto(
     } else {
         store.is_running(&agent)
     };
+    // Whether *this* agent is the one that would be refused: the global cap binds everybody, a
+    // project cap only that project's agents.
+    let at_run_limit = caps.blocks(agent.manifest.project.as_deref());
     let m = agent.manifest;
     AgentDto {
         name: agent.name,
@@ -781,6 +865,7 @@ fn agent_dto(
         updated_at: m.updated_at,
         runnable,
         running,
+        at_run_limit,
     }
 }
 
@@ -1489,10 +1574,11 @@ fn opts(pairs: &[(&str, &str)]) -> Vec<AgentFormOption> {
 }
 
 // Map an agent-store error to an HTTP status: bad name / unrunnable backend / bad key → 400,
-// missing → 404, wrong run state (already / not running) → 409, else 500.
+// missing → 404, wrong run state (already / not running) → 409, run cap full → 429, else 500.
 impl From<&AgentStoreError> for Response {
     fn from(e: &AgentStoreError) -> Self {
         let status = match e {
+            AgentStoreError::TooManyRunning { .. } => 429,
             AgentStoreError::Arguments(_)
             | AgentStoreError::InvalidName(_)
             | AgentStoreError::NotRunnable(_)
