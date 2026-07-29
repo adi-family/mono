@@ -112,7 +112,7 @@ pub(crate) fn start(
     std::fs::create_dir_all(&dir)?;
     let conv_id = detached::new_run_id();
     // The turn command needs the conversation id (the `adi` loop replays that conversation).
-    let (argv, working_dir) = engine_turn(
+    let argv = engine_turn(
         agent,
         &conv_id,
         message,
@@ -121,16 +121,18 @@ pub(crate) fn start(
         },
     )?;
     // Metadata sidecar: the run list reads `message` (the conversation title) and `started_at`; the
-    // session id is what a reply resumes.
+    // session id is what a reply resumes; the working dir is where every turn of this conversation
+    // runs — see `read_working_dir`.
     let meta = serde_json::json!({
         "started_at": detached::started_at(&conv_id),
         "message": message,
         "session_id": session_id,
+        "working_dir": base_dir.display().to_string(),
     });
     let _ = std::fs::write(detached::meta_path(&dir, &conv_id), meta.to_string());
     append_turn(&dir, &conv_id, ROLE_USER, message);
 
-    let launch = spawn_turn(&dir, &conv_id, base_dir, run_path, &argv, working_dir, run_env)?;
+    let launch = spawn_turn(&dir, &conv_id, base_dir, run_path, &argv, run_env)?;
     detached::prune_old_runs(&dir);
     Ok(launch)
 }
@@ -206,7 +208,9 @@ pub(crate) fn advance(
 /// `exists` instead of the launch context a real advance needs.
 pub(crate) fn can_advance(sessions_dir: &Path, agent_name: &str, conv_id: &str) -> bool {
     let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, agent_name);
-    queue_path(&dir, conv_id).exists() && !turn_running(&dir, conv_id) && !load_queue(&dir, conv_id).is_empty()
+    queue_path(&dir, conv_id).exists()
+        && !turn_running(&dir, conv_id)
+        && !load_queue(&dir, conv_id).is_empty()
 }
 
 /// Drop the queued message at `index`, for a message you have thought better of. Returns whether
@@ -249,7 +253,7 @@ fn start_turn(
     let session_id = read_session_id(dir, conv_id);
     // Build the command before appending the question, so a failure doesn't strand a dangling
     // unanswered user turn in the transcript.
-    let (argv, working_dir) = engine_turn(
+    let argv = engine_turn(
         agent,
         conv_id,
         message,
@@ -258,7 +262,9 @@ fn start_turn(
         },
     )?;
     append_turn(dir, conv_id, ROLE_USER, message);
-    spawn_turn(dir, conv_id, base_dir, run_path, &argv, working_dir, run_env)
+    // `base_dir` is already the directory this conversation started in — the caller resolved it
+    // through [`pinned_dir`] before building the launch, precisely so a reply cannot drift.
+    spawn_turn(dir, conv_id, base_dir, run_path, &argv, run_env)
 }
 
 /// The conversation's transcript, oldest first. Folds a just-finished turn's captured stdout into a
@@ -317,20 +323,10 @@ fn spawn_turn(
     base_dir: &Path,
     run_path: &str,
     argv: &[String],
-    working_dir: Option<String>,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
     let log = detached::log_path_in(dir, conv_id);
-    let pid = detached::spawn_child(
-        dir,
-        conv_id,
-        &log,
-        base_dir,
-        run_path,
-        argv,
-        working_dir.as_deref(),
-        run_env,
-    )?;
+    let pid = detached::spawn_child(dir, conv_id, &log, base_dir, run_path, argv, run_env)?;
     Ok(Launch::Process {
         command: detached::display_command(argv),
         pid,
@@ -488,6 +484,24 @@ fn read_session_id(dir: &Path, conv_id: &str) -> String {
                 .map(ToString::to_string)
         })
         .unwrap_or_default()
+}
+
+/// The directory this conversation was started in, when it recorded one. Every later turn re-enters
+/// it, so a conversation stays in one place for its whole life: the engine's session store is keyed
+/// by cwd, and the files earlier turns wrote with relative paths are only where they are.
+///
+/// `None` for a conversation started before the directory was recorded. Those must not be answered
+/// from a freshly resolved directory — their first turn ran in the store root, whatever the manifest
+/// resolves to today — so the caller supplies that as the fallback.
+pub(super) fn pinned_dir(dir: &Path, conv_id: &str) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(detached::meta_path(dir, conv_id)).ok()?;
+    serde_json::from_str::<serde_json::Value>(&text)
+        .ok()?
+        .get("working_dir")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(PathBuf::from)
 }
 
 fn now_ms() -> u64 {

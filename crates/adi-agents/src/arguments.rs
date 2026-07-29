@@ -281,10 +281,12 @@ pub struct HarnessClaudeSdkArguments {
     /// The adi-mono command groups this agent may use (e.g. `tasks,projects`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<String>,
-    /// Where the run's process starts. Defaults to the ADI store root, which is right for an agent
-    /// that operates the environment and wrong for one that lives in a repo — pointing it at the
+    /// Where the run's process starts — the agent's declared home. Leaving it unset falls through
+    /// to the agent's project directory, and then to the ADI store root, which is right for an agent
+    /// that operates the environment and wrong for one that lives in a repo. Pointing a run at its
     /// workspace saves every command an absolute-path preamble, and saves the run the mistakes it
-    /// makes when it forgets one.
+    /// makes when it forgets one. A launch may override this for one run; see
+    /// `Agents::run_in` and `crate::workspace` for the whole precedence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
 }

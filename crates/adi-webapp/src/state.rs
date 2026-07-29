@@ -936,6 +936,12 @@ pub(crate) struct AgentsWatch {
     /// normal app; the dashboard-agent embed sets it to "editing dashboard <id> …" so the one global
     /// `adi-agent` session always knows which dashboard it was opened from.
     pub(crate) context_prefix: RwSignal<String>,
+    /// Where the *next* run started from this composer should begin, when the human wants one run
+    /// somewhere other than the agent's usual home — a recon agent pointed at this target, a
+    /// reviewer pointed at that checkout. Empty means "as the agent is defined", which is the
+    /// normal case; it applies to the launch only, and the conversation then keeps that directory
+    /// for its replies.
+    pub(crate) run_dir: RwSignal<String>,
 }
 
 impl AgentsWatch {
@@ -951,6 +957,7 @@ impl AgentsWatch {
             input: RwSignal::new(String::new()),
             reply: RwSignal::new(String::new()),
             context_prefix: RwSignal::new(String::new()),
+            run_dir: RwSignal::new(String::new()),
         }
     }
 

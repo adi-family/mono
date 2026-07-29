@@ -69,11 +69,14 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
             "This backend runs headless (one --print turn), so it needs an initial task — enter what it should do before running.",
         );
     }
-    let launch = if message.is_empty() {
-        store.run(name)
-    } else {
-        store.run_with_message(name, message)
-    };
+    // A pty backend takes no task, so a blank message is its normal launch, not a missing one.
+    let message = if message.is_empty() { "run" } else { message };
+    let working_dir = req
+        .working_dir
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty());
+    let launch = store.run_in(name, message, working_dir);
     let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return Response::from(&e),
@@ -1044,13 +1047,13 @@ fn agent_form_spec() -> AgentFormSpec {
 
     // Codex takes it as its own `-C` flag; the harness instead starts the run's process there.
     // Either way it is the same question — which directory is this agent's home — so it is one
-    // field. Unset means the ADI store root.
+    // field. Unset falls through to the agent's project directory, then to the store root.
     fields.push(txt_field(
         "working_dir",
         "Working dir",
         &["pty:codex", "process:codex", "harness:claude-sdk"],
         "/path/to/repo",
-        "where the agent starts (default: the store root)",
+        "where the agent starts (default: its project's directory, else the store root)",
     ));
 
     fields.push(chk_field(

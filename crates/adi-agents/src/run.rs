@@ -270,6 +270,22 @@ pub(crate) fn advance_in(
     }
 }
 
+/// The directory a conversation was started in, for the caller to re-enter on every later turn.
+/// `None` when the backend keeps no conversation, or when this one predates the recorded field —
+/// see [`harness::pinned_dir`] for why the fallback is the store root rather than a fresh resolve.
+pub(crate) fn conversation_dir_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    conv_id: &str,
+) -> Option<PathBuf> {
+    match &agent.manifest.backend {
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::pinned_dir(sessions_dir, &agent.name, conv_id)
+        }
+        _ => None,
+    }
+}
+
 /// Whether [`advance_in`] would start anything — the cheap gate a poll asks before paying for a
 /// launch context.
 pub(crate) fn can_advance_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> bool {

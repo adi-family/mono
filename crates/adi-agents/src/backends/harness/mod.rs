@@ -97,6 +97,16 @@ pub fn advance(
     conversation::advance(agent, sessions_dir, base_dir, run_path, conv_id, run_env)
 }
 
+/// The directory this conversation was started in, so every later turn re-enters it. `None` when
+/// the conversation predates the field — those started in the store root, which is what the caller
+/// falls back to; answering from anywhere else would leave the engine's session (keyed by cwd)
+/// unresumable and the files the earlier turns wrote out of reach.
+#[must_use]
+pub fn pinned_dir(sessions_dir: &Path, agent_name: &str, conv_id: &str) -> Option<PathBuf> {
+    let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, agent_name);
+    conversation::pinned_dir(&dir, conv_id)
+}
+
 /// Whether [`advance`] would start anything — asked before building a launch context, so an idle
 /// poll costs one `exists` rather than a tool sync.
 #[must_use]
@@ -187,30 +197,29 @@ fn engine_supported(manifest: &StoredAgentManifest) -> Result<()> {
     }
 }
 
-/// Build one conversation turn's command for the agent's engine: the argv and its optional working
-/// dir. `cont` carries whether this is the establishing first turn or a resumed reply (claude-sdk);
-/// the `adi` loop instead replays the transcript, so it is keyed by the agent + conversation id.
+/// Build one conversation turn's command for the agent's engine. `cont` carries whether this is the
+/// establishing first turn or a resumed reply (claude-sdk); the `adi` loop instead replays the
+/// transcript, so it is keyed by the agent + conversation id.
+///
+/// No working directory comes back: a turn's child is spawned into the conversation's own directory
+/// (`workspace::resolve` at the first turn, pinned by [`conversation`] for every reply after it), so
+/// the manifest is not read again here to answer the same question a second way.
 fn engine_turn(
     agent: &StoredAgent,
     conv_id: &str,
     message: &str,
     cont: Continuation<'_>,
-) -> Result<(Vec<String>, Option<String>)> {
+) -> Result<Vec<String>> {
     match &agent.manifest.backend {
         Backend::HarnessClaudeSdk => {
             let arguments = agent
                 .manifest
                 .typed_arguments::<HarnessClaudeSdkArguments>()?;
-            let working_dir = arguments
-                .working_dir
-                .as_ref()
-                .map(|d| d.trim().to_string())
-                .filter(|d| !d.is_empty());
-            Ok((claude_sdk::argv(&arguments, message, &cont), working_dir))
+            Ok(claude_sdk::argv(&arguments, message, &cont))
         }
         Backend::HarnessAdi => {
             adi_loop::validate(&agent.manifest.typed_arguments::<HarnessAdiArguments>()?)?;
-            Ok((adi_loop::argv(&agent.name, conv_id), None))
+            Ok(adi_loop::argv(&agent.name, conv_id))
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -242,36 +251,27 @@ mod tests {
     fn claude_sdk_is_runnable_and_builds_a_command() {
         let agent = agent("harness:claude-sdk");
         assert!(is_runnable(&agent.manifest));
-        let (argv, working_dir) =
-            engine_turn(&agent, "conv-1", "go", first()).expect("engine_turn");
+        let argv = engine_turn(&agent, "conv-1", "go", first()).expect("engine_turn");
         assert_eq!(argv.first().map(String::as_str), Some("claude"));
         assert!(argv.iter().any(|a| a == "--print"));
         // The first turn establishes the session id it will resume on replies.
         assert!(argv.iter().any(|a| a == "--session-id"));
-        assert!(working_dir.is_none());
     }
 
+    /// A `working_dir` decides where the child is *spawned* (`workspace::resolve`), so it must never
+    /// also leak into the turn's argv — the CLI has no such flag, and a second answer to the same
+    /// question is how the two drift.
     #[test]
-    fn claude_sdk_starts_a_run_in_its_working_dir() {
+    fn a_working_dir_never_reaches_the_turn_command() {
         let mut agent = agent("harness:claude-sdk");
-        agent.manifest.arguments = serde_json::json!({ "working_dir": "  /repo/main  " })
+        agent.manifest.arguments = serde_json::json!({ "working_dir": "/repo/main" })
             .as_object()
             .unwrap()
             .clone()
             .into_iter()
             .collect();
-        let (_, working_dir) = engine_turn(&agent, "conv-2", "go", first()).expect("engine_turn");
-        assert_eq!(working_dir.as_deref(), Some("/repo/main"));
-
-        // Blank is the same as unset — the run falls back to the store root.
-        agent.manifest.arguments = serde_json::json!({ "working_dir": "   " })
-            .as_object()
-            .unwrap()
-            .clone()
-            .into_iter()
-            .collect();
-        let (_, working_dir) = engine_turn(&agent, "conv-3", "go", first()).expect("engine_turn");
-        assert!(working_dir.is_none());
+        let argv = engine_turn(&agent, "conv-2", "go", first()).expect("engine_turn");
+        assert!(!argv.iter().any(|a| a.contains("/repo/main")), "{argv:?}");
     }
 
     #[test]
@@ -295,7 +295,7 @@ mod tests {
             .into_iter()
             .collect();
         assert!(is_runnable(&agent.manifest));
-        let (argv, _) = engine_turn(&agent, "conv-9", "hi", first()).expect("engine_turn");
+        let argv = engine_turn(&agent, "conv-9", "hi", first()).expect("engine_turn");
         assert_eq!(argv.first().map(String::as_str), Some("adi-mono"));
         assert!(argv.iter().any(|a| a == "harness-turn"));
         assert!(argv.iter().any(|a| a == "conv-9"));

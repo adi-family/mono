@@ -3,8 +3,11 @@
 use crate::arguments::{CodexApproval, CodexSandbox, PtyCodexArguments};
 use crate::backends::push_option;
 
-/// Build the Codex CLI command run by the shared pty executor.
-pub(super) fn argv(config: &PtyCodexArguments) -> Vec<String> {
+/// Build the Codex CLI command run by the shared pty executor. `workspace` is the session's
+/// resolved directory (see `super::engine_argv`) — passed as `--cd` because it scopes Codex's
+/// sandbox, not just where the process starts. The manifest's own `working_dir` already fed into
+/// that resolution, so it is not read again here.
+pub(super) fn argv(config: &PtyCodexArguments, workspace: Option<&str>) -> Vec<String> {
     let mut argv = vec!["codex".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -17,7 +20,7 @@ pub(super) fn argv(config: &PtyCodexArguments) -> Vec<String> {
         "--ask-for-approval",
         config.approval.map(CodexApproval::as_str),
     );
-    push_option(&mut argv, "--cd", config.working_dir.as_deref());
+    push_option(&mut argv, "--cd", workspace);
     push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
     if config.web_search {
         argv.push("--search".into());
@@ -62,7 +65,7 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest.arguments),
+            argv(&manifest.arguments, Some("/repo")),
             [
                 "codex",
                 "--model",

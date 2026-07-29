@@ -268,8 +268,22 @@ pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
     post("/api/agents/delete", &AgentRef { name }).await
 }
 
-pub async fn run_agent(name: String, message: String) -> Result<AgentRunResult, String> {
-    post("/api/agents/run", &RunAgent { name, message }).await
+/// Launch a run. `working_dir` is the composer's optional "run here" — blank means "run this agent
+/// as defined", so it starts where its manifest and its project say.
+pub async fn run_agent(
+    name: String,
+    message: String,
+    working_dir: Option<String>,
+) -> Result<AgentRunResult, String> {
+    post(
+        "/api/agents/run",
+        &RunAgent {
+            name,
+            message,
+            working_dir,
+        },
+    )
+    .await
 }
 
 pub async fn stop_agent(name: String) -> Result<AgentsState, String> {

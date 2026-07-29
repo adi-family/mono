@@ -3,7 +3,14 @@
 use crate::arguments::{CodexApproval, CodexSandbox, ProcessCodexArguments};
 use crate::backends::push_option;
 
-pub(super) fn argv(config: &ProcessCodexArguments, message: &str) -> Vec<String> {
+/// `workspace` is the run's resolved directory (see `super::engine_run`), passed as `--cd` because
+/// it scopes Codex's sandbox, not just where the process starts. The manifest's own `working_dir`
+/// already fed into that resolution, so it is not read again here.
+pub(super) fn argv(
+    config: &ProcessCodexArguments,
+    message: &str,
+    workspace: Option<&str>,
+) -> Vec<String> {
     let mut argv = vec!["codex".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -16,7 +23,7 @@ pub(super) fn argv(config: &ProcessCodexArguments, message: &str) -> Vec<String>
         "--ask-for-approval",
         config.approval.map(CodexApproval::as_str),
     );
-    push_option(&mut argv, "--cd", config.working_dir.as_deref());
+    push_option(&mut argv, "--cd", workspace);
     push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
     if config.web_search {
         argv.push("--search".into());
@@ -74,7 +81,7 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest.arguments, "fix the tests"),
+            argv(&manifest.arguments, "fix the tests", Some("/targets/acme")),
             [
                 "codex",
                 "--model",
@@ -83,6 +90,8 @@ mod tests {
                 "workspace-write",
                 "--ask-for-approval",
                 "never",
+                "--cd",
+                "/targets/acme",
                 "--config",
                 "model_reasoning_effort=high",
                 "exec",

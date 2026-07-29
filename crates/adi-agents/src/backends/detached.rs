@@ -52,7 +52,6 @@ pub(crate) fn launch(
     run_path: &str,
     subdir: &str,
     argv: &[String],
-    working_dir: Option<String>,
     message: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
@@ -65,7 +64,7 @@ pub(crate) fn launch(
     let _ = std::fs::write(meta_path(&dir, &run_id), meta.to_string());
 
     let log = log_path_in(&dir, &run_id);
-    let pid = spawn_child(&dir, &run_id, &log, base_dir, run_path, argv, working_dir.as_deref(), run_env)?;
+    let pid = spawn_child(&dir, &run_id, &log, base_dir, run_path, argv, run_env)?;
 
     prune_old_runs(&dir);
 
@@ -91,7 +90,6 @@ pub(crate) fn spawn_child(
     base_dir: &Path,
     run_path: &str,
     argv: &[String],
-    working_dir: Option<&str>,
     run_env: &[(String, String)],
 ) -> Result<u32> {
     let log_file = File::create(log)?;
@@ -113,13 +111,10 @@ pub(crate) fn spawn_child(
     // Detach the run from the launcher's process group so a Ctrl-C / signal to the parent
     // doesn't tear down the agent. Unix: new process group; Windows: the equivalent flag.
     adi_osext::detach_process_group(&mut command);
-    // The agent's own `working_dir` wins; otherwise a run starts in `base_dir` (the ADI mono store
-    // root), not the launching daemon's cwd.
-    if let Some(d) = working_dir.filter(|d| !d.trim().is_empty()) {
-        command.current_dir(d);
-    } else {
-        command.current_dir(base_dir);
-    }
+    // `base_dir` is the run's directory, already resolved by `workspace::resolve` — the launch's
+    // own choice, else the manifest's, else the agent's project, else the store root. Not the
+    // launching daemon's cwd, and not re-decided here: one directory, decided once.
+    command.current_dir(base_dir);
 
     let mut child = command
         .spawn()
@@ -501,7 +496,6 @@ mod tests {
             "",
             "harness",
             &sleep_argv(),
-            None,
             "task one",
             &[],
         )
@@ -513,7 +507,6 @@ mod tests {
             "",
             "harness",
             &sleep_argv(),
-            None,
             "task two",
             &[],
         )
@@ -553,14 +546,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(sessions);
     }
 
+    /// `base_dir` is the run's directory, full stop — resolved once by `workspace::resolve` and not
+    /// re-decided here. This is the check that a spawned child really lands in it.
     #[test]
-    fn a_run_without_working_dir_starts_in_base_dir() {
+    fn a_run_starts_in_base_dir() {
         let sessions = scratch_dir("basedir-sessions");
         let base = scratch_dir("basedir-cwd");
         std::fs::create_dir_all(&base).unwrap();
         let a = agent("cwd-probe");
 
-        // No explicit working_dir, so the run must start in base_dir — the child writes its cwd.
+        // The child writes its own cwd, so the assertion is on where it actually ran.
         let _ = launch(
             &a,
             &sessions,
@@ -568,7 +563,6 @@ mod tests {
             "",
             "harness",
             &write_cwd_argv("cwd.txt"),
-            None,
             "probe",
             &[],
         )
@@ -627,7 +621,6 @@ mod tests {
             "",
             "harness",
             &sleep_argv(),
-            None,
             "go",
             &[],
         )

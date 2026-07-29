@@ -118,7 +118,7 @@ where
 /// into after it starts. The server supplies the executor-specific success message.
 fn run_now(state: State, name: String) {
     spawn_local(async move {
-        match fetch::run_agent(name, String::new()).await {
+        match fetch::run_agent(name, String::new(), None).await {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -130,9 +130,10 @@ fn run_now(state: State, name: String) {
 
 /// Launch a new headless run of the agent with `message` as its task, then select that run in the
 /// panel so its log streams in. Each launch is independent — never a continuation of a prior run.
-fn launch_agent(state: State, watch: AgentsWatch, name: String, message: String) {
+/// `working_dir` is the composer's optional "run here"; `None` starts the agent where it is defined.
+fn launch_agent(state: State, watch: AgentsWatch, name: String, message: String, working_dir: Option<String>) {
     spawn_local(async move {
-        match fetch::run_agent(name.clone(), message).await {
+        match fetch::run_agent(name.clone(), message, working_dir).await {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -1188,10 +1189,14 @@ fn run_row(
     .into_any()
 }
 
-/// The composer that starts a new run/conversation: a message input plus a Start/Run button. A
-/// message is required — the button stays disabled (and submit no-ops) until one is typed.
-/// Submitting launches it and opens its detail: a streaming log for a one-shot run, or the chat for
-/// an answerable conversation you then reply to.
+/// The composer that starts a new run/conversation: a message input, an optional directory to run
+/// it in, and a Start/Run button. A message is required — the button stays disabled (and submit
+/// no-ops) until one is typed. Submitting launches it and opens its detail: a streaming log for a
+/// one-shot run, or the chat for an answerable conversation you then reply to.
+///
+/// The directory box is the answer to "this agent, but against *that* target". Left blank — the
+/// normal case — the run starts where the agent is defined to. It applies to the launch only; a
+/// conversation then keeps the directory it started in for every reply.
 fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let placeholder = move || {
         if watch.answerable.get() {
@@ -1209,13 +1214,21 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 if message.trim().is_empty() {
                     return;
                 }
+                let dir = watch.run_dir.get();
+                let dir = dir.trim();
+                let working_dir = (!dir.is_empty()).then(|| dir.to_string());
                 watch.input.set(String::new());
-                launch_agent(state, watch, name, with_context(watch, message));
+                launch_agent(state, watch, name, with_context(watch, message), working_dir);
             }>
             <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
                 placeholder=placeholder
                 prop:value=move || watch.input.get()
                 on:input=move |ev| watch.input.set(event_target_value(&ev)) />
+            <input class="adi-input adi-mono" autocomplete="off"
+                title="Run this launch in a directory other than the agent's own. Blank = as defined."
+                placeholder="run here (optional) — /path/to/target"
+                prop:value=move || watch.run_dir.get()
+                on:input=move |ev| watch.run_dir.set(event_target_value(&ev)) />
             <button class="adi-btn adi-btn--primary" type="submit"
                 prop:disabled=move || watch.input.get().trim().is_empty()>
                 {move || if watch.answerable.get() { "▶ Start" } else { "▶ Run" }}

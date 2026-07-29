@@ -760,6 +760,12 @@ pub struct RunAgent {
     pub name: String,
     #[serde(default)]
     pub message: String,
+    /// Where *this* run starts, overriding the directory its manifest implies. For a caller that
+    /// points one agent definition at a different target each launch — a recon pass, a per-repo
+    /// reviewer — where no stored field can hold the answer. Absent/blank leaves the manifest and
+    /// the agent's project to decide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
 }
 
 /// Request naming one specific run of an agent — `POST /api/agents/run/peek` and `/run/stop`.

@@ -18,7 +18,7 @@ const PROCESS_DIR: &str = "process";
 
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
-    engine_run(manifest, "").is_ok()
+    engine_run(manifest, "", None).is_ok()
 }
 
 pub fn launch(
@@ -29,7 +29,7 @@ pub fn launch(
     message: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
-    let (argv, working_dir) = engine_run(&agent.manifest, message)?;
+    let argv = engine_run(&agent.manifest, message, base_dir.to_str())?;
     detached::launch(
         agent,
         sessions_dir,
@@ -37,7 +37,6 @@ pub fn launch(
         run_path,
         PROCESS_DIR,
         &argv,
-        working_dir,
         message,
         run_env,
     )
@@ -89,20 +88,23 @@ pub fn log_path(sessions_dir: &Path, agent_name: &str, run_id: &str) -> PathBuf 
     detached::log_path(sessions_dir, PROCESS_DIR, agent_name, run_id)
 }
 
+/// Build the engine's command. `workspace` is the run's already-resolved directory: the child is
+/// spawned there either way, and Codex is additionally *told* it (`--cd`), because that directory is
+/// what scopes its sandbox rather than merely being where it happens to start. `None` builds a
+/// command for inspection only ([`is_runnable`]), where no run exists to have a directory.
 fn engine_run(
     manifest: &StoredAgentManifest,
     message: &str,
-) -> Result<(Vec<String>, Option<String>)> {
+    workspace: Option<&str>,
+) -> Result<Vec<String>> {
     match &manifest.backend {
         Backend::ProcessClaude => {
             let arguments = manifest.typed_arguments::<ProcessClaudeArguments>()?;
-            let working_dir = arguments.working_dir.clone();
-            Ok((claude::argv(&arguments, message), working_dir))
+            Ok(claude::argv(&arguments, message))
         }
         Backend::ProcessCodex => {
             let arguments = manifest.typed_arguments::<ProcessCodexArguments>()?;
-            let working_dir = arguments.working_dir.clone();
-            Ok((codex::argv(&arguments, message), working_dir))
+            Ok(codex::argv(&arguments, message, workspace))
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -119,7 +121,7 @@ mod tests {
             ..StoredAgentManifest::default()
         };
         assert!(matches!(
-            engine_run(&manifest, "run"),
+            engine_run(&manifest, "run", None),
             Err(Error::NotRunnable(_))
         ));
     }

@@ -23,7 +23,7 @@ pub fn session_name(agent_name: &str) -> String {
 
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
-    engine_argv(manifest).is_ok()
+    engine_argv(manifest, None).is_ok()
 }
 
 #[must_use]
@@ -64,7 +64,7 @@ pub fn launch(
     run_path: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
-    let argv = engine_argv(&agent.manifest)?;
+    let argv = engine_argv(&agent.manifest, base_dir.to_str())?;
     let session = session_name(&agent.name);
     if adi_pty::is_running(&session) {
         return Err(Error::AlreadyRunning(agent.name.clone()));
@@ -79,7 +79,10 @@ pub fn launch(
     Ok(Launch::Pty { command: argv.join(" "), session })
 }
 
-fn engine_argv(manifest: &StoredAgentManifest) -> Result<Vec<String>> {
+/// Build the engine's command. `workspace` is the session's already-resolved directory — the pty is
+/// opened there either way, and Codex is additionally told it (`--cd`), which is what scopes its
+/// sandbox. `None` builds a command for inspection only ([`is_runnable`]).
+fn engine_argv(manifest: &StoredAgentManifest, workspace: Option<&str>) -> Result<Vec<String>> {
     match &manifest.backend {
         Backend::PtyClaude => {
             let arguments = manifest.typed_arguments::<PtyClaudeArguments>()?;
@@ -87,7 +90,7 @@ fn engine_argv(manifest: &StoredAgentManifest) -> Result<Vec<String>> {
         }
         Backend::PtyCodex => {
             let arguments = manifest.typed_arguments::<PtyCodexArguments>()?;
-            Ok(codex::argv(&arguments))
+            Ok(codex::argv(&arguments, workspace))
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -109,6 +112,9 @@ mod tests {
             backend: "pty:unknown".into(),
             ..StoredAgentManifest::default()
         };
-        assert!(matches!(engine_argv(&manifest), Err(Error::NotRunnable(_))));
+        assert!(matches!(
+            engine_argv(&manifest, None),
+            Err(Error::NotRunnable(_))
+        ));
     }
 }

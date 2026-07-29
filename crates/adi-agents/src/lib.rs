@@ -38,6 +38,7 @@ pub mod progress;
 mod run;
 mod tool_help;
 pub mod wasm;
+mod workspace;
 
 use std::path::PathBuf;
 
@@ -64,8 +65,9 @@ pub use wasm::DispatchOutcome;
 
 use agent::validate_name;
 use run::{
-    adi_turn_in, advance_in, can_advance_in, delete_run_in, is_running_in, launch_in, peek_in,
-    peek_run_in, reply_in, runs_in, stop_in, stop_run_in, transcript_in, unqueue_in,
+    adi_turn_in, advance_in, can_advance_in, conversation_dir_in, delete_run_in, is_running_in,
+    launch_in, peek_in, peek_run_in, reply_in, runs_in, stop_in, stop_run_in, transcript_in,
+    unqueue_in,
 };
 
 const AGENTS_MODULE: &str = "agents";
@@ -79,15 +81,20 @@ pub struct Agents {
     config: Config,
 }
 
-/// The resolved inputs a launch or reply needs from the store: the sessions/runs dir, the default
+/// The resolved inputs a launch or reply needs from the store: the sessions/runs dir, the
 /// working directory, the `PATH` the run resolves commands on, and the environment it is launched
-/// with (its attached secrets, the pointer to its scope's database, and its own declared vars).
+/// with (its attached secrets, the pointer to its scope's database, where it starts, and its own
+/// declared vars).
 struct LaunchContext {
-    /// The agent as it is *launched* — the stored definition with its tools' own help folded into
-    /// the system prompt (see [`tool_help`]). Launch from this, never from the stored agent, or the
-    /// run's `.bin` holds commands its prompt never mentions.
+    /// The agent as it is *launched* — the stored definition with its tools' own help and its
+    /// location folded into the system prompt (see [`tool_help`], [`workspace`]). Launch from this,
+    /// never from the stored agent, or the run's `.bin` holds commands its prompt never mentions
+    /// and it starts in a directory nothing told it about.
     agent: StoredAgent,
     sessions_dir: PathBuf,
+    /// Where this run's process starts — already resolved through [`workspace::resolve`], so it is
+    /// the whole answer. Executors spawn into it directly and no longer consult the manifest
+    /// themselves; two places deciding one directory is how they drift.
     base_dir: PathBuf,
     /// Already assembled (see [`launch::run_path`]): the agent's `.bin`, the dirs its manifest
     /// declares, and the standard tool dirs. Executors apply it verbatim — after the vars below, so
@@ -263,10 +270,22 @@ impl Agents {
     /// # Errors
     /// Returns [`Error::NotFound`] or backend launch errors.
     pub fn run_with_message(&self, name: &str, message: &str) -> Result<Launch> {
+        self.run_in(name, message, None)
+    }
+
+    /// Launch a run in a directory chosen for *this* launch, rather than the one its manifest
+    /// implies. The answer for an agent whose definition is reused across many targets — a recon
+    /// pass, a per-repo reviewer — where the right directory is a property of the run and no stored
+    /// field can hold it. `None` behaves exactly like [`Self::run_with_message`]; a harness
+    /// conversation pins whatever is resolved here, so its replies re-enter the same directory.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] or backend launch errors.
+    pub fn run_in(&self, name: &str, message: &str, working_dir: Option<&str>) -> Result<Launch> {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        let ctx = self.launch_context(&agent);
+        let ctx = self.launch_context(&agent, working_dir);
         let launch = launch_in(
             &ctx.agent,
             &ctx.sessions_dir,
@@ -293,7 +312,8 @@ impl Agents {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        let ctx = self.launch_context(&agent);
+        let dir = self.conversation_dir(&agent, conv_id);
+        let ctx = self.launch_context(&agent, dir.to_str());
         let sent = reply_in(
             &ctx.agent,
             &ctx.sessions_dir,
@@ -348,7 +368,8 @@ impl Agents {
         if !can_advance_in(agent, &sessions_dir, conv_id) {
             return false;
         }
-        let ctx = self.launch_context(agent);
+        let dir = self.conversation_dir(agent, conv_id);
+        let ctx = self.launch_context(agent, dir.to_str());
         let Some((message, launch)) = advance_in(
             &ctx.agent,
             &ctx.sessions_dir,
@@ -383,18 +404,37 @@ impl Agents {
             .ok_or_else(|| Error::NotFound(agent_name.to_string()))?;
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         // The `adi` loop builds its own system message here, in the turn child — not from the argv
-        // the launch assembled — so this is where its tool help has to be folded in.
-        adi_turn_in(&self.with_tool_help(&agent), &sessions_dir, conv_id)
+        // the launch assembled — so this is where its tool help and its location have to be folded
+        // in. The child was spawned *into* the run's directory and carries it in its environment,
+        // so `current` reproduces it exactly, per-run choice included.
+        let workdir = workspace::current(&self.config, &agent.manifest);
+        adi_turn_in(&self.decorated(&agent, &workdir), &sessions_dir, conv_id)
     }
 
-    /// The shared per-launch context: where runs live, the default cwd, the agent's `.bin`, and the
+    /// Where a turn of `conv_id` must run: the directory that conversation started in. Every turn
+    /// re-enters it, so a thread stays in one place for its whole life — the Claude session store is
+    /// keyed by cwd, so answering from elsewhere would leave the session unresumable, and the files
+    /// earlier turns wrote by relative path are only where they are.
+    ///
+    /// A conversation from before the directory was recorded gets the **store root**, which is
+    /// where every run started back then — not a fresh resolve, which would now hand a
+    /// project-scoped agent its project directory and strand its existing threads.
+    fn conversation_dir(&self, agent: &StoredAgent, conv_id: &str) -> PathBuf {
+        conversation_dir_in(agent, self.config.module(SESSIONS_MODULE).dir(), conv_id)
+            .unwrap_or_else(|| self.config.root().to_path_buf())
+    }
+
+    /// The shared per-launch context: where runs live, the cwd, the agent's `.bin`, and the
     /// environment its run gets — resolved the same way whether launching a fresh run or answering
     /// a reply.
-    fn launch_context(&self, agent: &StoredAgent) -> LaunchContext {
-        // Default cwd is the ADI store root (`~/.adi/mono`), not the daemon's cwd or $HOME. An
-        // agent's explicit `working_dir` still overrides this. A conversation's replies must run in
-        // the same cwd as its first turn, so the engine's session store lines up — this is that cwd.
-        let base_dir = self.config.root().to_path_buf();
+    ///
+    /// `run_dir` is this launch's own working directory, for a caller pointing one agent at a
+    /// different target each run; `None` leaves the manifest and the agent's project to decide. See
+    /// [`workspace::resolve`] for the full precedence. A conversation's replies must run in the same
+    /// cwd as its first turn, so the engine's session store lines up — the conversation pins the
+    /// directory it started in and re-enters that, whatever is resolved here later.
+    fn launch_context(&self, agent: &StoredAgent, run_dir: Option<&str>) -> LaunchContext {
+        let base_dir = workspace::resolve(&self.config, &agent.manifest, run_dir);
         // Best-effort: a sync failure (or no tools) just means no extra bin on PATH, never a blocked run.
         let bin_dir = adi_tools::Tools::with_config(self.config.clone())
             .sync_agent_bin(&agent.name, &agent.manifest.bin_tools)
@@ -407,6 +447,9 @@ impl Agents {
         // the agent being told where the file is. Secrets are listed first, so a secret named
         // `ADI_DB` would be overridden here rather than silently redirecting the run's database.
         run_env.extend(self.config.db_env(agent.manifest.project.as_deref()));
+        // Where the run starts, what it is called, and what it is scoped to. A run that has to be
+        // *told* its directory in prose gets it wrong; a script it writes can't be told at all.
+        run_env.extend(workspace::env(&self.config, agent, &base_dir));
         // The agent's own declared vars last, so an explicit `[env]` entry wins over a secret or
         // the database pointer it collides with — it is the most specific statement about this
         // agent there is. `PATH` is dropped rather than honoured: it is built from the manifest's
@@ -420,7 +463,7 @@ impl Agents {
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
         LaunchContext {
-            agent: self.with_tool_help(agent),
+            agent: self.decorated(agent, &base_dir),
             sessions_dir: self.config.module(SESSIONS_MODULE).dir().to_path_buf(),
             base_dir,
             run_path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
@@ -428,24 +471,33 @@ impl Agents {
         }
     }
 
-    /// The agent as it should be launched: its stored definition with the enabled tools' own help
-    /// appended to its system prompt, so a run knows what the commands on its `PATH` are and how to
-    /// call them. The user's prompt is untouched and leads; nothing is written back to the store.
+    /// The agent as it should be launched: its stored definition with two things it otherwise has no
+    /// way to know appended to its system prompt — the enabled tools' own help, so it knows what the
+    /// commands on its `PATH` are and how to call them, and where the run starts, so it neither
+    /// guesses at a directory nor `cd`s into one. The user's prompt is untouched and leads; nothing
+    /// is written back to the store.
     ///
-    /// Best-effort at every step — this decorates a prompt and must never cost a run. An agent with
-    /// no tools, a backend whose `system_prompt` isn't one (see [`tool_help::applies_to`]), tools
-    /// with nothing to say, or a decorated manifest its own backend would reject: each falls back to
-    /// launching the agent exactly as stored.
-    fn with_tool_help(&self, agent: &StoredAgent) -> StoredAgent {
-        if agent.manifest.bin_tools.is_empty() || !tool_help::applies_to(&agent.manifest.backend) {
+    /// Best-effort at every step — this decorates a prompt and must never cost a run. A backend
+    /// whose `system_prompt` isn't one (see [`tool_help::applies_to`]), an agent with no tools, or a
+    /// decorated manifest its own backend would reject: each falls back to launching the agent
+    /// exactly as stored.
+    fn decorated(&self, agent: &StoredAgent, workdir: &std::path::Path) -> StoredAgent {
+        if !tool_help::applies_to(&agent.manifest.backend) {
             return agent.clone();
         }
-        let tools = adi_tools::Tools::with_config(self.config.clone());
-        let Some(block) = tool_help::block(&tools.help_for(&agent.manifest.bin_tools)) else {
-            return agent.clone();
-        };
         let mut decorated = agent.clone();
-        tool_help::fold_into(&mut decorated.manifest.arguments, &block);
+        // Location first: it is the shorter block and the one that governs every path in the
+        // sections above and below it.
+        tool_help::fold_into(
+            &mut decorated.manifest.arguments,
+            &workspace::block(&self.config, agent, workdir),
+        );
+        if !agent.manifest.bin_tools.is_empty() {
+            let tools = adi_tools::Tools::with_config(self.config.clone());
+            if let Some(block) = tool_help::block(&tools.help_for(&agent.manifest.bin_tools)) {
+                tool_help::fold_into(&mut decorated.manifest.arguments, &block);
+            }
+        }
         // A backend whose arguments are `deny_unknown_fields` would reject a `system_prompt` it has
         // no field for. None do today; if one ever doesn't, its runs keep working undecorated
         // rather than failing at launch.
@@ -504,9 +556,9 @@ impl Agents {
             .filter(|r| !r.running)
             .map(|r| r.run_id.clone())
             .collect();
-        let advanced = idle
-            .iter()
-            .fold(false, |any, conv_id| self.advance_queue(agent, conv_id) || any);
+        let advanced = idle.iter().fold(false, |any, conv_id| {
+            self.advance_queue(agent, conv_id) || any
+        });
         // Only re-read when something actually started — the answer must not report a conversation
         // as idle in the very breath it started its next turn.
         if advanced {
@@ -951,7 +1003,10 @@ mod tests {
         // The attachment list is stored as a valid TOML array-of-tables (proven to round-trip by
         // the load above, since `toml::from_str` parsed it back into the two attachments).
         let raw = std::fs::read_to_string(store.dir().join("a.toml")).expect("stored manifest");
-        assert!(raw.contains("[[secrets]]"), "expected array-of-tables in {raw}");
+        assert!(
+            raw.contains("[[secrets]]"),
+            "expected array-of-tables in {raw}"
+        );
         assert!(raw.contains("name = \"API_KEY\""));
         assert!(raw.contains("project = \"proj\""));
     }
@@ -1007,11 +1062,15 @@ mod tests {
         let store = scratch("attached-env");
         let secrets = adi_secrets::Secrets::with_config(store.config().clone());
         secrets.set(None, "GLOBAL_ONLY", "g", None).expect("g");
-        secrets.set(None, "SHARED", "global", None).expect("shared-g");
+        secrets
+            .set(None, "SHARED", "global", None)
+            .expect("shared-g");
         secrets
             .set(None, "NOT_ATTACHED", "ambient", None)
             .expect("ambient");
-        secrets.set(Some("proj"), "PROJ_ONLY", "p", None).expect("p");
+        secrets
+            .set(Some("proj"), "PROJ_ONLY", "p", None)
+            .expect("p");
         secrets
             .set(Some("proj"), "SHARED", "project", None)
             .expect("shared-p");
@@ -1081,7 +1140,7 @@ mod tests {
         let agent = store.save("solver", m).expect("save");
         let agent = store.get(&agent.name).expect("get").expect("present");
 
-        let ctx = store.launch_context(&agent);
+        let ctx = store.launch_context(&agent, None);
         let env: std::collections::BTreeMap<_, _> = ctx.run_env.into_iter().collect();
         assert_eq!(env.get("NODE_ENV").map(String::as_str), Some("development"));
         assert_eq!(env.get("SHARED").map(String::as_str), Some("from-env"));
@@ -1143,7 +1202,12 @@ mod tests {
             .id
     }
 
-    fn agent_with_tools(store: &Agents, name: &str, backend: &str, tools: Vec<String>) -> StoredAgent {
+    fn agent_with_tools(
+        store: &Agents,
+        name: &str,
+        backend: &str,
+        tools: Vec<String>,
+    ) -> StoredAgent {
         let mut manifest = spec(backend);
         manifest.arguments.system_prompt = Some("You are a careful operator.".into());
         manifest.bin_tools = tools;
@@ -1160,12 +1224,15 @@ mod tests {
         let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
         let agent = agent_with_tools(&store, "helper", "harness:claude-sdk", vec![id]);
 
-        let launched = store.with_tool_help(&agent);
+        let launched = store.decorated(&agent, store.config.root());
         let prompt = launched.manifest.arguments["system_prompt"]
             .as_str()
             .expect("a prompt");
 
-        assert!(prompt.starts_with("You are a careful operator."), "{prompt}");
+        assert!(
+            prompt.starts_with("You are a careful operator."),
+            "{prompt}"
+        );
         assert!(prompt.contains("# Your tools"), "{prompt}");
         assert!(prompt.contains("## greet"), "{prompt}");
         assert!(prompt.contains("Usage: greet <name>"), "{prompt}");
@@ -1173,8 +1240,10 @@ mod tests {
         // And it survives the typed decode every backend performs before building its argv — where
         // `deny_unknown_fields` would reject a key the backend has no field for. For claude-sdk
         // this value goes straight into `--append-system-prompt`.
-        let typed: arguments::HarnessClaudeSdkArguments =
-            launched.manifest.typed_arguments().expect("typed arguments");
+        let typed: arguments::HarnessClaudeSdkArguments = launched
+            .manifest
+            .typed_arguments()
+            .expect("typed arguments");
         assert!(
             typed
                 .system_prompt
@@ -1189,27 +1258,125 @@ mod tests {
         );
     }
 
-    /// An agent with no tools ticked on is launched exactly as stored — no heading, no section,
-    /// and no tool registry read at all.
+    /// The prompt every launch carries: where the run starts. An agent with no tools still gets it —
+    /// having no tools says nothing about needing to know where it is — and it still gets no tool
+    /// section, so the registry is never read.
     #[test]
-    fn an_agent_without_tools_is_launched_untouched() {
-        let store = scratch("tool-help-none");
+    fn every_launch_states_where_the_run_starts() {
+        let store = scratch("workspace-block");
         let agent = agent_with_tools(&store, "bare", "harness:claude-sdk", Vec::new());
-        assert_eq!(store.with_tool_help(&agent), agent);
+        let prompt = store
+            .decorated(&agent, store.config.root())
+            .manifest
+            .arguments["system_prompt"]
+            .as_str()
+            .expect("a prompt")
+            .to_string();
+
+        assert!(
+            prompt.starts_with("You are a careful operator."),
+            "{prompt}"
+        );
+        assert!(prompt.contains("# Where you are"), "{prompt}");
+        assert!(
+            prompt.contains(&store.config.root().display().to_string()),
+            "{prompt}"
+        );
+        assert!(!prompt.contains("# Your tools"), "{prompt}");
     }
 
-    /// Codex takes its `system_prompt` as the opening user turn, so tool help would land there as a
-    /// question. Its agents keep the prompt they were given, tools or not.
+    /// The per-run directory is what the prompt states — not the manifest's, or the run is told one
+    /// thing and started in another.
+    #[test]
+    fn the_prompt_states_the_directory_the_run_actually_gets() {
+        let store = scratch("workspace-block-run-dir");
+        let agent = agent_with_tools(&store, "passive", "harness:claude-sdk", Vec::new());
+        let ctx = store.launch_context(&agent, Some("/targets/crescendo-ai"));
+
+        assert_eq!(ctx.base_dir, std::path::Path::new("/targets/crescendo-ai"));
+        assert!(
+            ctx.agent.manifest.arguments["system_prompt"]
+                .as_str()
+                .expect("a prompt")
+                .contains("/targets/crescendo-ai"),
+            "{:?}",
+            ctx.agent.manifest.arguments["system_prompt"]
+        );
+        // And the same directory is in the environment, for the scripts a run writes.
+        assert!(
+            ctx.run_env
+                .iter()
+                .any(|(k, v)| k == "ADI_WORKDIR" && v == "/targets/crescendo-ai"),
+            "{:?}",
+            ctx.run_env
+        );
+    }
+
+    /// Write a conversation sidecar for `agent` by hand, as the harness would. `working_dir` is
+    /// `None` for a conversation from before the field existed. Returns its id.
+    fn seed_conversation(store: &Agents, agent: &str, working_dir: Option<&str>) -> String {
+        let dir = store
+            .config
+            .module(SESSIONS_MODULE)
+            .dir()
+            .join("harness")
+            .join(agent);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let conv_id = "1700000000000-0000";
+        let mut meta = serde_json::json!({ "started_at": 1_700_000_000_000u64, "message": "go" });
+        if let Some(d) = working_dir {
+            meta["working_dir"] = serde_json::Value::String(d.to_string());
+        }
+        std::fs::write(dir.join(format!("{conv_id}.json")), meta.to_string()).expect("write meta");
+        conv_id.to_string()
+    }
+
+    /// A conversation answers from the directory it started in, however the manifest resolves now.
+    #[test]
+    fn a_conversation_re_enters_the_directory_it_started_in() {
+        let store = scratch("conv-pinned");
+        let agent = agent_with_tools(&store, "passive", "harness:claude-sdk", Vec::new());
+        let conv = seed_conversation(&store, "passive", Some("/targets/crescendo-ai"));
+        assert_eq!(
+            store.conversation_dir(&agent, &conv),
+            std::path::Path::new("/targets/crescendo-ai")
+        );
+    }
+
+    /// A conversation started before the directory was recorded ran in the store root. It has to
+    /// keep answering from there — a fresh resolve would now hand a project agent its project
+    /// directory, and the Claude session it resumes is keyed by the cwd it was established under.
+    #[test]
+    fn a_conversation_from_before_the_field_stays_in_the_store_root() {
+        let store = scratch("conv-legacy");
+        let mut manifest = spec("harness:claude-sdk");
+        manifest.project = Some("bugbounty".into());
+        store.save("legacy", manifest).expect("save");
+        let agent = store.get("legacy").expect("read back").expect("the agent");
+        // The project exists, so an unpinned resolve *would* move this agent's runs into it.
+        let project = store.config.root().join("projects").join("bugbounty");
+        std::fs::create_dir_all(&project).expect("mkdir");
+        assert_eq!(
+            workspace::resolve(&store.config, &agent.manifest, None),
+            project
+        );
+
+        let conv = seed_conversation(&store, "legacy", None);
+        assert_eq!(store.conversation_dir(&agent, &conv), store.config.root());
+    }
+
+    /// Codex takes its `system_prompt` as the opening user turn, so anything folded in would land
+    /// there as a question. Its agents keep the prompt they were given — tools, location, and all.
     #[test]
     fn a_codex_agent_keeps_its_prompt_as_written() {
         let store = scratch("tool-help-codex");
         let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
         let agent = agent_with_tools(&store, "coder", "pty:codex", vec![id]);
-        assert_eq!(store.with_tool_help(&agent), agent);
+        assert_eq!(store.decorated(&agent, store.config.root()), agent);
     }
 
     /// A tool ticked on but no longer registered (deleted, or archived out from under the agent)
-    /// contributes nothing — and, being the only one, leaves the prompt as written.
+    /// contributes nothing — being the only one, it leaves no tool section behind.
     #[test]
     fn an_unregistered_tool_adds_nothing() {
         let store = scratch("tool-help-ghost");
@@ -1219,6 +1386,13 @@ mod tests {
             "harness:claude-sdk",
             vec!["no-such-tool".into()],
         );
-        assert_eq!(store.with_tool_help(&agent), agent);
+        let prompt = store
+            .decorated(&agent, store.config.root())
+            .manifest
+            .arguments["system_prompt"]
+            .as_str()
+            .expect("a prompt")
+            .to_string();
+        assert!(!prompt.contains("# Your tools"), "{prompt}");
     }
 }

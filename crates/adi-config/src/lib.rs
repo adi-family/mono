@@ -119,6 +119,24 @@ impl Config {
         }
     }
 
+    /// Where a project's directory lives — `projects/<project>`, or `None` when the id is not a
+    /// safe path segment or nothing is registered under it.
+    ///
+    /// Same division of labour as [`Self::db_path`]: the *contents* of a project belong to
+    /// `adi-projects`, but the crates that only need to point a run at its project directory
+    /// (tools, agents, triggers) get the path here rather than taking on that dependency. The
+    /// existence check is deliberate — a manifest may name a project that was since removed, and a
+    /// caller resolving a launch directory needs a `None` it can fall back from, not a path that
+    /// makes the spawn fail.
+    #[must_use]
+    pub fn project_dir(&self, project: &str) -> Option<PathBuf> {
+        if !valid_name(project) {
+            return None;
+        }
+        let dir = self.module(PROJECTS_MODULE).dir().join(project);
+        dir.is_dir().then_some(dir)
+    }
+
     /// The database environment a run is launched with: `ADI_DB` (this scope's file) and
     /// `ADI_DB_DIR` (the store's `db/`). Exporting these is what lets an agent's shell, its `ts`
     /// tools, and the `@adi/db` Bun client all land on the same database without being configured.
@@ -144,6 +162,10 @@ const DB_MODULE: &str = "db";
 const DB_GLOBAL_FILE: &str = "global.db";
 const DB_PROJECTS_DIR: &str = "projects";
 const DB_EXT: &str = "db";
+
+/// The store module registered projects live under — one directory per project id. See
+/// [`Config::project_dir`].
+const PROJECTS_MODULE: &str = "projects";
 
 /// Whether `name` is a single, filesystem-safe path segment — the rule every store applies
 /// before joining `<name>.toml` onto a [`Module`] directory. This is a security boundary: names

@@ -97,6 +97,10 @@ pub(crate) enum AgentsCommand {
         /// agent's first subscription.
         #[arg(long)]
         handler: Option<String>,
+        /// Where this run starts, overriding the agent's own `working_dir` and its project
+        /// directory. For pointing one agent at a different target each run.
+        #[arg(long, value_name = "PATH")]
+        dir: Option<String>,
     },
     /// Stop a running agent using its executor's lifecycle.
     Stop { name: String },
@@ -220,6 +224,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             name,
             message,
             handler,
+            dir,
         } => {
             let is_wasm = store
                 .get(&name)
@@ -242,7 +247,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 );
             } else {
                 let launch = store
-                    .run_with_message(&name, &message)
+                    .run_in(&name, &message, dir.as_deref())
                     .map_err(|e| e.to_string())?;
                 match launch {
                     Launch::Pty { command, session } => {

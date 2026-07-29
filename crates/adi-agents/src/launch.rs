@@ -47,7 +47,10 @@ pub(crate) fn run_path(bin_dir: Option<&Path>, declared: &[String]) -> String {
 /// the current `HOME`, everything else taken as written. `None` for a blank entry, and for a
 /// `~`/`$HOME` entry when this process has no `HOME` — a run's `PATH` is better one dir short than
 /// carrying a literal `$HOME/...` that resolves to nothing.
-fn expand_home(dir: &str) -> Option<PathBuf> {
+///
+/// Shared with [`crate::workspace`]: a `working_dir` is written by the same hand, in the same TOML
+/// with the same absent shell, so `~/repo` has to mean there what it means here.
+pub(crate) fn expand_home(dir: &str) -> Option<PathBuf> {
     let dir = dir.trim();
     if dir.is_empty() {
         return None;
