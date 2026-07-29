@@ -49,7 +49,7 @@ pub(crate) fn launch(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     subdir: &str,
     argv: &[String],
     working_dir: Option<String>,
@@ -65,7 +65,7 @@ pub(crate) fn launch(
     let _ = std::fs::write(meta_path(&dir, &run_id), meta.to_string());
 
     let log = log_path_in(&dir, &run_id);
-    let pid = spawn_child(&dir, &run_id, &log, base_dir, bin_dir, argv, working_dir.as_deref(), run_env)?;
+    let pid = spawn_child(&dir, &run_id, &log, base_dir, run_path, argv, working_dir.as_deref(), run_env)?;
 
     prune_old_runs(&dir);
 
@@ -89,7 +89,7 @@ pub(crate) fn spawn_child(
     run_id: &str,
     log: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     argv: &[String],
     working_dir: Option<&str>,
     run_env: &[(String, String)],
@@ -103,10 +103,10 @@ pub(crate) fn spawn_child(
     let mut command = Command::new(program);
     command
         .args(command_args)
-        // Injected secrets go in first, under their literal names; `PATH` is set right after so
-        // a secret can never shadow the tool path.
+        // Injected secrets and the agent's declared vars go in first, under their literal names;
+        // `PATH` is set right after so nothing there can shadow the tool path.
         .envs(run_env.iter().map(|(k, v)| (k, v)))
-        .env("PATH", augmented_path(bin_dir))
+        .env("PATH", run_path)
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(errlog));
@@ -425,31 +425,6 @@ fn signal_group(pid: u32, _signal: &str) -> Result<()> {
     }
 }
 
-fn augmented_path(bin_dir: Option<&Path>) -> String {
-    let mut parts = Vec::new();
-    // The agent's own `.bin` (its enabled tools) comes first, so it runs those tools by name.
-    if let Some(dir) = bin_dir {
-        parts.push(dir.display().to_string());
-    }
-    if let Ok(home) = std::env::var("HOME") {
-        parts.extend([
-            format!("{home}/.local/bin"),
-            format!("{home}/bin"),
-            format!("{home}/.cargo/bin"),
-        ]);
-    }
-    parts.extend([
-        "/opt/homebrew/bin".to_string(),
-        "/usr/local/bin".to_string(),
-        "/usr/bin".to_string(),
-        "/bin".to_string(),
-    ]);
-    if let Ok(existing) = std::env::var("PATH") {
-        parts.push(existing);
-    }
-    parts.join(":")
-}
-
 pub(crate) fn display_command(argv: &[String]) -> String {
     argv.iter()
         .map(|arg| {
@@ -523,7 +498,7 @@ mod tests {
             &a,
             &sessions,
             &sessions,
-            None,
+            "",
             "harness",
             &sleep_argv(),
             None,
@@ -535,7 +510,7 @@ mod tests {
             &a,
             &sessions,
             &sessions,
-            None,
+            "",
             "harness",
             &sleep_argv(),
             None,
@@ -590,7 +565,7 @@ mod tests {
             &a,
             &sessions,
             &base,
-            None,
+            "",
             "harness",
             &write_cwd_argv("cwd.txt"),
             None,
@@ -649,7 +624,7 @@ mod tests {
             &a,
             &sessions,
             &sessions,
-            None,
+            "",
             "harness",
             &sleep_argv(),
             None,

@@ -32,7 +32,10 @@ pub(crate) use actions::{
 };
 use code::{code_editor_view, open_code_editor};
 pub(crate) use form::load_agent_into_form;
-use form::{agent_argument_values, agent_form_fields, agent_param_applies, clear_agent_form};
+use form::{
+    agent_argument_values, agent_environment_fields, agent_form_fields, agent_param_applies,
+    clear_agent_form, parsed_env_vars, parsed_path_dirs,
+};
 
 /// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
 /// pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
@@ -133,6 +136,10 @@ pub(crate) fn agents_view(
                     secrets: form.secrets.get().into_iter()
                         .map(|(project, name)| SecretRef { project, name })
                         .collect(),
+                    // This is the one form that edits the run environment, so it always states it —
+                    // `Some(empty)` clears, where the `None` other forms send means "leave as is".
+                    path: Some(parsed_path_dirs(&form.path.get())),
+                    env: Some(parsed_env_vars(&form.env.get())),
                     // Editing with the name field changed is a rename, not a second agent.
                     rename_from: editing.get(),
                 };
@@ -142,6 +149,7 @@ pub(crate) fn agents_view(
                 {move || agent_form_fields(state, form)}
                 {move || agent_tool_checkboxes(state, form)}
                 {move || agent_secret_checkboxes(state, form)}
+                {move || agent_environment_fields(form)}
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
                     {move || if editing.get().is_some() { "Update agent" } else { "Create agent" }}
                 </button>

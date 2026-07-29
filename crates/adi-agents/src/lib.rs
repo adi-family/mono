@@ -33,6 +33,7 @@ mod backend;
 mod backends;
 mod error;
 mod events;
+mod launch;
 pub mod progress;
 mod run;
 mod tool_help;
@@ -79,8 +80,8 @@ pub struct Agents {
 }
 
 /// The resolved inputs a launch or reply needs from the store: the sessions/runs dir, the default
-/// working directory, the agent's `.bin` of enabled tools, and the environment its run is launched
-/// with (its attached secrets, plus the pointer to its scope's database).
+/// working directory, the `PATH` the run resolves commands on, and the environment it is launched
+/// with (its attached secrets, the pointer to its scope's database, and its own declared vars).
 struct LaunchContext {
     /// The agent as it is *launched* — the stored definition with its tools' own help folded into
     /// the system prompt (see [`tool_help`]). Launch from this, never from the stored agent, or the
@@ -88,7 +89,10 @@ struct LaunchContext {
     agent: StoredAgent,
     sessions_dir: PathBuf,
     base_dir: PathBuf,
-    bin_dir: Option<PathBuf>,
+    /// Already assembled (see [`launch::run_path`]): the agent's `.bin`, the dirs its manifest
+    /// declares, and the standard tool dirs. Executors apply it verbatim — after the vars below, so
+    /// nothing injected there can shadow it.
+    run_path: String,
     run_env: Vec<(String, String)>,
 }
 
@@ -267,7 +271,7 @@ impl Agents {
             &ctx.agent,
             &ctx.sessions_dir,
             &ctx.base_dir,
-            ctx.bin_dir.as_deref(),
+            &ctx.run_path,
             message,
             &ctx.run_env,
         )?;
@@ -294,7 +298,7 @@ impl Agents {
             &ctx.agent,
             &ctx.sessions_dir,
             &ctx.base_dir,
-            ctx.bin_dir.as_deref(),
+            &ctx.run_path,
             conv_id,
             message,
             &ctx.run_env,
@@ -349,7 +353,7 @@ impl Agents {
             &ctx.agent,
             &ctx.sessions_dir,
             &ctx.base_dir,
-            ctx.bin_dir.as_deref(),
+            &ctx.run_path,
             conv_id,
             &ctx.run_env,
         ) else {
@@ -403,11 +407,23 @@ impl Agents {
         // the agent being told where the file is. Secrets are listed first, so a secret named
         // `ADI_DB` would be overridden here rather than silently redirecting the run's database.
         run_env.extend(self.config.db_env(agent.manifest.project.as_deref()));
+        // The agent's own declared vars last, so an explicit `[env]` entry wins over a secret or
+        // the database pointer it collides with — it is the most specific statement about this
+        // agent there is. `PATH` is dropped rather than honoured: it is built from the manifest's
+        // `path` below and applied after every var, so a `PATH` here would be silently overridden.
+        run_env.extend(
+            agent
+                .manifest
+                .env
+                .iter()
+                .filter(|(key, _)| key.as_str() != "PATH")
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
         LaunchContext {
             agent: self.with_tool_help(agent),
             sessions_dir: self.config.module(SESSIONS_MODULE).dir().to_path_buf(),
             base_dir,
-            bin_dir,
+            run_path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
             run_env,
         }
     }
@@ -940,6 +956,43 @@ mod tests {
         assert!(raw.contains("project = \"proj\""));
     }
 
+    /// The run environment survives the store round-trip, `[env]` included — a TOML table among
+    /// scalar fields is the one shape a manifest can get wrong on serialization.
+    #[test]
+    fn the_run_environment_round_trips_through_the_manifest() {
+        let store = scratch("run-env");
+        let mut m = spec("process:claude");
+        m.path = vec!["$HOME/.nvm/versions/node/v22.14.0/bin".into()];
+        m.env = [("NODE_ENV".to_string(), "development".to_string())]
+            .into_iter()
+            .collect();
+        store.save("a", m).expect("save with a run environment");
+
+        let got = store.get("a").expect("get").expect("present").manifest;
+        assert_eq!(
+            got.path,
+            vec!["$HOME/.nvm/versions/node/v22.14.0/bin".to_string()]
+        );
+        assert_eq!(
+            got.env.get("NODE_ENV").map(String::as_str),
+            Some("development")
+        );
+
+        let raw = std::fs::read_to_string(store.dir().join("a.toml")).expect("stored manifest");
+        assert!(raw.contains("[env]"), "expected an env table in {raw}");
+        assert!(raw.contains("path = ["), "expected a path array in {raw}");
+    }
+
+    /// An agent that declares neither keeps the manifest it had before these fields existed.
+    #[test]
+    fn an_agent_with_no_run_environment_stores_neither_key() {
+        let store = scratch("no-run-env");
+        store.save("a", spec("process:claude")).expect("save");
+        let raw = std::fs::read_to_string(store.dir().join("a.toml")).expect("stored manifest");
+        assert!(!raw.contains("[env]"), "{raw}");
+        assert!(!raw.contains("path = "), "{raw}");
+    }
+
     #[test]
     fn an_agent_with_no_attachments_stores_no_secrets_table() {
         let store = scratch("no-secret-attach");
@@ -998,6 +1051,54 @@ mod tests {
         assert!(!env.contains_key("MISSING"));
         // The allowlist is exclusive: a secret that exists but isn't attached is never injected.
         assert!(!env.contains_key("NOT_ATTACHED"));
+    }
+
+    /// End to end through the launch context: what an agent declares is what its run is started
+    /// with — the dirs on `PATH`, the vars in the environment.
+    #[test]
+    fn a_declared_run_environment_reaches_the_launch_context() {
+        let store = scratch("declared-run-env");
+        let secrets = adi_secrets::Secrets::with_config(store.config().clone());
+        secrets
+            .set(None, "SHARED", "from-secret", None)
+            .expect("secret");
+
+        let mut m = spec("process:claude");
+        m.path = vec!["/opt/node22/bin".into()];
+        m.env = [
+            ("NODE_ENV".to_string(), "development".to_string()),
+            // A declared value outranks an attached secret of the same name.
+            ("SHARED".to_string(), "from-env".to_string()),
+            // ...but PATH is never taken from here: it is assembled below.
+            ("PATH".to_string(), "/nowhere".to_string()),
+        ]
+        .into_iter()
+        .collect();
+        m.secrets = vec![SecretAttachment {
+            project: None,
+            name: "SHARED".into(),
+        }];
+        let agent = store.save("solver", m).expect("save");
+        let agent = store.get(&agent.name).expect("get").expect("present");
+
+        let ctx = store.launch_context(&agent);
+        let env: std::collections::BTreeMap<_, _> = ctx.run_env.into_iter().collect();
+        assert_eq!(env.get("NODE_ENV").map(String::as_str), Some("development"));
+        assert_eq!(env.get("SHARED").map(String::as_str), Some("from-env"));
+        assert!(!env.contains_key("PATH"), "PATH must not come from [env]");
+
+        let dirs: Vec<_> = std::env::split_paths(&ctx.run_path).collect();
+        assert!(
+            dirs.iter()
+                .any(|d| d == std::path::Path::new("/opt/node22/bin")),
+            "{}",
+            ctx.run_path
+        );
+        assert!(
+            !dirs.iter().any(|d| d == std::path::Path::new("/nowhere")),
+            "{}",
+            ctx.run_path
+        );
     }
 
     #[test]

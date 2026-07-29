@@ -11,11 +11,11 @@ existing file). Each active tool is exposed as a `tools/.bin/<name>` shim, so an
   every create/edit/archive/remove).
 
 ## Do it
-- List: `adi tools list` or `GET /api/tools`. Panel: `/tools`.
-- Create (owned): `adi tools add <name> [--runtime sh|ts] [--description …] [--project <id>]`, or
+- List: `{{cli}} tools list` or `GET /api/tools`. Panel: `/tools`.
+- Create (owned): `{{cli}} tools add <name> [--runtime sh|ts] [--description …] [--project <id>]`, or
   `POST /api/tools/create` (`{ "name", "runtime": "sh|ts", "project" }`) — writes a starter
   script you then edit in the store file editor.
-- Link (existing file): `adi tools link <path> [--name …] [--project <id>]`, or
+- Link (existing file): `{{cli}} tools link <path> [--name …] [--project <id>]`, or
   `POST /api/tools/link` (`{ "path", "name", "runtime", "project" }`).
 - Archive / remove: `POST /api/tools/archive` · `/remove` — both regenerate the `.bin` shims.
 
@@ -35,7 +35,7 @@ tools enabled has an empty bin, however many tools the store holds.
 So after creating a tool, do the second half:
 
 - Panel: `/agents` → the agent → tick the tool in its tools list, and save.
-- CLI: `adi agents save <agent> --backend <b> --tool <tool-id>` (repeatable, or comma-separated).
+- CLI: `{{cli}} agents save <agent> --backend <b> --tool <tool-id>` (repeatable, or comma-separated).
 - API: `POST /api/agents/save` with `"bin_tools": ["<tool-id>", …]`.
 
 Two things worth knowing: `bin_tools` is a **top-level field** on a save, not one of the backend
@@ -52,7 +52,7 @@ that project's code, data, or API. A project-scoped tool:
 - runs with that project's directory as its working directory, and `ADI_TOOL_PROJECT` set;
 - gets that project's database rather than the shared one (see `db.md`);
 - stays out of the global `tools/.bin` — it reaches an agent only by being enabled on that agent;
-- is listed on its own with `adi tools list --project <id>`.
+- is listed on its own with `{{cli}} tools list --project <id>`.
 
 Default to filing a tool under the project it serves; keep it global only when several projects
 would use it.

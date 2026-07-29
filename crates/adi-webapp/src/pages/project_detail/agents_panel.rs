@@ -84,6 +84,10 @@ pub(crate) fn agents_panel(
                     bin_tools: Vec::new(),
                     secrets: Vec::new(),
                     // This panel only creates; renaming lives on the Agents page.
+                    // This form doesn't edit the run environment — `None` leaves whatever the
+                    // agent already has, instead of clearing it on every save.
+                    path: None,
+                    env: None,
                     rename_from: None,
                 };
                 name.set(String::new());

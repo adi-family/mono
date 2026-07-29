@@ -74,17 +74,16 @@ pub(crate) fn run_events(adi: Adi, command: EventsCommand) -> Result<(), String>
                 }
             }
         }
-        EventsCommand::Types {
-            name,
-            json,
-            schema,
-        } => {
+        EventsCommand::Types { name, json, schema } => {
             let mut types = adi_core::event_catalog();
             if let Some(name) = &name {
                 types.retain(|e| e.name == name);
                 if types.is_empty() {
+                    // Name the binary the reader actually has. A machine may carry an unrelated
+                    // legacy `adi`, and pointing at that one sends them somewhere else entirely.
+                    let cli = env!("CARGO_BIN_NAME");
                     return Err(format!(
-                        "Unknown event `{name}`. Run `adi events types` to list them."
+                        "Unknown event `{name}`. Run `{cli} events types` to list them."
                     ));
                 }
             }

@@ -55,11 +55,11 @@ pub fn launch(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     message: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
-    conversation::start(agent, sessions_dir, base_dir, bin_dir, message, run_env)
+    conversation::start(agent, sessions_dir, base_dir, run_path, message, run_env)
 }
 
 /// Say something into an existing conversation: start the next turn, or queue the message when the
@@ -68,7 +68,7 @@ pub fn reply(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
@@ -77,7 +77,7 @@ pub fn reply(
         agent,
         sessions_dir,
         base_dir,
-        bin_dir,
+        run_path,
         conv_id,
         message,
         run_env,
@@ -90,11 +90,11 @@ pub fn advance(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     conv_id: &str,
     run_env: &[(String, String)],
 ) -> Option<(String, Launch)> {
-    conversation::advance(agent, sessions_dir, base_dir, bin_dir, conv_id, run_env)
+    conversation::advance(agent, sessions_dir, base_dir, run_path, conv_id, run_env)
 }
 
 /// Whether [`advance`] would start anything — asked before building a launch context, so an idle
@@ -180,7 +180,9 @@ fn engine_supported(manifest: &StoredAgentManifest) -> Result<()> {
         Backend::HarnessClaudeSdk => manifest
             .typed_arguments::<HarnessClaudeSdkArguments>()
             .map(drop),
-        Backend::HarnessAdi => adi_loop::validate(&manifest.typed_arguments::<HarnessAdiArguments>()?),
+        Backend::HarnessAdi => {
+            adi_loop::validate(&manifest.typed_arguments::<HarnessAdiArguments>()?)
+        }
         other => Err(Error::NotRunnable(other.to_string())),
     }
 }
@@ -196,8 +198,15 @@ fn engine_turn(
 ) -> Result<(Vec<String>, Option<String>)> {
     match &agent.manifest.backend {
         Backend::HarnessClaudeSdk => {
-            let arguments = agent.manifest.typed_arguments::<HarnessClaudeSdkArguments>()?;
-            Ok((claude_sdk::argv(&arguments, message, &cont), None))
+            let arguments = agent
+                .manifest
+                .typed_arguments::<HarnessClaudeSdkArguments>()?;
+            let working_dir = arguments
+                .working_dir
+                .as_ref()
+                .map(|d| d.trim().to_string())
+                .filter(|d| !d.is_empty());
+            Ok((claude_sdk::argv(&arguments, message, &cont), working_dir))
         }
         Backend::HarnessAdi => {
             adi_loop::validate(&agent.manifest.typed_arguments::<HarnessAdiArguments>()?)?;
@@ -239,6 +248,29 @@ mod tests {
         assert!(argv.iter().any(|a| a == "--print"));
         // The first turn establishes the session id it will resume on replies.
         assert!(argv.iter().any(|a| a == "--session-id"));
+        assert!(working_dir.is_none());
+    }
+
+    #[test]
+    fn claude_sdk_starts_a_run_in_its_working_dir() {
+        let mut agent = agent("harness:claude-sdk");
+        agent.manifest.arguments = serde_json::json!({ "working_dir": "  /repo/main  " })
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .collect();
+        let (_, working_dir) = engine_turn(&agent, "conv-2", "go", first()).expect("engine_turn");
+        assert_eq!(working_dir.as_deref(), Some("/repo/main"));
+
+        // Blank is the same as unset — the run falls back to the store root.
+        agent.manifest.arguments = serde_json::json!({ "working_dir": "   " })
+            .as_object()
+            .unwrap()
+            .clone()
+            .into_iter()
+            .collect();
+        let (_, working_dir) = engine_turn(&agent, "conv-3", "go", first()).expect("engine_turn");
         assert!(working_dir.is_none());
     }
 

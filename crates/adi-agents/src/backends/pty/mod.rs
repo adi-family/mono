@@ -61,7 +61,7 @@ pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
 pub fn launch(
     agent: &StoredAgent,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
     let argv = engine_argv(&agent.manifest)?;
@@ -70,10 +70,10 @@ pub fn launch(
         return Err(Error::AlreadyRunning(agent.name.clone()));
     }
 
-    // Inject the agent's secrets under their literal names, then the augmented PATH so its own
-    // `.bin` and the standard tool dirs resolve even under launchd's minimal environment.
+    // Inject the agent's secrets and declared vars under their literal names, then the assembled
+    // PATH — last, so its own `.bin` and tool dirs resolve whatever else was injected.
     let mut env = run_env.to_vec();
-    env.push(("PATH".into(), augmented_path(bin_dir)));
+    env.push(("PATH".into(), run_path.to_string()));
 
     adi_pty::launch(&session, &argv, base_dir, &env).map_err(|e| Error::Launch(e.to_string()))?;
     Ok(Launch::Pty { command: argv.join(" "), session })
@@ -91,33 +91,6 @@ fn engine_argv(manifest: &StoredAgentManifest) -> Result<Vec<String>> {
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
-}
-
-/// Build the run's `PATH`: the agent's own `.bin` first (so it can invoke its enabled tools by
-/// name), then — on unix — the standard tool dirs the app's minimal launchd `PATH` misses, then the
-/// current `PATH`. Joined with the platform separator, so it does the right thing on Windows too.
-fn augmented_path(bin_dir: Option<&Path>) -> String {
-    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
-    if let Some(bin) = bin_dir {
-        dirs.push(bin.to_path_buf());
-    }
-    #[cfg(unix)]
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = std::path::PathBuf::from(home);
-        dirs.push(home.join(".local/bin"));
-        dirs.push(home.join("bin"));
-    }
-    #[cfg(unix)]
-    {
-        dirs.push(std::path::PathBuf::from("/opt/homebrew/bin"));
-        dirs.push(std::path::PathBuf::from("/usr/local/bin"));
-    }
-    if let Some(existing) = std::env::var_os("PATH") {
-        dirs.extend(std::env::split_paths(&existing));
-    }
-    std::env::join_paths(dirs)
-        .map(|joined| joined.to_string_lossy().into_owned())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

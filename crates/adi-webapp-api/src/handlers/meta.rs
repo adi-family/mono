@@ -11,7 +11,7 @@ use adi_tools::Tools;
 use crate::types::MetaState;
 
 use super::agents::agents_state;
-use super::guides::{STORE_SHORTHAND, ensure_guides, prompt_section, store_root_display};
+use super::guides::{ensure_guides, prompt_section, render};
 use super::response::{Response, ok_json};
 
 /// The well-known name of the default ADI agent the Meta page manages. Creating the agent is an
@@ -72,7 +72,10 @@ fn default_bin_tools(tools: &Tools) -> Vec<String> {
 fn default_prompt(cfg: &Config) -> String {
     let mut events = String::new();
     for e in adi_agents::event_catalog() {
-        events.push_str(&format!("- `{}` — {} · example `{}`\n", e.name, e.summary, e.example));
+        events.push_str(&format!(
+            "- `{}` — {} · example `{}`\n",
+            e.name, e.summary, e.example
+        ));
     }
     let prompt = format!(
         "{DEFAULT_SYSTEM_PROMPT}\n\n\
@@ -81,18 +84,19 @@ fn default_prompt(cfg: &Config) -> String {
 The stack publishes platform events — dotted topics like `adi.tasks.created`. An **event trigger** \
 (a trigger of kind `event`, on /triggers) subscribes to name patterns — `*` matches one segment, \
 `**` the tail, so `adi.tasks.*` catches every task event — and runs its code block whenever a \
-matching event fires. {envelope} Publish one by hand with `adi events emit <name> [--payload …]` \
-or `POST /api/events/emit`; list the pending queue with `adi events list`. For an event's exact \
-payload structure, read its JSON Schema with `adi events types <name> --schema` (or GET \
-/api/triggers → `event_types[].schema`); `event_types[].example` is a concrete sample.\n\n\
+matching event fires. {envelope} Publish one by hand with `{{{{cli}}}} events emit <name> \
+[--payload …]` or `POST /api/events/emit` (whose `payload` is a **string**, not an object); list \
+the pending queue with `{{{{cli}}}} events list`. For an event's exact payload structure, read its \
+JSON Schema with `{{{{cli}}}} events types <name> --schema` (or GET /api/triggers → \
+`event_types[].schema`); `event_types[].example` is a concrete sample.\n\n\
 Events currently published:\n\
 {events}",
         guides = prompt_section(),
         envelope = adi_events::ENVELOPE,
     );
-    // `~` has no meaning on Windows, so name the real resolved store path the agent can act on.
-    // Every store reference shares the `~/.adi/mono` prefix, so one substitution rewrites them all.
-    prompt.replace(STORE_SHORTHAND, &store_root_display(cfg))
+    // Resolve the shorthands the prompt is authored with: `~` has no meaning on Windows, so name
+    // the real store path, and the CLI has to be the binary that exists on this machine.
+    render(&prompt, cfg)
 }
 
 /// The system prompt a fresh `adi-agent` is seeded with. It orients the agent inside this ADI
@@ -127,10 +131,10 @@ the split `.test`/`.adi` zones and forwards the rest.
   as loose `.ts` files. Panel: /dashboards.
 - Tools — small `sh`/`ts` CLIs that agents run, kept under `~/.adi/mono/tools/` and handed to an \
   agent as `.bin/<name>` shims on its PATH. A tool is either global or **filed under a project** \
-  (`adi tools add <name> --project <id>`, or `\"project\"` in `POST /api/tools/create`); a \
+  (`{{cli}} tools add <name> --project <id>`, or `\"project\"` in `POST /api/tools/create`); a \
   project-scoped tool runs in that project's directory, against that project's database. \
   Creating a tool gives it to nobody — an agent gets it only once it is **enabled on that \
-  agent** (`bin_tools`: tick it on /agents, `adi agents save <name> --tool <id>`, or the \
+  agent** (`bin_tools`: tick it on /agents, `{{cli}} agents save <name> --tool <id>`, or the \
   `bin_tools` field of `POST /api/agents/save`), which is what puts the shim on its PATH and its \
   help in its prompt. You yourself carry every tool in the store. Panel: /tools.
 - Tasks — a simple task tree (/tasks). Agents — agent definitions like yourself (/agents). \
@@ -141,8 +145,20 @@ the split `.test`/`.adi` zones and forwards the rest.
 - The control panel exposes a JSON API under `http://app.adi/api/*` (e.g. GET `/api/projects`, \
   GET `/api/hive`, GET `/api/ports`, POST `/api/projects/create`, POST `/api/hive/create`). \
   Read state with the GET endpoints before changing anything.
-- Prefer the ADI CLI (`adi …`) and the control-panel API over editing store files by hand; when \
-  you do edit files, keep them under `~/.adi/mono`.
+- **The CLI is `{{cli}}`.** Prefer it and the control-panel API over editing store files by hand; \
+  when you do edit files, keep them under `~/.adi/mono`. This machine may also carry an unrelated \
+  older binary named plain `adi` — it is *not* this stack. It answers a different command set, so \
+  `adi tasks` / `adi events` / `adi secrets` fail with `✕ Unknown command`, and the names that do \
+  overlap act on something else entirely (`adi hive down` stops services you did not mean). Never \
+  type `adi`; type `{{cli}}`, or the per-area shim (`adi-tasks`, `adi-secrets`, …) when one is \
+  enabled on you — a shim's own help is in this prompt, so if you can read it, you have it.
+- **Don't guess at a contract — read it.** When you don't know an endpoint's body or its reply \
+  shape, `GET` the thing first and look at what comes back, or read the area's guide; probing \
+  `/read` vs `/reveal` vs `/value` until one returns 200 burns a run and teaches nobody. Two \
+  contracts that have caught agents out: `POST /api/events/emit` takes `payload` as a **string** \
+  (`{\"name\":\"…\",\"payload\":\"{\\\"k\\\":1}\"}`), and a secret's value comes from \
+  `{{cli}} secrets read <NAME>` or `POST /api/secrets/reveal`, never from a `--reveal` flag. \
+  When you do learn something the hard way, write it into the matching guide before you finish.
 - **When a job needs a capability you don't have, make it a tool** rather than a one-off you \
   redo every run — a shell incantation you'd repeat, a query you keep retyping, an API you keep \
   curl-ing. File it under the project it serves (`--project <id>`), keep it global only when it \
@@ -151,6 +167,24 @@ the split `.test`/`.adi` zones and forwards the rest.
   a tool nobody can run. Read `guides/tools.md` before you write one.
 - Never touch ADI DNS: do not stop, kill, or restart the `adi.hive` service, and never bind the \
   `15353` port range. When you need a scratch port, pick a clearly free high port.
+
+# Working in a shell
+- **Your cwd is the store root (`~/.adi/mono`), not a project.** Use absolute paths, or `cd` into \
+  the directory first — a bare `grep -r … src` searches the store and quietly finds nothing.
+- **The shell is zsh, not bash.** An unquoted glob that matches nothing aborts the *entire* \
+  command line with `no matches found`, so everything after it is silently skipped. Quote them: \
+  `grep -r --include='*.js' …`, `ls 'svgo.config.'*`.
+- **Your run ends when you stop writing, and it takes your background work with it.** Anything \
+  launched with `&` or in the background is killed the moment the turn closes, and its output is \
+  never read. If you need the result, wait for it in the foreground; if it is genuinely long, \
+  make it a hive service or a trigger instead.
+- **Never end a turn with the world in a temporary state.** If you reverted a file to measure a \
+  control, stopped a service, or swapped a config, put it back *before* you write your final \
+  message — a run that ends mid-experiment leaves the next one to clean up after you, from `/tmp` \
+  if you are lucky. State the next run should inherit belongs in git or the store, not in `/tmp`.
+- **You may not be the only run in that directory.** Runs of the same agent can overlap; before \
+  editing a shared workspace, check whether someone else is mid-change (`git status`, the run \
+  list), and say what you touched in your report.
 
 # Style
 Work in small, verifiable steps. State what you're about to do, do it, then confirm the result \

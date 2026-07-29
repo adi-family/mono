@@ -225,6 +225,10 @@ fn submit_setup(state: State, form: MetaForm) {
         project: None,
         bin_tools,
         secrets: Vec::new(),
+        // This form doesn't edit the run environment — `None` leaves whatever the
+        // agent already has, instead of clearing it on every save.
+        path: None,
+        env: None,
         rename_from: None,
     };
     form.busy.set(true);

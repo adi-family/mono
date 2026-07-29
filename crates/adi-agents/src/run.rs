@@ -82,25 +82,25 @@ fn is_interactive(backend: &Backend) -> bool {
 
 /// Launch an agent. `base_dir` is the default working directory a run starts in when the agent
 /// defines no explicit `working_dir` of its own — the ADI mono store root, threaded from the store.
-/// `bin_dir`, when set, is the agent's own `.bin` of enabled tools; it is prepended to the run's
-/// `PATH` so the agent can invoke those tools by name.
+/// `run_path` is the already-assembled `PATH` the run resolves commands on — its own `.bin` of
+/// enabled tools, the dirs its manifest declares, then the standard ones (see `launch::run_path`).
 pub(crate) fn launch_in(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     message: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
     match &agent.manifest.backend {
         Backend::PtyClaude | Backend::PtyCodex => {
-            pty::launch(agent, base_dir, bin_dir, run_env)
+            pty::launch(agent, base_dir, run_path, run_env)
         }
         Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::launch(agent, sessions_dir, base_dir, bin_dir, message, run_env)
+            process::launch(agent, sessions_dir, base_dir, run_path, message, run_env)
         }
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::launch(agent, sessions_dir, base_dir, bin_dir, message, run_env)
+            harness::launch(agent, sessions_dir, base_dir, run_path, message, run_env)
         }
         other => Err(Error::NotRunnable(other.to_string())),
     }
@@ -237,14 +237,14 @@ pub(crate) fn reply_in(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
 ) -> Result<Sent> {
     match &agent.manifest.backend {
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::reply(agent, sessions_dir, base_dir, bin_dir, conv_id, message, run_env)
+            harness::reply(agent, sessions_dir, base_dir, run_path, conv_id, message, run_env)
         }
         other => Err(Error::Unsupported(format!(
             "backend {other} isn't answerable — only harness backends keep conversations you can reply to"
@@ -258,13 +258,13 @@ pub(crate) fn advance_in(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     conv_id: &str,
     run_env: &[(String, String)],
 ) -> Option<(String, Launch)> {
     match &agent.manifest.backend {
         Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::advance(agent, sessions_dir, base_dir, bin_dir, conv_id, run_env)
+            harness::advance(agent, sessions_dir, base_dir, run_path, conv_id, run_env)
         }
         _ => None,
     }
@@ -424,7 +424,7 @@ mod tests {
             manifest: manifest("harness:adi"),
         };
         assert!(matches!(
-            launch_in(&agent, Path::new("/unused"), Path::new("/unused"), None, "run", &[]),
+            launch_in(&agent, Path::new("/unused"), Path::new("/unused"), "", "run", &[]),
             Err(Error::NotRunnable(backend)) if backend == "harness:adi"
         ));
     }

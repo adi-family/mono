@@ -14,12 +14,14 @@ explicit reveal/read, never on listing.
   the value injects as into a run.
 
 ## Do it
-- List: `adi secrets list [--project <id>]` or `GET /api/secrets`. Panel: `/extended/secrets`.
-- Set (typed): `adi secrets set <NAME> [value] [--description <d>] [--project <id>]` (value from
+- List: `{{cli}} secrets list [--project <id>]` or `GET /api/secrets`. Panel: `/extended/secrets`.
+- Set (typed): `{{cli}} secrets set <NAME> [value] [--description <d>] [--project <id>]` (value from
   stdin when omitted), or `POST /api/secrets/set` (`{ "name", "value", "description?", "project?" }`).
-- Read the value (raw bytes, `op`-style): `adi secrets read <NAME> [--project <id>]`. This is the
-  value-returning primitive an agent uses — no `--reveal` flag. `GMAIL=$(adi secrets read GMAIL_TOKEN)`.
-- Remove: `adi secrets rm <NAME>` or `POST /api/secrets/remove`.
+- Read the value (raw bytes, `op`-style): `{{cli}} secrets read <NAME> [--project <id>]`. This is the
+  value-returning primitive an agent uses — no `--reveal` flag. `GMAIL=$({{cli}} secrets read GMAIL_TOKEN)`.
+  Over HTTP the same thing is `POST /api/secrets/reveal` (`{ "name", "project?" }`) →
+  `{ "name", "project", "value" }` — there is no `GET` that returns a value, and no `/read` route.
+- Remove: `{{cli}} secrets rm <NAME>` or `POST /api/secrets/remove`.
 - Attach to an agent: tick the secret on the agent's definition (see `agents.md`). Only the ticked
   secrets are decrypted and injected into that agent's runs — an explicit allowlist, not the scope.
 
@@ -40,7 +42,9 @@ through — if authorize is blocked, that account has to be added as a test user
 API works the same way once its scope is offered; the same flow also covers GitHub.
 
 An OAuth secret shows a provider + expiry badge and can be **Refreshed** (server-side, from its
-stored refresh token) or **Re-authorized** from its row's menu.
+stored refresh token) or **Re-authorized** from its row's menu. Reading one returns its **current
+access token**, refreshed server-side when it has expired — so read it fresh at the point of use
+rather than caching it in a variable a long-running job keeps reusing.
 
 ## Send the user a ready-to-submit form
 In a **conversation** (a harness/answerable agent), you can drop a form straight into your reply and
@@ -88,7 +92,7 @@ result appears on `/extended/secrets`. A malformed block just renders as a code 
 silently dropped.
 
 ## Notes
-- **Least privilege.** `adi secrets read` (and the `sys-secrets` tool) returns any secret's value to
+- **Least privilege.** `{{cli}} secrets read` (and the `sys-secrets` tool) returns any secret's value to
   a shell-capable agent — enable that tool deliberately. For a run, prefer the per-agent secret
   allowlist: attach exactly the secrets it needs and they arrive as env vars, nothing else.
 - Prefer OAuth over pasting a long-lived token: it scopes access and refreshes itself.

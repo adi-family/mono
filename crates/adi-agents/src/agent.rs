@@ -47,6 +47,20 @@ pub struct AgentManifest<Args> {
     /// run gets no secrets. See [`SecretAttachment`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretAttachment>,
+    /// Extra directories to put on the run's `PATH` — the agent's answer to "this project needs a
+    /// toolchain the machine's default `PATH` doesn't point at" (a pinned nvm node, say). Each
+    /// entry may lead with `~` or `$HOME`. They land right after the agent's `.bin`, so its own
+    /// tools still win, and ahead of every standard dir, so they beat the system copy of the same
+    /// binary. Stored as a TOML array: `path = ["$HOME/.nvm/versions/node/v22.14.0/bin"]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub path: Vec<String>,
+    /// Extra environment variables for the run, injected under their literal names — the plain
+    /// `KEY = "value"` half of the same idea. Applied after the attached secrets, so an entry here
+    /// wins over a secret of the same name. `PATH` is the one key that cannot be set here: it is
+    /// built from [`path`](Self::path) and applied last, so no declaration can strand a run
+    /// without its tools. Stored as a TOML table (`[env]`).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -86,6 +100,8 @@ impl<Args> AgentManifest<Args> {
             project: self.project.clone(),
             bin_tools: self.bin_tools.clone(),
             secrets: self.secrets.clone(),
+            path: self.path.clone(),
+            env: self.env.clone(),
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

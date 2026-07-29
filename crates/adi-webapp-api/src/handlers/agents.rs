@@ -372,6 +372,10 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
             return Response::from(&e);
         }
     }
+    // `path` and `env` are edited by the full agent form alone. Read the stored agent (post-rename,
+    // so an edit that renames still finds it) and carry them over when this request left them out —
+    // otherwise saving from a form that never offered them would quietly wipe an agent's toolchain.
+    let stored = store.get(&name).ok().flatten().map(|a| a.manifest);
     let manifest = AgentManifest {
         backend: Backend::from(req.backend.trim()),
         arguments: clean_arguments(req.arguments),
@@ -398,6 +402,25 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
             .into_iter()
             .filter_map(secret_attachment)
             .collect(),
+        // Extra `PATH` dirs and env vars: what the request states, else what the agent already had.
+        // Blank entries are dropped here so an empty line left in a textarea can't put an empty dir
+        // on the run's `PATH` or an unnamed variable in its environment.
+        path: match req.path {
+            Some(dirs) => dirs
+                .into_iter()
+                .map(|dir| dir.trim().to_string())
+                .filter(|dir| !dir.is_empty())
+                .collect(),
+            None => stored.as_ref().map(|m| m.path.clone()).unwrap_or_default(),
+        },
+        env: match req.env {
+            Some(vars) => vars
+                .into_iter()
+                .map(|(key, value)| (key.trim().to_string(), value))
+                .filter(|(key, _)| !key.is_empty())
+                .collect(),
+            None => stored.as_ref().map(|m| m.env.clone()).unwrap_or_default(),
+        },
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -749,6 +772,8 @@ fn agent_dto(
                 name: s.name,
             })
             .collect(),
+        path: m.path,
+        env: m.env,
         created_at: m.created_at,
         updated_at: m.updated_at,
         runnable,
@@ -1017,12 +1042,15 @@ fn agent_form_spec() -> AgentFormSpec {
         &["openai"],
     ));
 
+    // Codex takes it as its own `-C` flag; the harness instead starts the run's process there.
+    // Either way it is the same question — which directory is this agent's home — so it is one
+    // field. Unset means the ADI store root.
     fields.push(txt_field(
         "working_dir",
         "Working dir",
-        CODEX_BACKENDS,
+        &["pty:codex", "process:codex", "harness:claude-sdk"],
         "/path/to/repo",
-        "agent working root (-C)",
+        "where the agent starts (default: the store root)",
     ));
 
     fields.push(chk_field(
@@ -1518,10 +1546,8 @@ fn bad_run_ref() -> Response {
 
 fn parse_reply_to_run(body: &[u8]) -> Option<ReplyToRun> {
     let req: ReplyToRun = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty()
-        && !req.run_id.trim().is_empty()
-        && !req.message.trim().is_empty())
-    .then_some(req)
+    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty() && !req.message.trim().is_empty())
+        .then_some(req)
 }
 
 fn bad_reply_to_run() -> Response {
@@ -1574,4 +1600,95 @@ fn clean_arguments(
             Some((key, value))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use adi_config::Config;
+
+    fn scratch(tag: &str) -> Agents {
+        let root = std::env::temp_dir().join(format!(
+            "adi-agents-api-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        Agents::with_config(Config::with_root(root))
+    }
+
+    /// A save body as the forms send it, with `path`/`env` left for the caller to state.
+    fn body(path: Option<&str>, env: Option<&str>) -> Vec<u8> {
+        let mut save = serde_json::json!({ "name": "solver", "backend": "pty:claude" });
+        if let Some(dirs) = path {
+            save["path"] = serde_json::json!([dirs]);
+        }
+        if let Some(vars) = env {
+            save["env"] = serde_json::json!({ "NODE_ENV": vars });
+        }
+        save.to_string().into_bytes()
+    }
+
+    fn saved(store: &Agents) -> AgentManifest<adi_agents::RawAgentArguments> {
+        store.get("solver").expect("get").expect("agent").manifest
+    }
+
+    /// The run environment is edited by the full agent form alone. Every *other* form — the meta
+    /// setup, the project panel — posts a body without these fields, and must not wipe them.
+    #[test]
+    fn a_save_that_omits_the_run_environment_keeps_it() {
+        let store = scratch("keep");
+        assert_eq!(
+            save_agent(&store, &body(Some("~/node22/bin"), Some("dev"))).status,
+            200
+        );
+
+        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+
+        let m = saved(&store);
+        assert_eq!(m.path, vec!["~/node22/bin".to_string()]);
+        assert_eq!(m.env.get("NODE_ENV").map(String::as_str), Some("dev"));
+    }
+
+    /// Stating them empty is how they are actually cleared — the difference an `Option` on the
+    /// wire buys over a plain list.
+    #[test]
+    fn stating_them_empty_clears_them() {
+        let store = scratch("clear");
+        assert_eq!(
+            save_agent(&store, &body(Some("~/node22/bin"), Some("dev"))).status,
+            200
+        );
+
+        let cleared = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "path": [], "env": {},
+        });
+        assert_eq!(
+            save_agent(&store, cleared.to_string().as_bytes()).status,
+            200
+        );
+
+        let m = saved(&store);
+        assert!(m.path.is_empty(), "{:?}", m.path);
+        assert!(m.env.is_empty(), "{:?}", m.env);
+    }
+
+    /// A blank line left in the form's textarea must not reach the run as an empty `PATH` entry —
+    /// on unix an empty dir in `PATH` means the *current* directory, which is not what was asked
+    /// for and is worth keeping out of an agent's runs.
+    #[test]
+    fn blank_entries_are_dropped_before_they_are_stored() {
+        let store = scratch("blank");
+        let body = serde_json::json!({
+            "name": "solver",
+            "backend": "pty:claude",
+            "path": ["  ", "~/node22/bin", ""],
+            "env": { "  ": "ignored", "NODE_ENV": "dev" },
+        });
+        assert_eq!(save_agent(&store, body.to_string().as_bytes()).status, 200);
+
+        let m = saved(&store);
+        assert_eq!(m.path, vec!["~/node22/bin".to_string()]);
+        assert_eq!(m.env.keys().collect::<Vec<_>>(), vec!["NODE_ENV"]);
+    }
 }

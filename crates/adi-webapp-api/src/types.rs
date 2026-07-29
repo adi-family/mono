@@ -676,6 +676,15 @@ pub struct AgentDto {
     /// under their literal names — an explicit allowlist, never the whole scope.
     #[serde(default)]
     pub secrets: Vec<SecretRef>,
+    /// Extra directories prepended to the run's `PATH`, ahead of the machine's own — how an agent
+    /// pins a toolchain (a project's nvm node, say) that the default `PATH` doesn't point at. `~`
+    /// and `$HOME` are expanded at launch.
+    #[serde(default)]
+    pub path: Vec<String>,
+    /// Extra environment variables for the run, under their literal names. `PATH` is not settable
+    /// here — it is built from `path` above.
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
@@ -719,6 +728,16 @@ pub struct SaveAgent {
     /// reference; only these are decrypted and injected into the agent's runs — an allowlist.
     #[serde(default)]
     pub secrets: Vec<SecretRef>,
+    /// Extra directories for the run's `PATH` (see [`AgentDto::path`]). **Omit to keep whatever the
+    /// agent already has** — only the full agent editor sends these, so a form that doesn't offer
+    /// them (the meta setup, the project panel) can save without silently clearing them. Send an
+    /// empty list to actually clear.
+    #[serde(default)]
+    pub path: Option<Vec<String>>,
+    /// Extra environment variables for the run (see [`AgentDto::env`]). Omitted means unchanged,
+    /// exactly as for `path` above; an empty table clears.
+    #[serde(default)]
+    pub env: Option<BTreeMap<String, String>>,
     /// The agent's previous name when an edit renames it. The manifest is moved first (keeping
     /// `created_at`), then saved under `name`, so no orphan is left behind. Omitted — or equal to
     /// `name` — for a plain create/update.

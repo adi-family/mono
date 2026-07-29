@@ -25,7 +25,7 @@ pub fn launch(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     message: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
@@ -34,7 +34,7 @@ pub fn launch(
         agent,
         sessions_dir,
         base_dir,
-        bin_dir,
+        run_path,
         PROCESS_DIR,
         &argv,
         working_dir,

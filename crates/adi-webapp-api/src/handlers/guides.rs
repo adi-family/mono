@@ -17,11 +17,30 @@ const GUIDES_MODULE: &str = "guides";
 /// resolved store root (see [`store_root_display`]) before the agent ever sees it.
 pub const STORE_SHORTHAND: &str = "~/.adi/mono";
 
+/// The placeholder every guide template and the base prompt spell the ADI CLI with, rewritten to
+/// [`CLI`] before an agent reads it. Agent-facing text must never hardcode the binary name: the
+/// machine may also carry an unrelated legacy `adi` binary, and a command the agent types has to
+/// be the one that exists *here*.
+pub const CLI_SHORTHAND: &str = "{{cli}}";
+
+/// The name of the ADI CLI binary as it is invoked on a PATH. Mirrors `[[bin]] name` in
+/// `crates/adi-cli/Cargo.toml` — the two are renamed together, and this is the only place any
+/// agent-facing text learns the name.
+pub const CLI: &str = "adi-mono";
+
 /// The real, resolved store root as a display string, with forward slashes so it reads and pastes
 /// cleanly everywhere — Windows accepts `/` in paths and has no `~`, and the API takes `/` too.
 #[must_use]
 pub fn store_root_display(cfg: &Config) -> String {
     cfg.root().display().to_string().replace('\\', "/")
+}
+
+/// Resolve the shorthands every piece of agent-facing text is authored with — the store root and
+/// the CLI name — so what an agent reads names things that exist on this machine.
+#[must_use]
+pub fn render(text: &str, cfg: &Config) -> String {
+    text.replace(STORE_SHORTHAND, &store_root_display(cfg))
+        .replace(CLI_SHORTHAND, CLI)
 }
 
 /// One built-in guide: the file it seeds, a one-line summary for the prompt index, and its body.
@@ -101,13 +120,12 @@ pub fn ensure_guides(cfg: &Config) {
     if std::fs::create_dir_all(&dir).is_err() {
         return;
     }
-    // Bake this machine's real store path into the seeded copy, so the guide names a directory
-    // that exists here rather than the unexpandable `~` shorthand.
-    let root = store_root_display(cfg);
+    // Bake this machine's real store path and CLI name into the seeded copy, so the guide names a
+    // directory and a command that exist here rather than unexpandable shorthands.
     for g in GUIDES {
         let path = dir.join(g.file);
         if !path.exists() {
-            let _ = std::fs::write(&path, g.body.replace(STORE_SHORTHAND, &root));
+            let _ = std::fs::write(&path, render(g.body, cfg));
         }
     }
 }
@@ -131,4 +149,35 @@ instead of guessing. They're plain Markdown — keep them up to date as the setu
 Available guides:\n\
 {index}"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The failure this guards against was real: the guides told agents to run `adi tasks list`,
+    /// which on a machine carrying the older `adi` binary answers `✕ Unknown command`. Agent-facing
+    /// text names the CLI through the placeholder, so there is exactly one place to rename.
+    #[test]
+    fn no_guide_hardcodes_a_cli_name() {
+        for g in GUIDES {
+            for (n, line) in g.body.lines().enumerate() {
+                assert!(
+                    !line.contains("`adi "),
+                    "{}:{} spells a command with a hardcoded CLI name — use `{CLI_SHORTHAND}`: {line}",
+                    g.file,
+                    n + 1,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn render_resolves_both_shorthands() {
+        let cfg = Config::with_root(std::env::temp_dir().join("adi-guides-render"));
+        let out = render("run `{{cli}} tasks list` in ~/.adi/mono", &cfg);
+        assert!(out.contains("adi-mono tasks list"), "{out}");
+        assert!(!out.contains(STORE_SHORTHAND), "{out}");
+        assert!(out.contains(&store_root_display(&cfg)), "{out}");
+    }
 }

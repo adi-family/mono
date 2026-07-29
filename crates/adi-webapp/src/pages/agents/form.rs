@@ -649,6 +649,59 @@ fn is_scalar_argument_field(name: &str) -> bool {
     )
 }
 
+/// The agent's run environment: the extra `PATH` dirs and variables every run of it gets. Two
+/// free-text blocks rather than a schema field apiece — both are lists of unpredictable length, and
+/// unlike the backend params above they are set once when an agent is wired to a project and then
+/// left alone.
+pub(crate) fn agent_environment_fields(form: AgentsForm) -> AnyView {
+    view! {
+        <div class="adi-field">
+            <label class="adi-field__label" for="agent-path">"Extra PATH dirs"</label>
+            <textarea class="adi-textarea" id="agent-path" rows="2"
+                placeholder="$HOME/.nvm/versions/node/v22.14.0/bin"
+                prop:value=move || form.path.get()
+                on:input=move |ev| form.path.set(event_target_value(&ev))></textarea>
+            {field_hint(
+                "One directory per line, searched ahead of the machine's own — how an agent pins a \
+                 toolchain the default PATH doesn't point at (a project's nvm node, say). \
+                 ~ and $HOME are expanded at launch; the agent's own tools still come first.",
+            )}
+        </div>
+        <div class="adi-field">
+            <label class="adi-field__label" for="agent-env">"Extra environment"</label>
+            <textarea class="adi-textarea" id="agent-env" rows="2" placeholder="NODE_ENV=development"
+                prop:value=move || form.env.get()
+                on:input=move |ev| form.env.set(event_target_value(&ev))></textarea>
+            {field_hint(
+                "One KEY=VALUE per line, injected into every run under that literal name — and \
+                 over an attached secret of the same name. PATH belongs in the box above: it is \
+                 assembled at launch, so setting it here would have no effect.",
+            )}
+        </div>
+    }
+    .into_any()
+}
+
+/// The "extra PATH dirs" box as the wire list: one directory per line, blank lines dropped.
+pub(crate) fn parsed_path_dirs(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|dir| !dir.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// The "extra environment" box as the wire map: one `KEY=VALUE` per line. A line without an `=`, or
+/// with a blank key, is dropped rather than guessed at. The value is everything after the *first*
+/// `=`, so a value may itself contain one.
+pub(crate) fn parsed_env_vars(text: &str) -> BTreeMap<String, String> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
+        .filter(|(key, _)| !key.is_empty())
+        .collect()
+}
+
 /// Load an existing agent into the create/edit form (the Edit action).
 pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.name.set(a.name.clone());
@@ -668,6 +721,14 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
             .iter()
             .map(|s| (s.project.clone(), s.name.clone()))
             .collect(),
+    );
+    form.path.set(a.path.join("\n"));
+    form.env.set(
+        a.env
+            .iter()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect::<Vec<_>>()
+            .join("\n"),
     );
     form.system_prompt
         .set(argument_text(&a.arguments, "system_prompt"));
@@ -699,6 +760,8 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.tools.set(String::new());
     form.bin_tools.set(std::collections::BTreeSet::new());
     form.secrets.set(std::collections::BTreeSet::new());
+    form.path.set(String::new());
+    form.env.set(String::new());
     form.system_prompt.set(String::new());
     form.starred.set(false);
     form.arguments.set(BTreeMap::new());

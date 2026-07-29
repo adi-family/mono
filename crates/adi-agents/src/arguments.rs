@@ -281,6 +281,12 @@ pub struct HarnessClaudeSdkArguments {
     /// The adi-mono command groups this agent may use (e.g. `tasks,projects`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<String>,
+    /// Where the run's process starts. Defaults to the ADI store root, which is right for an agent
+    /// that operates the environment and wrong for one that lives in a repo — pointing it at the
+    /// workspace saves every command an absolute-path preamble, and saves the run the mistakes it
+    /// makes when it forgets one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
 }
 
 /// Arguments accepted by the `harness:adi` backend — ADI's own answering loop. `provider` selects

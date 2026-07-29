@@ -97,7 +97,7 @@ pub(crate) fn start(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     message: &str,
     run_env: &[(String, String)],
 ) -> Result<Launch> {
@@ -130,7 +130,7 @@ pub(crate) fn start(
     let _ = std::fs::write(detached::meta_path(&dir, &conv_id), meta.to_string());
     append_turn(&dir, &conv_id, ROLE_USER, message);
 
-    let launch = spawn_turn(&dir, &conv_id, base_dir, bin_dir, &argv, working_dir, run_env)?;
+    let launch = spawn_turn(&dir, &conv_id, base_dir, run_path, &argv, working_dir, run_env)?;
     detached::prune_old_runs(&dir);
     Ok(launch)
 }
@@ -142,7 +142,7 @@ pub(crate) fn reply(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
@@ -165,10 +165,10 @@ pub(crate) fn reply(
         queue.push(message.to_string());
         let head = queue.remove(0);
         save_queue(&dir, conv_id, &queue);
-        return start_turn(agent, &dir, base_dir, bin_dir, conv_id, &head, run_env)
+        return start_turn(agent, &dir, base_dir, run_path, conv_id, &head, run_env)
             .map(Sent::Started);
     }
-    start_turn(agent, &dir, base_dir, bin_dir, conv_id, message, run_env).map(Sent::Started)
+    start_turn(agent, &dir, base_dir, run_path, conv_id, message, run_env).map(Sent::Started)
 }
 
 /// Start the conversation's next queued message, if it is idle and something is waiting. This is the
@@ -178,7 +178,7 @@ pub(crate) fn advance(
     agent: &StoredAgent,
     sessions_dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     conv_id: &str,
     run_env: &[(String, String)],
 ) -> Option<(String, Launch)> {
@@ -197,7 +197,7 @@ pub(crate) fn advance(
     // Drop it from the queue *before* spawning: a message that fails to launch has still had its
     // turn, and leaving it at the head would retry it on every poll for ever.
     save_queue(&dir, conv_id, &queue);
-    let launch = start_turn(agent, &dir, base_dir, bin_dir, conv_id, &head, run_env).ok()?;
+    let launch = start_turn(agent, &dir, base_dir, run_path, conv_id, &head, run_env).ok()?;
     Some((head, launch))
 }
 
@@ -237,7 +237,7 @@ fn start_turn(
     agent: &StoredAgent,
     dir: &Path,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     conv_id: &str,
     message: &str,
     run_env: &[(String, String)],
@@ -258,7 +258,7 @@ fn start_turn(
         },
     )?;
     append_turn(dir, conv_id, ROLE_USER, message);
-    spawn_turn(dir, conv_id, base_dir, bin_dir, &argv, working_dir, run_env)
+    spawn_turn(dir, conv_id, base_dir, run_path, &argv, working_dir, run_env)
 }
 
 /// The conversation's transcript, oldest first. Folds a just-finished turn's captured stdout into a
@@ -315,7 +315,7 @@ fn spawn_turn(
     dir: &Path,
     conv_id: &str,
     base_dir: &Path,
-    bin_dir: Option<&Path>,
+    run_path: &str,
     argv: &[String],
     working_dir: Option<String>,
     run_env: &[(String, String)],
@@ -326,7 +326,7 @@ fn spawn_turn(
         conv_id,
         &log,
         base_dir,
-        bin_dir,
+        run_path,
         argv,
         working_dir.as_deref(),
         run_env,
@@ -710,9 +710,9 @@ mod tests {
         .unwrap();
 
         let agent = chatty("chat");
-        let sent = reply(&agent, &sessions, &sessions, None, conv, "second", &[]).expect("reply");
+        let sent = reply(&agent, &sessions, &sessions, "", conv, "second", &[]).expect("reply");
         assert_eq!(sent, Sent::Queued { place: 1 }, "it waits rather than failing");
-        let sent = reply(&agent, &sessions, &sessions, None, conv, "third", &[]).expect("reply");
+        let sent = reply(&agent, &sessions, &sessions, "", conv, "third", &[]).expect("reply");
         assert_eq!(sent, Sent::Queued { place: 2 });
 
         // Nothing was asked: the transcript still holds only the first question.

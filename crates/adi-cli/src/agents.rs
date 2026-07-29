@@ -1,6 +1,8 @@
 //! The `agents` command group: the agent-definition subcommand surface and its dispatch
 //! over the shared agent-definition store.
 
+use std::collections::BTreeMap;
+
 use adi_core::{Adi, AgentManifest, AgentSummaryArguments, Launch, SecretAttachment, StoredAgent};
 use clap::Subcommand;
 
@@ -60,6 +62,23 @@ pub(crate) enum AgentsCommand {
         /// explicit allowlist.
         #[arg(long = "secret")]
         secrets: Vec<String>,
+        /// A directory to put on this agent's run `PATH`, ahead of the machine's own — how an agent
+        /// pins a toolchain the default `PATH` doesn't point at. `~` and `$HOME` are expanded at
+        /// launch. Repeatable. Omit every `--path` to leave an existing agent's dirs as they are;
+        /// pass `--no-path` to clear them.
+        #[arg(long = "path")]
+        path: Vec<String>,
+        /// Clear the agent's extra `PATH` dirs (see `--path`).
+        #[arg(long, conflicts_with = "path")]
+        no_path: bool,
+        /// An environment variable for this agent's runs, as `KEY=VALUE`. Repeatable. Omit every
+        /// `--env` to leave an existing agent's variables alone; pass `--no-env` to clear them.
+        /// `PATH` is rejected here — it is built from `--path`.
+        #[arg(long = "env")]
+        env: Vec<String>,
+        /// Clear the agent's extra environment variables (see `--env`).
+        #[arg(long, conflicts_with = "env")]
+        no_env: bool,
         /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
@@ -128,6 +147,10 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             project,
             tools,
             secrets,
+            path,
+            no_path,
+            env,
+            no_env,
             arguments,
             json,
         } => {
@@ -151,6 +174,10 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             if let Some(value) = max_turns {
                 arguments.insert("max_turns".into(), value.into());
             }
+            // A save states the whole agent, so the run environment has to be carried over when
+            // this invocation says nothing about it — otherwise every `agents save` on an existing
+            // agent would silently strip the toolchain it was pinned to.
+            let stored = store.get(&name).ok().flatten().map(|a| a.manifest);
             let manifest = AgentManifest {
                 backend: backend.into(),
                 arguments,
@@ -159,6 +186,25 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 project: clean(project),
                 bin_tools: clean_tags(tools),
                 secrets: parse_secret_attachments(secrets),
+                path: if no_path {
+                    Vec::new()
+                } else if path.is_empty() {
+                    stored.as_ref().map(|m| m.path.clone()).unwrap_or_default()
+                } else {
+                    // Not `clean_tags`: a directory may legitimately contain a comma, so each
+                    // `--path` is one dir, never a comma-separated list.
+                    path.into_iter()
+                        .map(|dir| dir.trim().to_string())
+                        .filter(|dir| !dir.is_empty())
+                        .collect()
+                },
+                env: if no_env {
+                    BTreeMap::new()
+                } else if env.is_empty() {
+                    stored.as_ref().map(|m| m.env.clone()).unwrap_or_default()
+                } else {
+                    parse_env_vars(env)?
+                },
                 created_at: 0,
                 updated_at: 0,
             };
@@ -238,6 +284,27 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
 
 /// Parse `--secret` values into attachments. Each value is a comma-separated list of
 /// `NAME` (global) or `PROJECT/NAME` (project-scoped) references; blanks are dropped.
+/// Parse `--env KEY=VALUE` flags into the manifest's env table. The value is everything after the
+/// first `=`, so it may contain one itself. `PATH` is rejected rather than accepted-and-ignored:
+/// it is assembled at launch from `--path`, so honouring it here would be a lie.
+fn parse_env_vars(values: Vec<String>) -> Result<BTreeMap<String, String>, String> {
+    let mut vars = BTreeMap::new();
+    for value in values {
+        let Some((key, value)) = value.split_once('=') else {
+            return Err(format!("--env expects KEY=VALUE, got: {value}"));
+        };
+        let key = key.trim();
+        if key.is_empty() {
+            return Err("--env needs a variable name before the `=`".to_string());
+        }
+        if key == "PATH" {
+            return Err("--env cannot set PATH; use --path to add directories to it".to_string());
+        }
+        vars.insert(key.to_string(), value.trim().to_string());
+    }
+    Ok(vars)
+}
+
 fn parse_secret_attachments(values: Vec<String>) -> Vec<SecretAttachment> {
     values
         .iter()
@@ -297,6 +364,15 @@ fn print_agent(agent: &StoredAgent) {
             })
             .collect();
         println!("  secrets: {}", refs.join(", "));
+    }
+    if !agent.manifest.path.is_empty() {
+        println!("  path: {}", agent.manifest.path.join(", "));
+    }
+    if !agent.manifest.env.is_empty() {
+        // Names only: an agent's env table is ordinary config, but printing values into a terminal
+        // (and its scrollback) is not what `agents show` is for.
+        let names: Vec<&str> = agent.manifest.env.keys().map(String::as_str).collect();
+        println!("  env: {}", names.join(", "));
     }
     if !agent.manifest.tags.is_empty() {
         println!("  tags: {}", agent.manifest.tags.join(", "));

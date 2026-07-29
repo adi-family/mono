@@ -553,6 +553,10 @@ fn submit_onb_agent(
         project: None,
         bin_tools,
         secrets: Vec::new(),
+        // This form doesn't edit the run environment — `None` leaves whatever the
+        // agent already has, instead of clearing it on every save.
+        path: None,
+        env: None,
         rename_from: None,
     };
     busy.set(true);
@@ -736,6 +740,8 @@ fn App() -> impl IntoView {
         tools: RwSignal::new(String::new()),
         bin_tools: RwSignal::new(BTreeSet::new()),
         secrets: RwSignal::new(BTreeSet::new()),
+        path: RwSignal::new(String::new()),
+        env: RwSignal::new(String::new()),
         system_prompt: RwSignal::new(String::new()),
         starred: RwSignal::new(false),
         arguments: RwSignal::new(BTreeMap::new()),

@@ -662,6 +662,11 @@ pub(crate) struct AgentsForm {
     /// `(scope, name)` pair — `None` scope is a global secret. Only these are injected into the
     /// agent's runs as env vars (an allowlist).
     pub(crate) secrets: RwSignal<BTreeSet<(Option<String>, String)>>,
+    /// Extra `PATH` dirs for the agent's runs, one per line — how an agent pins a toolchain the
+    /// machine's default `PATH` doesn't point at. Parsed on submit.
+    pub(crate) path: RwSignal<String>,
+    /// Extra environment variables for the agent's runs, one `KEY=VALUE` per line. Parsed on submit.
+    pub(crate) env: RwSignal<String>,
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
     /// The complete backend argument map loaded for editing, including structured values the
