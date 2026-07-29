@@ -1718,6 +1718,23 @@ textarea.adi-input {
   line-height: 1.5;
 }
 
+// The chat composers — the new-run task and the reply box. A message is prose, often Markdown,
+// so it has to be *writable* as more than one line: the view sets `rows` from what is typed, so
+// the box grows with the message and Shift-Enter earns a line rather than sending half a thought.
+// Capped, because the composer must never grow to hide the transcript it is answering.
+//
+// Wrapping, not scrolling sideways: `.adi-textarea` (a code editor) keeps `white-space: pre` so a
+// long line stays one line, which is the opposite of what prose wants. Manual resize is off — the
+// row count is recomputed on the next keystroke and would fight the drag. Must stay after
+// `textarea.adi-input`: same specificity, so source order decides.
+textarea.adi-input--composer {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 40vh;
+  overflow-y: auto;
+  resize: none;
+}
+
 .adi-textarea {
   font-family: var(--font-mono);
   font-size: var(--text-sm);
