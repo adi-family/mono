@@ -5,14 +5,16 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_webapp_api::types::{
-    AgentPeek, AgentRunInfo, AgentsState, AllAgentRuns, DashboardsState, DbExecResult,
-    DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, Health, HiveState, MeshState,
-    MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectsState, SecretsState, TasksState,
-    ToolsState, TriggerLog, TriggersState, UsedPorts, WorkspaceTerm, WorkspacesState,
+    AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentsState, AllAgentRuns, DashboardsState,
+    DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, Health, HiveState,
+    MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectsState,
+    RunRef, SecretsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState, UsedPorts,
+    WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
 
 use crate::fetch;
+use crate::live::Sub;
 use crate::routing::{ProjectSection, Route, current_path, project_id_from_path};
 use crate::ui::TableState;
 
@@ -1084,7 +1086,236 @@ fn set_if_changed<T: PartialEq + Send + Sync + 'static>(sig: RwSignal<Option<T>>
     }
 }
 
+/// What the live channel should be watching for the page that is open, and where each answer
+/// goes — the subscription form of [`load`] plus the per-second watches the shell used to poll.
+///
+/// This is deliberately the same shape as [`load`], read the same way: an entry here is the very
+/// request the line beside it in `load` makes. The two are kept side by side so a page that starts
+/// needing something new is one edit in each, and the fallback path can never fetch something the
+/// live path forgets to watch.
+///
+/// Reads its signals *tracked*, so the effect that calls it re-runs — and re-subscribes — the
+/// moment the page moves: a route change, a different project, another chat opened.
+pub(crate) fn subscriptions(
+    s: State,
+    route: Route,
+    watch: AgentsWatch,
+    triggers_log: TriggersLogView,
+    hook_log: HookLogView,
+    term: TermWatch,
+) -> Vec<Sub> {
+    let mut subs = vec![
+        // Liveness and uptime. Every message is a sign of life, but this is the one that arrives
+        // whether or not anything on the page is changing.
+        Sub::get("/api/health", move |health: Health| {
+            set_if_changed(s.health, health);
+            s.status.set(Status::Online);
+        }),
+        // The explorer renders the project tree on every route, so the project list is shell data
+        // rather than something an individual page opts into.
+        Sub::get("/api/projects", move |p: ProjectsState| {
+            set_if_changed(s.projects, p);
+        }),
+    ];
+
+    // Page-specific data, watched only where it's shown.
+    if route == Route::Projects {
+        // The list shows a per-project open-task count, so it needs the task tree too.
+        subs.push(Sub::get("/api/tasks", move |t: TasksState| {
+            set_if_changed(s.tasks, t);
+        }));
+    }
+    if route == Route::ProjectDetail {
+        let id = s.current_project.get();
+        if !id.is_empty() {
+            subs.push(Sub::get(
+                format!("/api/projects/{id}"),
+                move |d: ProjectDetail| set_if_changed(s.project_detail, d),
+            ));
+            subs.push(Sub::get("/api/tasks", move |t: TasksState| {
+                set_if_changed(s.tasks, t);
+            }));
+            subs.push(Sub::get("/api/triggers", move |t: TriggersState| {
+                set_if_changed(s.triggers, t);
+            }));
+            subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+                set_if_changed(s.agents, a);
+            }));
+            // The cross-agent "All chats" index above the project's Agents panel.
+            subs.push(Sub::get("/api/agents/runs/all", move |c: AllAgentRuns| {
+                set_if_changed(s.all_chats, c);
+            }));
+            // The project's Tools panel lists the tools filed under it (from the shared list).
+            subs.push(Sub::get("/api/tools", move |t: ToolsState| {
+                set_if_changed(s.tools, t);
+            }));
+            // The project's Secrets panel filters the shared secrets list to this project.
+            subs.push(Sub::get("/api/secrets", move |sec: SecretsState| {
+                set_if_changed(s.secrets, sec);
+            }));
+            // The Workspaces panel's snapshot; watching it flips `creating` → `ready` live.
+            subs.push(Sub::post(
+                "/api/projects/workspaces",
+                &WorkspacesRef { id },
+                move |w: WorkspacesState| set_if_changed(s.workspaces, w),
+            ));
+        }
+    }
+    if route == Route::Tasks {
+        subs.push(Sub::get("/api/tasks", move |t: TasksState| {
+            set_if_changed(s.tasks, t);
+        }));
+    }
+    if route == Route::Meta {
+        subs.push(Sub::get("/api/meta", move |m: MetaState| {
+            set_if_changed(s.meta, m);
+        }));
+    }
+    if route == Route::Agents {
+        subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+            set_if_changed(s.agents, a);
+        }));
+        // The cross-agent "All chats" index at the top of the Agents page.
+        subs.push(Sub::get("/api/agents/runs/all", move |c: AllAgentRuns| {
+            set_if_changed(s.all_chats, c);
+        }));
+        // The agent form's per-tool and per-secret checkboxes (metadata only — a secret's value
+        // is never fetched here).
+        subs.push(Sub::get("/api/tools", move |t: ToolsState| {
+            set_if_changed(s.tools, t);
+        }));
+        subs.push(Sub::get("/api/secrets", move |sec: SecretsState| {
+            set_if_changed(s.secrets, sec);
+        }));
+    }
+    if route == Route::Tools {
+        subs.push(Sub::get("/api/tools", move |t: ToolsState| {
+            set_if_changed(s.tools, t);
+        }));
+    }
+    if route == Route::Secrets {
+        subs.push(Sub::get("/api/secrets", move |sec: SecretsState| {
+            set_if_changed(s.secrets, sec);
+        }));
+    }
+    if route == Route::Database {
+        subs.push(Sub::get("/api/db", move |d: DbState| {
+            set_if_changed(s.db, d);
+        }));
+    }
+    if route == Route::Triggers {
+        subs.push(Sub::get("/api/triggers", move |t: TriggersState| {
+            set_if_changed(s.triggers, t);
+        }));
+    }
+    if route == Route::Hive {
+        subs.push(Sub::get("/api/hive", move |h: HiveState| {
+            set_if_changed(s.hive, h);
+        }));
+        // The Hive table lists dashboard services too, and names their source — which needs the
+        // dashboards' own listing, since a service carries only its dashboard's id.
+        subs.push(Sub::get("/api/dashboards", move |d: DashboardsState| {
+            set_if_changed(s.dashboards, d);
+        }));
+    }
+    if route == Route::Dashboards {
+        subs.push(Sub::get("/api/dashboards", move |d: DashboardsState| {
+            set_if_changed(s.dashboards, d);
+        }));
+    }
+    if route == Route::PortsManager {
+        // The registry's leases, and the scan of what is actually listening.
+        subs.push(Sub::get("/api/ports", move |p: PortsState| {
+            set_if_changed(s.ports, p);
+        }));
+        subs.push(Sub::get("/api/ports/used", move |u: UsedPorts| {
+            set_if_changed(s.used, u);
+        }));
+    }
+    if route == Route::Mesh {
+        subs.push(Sub::get("/api/mesh", move |m: MeshState| {
+            set_if_changed(s.mesh, m);
+        }));
+    }
+
+    // The views that used to have a poll each: an open chat, an open log, an open terminal.
+    subs.extend(chat_subscriptions(watch));
+    if let Some(name) = triggers_log.name.get() {
+        subs.push(Sub::post(
+            "/api/triggers/log",
+            &TriggerRef { name },
+            move |snapshot: TriggerLog| set_if_changed(triggers_log.log, snapshot),
+        ));
+    }
+    if let Some((id, name)) = hook_log.watched.get() {
+        subs.push(Sub::post(
+            "/api/projects/hook/log",
+            &ProjectHookRef { id, name },
+            move |snapshot: ProjectHookLog| set_if_changed(hook_log.log, snapshot),
+        ));
+    }
+    if let Some((id, name)) = term.watched.get() {
+        subs.push(Sub::post(
+            "/api/projects/workspaces/terminal/peek",
+            &WorkspaceTermRef { id, name },
+            move |peek: WorkspaceTerm| set_if_changed(term.peek, peek),
+        ));
+    }
+    subs
+}
+
+/// What an open chat watches: the agent's live pane, or its run history and the transcript of
+/// whichever run is selected. Shared by the shell, the chat home and the dashboard embed, which
+/// all show the same live view.
+pub(crate) fn chat_subscriptions(watch: AgentsWatch) -> Vec<Sub> {
+    let Some(name) = watch.name.get() else {
+        return Vec::new();
+    };
+    // An interactive (pty) agent keeps no run history — the pane is the whole of it.
+    if watch.interactive.get() {
+        return vec![Sub::post(
+            "/api/agents/peek",
+            &AgentRef { name },
+            move |peek: AgentPeek| set_if_changed(watch.peek, peek),
+        )];
+    }
+
+    let mut subs = vec![Sub::post(
+        "/api/agents/runs",
+        &AgentRef { name: name.clone() },
+        move |runs: AgentRuns| {
+            // Whether these runs are answerable conversations — drives the chat vs. log view.
+            if watch.answerable.get_untracked() != runs.answerable {
+                watch.answerable.set(runs.answerable);
+            }
+            if watch.runs.get_untracked() != runs.runs {
+                watch.runs.set(runs.runs);
+            }
+        },
+    )];
+    // …and the selected run's transcript, if one is open. The tail feeds a dedicated `log` signal
+    // that the inline viewer follows; both are written only on real change, so a finished run's
+    // viewer sits perfectly still while a live one still grows.
+    if let Some(run_id) = watch.run_id.get() {
+        subs.push(Sub::post(
+            "/api/agents/run/peek",
+            &RunRef { name, run_id },
+            move |peek: AgentPeek| {
+                if watch.log.get_untracked() != peek.output {
+                    watch.log.set(peek.output.clone());
+                }
+                set_if_changed(watch.peek, peek);
+            },
+        ));
+    }
+    subs
+}
+
 /// Fetch `/api/health` + `/api/ports` together and fan the result into the signals.
+///
+/// The fallback path: with the live channel up this never runs (see [`subscriptions`]) — the
+/// shell's timers check [`crate::live::connected`] first. It is what keeps the panel working
+/// against a backend too old to speak `/api/ws`, or while a socket is down between reconnects.
 pub(crate) async fn load(s: State) {
     match (fetch::health().await, fetch::ports().await) {
         (Ok(h), Ok(p)) => {

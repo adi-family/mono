@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 mod fetch;
 mod highlight;
 mod icons;
+mod live;
 mod markdown;
 mod pages;
 mod pwa;
@@ -59,6 +60,9 @@ use ui::{apply_saved_theme, code_editor, fmt_uptime, toggle_theme};
 fn main() {
     console_error_panic_hook::set_once();
     apply_saved_theme();
+    // Open the live channel before anything mounts, so the first subscription a page makes goes
+    // out on a socket that is already connecting rather than waiting for one to be asked for.
+    live::start();
     let path = current_path();
     // Three doors into the one wasm bundle:
     //   * `/embed/dashboard-agent` — a chrome-less page (no workbench shell) hosting the global
@@ -240,8 +244,68 @@ fn Home() -> impl IntoView {
             refresh();
         }
     });
-    Interval::new(1_000, move || poll_watch(watch)).forget();
-    Interval::new(4_000, move || refresh()).forget();
+    // What the chat home watches: the open conversation, plus the rails around it. The same lists
+    // `refresh` fetches, arriving only when they change instead of every four seconds.
+    Effect::new(move |_| {
+        let mut subs = state::chat_subscriptions(watch);
+        subs.push(live::Sub::get("/api/agents", move |a: AgentsState| {
+            // Keep the live view shaped to *the agent it is on*: a pty backend is interactive.
+            let watched = watch.name.get_untracked();
+            let on = watched.clone().unwrap_or_else(|| ROOT_AGENT.to_string());
+            if let Some(d) = a.agents.iter().find(|d| d.name == on) {
+                let interactive = d.executor == "pty";
+                if watch.interactive.get_untracked() != interactive {
+                    watch.interactive.set(interactive);
+                }
+                if watched.is_none() {
+                    watch.name.set(Some(on));
+                }
+            }
+            // Only on change: the picker and the sessions rail read this list, and a select
+            // rebuilt on every message would drop an open dropdown on the floor.
+            if state.agents.get_untracked().as_ref() != Some(&a) {
+                state.agents.set(Some(a));
+            }
+        }));
+        // Every agent's sessions — what the rail lists under "Other agents" — and the dashboards
+        // rail, which groups by project and so needs the project names.
+        subs.push(live::Sub::get(
+            "/api/agents/runs/all",
+            move |c: adi_webapp_api::types::AllAgentRuns| {
+                if state.all_chats.get_untracked().as_ref() != Some(&c) {
+                    state.all_chats.set(Some(c));
+                }
+            },
+        ));
+        subs.push(live::Sub::get(
+            "/api/dashboards",
+            move |d: DashboardsState| {
+                if state.dashboards.get_untracked().as_ref() != Some(&d) {
+                    state.dashboards.set(Some(d));
+                }
+            },
+        ));
+        subs.push(live::Sub::get("/api/projects", move |p: ProjectsState| {
+            if state.projects.get_untracked().as_ref() != Some(&p) {
+                state.projects.set(Some(p));
+            }
+        }));
+        live::watch(subs);
+    });
+
+    // The fallback, while the live channel is down — the polling this page used to do.
+    Interval::new(1_000, move || {
+        if !live::connected() {
+            poll_watch(watch);
+        }
+    })
+    .forget();
+    Interval::new(4_000, move || {
+        if !live::connected() {
+            refresh();
+        }
+    })
+    .forget();
 
     // Bar "reconfigure": seed the setup form from the stored agent, then flip into reconfigure mode
     // so the centred wizard shows in place of the chat.
@@ -690,7 +754,14 @@ fn EmbedDashboardAgent() -> impl IntoView {
         watch.name.set(Some(ROOT_AGENT.to_string()));
         poll_watch(watch);
     });
-    Interval::new(1_000, move || poll_watch(watch)).forget();
+    // The embed shows one chat and nothing else, so that chat is all it watches.
+    Effect::new(move |_| live::watch(state::chat_subscriptions(watch)));
+    Interval::new(1_000, move || {
+        if !live::connected() {
+            poll_watch(watch);
+        }
+    })
+    .forget();
 
     let ctx_label = dashboard.clone();
     view! {
@@ -945,22 +1016,55 @@ fn App() -> impl IntoView {
         load_store_file(state, file);
     }
 
-    // Load now, poll the backend every 4s, and tick the "updated Ns ago" label each second.
-    // The same 1s tick refreshes the agents live view while one is open (it no-ops otherwise).
+    // "updated Ns ago" counts from the last time the backend said anything — which on the live
+    // channel is any pushed answer, not a poll landing.
+    live::on_message(move || secs_since.set(0));
+
+    // Tell the backend what this page is looking at, and re-tell it whenever the page moves — a
+    // route change, a different project, another chat or log or terminal opened. Everything the
+    // shell used to fetch on a timer now arrives on the socket, and only when it has changed.
+    Effect::new(move |_| {
+        live::watch(state::subscriptions(
+            state,
+            route.get(),
+            agents_watch,
+            triggers_log,
+            hook_log,
+            term_watch,
+        ));
+    });
+
+    // The fallback, for a backend that can't hold a socket open: exactly the polling this page
+    // used to do, and only while the live channel is down. Load once at startup either way, so a
+    // first paint never waits on the handshake.
     spawn_local(load(state));
-    Interval::new(4_000, move || spawn_local(load(state))).forget();
+    Interval::new(4_000, move || {
+        if !live::connected() {
+            spawn_local(load(state));
+        }
+    })
+    .forget();
+    // The "updated Ns ago" label ticks regardless — it counts local time, not requests.
     Interval::new(1_000, move || {
         secs_since.update(|s| *s = s.saturating_add(1));
-        poll_watch(agents_watch);
-        poll_trigger_log(triggers_log);
-        poll_hook_log(hook_log);
-        poll_term(term_watch);
+        if !live::connected() {
+            poll_watch(agents_watch);
+            poll_trigger_log(triggers_log);
+            poll_hook_log(hook_log);
+            poll_term(term_watch);
+        }
     })
     .forget();
 
     // Refresh immediately when a page that has page-specific data opens (the port scan on
-    // Ports Manager, the mesh state on Mesh), so it isn't stale.
-    Effect::new(move |_| {
+    // Ports Manager, the mesh state on Mesh), so it isn't stale. On the live channel the
+    // subscription effect above has already done this — a new page means a new watch list, which
+    // the server answers with a snapshot straight away — so only the fallback path fetches here.
+    //
+    // `opened` is `None` on the very first run, which is the mount rather than a navigation: the
+    // `load` above has already covered it, and fetching again would double every request a page
+    // load makes.
+    Effect::new(move |opened: Option<()>| {
         // Re-run when the open project changes too, so navigating detail A → B reloads.
         let _ = current_project.get();
         // Any page change closes an open row menu (its row is about to unmount anyway).
@@ -978,7 +1082,9 @@ fn App() -> impl IntoView {
                 | Route::Hive
                 | Route::PortsManager
                 | Route::Mesh
-        ) {
+        ) && opened.is_some()
+            && !live::connected()
+        {
             spawn_local(load(state));
         }
         // Leaving the pages that show the agents live view closes it, so its 1s poll stops

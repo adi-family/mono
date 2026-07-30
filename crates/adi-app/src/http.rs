@@ -16,12 +16,19 @@ const MAX_BODY: usize = 1 << 20; // 1 MiB
 /// So a silent client can't tie up a connection forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// A parsed request: method, full path (query included), and the buffered body.
+/// A parsed request: method, full path (query included), the headers (names lowercased), the
+/// buffered body, and whatever arrived after it.
 #[derive(Debug)]
 pub struct Request {
     pub method: String,
     pub path: String,
+    pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
+    /// Bytes read past the body — nothing for an ordinary request, which is one request per
+    /// connection, but a client that pipelines straight into a protocol switch (the WebSocket
+    /// upgrade at `/api/ws`) may have sent its first frames already. Dropping them would lose
+    /// that client's opening message.
+    pub rest: Vec<u8>,
 }
 
 impl Request {
@@ -29,6 +36,26 @@ impl Request {
     #[must_use]
     pub fn route_path(&self) -> &str {
         self.path.split('?').next().unwrap_or(&self.path)
+    }
+
+    /// One header's value, by lowercase name.
+    #[must_use]
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.get(name).map(String::as_str)
+    }
+
+    /// Whether this request asks to leave HTTP behind for a WebSocket (RFC 6455 §4.2.1: an
+    /// `Upgrade: websocket` token and `websocket` in `Connection`, both case-insensitive).
+    #[must_use]
+    pub fn is_websocket_upgrade(&self) -> bool {
+        let upgrade = self
+            .header("upgrade")
+            .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+        let connection = self.header("connection").is_some_and(|v| {
+            v.split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+        });
+        upgrade && connection
     }
 }
 
@@ -70,9 +97,20 @@ pub async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Reque
         }
         body.extend_from_slice(&chunk[..n]);
     }
-    body.truncate(content_length);
+    // Keep, rather than discard, anything past the declared body — see [`Request::rest`].
+    let rest = if body.len() > content_length {
+        body.split_off(content_length)
+    } else {
+        Vec::new()
+    };
 
-    Ok(Some(Request { method, path, body }))
+    Ok(Some(Request {
+        method,
+        path,
+        headers,
+        body,
+        rest,
+    }))
 }
 
 fn find_head_end(buf: &[u8]) -> Option<usize> {
@@ -181,14 +219,31 @@ mod tests {
         assert_eq!(headers.get("content-length").map(String::as_str), Some("3"));
     }
 
+    /// A request with no headers and no body — the shape the path/upgrade tests need.
+    fn bare(method: &str, path: &str) -> Request {
+        Request {
+            method: method.into(),
+            path: path.into(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+            rest: Vec::new(),
+        }
+    }
+
     #[test]
     fn route_path_strips_query() {
-        let req = Request {
-            method: "GET".into(),
-            path: "/api/ports?live=1".into(),
-            body: Vec::new(),
-        };
-        assert_eq!(req.route_path(), "/api/ports");
+        assert_eq!(bare("GET", "/api/ports?live=1").route_path(), "/api/ports");
+    }
+
+    #[test]
+    fn recognizes_a_websocket_upgrade() {
+        let mut req = bare("GET", "/api/ws");
+        assert!(!req.is_websocket_upgrade());
+        req.headers.insert("upgrade".into(), "WebSocket".into());
+        // Firefox sends `keep-alive, Upgrade`, so the token has to be found in a list.
+        req.headers
+            .insert("connection".into(), "keep-alive, Upgrade".into());
+        assert!(req.is_websocket_upgrade());
     }
 
     #[test]

@@ -41,6 +41,10 @@ web-sys = { version = "0.3", features = [
     "HtmlTextAreaElement", # scrollHeight/value: the chat composers grow with the message typed
     "CssStyleDeclaration", # …by writing that measured height back as an inline style
     "UrlSearchParams",   # parse the OAuth token returned in the redirect URL fragment
+    # The live channel (see `live`): one socket per tab, in place of a poll per open view.
+    "WebSocket",
+    "MessageEvent",      # …its inbound messages…
+    "CloseEvent",        # …and the close that triggers a reconnect.
 ] }
 
 serde = { workspace = true }

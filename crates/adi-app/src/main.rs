@@ -9,7 +9,9 @@
 //! their DTO types with that frontend.
 
 mod http;
+mod live;
 mod scan;
+mod ws;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
@@ -57,6 +59,9 @@ struct App {
     /// When the process started, for `/api/health`'s uptime.
     start: Instant,
     reads: Reads,
+    /// The `/api/ws` live channel: what each connected control panel is watching, and the answers
+    /// it has already been sent. See [`live`].
+    live: live::Hub,
 }
 
 /// Owns the mesh [`Daemon`] the control panel starts/stops in-process, so it lives only as
@@ -250,7 +255,12 @@ async fn main() -> anyhow::Result<()> {
         dist,
         start: Instant::now(),
         reads: Reads::default(),
+        live: live::Hub::default(),
     });
+
+    // The live channel's clock: it recomputes only what some open page is watching, so until a
+    // control panel connects this costs a wakeup every quarter second and nothing else.
+    live::start(Arc::clone(&app));
 
     // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
     // (non-blocking, best-effort) so the whole stack is up once the app is — the control
@@ -320,17 +330,32 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
     };
     debug!(method = %req.method, path = %req.path, "request");
 
+    // The live channel leaves HTTP behind entirely: past the handshake this connection is a
+    // websocket for as long as the page is open, not a request and a response.
+    if req.method == "GET" && req.route_path() == "/api/ws" && req.is_websocket_upgrade() {
+        return live::serve(stream, &req, app).await;
+    }
+
     // Any GET outside `/api` is a webapp asset, streamed straight back from memory or disk.
     // Inside `/api` an unknown path is a 404 from the router, not the app shell.
     if req.method == "GET" && !req.route_path().starts_with("/api") {
         return serve_asset(&mut stream, req.route_path(), app.dist.as_deref()).await;
     }
 
-    let response = match async_route(app, &req).await {
+    let response = answer(app, req).await;
+    http::write_json(&mut stream, response.status, &response.body).await
+}
+
+/// Answer one read or mutation: the few genuinely asynchronous routes first, then the synchronous
+/// dispatch — shared with anyone else asking the same thing, and off the async workers either way.
+///
+/// Shared with the live channel, which answers a subscription with the very same routing rather
+/// than a parallel set of handlers that could drift from it.
+async fn answer(app: &Arc<App>, req: http::Request) -> Arc<Response> {
+    match async_route(app, &req).await {
         Some(response) => Arc::new(response),
         None => app.answer(req).await,
-    };
-    http::write_json(&mut stream, response.status, &response.body).await
+    }
 }
 
 /// The few routes that are genuinely asynchronous: an outbound HTTP call, and the in-process mesh
@@ -881,7 +906,9 @@ mod tests {
         http::Request {
             method: method.to_string(),
             path: path.to_string(),
+            headers: HashMap::new(),
             body: body.as_bytes().to_vec(),
+            rest: Vec::new(),
         }
     }
 
