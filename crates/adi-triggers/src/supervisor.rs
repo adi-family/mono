@@ -202,7 +202,15 @@ impl Supervisor {
     async fn reconcile_loop(self: Arc<Self>, mut rx: watch::Receiver<bool>) {
         let mut running: BTreeMap<String, Running> = BTreeMap::new();
         loop {
-            self.reconcile(&mut running);
+            // Reading the store is the only disk work a tick does, so it is the only part that
+            // goes to the blocking pool. Everything the reconcile does with the answer is
+            // in-memory, and keeping it here is what lets `running` stay a plain local.
+            let supervisor = Arc::clone(&self);
+            match tokio::task::spawn_blocking(move || supervisor.wanted()).await {
+                Ok(Ok(wanted)) => self.reconcile(wanted, &mut running),
+                Ok(Err(e)) => warn!(error = %e, "couldn't read triggers; leaving the running set alone"),
+                Err(e) => warn!(error = %e, "reading triggers failed; leaving the running set alone"),
+            }
 
             tokio::select! {
                 () = tokio::time::sleep(TICK) => {}
@@ -226,15 +234,10 @@ impl Supervisor {
 
     /// Start what should be running and isn't, stop what shouldn't, and restart anything whose
     /// spec changed. A trigger whose spec is byte-identical is never bounced.
-    fn reconcile(&self, running: &mut BTreeMap<String, Running>) {
-        let mut wanted = match self.wanted() {
-            Ok(wanted) => wanted,
-            Err(e) => {
-                warn!(error = %e, "couldn't read triggers; leaving the running set alone");
-                return;
-            }
-        };
-
+    ///
+    /// `wanted` is read by the caller ([`Self::reconcile_loop`]) rather than here, so the disk
+    /// read can happen off the async runtime while this stays pure bookkeeping.
+    fn reconcile(&self, mut wanted: BTreeMap<String, Spec>, running: &mut BTreeMap<String, Running>) {
         // Drop anything no longer wanted, or wanted differently. A changed one is restarted by
         // being stopped here and re-started below, since it stays in `wanted`.
         let stale: Vec<String> = running

@@ -437,26 +437,15 @@ pub(crate) fn read_pid(path: &Path) -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
-#[cfg(unix)]
+/// Whether a run's recorded pid still names a living process — one shared syscall-backed probe
+/// ([`adi_osext::pid_alive`]), not a second copy of it.
+///
+/// This is the hottest question the store asks: every run listing checks one pid per run, and every
+/// conversation poll checks the same one twice. It used to spawn `/bin/kill -0` to answer, which
+/// cost a `fork`/`exec`/`wait` per call — milliseconds, spent blocked in the kernel — and that is
+/// what let a couple of open chats starve the app server's threads.
 pub(crate) fn pid_alive(pid: u32) -> bool {
-    Command::new("/bin/kill")
-        .args(["-0", &pid.to_string()])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
-}
-
-/// Windows liveness: `tasklist` filtered to the pid exits 0 whether or not the process exists, so
-/// read it from the output (the pid appears only when the process is live).
-#[cfg(not(unix))]
-pub(crate) fn pid_alive(pid: u32) -> bool {
-    Command::new("tasklist")
-        .args(["/NH", "/FI", &format!("PID eq {pid}")])
-        .output()
-        .is_ok_and(|out| {
-            out.status.success() && String::from_utf8_lossy(&out.stdout).contains(&pid.to_string())
-        })
+    adi_osext::pid_alive(pid)
 }
 
 /// Signal a run's whole process tree. Unix: `kill -<sig> -<pid>` (negative pid = the group the

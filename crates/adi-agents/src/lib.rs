@@ -35,6 +35,7 @@ mod error;
 mod events;
 mod launch;
 mod limits;
+mod memo;
 pub mod progress;
 mod run;
 mod tool_help;

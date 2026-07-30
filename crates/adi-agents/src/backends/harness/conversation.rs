@@ -22,9 +22,9 @@
 //! lazy clock as [`settle`] — every read of a conversation [`advance`]s it — so no reaper is needed
 //! here either.
 
-use std::io::{Read as _, Write as _};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -33,6 +33,7 @@ use uuid::Uuid;
 use crate::Backend;
 use crate::backends::detached;
 use crate::error::{Error, Result};
+use crate::memo;
 use crate::progress::{self, Step, TurnMetrics};
 use crate::run::{Launch, Sent};
 use crate::{StoredAgent, StoredAgentManifest};
@@ -285,19 +286,20 @@ pub(crate) fn transcript(
 ) -> Vec<Turn> {
     let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, agent_name);
     settle(&dir, conv_id, backend);
-    let mut turns = load_transcript(&dir, conv_id);
+    let committed = load_transcript(&dir, conv_id);
+    let mut turns = (*committed).clone();
     // A user turn with no committed answer and a live child → stream the partial answer, parsing the
     // partial event log so its tool steps appear (running) before the turn settles.
     if turns.last().map(|t| t.role.as_str()) == Some(ROLE_USER) && turn_running(&dir, conv_id) {
-        let content = progress::parse(backend, &read_log_bytes(&dir, conv_id));
+        let content = parsed_log(&dir, conv_id, backend);
         turns.push(Turn {
             role: ROLE_ASSISTANT.to_string(),
-            text: content.text,
+            text: content.text.clone(),
             at: 0,
             pending: true,
             queued: false,
-            steps: content.steps,
-            metrics: content.metrics,
+            steps: content.steps.clone(),
+            metrics: content.metrics.clone(),
         });
     }
     turns.extend(load_queue(&dir, conv_id).into_iter().map(|text| Turn {
@@ -317,7 +319,7 @@ pub(crate) fn transcript(
 /// would splice in this very turn's empty partial answer.
 pub(super) fn committed(sessions_dir: &Path, agent_name: &str, conv_id: &str) -> Vec<Turn> {
     let dir = detached::agent_dir(sessions_dir, HARNESS_DIR, agent_name);
-    load_transcript(&dir, conv_id)
+    (*load_transcript(&dir, conv_id)).clone()
 }
 
 // ---- turn spawning -----------------------------------------------------------------
@@ -438,14 +440,11 @@ fn write_turn(dir: &Path, conv_id: &str, turn: &Turn) {
 }
 
 /// The committed transcript, oldest first. Unparseable lines are skipped rather than failing.
-fn load_transcript(dir: &Path, conv_id: &str) -> Vec<Turn> {
-    let Ok(text) = std::fs::read_to_string(transcript_path(dir, conv_id)) else {
-        return Vec::new();
-    };
-    text.lines()
-        .filter(|l| !l.trim().is_empty())
-        .filter_map(|l| serde_json::from_str::<Turn>(l).ok())
-        .collect()
+///
+/// Memoized on the file's identity ([`crate::memo`]): every poll of an open chat asks for this, and
+/// re-deserializing a settled conversation that cannot have changed is pure waste.
+fn load_transcript(dir: &Path, conv_id: &str) -> Arc<Vec<Turn>> {
+    memo::transcript(&transcript_path(dir, conv_id))
 }
 
 /// If the last turn is an unanswered question and the child has exited, parse its captured output
@@ -459,20 +458,15 @@ fn settle(dir: &Path, conv_id: &str, backend: &Backend) {
     if turn_running(dir, conv_id) {
         return;
     }
-    let content = progress::parse(backend, &read_log_bytes(dir, conv_id));
+    let content = parsed_log(dir, conv_id, backend);
     append_assistant(dir, conv_id, &content);
 }
 
-/// The turn child's captured output, read whole from the start up to the parse cap. Reading from the
-/// start (not a tail) keeps the beginning of a streamed event log, so early tool steps survive.
-fn read_log_bytes(dir: &Path, conv_id: &str) -> Vec<u8> {
-    let path = detached::log_path_in(dir, conv_id);
-    let Ok(file) = std::fs::File::open(&path) else {
-        return Vec::new();
-    };
-    let mut buf = Vec::new();
-    let _ = file.take(progress::MAX_PARSE_BYTES).read_to_end(&mut buf);
-    buf
+/// The turn child's captured output, parsed into progress content — and, like the transcript,
+/// re-parsed only once the log has actually grown. A finished turn is parsed exactly once however
+/// long its conversation stays open.
+fn parsed_log(dir: &Path, conv_id: &str, backend: &Backend) -> Arc<progress::TurnContent> {
+    memo::parsed_log(backend, &detached::log_path_in(dir, conv_id))
 }
 
 // ---- meta ------------------------------------------------------------------------
@@ -622,7 +616,7 @@ mod tests {
             "the turn alternates message → tool → message → tool, not one merged blob"
         );
         // And it survives the jsonl round-trip, so a reload reads the same timeline.
-        assert_eq!(load_transcript(&dir, conv), turns);
+        assert_eq!(*load_transcript(&dir, conv), turns);
 
         let _ = std::fs::remove_dir_all(&sessions);
     }

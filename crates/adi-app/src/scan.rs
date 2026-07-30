@@ -3,17 +3,60 @@
 //! — it never binds a socket — so it's safe to run against a live system. Best-effort: if
 //! `lsof`/`ps` is missing or errors, the scan yields an empty list (or portless usage) rather
 //! than failing the request. macOS/Linux only (this app targets macOS).
+//!
+//! A scan is **memoized for [`SCAN_TTL`]**. It is by far the most expensive thing a request can
+//! ask for — two whole-machine subprocesses, ~170ms of it spent blocked — and eight routes call
+//! it, several of which the open control panel refetches every four seconds. Without the memo a
+//! single page render pays for the same `lsof` three or four times over.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::process::Command;
+use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use adi_webapp_api::types::{ProcessUsage, UsedPort};
+
+/// How long a scan is served from memory before the machine is looked at again. Short enough that
+/// "is this service up?" still reads as live, long enough that one page render scans once.
+const SCAN_TTL: Duration = Duration::from_millis(1_500);
+
+/// The last scan and the moment it was taken, or `None` before the first one.
+static MEMO: Mutex<Option<(Instant, Vec<UsedPort>)>> = Mutex::new(None);
 
 /// Every distinct listening TCP port, with the owning process where `lsof` reports one and
 /// what that process tree currently costs. Sorted by port; deduplicated (a port listening on
 /// both IPv4 and IPv6 appears once).
+///
+/// Served from the [`SCAN_TTL`] memo when one is fresh. The lock is deliberately held across the
+/// scan itself, so concurrent callers that all miss produce **one** `lsof` between them: the
+/// others wait, then find the answer already there.
 #[must_use]
 pub fn listening_ports() -> Vec<UsedPort> {
+    let mut memo = MEMO.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((taken, ports)) = memo.as_ref()
+        && is_fresh(*taken, Instant::now())
+    {
+        return ports.clone();
+    }
+    let ports = scan();
+    *memo = Some((Instant::now(), ports.clone()));
+    ports
+}
+
+/// Drop the memo, so the next [`listening_ports`] looks at the machine again. For the moments
+/// where a stale answer would be a visibly wrong one — right after we ourselves started or
+/// stopped a service, when the caller is about to ask whether it is up.
+pub fn invalidate() {
+    *MEMO.lock().unwrap_or_else(PoisonError::into_inner) = None;
+}
+
+/// Whether a scan taken at `taken` is still worth serving at `now`.
+fn is_fresh(taken: Instant, now: Instant) -> bool {
+    now.duration_since(taken) < SCAN_TTL
+}
+
+/// Look at the machine: the listening sockets, then what each listener's tree costs.
+fn scan() -> Vec<UsedPort> {
     // `-nP` skips host/port name lookups (fast, numeric); `+c0` keeps full (untruncated)
     // command names; `-Fpcn` emits machine-readable fields: p<pid>, c<command>, n<addr:port>.
     let Ok(output) = Command::new("lsof")
@@ -218,6 +261,22 @@ mod tests {
     #[test]
     fn empty_output_is_empty() {
         assert!(parse_lsof("").is_empty());
+    }
+
+    /// The memo's whole contract: a scan just taken is reusable, one older than the TTL is not.
+    #[test]
+    fn a_scan_is_fresh_only_inside_the_ttl() {
+        let now = Instant::now();
+        let just_under_ttl = SCAN_TTL
+            .checked_sub(Duration::from_millis(1))
+            .expect("the TTL is longer than a millisecond");
+        assert!(is_fresh(now, now), "the scan we just took");
+        assert!(
+            is_fresh(now, now + just_under_ttl),
+            "still inside the window"
+        );
+        assert!(!is_fresh(now, now + SCAN_TTL), "the window is half-open");
+        assert!(!is_fresh(now, now + Duration::from_secs(60)), "long stale");
     }
 
     #[test]

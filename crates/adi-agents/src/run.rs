@@ -376,8 +376,11 @@ fn process_run_turns(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> 
         .map(|r| r.message)
         .unwrap_or_default();
     let running = process::is_running(sessions_dir, &agent.name, run_id);
-    let log = read_capped(&process::log_path(sessions_dir, &agent.name, run_id));
-    let content = crate::progress::parse(&agent.manifest.backend, &log);
+    // Memoized on the log's identity: a finished run is parsed once, not once per poll.
+    let content = crate::memo::parsed_log(
+        &agent.manifest.backend,
+        &process::log_path(sessions_dir, &agent.name, run_id),
+    );
 
     let mut turns = Vec::new();
     if !task.trim().is_empty() {
@@ -393,25 +396,14 @@ fn process_run_turns(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> 
     }
     turns.push(Turn {
         role: "assistant".to_string(),
-        text: content.text,
+        text: content.text.clone(),
         at: 0,
         pending: running,
         queued: false,
-        steps: content.steps,
-        metrics: content.metrics,
+        steps: content.steps.clone(),
+        metrics: content.metrics.clone(),
     });
     turns
-}
-
-/// Read a log file whole, up to the progress parse cap.
-fn read_capped(path: &Path) -> Vec<u8> {
-    use std::io::Read as _;
-    let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
-    };
-    let mut buf = Vec::new();
-    let _ = file.take(crate::progress::MAX_PARSE_BYTES).read_to_end(&mut buf);
-    buf
 }
 
 /// Stop the agent wholesale: the pty session, or every live run of a headless agent.

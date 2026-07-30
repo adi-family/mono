@@ -97,7 +97,14 @@ impl EventDispatcher {
     /// The dispatch loop: drain and deliver, then wait for the next tick or shutdown.
     async fn run_loop(self: Arc<Self>, mut rx: watch::Receiver<bool>) {
         loop {
-            self.dispatch_pending();
+            // Draining the spool, reading the triggers and firing what matches is all disk work
+            // (and, for a match, a spawned process). At one tick a second it would otherwise hold
+            // an async worker every second, for as long as the app is up.
+            let dispatcher = Arc::clone(&self);
+            if let Err(e) = tokio::task::spawn_blocking(move || dispatcher.dispatch_pending()).await
+            {
+                warn!(error = %e, "dispatching spooled events failed");
+            }
             tokio::select! {
                 () = tokio::time::sleep(TICK) => {}
                 _ = rx.changed() => break,

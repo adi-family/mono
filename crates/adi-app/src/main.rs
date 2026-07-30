@@ -11,6 +11,8 @@
 mod http;
 mod scan;
 
+use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -30,8 +32,32 @@ use adi_webapp_api::handlers;
 use adi_webapp_api::handlers::Response;
 use include_dir::{Dir, include_dir};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 use tracing::{debug, info, warn};
+
+/// Everything a request may need, held once and shared by every connection.
+///
+/// One `Arc<App>` rather than a dozen: a synchronous handler runs on the blocking pool, which
+/// needs an owned `'static` handle to what it touches (see [`App::answer`]). Grouping the stores
+/// is what makes that a clone of one pointer instead of twelve.
+struct App {
+    ports: Ports,
+    projects: Projects,
+    secrets: Secrets,
+    db: Db,
+    tasks: Tasks,
+    tools: Tools,
+    agents: Agents,
+    triggers: Triggers,
+    trigger_supervisor: Arc<Supervisor>,
+    events: Events,
+    mesh: MeshCtl,
+    /// A `dist/` to serve the webapp from instead of the embedded copy ([`DIST_ENV`]).
+    dist: Option<PathBuf>,
+    /// When the process started, for `/api/health`'s uptime.
+    start: Instant,
+    reads: Reads,
+}
 
 /// Owns the mesh [`Daemon`] the control panel starts/stops in-process, so it lives only as
 /// long as this app. `None` when stopped. The async mutex serializes start/stop.
@@ -60,6 +86,88 @@ impl MeshCtl {
         if let Some(daemon) = self.daemon.lock().await.take() {
             daemon.stop().await;
         }
+    }
+}
+
+/// Reads that are already in flight, so several askers share one answer.
+///
+/// The control panel polls: an open chat asks for its run list and its transcript once a second,
+/// and the rails refetch the agent list, every agent's sessions and the dashboards every four —
+/// per tab. When one of those reads takes longer than the interval, the next tick fires anyway and
+/// the requests stack up, each redoing byte-for-byte the same work. This collapses that: the first
+/// asker computes, everyone who asks the same thing while it runs waits on *its* result, and they
+/// all get the same response.
+///
+/// Only routes named by [`shared_read_key`] take part — reads, where "the answer a moment ago" and
+/// "the answer now" are the same answer. Nothing that mutates is ever shared.
+#[derive(Debug, Default)]
+struct Reads {
+    inflight: std::sync::Mutex<HashMap<String, broadcast::Sender<Arc<Response>>>>,
+}
+
+impl Reads {
+    /// The answer to `key`, computing it only if nobody else already is.
+    async fn shared<F>(&self, key: String, compute: F) -> Arc<Response>
+    where
+        F: FnOnce() -> Response + Send + 'static,
+    {
+        // Claim the slot or join it, holding the lock for exactly that decision — never across
+        // the read itself, which is the slow part everyone is waiting on.
+        let joined = {
+            let mut inflight = self.inflight();
+            match inflight.entry(key.clone()) {
+                Entry::Occupied(leader) => Some(leader.get().subscribe()),
+                Entry::Vacant(slot) => {
+                    slot.insert(broadcast::channel(1).0);
+                    None
+                }
+            }
+        };
+
+        if let Some(mut answer) = joined {
+            return answer.recv().await.unwrap_or_else(|_| {
+                // Only reachable if the leader's connection task vanished between claiming the
+                // slot and answering; it cannot happen through a handler panic, which [`blocking`]
+                // turns into a 500 the followers receive like any other answer.
+                Arc::new(handlers::error(500, "the shared read was dropped"))
+            });
+        }
+
+        let response = Arc::new(blocking(compute).await);
+        // Free the slot before publishing, so the next poll starts a fresh read rather than
+        // joining one that has already finished.
+        if let Some(waiting) = self.inflight().remove(&key) {
+            let _ = waiting.send(Arc::clone(&response));
+        }
+        response
+    }
+
+    /// A previous panic while holding this lock says nothing about the map, so a poisoned lock is
+    /// taken anyway rather than failing every later request.
+    fn inflight(&self) -> std::sync::MutexGuard<'_, HashMap<String, broadcast::Sender<Arc<Response>>>>
+    {
+        self.inflight
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+/// Run a synchronous handler on tokio's blocking pool.
+///
+/// Every `/api` handler below reads files, stats pids and sometimes spawns a subprocess. Run
+/// directly in the connection's async task — as they used to be — a handful of them occupy every
+/// runtime worker at once, and the server stops answering *anything*: `/api/health`, which touches
+/// nothing, was observed taking 22 seconds behind them. On the blocking pool they can take as long
+/// as they take without a single async worker being held.
+async fn blocking<F>(work: F) -> Response
+where
+    F: FnOnce() -> Response + Send + 'static,
+{
+    match tokio::task::spawn_blocking(work).await {
+        Ok(response) => response,
+        // The handler panicked. Answering 500 keeps the failure to this one request (and, when it
+        // was a shared read, hands the same 500 to everyone waiting on it).
+        Err(e) => handlers::error(500, &format!("the request handler failed: {e}")),
     }
 }
 
@@ -94,11 +202,11 @@ async fn main() -> anyhow::Result<()> {
     let addr = listen_addr();
     let listener = TcpListener::bind(addr).await?;
     let local = listener.local_addr().unwrap_or(addr);
-    let ports = Arc::new(Ports::new());
-    let projects = Arc::new(Projects::open());
-    let secrets = Arc::new(Secrets::open());
-    let tasks = Arc::new(Tasks::open());
-    let tools = Arc::new(Tools::open());
+    let ports = Ports::new();
+    let projects = Projects::open();
+    let secrets = Secrets::open();
+    let tasks = Tasks::open();
+    let tools = Tools::open();
     // Ensure the built-in system tools (the adi-ecosystem CLIs) exist, then rebuild the global
     // `.bin`. Best-effort — a store that can't be seeded shouldn't stop the app from starting.
     if let Err(e) = tools.seed_system().and_then(|_| tools.sync_bin().map(|_| ())) {
@@ -107,75 +215,63 @@ async fn main() -> anyhow::Result<()> {
     // Create the global database (so it exists in WAL mode before anything races to make it) and
     // seed the `@adi/db` Bun client into the store's node_modules, so `import … from "@adi/db"`
     // resolves from every `.ts` the platform runs. Best-effort, like the tools above.
-    let db = Arc::new(Db::open());
+    let db = Db::open();
     if let Err(e) = db.bootstrap() {
         warn!(error = %e, "bootstrapping the shared database failed");
     }
-    let agents = Arc::new(Agents::open());
-    let triggers = Arc::new(Triggers::open());
-    let events = Arc::new(Events::open());
+    let agents = Agents::open();
+    let triggers = Triggers::open();
+    let events = Events::open();
     // Background triggers are long-lived processes owned by this app: the supervisor keeps
     // every enabled one running for as long as the app is up, and stops them on the way out.
-    let trigger_supervisor = Supervisor::start((*triggers).clone());
+    let trigger_supervisor = Supervisor::start(triggers.clone());
     // Event triggers, in turn, are fired on demand: the dispatcher drains the shared event spool
     // (which task/agent mutations and the emit endpoint publish onto) and launches every enabled
     // event trigger whose patterns match a drained event.
-    let event_dispatcher = EventDispatcher::start((*triggers).clone());
-    let webapp_dist = Arc::new(webapp_dist_override());
+    let event_dispatcher = EventDispatcher::start(triggers.clone());
+    let dist = webapp_dist_override();
+    if let Some(dir) = dist.as_ref() {
+        info!(dist = %dir.display(), "serving webapp from disk (dev mode)");
+    }
+    info!(%local, registry = %ports.config().registry_path.display(), "adi-app listening");
+
+    let app = Arc::new(App {
+        ports,
+        projects,
+        secrets,
+        db,
+        tasks,
+        tools,
+        agents,
+        triggers,
+        trigger_supervisor,
+        events,
+        mesh: MeshCtl::default(),
+        dist,
+        start: Instant::now(),
+        reads: Reads::default(),
+    });
+
     // The mesh daemon runs in-process, so it lives only as long as this app. Autostart it
     // (non-blocking, best-effort) so the whole stack is up once the app is — the control
     // panel's Stop button still stops it for the session.
-    let mesh = Arc::new(MeshCtl::default());
     {
-        let mesh = Arc::clone(&mesh);
+        let app = Arc::clone(&app);
         tokio::spawn(async move {
-            match mesh.start().await {
+            match app.mesh.start().await {
                 Ok(()) => info!("mesh autostarted"),
                 Err(e) => warn!(error = %e, "mesh autostart failed"),
             }
         });
-    }
-    let start = Instant::now();
-    info!(%local, registry = %ports.config().registry_path.display(), "adi-app listening");
-    if let Some(dir) = webapp_dist.as_ref() {
-        info!(dist = %dir.display(), "serving webapp from disk (dev mode)");
     }
 
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, peer)) => {
-                    let ports = Arc::clone(&ports);
-                    let projects = Arc::clone(&projects);
-                    let secrets = Arc::clone(&secrets);
-                    let db = Arc::clone(&db);
-                    let tasks = Arc::clone(&tasks);
-                    let tools = Arc::clone(&tools);
-                    let agents = Arc::clone(&agents);
-                    let triggers = Arc::clone(&triggers);
-                    let trigger_supervisor = Arc::clone(&trigger_supervisor);
-                    let events = Arc::clone(&events);
-                    let webapp_dist = Arc::clone(&webapp_dist);
-                    let mesh = Arc::clone(&mesh);
+                    let app = Arc::clone(&app);
                     tokio::spawn(async move {
-                        if let Err(e) = handle(
-                            stream,
-                            &ports,
-                            &projects,
-                            &secrets,
-                            &db,
-                            &tasks,
-                            &tools,
-                            &agents,
-                            &triggers,
-                            &trigger_supervisor,
-                            &events,
-                            &mesh,
-                            start,
-                            webapp_dist.as_deref(),
-                        )
-                        .await
-                        {
+                        if let Err(e) = handle(stream, &app).await {
                             debug!(%peer, error = %e, "connection error");
                         }
                     });
@@ -191,11 +287,11 @@ async fn main() -> anyhow::Result<()> {
     // Background triggers run in their own process groups so the supervisor can signal their
     // whole tree — which also means they outlive this process unless they are stopped first.
     // Waiting here is what keeps a restart from leaking a copy of every background trigger.
-    trigger_supervisor.stop(TRIGGER_STOP_GRACE).await;
+    app.trigger_supervisor.stop(TRIGGER_STOP_GRACE).await;
     // The dispatcher owns no child processes (fired event triggers are detached one-offs), so
     // this just ends its poll loop cleanly.
     event_dispatcher.stop(TRIGGER_STOP_GRACE).await;
-    mesh.stop().await;
+    app.mesh.stop().await;
     Ok(())
 }
 
@@ -218,32 +314,144 @@ fn listen_addr() -> SocketAddr {
 }
 
 /// Read one request, route it, and write the response.
-// The dispatcher threads each store handle through by reference; grouping them into a context
-// struct would be churn for no gain in a single hand-rolled router.
-#[allow(clippy::too_many_arguments)]
-async fn handle(
-    mut stream: TcpStream,
-    ports: &Ports,
-    projects: &Projects,
-    secrets: &Secrets,
-    db: &Db,
-    tasks: &Tasks,
-    tools: &Tools,
-    agents: &Agents,
-    triggers: &Triggers,
-    trigger_supervisor: &Supervisor,
-    events: &Events,
-    mesh: &MeshCtl,
-    start: Instant,
-    dist: Option<&Path>,
-) -> anyhow::Result<()> {
+async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
     let Some(req) = http::read_request(&mut stream).await? else {
         return Ok(());
     };
     debug!(method = %req.method, path = %req.path, "request");
 
+    // Any GET outside `/api` is a webapp asset, streamed straight back from memory or disk.
+    // Inside `/api` an unknown path is a 404 from the router, not the app shell.
+    if req.method == "GET" && !req.route_path().starts_with("/api") {
+        return serve_asset(&mut stream, req.route_path(), app.dist.as_deref()).await;
+    }
+
+    let response = match async_route(app, &req).await {
+        Some(response) => Arc::new(response),
+        None => app.answer(req).await,
+    };
+    http::write_json(&mut stream, response.status, &response.body).await
+}
+
+/// The few routes that are genuinely asynchronous: an outbound HTTP call, and the in-process mesh
+/// daemon behind its async mutex. `None` means "not one of these" — a synchronous route, which
+/// [`App::answer`] takes off the runtime entirely.
+async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
+    let response = match (req.method.as_str(), req.route_path()) {
+        // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async
+        // because it makes an outbound call, so it can't be a plain sync handler.
+        ("POST", "/api/secrets/refresh") => refresh_secret(&app.secrets, &req.body).await,
+        ("GET", "/api/mesh") => handlers::mesh(app.mesh.running().await),
+        ("POST", "/api/mesh/start") => mesh_start(&app.mesh).await,
+        ("POST", "/api/mesh/stop") => mesh_stop(&app.mesh).await,
+        ("POST", "/api/mesh/allow") => handlers::mesh_allow(app.mesh.running().await, &req.body),
+        ("POST", "/api/mesh/deny") => handlers::mesh_deny(app.mesh.running().await, &req.body),
+        ("POST", "/api/mesh/peers/allow") => {
+            handlers::mesh_allow_peer(app.mesh.running().await, &req.body)
+        }
+        ("POST", "/api/mesh/peers/deny") => {
+            handlers::mesh_deny_peer(app.mesh.running().await, &req.body)
+        }
+        ("POST", "/api/mesh/forwards/add") => {
+            handlers::mesh_add_forward(app.mesh.running().await, &req.body)
+        }
+        ("POST", "/api/mesh/forwards/remove") => {
+            handlers::mesh_remove_forward(app.mesh.running().await, &req.body)
+        }
+        _ => return None,
+    };
+    Some(response)
+}
+
+impl App {
+    /// Answer a synchronous request without occupying an async worker: shared with whoever else is
+    /// asking the same thing right now, and run on the blocking pool either way.
+    async fn answer(self: &Arc<Self>, req: http::Request) -> Arc<Response> {
+        let key = shared_read_key(&req);
+        let app = Arc::clone(self);
+        let work = move || dispatch(&app, &req);
+        match key {
+            Some(key) => self.reads.shared(key, work).await,
+            None => Arc::new(blocking(work).await),
+        }
+    }
+}
+
+/// GET routes that only look at state, and so may be shared between concurrent askers.
+const SHARED_GETS: &[&str] = &[
+    "/api/agents",
+    "/api/agents/runs/all",
+    "/api/dashboards",
+    "/api/db",
+    "/api/hive",
+    "/api/meta",
+    "/api/ports",
+    "/api/ports/used",
+    "/api/projects",
+    "/api/secrets",
+    "/api/tasks",
+    "/api/tools",
+    "/api/triggers",
+];
+
+/// POST routes that are reads despite the method — the polled ones carry their subject (an agent
+/// name, a run id) in the body, which is why they are POSTs at all.
+const SHARED_POSTS: &[&str] = &[
+    "/api/agents/peek",
+    "/api/agents/run/peek",
+    "/api/agents/runs",
+    "/api/projects/hook/log",
+    "/api/projects/workspaces",
+    "/api/triggers/log",
+];
+
+/// The largest body a shared read may be keyed on. Every route above sends a handful of fields;
+/// anything larger is answered on its own rather than growing the in-flight map.
+const MAX_SHARED_KEY_BODY: usize = 1024;
+
+/// How to identify a request that may be answered together with identical ones in flight, or
+/// `None` for everything else — which is every mutation, and so every route not named above.
+fn shared_read_key(req: &http::Request) -> Option<String> {
     let path = req.route_path();
-    let Response { status, body } = match (req.method.as_str(), path) {
+    let shared = match req.method.as_str() {
+        // `/api/projects/<id>` is one project's detail page, a read like the bare list above.
+        "GET" => SHARED_GETS.contains(&path) || path.starts_with("/api/projects/"),
+        "POST" => SHARED_POSTS.contains(&path),
+        _ => false,
+    };
+    if !shared || req.body.len() > MAX_SHARED_KEY_BODY {
+        return None;
+    }
+    Some(format!(
+        "{} {path}\n{}",
+        req.method,
+        String::from_utf8_lossy(&req.body)
+    ))
+}
+
+/// Route a synchronous request. Runs on the blocking pool ([`blocking`]), never on an async
+/// worker: nearly every arm reads files, and several spawn a subprocess.
+// One flat table of routes, deliberately: splitting it by prefix would hide the ordering the
+// guarded arms depend on, and every arm is a single line of dispatch.
+#[allow(clippy::too_many_lines)]
+fn dispatch(app: &App, req: &http::Request) -> Response {
+    let App {
+        ports,
+        projects,
+        secrets,
+        db,
+        tasks,
+        tools,
+        agents,
+        triggers,
+        trigger_supervisor,
+        events,
+        start,
+        ..
+    } = app;
+    let start = *start;
+    let path = req.route_path();
+    match (req.method.as_str(), path) {
         ("GET", "/api/health") => handlers::health(SERVICE, VERSION, start),
         ("GET", "/api/ports") => handlers::ports(ports),
         ("GET", "/api/ports/used") => handlers::used_ports(scan::listening_ports()),
@@ -324,9 +532,6 @@ async fn handle(
         ("POST", "/api/secrets/set-oauth") => handlers::set_oauth_secret(secrets, &req.body),
         ("POST", "/api/secrets/remove") => handlers::remove_secret(secrets, &req.body),
         ("POST", "/api/secrets/reveal") => handlers::reveal_secret(secrets, &req.body),
-        // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async
-        // because it makes an outbound call, so it can't be a plain sync handler.
-        ("POST", "/api/secrets/refresh") => refresh_secret(secrets, &req.body).await,
         // The Meta page's state: the well-known `adi-agent` (if set up), the defaults to seed a
         // new one with (system prompt + every active tool), and the agent form schema. Reads the
         // same agents store; the tools store supplies the default tool set.
@@ -399,35 +604,25 @@ async fn handle(
             let live = scan::listening_ports();
             handlers::delete_dashboard(projects.config(), ports, &live, &req.body)
         }
-        ("POST", "/api/hive/start") => handlers::start_service(projects, &req.body),
-        ("POST", "/api/hive/stop") => handlers::stop_service(projects, &req.body),
+        // Starting or stopping a service changes what is listening, and the page asks that next —
+        // so drop the port-scan memo rather than answering it from a scan taken before the change.
+        ("POST", "/api/hive/start") => {
+            let response = handlers::start_service(projects, &req.body);
+            scan::invalidate();
+            response
+        }
+        ("POST", "/api/hive/stop") => {
+            let response = handlers::stop_service(projects, &req.body);
+            scan::invalidate();
+            response
+        }
         ("POST", "/api/hive/create") => {
             let live = scan::listening_ports();
             handlers::create_service(projects, &req.body, &live)
         }
-        ("GET", "/api/mesh") => handlers::mesh(mesh.running().await),
-        ("POST", "/api/mesh/start") => mesh_start(mesh).await,
-        ("POST", "/api/mesh/stop") => mesh_stop(mesh).await,
-        ("POST", "/api/mesh/allow") => handlers::mesh_allow(mesh.running().await, &req.body),
-        ("POST", "/api/mesh/deny") => handlers::mesh_deny(mesh.running().await, &req.body),
-        ("POST", "/api/mesh/peers/allow") => {
-            handlers::mesh_allow_peer(mesh.running().await, &req.body)
-        }
-        ("POST", "/api/mesh/peers/deny") => {
-            handlers::mesh_deny_peer(mesh.running().await, &req.body)
-        }
-        ("POST", "/api/mesh/forwards/add") => {
-            handlers::mesh_add_forward(mesh.running().await, &req.body)
-        }
-        ("POST", "/api/mesh/forwards/remove") => {
-            handlers::mesh_remove_forward(mesh.running().await, &req.body)
-        }
         (_, p) if p.starts_with("/api") => handlers::error(404, "no such API endpoint"),
-        // Any other GET serves a webapp asset, or the app shell for client-side routing.
-        ("GET", p) => return serve_asset(&mut stream, p, dist).await,
         _ => handlers::error(405, "method not allowed"),
-    };
-    http::write_json(&mut stream, status, &body).await
+    }
 }
 
 /// `POST /api/mesh/start` — bring the in-process mesh daemon up, then report fresh state.
@@ -674,4 +869,133 @@ async fn shutdown_signal() {
 #[cfg(unix)]
 async fn futures_pending() {
     std::future::pending::<()>().await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn request(method: &str, path: &str, body: &str) -> http::Request {
+        http::Request {
+            method: method.to_string(),
+            path: path.to_string(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    /// What may be shared and what may not. The distinction is the whole safety argument for
+    /// coalescing: a read repeated is the same read, a mutation repeated is a second mutation.
+    #[test]
+    fn only_reads_are_shareable() {
+        assert!(shared_read_key(&request("GET", "/api/agents", "")).is_some());
+        assert!(shared_read_key(&request("GET", "/api/projects/abc", "")).is_some());
+        assert!(shared_read_key(&request("POST", "/api/agents/run/peek", "{}")).is_some());
+
+        assert!(
+            shared_read_key(&request("POST", "/api/agents/run", "{}")).is_none(),
+            "launching a run is not a read"
+        );
+        assert!(
+            shared_read_key(&request("POST", "/api/agents/run/reply", "{}")).is_none(),
+            "saying something into a chat is not a read"
+        );
+        assert!(
+            shared_read_key(&request("GET", "/api/nope", "")).is_none(),
+            "an unrouted path is never shared"
+        );
+    }
+
+    /// Two pollers watching *different* chats must not be handed each other's answer, so the body
+    /// that names the subject is part of the key — and a body too large to key on opts out.
+    #[test]
+    fn the_key_separates_subjects_and_bounds_itself() {
+        let one = shared_read_key(&request("POST", "/api/agents/runs", r#"{"name":"a"}"#));
+        let other = shared_read_key(&request("POST", "/api/agents/runs", r#"{"name":"b"}"#));
+        assert!(one.is_some() && one != other, "different agents, different keys");
+
+        let query = shared_read_key(&request("GET", "/api/agents?x=1", ""));
+        assert_eq!(
+            query,
+            shared_read_key(&request("GET", "/api/agents", "")),
+            "the key is the route, so a query string does not split it"
+        );
+
+        let huge = "x".repeat(MAX_SHARED_KEY_BODY + 1);
+        assert!(
+            shared_read_key(&request("POST", "/api/agents/runs", &huge)).is_none(),
+            "an oversized body is answered on its own rather than growing the map"
+        );
+    }
+
+    /// The point of the coalescer: concurrent askers cost one read between them, and every one of
+    /// them gets that read's answer.
+    #[tokio::test]
+    async fn concurrent_readers_share_one_answer() {
+        let reads = Reads::default();
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        let compute = |runs: Arc<AtomicUsize>| {
+            move || {
+                let nth = runs.fetch_add(1, Ordering::SeqCst);
+                // Long enough that the followers below are certain to join while it is in flight.
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                handlers::error(200, &format!("read #{nth}"))
+            }
+        };
+
+        let key = "GET /api/agents".to_string();
+        let (first, second, third) = tokio::join!(
+            reads.shared(key.clone(), compute(Arc::clone(&runs))),
+            reads.shared(key.clone(), compute(Arc::clone(&runs))),
+            reads.shared(key.clone(), compute(Arc::clone(&runs))),
+        );
+
+        assert_eq!(runs.load(Ordering::SeqCst), 1, "one read, not three");
+        assert_eq!(first.body, second.body);
+        assert_eq!(second.body, third.body);
+        assert!(
+            reads.inflight().is_empty(),
+            "the slot is freed once the read is answered"
+        );
+    }
+
+    /// Sharing is per-question: two different reads in flight at once must not collapse into one.
+    #[tokio::test]
+    async fn different_reads_are_not_shared() {
+        let reads = Reads::default();
+        let runs = Arc::new(AtomicUsize::new(0));
+
+        let compute = |runs: Arc<AtomicUsize>| {
+            move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                handlers::error(200, "ok")
+            }
+        };
+        let (_, _) = tokio::join!(
+            reads.shared("GET /api/agents".into(), compute(Arc::clone(&runs))),
+            reads.shared("GET /api/tasks".into(), compute(Arc::clone(&runs))),
+        );
+        assert_eq!(runs.load(Ordering::SeqCst), 2);
+    }
+
+    /// A panicking handler must not take the followers with it: everyone waiting on that read gets
+    /// the same 500, and the slot is released so the next poll tries again.
+    #[tokio::test]
+    async fn a_panicking_read_answers_its_followers() {
+        let reads = Reads::default();
+        let key = "GET /api/agents".to_string();
+        let (leader, follower) = tokio::join!(
+            reads.shared(key.clone(), || {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                panic!("handler exploded");
+            }),
+            reads.shared(key.clone(), || handlers::error(200, "never runs")),
+        );
+
+        assert_eq!(leader.status, 500);
+        assert_eq!(follower.status, 500);
+        assert!(reads.inflight().is_empty(), "the slot is released");
+    }
 }
