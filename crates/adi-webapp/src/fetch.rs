@@ -4,7 +4,7 @@ use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
     AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
-    FilesRef, FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HiveState, LeaseRef,
+    FilesRef, FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState, LeaseRef,
     LinkTool, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState,
     NewDashboard, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
@@ -369,6 +369,20 @@ pub async fn stop_run(name: String, run_id: String) -> Result<AgentRuns, String>
 /// history without it.
 pub async fn delete_run(name: String, run_id: String) -> Result<AgentRuns, String> {
     post("/api/agents/run/delete", &RunRef { name, run_id }).await
+}
+
+/// Hide one session from the chat rail, or bring it back (`hidden: false`). Nothing is deleted and
+/// nothing is stopped — the fresh run history still carries the run, now flagged `hidden`.
+pub async fn hide_run(name: String, run_id: String, hidden: bool) -> Result<AgentRuns, String> {
+    post(
+        "/api/agents/run/hide",
+        &HideRun {
+            name,
+            run_id,
+            hidden,
+        },
+    )
+    .await
 }
 
 pub async fn peek_agent(name: String) -> Result<AgentPeek, String> {

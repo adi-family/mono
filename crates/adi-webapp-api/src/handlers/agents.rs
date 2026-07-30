@@ -14,8 +14,8 @@ use crate::types::{
     AgentBackendOption, AgentBuildResult, AgentCapabilities, AgentCode, AgentDto, AgentFormField,
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef,
     AgentRunInfo, AgentRunResult, AgentRuns, AgentStep, AgentToolStatus, AgentTurn,
-    AgentTurnMetrics, AgentsState, AllAgentRuns, ProjectRunLimit, ReplyToRun, RunAgent, RunRef,
-    SaveAgent, SaveAgentCode, SecretRef, SetRunLimit, UnqueueFromRun,
+    AgentTurnMetrics, AgentsState, AllAgentRuns, HideRun, ProjectRunLimit, ReplyToRun, RunAgent,
+    RunRef, SaveAgent, SaveAgentCode, SecretRef, SetRunLimit, UnqueueFromRun,
 };
 
 use super::files::MAX_TEXT_BYTES;
@@ -334,6 +334,26 @@ pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
     ok_json(&runs_response(store, &agent))
 }
 
+/// `POST /api/agents/run/hide` — hide one session from the chat rail, or bring it back
+/// (`hidden: false`), then report the fresh run history. Only a listing preference: the run keeps
+/// running and keeps everything it has written, and the history still carries it — flagged `hidden`,
+/// which is what the rail leaves out. Idempotent, and for a run that is already gone a no-op; only an
+/// unknown agent is a 404, and a backend that keeps no run history is a 400.
+#[must_use]
+pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_hide_run(body) else {
+        return bad_hide_run();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    if let Err(e) = store.set_run_hidden(&agent.name, req.run_id.trim(), req.hidden) {
+        return Response::from(&e);
+    }
+    ok_json(&runs_response(store, &agent))
+}
+
 /// `GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the
 /// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), in the
 /// store's list order; the client flattens and sorts them.
@@ -365,6 +385,7 @@ fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
                 last_activity: r.last_activity,
                 message: r.message,
                 running: r.running,
+                hidden: r.hidden,
             })
             .collect(),
     }
@@ -1631,6 +1652,18 @@ fn bad_run_ref() -> Response {
     error(
         400,
         "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id",
+    )
+}
+
+fn parse_hide_run(body: &[u8]) -> Option<HideRun> {
+    let req: HideRun = serde_json::from_slice(body).ok()?;
+    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty()).then_some(req)
+}
+
+fn bad_hide_run() -> Response {
+    error(
+        400,
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"hidden\": true } with a non-empty name and run_id",
     )
 }
 

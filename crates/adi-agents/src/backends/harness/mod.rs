@@ -172,6 +172,17 @@ pub fn delete(sessions_dir: &Path, agent_name: &str, conv_id: &str) -> Result<bo
     detached::delete(sessions_dir, HARNESS_DIR, agent_name, conv_id)
 }
 
+/// Hide (or unhide) one conversation from the chat rail. Only a listing preference — the
+/// conversation keeps its transcript, its queue, and whatever turn it is answering.
+pub fn set_hidden(
+    sessions_dir: &Path,
+    agent_name: &str,
+    conv_id: &str,
+    hidden: bool,
+) -> Result<bool> {
+    detached::set_hidden(sessions_dir, HARNESS_DIR, agent_name, conv_id, hidden)
+}
+
 /// The tail of one run's log, for the live view.
 #[must_use]
 pub fn tail_log(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Option<String> {

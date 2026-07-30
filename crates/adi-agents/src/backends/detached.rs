@@ -149,9 +149,9 @@ pub(crate) fn list_runs(sessions_dir: &Path, subdir: &str, agent_name: &str) -> 
     ids.reverse();
     ids.into_iter()
         .map(|run_id| {
-            let (meta_started, message) = read_meta(&dir, &run_id);
-            let started = if meta_started > 0 {
-                meta_started
+            let meta = read_meta(&dir, &run_id);
+            let started = if meta.started_at > 0 {
+                meta.started_at
             } else {
                 started_at(&run_id)
             };
@@ -161,7 +161,8 @@ pub(crate) fn list_runs(sessions_dir: &Path, subdir: &str, agent_name: &str) -> 
                 // field is always a time the run existed rather than the epoch.
                 last_activity: touched.get(&run_id).copied().unwrap_or(0).max(started),
                 started_at: started,
-                message,
+                message: meta.message,
+                hidden: meta.hidden,
                 run_id,
             }
         })
@@ -174,6 +175,10 @@ pub(crate) fn list_runs(sessions_dir: &Path, subdir: &str, agent_name: &str) -> 
 /// — the combined log, a harness conversation's transcript — are appended to for as long as it is
 /// talking. So the newest mtime across a run's files is the last moment it moved. Runs whose files
 /// carry no readable mtime are simply absent; the caller falls back to their start time.
+///
+/// The metadata sidecar is the one file left out: it is written at launch (which `started_at`
+/// already reports) and then only when a *reader* changes its mind about the run — hiding it from
+/// the rail. Counting that as activity would have a hide read as the run having just moved.
 fn last_activity(dir: &Path) -> BTreeMap<String, u64> {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return BTreeMap::new();
@@ -184,9 +189,12 @@ fn last_activity(dir: &Path) -> BTreeMap<String, u64> {
             continue;
         };
         // Run ids hold no dots (`{millis}-{seq}`), so everything before the first one is the id.
-        let Some((run_id, _)) = name.split_once('.') else {
+        let Some((run_id, rest)) = name.split_once('.') else {
             continue;
         };
+        if rest == META_EXT {
+            continue;
+        }
         let Some(ms) = entry
             .metadata()
             .and_then(|m| m.modified())
@@ -340,8 +348,12 @@ pub(crate) fn pid_path_in(dir: &Path, run_id: &str) -> PathBuf {
     dir.join(format!("{run_id}.pid"))
 }
 
+/// The extension of a run's metadata sidecar, as it appears after the run id in the file name.
+/// A harness conversation's `.queue.json` is a different sidecar and reads as `queue.json`.
+const META_EXT: &str = "json";
+
 pub(crate) fn meta_path(dir: &Path, run_id: &str) -> PathBuf {
-    dir.join(format!("{run_id}.json"))
+    dir.join(format!("{run_id}.{META_EXT}"))
 }
 
 /// All run ids present in an agent dir, derived from their `.log` files.
@@ -358,24 +370,74 @@ fn run_ids(dir: &Path) -> Vec<String> {
         .collect()
 }
 
-/// The `(started_at, message)` recorded for a run, defaulting to `(0, "")` when absent or unreadable.
-fn read_meta(dir: &Path, run_id: &str) -> (u64, String) {
+/// What a run's metadata sidecar records: when it began, what it was asked to do, and whether a
+/// reader has hidden it from the chat rail.
+#[derive(Default)]
+struct RunMeta {
+    started_at: u64,
+    message: String,
+    hidden: bool,
+}
+
+/// The metadata recorded for a run, all-default when the sidecar is absent or unreadable — an older
+/// run with no sidecar simply reads as never hidden, with its start recovered from its run id.
+fn read_meta(dir: &Path, run_id: &str) -> RunMeta {
     let Ok(text) = std::fs::read_to_string(meta_path(dir, run_id)) else {
-        return (0, String::new());
+        return RunMeta::default();
     };
     let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-        return (0, String::new());
+        return RunMeta::default();
     };
-    let started = value
-        .get("started_at")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0);
-    let message = value
-        .get("message")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .to_string();
-    (started, message)
+    RunMeta {
+        started_at: value
+            .get("started_at")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0),
+        message: value
+            .get("message")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        hidden: value
+            .get("hidden")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false),
+    }
+}
+
+/// Hide (or unhide) one run: a flag in its metadata sidecar, so the choice outlives the browser tab
+/// that made it. Nothing about the run itself changes — it keeps running, keeps its log and
+/// transcript, and is still listed by everything that asks for the full history.
+///
+/// Returns whether there was a run there to flag; an id with no files is `false`, so a stale click is
+/// idempotent rather than an error. The sidecar is rewritten whole from what was read, which also
+/// mints one for a run that predates it (its start recovered from its id, its message unknown —
+/// which is exactly what the listing already showed for it).
+pub(crate) fn set_hidden(
+    sessions_dir: &Path,
+    subdir: &str,
+    agent_name: &str,
+    run_id: &str,
+    hidden: bool,
+) -> Result<bool> {
+    let dir = agent_dir(sessions_dir, subdir, agent_name);
+    let meta_file = meta_path(&dir, run_id);
+    if !log_path_in(&dir, run_id).exists() && !meta_file.exists() {
+        return Ok(false);
+    }
+    let meta = read_meta(&dir, run_id);
+    let started = if meta.started_at > 0 {
+        meta.started_at
+    } else {
+        started_at(run_id)
+    };
+    let next = serde_json::json!({
+        "started_at": started,
+        "message": meta.message,
+        "hidden": hidden,
+    });
+    std::fs::write(meta_file, next.to_string())?;
+    Ok(true)
 }
 
 /// Keep only the newest `MAX_RUNS` runs, deleting older *finished* runs' files. A run that is somehow
@@ -713,6 +775,73 @@ mod tests {
             tail_log(&sessions, "harness", "job", "0000000000001-0000", 13).as_deref(),
             Some("line two")
         );
+        let _ = std::fs::remove_dir_all(sessions);
+    }
+
+    /// Hiding a session is a flag in its metadata and nothing else: the run stays in the history with
+    /// its task intact, the flag survives a re-read (which is what makes it survive a reload), and
+    /// writing it never reads as the run having just moved — a hidden chat brought back must not have
+    /// jumped to the top of the rail in the meantime.
+    #[test]
+    fn hiding_a_run_only_flags_it() {
+        let sessions = scratch_dir("hidden");
+        let dir = agent_dir(&sessions, "harness", "talker");
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap())
+            .unwrap();
+
+        // A conversation that started an hour ago and has been quiet since — the case the assertion
+        // about activity needs, since `last_activity` never precedes a run's start.
+        let run_id = format!("{:013}-0001", now - 3_600_000);
+        std::fs::write(dir.join(format!("{run_id}.log")), "hello").unwrap();
+        std::fs::write(dir.join(format!("{run_id}.jsonl")), "{}\n").unwrap();
+        std::fs::write(
+            meta_path(&dir, &run_id),
+            serde_json::json!({ "started_at": now - 3_600_000, "message": "some task" })
+                .to_string(),
+        )
+        .unwrap();
+        // Its files are written just now, so back-date them all to when it was actually talking.
+        let hour_ago = SystemTime::now() - Duration::from_secs(3_600);
+        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
+            let file = File::options().write(true).open(entry.path()).unwrap();
+            file.set_modified(hour_ago).unwrap();
+        }
+
+        let listed = |id: &str| {
+            list_runs(&sessions, "harness", "talker")
+                .into_iter()
+                .find(|r| r.run_id == id)
+                .expect("run is listed")
+        };
+        let before = listed(&run_id);
+        assert!(!before.hidden, "a run nobody hid is not hidden");
+        let backdated = before.last_activity;
+        assert!(backdated < now - 60_000, "the files really are old");
+
+        assert!(
+            set_hidden(&sessions, "harness", "talker", &run_id, true).expect("hide"),
+            "an existing run is there to flag",
+        );
+        let hidden = listed(&run_id);
+        assert!(hidden.hidden, "the flag round-trips through the sidecar");
+        assert_eq!(hidden.message, before.message, "the task is not lost");
+        assert_eq!(hidden.started_at, before.started_at);
+        assert_eq!(
+            hidden.last_activity, backdated,
+            "hiding is not activity — the sidecar's mtime is left out of it",
+        );
+
+        // Unhiding is the same write in reverse, and an unknown run is a quiet no-op.
+        assert!(set_hidden(&sessions, "harness", "talker", &run_id, false).expect("unhide"));
+        assert!(!listed(&run_id).hidden);
+        assert!(
+            !set_hidden(&sessions, "harness", "talker", "0000000000001-0000", true).expect("absent"),
+            "a run that isn't there is nothing to flag",
+        );
+
         let _ = std::fs::remove_dir_all(sessions);
     }
 

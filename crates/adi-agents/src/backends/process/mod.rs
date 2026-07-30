@@ -76,6 +76,16 @@ pub fn delete(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Result<boo
     detached::delete(sessions_dir, PROCESS_DIR, agent_name, run_id)
 }
 
+/// Hide (or unhide) one run from the chat rail, leaving the run itself untouched.
+pub fn set_hidden(
+    sessions_dir: &Path,
+    agent_name: &str,
+    run_id: &str,
+    hidden: bool,
+) -> Result<bool> {
+    detached::set_hidden(sessions_dir, PROCESS_DIR, agent_name, run_id, hidden)
+}
+
 /// The tail of one run's log, for the live view.
 #[must_use]
 pub fn tail_log(sessions_dir: &Path, agent_name: &str, run_id: &str) -> Option<String> {

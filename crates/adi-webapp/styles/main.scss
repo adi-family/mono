@@ -474,6 +474,22 @@
       padding-top: 2px;
       border-top: none;
     }
+
+    // The Hidden band's heading is a button — it opens and closes the band beneath it. Resets only
+    // what a <button> would otherwise impose; the band's own type scale and colour still apply.
+    &--toggle {
+      display: block;
+      width: 100%;
+      border-left: 0;
+      border-right: 0;
+      border-bottom: 0;
+      background: none;
+      font-family: inherit;
+      text-align: left;
+      cursor: pointer;
+
+      &:hover { color: var(--ink); }
+    }
   }
 
   // --- a session row (left) -------------------------------------------------------
@@ -516,6 +532,9 @@
     // A row in the Recent band. It spans every agent, so nothing is indented under a name here and
     // the full width is the title's; the agent it belongs to rides in the line beneath.
     &--recent { padding-right: 10px; }
+    // A row in the Hidden band: another agent's strip, but with an unhide at its right edge — so it
+    // takes the room back that `--other` gave to the title.
+    &--hidden { padding-right: 26px; }
   }
   &__session-main { display: flex; flex-direction: column; min-width: 0; }
   &__session-title {
@@ -528,10 +547,12 @@
     font-size: var(--text-xs);
     color: var(--muted);
   }
-  // Hidden until the row is under the cursor (or holds focus), so the rail reads as a list of
-  // chats rather than a column of × marks. `visibility` rather than opacity alone, so an unseen
-  // delete is also unclickable.
-  &__session-del {
+  // A control on the right edge of a session row — the delete on the picked agent's chats, the
+  // unhide on a hidden one. Hidden until the row is under the cursor (or holds focus), so the rail
+  // reads as a list of chats rather than a column of marks. `visibility` rather than opacity alone,
+  // so an unseen control is also unclickable.
+  &__session-del,
+  &__session-unhide {
     position: absolute;
     right: 4px;
     top: 50%;
@@ -548,14 +569,21 @@
     visibility: hidden;
     opacity: 0;
     transition: opacity var(--transition);
-
-    &:hover {
-      color: var(--down);
-      background: color-mix(in srgb, var(--down) 12%, transparent);
-    }
+  }
+  // Deleting is destructive, so it takes the down accent; bringing a chat back is not, so it takes
+  // the ordinary one.
+  &__session-del:hover {
+    color: var(--down);
+    background: color-mix(in srgb, var(--down) 12%, transparent);
+  }
+  &__session-unhide:hover {
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 12%, transparent);
   }
   &__sessionrow:hover &__session-del,
-  &__sessionrow:focus-within &__session-del {
+  &__sessionrow:focus-within &__session-del,
+  &__sessionrow:hover &__session-unhide,
+  &__sessionrow:focus-within &__session-unhide {
     visibility: visible;
     opacity: 1;
   }

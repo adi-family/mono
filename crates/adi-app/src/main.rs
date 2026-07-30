@@ -548,6 +548,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/run/unqueue") => handlers::unqueue_run(agents, &req.body),
         ("POST", "/api/agents/run/stop") => handlers::stop_run(agents, &req.body),
         ("POST", "/api/agents/run/delete") => handlers::delete_run(agents, &req.body),
+        ("POST", "/api/agents/run/hide") => handlers::hide_run(agents, &req.body),
         ("POST", "/api/agents/stop") => handlers::stop_agent(agents, &req.body),
         ("POST", "/api/agents/code") => handlers::agent_code(agents, &req.body),
         ("POST", "/api/agents/code/save") => handlers::save_agent_code(agents, &req.body),

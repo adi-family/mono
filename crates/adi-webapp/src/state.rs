@@ -72,6 +72,12 @@ pub(crate) struct State {
     pub(crate) store: StoreBrowser,
     /// The open table-row kebab menu, shared by every page's action columns. See [`RowMenu`].
     pub(crate) row_menu: RwSignal<Option<RowMenu>>,
+    /// The open right-click menu on a chat-home session row. See [`SessionMenu`].
+    pub(crate) session_menu: RwSignal<Option<SessionMenu>>,
+    /// Whether the chat rail's **Hidden** band is expanded. Collapsed by default — that band exists
+    /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
+    /// a reload closes it again.
+    pub(crate) show_hidden: RwSignal<bool>,
     /// How every table on the site is sorted and arranged. See [`Tables`].
     pub(crate) tables: Tables,
 }
@@ -207,6 +213,8 @@ impl State {
             files: FilesState::new(),
             store: StoreBrowser::new(),
             row_menu: RwSignal::new(None),
+            session_menu: RwSignal::new(None),
+            show_hidden: RwSignal::new(false),
             tables: Tables::new(),
         }
     }
@@ -259,6 +267,23 @@ pub(crate) struct RowMenu {
     pub(crate) key: String,
     pub(crate) right: i32,
     pub(crate) top: i32,
+}
+
+/// An open right-click menu on one of the chat rail's session rows. Carries which session was
+/// right-clicked — the rail spans every agent, so a row is named by its agent *and* run id — and
+/// whether it is currently hidden, which is what decides between Hide and Unhide.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct SessionMenu {
+    pub(crate) agent: String,
+    pub(crate) run_id: String,
+    /// The row's title, shown as the menu's heading so it is unmistakable which chat is being acted
+    /// on — a rail can hold several rows that read alike.
+    pub(crate) title: String,
+    pub(crate) hidden: bool,
+    /// Where to draw, in viewport pixels (the menu is `position: fixed`).
+    pub(crate) x: i32,
+    /// See [`x`](Self::x).
+    pub(crate) y: i32,
 }
 
 /// An open right-click menu on the store tree.

@@ -69,8 +69,8 @@ pub use wasm::DispatchOutcome;
 use agent::validate_name;
 use run::{
     adi_turn_in, advance_in, can_advance_in, conversation_dir_in, delete_run_in, is_running_in,
-    launch_in, peek_in, peek_run_in, reply_in, runs_in, stop_in, stop_run_in, transcript_in,
-    unqueue_in,
+    launch_in, peek_in, peek_run_in, reply_in, runs_in, set_run_hidden_in, stop_in, stop_run_in,
+    transcript_in, unqueue_in,
 };
 
 const AGENTS_MODULE: &str = "agents";
@@ -774,6 +774,25 @@ impl Agents {
             );
         }
         Ok(deleted)
+    }
+
+    /// Hide one run from the chat rail, or bring it back (`hidden: false`). Returns whether there was
+    /// a run there to flag; flagging one that is already gone is not an error.
+    ///
+    /// This is not [`Self::delete_run`]: nothing is removed and nothing is stopped. The flag rides in
+    /// the run's metadata, so a hidden session stays out of the rail across reloads — and is still
+    /// listed by [`Self::runs`], for the views that want the whole history.
+    ///
+    /// # Errors
+    /// Returns name validation errors, or [`Error::Unsupported`] for a backend that keeps no run
+    /// history (a pty session is not a run, so there is nothing to mark).
+    pub fn set_run_hidden(&self, name: &str, run_id: &str, hidden: bool) -> Result<bool> {
+        validate_name(name)?;
+        let Some(agent) = self.get(name)? else {
+            return Ok(false);
+        };
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        set_run_hidden_in(&agent, &sessions_dir, run_id, hidden)
     }
 
     /// Stops a run, returning whether one was found.

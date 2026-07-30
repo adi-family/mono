@@ -819,6 +819,15 @@ pub struct RunRef {
     pub run_id: String,
 }
 
+/// `POST /api/agents/run/hide` request — hide one session from the chat rail, or (`hidden: false`)
+/// bring it back. Nothing about the run changes: it keeps running, and keeps its log and transcript.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HideRun {
+    pub name: String,
+    pub run_id: String,
+    pub hidden: bool,
+}
+
 /// `POST /api/agents/run/reply` request — say `message` into one of a harness agent's conversations
 /// (`run_id` is the conversation id). It becomes the next turn, or — while the agent is still
 /// answering — waits in that conversation's queue. Only harness backends keep answerable
@@ -944,6 +953,11 @@ pub struct AgentRunInfo {
     #[serde(default)]
     pub message: String,
     pub running: bool,
+    /// Whether this session has been hidden from the chat rail (`POST /api/agents/run/hide`). The run
+    /// is listed either way — hiding is a listing preference the client applies, not a filter the
+    /// server does — so a full history view can still show it.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// `POST /api/agents/runs` — a headless agent's run history, newest first. `interactive` is true for

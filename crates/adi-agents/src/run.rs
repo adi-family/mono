@@ -66,6 +66,10 @@ pub struct RunInfo {
     /// The task the run was launched with.
     pub message: String,
     pub running: bool,
+    /// Whether a reader has hidden this session from the chat rail. Purely a listing preference,
+    /// kept in the run's metadata so it survives a reload: a hidden run still runs, still keeps its
+    /// log and transcript, and is still returned here — it is up to the *view* to leave it out.
+    pub hidden: bool,
 }
 
 #[must_use]
@@ -246,6 +250,28 @@ pub(crate) fn delete_run_in(
         }
         other => Err(Error::Unsupported(format!(
             "backend {other} keeps no run history, so it has no run to delete"
+        ))),
+    }
+}
+
+/// Hide (or unhide) one specific run of a headless agent from the chat rail. Interactive (pty)
+/// backends keep no run history — their live session is the run — so there is no per-run record to
+/// mark, and nothing to hide.
+pub(crate) fn set_run_hidden_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    run_id: &str,
+    hidden: bool,
+) -> Result<bool> {
+    match &agent.manifest.backend {
+        Backend::ProcessClaude | Backend::ProcessCodex => {
+            process::set_hidden(sessions_dir, &agent.name, run_id, hidden)
+        }
+        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
+            harness::set_hidden(sessions_dir, &agent.name, run_id, hidden)
+        }
+        other => Err(Error::Unsupported(format!(
+            "backend {other} keeps no run history, so it has no session to hide"
         ))),
     }
 }

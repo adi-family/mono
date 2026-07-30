@@ -744,6 +744,8 @@ fn App() -> impl IntoView {
         files,
         store,
         row_menu: RwSignal::new(None),
+        session_menu: RwSignal::new(None),
+        show_hidden: RwSignal::new(false),
         // Each table restores the arrangement its user last left, else its declared columns.
         tables: state::Tables::new(),
     };
