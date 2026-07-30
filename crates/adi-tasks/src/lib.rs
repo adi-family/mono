@@ -15,10 +15,10 @@
 //!
 //! # let store = Tasks::with_config(adi_config::Config::with_root(&tmp));
 //! // In real code: let store = Tasks::open();
-//! let root = store.create("ship it".into(), None, None, None, None)?;
+//! let root = store.create("ship it".into(), None, None, None, None, None)?;
 //! assert_eq!(root.task.id, "t1");
 //!
-//! let child = store.create("subtask".into(), None, None, None, Some("t1".into()))?;
+//! let child = store.create("subtask".into(), None, None, None, Some("t1".into()), None)?;
 //! // The parent is now blocked by its still-open child.
 //! assert_eq!(store.get("t1")?.children_open, 1);
 //!
@@ -135,7 +135,8 @@ impl Tasks {
     /// The new task's id follows its project: a project-scoped task gets a Jira-style `<KEY>-<n>`
     /// id (`KEY` is the uppercased project id, `n` a per-key counter); a project-less task keeps
     /// the legacy global `t<n>` id. When no project is given but a parent is, the task inherits
-    /// the parent's project so a subtask shares the parent's key.
+    /// the parent's project so a subtask shares the parent's key — and its `cwd` with it, so
+    /// decomposing a task keeps every piece pointed at the same directory.
     ///
     /// # Errors
     /// [`Error::ParentMissing`] for an unknown parent id, or [`Error::Store`] on an I/O failure.
@@ -146,6 +147,7 @@ impl Tasks {
         project: Option<String>,
         tag: Option<String>,
         parent: Option<String>,
+        cwd: Option<String>,
     ) -> Result<TaskView> {
         let mut doc = self.load()?;
         let parent = clean(parent);
@@ -154,17 +156,20 @@ impl Tasks {
         {
             return Err(Error::ParentMissing(pid.to_string()));
         }
-        // An explicit project wins; otherwise a subtask inherits its parent's project so it
-        // lands under the same Jira key.
+        // An explicit value wins; otherwise a subtask inherits from its parent — the project so it
+        // lands under the same Jira key, and the working directory because decomposing a task does
+        // not move the work: a subtask of "migrate <repo>" is still about that repo, and re-typing
+        // the path on every subtask is how one of them ends up pointed somewhere else.
+        let inherited = parent
+            .as_deref()
+            .and_then(|pid| doc.tasks.iter().find(|t| t.id == pid));
         let mut project = clean(project);
-        if project.is_none()
-            && let Some(pid) = parent.as_deref()
-        {
-            project = doc
-                .tasks
-                .iter()
-                .find(|t| t.id == pid)
-                .and_then(|t| t.project.clone());
+        if project.is_none() {
+            project = inherited.and_then(|t| t.project.clone());
+        }
+        let mut cwd = clean(cwd);
+        if cwd.is_none() {
+            cwd = inherited.and_then(|t| t.cwd.clone());
         }
         let id = match project.as_deref() {
             Some(p) => {
@@ -187,6 +192,7 @@ impl Tasks {
             details: clean(details),
             status: TaskStatus::Open,
             project,
+            cwd,
             parent,
             tag: clean(tag),
             assignee: None,
@@ -277,6 +283,9 @@ impl Tasks {
         }
         if let Some(assignee) = patch.assignee {
             task.assignee = clean(Some(assignee));
+        }
+        if let Some(cwd) = patch.cwd {
+            task.cwd = clean(Some(cwd));
         }
         match parent_change {
             ParentChange::Keep => {}
@@ -411,7 +420,7 @@ mod tests {
 
     fn mk(store: &Tasks, title: &str, parent: Option<&str>) -> TaskView {
         store
-            .create(title.into(), None, None, None, parent.map(Into::into))
+            .create(title.into(), None, None, None, parent.map(Into::into), None)
             .expect("create")
     }
 
@@ -457,7 +466,7 @@ mod tests {
         let child = mk(&store, "child", Some("t1"));
         assert_eq!(child.task.parent.as_deref(), Some("t1"));
         assert!(matches!(
-            store.create("orphan".into(), None, None, None, Some("t99".into())),
+            store.create("orphan".into(), None, None, None, Some("t99".into()), None),
             Err(Error::ParentMissing(_))
         ));
     }
@@ -466,19 +475,19 @@ mod tests {
     fn project_tasks_get_jira_ids_with_per_key_counters() {
         let store = scratch("jira");
         let a = store
-            .create("a".into(), None, Some("demo".into()), None, None)
+            .create("a".into(), None, Some("demo".into()), None, None, None)
             .expect("create");
         let b = store
-            .create("b".into(), None, Some("demo".into()), None, None)
+            .create("b".into(), None, Some("demo".into()), None, None, None)
             .expect("create");
         assert_eq!(a.task.id, "DEMO-1");
         assert_eq!(b.task.id, "DEMO-2");
         let c = store
-            .create("c".into(), None, Some("my-app".into()), None, None)
+            .create("c".into(), None, Some("my-app".into()), None, None, None)
             .expect("create");
         assert_eq!(c.task.id, "MY-APP-1");
         let d = store
-            .create("d".into(), None, None, None, None)
+            .create("d".into(), None, None, None, None, None)
             .expect("create");
         assert_eq!(d.task.id, "t1");
     }
@@ -487,28 +496,95 @@ mod tests {
     fn subtask_inherits_parent_project_and_key() {
         let store = scratch("inherit");
         let root = store
-            .create("root".into(), None, Some("demo".into()), None, None)
+            .create("root".into(), None, Some("demo".into()), None, None, None)
             .expect("create");
         assert_eq!(root.task.id, "DEMO-1");
         let child = store
-            .create("child".into(), None, None, None, Some("DEMO-1".into()))
+            .create("child".into(), None, None, None, Some("DEMO-1".into()), None)
             .expect("create");
         assert_eq!(child.task.id, "DEMO-2");
         assert_eq!(child.task.project.as_deref(), Some("demo"));
+    }
+
+    /// A task states where its work happens, and decomposing it keeps every piece pointed there —
+    /// unless a subtask says otherwise, which is a deliberate move, not an omission.
+    #[test]
+    fn a_subtask_inherits_the_working_directory_unless_it_states_its_own() {
+        let store = scratch("cwd-inherit");
+        let root = store
+            .create(
+                "migrate".into(),
+                None,
+                None,
+                None,
+                None,
+                Some("~/repos/thing".into()),
+            )
+            .expect("create");
+        assert_eq!(root.task.cwd.as_deref(), Some("~/repos/thing"));
+
+        let child = store
+            .create("step one".into(), None, None, None, Some(root.task.id.clone()), None)
+            .expect("create");
+        assert_eq!(child.task.cwd.as_deref(), Some("~/repos/thing"));
+
+        let elsewhere = store
+            .create(
+                "step two".into(),
+                None,
+                None,
+                None,
+                Some(root.task.id.clone()),
+                Some("/tmp/scratch".into()),
+            )
+            .expect("create");
+        assert_eq!(elsewhere.task.cwd.as_deref(), Some("/tmp/scratch"));
+    }
+
+    /// Editing it follows the same rule every optional field does: a value sets, a blank clears.
+    #[test]
+    fn editing_the_working_directory_sets_and_clears_it() {
+        let store = scratch("cwd-edit");
+        let task = store
+            .create("fix".into(), None, None, None, None, None)
+            .expect("create");
+        assert_eq!(task.task.cwd, None);
+
+        let patched = store
+            .update(
+                &task.task.id,
+                TaskPatch {
+                    cwd: Some("  /srv/app  ".into()),
+                    ..TaskPatch::default()
+                },
+            )
+            .expect("update");
+        assert_eq!(patched.task.cwd.as_deref(), Some("/srv/app"));
+
+        let cleared = store
+            .update(
+                &task.task.id,
+                TaskPatch {
+                    cwd: Some(String::new()),
+                    ..TaskPatch::default()
+                },
+            )
+            .expect("update");
+        assert_eq!(cleared.task.cwd, None);
     }
 
     #[test]
     fn deleting_the_top_task_does_not_reuse_its_number() {
         let store = scratch("noreuse");
         store
-            .create("a".into(), None, Some("demo".into()), None, None)
+            .create("a".into(), None, Some("demo".into()), None, None, None)
             .expect("create");
         store
-            .create("b".into(), None, Some("demo".into()), None, None)
+            .create("b".into(), None, Some("demo".into()), None, None, None)
             .expect("create");
         store.delete("DEMO-2").expect("delete");
         let c = store
-            .create("c".into(), None, Some("demo".into()), None, None)
+            .create("c".into(), None, Some("demo".into()), None, None, None)
             .expect("create");
         assert_eq!(c.task.id, "DEMO-3");
     }

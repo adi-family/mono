@@ -405,6 +405,9 @@ pub(crate) struct TasksForm {
     pub(crate) project: RwSignal<String>,
     pub(crate) parent: RwSignal<String>,
     pub(crate) tag: RwSignal<String>,
+    /// Where the task's work happens — the directory a run picking it up starts in. Blank leaves
+    /// it to the agent's own home; a subtask inherits its parent's.
+    pub(crate) cwd: RwSignal<String>,
     pub(crate) details: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     /// Whether the collapsed block of finished tasks at the foot of the page is open. Done and

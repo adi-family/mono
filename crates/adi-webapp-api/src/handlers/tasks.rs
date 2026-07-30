@@ -34,6 +34,7 @@ pub fn create_task(store: &Tasks, body: &[u8]) -> Response {
         req.project,
         req.tag,
         req.parent,
+        req.cwd,
     ) {
         Ok(_) => tasks(store),
         Err(e) => Response::from(&e),
@@ -91,6 +92,7 @@ fn task_row(view: &TaskView) -> TaskRow {
         status: task.status.as_str().to_string(),
         effective: view.effective.as_str().to_string(),
         project: task.project.clone(),
+        cwd: task.cwd.clone(),
         parent: task.parent.clone(),
         tag: task.tag.clone(),
         assignee: task.assignee.clone(),

@@ -77,7 +77,7 @@ impl Tool for TaskCreateTool {
         Some(TASKS_GUIDANCE.to_string())
     }
     fn parameters_json(&self) -> String {
-        r#"{"type":"object","properties":{"title":{"type":"string"},"details":{"type":"string"},"tag":{"type":"string","description":"Free-form tag; a tag equal to an agent name assigns the task to that agent"},"parent_id":{"type":"string"},"project":{"type":"string","description":"Project id; omit to use the tool's configured project"}},"required":["title"]}"#.to_string()
+        r#"{"type":"object","properties":{"title":{"type":"string"},"details":{"type":"string"},"tag":{"type":"string","description":"Free-form tag; a tag equal to an agent name assigns the task to that agent"},"parent_id":{"type":"string"},"project":{"type":"string","description":"Project id; omit to use the tool's configured project"},"cwd":{"type":"string","description":"Where this task's work happens — the directory a run picking it up starts in; a subtask inherits its parent's"}},"required":["title"]}"#.to_string()
     }
     fn parse(&self, raw: &str) -> Result<ConfigValue, ToolCallError> {
         let args = parse_json(raw)?;
@@ -97,6 +97,7 @@ impl Tool for TaskCreateTool {
                 project,
                 arg_str(&args, "tag"),
                 arg_str(&args, "parent_id"),
+                arg_str(&args, "cwd"),
             )
             .map_err(|e| PluginError::new(format!("task_create: {e}")))?;
         Ok(view_json(&view))
@@ -227,7 +228,7 @@ impl Tool for TaskUpdateTool {
         Some(TASKS_GUIDANCE.to_string())
     }
     fn parameters_json(&self) -> String {
-        r#"{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"details":{"type":"string"},"tag":{"type":"string"},"assignee":{"type":"string"},"parent_id":{"type":"string"}},"required":["id"]}"#.to_string()
+        r#"{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"details":{"type":"string"},"tag":{"type":"string"},"assignee":{"type":"string"},"parent_id":{"type":"string"},"cwd":{"type":"string","description":"Where this task's work happens; \"\" clears it"}},"required":["id"]}"#.to_string()
     }
     fn parse(&self, raw: &str) -> Result<ConfigValue, ToolCallError> {
         let args = parse_json(raw)?;
@@ -252,6 +253,7 @@ impl Tool for TaskUpdateTool {
             tag: raw_string("tag"),
             assignee: raw_string("assignee"),
             parent: raw_string("parent_id"),
+            cwd: raw_string("cwd"),
         };
         let view = Tasks::open()
             .update(&id, patch)

@@ -71,6 +71,7 @@ pub(crate) fn project_detail_view(
         title: RwSignal::new(String::new()),
         parent: RwSignal::new(String::new()),
         tag: RwSignal::new(String::new()),
+        cwd: RwSignal::new(String::new()),
         details: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
     };

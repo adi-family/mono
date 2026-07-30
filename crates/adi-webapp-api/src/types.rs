@@ -389,6 +389,10 @@ pub struct TaskRow {
     pub effective: String,
     #[serde(default)]
     pub project: Option<String>,
+    /// Where this task's work happens — the directory a run picking it up should start in, or
+    /// `None` when the task has no opinion and the run starts where its agent is defined to.
+    #[serde(default)]
+    pub cwd: Option<String>,
     #[serde(default)]
     pub parent: Option<String>,
     #[serde(default)]
@@ -422,6 +426,9 @@ pub struct NewTask {
     pub tag: Option<String>,
     #[serde(default)]
     pub parent: Option<String>,
+    /// Where this task's work happens (`~` allowed). Omitted, a subtask inherits its parent's.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// Request body naming one task — `POST /api/tasks/archive` and `POST /api/tasks/reopen`. Both

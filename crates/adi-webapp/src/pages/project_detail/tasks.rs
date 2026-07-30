@@ -26,6 +26,9 @@ pub(crate) struct TaskForm {
     /// lists this project's whole tree, so a subtask can sit at any depth.
     pub(crate) parent: RwSignal<String>,
     pub(crate) tag: RwSignal<String>,
+    /// Where the task's work happens — the directory a run picking it up starts in. Blank leaves
+    /// it to the agent's own home; a subtask inherits its parent's.
+    pub(crate) cwd: RwSignal<String>,
     pub(crate) details: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
 }
@@ -38,6 +41,7 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
         title,
         parent,
         tag,
+        cwd,
         details,
         busy,
     } = form;
@@ -63,17 +67,20 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
                 let par = parent.get().trim().to_string();
                 let tg = tag.get().trim().to_string();
                 let det = details.get().trim().to_string();
+                let dir = cwd.get().trim().to_string();
                 let body = NewTask {
                     title: t.clone(),
                     details: (!det.is_empty()).then_some(det),
                     project: Some(id),
                     tag: (!tg.is_empty()).then_some(tg),
                     parent: (!par.is_empty()).then_some(par),
+                    cwd: (!dir.is_empty()).then_some(dir),
                 };
                 title.set(String::new());
                 parent.set(String::new());
                 tag.set(String::new());
                 details.set(String::new());
+                // The directory stays: a project's tasks usually happen in the same place.
                 apply_mutation(state, Some(busy), format!("Created task “{t}”."),
                     |s: State, ts: TasksState| s.tasks.set(Some(ts)), fetch::create_task(body));
             }>
@@ -90,6 +97,9 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
                 </div>
                 <TextField id="ptask-tag" label="Tag" placeholder="agent name" mono=true
                     hint="= an agent name auto-starts it" value=tag />
+                <TextField id="ptask-cwd" label="Working dir" placeholder="/path/to/work (optional)"
+                    mono=true wide=true
+                    hint="where a run picking this up starts; subtasks inherit it" value=cwd />
                 <TextField id="ptask-details" label="Details" placeholder="optional notes" wide=true
                     field_class="adi-field--grow" value=details />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>

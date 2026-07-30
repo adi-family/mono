@@ -34,6 +34,10 @@ pub(crate) enum TasksCommand {
         tag: Option<String>,
         #[arg(long)]
         parent: Option<String>,
+        /// Where this task's work happens — the directory a run picking it up starts in.
+        /// A subtask inherits it from its parent unless it states its own.
+        #[arg(long)]
+        cwd: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -56,6 +60,9 @@ pub(crate) enum TasksCommand {
         assignee: Option<String>,
         #[arg(long)]
         parent: Option<String>,
+        /// Where this task's work happens; pass an empty string to clear it.
+        #[arg(long)]
+        cwd: Option<String>,
         #[arg(long)]
         json: bool,
     },
@@ -124,10 +131,11 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
             project,
             tag,
             parent,
+            cwd,
             json,
         } => {
             let task = store
-                .create(title, details, project, tag, parent)
+                .create(title, details, project, tag, parent, cwd)
                 .map_err(|e| e.to_string())?;
             if json {
                 print_json(&task);
@@ -151,6 +159,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
             tag,
             assignee,
             parent,
+            cwd,
             json,
         } => {
             let task = store
@@ -162,6 +171,7 @@ pub(crate) fn run_tasks(adi: Adi, command: TasksCommand) -> Result<(), String> {
                         tag,
                         assignee,
                         parent,
+                        cwd,
                     },
                 )
                 .map_err(|e| e.to_string())?;
@@ -227,6 +237,9 @@ fn print_task(task: &TaskView) {
     }
     if let Some(assignee) = &task.task.assignee {
         meta.push(format!("assignee: {assignee}"));
+    }
+    if let Some(cwd) = &task.task.cwd {
+        meta.push(format!("cwd: {cwd}"));
     }
     if task.children_total > 0 {
         meta.push(format!(

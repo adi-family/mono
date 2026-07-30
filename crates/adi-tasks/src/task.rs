@@ -77,6 +77,15 @@ pub struct Task {
     /// Optional associated adi project id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Where this task's work happens — the directory a run picking it up should start in
+    /// (`~` allowed). A task is often *about* one place: a repo, a workspace clone, a
+    /// dashboard's directory. Saying so once, on the task, is what lets whatever dispatches it
+    /// hand that directory to the run (`working_dir` of `POST /api/agents/run`) instead of
+    /// describing the path in prose and leaving each command to `cd` there again.
+    ///
+    /// `None` means the task has no opinion: the run starts wherever the agent is defined to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
     /// Optional parent task id — the link that forms the tree.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
@@ -149,6 +158,7 @@ impl TaskView {
                 details: None,
                 status: TaskStatus::Open,
                 project: None,
+                cwd: None,
                 parent: None,
                 tag: None,
                 assignee: None,
@@ -199,6 +209,8 @@ pub struct TaskPatch {
     pub tag: Option<String>,
     /// New assignee; `Some("")` clears, `None` leaves unchanged.
     pub assignee: Option<String>,
+    /// New working directory; `Some("")` clears, `None` leaves unchanged.
+    pub cwd: Option<String>,
     /// A requested parent change: `None` leaves it; `Some("")` detaches to root; `Some(id)` sets.
     pub parent: Option<String>,
 }

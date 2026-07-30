@@ -29,6 +29,7 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
         project,
         parent,
         tag,
+        cwd,
         details,
         busy,
         show_done,
@@ -62,18 +63,21 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 let par = parent.get().trim().to_string();
                 let tg = tag.get().trim().to_string();
                 let proj = project.get().trim().to_string();
+                let dir = cwd.get().trim().to_string();
                 let body = NewTask {
                     title: t.clone(),
                     details: (!det.is_empty()).then_some(det),
                     project: (!proj.is_empty()).then_some(proj),
                     tag: (!tg.is_empty()).then_some(tg),
                     parent: (!par.is_empty()).then_some(par),
+                    cwd: (!dir.is_empty()).then_some(dir),
                 };
                 title.set(String::new());
                 details.set(String::new());
                 parent.set(String::new());
                 tag.set(String::new());
-                // Keep the project selected — filing several tasks under one project is common.
+                // Keep the project *and* the directory — several tasks about one place is the
+                // normal case, and retyping the path each time is how one of them gets it wrong.
                 apply_tasks(state, Some(busy), format!("Created task “{t}”."),
                     fetch::create_task(body));
             }>
@@ -109,6 +113,9 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 </div>
                 <TextField id="task-tag" label="Tag" placeholder="agent name" mono=true
                     hint="= an agent name auto-starts it" value=tag />
+                <TextField id="task-cwd" label="Working dir" placeholder="/path/to/work (optional)"
+                    mono=true wide=true
+                    hint="where a run picking this up starts; subtasks inherit it" value=cwd />
                 <TextField id="task-details" label="Details" placeholder="optional notes" wide=true
                     field_class="adi-field--grow" value=details />
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
@@ -305,9 +312,17 @@ pub(crate) fn task_cell(col: &str, t: &TaskRow, depth: usize) -> AnyView {
         // "Task", and anything the layout offers that this match doesn't name.
         _ => {
             let indent = format!("padding-left:{}px", depth * 20);
-            let details = t.details.clone().unwrap_or_default();
+            // The hover text is what a row can say without a column of its own: the details, and
+            // the directory the work happens in when the task names one.
+            let mut hover = t.details.clone().unwrap_or_default();
+            if let Some(cwd) = t.cwd.as_deref().filter(|c| !c.trim().is_empty()) {
+                if !hover.is_empty() {
+                    hover.push_str("\n\n");
+                }
+                hover.push_str(&format!("cwd: {cwd}"));
+            }
             view! {
-                <td title=details><span style=indent>{t.title.clone()}</span></td>
+                <td title=hover><span style=indent>{t.title.clone()}</span></td>
             }
             .into_any()
         }
