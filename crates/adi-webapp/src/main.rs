@@ -1000,6 +1000,13 @@ fn App() -> impl IntoView {
                 }}
             </nav>
             <span class="adi-spacer"></span>
+            // The way back out of the control panel. The root bar offers "extended →" in the
+            // other direction, so the trip is round rather than one-way; a plain link, since
+            // `/` is a different document than the workbench and not an SPA route.
+            <a class="adi-simple" href="/" title="Back to the simple chat view">
+                <span class="adi-simple__arrow" aria-hidden="true">"\u{2190}"</span>
+                <span>"simple"</span>
+            </a>
             {move || can_install.get().then(|| view! {
                 <button class="adi-install" type="button"
                     title="Install adi as an app in its own window"

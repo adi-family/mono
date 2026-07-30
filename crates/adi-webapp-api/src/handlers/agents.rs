@@ -362,6 +362,7 @@ fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
             .map(|r| AgentRunInfo {
                 run_id: r.run_id,
                 started_at: r.started_at,
+                last_activity: r.last_activity,
                 message: r.message,
                 running: r.running,
             })

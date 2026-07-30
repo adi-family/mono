@@ -143,24 +143,63 @@ pub(crate) fn spawn_child(
 /// Every run of `agent` under `subdir`, newest first.
 pub(crate) fn list_runs(sessions_dir: &Path, subdir: &str, agent_name: &str) -> Vec<RunInfo> {
     let dir = agent_dir(sessions_dir, subdir, agent_name);
+    let touched = last_activity(&dir);
     let mut ids = run_ids(&dir);
     ids.sort_unstable();
     ids.reverse();
     ids.into_iter()
         .map(|run_id| {
             let (meta_started, message) = read_meta(&dir, &run_id);
+            let started = if meta_started > 0 {
+                meta_started
+            } else {
+                started_at(&run_id)
+            };
             RunInfo {
                 running: read_pid(&pid_path_in(&dir, &run_id)).is_some_and(pid_alive),
-                started_at: if meta_started > 0 {
-                    meta_started
-                } else {
-                    started_at(&run_id)
-                },
+                // A run that left no readable mtime behind falls back to when it began, so the
+                // field is always a time the run existed rather than the epoch.
+                last_activity: touched.get(&run_id).copied().unwrap_or(0).max(started),
+                started_at: started,
                 message,
                 run_id,
             }
         })
         .collect()
+}
+
+/// When each run in `dir` last did anything, as unix millis keyed by run id.
+///
+/// A run owns the whole `<run_id>.*` namespace of its agent dir, and the files it writes as it works
+/// — the combined log, a harness conversation's transcript — are appended to for as long as it is
+/// talking. So the newest mtime across a run's files is the last moment it moved. Runs whose files
+/// carry no readable mtime are simply absent; the caller falls back to their start time.
+fn last_activity(dir: &Path) -> BTreeMap<String, u64> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return BTreeMap::new();
+    };
+    let mut newest: BTreeMap<String, u64> = BTreeMap::new();
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        // Run ids hold no dots (`{millis}-{seq}`), so everything before the first one is the id.
+        let Some((run_id, _)) = name.split_once('.') else {
+            continue;
+        };
+        let Some(ms) = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .and_then(|d| u64::try_from(d.as_millis()).ok())
+        else {
+            continue;
+        };
+        let slot = newest.entry(run_id.to_string()).or_default();
+        *slot = (*slot).max(ms);
+    }
+    newest
 }
 
 /// How many runs under `subdir` are alive right now, per agent — what the concurrency caps count.
@@ -578,6 +617,49 @@ mod tests {
         assert_eq!(list_runs(&sessions, "harness", "sleeper").len(), 2);
 
         assert!(stop(&sessions, "harness", "sleeper", &id2).expect("stop run 2"));
+        let _ = std::fs::remove_dir_all(sessions);
+    }
+
+    /// A run's *last activity* is when its files last changed, not when it started — that is what
+    /// makes a long, quiet conversation sort below one answered a minute ago. And it never precedes
+    /// the start, so a run whose files somehow predate it still reads as a moment it existed.
+    #[test]
+    fn last_activity_follows_the_files_but_never_precedes_the_start() {
+        let sessions = scratch_dir("activity");
+        let dir = agent_dir(&sessions, "harness", "talker");
+        std::fs::create_dir_all(&dir).unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| u64::try_from(d.as_millis()).unwrap())
+            .unwrap();
+
+        // A run started an hour ago whose transcript was written just now: its log/transcript mtimes
+        // are what the rail reads as "active", so it must land near now rather than an hour back.
+        let old = format!("{:013}-0001", now - 3_600_000);
+        std::fs::write(dir.join(format!("{old}.log")), "hello").unwrap();
+        std::fs::write(dir.join(format!("{old}.jsonl")), "{}\n").unwrap();
+
+        // A run whose id claims it starts in an hour — its files are already older than that.
+        let future = format!("{:013}-0002", now + 3_600_000);
+        std::fs::write(dir.join(format!("{future}.log")), "hello").unwrap();
+
+        let runs = list_runs(&sessions, "harness", "talker");
+        let by_id = |id: &str| runs.iter().find(|r| r.run_id == id).cloned().unwrap();
+
+        let quiet = by_id(&old);
+        assert_eq!(quiet.started_at, now - 3_600_000, "start comes from the id");
+        assert!(
+            quiet.last_activity >= now - 60_000,
+            "last activity comes from the files, not the id: {} vs {now}",
+            quiet.last_activity,
+        );
+
+        let odd = by_id(&future);
+        assert_eq!(
+            odd.last_activity, odd.started_at,
+            "an mtime older than the start never drags last activity backwards",
+        );
+
         let _ = std::fs::remove_dir_all(sessions);
     }
 

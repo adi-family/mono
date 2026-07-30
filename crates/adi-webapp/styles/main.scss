@@ -425,7 +425,8 @@
     font-size: var(--text-sm);
   }
 
-  // The rule between the picked agent's sessions and every other agent's.
+  // The rule that opens each band of the rail — Recent, the picked agent's own sessions, every
+  // other agent's. Topmost band has nothing above it to be ruled off from, so it drops the line.
   &__divider {
     margin-top: var(--space-3);
     padding: 10px 10px 4px;
@@ -435,6 +436,12 @@
     text-transform: uppercase;
     letter-spacing: .08em;
     color: var(--muted);
+
+    &:first-child {
+      margin-top: 0;
+      padding-top: 2px;
+      border-top: none;
+    }
   }
 
   // --- a session row (left) -------------------------------------------------------
@@ -474,6 +481,9 @@
       color: var(--muted);
       &:hover { color: var(--ink); }
     }
+    // A row in the Recent band. It spans every agent, so nothing is indented under a name here and
+    // the full width is the title's; the agent it belongs to rides in the line beneath.
+    &--recent { padding-right: 10px; }
   }
   &__session-main { display: flex; flex-direction: column; min-width: 0; }
   &__session-title {
@@ -779,6 +789,34 @@
 // Only ever rendered while the browser has an install to offer, so it can afford the accent
 // border — it's a one-time invitation, not a permanent control. Sized to sit inside the 38px
 // titlebar next to the theme toggle.
+// The titlebar's exit from the control panel back to the simple chat at `/`. Quieter than its
+// Install neighbour — it's a way back, not something to reach for.
+.adi-simple {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1.2;
+  color: var(--muted);
+  text-decoration: none;
+  transition: color var(--transition), border-color var(--transition), background var(--transition);
+
+  &:hover {
+    color: var(--ink);
+    border-color: var(--muted);
+    background: var(--surface-2);
+  }
+  // Slides toward the exit on hover, the mirror of the root bar's "extended →" arrow.
+  &__arrow { transition: transform var(--transition); }
+  &:hover &__arrow { transform: translateX(-2px); }
+}
+
 .adi-install {
   display: inline-flex;
   align-items: center;
