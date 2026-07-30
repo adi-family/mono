@@ -396,6 +396,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
         modules: ts_stems(&dir.join("frontend").join("modules")),
         routes: ts_stems(&dir.join("backend").join("routes")),
         archived_at: manifest.archived_at,
+        dir: dir.display().to_string(),
         id,
     }
 }

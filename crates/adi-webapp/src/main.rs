@@ -634,9 +634,9 @@ fn arg_text(arguments: &BTreeMap<String, serde_json::Value>, name: &str) -> Stri
 
 /// The chrome-less dashboard-agent embed (`/embed/dashboard-agent?dashboard=<id>`): the one global
 /// `adi-agent` chat, opened from a dashboard's launcher. It reuses the agent live view, points it at
-/// `adi-agent`, and sets a context prefix so every message it sends is tagged with which dashboard
-/// it was opened from — the agent then edits that dashboard's `.ts` files. Served by app.adi, so its
-/// API calls are same-origin (no CORS).
+/// `adi-agent`, and starts the conversation **in that dashboard's directory**, tagged with which
+/// dashboard it was opened from — the agent then edits that dashboard's `.ts` files. Served by
+/// app.adi, so its API calls are same-origin (no CORS).
 #[component]
 fn EmbedDashboardAgent() -> impl IntoView {
     let state = State::fresh();
@@ -644,11 +644,36 @@ fn EmbedDashboardAgent() -> impl IntoView {
     let dashboard = query_param("dashboard").unwrap_or_default();
 
     if !dashboard.is_empty() {
+        // Until the directory is known, the agent is told the path — the conventional one — and to
+        // move there once. It is the honest fallback: a chat sent before the listing lands (or at
+        // all, if it fails) still knows where the files are.
         watch.context_prefix.set(format!(
             "[Context: you are editing dashboard {dashboard}. Its files are at \
              ~/.adi/mono/dashboards/{dashboard} — UI panels in frontend/modules/*.ts, endpoints in \
-             backend/routes/*.ts. Edit those .ts files; the dashboard hot-reloads.]"
+             backend/routes/*.ts. `cd` there once, then edit those .ts files by relative path; the \
+             dashboard hot-reloads.]"
         ));
+        // Then *start the conversation there*, rather than handing over a path and leaving every
+        // command to re-state it. The launch directory is the one statement about location that
+        // can't be forgotten halfway through a run — it is the process's own cwd, so relative
+        // paths land in the dashboard by construction. The server states the path
+        // (`GET /api/dashboards` → `dir`), so the embed never rebuilds the store's layout out of
+        // an id; once it has it, the prefix stops mentioning directories at all.
+        let id = dashboard.clone();
+        spawn_local(async move {
+            if let Ok(boards) = fetch::dashboards().await
+                && let Some(board) = boards.dashboards.iter().find(|d| d.id == id)
+                && !board.dir.is_empty()
+            {
+                watch.run_dir.set(board.dir.clone());
+                watch.context_prefix.set(format!(
+                    "[Context: you are editing dashboard {id}, and this chat already runs in its \
+                     directory — UI panels in frontend/modules/*.ts, endpoints in \
+                     backend/routes/*.ts. Edit those .ts files by relative path; the dashboard \
+                     hot-reloads.]"
+                ));
+            }
+        });
     }
 
     // Learn whether adi-agent is interactive (pty) vs headless, point the live view at it, and poll.
@@ -774,6 +799,7 @@ fn App() -> impl IntoView {
         project: RwSignal::new(String::new()),
         parent: RwSignal::new(String::new()),
         tag: RwSignal::new(String::new()),
+        cwd: RwSignal::new(String::new()),
         details: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
         show_done: RwSignal::new(false),

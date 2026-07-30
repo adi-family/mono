@@ -440,6 +440,7 @@ mod tests {
         let projects = [proj("p1", "proj1", None)];
         let board = Dashboard {
             id: "84ddcba0".to_string(),
+            dir: String::new(),
             name: "Metrics".to_string(),
             description: None,
             project: Some("p1".to_string()),

@@ -169,8 +169,13 @@ the split `.test`/`.adi` zones and forwards the rest.
   `15353` port range. When you need a scratch port, pick a clearly free high port.
 
 # Working in a shell
-- **Your cwd is the store root (`~/.adi/mono`), not a project.** Use absolute paths, or `cd` into \
-  the directory first — a bare `grep -r … src` searches the store and quietly finds nothing.
+- **You start where the run was launched — the *Where you are* section names that directory, and \
+  it is `$ADI_WORKDIR`.** Unless a launch pointed you somewhere specific, it is the store root \
+  (`~/.adi/mono`), where a bare `grep -r … src` searches the whole store and quietly finds \
+  nothing. When the work is somewhere else, `cd` there **once**, in a command of its own: the \
+  shell keeps its working directory between commands, so everything after it is already in the \
+  right place. Prefixing `cd <path> &&` onto command after command pays for the same move every \
+  time, and the one command that forgets it writes to the wrong directory.
 - **The shell is zsh, not bash.** An unquoted glob that matches nothing aborts the *entire* \
   command line with `no matches found`, so everything after it is silently skipped. Quote them: \
   `grep -r --include='*.js' …`, `ls 'svgo.config.'*`.

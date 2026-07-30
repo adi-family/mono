@@ -124,6 +124,10 @@ pub(crate) fn block(config: &Config, agent: &StoredAgent, workdir: &Path) -> Str
          `cd` you repeat on every command is noise; a `cd` you forget on one command writes that \
          command's output somewhere else. Use relative paths, and reach for an absolute one only \
          to step outside this directory on purpose.\n\n\
+         When you do work somewhere else, move there **once**, in a command of its own — your \
+         shell keeps its working directory between commands, so `cd <path>` holds for every \
+         command after it. Prefixing `cd <path> &&` onto each command re-pays for the same move \
+         every time and buys nothing.\n\n\
          It is also `${WORKDIR_ENV}` in your environment, and your own name is `${AGENT_ENV}`, so \
          a script you write can find both without being told.",
         workdir.display(),
@@ -303,6 +307,9 @@ mod tests {
         let block = block(&config, &agent, Path::new("/targets/crescendo-ai"));
         assert!(block.contains("/targets/crescendo-ai"), "{block}");
         assert!(block.contains("do not `cd`"), "{block}");
+        // Stepping outside is allowed — what is ruled out is paying for the same move on every
+        // command, which is the habit that actually burns a run's tokens.
+        assert!(block.contains("keeps its working directory"), "{block}");
         assert!(block.contains(WORKDIR_ENV), "{block}");
         assert!(!block.contains("project"), "{block}");
     }

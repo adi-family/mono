@@ -1718,6 +1718,11 @@ pub struct HiveState {
 pub struct Dashboard {
     /// The directory name, which is also how its hive services are keyed (`<id>/frontend`).
     pub id: String,
+    /// The absolute path of that directory. Stated by the server rather than rebuilt client-side
+    /// from the id, so anything that has to *point* at a dashboard — the agent embed launching its
+    /// chat in it — uses the store's real layout instead of a hardcoded copy of it.
+    #[serde(default)]
+    pub dir: String,
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
