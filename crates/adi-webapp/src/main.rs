@@ -72,6 +72,33 @@ fn main() {
     } else {
         mount_to_body(Home);
     }
+    drop_boot_splash();
+}
+
+/// Remove the pre-wasm splash `index.html` paints (the wordmark, so the first frame is adi and
+/// not a blank page). `mount_to_body` *appends*, so without this the splash would stay above the
+/// mounted app. The wasm side keeps showing its own identical [`boot_splash`] while `/api/meta`
+/// is in flight, so the handover is invisible.
+fn drop_boot_splash() {
+    if let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id("adi-boot"))
+    {
+        el.remove();
+    }
+}
+
+/// The front door's boot screen: the wordmark alone, held while we still don't know what this
+/// stack is. Onboarding copy ("Welcome to adi.") would claim a first run before `/api/meta`
+/// has said whether it *is* one — for the far more common set-up stack that reads as a wrong
+/// turn on every load. Mirrors the pre-wasm splash markup in `index.html`.
+fn boot_splash() -> AnyView {
+    view! {
+        <div class="adi-boot">
+            <span class="adi-boot__logo">"adi"<span class="adi-boot__dot">"."</span></span>
+        </div>
+    }
+    .into_any()
 }
 
 /// The onboarding steps, in order. Only step 1 is interactive today; the rest scaffold the
@@ -118,10 +145,11 @@ const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
     },
 ];
 
-/// The root (`/`). Before the root agent exists it's a guided onboarding wizard (welcome, stepper,
-/// setup form) behind a slim `adi. · extended →` bar. **Once the agent exists the app becomes the
-/// chat**: its sessions on the left, the conversation in the centre, dashboards on the right (see
-/// [`chat_home_view`]). The bar's "reconfigure" returns to the setup form to change the agent.
+/// The root (`/`). It opens on the wordmark ([`boot_splash`]) and commits to a shape only once
+/// `/api/meta` answers: before the root agent exists, a guided onboarding wizard (welcome,
+/// stepper, setup form) behind a slim `adi. · extended →` bar; **once the agent exists the app is
+/// the chat** — its sessions on the left, the conversation in the centre, dashboards on the right
+/// (see [`chat_home_view`]). The bar's "reconfigure" returns to the setup form to change the agent.
 #[component]
 fn Home() -> impl IntoView {
     let state = State::fresh();
@@ -226,9 +254,16 @@ fn Home() -> impl IntoView {
     };
 
     move || {
-        // The chat takes over once the agent exists and we're not mid-reconfigure; otherwise the
-        // onboarding wizard. Reads only `meta`/`reconfiguring`, so a poll never rebuilds the tree.
-        if meta.get().is_some_and(|m| m.agent.is_some()) && !reconfiguring.get() {
+        // Three doors, decided by what we actually know. Reads only `meta`/`reconfiguring`, so a
+        // poll never rebuilds the tree.
+        //   * `/api/meta` hasn't answered yet ⇒ the wordmark splash. We can't tell a first run
+        //     from a set-up stack, so we say nothing rather than guess "welcome".
+        //   * the agent exists (and we're not mid-reconfigure) ⇒ the chat.
+        //   * no agent, or reconfiguring ⇒ the wizard.
+        let Some(m) = meta.get() else {
+            return boot_splash();
+        };
+        if m.agent.is_some() && !reconfiguring.get() {
             view! {
                 <div class="adi-chome-root">
                     <header class="adi-onb__bar">
@@ -260,25 +295,12 @@ fn Home() -> impl IntoView {
                     </header>
                     <main class="adi-onb__body">
                         <div class="adi-onb__panel">
-                            <div class="adi-onb__intro">
-                                <h1 class="adi-onb__welcome">
-                                    "Welcome to adi"<span class="adi-onb__dot">"."</span>
-                                </h1>
-                                <p class="adi-onb__sub">"Let\u{2019}s set up your primary agent."</p>
-                            </div>
+                            {onb_intro(m.agent.is_none())}
                             <ol class="adi-onb__steps">{onb_steps(meta, reconfiguring)}</ol>
-                            {move || match meta.get() {
-                                None => view! {
-                                    <div class="adi-onb__card">
-                                        <div class="adi-onb__loading">"Loading…"</div>
-                                    </div>
-                                }
-                                .into_any(),
-                                Some(m) => onb_setup_form(
-                                    meta, backend, prompt, busy, error, reconfiguring, show_help,
-                                    show_prompt, m,
-                                ),
-                            }}
+                            {onb_setup_form(
+                                meta, backend, prompt, busy, error, reconfiguring, show_help,
+                                show_prompt, m,
+                            )}
                         </div>
                     </main>
                 </div>
@@ -303,6 +325,33 @@ fn install_pill(can_install: RwSignal<bool>) -> impl IntoView {
                 </button>
             }
         })
+    }
+}
+
+/// The wizard's heading. "Welcome to adi." is the greeting for an actual first run — no agent
+/// exists yet — so a reconfigure (same form, reached from the chat's bar) gets a heading that
+/// says where you are instead of greeting someone who has been here all along.
+fn onb_intro(first_run: bool) -> AnyView {
+    if first_run {
+        view! {
+            <div class="adi-onb__intro">
+                <h1 class="adi-onb__welcome">
+                    "Welcome to adi"<span class="adi-onb__dot">"."</span>
+                </h1>
+                <p class="adi-onb__sub">"Let\u{2019}s set up your primary agent."</p>
+            </div>
+        }
+        .into_any()
+    } else {
+        view! {
+            <div class="adi-onb__intro">
+                <h1 class="adi-onb__welcome">"Reconfigure your agent"</h1>
+                <p class="adi-onb__sub">
+                    "Change the runtime it runs on, or its system prompt."
+                </p>
+            </div>
+        }
+        .into_any()
     }
 }
 

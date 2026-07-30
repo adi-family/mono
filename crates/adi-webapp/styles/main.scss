@@ -338,6 +338,38 @@
   .adi-onb__panel { animation: none; }
 }
 
+// ---- boot splash (`/`, before we know what to show) --------------------------------
+// Written twice on purpose — once in `index.html` for the pre-wasm frame, once from the app while
+// `/api/meta` is in flight — and both use this block, so the handover between them is a no-op on
+// screen. Just the wordmark: the welcome copy belongs to a real first run.
+.adi-boot {
+  min-height: 100dvh;
+  display: grid;
+  place-items: center;
+  background: var(--bg);
+  color: var(--ink);
+  // The splash's whole job is the mark, so it breathes above the fold rather than sitting dead
+  // centre of a tall viewport.
+  padding-bottom: 6vh;
+}
+.adi-boot__logo {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: clamp(28px, 6vw, 44px);
+  letter-spacing: -.03em;
+  // Slow, shallow breath — enough to read as "working", not as a spinner demanding attention.
+  animation: adi-boot-breathe 1.6s ease-in-out infinite;
+}
+.adi-boot__dot { color: var(--accent); }
+
+@keyframes adi-boot-breathe {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .adi-boot__logo { animation: none; }
+}
+
 // ---- chat home (`/` once the root agent exists) ------------------------------------
 // The app is the chat: a fixed-height frame (slim bar + three columns) that fills the viewport,
 // each column scrolling on its own. Sessions left, conversation centre, dashboards right.

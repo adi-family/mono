@@ -22,6 +22,18 @@
 <link rel="icon" href="/assets/icon-192.png" sizes="192x192" type="image/png">
 <link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
 
+<!-- Theme before first paint. `apply_saved_theme()` does the same thing from wasm, but that runs
+     a bundle-download later — long enough for the boot splash below to paint in the OS theme and
+     then snap to a saved override that disagrees with it. -->
+<script>
+(function () {
+  try {
+    var t = localStorage.getItem("adi-theme");
+    if (t) document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* private mode: fall through to the OS preference */ }
+})();
+</script>
+
 <link data-trunk rel="rust" />
 <link data-trunk rel="scss" href="styles/main.scss" />
 <!-- Copied verbatim (no content hash) so the manifest, the worker and the icons keep the
@@ -108,5 +120,12 @@
 })();
 </script>
 </head>
-<body></body>
+<body>
+<!-- The first frame, before a byte of wasm has run: the wordmark, centred, in the page's own
+     theme. `drop_boot_splash()` removes this node once the app mounts, and the app keeps
+     showing the same splash (`.adi-boot`) until /api/meta says whether to onboard or chat. -->
+<div id="adi-boot" class="adi-boot">
+  <span class="adi-boot__logo">adi<span class="adi-boot__dot">.</span></span>
+</div>
+</body>
 </html>
