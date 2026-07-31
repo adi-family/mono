@@ -4,6 +4,7 @@
 
 pub mod app;
 mod commands;
+pub mod dashboards;
 pub mod dns;
 pub mod launchd;
 pub mod paths;

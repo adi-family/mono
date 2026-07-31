@@ -139,7 +139,8 @@ the split `.test`/`.adi` zones and forwards the rest.
   help in its prompt. You yourself carry every tool in the store. Panel: /tools.
 - Tasks — a simple task tree (/tasks). Agents — agent definitions like yourself (/agents). \
   Triggers — webhook or supervised background code blocks (/triggers). Mesh — peer-to-peer port \
-  forwarding (/settings/mesh).
+  forwarding (/settings/mesh). Fleet — the remote adi machines this one is paired with, each \
+  reachable at `<service>.<node>.n.adi` (/extended/settings/fleet).
 
 # How to act
 - The control panel exposes a JSON API under `http://app.adi/api/*` (e.g. GET `/api/projects`, \

@@ -5,9 +5,18 @@
 // dropping one `.ts` file into `modules/`; nothing here needs editing, and there is no build
 // step and no package.json.
 //
-// The hive runner injects $PORT (the port allocated for `<dashboard>/frontend`). The backend
-// runs as a sibling hive service on its own port with no proxy host of its own, so the browser
-// talks to it directly by port — see `backendPort()`.
+// One dashboard is one origin. The hive runner injects $PORT (the port leased for
+// `<dashboard>/frontend`), but that number is private to this process: the browser reaches the
+// dashboard through the single hostname both hive services share, where this server owns `/` and
+// the sibling backend owns `/api`. So this file resolves no address, injects no address, and the
+// page it serves is never told one — every request the page makes is a relative path.
+//
+// That is the whole point, and it is not cosmetic. An earlier version of this file read the
+// backend's leased port out of the ports-manager registry and handed it to the browser as
+// `127.0.0.1:<port>`. Viewed from another machine — over the mesh, as `<label>.<node>.n.adi` —
+// that address is the *viewer's* loopback, not this one, so the page only ever worked when it was
+// opened on the machine it ran on. Relative URLs work for every viewer, under every hostname,
+// with no substitution.
 
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -19,37 +28,8 @@ const MODULES = join(ROOT, "modules");
 /** This dashboard's id — the directory name the hive service is keyed under. */
 const DASHBOARD = basename(join(ROOT, ".."));
 
-/**
- * The sibling backend's port.
- *
- * `$BACKEND_PORT` wins when set. Otherwise we read the ports manager's registry, the same
- * source of truth adi-hive allocated from, so neither port is ever hardcoded. Returns null if
- * the backend has not been allocated yet; the UI degrades to "backend offline" rather than
- * failing to boot.
- */
-async function backendPort(): Promise<number | null> {
-  const fromEnv = Number(process.env.BACKEND_PORT);
-  if (Number.isFinite(fromEnv) && fromEnv > 0) return fromEnv;
-
-  const adiDir = process.env.ADI_DIR?.trim() || ".adi";
-  const registry = join(
-    process.env.HOME ?? "",
-    adiDir,
-    "mono",
-    "ports",
-    "registry.json",
-  );
-  try {
-    const { leases } = await Bun.file(registry).json();
-    const lease = leases?.find(
-      (l: { service: string; key: string }) =>
-        l.service === `${DASHBOARD}/backend` && l.key === "http",
-    );
-    return lease?.port ?? null;
-  } catch {
-    return null;
-  }
-}
+/** The prefix the sibling backend claims on this dashboard's host (`proxy.path` in hive.yaml). */
+const API_PREFIX = "/api";
 
 /** Module ids available to the shell: every `modules/*.ts`, minus dotfiles, sorted. */
 async function moduleIds(): Promise<string[]> {
@@ -81,12 +61,12 @@ const server = Bun.serve({
   async fetch(req) {
     const { pathname } = new URL(req.url);
 
-    // The shell, with its runtime config injected so the browser knows where the backend is.
+    // The shell, with the little runtime config it genuinely needs: which dashboard this is and
+    // which modules to mount. Deliberately no address of any kind — see the header.
     if (pathname === "/" || pathname === "/index.html") {
       const shell = await Bun.file(join(ROOT, "index.html")).text();
       const config = {
         dashboard: DASHBOARD,
-        backendPort: await backendPort(),
         modules: await moduleIds(),
       };
       return new Response(
@@ -112,6 +92,19 @@ const server = Bun.serve({
           "cache-control": "no-store",
         },
       });
+    }
+
+    // `/api` belongs to the backend, and the front door routes it there — this server only ever
+    // sees it when the page was opened on this process's port instead of on the dashboard's
+    // hostname. Say so, rather than 404-ing as if the route did not exist.
+    if (pathname === API_PREFIX || pathname.startsWith(`${API_PREFIX}/`)) {
+      return Response.json(
+        {
+          error: "the backend is served under /api on this dashboard's host",
+          hint: "open the dashboard by hostname (its .adi name), not by port",
+        },
+        { status: 404 },
+      );
     }
 
     // Anything else: a static file from the frontend dir.

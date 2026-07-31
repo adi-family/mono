@@ -18,6 +18,8 @@ pub struct Status {
 }
 
 impl Status {
+    /// Snapshot the live state a controlling GUI reads: what bound, and how much is routed.
+    #[must_use]
     pub fn new(bound_addrs: Vec<String>, route_count: usize) -> Self {
         let started_at_unix = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -34,6 +36,7 @@ impl Status {
 }
 
 /// Precedence: the `ADI_HIVE_STATUS_FILE` env var, then `default`.
+#[must_use]
 pub fn resolve_path(default: PathBuf) -> PathBuf {
     if let Ok(env) = std::env::var(STATUS_FILE_ENV)
         && !env.is_empty()
@@ -43,6 +46,12 @@ pub fn resolve_path(default: PathBuf) -> PathBuf {
     default
 }
 
+/// Write the status file, creating its directory if needed.
+///
+/// # Errors
+/// Fails if the directory can't be created or the file can't be written — a read-only or
+/// root-owned status directory. Callers log it and keep serving; the status file is a report on
+/// the daemon, never a thing the daemon needs.
 pub fn write(path: &Path, status: &Status) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;

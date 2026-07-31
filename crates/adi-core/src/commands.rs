@@ -4,6 +4,7 @@
 use serde::Serialize;
 
 use crate::app::App;
+use crate::dashboards::Dashboards;
 use crate::dns::Dns;
 use crate::service::{Service, ServiceReport};
 use crate::update::{Update, Updater};
@@ -96,6 +97,10 @@ impl Adi {
         vec![
             Box::new(Dns::new()),
             Box::new(App::new()),
+            // After the panel: it is the panel that scaffolds dashboards, and the supervisor has
+            // nothing to run until one exists. Before the updater only because the updater is
+            // periodic and cares about neither.
+            Box::new(Dashboards::new()),
             Box::new(Updater::new()),
         ]
     }

@@ -1,7 +1,14 @@
 //! The mesh runtime as a controllable handle. [`Daemon::start`] binds the endpoint and
-//! spawns the host + client tasks; [`Daemon::stop`] tears them down. It runs the same way
-//! whether driven by the `adi-mesh run` binary or started in-process by the control panel —
+//! spawns the host + client + gateway tasks; [`Daemon::stop`] tears them down. It runs the same
+//! way whether driven by the `adi-mesh run` binary or started in-process by the control panel —
 //! either way the tasks live only as long as the handle, so nothing survives the owner.
+//!
+//! The endpoint carries **three ALPNs**: the raw TCP forward that ssh and databases use, the
+//! fleet's HTTP gateway (`docs/fleet.md` §7), and the [join](crate::join) handshake a node dials
+//! out with to be paired (E3). They are dispatched by `conn.alpn()` inside the
+//! one accept loop [`host::serve`] already owns, rather than by iroh's
+//! [`protocol::Router`](iroh::protocol::Router) — see [`crate::gateway`] for why that choice went
+//! the way it did.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,7 +20,8 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::MeshConfig;
-use crate::{client, host, identity, protocol, ticket};
+use crate::gateway::{self, Gateway};
+use crate::{client, host, identity, join, protocol, ticket};
 
 /// How long to wait for a home relay before publishing a (possibly direct-only) ticket.
 const TICKET_RELAY_WAIT: Duration = Duration::from_secs(8);
@@ -38,7 +46,15 @@ impl Daemon {
         let secret = identity::load_or_create()?;
         let endpoint = Endpoint::builder(presets::N0)
             .secret_key(secret)
-            .alpns(vec![protocol::ALPN.to_vec()])
+            // Every ALPN on one endpoint, so a machine keeps one identity and one relay session
+            // whether a peer wants a raw port, a service (`docs/fleet.md` §7), or to be paired.
+            // The join ALPN belongs here and not on a listener of its own: a viewer that had to
+            // open something extra to accept a pairing is a viewer that can forget to close it.
+            .alpns(vec![
+                protocol::ALPN.to_vec(),
+                protocol::HTTP_ALPN.to_vec(),
+                join::ALPN.to_vec(),
+            ])
             .bind()
             .await?;
         let id = endpoint.id();
@@ -50,10 +66,38 @@ impl Daemon {
         // Publish this run's ticket once its relay is up, so tools can share it.
         tasks.push(tokio::spawn(publish_ticket(endpoint.clone())));
 
+        // Both roles served over the endpoint share this: the forward loop dispatches the
+        // gateway's ALPN to it, and the local listener below calls out through it.
+        let gateway = Arc::new(Gateway::new(endpoint.clone()));
+
         let host_cfg = Arc::new(cfg.host.clone());
         tasks.push(tokio::spawn(host::serve(
             endpoint.clone(),
             host_cfg,
+            Arc::clone(&gateway),
+            rx.clone(),
+        )));
+
+        // The calling side. A gateway that cannot bind is a lost fleet, not a lost mesh: the
+        // forwards and the host role keep running, and the front door's own "no gateway" page
+        // explains the rest.
+        let addr = gateway::configured_addr();
+        match gateway::bind(addr).await {
+            Ok(listener) => {
+                info!(%addr, "mesh gateway listening for *.n.adi");
+                tasks.push(tokio::spawn(gateway::serve(
+                    listener,
+                    Arc::clone(&gateway),
+                    rx.clone(),
+                )));
+            }
+            Err(e) => warn!(%addr, error = %e, "mesh gateway could not bind; no node is reachable from here"),
+        }
+
+        // Independently of the listener: the *node* side reads the same snapshots, so a machine
+        // that only serves peers still picks up a new pairing without a restart.
+        tasks.push(tokio::spawn(gateway::reload(
+            Arc::clone(&gateway),
             rx.clone(),
         )));
 

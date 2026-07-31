@@ -8,7 +8,15 @@
 //! Neither port is declared in the dashboard's `hive.yaml`: adi-hive leases one per service
 //! from the ports manager, keyed `<id>/frontend` and `<id>/backend`. We resolve them from that
 //! same registry, which is also why a dashboard can report ports before it is running.
+//!
+//! **One dashboard is one origin** (`docs/fleet.md` §4). Both services declare the *same*
+//! `proxy.host`; the frontend owns `/` and the backend claims `/api` through hive path routing.
+//! That is what lets the page use relative URLs only and never learn its own address — the
+//! precondition for the same dashboard working at `<host>.adi`, at `<host>.<node>.n.adi` over
+//! the mesh (where `127.0.0.1` would be the *viewer's* machine), and behind a real domain later.
+//! Dashboards written before that rule are brought up to it by [`migrate`] on the next read.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use adi_config::Config;
@@ -226,7 +234,12 @@ fn now_secs() -> u64 {
 }
 
 /// Write the full scaffold into `dir`. Any error leaves the caller to clean up.
-fn scaffold(dir: &Path, name: &str, description: &str, project: Option<&str>) -> std::io::Result<()> {
+fn scaffold(
+    dir: &Path,
+    name: &str,
+    description: &str,
+    project: Option<&str>,
+) -> std::io::Result<()> {
     std::fs::create_dir_all(dir.join("frontend").join("modules"))?;
     std::fs::create_dir_all(dir.join("backend").join("routes"))?;
     std::fs::create_dir_all(dir.join(".adi"))?;
@@ -260,7 +273,8 @@ fn scaffold(dir: &Path, name: &str, description: &str, project: Option<&str>) ->
             archived_at: None,
         },
     )?;
-    std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(dir))?;
+    let host = dashboard_host(dir, name);
+    std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(dir, &host))?;
     Ok(())
 }
 
@@ -300,43 +314,314 @@ fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
     std::fs::write(dir.join("config.toml"), out)
 }
 
-/// The dashboard's hive services. No `proxy:` (reached by port, so nothing to route) and no
-/// declared ports (adi-hive leases them), leaving `working_dir` as the only generated value.
-fn hive_yaml(dir: &Path) -> String {
-    let dir = dir.display();
-    format!(
-        "# Dashboard hive services — run by the per-user supervisor \
-         (~/.adi/mono/dashboards/hive.yaml).\n\
-         #\n\
-         # Neither service declares a `proxy:` host: a dashboard is reached on 127.0.0.1:<port>, \
-         so it\n\
-         # depends on nothing but its own supervisor — not the root front door, not DNS.\n\
-         #\n\
-         # Neither port is declared either: adi-hive leases a stable one per service from the \
-         ports\n\
-         # manager (keyed `<dashboard-id>/frontend` and `<dashboard-id>/backend`) and injects it \
-         as\n\
-         # $PORT. The leases are idempotent, so the ports survive restarts.\n\
-         \n\
-         version: \"1\"\n\
-         \n\
-         services:\n\
-         \x20 frontend:\n\
-         \x20   restart: always\n\
-         \x20   runner:\n\
-         \x20     type: script\n\
-         \x20     script:\n\
-         \x20       run: bun run frontend/index.ts\n\
-         \x20       working_dir: {dir}\n\
-         \n\
-         \x20 backend:\n\
-         \x20   restart: always\n\
-         \x20   runner:\n\
-         \x20     type: script\n\
-         \x20     script:\n\
-         \x20       run: bun run backend/index.ts\n\
-         \x20       working_dir: {dir}\n"
-    )
+/// The dashboard's hive services: **one host, two services**. `{{HOST}}` is the hostname both
+/// share and `{{DIR}}` the dashboard directory; nothing else is generated, and in particular no
+/// port ever is — adi-hive leases those.
+///
+/// Kept as a template rather than a `format!` chain so the emitted YAML reads here exactly as it
+/// lands on disk, comments and all.
+const HIVE_TEMPLATE: &str = r#"# Dashboard hive services — run by the per-user supervisor (~/.adi/mono/dashboards/hive.yaml).
+#
+# One dashboard is one origin. Both services declare the same `proxy.host`: the frontend owns
+# `/`, the backend claims `/api`. The page therefore only ever uses relative URLs and never
+# learns its own address, which is what lets this dashboard work unchanged at `{{HOST}}`, at
+# `<label>.<node>.n.adi` over the mesh, and behind a real domain later — for every viewer, with
+# no substitution. Do not give the backend a host of its own: an absolute backend URL in the page
+# would point at whatever machine the *browser* is on.
+#
+# The front door imports dashboards (stripping their runners, since it only routes) and picks
+# both entries up; the per-user supervisor is what actually runs them.
+#
+# No port is declared: adi-hive leases a stable one per service from the ports manager (keyed
+# `<dashboard-id>/frontend` and `<dashboard-id>/backend`) and injects it as $PORT. The leases are
+# idempotent, so the front door resolves the same port the supervisor runs on.
+
+version: "1"
+
+services:
+  frontend:
+    restart: always
+    proxy:
+      host: {{HOST}}
+    runner:
+      type: script
+      script:
+        run: bun run frontend/index.ts
+        working_dir: {{DIR}}
+
+  backend:
+    restart: always
+    proxy:
+      host: {{HOST}}
+      path: /api
+    runner:
+      type: script
+      script:
+        run: bun run backend/index.ts
+        working_dir: {{DIR}}
+"#;
+
+/// Render [`HIVE_TEMPLATE`] for one dashboard directory and hostname.
+fn hive_yaml(dir: &Path, host: &str) -> String {
+    HIVE_TEMPLATE
+        .replace("{{HOST}}", host)
+        .replace("{{DIR}}", &dir.display().to_string())
+}
+
+/// The zone every local service answers under, so a label becomes `<label>.adi`.
+const HOST_ZONE: &str = "adi";
+
+/// The path prefix the backend claims on the dashboard's host. The page's whole API base.
+const API_PATH: &str = "/api";
+
+/// The longest a single DNS label may be.
+const MAX_LABEL: usize = 63;
+
+/// Labels a dashboard may never take, because something else already answers there:
+/// `n` is the reserved mesh zone (`docs/fleet.md` §1, and adi-hive refuses to route `n.adi`),
+/// `app` is the control panel, and the rest would shadow infrastructure or read as one.
+const RESERVED_LABELS: &[&str] = &["adi", "api", "app", "dns", "hive", "localhost", "n", "www"];
+
+/// The label used when neither the name nor the id yields a usable one — unreachable in practice
+/// (an id is a UUID, which is already a valid label), but a host must always exist.
+const FALLBACK_LABEL: &str = "dashboard";
+
+/// The hostname both of a dashboard's services share: `<label>.adi`.
+///
+/// Deterministic, and derived from what a human already typed: a slug of the dashboard's name,
+/// falling back to its id when the name has nothing DNS-usable in it (all-unicode, punctuation
+/// only), is reserved, or is already claimed by another dashboard. The id is a UUID, so that
+/// fallback is always free — a collision costs you a pretty hostname, never a working one.
+fn dashboard_host(dir: &Path, name: &str) -> String {
+    let id = dir
+        .file_name()
+        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+    format!("{}.{HOST_ZONE}", host_label(dir, &id, name))
+}
+
+/// The label part of [`dashboard_host`]. Split out so the fallback chain is testable on its own.
+fn host_label(dir: &Path, id: &str, name: &str) -> String {
+    let taken = claimed_labels(dir);
+    let free = |label: &String| !is_reserved(label) && !taken.contains(label);
+
+    slugify(name)
+        .filter(free)
+        .or_else(|| slugify(id).filter(|l| !is_reserved(l)))
+        .unwrap_or_else(|| FALLBACK_LABEL.to_string())
+}
+
+/// Whether `label` is one of the names a dashboard must not take. Compared case-insensitively
+/// even though [`slugify`] already lowercases, so a hand-edited hive file is judged the same way.
+fn is_reserved(label: &str) -> bool {
+    RESERVED_LABELS.contains(&label.to_ascii_lowercase().as_str())
+}
+
+/// Reduce free text to a single DNS label: ASCII-lowercased, every other character a separator,
+/// runs of separators collapsed, trimmed, capped at [`MAX_LABEL`]. `None` when nothing usable is
+/// left — a name written entirely in a non-Latin script is the common case, and inventing a
+/// transliteration for it would be a worse hostname than the id.
+fn slugify(text: &str) -> Option<String> {
+    let mut out = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.truncate(MAX_LABEL);
+    let label = out.trim_matches('-').to_string();
+    (!label.is_empty()).then_some(label)
+}
+
+/// Every host label already claimed by a dashboard *other* than the one in `dir`.
+///
+/// Read from the siblings' hive files rather than re-derived from their names, so a host that was
+/// hand-picked (or derived under an older rule) still counts as taken — two dashboards answering
+/// on one hostname is a routing coin-flip, and the point of the check is that it never happens.
+fn claimed_labels(dir: &Path) -> BTreeSet<String> {
+    let Some(root) = dir.parent() else {
+        return BTreeSet::new();
+    };
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return BTreeSet::new();
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir() && p != dir)
+        .filter_map(|p| declared_host(&p))
+        .map(|host| label_of(&host))
+        .collect()
+}
+
+/// The first label of a hostname, lowercased — `nosh.adi` → `nosh`.
+fn label_of(host: &str) -> String {
+    host.trim()
+        .trim_end_matches('.')
+        .split('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+}
+
+/// The proxy-relevant subset of a dashboard's hive file — enough to tell whether it already
+/// declares one origin, and which host it declares. Unknown fields (runners, restart policy) are
+/// ignored: this parse decides *whether* to rewrite, never what to keep.
+#[derive(Deserialize)]
+struct HiveFile {
+    #[serde(default)]
+    services: BTreeMap<String, HiveService>,
+}
+
+#[derive(Deserialize)]
+struct HiveService {
+    #[serde(default)]
+    proxy: Option<HiveProxy>,
+}
+
+#[derive(Deserialize)]
+struct HiveProxy {
+    host: String,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+/// The dashboard's declared hostname, preferring the frontend's (it owns the host's root) and
+/// falling back to the backend's. `None` when there is no hive file, it does not parse, or no
+/// service declares a `proxy.host` — all three meaning "nothing has been claimed yet".
+fn declared_host(dir: &Path) -> Option<String> {
+    let parsed = parse_hive(dir)?.1;
+    let host = |svc: &str| {
+        parsed
+            .services
+            .get(svc)
+            .and_then(|s| s.proxy.as_ref())
+            .map(|p| p.host.trim().to_string())
+            .filter(|h| !h.is_empty())
+    };
+    host("frontend").or_else(|| host("backend"))
+}
+
+/// Read and parse whichever of the two hive file names is on disk, returning that path with it.
+/// The live name wins; an archived dashboard keeps its parked file, and migrating that one too is
+/// what stops a restore from bringing back the old shape.
+fn parse_hive(dir: &Path) -> Option<(PathBuf, HiveFile)> {
+    let path = [HIVE_LIVE, HIVE_ARCHIVED]
+        .iter()
+        .map(|f| dir.join(".adi").join(f))
+        .find(|p| p.is_file())?;
+    let raw = std::fs::read_to_string(&path).ok()?;
+    let parsed = serde_yaml_ng::from_str::<HiveFile>(&raw).ok()?;
+    Some((path, parsed))
+}
+
+// MARK: migration — dashboards written before the one-origin rule
+
+/// What a pre-one-origin frontend entry point still carries: the injected `backendPort`, read out
+/// of the ports registry and handed to the browser so it could dial `127.0.0.1:<port>` itself.
+/// Both `frontend/index.ts` and the shell it renders spell it, and neither template does now.
+const LEGACY_BACKEND_PORT: &str = "backendPort";
+
+/// What a pre-one-origin backend entry point still carries: wildcard CORS, which only ever
+/// existed because the page called it from a different origin. Under one origin it is not merely
+/// unnecessary — it lets any page you visit read this dashboard's API.
+const LEGACY_CORS: &str = "access-control-allow-origin";
+
+/// Bring a dashboard written before the one-origin rule (`docs/fleet.md` §4) up to it, in place,
+/// the next time it is read or listed. There is no separate migration command: a dashboard is a
+/// directory, and the listing is the only thing guaranteed to visit every one of them.
+///
+/// Idempotent by construction — every step tests what is on disk and writes only when the old
+/// shape is still there, so the panel's few-second poll writes nothing once a dashboard is
+/// current, and the supervisor sees no spurious config change.
+///
+/// It rewrites **generated** files only: the hive file and the three fixed entry points. The
+/// panels and routes under `frontend/modules/` and `backend/routes/` are what a user or an agent
+/// authored, and are never read here, let alone written.
+fn migrate(dir: &Path, name: &str) {
+    migrate_hive(dir, name);
+    let frontend = dir.join("frontend");
+    migrate_entry_point(
+        &frontend.join("index.ts"),
+        LEGACY_BACKEND_PORT,
+        FRONTEND_INDEX_TS,
+    );
+    migrate_entry_point(
+        &frontend.join("index.html"),
+        LEGACY_BACKEND_PORT,
+        FRONTEND_INDEX_HTML,
+    );
+    migrate_entry_point(
+        &dir.join("backend").join("index.ts"),
+        LEGACY_CORS,
+        BACKEND_INDEX_TS,
+    );
+}
+
+/// Rewrite one fixed entry point with the current template, but only while it still spells
+/// `marker` — the one string the old file has and the new one does not. That test is what makes
+/// this both idempotent (the marker is gone after the first pass) and safe to run on every read.
+fn migrate_entry_point(path: &Path, marker: &str, template: &str) {
+    let Ok(current) = std::fs::read_to_string(path) else {
+        return;
+    };
+    if !current.contains(marker) {
+        return;
+    }
+    let _ = std::fs::write(path, template);
+}
+
+/// Rewrite the dashboard's hive file to the one-origin form, keeping the hostname it already
+/// declares. A hand-picked host is a link somebody has bookmarked, so migration never re-derives
+/// one that exists; a dashboard that declares none gets [`dashboard_host`].
+///
+/// Anything that is not recognisably this scaffold's own file — unparseable, or carrying services
+/// beyond the `frontend`/`backend` pair — is left exactly as it is. A rewrite is a full rewrite,
+/// and clobbering a hive file we do not understand would cost more than the stale shape does.
+fn migrate_hive(dir: &Path, name: &str) {
+    let Some((path, parsed)) = parse_hive(dir) else {
+        return;
+    };
+    let services: Vec<&str> = parsed.services.keys().map(String::as_str).collect();
+    if services != ["backend", "frontend"] {
+        return;
+    }
+    if is_one_origin(&parsed) {
+        return;
+    }
+
+    let host = declared_host(dir).unwrap_or_else(|| dashboard_host(dir, name));
+    let _ = std::fs::write(path, hive_yaml(dir, &host));
+}
+
+/// Whether a parsed hive file already declares one origin: both services on the same host, the
+/// frontend as that host's fallback route, the backend claiming [`API_PATH`]. Paths are compared
+/// after the same normalisation adi-hive applies, so `/api/` and `api` count as current.
+fn is_one_origin(parsed: &HiveFile) -> bool {
+    let proxy = |svc: &str| parsed.services.get(svc).and_then(|s| s.proxy.as_ref());
+    let (Some(frontend), Some(backend)) = (proxy("frontend"), proxy("backend")) else {
+        return false;
+    };
+    let same_host = !frontend.host.trim().is_empty()
+        && frontend.host.trim().eq_ignore_ascii_case(backend.host.trim());
+    same_host
+        && path_claim(frontend.path.as_deref()).is_none()
+        && path_claim(backend.path.as_deref()).as_deref() == Some(API_PATH)
+}
+
+/// Normalise a `proxy.path` the way adi-hive's router does: `None` (the host's fallback) or a
+/// `/`-rooted prefix with no trailing slash. `/` is the fallback, so it normalises to `None`.
+fn path_claim(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw?.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    })
 }
 
 /// Quote a value as a TOML basic string, escaping what that grammar requires.
@@ -372,12 +657,17 @@ pub fn dashboards(cfg: &Config, ports: &Ports, live: &[UsedPort]) -> Response {
 /// Read one dashboard directory into its DTO. Every field degrades independently: a missing
 /// manifest, an unleased port, or an absent `modules/` dir each fall back rather than failing
 /// the whole listing.
+///
+/// This is also where a dashboard is brought up to the current contract — see [`migrate`]. Doing
+/// it on read is deliberate: dashboards are directories a user can copy in, and the listing is
+/// the one code path that visits every one of them.
 fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
     let id = dir
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
 
     let manifest = read_manifest(dir);
+    migrate(dir, manifest.name.as_deref().unwrap_or(&id));
 
     // The ports manager is the source of truth adi-hive allocated from, so read it rather than
     // the hive.yaml (which deliberately declares no ports).
@@ -389,6 +679,9 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
         name: manifest.name.unwrap_or_else(|| id.clone()),
         description: manifest.description,
         project: manifest.project,
+        // Read after [`migrate`], so a dashboard that only just gained a host reports it on the
+        // very listing that gave it one, rather than a poll later.
+        host: declared_host(dir),
         frontend_running: frontend_port.is_some_and(|p| is_listening(live, p)),
         backend_running: backend_port.is_some_and(|p| is_listening(live, p)),
         frontend_port,
@@ -419,4 +712,500 @@ fn ts_stems(dir: &Path) -> Vec<String> {
         .collect();
     stems.sort();
     stems
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dashboards root of this test's own, under the system temp dir — never the user's store.
+    fn scratch(tag: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "adi-dashboards-api-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("scratch root");
+        root
+    }
+
+    /// A [`Config`] whose whole store is a scratch dir, plus a ports manager whose registry lives
+    /// in it too — so nothing in these tests can read or write the real `~/.adi/mono`.
+    fn store(tag: &str) -> (Config, Ports) {
+        let root = scratch(tag);
+        let ports = Ports::with_config(adi_ports_manager::Config {
+            registry_path: root.join("ports").join("registry.json"),
+            ..Default::default()
+        });
+        (Config::with_root(root), ports)
+    }
+
+    /// The rule from `docs/fleet.md` §2: `^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`. Spelled out here
+    /// rather than reused from the implementation, so the tests check the contract, not the code.
+    fn is_dns_label(label: &str) -> bool {
+        let bytes = label.as_bytes();
+        let alnum = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
+        !bytes.is_empty()
+            && bytes.len() <= 63
+            && alnum(bytes[0])
+            && alnum(bytes[bytes.len() - 1])
+            && bytes.iter().all(|&b| alnum(b) || b == b'-')
+    }
+
+    /// A dashboard exactly as the pre-one-origin scaffold left it: a hive file with no `proxy:`
+    /// anywhere, entry points that still resolve and inject the backend's port, and one authored
+    /// panel and route to prove migration keeps its hands off them.
+    fn legacy_dashboard(root: &Path, id: &str, name: &str) -> PathBuf {
+        let dir = root.join(id);
+        std::fs::create_dir_all(dir.join("frontend").join("modules")).expect("frontend dir");
+        std::fs::create_dir_all(dir.join("backend").join("routes")).expect("backend dir");
+        std::fs::create_dir_all(dir.join(".adi")).expect("hive dir");
+
+        std::fs::write(
+            dir.join(".adi").join(HIVE_LIVE),
+            legacy_hive_yaml(&dir, None),
+        )
+        .expect("hive file");
+        std::fs::write(
+            dir.join("frontend").join("index.ts"),
+            "const p = await backendPort(); // reads ports/registry.json\n",
+        )
+        .expect("frontend entry");
+        std::fs::write(
+            dir.join("frontend").join("index.html"),
+            "<script>const api = `http://127.0.0.1:${config.backendPort}`;</script>\n",
+        )
+        .expect("shell");
+        std::fs::write(
+            dir.join("backend").join("index.ts"),
+            "const CORS = { \"access-control-allow-origin\": \"*\" };\n",
+        )
+        .expect("backend entry");
+        std::fs::write(
+            dir.join("frontend").join("modules").join("mine.ts"),
+            "export default () => {};\n",
+        )
+        .expect("panel");
+        std::fs::write(
+            dir.join("backend").join("routes").join("mine.ts"),
+            "export default () => Response.json({});\n",
+        )
+        .expect("route");
+        write_manifest(
+            &dir,
+            &Manifest {
+                name: Some(name.to_string()),
+                ..Manifest::default()
+            },
+        )
+        .expect("manifest");
+        dir
+    }
+
+    /// The hive file the old scaffold wrote: two services, ports left to the manager, and a
+    /// `proxy.host` only where somebody added one by hand.
+    fn legacy_hive_yaml(dir: &Path, host: Option<&str>) -> String {
+        let proxy = host.map_or_else(String::new, |h| format!("    proxy:\n      host: {h}\n"));
+        format!(
+            "version: \"1\"\n\nservices:\n  frontend:\n    restart: always\n{proxy}\
+             \x20   runner:\n      type: script\n      script:\n\
+             \x20       run: bun run frontend/index.ts\n        working_dir: {dir}\n\n\
+             \x20 backend:\n    restart: always\n    runner:\n      type: script\n\
+             \x20     script:\n        run: bun run backend/index.ts\n        working_dir: {dir}\n",
+            dir = dir.display(),
+        )
+    }
+
+    /// Parse a dashboard's hive file the way adi-hive will.
+    fn hive_of(dir: &Path) -> HiveFile {
+        parse_hive(dir).expect("hive file parses").1
+    }
+
+    // MARK: the host label
+
+    #[test]
+    fn a_display_name_becomes_one_lowercase_dns_label() {
+        assert_eq!(slugify("NakitYok Status").as_deref(), Some("nakityok-status"));
+        assert_eq!(slugify("  My  Dash!!  ").as_deref(), Some("my-dash"));
+        assert_eq!(slugify("CRM").as_deref(), Some("crm"));
+        assert_eq!(slugify("v2.1 metrics").as_deref(), Some("v2-1-metrics"));
+    }
+
+    #[test]
+    fn a_name_with_nothing_ascii_in_it_slugs_to_nothing() {
+        // Transliterating would invent a hostname nobody chose; the id is the honest fallback.
+        for name in ["Панель мониторинга", "ダッシュボード", "—", "  ", "!!!"] {
+            assert_eq!(slugify(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn a_long_name_is_cut_to_a_valid_label() {
+        for name in [
+            "a".repeat(200),
+            format!("{} status page", "b".repeat(70)),
+            format!("{}   ", "c".repeat(63)),
+        ] {
+            let label = slugify(&name).expect("a label");
+            assert!(is_dns_label(&label), "{label:?} from {name:?}");
+        }
+    }
+
+    #[test]
+    fn the_host_label_falls_back_to_the_id_when_the_name_yields_none() {
+        let root = scratch("fallback-id");
+        let id = "84ddcba0-5aaf-4992-80d7-4fdda4bd6339";
+        let label = host_label(&root.join(id), id, "Панель");
+        assert_eq!(label, id);
+        assert!(is_dns_label(&label));
+    }
+
+    #[test]
+    fn a_label_another_dashboard_already_claims_falls_back_to_the_id() {
+        let root = scratch("collision");
+        // The neighbour is on `crm.adi` already — derived or hand-picked, it makes no difference.
+        let neighbour = legacy_dashboard(&root, "1111", "CRM");
+        std::fs::write(
+            neighbour.join(".adi").join(HIVE_LIVE),
+            legacy_hive_yaml(&neighbour, Some("crm.adi")),
+        )
+        .expect("neighbour hive");
+
+        let id = "2222";
+        assert_eq!(host_label(&root.join(id), id, "CRM"), id);
+        // …while the neighbour itself keeps it: its own host never counts as taken.
+        assert_eq!(host_label(&neighbour, "1111", "CRM"), "crm");
+    }
+
+    #[test]
+    fn reserved_labels_are_never_handed_to_a_dashboard() {
+        let root = scratch("reserved");
+        // `n` is the mesh zone and `app` the control panel — either would shadow live routing.
+        for (id, name) in [("3333", "app"), ("4444", "N"), ("5555", "www")] {
+            assert_eq!(host_label(&root.join(id), id, name), id, "{name}");
+        }
+    }
+
+    #[test]
+    fn the_derived_host_is_a_label_under_the_adi_zone() {
+        let root = scratch("host");
+        let dir = root.join("6666");
+        let host = dashboard_host(&dir, "NakitYok Status");
+        assert_eq!(host, "nakityok-status.adi");
+        assert!(is_dns_label(host.split('.').next().expect("label")));
+    }
+
+    // MARK: the generated hive file
+
+    #[test]
+    fn the_scaffold_declares_one_origin() {
+        let root = scratch("scaffold");
+        let dir = root.join("7777");
+        scaffold(&dir, "Nosh", "", None).expect("scaffold");
+
+        let hive = hive_of(&dir);
+        let frontend = hive.services["frontend"].proxy.as_ref().expect("frontend");
+        let backend = hive.services["backend"].proxy.as_ref().expect("backend");
+        assert_eq!(frontend.host, "nosh.adi");
+        assert_eq!(backend.host, "nosh.adi", "both services share one host");
+        assert_eq!(frontend.path, None, "the frontend owns the host's root");
+        assert_eq!(backend.path.as_deref(), Some("/api"));
+        assert!(is_one_origin(&hive));
+    }
+
+    #[test]
+    fn the_generated_hive_file_still_leaves_the_ports_to_the_manager() {
+        let root = scratch("no-ports");
+        let dir = root.join("8888");
+        scaffold(&dir, "Nosh", "", None).expect("scaffold");
+
+        let raw = std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive file");
+        assert!(!raw.contains("ports:"), "{raw}");
+        assert!(!raw.contains("rollout:"), "{raw}");
+        // The runner shape is what the front door strips and the supervisor runs — unchanged.
+        assert!(raw.contains("run: bun run frontend/index.ts"), "{raw}");
+        assert!(raw.contains("run: bun run backend/index.ts"), "{raw}");
+        assert!(
+            raw.contains(&format!("working_dir: {}", dir.display())),
+            "{raw}"
+        );
+    }
+
+    // MARK: the templates the browser gets
+
+    #[test]
+    fn the_page_carries_no_address_of_its_own() {
+        // The shell is what reaches the browser: an absolute URL or a port in here is the whole
+        // bug (`docs/fleet.md` §4) — over the mesh `127.0.0.1` is the *viewer's* machine.
+        for needle in ["backendPort", "127.0.0.1", "localhost", "http://"] {
+            assert!(
+                !FRONTEND_INDEX_HTML.contains(needle),
+                "the shell must not mention {needle}"
+            );
+        }
+        assert!(FRONTEND_INDEX_HTML.contains(r#"const api = "/api""#));
+
+        // …and the server that renders it no longer looks a port up to inject one.
+        for needle in ["backendPort", "registry.json", "BACKEND_PORT"] {
+            assert!(
+                !FRONTEND_INDEX_TS.contains(needle),
+                "the frontend entry must not mention {needle}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_backend_serves_the_prefix_it_claims() {
+        assert!(BACKEND_INDEX_TS.contains(r#"const API_PREFIX = "/api""#));
+        // Wildcard CORS existed only because the page used to call a different origin.
+        assert!(!BACKEND_INDEX_TS.contains(LEGACY_CORS));
+    }
+
+    // MARK: migration
+
+    #[test]
+    fn migration_rewrites_a_legacy_dashboard_to_one_origin() {
+        let root = scratch("migrate");
+        let dir = legacy_dashboard(&root, "9999", "NakitYok Status");
+
+        migrate(&dir, "NakitYok Status");
+
+        let hive = hive_of(&dir);
+        assert!(is_one_origin(&hive), "still not one origin");
+        assert_eq!(
+            hive.services["frontend"]
+                .proxy
+                .as_ref()
+                .expect("frontend")
+                .host,
+            "nakityok-status.adi"
+        );
+        // The entry points that knew an address are replaced by the current templates.
+        let read = |p: PathBuf| std::fs::read_to_string(p).expect("entry point");
+        assert_eq!(read(dir.join("frontend").join("index.ts")), FRONTEND_INDEX_TS);
+        assert_eq!(
+            read(dir.join("frontend").join("index.html")),
+            FRONTEND_INDEX_HTML
+        );
+        assert_eq!(read(dir.join("backend").join("index.ts")), BACKEND_INDEX_TS);
+    }
+
+    #[test]
+    fn migration_is_idempotent() {
+        let root = scratch("idempotent");
+        let dir = legacy_dashboard(&root, "aaaa", "Nosh");
+
+        migrate(&dir, "Nosh");
+        let hive = std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive");
+
+        // Two more passes — as the panel's poll would — must not change a byte, or the supervisor
+        // would see a config change (and restart both bun servers) every few seconds.
+        migrate(&dir, "Nosh");
+        migrate(&dir, "Nosh");
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive"),
+            hive
+        );
+
+        // And an entry point that no longer carries the marker is left alone, whatever it says.
+        let entry = dir.join("frontend").join("index.ts");
+        std::fs::write(&entry, "// mine now\n").expect("hand edit");
+        migrate(&dir, "Nosh");
+        assert_eq!(
+            std::fs::read_to_string(&entry).expect("entry point"),
+            "// mine now\n"
+        );
+    }
+
+    #[test]
+    fn no_current_template_still_spells_its_own_migration_marker() {
+        // A marker left in the file it migrates *to* would make migration rewrite that entry
+        // point on every read — a write per poll, forever.
+        assert!(!FRONTEND_INDEX_TS.contains(LEGACY_BACKEND_PORT));
+        assert!(!FRONTEND_INDEX_HTML.contains(LEGACY_BACKEND_PORT));
+        assert!(!BACKEND_INDEX_TS.contains(LEGACY_CORS));
+    }
+
+    #[test]
+    fn migration_keeps_a_hand_picked_host() {
+        let root = scratch("keep-host");
+        let dir = legacy_dashboard(&root, "bbbb", "NakitYok Status");
+        // Somebody chose `nosh.adi` by hand; that link is bookmarked, so it must survive.
+        std::fs::write(
+            dir.join(".adi").join(HIVE_LIVE),
+            legacy_hive_yaml(&dir, Some("nosh.adi")),
+        )
+        .expect("hand-picked hive");
+
+        migrate(&dir, "NakitYok Status");
+
+        let hive = hive_of(&dir);
+        assert!(is_one_origin(&hive));
+        assert_eq!(
+            hive.services["backend"].proxy.as_ref().expect("backend").host,
+            "nosh.adi"
+        );
+    }
+
+    #[test]
+    fn migration_never_touches_authored_panels_and_routes() {
+        let root = scratch("user-content");
+        let dir = legacy_dashboard(&root, "cccc", "Nosh");
+        let panel = dir.join("frontend").join("modules").join("mine.ts");
+        let route = dir.join("backend").join("routes").join("mine.ts");
+        let before = (
+            std::fs::read_to_string(&panel).expect("panel"),
+            std::fs::read_to_string(&route).expect("route"),
+        );
+
+        migrate(&dir, "Nosh");
+
+        assert_eq!(std::fs::read_to_string(&panel).expect("panel"), before.0);
+        assert_eq!(std::fs::read_to_string(&route).expect("route"), before.1);
+    }
+
+    #[test]
+    fn migration_leaves_a_hive_file_it_does_not_recognise_alone() {
+        let root = scratch("unknown-hive");
+        let dir = legacy_dashboard(&root, "dddd", "Nosh");
+        // A third service means somebody built something we would be guessing about.
+        let custom = format!(
+            "{}\n  worker:\n    runner:\n      type: script\n      script:\n        run: bun run w.ts\n",
+            legacy_hive_yaml(&dir, None).trim_end()
+        );
+        std::fs::write(dir.join(".adi").join(HIVE_LIVE), &custom).expect("custom hive");
+
+        migrate(&dir, "Nosh");
+
+        assert_eq!(
+            std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive"),
+            custom
+        );
+    }
+
+    #[test]
+    fn an_archived_dashboard_migrates_its_parked_hive_file() {
+        let root = scratch("archived");
+        let dir = legacy_dashboard(&root, "eeee", "Nosh");
+        std::fs::rename(
+            dir.join(".adi").join(HIVE_LIVE),
+            dir.join(".adi").join(HIVE_ARCHIVED),
+        )
+        .expect("park it");
+
+        migrate(&dir, "Nosh");
+
+        // Restoring it must bring back the current shape, not the one it was archived with.
+        assert!(is_one_origin(&hive_of(&dir)));
+        assert!(!dir.join(".adi").join(HIVE_LIVE).exists());
+    }
+
+    #[test]
+    fn listing_dashboards_migrates_them() {
+        let (cfg, ports) = store("listing");
+        let root = cfg.module("dashboards").dir().to_path_buf();
+        std::fs::create_dir_all(&root).expect("dashboards root");
+        let dir = legacy_dashboard(&root, "ffff", "Nosh");
+
+        assert_eq!(dashboards(&cfg, &ports, &[]).status, 200);
+
+        assert!(is_one_origin(&hive_of(&dir)));
+    }
+
+    // MARK: the host on the wire
+
+    /// The listing, parsed back out of the response the panel actually receives.
+    fn listed(cfg: &Config, ports: &Ports) -> Vec<Dashboard> {
+        let res = dashboards(cfg, ports, &[]);
+        assert_eq!(res.status, 200, "{}", res.body);
+        serde_json::from_str::<DashboardsState>(&res.body)
+            .expect("dashboards state")
+            .dashboards
+    }
+
+    #[test]
+    fn a_listed_dashboard_reports_the_host_it_declares() {
+        let (cfg, ports) = store("host-listed");
+        let root = cfg.module("dashboards").dir().to_path_buf();
+        std::fs::create_dir_all(&root).expect("dashboards root");
+        scaffold(&root.join("1234"), "Nosh", "", None).expect("scaffold");
+
+        let listed = listed(&cfg, &ports);
+        assert_eq!(listed.len(), 1);
+        // The panel links this, so it must be the same name the hive file claims — the one the
+        // front door routes `/api` on.
+        assert_eq!(listed[0].host.as_deref(), Some("nosh.adi"));
+        assert_eq!(listed[0].host.as_deref(), declared_host(&root.join("1234")).as_deref());
+    }
+
+    #[test]
+    fn a_dashboard_that_declares_no_host_reports_none() {
+        let (cfg, ports) = store("host-absent");
+        let root = cfg.module("dashboards").dir().to_path_buf();
+        std::fs::create_dir_all(&root).expect("dashboards root");
+        let dir = legacy_dashboard(&root, "5678", "Nosh");
+        // A hive file the migration will not touch (a third service), so it keeps its hostless
+        // shape through the listing — the one case where the panel has nothing to link.
+        let custom = format!(
+            "{}\n  worker:\n    runner:\n      type: script\n      script:\n        run: bun run w.ts\n",
+            legacy_hive_yaml(&dir, None).trim_end()
+        );
+        std::fs::write(dir.join(".adi").join(HIVE_LIVE), custom).expect("custom hive");
+
+        let listed = listed(&cfg, &ports);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].host, None, "nothing is claimed, so nothing is reported");
+        // Absent, not blank: `null` round-trips as `None`, so a link is never built from "".
+        let json: serde_json::Value = serde_json::from_str(&dashboards(&cfg, &ports, &[]).body)
+            .expect("json");
+        assert!(json["dashboards"][0]["host"].is_null(), "{json}");
+    }
+
+    #[test]
+    fn a_hive_file_that_does_not_parse_leaves_the_host_unknown() {
+        let (cfg, ports) = store("host-unparseable");
+        let root = cfg.module("dashboards").dir().to_path_buf();
+        std::fs::create_dir_all(&root).expect("dashboards root");
+        let dir = legacy_dashboard(&root, "9abc", "Nosh");
+        // Somebody's half-finished edit. The listing visits every dashboard, so a panic here
+        // would take out the whole page, not just this row.
+        std::fs::write(dir.join(".adi").join(HIVE_LIVE), "services: [oh no\n  : :\n")
+            .expect("broken hive");
+
+        let listed = listed(&cfg, &ports);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].host, None);
+        assert_eq!(listed[0].name, "Nosh", "the rest of the row still reports");
+    }
+
+    #[test]
+    fn the_host_field_is_optional_on_the_wire() {
+        // The wasm client and adi-app ship apart, so a payload written before this field existed
+        // must still deserialize — as "no routable name", which is exactly what it meant.
+        let older = r#"{"id":"1","dir":"/d","name":"Nosh","frontend_running":false,
+            "backend_running":false,"modules":[],"routes":[]}"#;
+        let parsed: Dashboard = serde_json::from_str(older).expect("older payload");
+        assert_eq!(parsed.host, None);
+    }
+
+    #[test]
+    fn creating_a_dashboard_writes_the_current_shape() {
+        let (cfg, ports) = store("create");
+        let body = br#"{"name":"Nosh","description":"a dashboard"}"#;
+
+        let res = create_dashboard(&cfg, &ports, body);
+        assert_eq!(res.status, 200, "{}", res.body);
+
+        let created: Dashboard = serde_json::from_str(&res.body).expect("dashboard DTO");
+        let dir = PathBuf::from(&created.dir);
+        assert!(is_one_origin(&hive_of(&dir)));
+        // The create response is a row the panel renders straight away, so it carries the host too.
+        assert_eq!(created.host.as_deref(), Some("nosh.adi"));
+        assert_eq!(
+            declared_host(&dir).as_deref(),
+            Some("nosh.adi"),
+            "the host comes from the name"
+        );
+    }
 }

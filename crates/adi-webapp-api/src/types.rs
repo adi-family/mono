@@ -166,6 +166,105 @@ pub struct MeshListenRef {
     pub listen: u16,
 }
 
+// ---- fleet (the remote adi nodes paired with this machine) --------------------------
+
+/// `GET /api/fleet` — every node paired with this machine, in petname order. Every mutation
+/// endpoint answers with a fresh one of these, so the panel updates in one round-trip (the
+/// contract `/api/mesh` already keeps).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetState {
+    pub nodes: Vec<FleetNode>,
+}
+
+/// One paired node: all three of its names (`docs/fleet.md` §2) and what it may reach here (§5).
+///
+/// **The verifier never leaves the machine.** The registry stores each node's Basic-auth
+/// credential as a salted digest beside its salt; this carries only a `has_password` flag —
+/// enough for the panel to say the gate is configured, and nothing an offline cracker could work
+/// against. A DTO is the wire, and the wire is exactly where a verifier must not be.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetNode {
+    /// What *this* machine calls the node: local, unique, and the label in
+    /// `<service>.<petname>.n.adi`.
+    pub petname: String,
+    /// The node's `EndpointId` — the identity of record, and the only thing authorization is
+    /// ever decided by. Full, because it is what an operator confirms out of band; see
+    /// [`key_short`](Self::key_short) for the rendering a table cell wants.
+    pub key: String,
+    /// What the node calls *itself*, as acknowledged here. Only ever a suggestion.
+    pub nickname: String,
+    /// Unix seconds at which petname→key was pinned (trust on first use).
+    pub paired_at: u64,
+    /// What this node may reach here, in the string form an operator types: `http:*`,
+    /// `http:nosh`, `tcp:127.0.0.1:22`, `ctl:read`. **Empty denies everything.**
+    pub grants: Vec<String>,
+    /// Whether a Basic-auth credential is configured for this node — the password its requests
+    /// into *this* machine must carry, and the human-scoped half of §5's gate (the grant above is
+    /// the machine-scoped half). Never the digest, never the salt.
+    pub has_password: bool,
+    /// A newer nickname the node has declared that this machine has *not* acknowledged. A
+    /// notification, never a re-point: §2 rule 4 exists so no node can rename itself into
+    /// another's links, and ignoring this line is exactly the case that rule guards.
+    #[serde(default)]
+    pub pending_nickname: Option<String>,
+}
+
+impl FleetNode {
+    /// The key shortened for a table cell — head and tail around an ellipsis, so two keys that
+    /// differ are still visibly different. One implementation, here rather than in the page, so
+    /// the panel and anything else rendering a fleet abbreviate a key the same way.
+    #[must_use]
+    pub fn key_short(&self) -> String {
+        // By characters, not bytes: a hand-edited `fleet.toml` can hold anything, and a panel
+        // that panics on a stray non-ASCII key is worse than one that renders it in full.
+        let chars: Vec<char> = self.key.chars().collect();
+        if chars.len() <= 16 {
+            return self.key.clone();
+        }
+        let head: String = chars[..8].iter().collect();
+        let tail: String = chars[chars.len() - 4..].iter().collect();
+        format!("{head}\u{2026}{tail}")
+    }
+
+    /// This node's control panel: `app.<petname>.n.adi` (§1). The `n.adi` suffix is reserved for
+    /// remote nodes, so this can never collide with a local `<service>.adi`.
+    #[must_use]
+    pub fn app_host(&self) -> String {
+        format!("app.{}.n.adi", self.petname)
+    }
+
+    /// Whether the node declares a nickname this machine has not acknowledged.
+    #[must_use]
+    pub fn has_pending_nickname(&self) -> bool {
+        self.pending_nickname.is_some()
+    }
+}
+
+/// Request body naming one node — `POST /api/fleet/unpair` and the two nickname endpoints.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetRef {
+    pub petname: String,
+}
+
+/// Request body for the local rename — `POST /api/fleet/rename`. Local because the far side is
+/// not involved: this is §2 rule 5's escape hatch for two fleets that both use `main`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetRename {
+    /// The node's current petname.
+    pub petname: String,
+    /// The petname it should answer to here from now on.
+    pub to: String,
+}
+
+/// Request body naming one grant on one node — `POST /api/fleet/grants/add` and
+/// `/api/fleet/grants/remove`. The grant is its string form; the server parses it, and an
+/// unparseable one is a 400 rather than a silently dropped rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetGrantRef {
+    pub petname: String,
+    pub grant: String,
+}
+
 // ---- projects (metadata manifests under ~/.adi/mono/projects) -----------------------
 
 /// One registered project, flattened for the wire: the id (its directory name) plus the
@@ -1719,8 +1818,11 @@ pub struct HiveState {
 /// One dashboard under `~/.adi/mono/dashboards/<id>/` — a bun-served frontend + backend pair
 /// whose UI is authored as loose `.ts` files by agents.
 ///
-/// Deliberately hostname-free: both services are reached on `127.0.0.1:<port>`, so a dashboard
-/// depends on nothing but its own supervisor — not on the root front door or DNS.
+/// **One dashboard is one origin** (`docs/fleet.md` §4): both services declare the same
+/// `proxy.host`, the frontend owning `/` and the backend `/api`. So [`host`](Self::host) — not a
+/// port — is the dashboard's address. The loopback ports remain on the wire because they are what
+/// says whether each half is actually *up*, but reaching a dashboard past its front door is what
+/// breaks its `/api` calls.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Dashboard {
     /// The directory name, which is also how its hive services are keyed (`<id>/frontend`).
@@ -1737,6 +1839,16 @@ pub struct Dashboard {
     /// Purely organizational — a dashboard still runs on its own port regardless.
     #[serde(default)]
     pub project: Option<String>,
+    /// The hostname both of its services declare (`nosh.adi`) — the dashboard's whole address, and
+    /// the only one under which its page's relative `/api` calls route.
+    ///
+    /// `None` when the dashboard's hive file declares no `proxy.host`, does not parse, or is
+    /// missing: it is then running, but has no routable name, and only its loopback ports can
+    /// reach it. Optional rather than a blank string so "no name yet" cannot be mistaken for one,
+    /// and `#[serde(default)]` so a payload from a server that predates this field still
+    /// deserializes — the wasm client and adi-app are versioned apart.
+    #[serde(default)]
+    pub host: Option<String>,
     /// Ports leased from the ports manager; `None` until the supervisor has allocated them.
     #[serde(default)]
     pub frontend_port: Option<u16>,

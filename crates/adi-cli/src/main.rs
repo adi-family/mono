@@ -6,6 +6,7 @@ mod agents;
 mod db;
 mod dns;
 mod format;
+mod mesh;
 mod projects;
 mod secrets;
 mod events;
@@ -21,6 +22,7 @@ use crate::agents::{AgentsCommand, run_agents};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
+use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::secrets::{SecretsCommand, run_secrets};
 use crate::events::{EventsCommand, run_events};
@@ -90,6 +92,11 @@ enum Command {
     Triggers {
         #[command(subcommand)]
         command: TriggersCommand,
+    },
+    /// Fleet commands: pair remote adi machines over the mesh, and say what they may reach.
+    Mesh {
+        #[command(subcommand)]
+        command: MeshCommand,
     },
     /// Event bus commands: publish platform events and peek at the spool.
     Events {
@@ -171,6 +178,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // The one group that does not take the `adi` facade: its state is the mesh module's own.
+        Command::Mesh { command } => {
+            if let Err(e) = run_mesh(command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Command::Events { command } => {
             if let Err(e) = run_events(adi, command) {
                 eprintln!("error: {e}");
@@ -192,5 +206,31 @@ fn main() {
             let _ = out.flush();
             std::process::exit(code);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory as _;
+
+    #[test]
+    fn the_command_tree_is_well_formed() {
+        Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn the_mesh_group_is_reachable_from_the_top_level() {
+        // The group's own argv surface is tested in `mesh.rs`; what this pins is the wiring —
+        // that `adi-mono mesh …` reaches it at all, which a module compiled but never registered
+        // would pass every one of those tests without.
+        let cli = Cli::try_parse_from(["adi-mono", "mesh", "fleet", "--json"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Mesh {
+                command: MeshCommand::Fleet { json: true }
+            }
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "mesh"]).is_err());
     }
 }

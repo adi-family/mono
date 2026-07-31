@@ -32,6 +32,20 @@ proxy:
   # nothing that speaks HTTP to the front door breaks. Omit the key entirely for no HTTPS.
   tls_bind:
     - "127.0.0.53:443"
+  # The local mesh gateway. Set it and every host ending in `.n.adi` — the reserved namespace for
+  # *remote* adi machines, `<service>.<node>.n.adi` — is forwarded here verbatim instead of being
+  # matched against the services below. One rule covers the whole fleet: the gateway is what turns
+  # a hostname into a peer key, and adi-hive deliberately learns none of that. Omit it and such a
+  # host gets a "node unreachable" page rather than a misleading 404.
+  # 10080 is the platform default (adi-config's MESH_GATEWAY_PORT, which adi-mesh binds and
+  # adi-core writes into the generated front door). Deliberately outside the ports manager's
+  # 8000-9999 range, so the allocator can never hand a project the gateway's port.
+  mesh_gateway: "127.0.0.1:10080"
+  # Petnames of the nodes you have paired with. Only TLS reads this: a wildcard label covers one
+  # level, so `*.n.adi` reaches `laptop-b.n.adi` but not `nosh.laptop-b.n.adi`, and the leaf needs
+  # a `*.<node>.n.adi` per node. Pairing appends the name here; the next start mints a leaf for it.
+  mesh_nodes:
+    - laptop-b
 
 services:
   # A proxied service: Host: app.adi -> 127.0.0.1:8010
@@ -69,6 +83,27 @@ services:
       script:
         run: npm run start:dev
         working_dir: backend
+
+  # One origin, two services. The dashboard's page owns `nosh.adi`; its backend claims `/api` on
+  # the same host, so the page only ever uses relative URLs and never has to learn its own address
+  # — which is what lets it work unchanged under `nosh.adi`, `nosh.laptop-b.n.adi` over the mesh,
+  # or a real customer domain. Longest prefix wins, so `/api/things` is the backend's and
+  # `/apifoo` (no segment boundary) is not.
+  nosh-frontend:
+    proxy:
+      host: nosh.adi
+    rollout:
+      recreate:
+        ports:
+          http: 8020
+  nosh-backend:
+    proxy:
+      host: nosh.adi
+      path: /api
+    rollout:
+      recreate:
+        ports:
+          http: 8021
 
   # No `proxy:` — not fronted by adi-hive, silently ignored.
   postgres:

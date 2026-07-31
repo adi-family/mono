@@ -408,6 +408,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/agents/runs/all",
     "/api/dashboards",
     "/api/db",
+    "/api/fleet",
     "/api/hive",
     "/api/meta",
     "/api/ports",
@@ -525,6 +526,21 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", p) if p.starts_with("/api/projects/") => {
             let live = scan::listening_ports();
             handlers::project_detail(projects, &p["/api/projects/".len()..], &live)
+        }
+        // The fleet: the remote adi nodes this machine is paired with (`docs/fleet.md`). The
+        // registry is a file in the shared store, so these take the store the projects registry
+        // already holds open rather than reaching for `~/.adi/mono` a second time — which is also
+        // what lets the handlers be tested against a temp root.
+        ("GET", "/api/fleet") => handlers::fleet(projects.config()),
+        ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
+        ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
+        ("POST", "/api/fleet/grants/add") => handlers::fleet_grant(projects.config(), &req.body),
+        ("POST", "/api/fleet/grants/remove") => handlers::fleet_revoke(projects.config(), &req.body),
+        ("POST", "/api/fleet/nickname/accept") => {
+            handlers::fleet_accept_nickname(projects.config(), &req.body)
+        }
+        ("POST", "/api/fleet/nickname/dismiss") => {
+            handlers::fleet_dismiss_nickname(projects.config(), &req.body)
         }
         ("GET", "/api/tasks") => handlers::tasks(tasks),
         ("POST", "/api/tasks/create") => handlers::create_task(tasks, &req.body),

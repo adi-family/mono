@@ -48,6 +48,11 @@ const CA_DAYS: i64 = 3650;
 /// address over TLS even before any service is routed.
 const BASE_SANS: [&str; 3] = ["localhost", "127.0.0.1", "127.0.0.53"];
 
+/// The mesh zone's own wildcard, added whenever a mesh gateway is configured. It covers the
+/// three-label `<node>.n.adi` — the node itself — and **not** the four-label service names below;
+/// see [`mesh_sans`] for why those need one SAN apiece.
+const MESH_ZONE_SAN: &str = "*.n.adi";
+
 /// What the leaf on disk was minted for, so we can tell whether it still fits the config without
 /// parsing X.509. Written beside it as `cert.json`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,6 +64,7 @@ struct LeafMeta {
 }
 
 /// A ready TLS front door.
+#[derive(Debug)]
 pub struct Tls {
     pub config: Arc<ServerConfig>,
     /// Where the CA lives — surfaced in the log line that tells the user what to trust.
@@ -69,16 +75,19 @@ pub struct Tls {
 
 /// Load the TLS identity for `hosts`, generating or renewing whatever is missing or stale.
 ///
+/// `mesh` is `Some(petnames)` when a mesh gateway is configured — the leaf then also covers the
+/// reserved `n.adi` zone (see [`san_list`]) — and `None` when this machine has no mesh at all.
+///
 /// # Errors
 /// Fails if `dir` can't be created, a key is unreadable (a root-owned key when running
 /// unprivileged, say), or certificate generation fails. Callers treat that as "no HTTPS" rather
 /// than fatal — the plain-HTTP front door should survive a broken cert.
-pub fn prepare(dir: &Path, hosts: &[String]) -> anyhow::Result<Tls> {
+pub fn prepare(dir: &Path, hosts: &[String], mesh: Option<&[String]>) -> anyhow::Result<Tls> {
     std::fs::create_dir_all(dir)
         .with_context(|| format!("creating TLS directory {}", dir.display()))?;
 
     let (ca, ca_key, ca_is_new) = load_or_create_ca(dir)?;
-    let wanted = san_list(hosts);
+    let wanted = san_list(hosts, mesh);
     let (chain, key) = load_or_create_leaf(dir, &wanted, &ca, &ca_key)?;
 
     let provider = Arc::new(rustls::crypto::ring::default_provider());
@@ -100,18 +109,50 @@ pub fn prepare(dir: &Path, hosts: &[String]) -> anyhow::Result<Tls> {
     })
 }
 
-/// Every SAN the leaf should carry: the configured hosts plus [`BASE_SANS`], deduped and sorted so
-/// the comparison against `cert.json` is order-insensitive.
-fn san_list(hosts: &[String]) -> Vec<String> {
+/// Every SAN the leaf should carry: the configured hosts plus [`BASE_SANS`], plus the mesh names
+/// from [`mesh_sans`] when a gateway is configured. Deduped and sorted so the comparison against
+/// `cert.json` is order-insensitive.
+fn san_list(hosts: &[String], mesh: Option<&[String]>) -> Vec<String> {
     let mut all: Vec<String> = BASE_SANS
         .iter()
         .map(|s| (*s).to_string())
         .chain(hosts.iter().map(|h| h.trim().to_ascii_lowercase()))
+        .chain(mesh.map(mesh_sans).unwrap_or_default())
         .filter(|h| !h.is_empty())
         .collect();
     all.sort();
     all.dedup();
     all
+}
+
+/// The SANs that cover the reserved mesh zone for the nodes this machine has paired with.
+///
+/// **Why one SAN per node.** A wildcard label matches exactly one label, and only the leftmost
+/// label may be a wildcard (RFC 6125 §6.4.3, and every browser enforces it). A remote service is
+/// four labels — `<service>.<node>.n.adi` — so:
+///
+/// * `*.n.adi` matches `laptop-b.n.adi`, never `nosh.laptop-b.n.adi`. One label short.
+/// * `*.*.n.adi` would be the shape that "fits", and is worthless: a second wildcard is rejected
+///   outright, so the SAN matches nothing at all. It is deliberately not emitted — a certificate
+///   that looks like it covers the fleet but silently doesn't is worse than one that admits it.
+/// * `*.<node>.n.adi` puts the single wildcard leftmost, over the service label, which is the one
+///   part that genuinely varies without limit. That works, and it costs one SAN per **node** — a
+///   number bounded by how many machines you have paired, not by how many services they run.
+///
+/// So the leaf can only cover nodes it knows about, which is why `proxy.mesh_nodes` exists: pairing
+/// records the petname, and the next start mints a leaf that covers it. The zone wildcard
+/// [`MESH_ZONE_SAN`] is added alongside so a node's own apex is covered even before any service on
+/// it is named.
+fn mesh_sans(nodes: &[String]) -> Vec<String> {
+    let mut out = vec![MESH_ZONE_SAN.to_string()];
+    out.extend(
+        nodes
+            .iter()
+            .map(|n| n.trim().to_ascii_lowercase())
+            .filter(|n| !n.is_empty())
+            .map(|n| format!("*.{n}.{}", crate::config::MESH_ZONE)),
+    );
+    out
 }
 
 /// Read the CA from disk, or generate and persist one. Returns whether it was just created.
@@ -323,7 +364,7 @@ mod tests {
 
     #[test]
     fn san_list_adds_base_hosts_and_dedupes() {
-        let sans = san_list(&["app.adi".into(), "APP.adi".into(), "api.adi".into()]);
+        let sans = san_list(&["app.adi".into(), "APP.adi".into(), "api.adi".into()], None);
         assert_eq!(
             sans,
             vec!["127.0.0.1", "127.0.0.53", "api.adi", "app.adi", "localhost"]
@@ -332,8 +373,74 @@ mod tests {
 
     #[test]
     fn san_list_ignores_blank_hosts() {
-        let sans = san_list(&["".into(), "  ".into()]);
+        let sans = san_list(&[String::new(), "  ".into()], None);
         assert_eq!(sans, vec!["127.0.0.1", "127.0.0.53", "localhost"]);
+    }
+
+    /// The wildcard decision, written down: a four-label `<service>.<node>.n.adi` needs the single
+    /// permitted wildcard in the **leftmost** label with the node spelled out, so the leaf carries
+    /// one SAN per paired node — never a two-wildcard `*.*.n.adi`, which no client accepts.
+    #[test]
+    fn mesh_sans_use_one_leftmost_wildcard_per_node() {
+        let sans = mesh_sans(&["laptop-b".into(), "Tower".into(), "  ".into()]);
+        assert_eq!(sans, vec!["*.n.adi", "*.laptop-b.n.adi", "*.tower.n.adi"]);
+
+        // `*.n.adi` is the node apex only — it is one label short of a service name, which is the
+        // whole reason the per-node entries exist.
+        assert!(matches_wildcard("*.n.adi", "laptop-b.n.adi"));
+        assert!(!matches_wildcard("*.n.adi", "nosh.laptop-b.n.adi"));
+        assert!(matches_wildcard("*.laptop-b.n.adi", "nosh.laptop-b.n.adi"));
+
+        assert!(
+            !sans.iter().any(|s| s.matches('*').count() > 1),
+            "a second wildcard label is rejected by every client; it must never be emitted",
+        );
+    }
+
+    /// A single wildcard label, matched the way RFC 6125 §6.4.3 says clients do: it stands for
+    /// exactly one label, and only the leftmost one.
+    fn matches_wildcard(san: &str, host: &str) -> bool {
+        let Some(suffix) = san.strip_prefix("*.") else {
+            return san == host;
+        };
+        host.strip_suffix(suffix)
+            .is_some_and(|label| label.ends_with('.') && !label[..label.len() - 1].contains('.'))
+    }
+
+    #[test]
+    fn a_configured_mesh_gateway_puts_the_zone_wildcard_on_the_leaf() {
+        // Gateway configured, nothing paired yet: the zone wildcard is still carried, so a node's
+        // own apex is covered the moment it appears.
+        let bare = san_list(&["app.adi".into()], Some(&[]));
+        assert_eq!(
+            bare,
+            vec!["*.n.adi", "127.0.0.1", "127.0.0.53", "app.adi", "localhost"]
+        );
+
+        let paired = san_list(&["app.adi".into()], Some(&["laptop-b".to_string()]));
+        assert!(paired.contains(&"*.laptop-b.n.adi".to_string()));
+
+        // No mesh gateway: not one mesh name on the leaf.
+        let none = san_list(&["app.adi".into()], None);
+        assert!(none.iter().all(|s| !s.contains("n.adi")), "{none:?}");
+    }
+
+    #[test]
+    fn a_leaf_carrying_mesh_wildcards_still_mints() {
+        // `*` is legal in a DNS SAN but not in a hostname, so prove rcgen actually accepts the
+        // shape before a front door depends on it at start-up.
+        let dir = std::env::temp_dir().join(format!("adi-hive-tls-mesh-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let ready = prepare(
+            &dir,
+            &["app.adi".to_string()],
+            Some(&["laptop-b".to_string()]),
+        )
+        .expect("a leaf with wildcard mesh SANs");
+        assert!(ready.ca_path.ends_with("ca.pem"));
+        let meta = std::fs::read_to_string(dir.join("cert.json")).unwrap();
+        assert!(meta.contains("*.laptop-b.n.adi"), "{meta}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -342,13 +449,13 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let hosts = vec!["app.adi".to_string()];
 
-        let first = prepare(&dir, &hosts).expect("first prepare");
+        let first = prepare(&dir, &hosts, None).expect("first prepare");
         assert!(first.ca_is_new, "the CA should be generated on a cold start");
         let ca_pem = std::fs::read_to_string(dir.join("ca.pem")).unwrap();
         let leaf_pem = std::fs::read_to_string(dir.join("cert.pem")).unwrap();
 
         // Same hosts: nothing should be re-issued, and the CA must not move.
-        let second = prepare(&dir, &hosts).expect("second prepare");
+        let second = prepare(&dir, &hosts, None).expect("second prepare");
         assert!(!second.ca_is_new);
         assert_eq!(ca_pem, std::fs::read_to_string(dir.join("ca.pem")).unwrap());
         assert_eq!(
@@ -358,7 +465,7 @@ mod tests {
         );
 
         // A new host re-mints the leaf but must leave the trusted CA alone.
-        prepare(&dir, &["app.adi".into(), "api.adi".into()]).expect("third prepare");
+        prepare(&dir, &["app.adi".into(), "api.adi".into()], None).expect("third prepare");
         assert_eq!(
             ca_pem,
             std::fs::read_to_string(dir.join("ca.pem")).unwrap(),
@@ -379,7 +486,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt as _;
         let dir = std::env::temp_dir().join(format!("adi-hive-tls-mode-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
-        prepare(&dir, &["app.adi".to_string()]).expect("prepare");
+        prepare(&dir, &["app.adi".to_string()], None).expect("prepare");
         for name in ["ca-key.pem", "key.pem"] {
             let mode = std::fs::metadata(dir.join(name)).unwrap().permissions().mode();
             assert_eq!(mode & 0o777, 0o600, "{name} should be 0600, was {mode:o}");

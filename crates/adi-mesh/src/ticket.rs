@@ -107,7 +107,14 @@ pub fn clear_published() {
         .remove_raw(TICKET_FILE);
 }
 
-fn to_hex(bytes: &[u8]) -> String {
+/// The crate's hex codec, shared with [`crate::join`]'s invite token.
+///
+/// `pub(crate)` rather than copied: both tokens are `<prefix>:<hex(json(…))>` on purpose — one
+/// shape an operator can recognise, one that survives a shell, a YAML file and a cloud-init
+/// blob without quoting — and a second implementation would be free to disagree about, say, an
+/// odd-length payload. It stays crate-private because the *encoding* is an implementation
+/// detail of those two tokens; callers get [`encode`]/[`decode`] and their invite equivalents.
+pub(crate) fn to_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
     for &b in bytes {
@@ -117,7 +124,8 @@ fn to_hex(bytes: &[u8]) -> String {
     out
 }
 
-fn from_hex(s: &str) -> anyhow::Result<Vec<u8>> {
+/// The inverse of [`to_hex`]; see it for why this is shared rather than duplicated.
+pub(crate) fn from_hex(s: &str) -> anyhow::Result<Vec<u8>> {
     let s = s.trim();
     anyhow::ensure!(s.len().is_multiple_of(2), "odd-length hex string");
     (0..s.len())

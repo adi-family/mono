@@ -15,6 +15,14 @@ path = "src/main.rs"
 [dependencies]
 adi-config = { workspace = true }
 
+# The node side of the mesh gateway resolves a service label against *this machine's* hive route
+# table (docs/fleet.md C6), so it depends on the front door's routing brain rather than reimplementing
+# it — a second lookup would be a second set of rules to keep in step. The direction is acyclic
+# (adi-hive knows nothing of the mesh), but it does pull hive's TLS stack (rustls/rcgen) into this
+# crate's build; splitting the gateway into its own `adi-gateway` crate is the escape hatch if that
+# ever costs more than the duplication would.
+adi-hive = { workspace = true }
+
 # The peer-to-peer transport: QUIC connections dialled by EndpointId, with relays doing
 # NAT traversal and n0 discovery resolving an id to its current addresses.
 iroh = { workspace = true }
@@ -24,6 +32,19 @@ clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
+
+# Basic authentication on the node side (see docs/fleet.md §5): base64 decodes the
+# `Authorization` header, sha2 hashes the password with a per-node salt, subtle compares the
+# digests without leaking their prefix through timing, and rand mints the salt.
+# The gateway resolves a service label to a port the same way the front door does, and for a
+# service that declares none (every dashboard) that means asking the ports manager for its
+# stable lease. Reserving is idempotent and keyed the same, so both sides land on one port.
+adi-ports-manager = { workspace = true }
+
+base64 = { workspace = true }
+sha2 = "0.10"
+subtle = "2"
+rand = "0.8"
 
 tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "io-util", "sync", "time"] }
 

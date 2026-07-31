@@ -1,21 +1,19 @@
 //! adi-hive — the adi-family reverse proxy: routes inbound HTTP by `Host` header to a
 //! local upstream (nginx-style), and launches + supervises each service's local `runner`
 //! so those upstreams are alive. Foreground process owned by a supervisor.
-
-mod config;
-mod notfound;
-mod proxy;
-mod runner;
-mod status;
-mod tls;
+//!
+//! A thin shell over the [`adi_hive`] library: this file owns sockets, processes and the reload
+//! tick; every routing decision it makes comes from the library, so the mesh gateway resolves
+//! hostnames through exactly the same table.
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use config::Hive;
-use proxy::Router;
+use adi_hive::config::{self, Hive};
+use adi_hive::proxy::{self, Router};
+use adi_hive::{runner, status, tls};
 use tokio::net::TcpListener;
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
@@ -23,12 +21,7 @@ use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .init();
+    init_tracing();
 
     // A missing config is not fatal: fall back to built-in defaults so the daemon still runs.
     let path = std::env::args()
@@ -52,75 +45,25 @@ async fn main() -> anyhow::Result<()> {
     }
 
     let resolved = hive.resolve();
+    // Each entry already carries its own reason (no HTTP port, or a claim on the reserved mesh
+    // zone), so the line only has to surface it.
     for skipped in &resolved.skipped {
-        warn!(service = %skipped, "not routed: no HTTP port");
+        warn!(service = %skipped, "not routed");
+    }
+    if let Some(gateway) = resolved.mesh_gateway {
+        info!(%gateway, "routing *.n.adi to the local mesh gateway");
     }
     info!(binds = ?resolved.binds, routes = resolved.routes.len(), "starting adi-hive");
     // Serve the routing table through a watch channel so the reloader can hot-swap it — a service
     // added on disk with a `proxy.host` starts routing without a front-door restart (which would
     // drop `app.adi` and every other proxied host).
-    let (route_tx, route_rx) = watch::channel(Arc::new(Router::new(&resolved.routes)));
-    let mut current_routes = resolved.routes.clone();
+    let mut current = Arc::new(Router::new(&resolved.routes, resolved.mesh_gateway));
+    let (route_tx, route_rx) = watch::channel(Arc::clone(&current));
 
-    // Bind each address independently: a failure (privileged port, or in use) is logged and
-    // skipped, not fatal. Only bail if nothing bound at all.
     let mut bound = Vec::with_capacity(resolved.binds.len());
     let mut tasks: Vec<JoinHandle<()>> = Vec::new();
-    for addr in &resolved.binds {
-        ensure_loopback_alias(addr.ip());
-        match TcpListener::bind(addr).await {
-            Ok(listener) => {
-                let local = listener.local_addr().unwrap_or(*addr);
-                info!(%local, "listening");
-                bound.push(local.to_string());
-                tasks.push(tokio::spawn(proxy::serve(listener, route_rx.clone())));
-            }
-            Err(e) => {
-                warn!(%addr, error = %e, "could not bind (privileged port needs root, or in use?); skipping");
-            }
-        }
-    }
-
-    // The HTTPS front door, when the config asks for one. Everything about it is best-effort: a
-    // certificate we can't mint or a port we can't take is a warning, never a reason to drop the
-    // plain-HTTP front door that `app.adi` already depends on.
-    if !resolved.tls_binds.is_empty() {
-        let hosts: Vec<String> = resolved.routes.iter().map(|r| r.host.clone()).collect();
-        match tls::prepare(&path.with_file_name("tls"), &hosts) {
-            Ok(ready) => {
-                if ready.ca_is_new {
-                    warn!(
-                        ca = %ready.ca_path.display(),
-                        "generated a new local CA — nothing trusts it yet, so HTTPS will warn until you {}",
-                        tls::trust_hint(&ready.ca_path),
-                    );
-                } else {
-                    info!(ca = %ready.ca_path.display(), "using the existing local CA");
-                }
-                let acceptor = tokio_rustls::TlsAcceptor::from(ready.config);
-                for addr in &resolved.tls_binds {
-                    ensure_loopback_alias(addr.ip());
-                    match TcpListener::bind(addr).await {
-                        Ok(listener) => {
-                            let local = listener.local_addr().unwrap_or(*addr);
-                            info!(%local, "listening (TLS)");
-                            bound.push(format!("{local} (tls)"));
-                            tasks.push(tokio::spawn(proxy::serve_tls(
-                                listener,
-                                acceptor.clone(),
-                                route_rx.clone(),
-                            )));
-                        }
-                        Err(e) => warn!(
-                            %addr, error = %e,
-                            "could not bind for TLS (privileged port needs root, or in use?); skipping"
-                        ),
-                    }
-                }
-            }
-            Err(e) => warn!(error = %e, "TLS unavailable; serving plain HTTP only"),
-        }
-    }
+    bind_plain(&resolved, &route_rx, &mut bound, &mut tasks).await;
+    bind_tls(&path, &resolved, &route_rx, &mut bound, &mut tasks).await;
 
     if tasks.is_empty() {
         anyhow::bail!("no proxy address could be bound");
@@ -170,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
                 break;
             }
             _ = reload.tick() => {
-                if let Some((specs, routes)) = reload_config(&path, &ports_manager, &base_dir) {
+                if let Some((specs, table)) = reload_config(&path, &ports_manager, &base_dir) {
                     let (started, stopped) = supervisor.reconcile(specs);
                     if started > 0 || stopped > 0 {
                         info!(started, stopped, total = supervisor.len(), "reloaded runners");
@@ -178,14 +121,14 @@ async fn main() -> anyhow::Result<()> {
                     // Hot-swap the routing table when the host→upstream set changed, so a service
                     // added with a domain starts routing on the next connection — no restart, so
                     // `app.adi` and every other proxied host stay up.
-                    if routes != current_routes {
-                        info!(routes = routes.len(), "routes changed; hot-swapping the proxy table");
-                        route_tx.send_replace(Arc::new(Router::new(&routes)));
-                        let status = status::Status::new(bound.clone(), routes.len());
+                    if table != *current {
+                        info!(routes = table.len(), "routes changed; hot-swapping the proxy table");
+                        let status = status::Status::new(bound.clone(), table.len());
+                        current = Arc::new(table);
+                        route_tx.send_replace(Arc::clone(&current));
                         if let Err(e) = status::write(&status_path, &status) {
                             warn!(error = %e, "could not update status file after route change");
                         }
-                        current_routes = routes;
                     }
                 }
             }
@@ -205,6 +148,100 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Logs to stdout/stderr for the supervisor to capture, `info` unless `RUST_LOG` says otherwise.
+fn init_tracing() {
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_target(false)
+        .init();
+}
+
+/// Bind each plain-HTTP address independently: a failure (a privileged port without root, or one
+/// already in use) is logged and skipped, not fatal — the caller bails only if *nothing* bound, so
+/// one taken port never costs the front door the addresses it could still serve.
+async fn bind_plain(
+    resolved: &config::Resolved,
+    route_rx: &watch::Receiver<Arc<Router>>,
+    bound: &mut Vec<String>,
+    tasks: &mut Vec<JoinHandle<()>>,
+) {
+    for addr in &resolved.binds {
+        ensure_loopback_alias(addr.ip());
+        match TcpListener::bind(addr).await {
+            Ok(listener) => {
+                let local = listener.local_addr().unwrap_or(*addr);
+                info!(%local, "listening");
+                bound.push(local.to_string());
+                tasks.push(tokio::spawn(proxy::serve(listener, route_rx.clone())));
+            }
+            Err(e) => {
+                warn!(%addr, error = %e, "could not bind (privileged port needs root, or in use?); skipping");
+            }
+        }
+    }
+}
+
+/// Add the HTTPS front door, when the config asks for one, appending whatever bound to `bound` and
+/// `tasks`. Everything about it is best-effort: a certificate we can't mint or a port we can't take
+/// is a warning, never a reason to drop the plain-HTTP front door `app.adi` already depends on.
+async fn bind_tls(
+    path: &Path,
+    resolved: &config::Resolved,
+    route_rx: &watch::Receiver<Arc<Router>>,
+    bound: &mut Vec<String>,
+    tasks: &mut Vec<JoinHandle<()>>,
+) {
+    if resolved.tls_binds.is_empty() {
+        return;
+    }
+    let hosts: Vec<String> = resolved.routes.iter().map(|r| r.host.clone()).collect();
+    // The mesh SANs are minted once, at start: a node paired later is covered from the next start,
+    // which is also when its petname reaches `proxy.mesh_nodes`.
+    let mesh = if resolved.mesh_gateway.is_some() {
+        Some(resolved.mesh_nodes.as_slice())
+    } else {
+        None
+    };
+    let ready = match tls::prepare(&path.with_file_name("tls"), &hosts, mesh) {
+        Ok(ready) => ready,
+        Err(e) => {
+            warn!(error = %e, "TLS unavailable; serving plain HTTP only");
+            return;
+        }
+    };
+    if ready.ca_is_new {
+        warn!(
+            ca = %ready.ca_path.display(),
+            "generated a new local CA — nothing trusts it yet, so HTTPS will warn until you {}",
+            tls::trust_hint(&ready.ca_path),
+        );
+    } else {
+        info!(ca = %ready.ca_path.display(), "using the existing local CA");
+    }
+    let acceptor = tokio_rustls::TlsAcceptor::from(ready.config);
+    for addr in &resolved.tls_binds {
+        ensure_loopback_alias(addr.ip());
+        match TcpListener::bind(addr).await {
+            Ok(listener) => {
+                let local = listener.local_addr().unwrap_or(*addr);
+                info!(%local, "listening (TLS)");
+                bound.push(format!("{local} (tls)"));
+                tasks.push(tokio::spawn(proxy::serve_tls(
+                    listener,
+                    acceptor.clone(),
+                    route_rx.clone(),
+                )));
+            }
+            Err(e) => warn!(
+                %addr, error = %e,
+                "could not bind for TLS (privileged port needs root, or in use?); skipping"
+            ),
+        }
+    }
+}
+
 /// Upper bound on how long shutdown waits for all runners to stop.
 const TERM_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -213,14 +250,15 @@ const TERM_TIMEOUT: Duration = Duration::from_secs(20);
 /// adi-hive dependency-free.
 const RELOAD_INTERVAL: Duration = Duration::from_secs(3);
 
-/// Re-read the config and resolve it to the runners *and* routes it now describes, or `None` if it
-/// could not be read (a half-written file mid-edit, say) — in which case the caller keeps what it
-/// has rather than tearing every service down (or dropping every route) over a transient parse error.
+/// Re-read the config and resolve it to the runners *and* the routing table it now describes, or
+/// `None` if it could not be read (a half-written file mid-edit, say) — in which case the caller
+/// keeps what it has rather than tearing every service down (or dropping every route) over a
+/// transient parse error.
 fn reload_config(
     path: &Path,
     ports_manager: &adi_ports_manager::Ports,
     base_dir: &Path,
-) -> Option<(Vec<config::RunnerSpec>, Vec<config::ResolvedRoute>)> {
+) -> Option<(Vec<config::RunnerSpec>, Router)> {
     if !path.exists() {
         return None;
     }
@@ -235,7 +273,11 @@ fn reload_config(
     // over unchanged services is a no-op that returns their existing ports. Ports must be allocated
     // before resolving, or a fresh service would resolve to no upstream.
     hive.allocate_missing_ports(ports_manager);
-    Some((hive.runners(base_dir), hive.resolve().routes))
+    let resolved = hive.resolve();
+    Some((
+        hive.runners(base_dir),
+        Router::new(&resolved.routes, resolved.mesh_gateway),
+    ))
 }
 
 /// How often the self-watch re-checks the binary on disk.

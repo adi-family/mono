@@ -36,6 +36,8 @@ pub(crate) enum Route {
     Hive,
     PortsManager,
     Mesh,
+    /// The paired remote adi nodes — `<service>.<node>.n.adi` (`/settings/fleet`).
+    Fleet,
     /// One file from the ADI store, open in the full-width editor (`/files/<path>`). The path
     /// lives in `StoreBrowser::open_file`, the way a project id lives in `current_project`.
     StoreFile,
@@ -64,6 +66,7 @@ impl Route {
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
+            "/settings/fleet" => Route::Fleet,
             _ => Route::Projects,
         }
     }
@@ -86,6 +89,7 @@ impl Route {
             Route::Hive => "/extended/settings/hive",
             Route::PortsManager => "/extended/settings/ports-manager",
             Route::Mesh => "/extended/settings/mesh",
+            Route::Fleet => "/extended/settings/fleet",
             // The real path carries the file path; this base is only used for nav fallbacks.
             Route::StoreFile => "/extended/files",
         }
@@ -107,6 +111,7 @@ impl Route {
             Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",
+            Route::Fleet => "Fleet",
             Route::StoreFile => "File",
         }
     }

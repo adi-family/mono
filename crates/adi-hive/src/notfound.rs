@@ -1,5 +1,12 @@
-//! The animated `4XX` fallback page adi-hive serves when a request's `Host` matches no
-//! configured route. Fully self-contained (inline CSS + JS, no external requests).
+//! The pages adi-hive serves in place of an upstream: the animated `4XX` fallback for a `Host`
+//! that matches no configured route, and the mesh page for a `*.n.adi` host this machine has no
+//! way to reach. Fully self-contained (inline CSS + JS, no external requests) — a front door that
+//! fetched an asset to explain that nothing is reachable would be explaining it to nobody.
+//!
+//! They are deliberately three different pages. "Nothing serves this name", "the app is here but
+//! its port is dead" and "this name is a *remote machine* you have not paired with" call for three
+//! different next actions, and a single generic error would leave the reader guessing which one
+//! they are in.
 
 /// The standalone fallback page. Self-contained (inline CSS + JS), no external requests.
 pub const PAGE: &str = r##"<!doctype html>
@@ -162,9 +169,135 @@ pub const PAGE: &str = r##"<!doctype html>
 </html>
 "##;
 
+/// The `502` page for a hostname in the reserved `n.adi` zone that this machine cannot reach:
+/// either no local mesh gateway is configured, or the one that is refused the connection.
+///
+/// It exists because the two generic pages would both mislead here. A `404` would say "nothing
+/// serves this name", when the name is perfectly good — it just names a machine somewhere else. A
+/// bare `502` would say "the upstream is down", sending the reader to look for a local service
+/// that was never part of this request. What is actually missing is a *pairing*, and that is the
+/// one thing this page says.
+///
+/// `host` and `node` come straight off the wire (a `Host` header is whatever the client wrote), so
+/// both are HTML-escaped before they reach the markup.
+#[must_use]
+pub fn mesh_unavailable(host: &str, node: Option<&str>) -> String {
+    let host = escape(host);
+    let node = node.map_or_else(|| "this node".to_string(), escape);
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{host} — node unreachable</title>
+<style>
+  /* Mirrors the adi design-system tokens; inlined because this page makes no external
+     requests. Keep in sync with crates/adi-css/scss/_tokens.scss. */
+  :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; --accent:#c96422; }}
+  @media (prefers-color-scheme: dark) {{
+    :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; --accent:#e08a4a; }}
+  }}
+  * {{ box-sizing: border-box; }}
+  html, body {{ height: 100%; }}
+  body {{
+    margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+    padding:40px 24px; background:var(--bg); color:var(--fg);
+    letter-spacing:-.006em; -webkit-font-smoothing:antialiased;
+    font:13.5px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }}
+  .wrap {{ display:flex; flex-direction:column; align-items:center; gap:14px;
+    text-align:center; max-width:36rem; }}
+  .link {{ width:min(196px, 46vw); height:auto; color:var(--fg); overflow:visible; }}
+  .link .near {{ opacity:1; }}
+  .link .far {{ opacity:.32; }}
+  .link .span {{ stroke-dasharray:6 7; animation:meshDrift 2.6s linear infinite; }}
+  @keyframes meshDrift {{ to {{ stroke-dashoffset:-26; }} }}
+  @media (prefers-reduced-motion: reduce) {{ .link .span {{ animation:none; }} }}
+  .line {{ display:flex; align-items:center; margin-top:6px; }}
+  .code {{ font-size:20px; font-weight:600; letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums; }}
+  .reason {{ margin-left:14px; padding-left:14px; border-left:1px solid var(--line);
+    color:var(--muted); }}
+  .host {{ margin:0; font:600 15px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color:var(--accent); word-break:break-all; }}
+  .msg {{ margin:0; color:var(--muted); }}
+  ol {{ margin:6px 0 0; padding:0; list-style:none; display:flex; flex-direction:column; gap:8px;
+    text-align:left; color:var(--muted); border-top:1px solid var(--line); padding-top:14px;
+    width:100%; }}
+  li {{ display:flex; gap:10px; align-items:baseline; }}
+  li b {{ color:var(--fg); font-weight:600; }}
+  .n {{ flex:0 0 auto; width:18px; height:18px; border:1px solid var(--line); border-radius:50%;
+    display:inline-flex; align-items:center; justify-content:center; font-size:10px;
+    font-variant-numeric:tabular-nums; color:var(--muted); }}
+  code {{ font:12.5px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; color:var(--fg); }}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <svg class="link" viewBox="0 0 240 90" fill="none" role="img"
+         aria-label="two machines, not connected">
+      <g class="near">
+        <path d="M24 45 L44 33 L64 45 L44 57 Z" stroke="currentColor" stroke-width="2"
+              stroke-linejoin="round"/>
+        <circle cx="44" cy="45" r="5" fill="var(--accent)"/>
+      </g>
+      <line class="span" x1="74" y1="45" x2="166" y2="45" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" opacity=".45"/>
+      <g class="far">
+        <path d="M176 45 L196 33 L216 45 L196 57 Z" stroke="currentColor" stroke-width="2"
+              stroke-linejoin="round"/>
+        <circle cx="196" cy="45" r="5" fill="currentColor"/>
+      </g>
+    </svg>
+
+    <div class="line">
+      <span class="code">502</span>
+      <span class="reason">node unreachable</span>
+    </div>
+
+    <p class="host">{host}</p>
+    <p class="msg">
+      This hostname addresses a service on <b>{node}</b> — another adi machine, not this one.
+      Reaching it needs a local mesh gateway, and none is running here.
+    </p>
+
+    <ol>
+      <li><span class="n">1</span><span>Start the mesh on this machine, so the front door has a
+        gateway to hand <code>*.n.adi</code> to.</span></li>
+      <li><span class="n">2</span><span>Pair with <b>{node}</b>. Its administrator authorizes this
+        machine's key; a name alone grants nothing.</span></li>
+      <li><span class="n">3</span><span>Reload. Every node reachable from here answers under
+        <code>&lt;service&gt;.&lt;node&gt;.n.adi</code>.</span></li>
+    </ol>
+  </div>
+</body>
+</html>
+"#
+    )
+}
+
+/// Escape the five characters that could break out of the markup. Small and local on purpose:
+/// pulling in an HTML-escaping crate for two interpolations would be a dependency the front door
+/// pays for on every build.
+fn escape(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
-    use super::PAGE;
+    use super::{PAGE, escape, mesh_unavailable};
 
     #[test]
     fn page_is_a_self_contained_document() {
@@ -178,5 +311,36 @@ mod tests {
         assert!(page.contains(">error<"), "includes the 'error' word");
         assert!(!page.contains("http://"), "no external http refs");
         assert!(!page.contains("https://"), "no external https refs");
+    }
+
+    #[test]
+    fn the_mesh_page_names_the_node_and_says_what_is_missing() {
+        let page = mesh_unavailable("nosh.laptop-b.n.adi", Some("laptop-b"));
+        assert!(page.starts_with("<!doctype html>"), "is a full document");
+        assert!(page.contains("nosh.laptop-b.n.adi"), "names the hostname");
+        assert!(page.contains("laptop-b"), "names the node");
+        assert!(page.contains("502"), "carries its status");
+        // The three things that make this page different from the 404 and the generic 502.
+        assert!(page.contains("mesh gateway"), "says the gateway is missing");
+        assert!(page.contains("Pair"), "says the node must be paired");
+        assert!(!page.contains("http://"), "no external http refs");
+        assert!(!page.contains("https://"), "no external https refs");
+    }
+
+    #[test]
+    fn the_mesh_page_falls_back_when_the_node_cannot_be_read_from_the_host() {
+        // The zone apex names no node; the page still has to say something sensible.
+        let page = mesh_unavailable("n.adi", None);
+        assert!(page.contains("this node"));
+        assert!(page.contains("n.adi"));
+    }
+
+    #[test]
+    fn the_mesh_page_escapes_the_host_it_was_handed() {
+        // A `Host` header is whatever the client wrote — it must never reach the markup raw.
+        let page = mesh_unavailable("<script>alert(1)</script>.n.adi", None);
+        assert!(!page.contains("<script>alert"), "the host must not be markup");
+        assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
+        assert_eq!(escape("a&b\"c'<d>"), "a&amp;b&quot;c&#39;&lt;d&gt;");
     }
 }

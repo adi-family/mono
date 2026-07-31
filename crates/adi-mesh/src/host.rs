@@ -2,6 +2,19 @@
 //! local port to the peer. Every request is checked against the [`HostConfig`] — an
 //! unauthorized peer or a non-allow-listed port is refused with a [status](crate::protocol::Status),
 //! never connected. One bi-stream is one TCP tunnel.
+//!
+//! This is also the endpoint's **only** accept loop, and an endpoint now carries three ALPNs, so
+//! the loop dispatches: `adi/mesh/http/1` connections are the fleet gateway's and go to
+//! [`crate::gateway::serve_peer`] (`docs/fleet.md` §7), `adi/mesh/join/1` connections are a node
+//! asking to be paired and go to [`crate::join::serve_join`] (E3), and everything else is the raw
+//! forward below. The branch is a byte compare on `conn.alpn()` — the handshake already picked
+//! the protocol, so nothing on the wire has to carry a discriminator.
+//!
+//! Note what the join arm skips: [`peer_authorized`]. That is deliberate and it is the whole
+//! reason the join speaks its own ALPN. A machine asking to be paired is by definition not yet in
+//! any allow-list, so the usual key check cannot be its gate; a single-use nonce is
+//! ([`crate::join`]). Keeping it a separate protocol means that exception is one named branch
+//! here rather than a condition buried inside the check it is bypassing.
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
@@ -14,15 +27,24 @@ use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use crate::config::HostConfig;
+use crate::gateway::{self, Gateway};
 use crate::protocol::{self, Status};
-use crate::tunnel;
+use crate::{join, tunnel};
 
 /// After sending a refusal, hold the connection open at most this long so the client can
 /// read the status byte before the connection closes (an immediate drop truncates it).
 const REFUSAL_LINGER: Duration = Duration::from_secs(3);
 
 /// Accept loop for the host role: spawn a task per inbound connection until shutdown.
-pub async fn serve(endpoint: Endpoint, host: Arc<HostConfig>, mut shutdown: watch::Receiver<bool>) {
+///
+/// `gateway` is where connections speaking the fleet's ALPN go; it is passed in rather than
+/// looked up so this loop keeps knowing nothing about the fleet beyond "not mine".
+pub async fn serve(
+    endpoint: Endpoint,
+    host: Arc<HostConfig>,
+    gateway: Arc<Gateway>,
+    mut shutdown: watch::Receiver<bool>,
+) {
     if host.allow.is_empty() {
         info!("host: no ports allow-listed — every inbound request will be refused");
     } else {
@@ -42,8 +64,16 @@ pub async fn serve(endpoint: Endpoint, host: Arc<HostConfig>, mut shutdown: watc
                     return;
                 };
                 let host = Arc::clone(&host);
+                let gateway = Arc::clone(&gateway);
                 tokio::spawn(async move {
                     match incoming.await {
+                        // The fleet's HTTP gateway speaks its own ALPN and its own protocol; one
+                        // of its connections carries many streams, so it owns the connection.
+                        Ok(conn) if conn.alpn() == protocol::HTTP_ALPN => {
+                            gateway::serve_peer(conn, gateway).await;
+                        }
+                        // A pairing: answered from an unknown key on purpose (see the module docs).
+                        Ok(conn) if conn.alpn() == join::ALPN => join::serve_join(conn).await,
                         Ok(conn) => {
                             if let Err(e) = handle_connection(conn, &host).await {
                                 debug!(error = %e, "host: connection ended with error");

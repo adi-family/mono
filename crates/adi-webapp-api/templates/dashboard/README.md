@@ -11,7 +11,7 @@ frontend/index.html   the shell that mounts modules                  (do not edi
 frontend/modules/     >>> agents add UI panels here <<<
 backend/index.ts      entry — discovers and serves routes            (do not edit)
 backend/routes/       >>> agents add endpoints here <<<
-.adi/hive.yaml        the two hive services
+.adi/hive.yaml        the two hive services, sharing one host   (do not edit)
 ```
 
 Only the two `index.ts` files are fixed. Everything a user sees comes from `modules/` and
@@ -38,10 +38,22 @@ export default async function myPanel(ctx) {
 | `ctx.panel(title)` | appends a card to the grid, returns the element to fill |
 | `ctx.api.get(path)` | GET a backend route, parsed as JSON |
 | `ctx.api.post(path, body)` | POST JSON to a backend route |
-| `ctx.api.base` | the backend's origin, or `null` when it is down |
+| `ctx.api.base` | `/api` — the backend's prefix on *this* origin, never a URL |
 | `ctx.dashboard` | this dashboard's id |
 
 A module that throws renders its error in its own card and never blocks the others.
+
+### Relative paths only — never a host, never a port
+
+This dashboard is **one origin**: the page and its backend answer on the same hostname, the
+backend under `/api`. So a panel asks for `ctx.api.get("/status")` and nothing else. If you need
+`fetch` directly, give it a path (`fetch("/api/status")`).
+
+Never write an absolute URL into a panel. Not `http://127.0.0.1:1234`, not `http://<name>.adi`,
+not a port from anywhere. The same page is served under this machine's `.adi` name, under
+`<label>.<node>.n.adi` when somebody views it from another machine over the mesh, and behind a
+real domain later — a hardcoded address pins it to one of those, and `127.0.0.1` in particular
+means *the viewer's* machine, which is the one place the backend certainly is not.
 
 ## Add an endpoint
 
@@ -57,27 +69,34 @@ export default async function mine(req, ctx) {
 }
 ```
 
-`ctx.params` holds the segments after the route's own path (`/mine/42` → `["42"]`), plus
-`ctx.url` and `ctx.dashboard`. CORS is applied for you.
+Route files write plain paths: `path = "/mine"`, reached by the page as `/api/mine`. The mount
+prefix is stripped before matching, so it never appears in a route file.
 
-Routes are loaded at startup; after adding one, `curl http://127.0.0.1:$BACKEND/_reload` picks
-it up without a restart. `/_routes` lists what is currently served, `/health` is the liveness
-probe the shell polls.
+`ctx.params` holds the segments after the route's own path (`/mine/42` → `["42"]`), plus
+`ctx.url` (the request URL as it arrived, prefix included — read the query off it, don't match on
+it) and `ctx.dashboard`. There are no CORS headers, and none are needed: the page is same-origin.
+
+Routes are loaded at startup; after adding one, `curl http://<this dashboard>/api/_reload` picks
+it up without a restart. `/api/_routes` lists what is currently served, `/api/health` is the
+liveness probe the shell polls.
 
 ## How it runs
 
-Two hive services, both supervised by the per-user `family.adi.dashboards` LaunchAgent:
+Two hive services, both supervised by the per-user `family.adi.dashboards` LaunchAgent, sharing
+**one hostname** (`.adi/hive.yaml` declares the same `proxy.host` on both):
 
-- **frontend** — the page itself, on `http://127.0.0.1:<frontend port>`
-- **backend** — the JSON API the page calls, on its own port
+- **frontend** — the page itself, owning `/` on that host
+- **backend** — the JSON API the page calls, claiming `/api` on the same host
 
-Neither has a hostname: a dashboard depends only on its own supervisor, not on the root front
-door or DNS, so adding one never needs a privileged restart. The Dashboards page in the control
-panel (<http://app.adi/extended/dashboards>) lists both ports and links the frontend.
+One origin is the contract, not an implementation detail: it is what lets the page use relative
+URLs only, and so work unchanged for a viewer on another machine (over the mesh the dashboard
+appears as `<label>.<node>.n.adi`) or behind a real domain later. Open the dashboard by its
+hostname — by port, nothing routes `/api` and the page reports the backend as down. The
+Dashboards page in the control panel (<http://app.adi/extended/dashboards>) links it.
 
-Neither port is hardcoded. adi-hive reserves one per service from the ports manager and injects
-it as `$PORT`; the frontend looks the backend's port up in the same registry and hands it to
-the browser. Set `$BACKEND_PORT` to override.
+No port is hardcoded anywhere, and no port ever reaches the browser. adi-hive leases one per
+service from the ports manager and injects it as `$PORT`; both are private to the two bun
+processes.
 
 ```sh
 # logs for both servers

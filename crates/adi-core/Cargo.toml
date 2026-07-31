@@ -36,5 +36,11 @@ serde_json = { workspace = true }
 [dev-dependencies]
 serde_yaml_ng = "0.10"
 
+# Tests only. The front-door hive.yaml rendered here is read by adi-hive, so the tests parse it
+# with adi-hive's own config type instead of a hand-written stand-in — a rename or a retyped field
+# over there then fails here rather than at the next front-door start. adi-hive does not depend on
+# adi-core, so this edge exists only in the test graph and only in one direction.
+adi-hive = { path = "../adi-hive" }
+
 [lints]
 workspace = true

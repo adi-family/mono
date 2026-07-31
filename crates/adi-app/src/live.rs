@@ -78,6 +78,7 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             | "/api/agents/runs/all"
             | "/api/dashboards"
             | "/api/db"
+            | "/api/fleet"
             | "/api/hive"
             | "/api/mesh"
             | "/api/meta"
@@ -443,7 +444,9 @@ mod tests {
         assert_eq!(watchable("GET", "/api/tasks"), Some(SLOW));
         assert_eq!(watchable("POST", "/api/agents/peek"), Some(FAST));
         assert_eq!(watchable("GET", "/api/projects/acme"), Some(SLOW));
+        assert_eq!(watchable("GET", "/api/fleet"), Some(SLOW));
         // Mutations are not on the list, whatever they look like.
+        assert_eq!(watchable("POST", "/api/fleet/unpair"), None);
         assert_eq!(watchable("POST", "/api/projects/remove"), None);
         assert_eq!(watchable("POST", "/api/agents/run"), None);
         assert_eq!(watchable("DELETE", "/api/health"), None);

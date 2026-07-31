@@ -16,7 +16,12 @@ serde_json = { workspace = true }
 # The WASM component host. Pinned to the same major the engine was written
 # against — the component-model API shifts between majors.
 wasmtime = "29"
-reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
+# `default-features = false` is load-bearing, not tidiness: reqwest's defaults pull `default-tls`
+# → native-tls → openssl-sys, and Cargo unifies features across the graph, so leaving it on here
+# forced an OpenSSL dependency on *every* crate — including the ones that already asked for
+# rustls. That is what made a static `x86_64-unknown-linux-musl` node build impossible without a
+# musl OpenSSL on the build host. adi-app and adi-agents already declare it this way.
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 regex = "1"
 yaque = "0.6"
 tokio = { version = "1", features = ["rt", "time"] }

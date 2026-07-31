@@ -2328,11 +2328,16 @@ fn chat_group(name: &str) -> AnyView {
 }
 
 /// One dashboard row in the rail: a link to its running frontend, or a dimmed row when it's down.
+///
+/// The address comes from [`open_url`](crate::pages::dashboards::open_url), the same rule the
+/// Dashboards page uses: the dashboard's own host when it has one, loopback only as the fallback.
+/// A dashboard is one origin now, so a `127.0.0.1:<port>` link bypasses the front door and the
+/// page's `/api` calls stop routing — it renders, and only then falls over.
 fn chat_dash_item(d: &Dashboard) -> AnyView {
     let name = d.name.clone();
-    match d.frontend_port {
-        Some(port) if d.frontend_running => view! {
-            <a class="adi-chome__dash" href=format!("http://127.0.0.1:{port}")
+    match crate::pages::dashboards::open_url(d) {
+        Some(href) => view! {
+            <a class="adi-chome__dash" href=href
                 target="_blank" rel="noreferrer" title=d.name.clone()>
                 <span class="adi-chome__dot adi-chome__dot--on"></span>
                 <span class="adi-chome__dash-name">{name}</span>
@@ -2340,7 +2345,7 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
             </a>
         }
         .into_any(),
-        _ => view! {
+        None => view! {
             <div class="adi-chome__dash is-off" title="not running">
                 <span class="adi-chome__dot"></span>
                 <span class="adi-chome__dash-name">{name}</span>

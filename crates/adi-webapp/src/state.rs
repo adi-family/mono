@@ -6,8 +6,9 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_webapp_api::types::{
     AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentsState, AllAgentRuns, DashboardsState,
-    DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, Health, HiveState,
-    MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectsState,
+    DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetState, Health,
+    HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    ProjectsState,
     RunRef, SecretsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState, UsedPorts,
     WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
@@ -34,6 +35,8 @@ pub(crate) struct State {
     pub(crate) secs_since: RwSignal<u32>,
     pub(crate) used: RwSignal<Option<UsedPorts>>,
     pub(crate) mesh: RwSignal<Option<MeshState>>,
+    /// The paired remote nodes (`/api/fleet`), shown on the Fleet page.
+    pub(crate) fleet: RwSignal<Option<FleetState>>,
     pub(crate) projects: RwSignal<Option<ProjectsState>>,
     pub(crate) project_detail: RwSignal<Option<ProjectDetail>>,
     pub(crate) current_project: RwSignal<String>,
@@ -121,6 +124,8 @@ pub(crate) struct Tables {
     pub(crate) mesh_allow: TableState,
     pub(crate) mesh_peers: TableState,
     pub(crate) mesh_forwards: TableState,
+    /// The paired remote nodes on the Fleet page.
+    pub(crate) fleet: TableState,
     pub(crate) projects: TableState,
     pub(crate) projects_archived: TableState,
     pub(crate) secrets: TableState,
@@ -162,6 +167,7 @@ impl Tables {
             mesh_allow: TableState::new("mesh-allow", c::MESH_ALLOW_COLS),
             mesh_peers: TableState::new("mesh-peers", c::MESH_PEER_COLS),
             mesh_forwards: TableState::new("mesh-forwards", c::MESH_FORWARD_COLS),
+            fleet: TableState::new("fleet", c::FLEET_COLS),
             projects: TableState::new("projects", c::PROJECT_COLS),
             projects_archived: TableState::new("projects-archived", c::PROJECT_ARCHIVED_COLS),
             secrets: TableState::new("secrets", c::SECRET_COLS),
@@ -197,6 +203,7 @@ impl State {
             secs_since: RwSignal::new(0),
             used: RwSignal::new(None),
             mesh: RwSignal::new(None),
+            fleet: RwSignal::new(None),
             projects: RwSignal::new(None),
             project_detail: RwSignal::new(None),
             current_project: RwSignal::new(String::new()),
@@ -1030,6 +1037,29 @@ pub(crate) struct MeshForm {
     pub(crate) ticket_ref: NodeRef<leptos::html::Input>,
 }
 
+/// The Fleet page's local signals: the grant form's node picker and grant text, plus a shared
+/// busy flag. Renaming and unpairing are row actions rather than form fields — they name their
+/// node by the row you clicked — so nothing here holds a petname of its own. `Copy`, so it
+/// threads into the page view and its handlers.
+#[derive(Clone, Copy)]
+pub(crate) struct FleetForm {
+    /// Which node the grant lands on (a petname, empty until picked).
+    pub(crate) grant_node: RwSignal<String>,
+    /// The grant in its string form: `http:*`, `http:nosh`, `tcp:127.0.0.1:22`, `ctl:read`.
+    pub(crate) grant: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl FleetForm {
+    pub(crate) fn new() -> Self {
+        Self {
+            grant_node: RwSignal::new(String::new()),
+            grant: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+        }
+    }
+}
+
 /// Backend liveness as shown by the status pill.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Status {
@@ -1235,6 +1265,11 @@ pub(crate) fn subscriptions(
     if route == Route::Mesh {
         subs.push(Sub::get("/api/mesh", move |m: MeshState| {
             set_if_changed(s.mesh, m);
+        }));
+    }
+    if route == Route::Fleet {
+        subs.push(Sub::get("/api/fleet", move |f: FleetState| {
+            set_if_changed(s.fleet, f);
         }));
     }
 
@@ -1446,5 +1481,10 @@ pub(crate) async fn load(s: State) {
         && let Ok(m) = fetch::mesh().await
     {
         set_if_changed(s.mesh, m);
+    }
+    if path == Route::Fleet.path()
+        && let Ok(f) = fetch::fleet().await
+    {
+        set_if_changed(s.fleet, f);
     }
 }

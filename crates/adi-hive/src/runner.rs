@@ -108,6 +108,12 @@ impl Supervisor {
         self.running.len()
     }
 
+    /// Whether nothing is being supervised — a hive that only routes.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.running.is_empty()
+    }
+
     /// Signal every runner to stop, then wait for them all to terminate.
     pub async fn shutdown(self) {
         for r in self.running.values() {

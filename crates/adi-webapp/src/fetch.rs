@@ -4,7 +4,8 @@ use adi_webapp_api::types::{
     AgentBuildResult, AgentCode, AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
     AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
-    FilesRef, FsContent, FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState, LeaseRef,
+    FilesRef, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing,
+    FsRef, FsWrite, Health, HideRun, HiveState, LeaseRef,
     LinkTool, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState,
     NewDashboard, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
@@ -82,6 +83,41 @@ pub async fn mesh_add_forward(body: MeshForwardRef) -> Result<MeshState, String>
 
 pub async fn mesh_remove_forward(listen: u16) -> Result<MeshState, String> {
     post("/api/mesh/forwards/remove", &MeshListenRef { listen }).await
+}
+
+// Fleet: the paired remote nodes. As with mesh, every endpoint answers with the fresh
+// FleetState, so an edit and the view of it are one round-trip.
+
+pub async fn fleet() -> Result<FleetState, String> {
+    get("/api/fleet").await
+}
+
+pub async fn fleet_rename(petname: String, to: String) -> Result<FleetState, String> {
+    post("/api/fleet/rename", &FleetRename { petname, to }).await
+}
+
+pub async fn fleet_unpair(petname: String) -> Result<FleetState, String> {
+    post("/api/fleet/unpair", &FleetRef { petname }).await
+}
+
+pub async fn fleet_grant(petname: String, grant: String) -> Result<FleetState, String> {
+    post("/api/fleet/grants/add", &FleetGrantRef { petname, grant }).await
+}
+
+pub async fn fleet_revoke(petname: String, grant: String) -> Result<FleetState, String> {
+    post(
+        "/api/fleet/grants/remove",
+        &FleetGrantRef { petname, grant },
+    )
+    .await
+}
+
+pub async fn fleet_accept_nickname(petname: String) -> Result<FleetState, String> {
+    post("/api/fleet/nickname/accept", &FleetRef { petname }).await
+}
+
+pub async fn fleet_dismiss_nickname(petname: String) -> Result<FleetState, String> {
+    post("/api/fleet/nickname/dismiss", &FleetRef { petname }).await
 }
 
 // Projects: every endpoint returns the fresh ProjectsState so the page updates in one round-trip.

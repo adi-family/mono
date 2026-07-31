@@ -23,9 +23,9 @@ so the daemon still runs.
 The file is the nakit-yok **hive spec** format (see
 `~/projects/nakit-yok/.adi/hive.yaml`). adi-hive reads two slices and ignores the rest:
 
-- **Proxy:** `proxy.bind` (addresses to listen on) and, per service, `proxy.host` +
-  its HTTP port (`rollout.recreate.ports.http`) → one rule `Host: <host> →
-  127.0.0.1:<http port>`.
+- **Proxy:** `proxy.bind` (addresses to listen on) and, per service, `proxy.host`
+  (+ an optional `proxy.path`) with its HTTP port (`rollout.recreate.ports.http`) →
+  one rule `Host: <host>[<path>] → 127.0.0.1:<http port>`.
 - **Run:** per service, a `runner` — either a `runner.script` (`run` + optional
   `working_dir`) or a `runner.docker` container (see below) — plus `environment.static`
   and `restart`: what to launch and how to keep it alive.
@@ -34,6 +34,49 @@ Everything else (healthcheck, hooks, depends_on, defaults, observability, …) i
 accepted-but-ignored. A service without a `proxy:` block is simply not routed; one
 whose `runner` has neither a `script` nor a `docker` block is simply not launched. See
 [`hive.yaml`](./hive.yaml) for a worked example.
+
+## One host, several services (`proxy.path`)
+
+A service may claim a **path prefix** on another service's host, so a dashboard is one
+origin rather than two:
+
+```yaml
+services:
+  frontend:
+    proxy: { host: nosh.adi }              # owns the host
+  backend:
+    proxy: { host: nosh.adi, path: /api }  # owns /api on it
+```
+
+- **Longest prefix wins**, and a service with no path is the host's fallback — so
+  `/api/things` is the backend's and `/assets/app.js` is the frontend's.
+- **Prefixes match on segment boundaries.** `/api` claims `/api` and `/api/x`, never
+  `/apifoo`, which is a different resource that merely starts with the same letters.
+- `path: /` means the same as no path at all (it is the fallback either way), so every
+  config written before prefixes did anything behaves exactly as it did.
+- **Nothing is rewritten.** The backend sees `/api/things`, not `/things`. Both the path
+  and the `Host` header reach the upstream as the client wrote them.
+
+The point is that the page never learns its own address: it uses relative URLs only, and
+therefore works unchanged under `nosh.adi`, under `nosh.laptop-b.n.adi` over the mesh,
+and under a real customer domain later.
+
+## Remote nodes (`*.n.adi`)
+
+`n.adi` is a **reserved** namespace: `<service>.<node>.n.adi` addresses a service on
+another adi machine. Point `proxy.mesh_gateway` at the local mesh gateway's loopback
+address and every such host is forwarded there, head verbatim — one rule for the entire
+fleet, because turning a hostname into a peer key is the gateway's job, not the front
+door's. No service may claim a name in the zone; adi-hive refuses such a route at load.
+
+With no gateway configured (or one that won't answer) the request gets a dedicated
+`502` page saying the name addresses a remote node and that the node has to be paired —
+distinct from the `404` for an unknown host and the `502` for a local upstream that died.
+
+For HTTPS, `proxy.mesh_nodes` lists the petnames the leaf should cover. A wildcard label
+matches exactly one level, so `*.n.adi` reaches `laptop-b.n.adi` but not
+`nosh.laptop-b.n.adi`; the four-label name needs a `*.<node>.n.adi` per node, which is
+what this list produces.
 
 ## Running services
 
@@ -133,9 +176,14 @@ Run under a privileged supervisor to bind the front door.
 ## How it works
 
 Hand-rolled L7 proxy, no HTTP framework. Per connection it reads the request head,
-parses just the `Host` header to pick an upstream, forwards the original bytes
-unchanged (upstream sees the real `Host`), then splices bytes both ways for the life
-of the connection. A connection is pinned to one upstream (the first request's host),
-which matches how browsers open a separate connection per hostname. A host that
-matches no route gets the animated `404` page; a matched host whose upstream is
-unreachable gets a small self-contained `502` — different failures, different pages.
+parses just the `Host` header and the request target to pick an upstream, forwards the
+original bytes unchanged (upstream sees the real `Host` and the real path), then splices
+bytes both ways for the life of the connection. A connection is pinned to one upstream
+(the first request's host and path), which matches how browsers open a separate
+connection per hostname. A host that matches no route gets the animated `404` page; a
+matched host whose upstream is unreachable gets a small self-contained `502`; a `*.n.adi`
+host this machine can't reach gets the mesh page — different failures, different pages.
+
+The routing table and the config loader are also a **library** (`adi_hive`), so the mesh
+gateway resolves a service against the same table the front door serves from rather than
+reimplementing the lookup and drifting from it.

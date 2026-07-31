@@ -26,8 +26,8 @@ mod tree;
 mod ui;
 
 use adi_webapp_api::types::{
-    AgentBackendOption, AgentsState, DashboardsState, DbState, Health, HiveState, MeshState,
-    MetaState,
+    AgentBackendOption, AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
+    MeshState, MetaState,
     PortsState, ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState, ToolsState,
     TriggersState, UsedPorts, WorkspacesState,
 };
@@ -38,8 +38,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, chat_home_view, dashboards_view, database_view, hive_view, live_view, load_dir,
-    load_store_file,
+    agents_view, chat_home_view, dashboards_view, database_view, fleet_view, hive_view, live_view,
+    load_dir, load_store_file,
     mesh_view, meta_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, secrets_view, store_file_view,
     tasks_view, tools_view, triggers_view,
@@ -49,8 +49,8 @@ use routing::{
     project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
-    AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, Form,
-    HookLogView,
+    AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, FleetForm,
+    Flash, Form, HookLogView,
     MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, State, Status, TasksForm, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
 };
@@ -792,6 +792,7 @@ fn App() -> impl IntoView {
     let secs_since = RwSignal::new(0u32);
     let used = RwSignal::new(None::<UsedPorts>);
     let mesh = RwSignal::new(None::<MeshState>);
+    let fleet = RwSignal::new(None::<FleetState>);
     let projects = RwSignal::new(None::<ProjectsState>);
     let project_detail = RwSignal::new(None::<ProjectDetail>);
     let tasks = RwSignal::new(None::<TasksState>);
@@ -822,6 +823,7 @@ fn App() -> impl IntoView {
         secs_since,
         used,
         mesh,
+        fleet,
         projects,
         project_detail,
         current_project,
@@ -951,6 +953,8 @@ fn App() -> impl IntoView {
         id_ref: NodeRef::new(),
         ticket_ref: NodeRef::new(),
     };
+
+    let fleet_form = FleetForm::new();
 
     let managed_only = RwSignal::new(true);
 
@@ -1082,6 +1086,7 @@ fn App() -> impl IntoView {
                 | Route::Hive
                 | Route::PortsManager
                 | Route::Mesh
+                | Route::Fleet
         ) && opened.is_some()
             && !live::connected()
         {
@@ -1249,6 +1254,7 @@ fn App() -> impl IntoView {
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
+                        Route::Fleet => fleet_view(state, fleet_form),
                     }}
 
                 </div>
@@ -1295,7 +1301,10 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Dashboards,
         ],
     ),
-    ("Settings", &[Route::Hive, Route::PortsManager, Route::Mesh]),
+    (
+        "Settings",
+        &[Route::Hive, Route::PortsManager, Route::Mesh, Route::Fleet],
+    ),
 ];
 
 /// The glyph for a top-level scope header.

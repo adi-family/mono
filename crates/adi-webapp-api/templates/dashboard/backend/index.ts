@@ -5,9 +5,16 @@
 // unless it says otherwise. Adding an endpoint means dropping one `.ts` file into `routes/`;
 // nothing here needs editing.
 //
-// The hive runner injects $PORT (the port allocated for `<dashboard>/backend`). This service
-// has no proxy host of its own, so the browser reaches it directly by port from the frontend's
-// origin — which makes every response cross-origin, hence the CORS headers below.
+// The hive runner injects $PORT (the port allocated for `<dashboard>/backend`). This service does
+// not have a host of its own: it shares the frontend's, claiming the `/api` prefix on it
+// (`proxy.path` in the dashboard's hive.yaml), so the page calls it same-origin with relative
+// URLs and never learns an address. That is also why there are no CORS headers here — there is no
+// cross-origin caller to allow, and a wildcard allow-origin on a routable hostname would let any
+// page you happen to visit read this dashboard's API.
+//
+// The front door forwards the path as it arrived, so requests land here as `/api/<route>`. The
+// prefix is stripped below, which keeps route files writing plain paths (`/status`) and keeps the
+// backend working unchanged if it is ever mounted at the root instead.
 
 import { readdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -19,18 +26,27 @@ const ROUTES = join(ROOT, "routes");
 /** This dashboard's id — the directory name the hive service is keyed under. */
 const DASHBOARD = basename(join(ROOT, ".."));
 
-/** The browser loads the UI from a different origin (the frontend's host), so allow it. */
-const CORS: Record<string, string> = {
-  "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
-  "access-control-allow-headers": "content-type",
-};
+/** The prefix this backend is mounted under on the dashboard's host. */
+const API_PREFIX = "/api";
+
+/**
+ * The path to route on: the request path minus the mount prefix. Tolerates both shapes, so the
+ * same file serves `/api/status` through the front door and `/status` when a route is exercised
+ * against the process directly (`curl 127.0.0.1:$PORT/status` while developing).
+ */
+function routePath(pathname: string): string {
+  if (pathname === API_PREFIX) return "/";
+  if (pathname.startsWith(`${API_PREFIX}/`)) return pathname.slice(API_PREFIX.length);
+  return pathname;
+}
 
 type Handler = (req: Request, ctx: RouteContext) => Response | Promise<Response>;
 
 interface RouteContext {
   /** Path segments after the route's own prefix, e.g. `/items/42` on `/items` -> `["42"]`. */
   params: string[];
+  /** The request URL as it arrived — so `url.pathname` still carries the `/api` mount prefix.
+   *  Read the query off it (`url.searchParams`); match on `params`, never on `url.pathname`. */
   url: URL;
   dashboard: string;
 }
@@ -99,47 +115,40 @@ const server = Bun.serve({
   hostname: "127.0.0.1",
   async fetch(req) {
     const url = new URL(req.url);
-
-    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS });
+    const pathname = routePath(url.pathname);
 
     // Liveness — the shell polls this to show backend up/down.
-    if (url.pathname === "/health") {
-      return Response.json(
-        { ok: true, dashboard: DASHBOARD, port: PORT, routes: routes.length },
-        { headers: CORS },
-      );
+    if (pathname === "/health") {
+      return Response.json({
+        ok: true,
+        dashboard: DASHBOARD,
+        port: PORT,
+        routes: routes.length,
+      });
     }
 
     // Pick up newly written route files without a restart.
-    if (url.pathname === "/_reload") {
+    if (pathname === "/_reload") {
       routes = await loadRoutes();
-      return Response.json(
-        { reloaded: routes.map((r) => `${r.method} ${r.path}`) },
-        { headers: CORS },
-      );
+      return Response.json({ reloaded: routes.map((r) => `${r.method} ${r.path}`) });
     }
 
     // What this backend currently exposes.
-    if (url.pathname === "/_routes") {
-      return Response.json(
-        { routes: routes.map((r) => ({ method: r.method, path: r.path, source: r.source })) },
-        { headers: CORS },
-      );
+    if (pathname === "/_routes") {
+      return Response.json({
+        routes: routes.map((r) => ({ method: r.method, path: r.path, source: r.source })),
+      });
     }
 
-    const hit = match(req.method, url.pathname);
-    if (!hit) return new Response("not found", { status: 404, headers: CORS });
+    const hit = match(req.method, pathname);
+    if (!hit) return new Response("not found", { status: 404 });
 
     const [route, params] = hit;
     try {
-      const res = await route.handler(req, { params, url, dashboard: DASHBOARD });
-      // Handlers build their own Response; add CORS without clobbering their headers.
-      const headers = new Headers(res.headers);
-      for (const [k, v] of Object.entries(CORS)) headers.set(k, v);
-      return new Response(res.body, { status: res.status, headers });
+      return await route.handler(req, { params, url, dashboard: DASHBOARD });
     } catch (err) {
       console.error(`route ${route.source} threw:`, err);
-      return Response.json({ error: String(err) }, { status: 500, headers: CORS });
+      return Response.json({ error: String(err) }, { status: 500 });
     }
   },
 });

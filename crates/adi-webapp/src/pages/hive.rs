@@ -444,6 +444,7 @@ mod tests {
             name: "Metrics".to_string(),
             description: None,
             project: Some("p1".to_string()),
+            host: None,
             frontend_port: None,
             backend_port: None,
             frontend_running: false,

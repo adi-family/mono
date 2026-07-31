@@ -22,13 +22,27 @@ impl Output {
 
 /// Run `argv` (program + args) to completion; `argv[0]` must be absolute or on `PATH`.
 pub fn run<S: AsRef<OsStr>>(argv: &[S]) -> Output {
+    run_with_env(&[], argv)
+}
+
+/// [`run`], with `env` layered **over** the inherited environment rather than replacing it.
+///
+/// The systemd back-end is what needs this: `systemctl --user` reaches the per-user manager over
+/// the bus under `XDG_RUNTIME_DIR`, which a non-login context (a cron job, `ssh node adi up`) does
+/// not set — so the supervisor supplies it instead of failing on an environment detail.
+pub fn run_with_env<S: AsRef<OsStr>>(env: &[(&str, String)], argv: &[S]) -> Output {
     let Some((program, rest)) = argv.split_first() else {
         return Output {
             status: -1,
             text: "empty argv".to_string(),
         };
     };
-    match Command::new(program).args(rest).output() {
+    let mut command = Command::new(program);
+    command.args(rest);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    match command.output() {
         Ok(out) => {
             let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
             text.push_str(&String::from_utf8_lossy(&out.stderr));
@@ -54,7 +68,15 @@ pub fn run<S: AsRef<OsStr>>(argv: &[S]) -> Output {
 /// - **Windows:** `code` is a **PowerShell** script, staged to a temp `.ps1` and launched
 ///   elevated via `Start-Process -Verb RunAs` (one UAC prompt); the elevated exit code is
 ///   propagated back.
-#[cfg(unix)]
+///
+/// There is no Linux arm, on purpose. It is not that elevation is impossible there — it is that
+/// there is no equivalent of *this* function: `osascript` and `RunAs` both raise a prompt the
+/// desktop session owns, and Linux's counterparts (`pkexec`, `sudo` with an askpass) need an agent
+/// a headless node does not have. `adi-core`'s Linux privileged steps therefore go through
+/// `sudo -n` — which never prompts — and print what to run when that is refused; see
+/// [`crate::dns`]. Gating this per `target_os` rather than `unix` is what keeps a Linux build from
+/// compiling a call to an `osascript` that is not there.
+#[cfg(target_os = "macos")]
 pub fn run_admin(code: &str) -> Output {
     // Escape for AppleScript string literal: backslash first, then double-quote.
     let escaped = code.replace('\\', "\\\\").replace('"', "\\\"");

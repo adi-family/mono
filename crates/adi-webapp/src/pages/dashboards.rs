@@ -4,6 +4,10 @@
 //! A dashboard's UI is loose `.ts` files — `frontend/modules/*.ts` panels and
 //! `backend/routes/*.ts` endpoints — so the module and route lists, not the two fixed entry
 //! points, are what actually tell you what a dashboard does. That is what this page surfaces.
+//!
+//! Every link out of this page goes to a dashboard's **host**, not to a port — see [`open_url`].
+//! A dashboard is one origin (`docs/fleet.md` §4), and only its host routes the `/api` prefix its
+//! page calls.
 
 use adi_webapp_api::types::{Dashboard, DashboardsState, NewDashboard};
 use leptos::prelude::*;
@@ -208,37 +212,75 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
         "Project" => view! { <td>{project_cell(state, d)}</td> }.into_any(),
         // Only the frontend is a link — the backend serves JSON to the page, not the reader.
         "Frontend" => {
-            view! { <td>{service_cell(d.frontend_port, d.frontend_running, true)}</td> }.into_any()
+            view! { <td>{service_cell(d.frontend_port, d.frontend_running, open_url(d))}</td> }
+                .into_any()
         }
         "Backend" => {
-            view! { <td>{service_cell(d.backend_port, d.backend_running, false)}</td> }.into_any()
+            view! { <td>{service_cell(d.backend_port, d.backend_running, None)}</td> }.into_any()
         }
         "Modules" => view! { <td class="adi-mono">{summarize(&d.modules)}</td> }.into_any(),
         "Routes" => view! { <td class="adi-mono">{summarize(&d.routes)}</td> }.into_any(),
         // "Dashboard", and anything the layout offers that this match doesn't name.
         _ => {
-            let name = match d.frontend_port.filter(|_| d.frontend_running) {
-                Some(port) => {
-                    let href = format!("http://127.0.0.1:{port}");
-                    view! {
-                        <a href=href.clone() target="_blank" rel="noreferrer" title=href>
-                            {d.name.clone()}
-                        </a>
-                    }
-                    .into_any()
+            let name = match open_url(d) {
+                Some(href) => view! {
+                    <a href=href.clone() target="_blank" rel="noreferrer" title=href>
+                        {d.name.clone()}
+                    </a>
                 }
-                // Nothing is listening, so a link would only 404 — show the name plainly.
+                .into_any(),
+                // Nothing is listening, so a link would only fail — show the name plainly.
                 None => view! { <span>{d.name.clone()}</span> }.into_any(),
             };
             view! {
                 <td>
                     <div>{name}</div>
                     <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
+                    {no_host_hint(d)}
                 </td>
             }
             .into_any()
         }
     }
+}
+
+/// Where to actually open a dashboard, or `None` when nothing is up to open.
+///
+/// **Its host, whenever it has one** (`docs/fleet.md` §4). A dashboard is one origin: the page its
+/// frontend serves calls the backend at `/api` on that same host, and only the front door routes
+/// that prefix. So `http://127.0.0.1:<frontend port>` yields a page that loads and then 404s every
+/// request it makes — it is the fallback for a dashboard with no routable name, never the default.
+pub(crate) fn open_url(d: &Dashboard) -> Option<String> {
+    if !d.frontend_running {
+        return None;
+    }
+    routable_host(d).map_or_else(
+        || d.frontend_port.map(|port| format!("http://127.0.0.1:{port}")),
+        |host| Some(format!("http://{host}/")),
+    )
+}
+
+/// The dashboard's hostname, with a blank one read as absent: a hand-edited hive file can carry a
+/// `host:` with nothing after it, and `http:///` is worse than no link at all.
+fn routable_host(d: &Dashboard) -> Option<&str> {
+    d.host.as_deref().map(str::trim).filter(|h| !h.is_empty())
+}
+
+/// The note under a dashboard that declares no `proxy.host`: it is reachable only on loopback, so
+/// the link above it bypasses the front door and the page's `/api` calls will not route. Said out
+/// loud rather than left as a link that half-works — the page renders, and only then falls over.
+fn no_host_hint(d: &Dashboard) -> AnyView {
+    if routable_host(d).is_some() {
+        return ().into_any();
+    }
+    view! {
+        <div class="adi-muted"
+            title="Give both of its services the same proxy.host in .adi/hive.yaml, and its \
+                   /api calls route through the front door.">
+            "no host yet — /api will not route"
+        </div>
+    }
+    .into_any()
 }
 
 /// The Project cell: a compact picker filing this dashboard under a project (or none). Choosing an
@@ -320,9 +362,11 @@ where
     apply_mutation(state, None, ok_msg, |s, d| s.dashboards.set(Some(d)), fut);
 }
 
-/// A service cell: the running led plus its loopback port, or a note when nothing is leased yet.
-/// Dashboards carry no hostname, so the port *is* the address — `link` makes it openable.
-fn service_cell(port: Option<u16>, running: bool, link: bool) -> AnyView {
+/// A service cell: the running led plus the loopback port the ports manager leased, or a note when
+/// nothing is leased yet. The port is a readout of what the supervisor allocated, no longer the
+/// address — `href` (from [`open_url`], so the dashboard's host when it has one) is what the cell
+/// opens, and only the frontend is ever given one.
+fn service_cell(port: Option<u16>, running: bool, href: Option<String>) -> AnyView {
     let Some(port) = port else {
         return view! { <span class="adi-muted">"not allocated"</span> }.into_any();
     };
@@ -331,11 +375,10 @@ fn service_cell(port: Option<u16>, running: bool, link: bool) -> AnyView {
     } else {
         ("down", format!(":{port} down"))
     };
-    // A dead port is not worth offering to open, so only a running frontend becomes a link.
-    let body = if link && running {
+    let body = if let Some(href) = href {
         view! {
-            <a class="adi-mono" href=format!("http://127.0.0.1:{port}") target="_blank"
-                rel="noreferrer" title=format!("http://127.0.0.1:{port}")>{label}</a>
+            <a class="adi-mono" href=href.clone() target="_blank"
+                rel="noreferrer" title=href>{label}</a>
         }
         .into_any()
     } else {

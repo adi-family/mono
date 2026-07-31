@@ -4,6 +4,7 @@
 mod agents;
 mod dashboards;
 mod db;
+mod fleet;
 mod hive;
 mod mesh;
 mod meta;
@@ -26,6 +27,7 @@ pub(crate) mod columns {
     pub(crate) use super::agents::{CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS};
     pub(crate) use super::dashboards::COLS as DASHBOARD_COLS;
     pub(crate) use super::db::{SCOPE_COLS as DB_SCOPE_COLS, TABLE_COLS as DB_TABLE_COLS};
+    pub(crate) use super::fleet::COLS as FLEET_COLS;
     pub(crate) use super::hive::COLS as HIVE_COLS;
     pub(crate) use super::mesh::{
         ALLOW_COLS as MESH_ALLOW_COLS, FORWARD_COLS as MESH_FORWARD_COLS,
@@ -48,6 +50,7 @@ pub(crate) mod columns {
 pub(crate) use agents::{agents_view, chat_home_view, live_view, poll_watch};
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
+pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use meta::{meta_bin_tools, meta_view};
@@ -75,6 +78,7 @@ mod tests {
         ("dashboards", c::DASHBOARD_COLS),
         ("db-scopes", c::DB_SCOPE_COLS),
         ("db-tables", c::DB_TABLE_COLS),
+        ("fleet", c::FLEET_COLS),
         ("hive", c::HIVE_COLS),
         ("leases", c::LEASE_COLS),
         ("used-ports", c::USED_PORT_COLS),

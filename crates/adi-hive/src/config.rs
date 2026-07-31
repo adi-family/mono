@@ -25,6 +25,14 @@ const HTTP_PORT_KEY: &str = "http";
 const FRONT_DOOR_NAME: &str = "adi-hive";
 const FRONT_DOOR_KEY: &str = "front-door";
 
+/// The reserved namespace for remote nodes: `<service>.<node>.n.adi` (docs/fleet.md §1). Nothing
+/// local may claim a name inside it, which is exactly what guarantees a remote name can never
+/// collide with a local `<service>.adi` — the two zones are disjoint by construction.
+pub const MESH_ZONE: &str = "n.adi";
+
+/// The suffix form of [`MESH_ZONE`], so a host *inside* the zone is a plain suffix test.
+const MESH_SUFFIX: &str = ".n.adi";
+
 // MARK: parsed hive.yaml (proxy-relevant subset)
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -54,6 +62,34 @@ pub struct ProxyBinds {
     /// Optional front-door name; the ports-manager lease key when the bind port is manager-allocated.
     #[serde(default)]
     pub name: Option<String>,
+    /// Route imported services, never launch them — say it, rather than let it be inferred.
+    ///
+    /// Two hives read the same imports: the **front door**, which must only route, and the
+    /// per-user **supervisor**, which must actually run things. Until now the difference was
+    /// guessed from the effective uid — root means front door — which held only because on macOS
+    /// the front door is a root daemon. On a Linux node it runs unprivileged (there is no root
+    /// daemon by design), so the guess inverted: the front door kept every imported runner and
+    /// launched a second copy of every dashboard, racing the supervisor for the same leased
+    /// ports. A config key cannot be wrong about which instance it is.
+    ///
+    /// `true` here forces route-only; running as root still implies it, so existing configs are
+    /// unaffected.
+    #[serde(default)]
+    pub routes_only: bool,
+    /// Loopback address of the local **mesh gateway**. Set it and every `*.n.adi` host is forwarded
+    /// there verbatim instead of being matched against the service routes — one rule for the whole
+    /// fleet, because the gateway (not the front door) is what knows how to turn a hostname into a
+    /// peer key. Unset means this machine has no mesh, and such a host gets the
+    /// [mesh-unavailable page](crate::notfound::mesh_unavailable) rather than a misleading 404.
+    #[serde(default)]
+    pub mesh_gateway: Option<SocketAddr>,
+    /// Petnames of the paired nodes whose `*.<node>.n.adi` names the front door's TLS leaf should
+    /// cover. Only TLS reads this — routing never needs it, since one gateway rule covers every
+    /// node. It exists because a wildcard label matches exactly one level, so `<service>.<node>.n.adi`
+    /// needs a *per-node* wildcard in the certificate (see [`crate::tls`]); pairing appends the
+    /// petname here so the next start mints a leaf that covers it.
+    #[serde(default)]
+    pub mesh_nodes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -84,9 +120,16 @@ pub struct ServiceSpec {
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServiceProxy {
     pub host: String,
-    /// Accepted (part of the hive schema) but unused: routing is host-based for now.
+    /// An optional path prefix this service claims **on** [`Self::host`], so several services can
+    /// share one hostname: a dashboard's `frontend` takes the host, its `backend` takes
+    /// `path: /api`. That is what lets a dashboard be *one origin* — the page uses relative URLs
+    /// only and therefore works unchanged under `nosh.adi`, `nosh.laptop-b.n.adi` or a real
+    /// customer domain (docs/fleet.md §4).
+    ///
+    /// Longest prefix wins; a service with no path is the host's fallback. `/` means the same as
+    /// no path at all — it is the fallback either way, which is why the many configs written with
+    /// `path: /` keep behaving exactly as before.
     #[serde(default)]
-    #[allow(dead_code)]
     pub path: Option<String>,
 }
 
@@ -697,10 +740,13 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 // MARK: resolution — from the parsed spec to what the daemon runs
 
-/// One routing rule the proxy enforces: `Host: host` → `upstream`.
+/// One routing rule the proxy enforces: `Host: host` (optionally under `path`) → `upstream`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedRoute {
     pub host: String,
+    /// The path prefix this route claims on `host`, already normalised by [`path_prefix`].
+    /// `None` is the host's fallback route — the shape every pre-`proxy.path` config has.
+    pub path: Option<String>,
     pub upstream: SocketAddr,
 }
 
@@ -713,19 +759,73 @@ pub struct Resolved {
     /// unprivileged dev run.
     pub tls_binds: Vec<SocketAddr>,
     pub routes: Vec<ResolvedRoute>,
+    /// Where `*.n.adi` goes, if anywhere. See [`ProxyBinds::mesh_gateway`].
+    pub mesh_gateway: Option<SocketAddr>,
+    /// Paired node petnames, for the TLS leaf only. See [`ProxyBinds::mesh_nodes`].
+    pub mesh_nodes: Vec<String>,
     pub skipped: Vec<String>,
+}
+
+/// The comparable form of a `Host` header value: lowercased, without the optional `:port` and
+/// without the trailing root dot a resolver-literal name may carry. Both a config's `proxy.host`
+/// and a request's `Host` go through this, so the two are compared in the same shape.
+#[must_use]
+pub fn host_key(host: &str) -> String {
+    let host = host.trim();
+    let host = host.split(':').next().unwrap_or(host);
+    host.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// Whether this hostname lives in the reserved [`MESH_ZONE`] — i.e. names a service on a *remote*
+/// node rather than anything on this machine.
+#[must_use]
+pub fn is_mesh_host(host: &str) -> bool {
+    let key = host_key(host);
+    key == MESH_ZONE || key.ends_with(MESH_SUFFIX)
+}
+
+/// The node label out of `<service>.<node>.n.adi`, for the error page that has to name it. The
+/// front door deliberately learns nothing else from the name: which peer key a node maps to, and
+/// which service label it exposes, are the gateway's business (docs/fleet.md §3).
+#[must_use]
+pub fn mesh_node(host: &str) -> Option<String> {
+    let key = host_key(host);
+    let head = key.strip_suffix(MESH_SUFFIX)?;
+    let node = head.rsplit('.').next().unwrap_or(head);
+    (!node.is_empty()).then(|| node.to_string())
+}
+
+/// Normalise a configured `proxy.path` into the prefix the router matches on: `None` (this route
+/// is the host's fallback) or a `/`-rooted prefix with no trailing slash, so `/api`, `/api/` and
+/// `api` all describe the same claim. `/` normalises to `None` — a prefix that matches every path
+/// *is* the fallback, and saying so once here keeps the matcher from having to special-case it.
+#[must_use]
+pub fn path_prefix(raw: Option<&str>) -> Option<String> {
+    let trimmed = raw?.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(if trimmed.starts_with('/') {
+        trimmed.to_string()
+    } else {
+        format!("/{trimmed}")
+    })
 }
 
 impl Hive {
     /// Load a hive.yaml and fan in every service reachable through its `imports`, so one hive can
     /// front-door an entire machine.
+    ///
+    /// # Errors
+    /// Fails only on *this* file: unreadable, or not valid hive YAML. An import that is either is
+    /// logged and skipped — one broken project must not take the whole front door down with it.
     pub fn load(path: &Path) -> anyhow::Result<Self> {
         let mut hive = Self::parse_file(path)?;
         hive.apply_imports(path);
         Ok(hive)
     }
 
-    /// Parse a single hive.yaml with no import expansion: rewrite `bash`…`` port commands into
+    /// Parse a single hive.yaml with no import expansion: rewrite ``bash`…` `` port commands into
     /// valid YAML placeholders, then parse with the command table installed so port fields run
     /// their commands on read.
     fn parse_file(path: &Path) -> anyhow::Result<Self> {
@@ -748,7 +848,9 @@ impl Hive {
     ///
     /// Best-effort: an unreadable or unparsable import is logged and skipped, never fatal.
     fn apply_imports(&mut self, base: &Path) {
-        let strip_runners = running_as_root();
+        // The declared intent wins; root still implies it, so a config that predates the key
+        // behaves exactly as before.
+        let strip_runners = self.proxy.routes_only || running_as_root();
         let patterns = std::mem::take(&mut self.imports);
         for pattern in patterns {
             for file in find_imports(&expand_vars(&pattern)) {
@@ -764,11 +866,11 @@ impl Hive {
                             child,
                             &import_namespace(&file),
                             strip_runners,
-                            import_base_dir(&file),
+                            import_base_dir(&file).as_deref(),
                         );
                     }
                     Err(e) => {
-                        warn!(file = %file.display(), error = %e, "skipping unreadable import")
+                        warn!(file = %file.display(), error = %e, "skipping unreadable import");
                     }
                 }
             }
@@ -777,13 +879,13 @@ impl Hive {
 
     /// Merge one imported hive's services under `ns`, dropping their runners when
     /// `strip_runners`. An already-present key wins, so a local service is never overridden.
-    fn merge_import(&mut self, child: Self, ns: &str, strip_runners: bool, dir: Option<PathBuf>) {
+    fn merge_import(&mut self, child: Self, ns: &str, strip_runners: bool, dir: Option<&Path>) {
         for (name, mut svc) in child.services {
             if strip_runners {
                 svc.runner = None;
             }
             // Remember where this service came from, so its runner's relative paths resolve there.
-            svc.base_dir.clone_from(&dir);
+            svc.base_dir = dir.map(Path::to_path_buf);
             self.services.entry(format!("{ns}/{name}")).or_insert(svc);
         }
     }
@@ -802,9 +904,23 @@ impl Hive {
             let Some(proxy) = &svc.proxy else {
                 continue;
             };
+            // `n.adi` belongs to remote nodes and to nothing else. Honouring a local claim on it
+            // would let any imported project shadow a whole fleet's namespace, so the route is
+            // dropped here rather than deprioritised in the router — the collision must be
+            // impossible, not merely unlikely.
+            if is_mesh_host(&proxy.host) {
+                warn!(service = %name, host = %proxy.host,
+                      "`{MESH_ZONE}` is reserved for remote nodes; refusing this route");
+                skipped.push(format!(
+                    "{name} (host {}): `{MESH_ZONE}` is reserved for remote nodes",
+                    proxy.host
+                ));
+                continue;
+            }
             match svc.http_port() {
                 Some(port) => routes.push(ResolvedRoute {
                     host: proxy.host.clone(),
+                    path: path_prefix(proxy.path.as_deref()),
                     upstream: SocketAddr::new(UPSTREAM_IP, port),
                 }),
                 None => skipped.push(format!("{name} (host {}): no HTTP port", proxy.host)),
@@ -814,6 +930,8 @@ impl Hive {
             binds,
             tls_binds: self.proxy.tls_bind.clone(),
             routes,
+            mesh_gateway: self.proxy.mesh_gateway,
+            mesh_nodes: self.proxy.mesh_nodes.clone(),
             skipped,
         }
     }
@@ -901,6 +1019,133 @@ services:
         );
 
         assert!(r.skipped.is_empty(), "postgres is silently not-routed");
+    }
+
+    /// The shipped example is documentation, and documentation rots. Load it for real so a field
+    /// renamed here can't leave the worked example describing a schema that no longer exists.
+    #[test]
+    fn the_worked_example_hive_yaml_still_parses_and_resolves() {
+        let example = Path::new(env!("CARGO_MANIFEST_DIR")).join(HIVE_CONFIG_FILE);
+        let hive = Hive::load(&example).expect("the example hive.yaml loads");
+        let r = hive.resolve();
+        // Against the platform constant, not a literal: the example is what an operator copies,
+        // so if it drifts from the port adi-mesh actually binds, the copy silently 502s.
+        assert_eq!(r.mesh_gateway, Some(adi_config::mesh_gateway_addr()));
+        assert_eq!(r.mesh_nodes, vec!["laptop-b".to_string()]);
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+        let nosh: Vec<_> = r.routes.iter().filter(|x| x.host == "nosh.adi").collect();
+        assert_eq!(nosh.len(), 2, "the one-origin dashboard is two routes");
+        assert!(nosh.iter().any(|x| x.path.as_deref() == Some("/api")));
+        assert!(nosh.iter().any(|x| x.path.is_none()));
+    }
+
+    #[test]
+    fn a_service_path_becomes_a_normalised_route_prefix() {
+        // One host, two services: the frontend owns it, the backend claims `/api` on it.
+        let hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  frontend:
+    proxy: { host: nosh.adi }
+    rollout: { recreate: { ports: { http: 8010 } } }
+  backend:
+    proxy: { host: nosh.adi, path: /api/ }
+    rollout: { recreate: { ports: { http: 8011 } } }
+",
+        )
+        .unwrap();
+        let mut got: Vec<(String, Option<String>, u16)> = hive
+            .resolve()
+            .routes
+            .into_iter()
+            .map(|r| (r.host, r.path, r.upstream.port()))
+            .collect();
+        got.sort();
+        assert_eq!(
+            got,
+            vec![
+                ("nosh.adi".to_string(), None, 8010),
+                ("nosh.adi".to_string(), Some("/api".to_string()), 8011),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_slash_path_is_the_host_fallback_just_like_no_path() {
+        // Every config written before `proxy.path` did anything says `path: /`. It must stay the
+        // plain host route, or those configs would change behaviour under the new matcher.
+        assert_eq!(path_prefix(None), None);
+        assert_eq!(path_prefix(Some("/")), None);
+        assert_eq!(path_prefix(Some("   ")), None);
+        assert_eq!(path_prefix(Some("/api")), Some("/api".to_string()));
+        assert_eq!(path_prefix(Some("/api/")), Some("/api".to_string()));
+        assert_eq!(path_prefix(Some("api")), Some("/api".to_string()));
+        assert_eq!(path_prefix(Some(" /api/v1 ")), Some("/api/v1".to_string()));
+    }
+
+    #[test]
+    fn a_service_may_not_claim_a_host_in_the_reserved_mesh_zone() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            r"
+services:
+  impostor:
+    proxy: { host: app.laptop-b.n.adi }
+    rollout: { recreate: { ports: { http: 8010 } } }
+  apex:
+    proxy: { host: n.adi }
+    rollout: { recreate: { ports: { http: 8011 } } }
+  local:
+    proxy: { host: app.adi }
+    rollout: { recreate: { ports: { http: 8012 } } }
+",
+        )
+        .unwrap();
+        let r = hive.resolve();
+        assert_eq!(
+            r.routes.iter().map(|x| x.host.as_str()).collect::<Vec<_>>(),
+            vec!["app.adi"],
+            "only the local host is routable"
+        );
+        assert_eq!(r.skipped.len(), 2);
+        assert!(r.skipped.iter().all(|s| s.contains("reserved")), "{:?}", r.skipped);
+    }
+
+    #[test]
+    fn recognises_the_reserved_mesh_zone_and_reads_the_node_out_of_it() {
+        assert!(is_mesh_host("nosh.laptop-b.n.adi"));
+        assert!(is_mesh_host("NOSH.Laptop-B.N.ADI:443"));
+        assert!(is_mesh_host("n.adi"));
+        // A name that merely *contains* the labels is not in the zone.
+        assert!(!is_mesh_host("app.adi"));
+        assert!(!is_mesh_host("n.adi.example.com"));
+        assert!(!is_mesh_host("notn.adi"));
+
+        assert_eq!(mesh_node("nosh.laptop-b.n.adi").as_deref(), Some("laptop-b"));
+        assert_eq!(mesh_node("laptop-b.n.adi").as_deref(), Some("laptop-b"));
+        assert_eq!(mesh_node("a.b.laptop-b.n.adi").as_deref(), Some("laptop-b"));
+        assert_eq!(mesh_node("n.adi"), None, "the zone apex names no node");
+        assert_eq!(mesh_node("app.adi"), None);
+    }
+
+    #[test]
+    fn the_mesh_gateway_and_node_list_are_read_from_the_proxy_block() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            r#"
+proxy:
+  bind: ["127.0.0.1:8080"]
+  mesh_gateway: "127.0.0.1:8099"
+  mesh_nodes: [laptop-b, tower]
+"#,
+        )
+        .unwrap();
+        let r = hive.resolve();
+        assert_eq!(r.mesh_gateway, "127.0.0.1:8099".parse().ok());
+        assert_eq!(r.mesh_nodes, vec!["laptop-b".to_string(), "tower".to_string()]);
+
+        // Absent by default — a hive that says nothing about the mesh has none.
+        let bare = Hive::default().resolve();
+        assert_eq!(bare.mesh_gateway, None);
+        assert!(bare.mesh_nodes.is_empty());
     }
 
     #[test]
@@ -1009,6 +1254,65 @@ services:
         );
     }
 
+    /// `routes_only` must strip imported runners for an **unprivileged** hive — the whole point
+    /// of the key. Root already stripped them, which is why the front door behaved on macOS and
+    /// misbehaved on a Linux node: unprivileged there, it kept every imported runner and started
+    /// a second copy of every dashboard against the supervisor's own leased ports.
+    #[test]
+    fn a_routes_only_hive_imports_routes_without_runners() {
+        let base = std::env::temp_dir().join(format!(
+            "adi-hive-routesonly-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let proj = base.join("proj/.adi");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::write(
+            proj.join("hive.yaml"),
+            "services:\n  app:\n    proxy: { host: proj.adi }\n    rollout: { recreate: { ports: { http: 9124 } } }\n    runner: { type: script, script: { run: \"echo hi\" } }\n",
+        )
+        .unwrap();
+
+        assert!(
+            !running_as_root(),
+            "this test asserts the unprivileged path; run it as a normal user"
+        );
+
+        // Same imports, the flag the only difference.
+        let importer = |routes_only: bool, name: &str| {
+            let path = base.join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "proxy:\n  routes_only: {routes_only}\nimports:\n  - {}/**/hive.yaml\n",
+                    base.display()
+                ),
+            )
+            .unwrap();
+            Hive::load(&path).expect("load with imports")
+        };
+
+        let supervisor = importer(false, "supervisor.yaml");
+        assert!(
+            supervisor.services["proj/app"].runner.is_some(),
+            "without the flag an unprivileged hive still supervises what it imports"
+        );
+
+        let front_door = importer(true, "frontdoor.yaml");
+        let svc = &front_door.services["proj/app"];
+        assert!(
+            svc.runner.is_none(),
+            "routes_only must drop the runner, or two hives race to run one service"
+        );
+        assert_eq!(
+            svc.proxy.as_ref().expect("proxy").host,
+            "proj.adi",
+            "the route survives — dropping the runner must not drop the reason to import"
+        );
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     #[test]
     fn imports_fan_in_project_services_namespaced_and_runnable() {
         let base = std::env::temp_dir().join(format!(
@@ -1084,7 +1388,7 @@ services:
         // An unprivileged import keeps the runner AND records the import's directory, so its runner
         // resolves relative paths there rather than under the importer.
         let mut user = Hive::default();
-        user.merge_import(child, "proj", false, Some(PathBuf::from("/srv/proj")));
+        user.merge_import(child, "proj", false, Some(Path::new("/srv/proj")));
         let svc = &user.services["proj/app"];
         assert!(
             svc.runner.is_some(),
@@ -1116,7 +1420,7 @@ services:
         )
         .expect("parse child");
         let mut sup = Hive::default();
-        sup.merge_import(child, "proj", false, Some(PathBuf::from("/home/u/.adi/mono/projects/proj")));
+        sup.merge_import(child, "proj", false, Some(Path::new("/home/u/.adi/mono/projects/proj")));
 
         // The supervisor's own base_dir is elsewhere; the imported service must ignore it.
         let runners = sup.runners(Path::new("/home/u/.adi/mono/dashboards"));

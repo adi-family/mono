@@ -20,6 +20,7 @@ pub(crate) enum Icon {
     Server,
     Plug,
     Mesh,
+    Node,
     Box,
     Layers,
     File,
@@ -82,6 +83,12 @@ impl Icon {
                    <circle cx="12.75" cy="12.25" r="1.75"/>
                    <path d="M6.9 4.8L4.35 10.7M9.1 4.8l2.55 5.9M5 12.25h6"/>"#
             }
+            // A screen on a stand — a remote *machine*, as against `Mesh`'s links between them.
+            // The fleet page is about the nodes themselves, so the two must not read alike.
+            Icon::Node => {
+                r#"<rect x="1.75" y="2.25" width="12.5" height="8.5" rx="1"/>
+                   <path d="M8 10.75v2.25M5.25 13.75h5.5"/>"#
+            }
             Icon::Box => {
                 r#"<path d="M8 1.75l5.75 3.1v6.3L8 14.25l-5.75-3.1v-6.3z"/>
                    <path d="M2.25 4.85L8 7.95l5.75-3.1M8 7.95v6.3"/>"#
@@ -137,6 +144,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Hive => Icon::Server,
         Route::PortsManager => Icon::Plug,
         Route::Mesh => Icon::Mesh,
+        Route::Fleet => Icon::Node,
         // Reached from the Store rail rather than the explorer, so this icon is a fallback.
         Route::StoreFile => Icon::Doc,
     }

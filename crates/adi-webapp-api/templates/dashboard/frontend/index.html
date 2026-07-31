@@ -100,12 +100,30 @@
     <main id="app"></main>
 
     <script type="module">
-      // Runtime config injected by frontend/index.ts.
+      // Runtime config injected by frontend/index.ts: which dashboard this is and which modules
+      // to mount. No address, by design — see below.
       const config = __ADI_CONFIG__;
+
+      // One dashboard is one origin. The backend is a sibling hive service claiming `/api` on
+      // this very host, so its base is a *relative* path and every call the page makes is
+      // same-origin. Nothing here may ever become an absolute URL: this page is served under its
+      // local `.adi` name, under `<label>.<node>.n.adi` when someone views it over the mesh from
+      // another machine, and under a real domain later — an absolute URL would pin it to one of
+      // those, and a loopback address would pin it to whichever machine the *browser* is on.
+      const api = "/api";
 
       // adi-agent editor launcher — a floating button that opens the control panel's embedded
       // adi-agent chat, scoped to this dashboard, so you can edit its .ts files by chatting with it.
+      //
+      // The panel that can edit these files is the one on the machine this dashboard runs on, so
+      // the host is derived from where the page came from rather than hardcoded: on `nosh.adi`
+      // that is `app.adi`, and viewed over the mesh on `nosh.laptop-b.n.adi` it is
+      // `app.laptop-b.n.adi` — that node's panel, not the viewer's. Opened by port there is no
+      // name to derive from, and then the local panel is the only sensible guess.
       (() => {
+        const host = location.hostname.endsWith(".adi")
+          ? location.hostname.replace(/^[^.]+/, "app")
+          : "app.adi";
         const btn = document.createElement("button");
         btn.textContent = "✎ edit";
         btn.title = "Edit this dashboard with adi-agent";
@@ -116,7 +134,8 @@
           "box-shadow:0 2px 8px rgba(0,0,0,.18);";
         btn.addEventListener("click", () => {
           const url =
-            "//app.adi/embed/dashboard-agent?dashboard=" + encodeURIComponent(config.dashboard);
+            "//" + host + "/embed/dashboard-agent?dashboard=" +
+            encodeURIComponent(config.dashboard);
           window.open(url, "adi-dashboard-agent", "width=480,height=760");
         });
         document.body.append(btn);
@@ -125,14 +144,10 @@
       const app = document.getElementById("app");
       const status = document.getElementById("status");
 
-      // The backend is a sibling hive service with no proxy host — reached directly by port.
-      const api = config.backendPort
-        ? `http://127.0.0.1:${config.backendPort}`
-        : null;
-
       /**
        * What every module receives. `api.get`/`api.post` are pre-bound to the backend, so a
-       * module never has to know the port; `panel()` gives it a titled card to render into.
+       * module never has to know — or be able to state — where it lives; `panel()` gives it a
+       * titled card to render into.
        */
       function context(id) {
         return {
@@ -140,13 +155,11 @@
           api: {
             base: api,
             async get(path) {
-              if (!api) throw new Error("backend offline");
               const r = await fetch(api + path);
               if (!r.ok) throw new Error(`${path}: ${r.status}`);
               return r.json();
             },
             async post(path, body) {
-              if (!api) throw new Error("backend offline");
               const r = await fetch(api + path, {
                 method: "POST",
                 headers: { "content-type": "application/json" },
@@ -171,16 +184,16 @@
 
       async function boot() {
         // Report backend reachability up front — a dead backend should be visible, not silent.
+        // A dashboard opened by port instead of by hostname lands here too: nothing routes `/api`
+        // on that origin, so the probe fails and the header says so.
         let online = false;
-        if (api) {
-          try {
-            const r = await fetch(api + "/health");
-            online = r.ok;
-          } catch {}
-        }
+        try {
+          const r = await fetch(api + "/health");
+          online = r.ok;
+        } catch {}
         status.innerHTML = `<span class="dot ${online ? "" : "off"}"></span>` +
           `${config.dashboard.slice(0, 8)} · ${config.modules.length} module(s) · ` +
-          (api ? `backend ${online ? "up" : "down"} :${config.backendPort}` : "no backend");
+          `backend ${online ? "up" : "down"}`;
 
         if (!config.modules.length) {
           app.innerHTML =

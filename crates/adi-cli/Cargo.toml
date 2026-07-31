@@ -16,9 +16,22 @@ path = "src/main.rs"
 
 [dependencies]
 adi-core = { workspace = true }
+
+# The `mesh` command group (docs/fleet.md E3). This is what pulls iroh into `adi-mono`, and it is
+# a deliberate trade: a node is enrolled over ssh or cloud-init, where there is no control panel
+# and often no second binary, so pairing has to be reachable from a shell on the box itself. The
+# escape hatch, if the binary size ever matters more than that, is a Cargo feature — not a second
+# CLI, which would only move the same code behind a name nobody has on the node.
+adi-mesh = { workspace = true }
+
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# `mesh join` dials out and awaits one handshake; every other subcommand is synchronous. So the
+# runtime is built inside that one arm rather than wrapping `main`, and only the drivers that
+# handshake needs are compiled in.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
 
 [lints]
 workspace = true

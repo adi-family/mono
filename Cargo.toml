@@ -51,6 +51,7 @@ adi-css = { path = "crates/adi-css" }
 adi-db = { path = "crates/adi-db" }
 adi-events = { path = "crates/adi-events" }
 adi-fs = { path = "crates/adi-fs" }
+adi-hive = { path = "crates/adi-hive" }
 adi-hooks = { path = "crates/adi-hooks" }
 adi-mesh = { path = "crates/adi-mesh" }
 adi-osext = { path = "crates/adi-osext" }

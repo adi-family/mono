@@ -54,6 +54,47 @@ pub use module::Module;
 /// it at every call site.
 pub const MANIFEST_EXT: &str = "toml";
 
+/// Where the mesh gateway listens, and therefore where the front door sends the whole `n.adi`
+/// zone (see `docs/fleet.md` §3).
+///
+/// It lives here because **two crates that cannot see each other have to agree on it**:
+/// `adi-core` writes the front door's `proxy.mesh_gateway` into the generated hive config, and
+/// `adi-mesh` binds the listener. Neither depends on the other, and the two ends never
+/// handshake — the front door reads a file written once, the gateway binds at start-up — so a
+/// number typed twice would fail silently, as a `502` with nothing listening. Both crates
+/// already depend on this one, so a single constant makes the compiler keep them in step.
+///
+/// A fixed port rather than a ports-manager lease for the same reason: a lease that moved
+/// between allocations would leave the front door pointing at nothing. `10080` is outside the
+/// allocator's `8000..=9999` range (so no project can ever be handed it), clear of `15353` and
+/// the `adi daemon` band around it, and in the same fixed `10xxx` band as the resolver's
+/// `10053`.
+pub const MESH_GATEWAY_PORT: u16 = 10080;
+
+/// Where the *generated* front-door config lives: module dir and file name.
+///
+/// Two crates have to agree on this for the same reason as [`MESH_GATEWAY_PORT`]: `adi-core`
+/// writes this file (it is the front door a node actually runs), and `adi-mesh`'s gateway reads
+/// it to answer "which local port serves this service label?". A machine may also carry a
+/// hand-managed `hive/hive.yaml` — the richer one that imports projects and dashboards — and
+/// where both exist that one wins. But a freshly installed node has *only* this file, so a
+/// gateway that knew only the hand-managed path would resolve every label to nothing and refuse
+/// every request with "no such service".
+pub const FRONTDOOR_MODULE: &str = "dns";
+
+/// The generated front-door config's file name within [`FRONTDOOR_MODULE`].
+pub const FRONTDOOR_CONFIG_FILE: &str = "hive-frontdoor.yaml";
+
+/// The mesh gateway's loopback address — [`MESH_GATEWAY_PORT`] on `127.0.0.1`.
+///
+/// Loopback only, and deliberately: the gateway is reached through the front door, never from
+/// off-machine. Binding it anywhere else would hand every service of every paired node to the
+/// local network, with no password in front of it until the far side asks for one.
+#[must_use]
+pub fn mesh_gateway_addr() -> std::net::SocketAddr {
+    std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, MESH_GATEWAY_PORT))
+}
+
 /// The settings store: one directory that hands out per-[module](Module) settings
 /// directories. Cheap to clone; holds only the root path.
 #[derive(Debug, Clone)]
