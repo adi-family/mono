@@ -17,6 +17,14 @@ fi
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
+# Same version rule as the three packaging scripts (scripts/version.sh): without it a dev
+# build reports the workspace floor, so a control panel run from target/ claims 0.1.0 while
+# the bundle beside it is on the released version — which reads as a failed auto-update and
+# is not one.
+ADI_VERSION="$("$repo_root/scripts/version.sh")"
+export ADI_VERSION
+echo "==> version: $ADI_VERSION"
+
 if ! command -v trunk >/dev/null 2>&1; then
   echo "error: 'trunk' is not installed. Install it with:  brew install trunk" >&2
   echo "       (or: cargo install trunk)" >&2
