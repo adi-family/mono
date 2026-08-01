@@ -8,6 +8,16 @@
 //! node's absolute redirects point at a same-named host on the *viewer's* machine, and stripping a
 //! path prefix would make a dashboard's backend answer at a different URL than the page asked for.
 //! What the front door matched and what the upstream reads are the same bytes.
+//!
+//! The single exception is `Connection`, and only on a host that two services share by path prefix
+//! (see [`force_connection_close`]). Splicing decides the upstream once per *connection*, while on
+//! such a host the upstream is a property of each *request* — so those connections are made
+//! single-request rather than routed on their first request's behalf. Both ends are told: the
+//! upstream, so it may hang up early, and the client in the response head, because that is the
+//! half that decides whether a second request goes down this socket and an upstream is free to
+//! ignore what it was asked. `Connection` is hop-by-hop: it addresses this socket alone, so
+//! rewriting it tells a downstream node nothing and moves no address, which is exactly why it is
+//! the header that may be touched.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -142,6 +152,20 @@ impl Router {
             .or(fallback)
             .map_or(Decision::NoRoute, |route| Decision::Service(route.upstream))
     }
+
+    /// Whether this host is *carved up*: some route on it claims a path prefix, so which upstream
+    /// answers depends on the request and not merely on the host.
+    ///
+    /// [`handle`] asks this before it splices. A host owned end to end by one service routes the
+    /// same way for every path, so a connection may be handed over whole; a carved one may not,
+    /// because the second request on a keep-alive socket can belong to the other service.
+    #[must_use]
+    pub fn host_is_carved(&self, host: &str) -> bool {
+        let host = host_key(host);
+        self.routes
+            .iter()
+            .any(|r| r.host == host && r.path.is_some())
+    }
 }
 
 /// Whether `prefix` claims `path`, matched on **segment boundaries**: `/api` claims `/api` and
@@ -248,8 +272,11 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
     // The target only picks the route. A missing/unparsable request line routes as `/`, which is
     // the host's fallback — the same place a pre-prefix config always sent it.
     let target = extract_target(&head);
-    let upstream = match router.route(&host, target.as_deref().unwrap_or("/")) {
-        Decision::Service(upstream) | Decision::Mesh(upstream) => upstream,
+    let (upstream, carved) = match router.route(&host, target.as_deref().unwrap_or("/")) {
+        Decision::Service(upstream) => (upstream, router.host_is_carved(&host)),
+        // A mesh host is one upstream — the gateway — whatever the path, and its head travels on to
+        // a node that does its own routing. Nothing here to carve, and nothing to rewrite.
+        Decision::Mesh(upstream) => (upstream, false),
         Decision::MeshUnavailable => {
             info!(%host, "mesh host, but no local mesh gateway is configured");
             return respond_mesh_unavailable(&mut client, &host).await;
@@ -278,8 +305,35 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
     };
     debug!(%host, %upstream, "proxying");
 
+    // The route above was decided from *this* request, but what follows is a byte splice: every
+    // later request on the same socket lands on the upstream this one picked. On a host owned by a
+    // single service that is free — the answer would be the same anyway. On a carved-up host it is
+    // wrong, and browsers make it wrong immediately: they fetch the page, then the page's `/api`
+    // calls down the very same keep-alive connection, where the front door is no longer looking at
+    // paths and hands them to the frontend that served `/`.
+    //
+    // So a carved host gets single-request connections: this request is answered, the client is
+    // told the connection ends with it, and its next one arrives on a fresh connection that is
+    // routed on its own request line. An upgrade is exempt — past its handshake the connection
+    // stops being a sequence of requests and belongs to one upstream by definition, which is the
+    // case splicing was written for.
+    let single_request = carved && !is_upgrade_request(&head);
+
     // Forward the head bytes we already consumed, then splice the rest both ways.
+    let head = if single_request {
+        force_connection_close(&head)
+    } else {
+        head
+    };
     server.write_all(&head).await?;
+
+    // Asking the upstream to close is the polite half and frees the socket early, but it is only a
+    // request: Bun's server — which every dashboard here runs on — reads `Connection: close` and
+    // keeps the connection open regardless. The half that actually decides is the client, so the
+    // response head says it too, on its way past.
+    if single_request {
+        forward_closing_response_head(&mut server, &mut client).await?;
+    }
 
     // `tokio::io::split` rather than TcpStream's inherent borrow-split: the client half is generic
     // now, and this is the one form that works for any stream (TLS included).
@@ -295,6 +349,57 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
     };
     tokio::join!(client_to_server, server_to_client);
     Ok(())
+}
+
+/// Pass the upstream's response head to the client with `Connection: close` in it, so a keep-alive
+/// client opens a fresh connection for whatever it asks next — which is the whole point on a carved
+/// host, where the next request may belong to the other service. Body bytes that arrive with the
+/// head go straight through, and the caller splices the rest.
+///
+/// An interim `1xx` head (the `100 Continue` an `Expect:` request draws out) is forwarded untouched
+/// and the search continues: it precedes the real response and says nothing about the connection.
+///
+/// A head that never terminates — a truncated upstream, or one past [`MAX_HEAD`] — is forwarded as
+/// it came. The connection then behaves as it did before this rewrite existed, which is the right
+/// failure: degraded, not broken.
+async fn forward_closing_response_head<S: ClientStream, C: ClientStream>(
+    server: &mut S,
+    client: &mut C,
+) -> anyhow::Result<()> {
+    let mut pending = Vec::new();
+    loop {
+        let Some(end) = head_end(&pending) else {
+            let more = read_head(server).await?;
+            if more.is_empty() {
+                // Upstream closed without a complete head; hand on what there is.
+                client.write_all(&pending).await?;
+                return Ok(());
+            }
+            pending.extend_from_slice(&more);
+            continue;
+        };
+        if is_informational(&pending) {
+            client.write_all(&pending[..end]).await?;
+            pending.drain(..end);
+            continue;
+        }
+        let body = pending.split_off(end);
+        client.write_all(&force_connection_close(&pending)).await?;
+        client.write_all(&body).await?;
+        return Ok(());
+    }
+}
+
+/// Whether a response head carries a `1xx` status — an interim answer, with the real one behind it.
+fn is_informational(head: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(head);
+    let Some(status) = text.split("\r\n").next() else {
+        return false;
+    };
+    status
+        .split(' ')
+        .nth(1)
+        .is_some_and(|code| code.starts_with('1') && code.len() == 3)
 }
 
 /// Read until the blank line ending the head, a size cap, or a timeout; the returned buffer is forwarded verbatim (may include first body bytes).
@@ -319,7 +424,105 @@ async fn read_head<S: ClientStream>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
 }
 
 fn head_complete(buf: &[u8]) -> bool {
-    buf.windows(4).any(|w| w == b"\r\n\r\n")
+    head_end(buf).is_some()
+}
+
+/// Index just past the `\r\n\r\n` ending the head, or `None` while the head is still incomplete.
+/// Anything after it is the start of the body, which the rewrite below must carry through untouched.
+fn head_end(buf: &[u8]) -> Option<usize> {
+    buf.windows(4).position(|w| w == b"\r\n\r\n").map(|i| i + 4)
+}
+
+/// The `\r\n`-separated lines of a head, without the empty one that terminates it.
+fn crlf_lines(buf: &[u8]) -> impl Iterator<Item = &[u8]> {
+    let mut rest = buf;
+    std::iter::from_fn(move || {
+        if rest.is_empty() {
+            return None;
+        }
+        match rest.windows(2).position(|w| w == b"\r\n") {
+            Some(i) => {
+                let (line, tail) = rest.split_at(i);
+                rest = &tail[2..];
+                Some(line)
+            }
+            None => Some(std::mem::take(&mut rest)),
+        }
+    })
+}
+
+/// Hop-by-hop headers about connection reuse — the ones [`force_connection_close`] replaces.
+const REUSE_HEADERS: [&[u8]; 3] = [b"connection", b"keep-alive", b"proxy-connection"];
+
+/// Whether the client is asking to leave HTTP behind on this connection (a WebSocket handshake, or
+/// any other `Upgrade`). Read from both spellings: the `Upgrade` header, and `upgrade` listed as a
+/// token in `Connection`.
+fn is_upgrade_request(head: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(head);
+    for line in text.split("\r\n") {
+        if line.is_empty() {
+            break;
+        }
+        let Some((name, value)) = line.split_once(':') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.eq_ignore_ascii_case("upgrade") && !value.trim().is_empty() {
+            return true;
+        }
+        if name.eq_ignore_ascii_case("connection")
+            && value
+                .split(',')
+                .any(|token| token.trim().eq_ignore_ascii_case("upgrade"))
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// The head with its connection-reuse headers replaced by a single `Connection: close`, marking this
+/// connection as ending with the exchange it carries.
+///
+/// Serves both directions — the first line is copied through whether it is a request line or a
+/// status line, and only the headers below it are touched. Every other header and any body bytes
+/// that arrived early are copied byte for byte: this is a rewrite of one hop-by-hop header, not a
+/// normalisation pass. A head whose end never arrived (a peer that stopped mid-headers, or one that
+/// ran past [`MAX_HEAD`]) is returned untouched — it cannot be edited safely, and forwarding it
+/// verbatim is what used to happen anyway.
+fn force_connection_close(head: &[u8]) -> Vec<u8> {
+    let Some(end) = head_end(head) else {
+        return head.to_vec();
+    };
+    let (headers, body) = head.split_at(end);
+    let mut out = Vec::with_capacity(head.len() + b"Connection: close\r\n".len());
+    // Everything up to the blank line's own CRLF: the request line and the headers. The terminator
+    // is written below, after the `Connection` we are putting in.
+    let mut dropped_previous = false;
+    for (i, line) in crlf_lines(&headers[..end - 2]).enumerate() {
+        if i > 0 {
+            if matches!(line.first(), Some(b' ' | b'\t')) {
+                // An obs-fold continuation line belongs to the header above it, so it lives or dies
+                // with it. Ancient, but a continuation left behind would be a header of its own.
+                if dropped_previous {
+                    continue;
+                }
+            } else {
+                let name = line.split(|b| *b == b':').next().unwrap_or_default();
+                dropped_previous = REUSE_HEADERS
+                    .iter()
+                    .any(|h| name.trim_ascii().eq_ignore_ascii_case(h));
+                if dropped_previous {
+                    continue;
+                }
+            }
+        }
+        out.extend_from_slice(line);
+        out.extend_from_slice(b"\r\n");
+    }
+    out.extend_from_slice(b"Connection: close\r\n\r\n");
+    out.extend_from_slice(body);
+    out
 }
 
 /// Pull the `Host` header value out of a raw request head (case-insensitive field name).
@@ -719,6 +922,218 @@ mod tests {
             received.await.unwrap(),
             REQUEST,
             "the gateway must see the original head, host and path included",
+        );
+    }
+
+    #[test]
+    fn a_host_two_services_share_is_carved_and_one_owned_end_to_end_is_not() {
+        let dashboard = Router::new(
+            &[
+                route("nosh.adi", None, "127.0.0.1:8010"),
+                route("nosh.adi", Some("/api"), "127.0.0.1:8011"),
+            ],
+            None,
+        );
+        assert!(dashboard.host_is_carved("nosh.adi"));
+        assert!(dashboard.host_is_carved("NOSH.adi:8080"), "same key rules");
+        assert!(!dashboard.host_is_carved("other.adi"), "not a host we route");
+        // The pre-prefix shape: one service, whole host, splice it whole.
+        assert!(!router().host_is_carved("app.test"));
+    }
+
+    #[test]
+    fn forcing_close_replaces_every_reuse_header_and_keeps_the_rest_byte_for_byte() {
+        let head = b"POST /api/x HTTP/1.1\r\nHost: nosh.adi\r\nConnection: keep-alive\r\n\
+                     Keep-Alive: timeout=5\r\nContent-Length: 2\r\n\r\nhi";
+        assert_eq!(
+            force_connection_close(head),
+            b"POST /api/x HTTP/1.1\r\nHost: nosh.adi\r\nContent-Length: 2\r\n\
+              Connection: close\r\n\r\nhi"
+                .to_vec(),
+            "the request line, the other headers and the early body all survive",
+        );
+    }
+
+    #[test]
+    fn forcing_close_adds_the_header_when_the_client_never_sent_one() {
+        assert_eq!(
+            force_connection_close(b"GET / HTTP/1.1\r\nHost: nosh.adi\r\n\r\n"),
+            b"GET / HTTP/1.1\r\nHost: nosh.adi\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+        // Field-name case and padding are the client's business, not a reason to miss the header.
+        assert_eq!(
+            force_connection_close(b"GET / HTTP/1.1\r\nHost: n.adi\r\nCONNECTION :  keep-alive\r\n\r\n"),
+            b"GET / HTTP/1.1\r\nHost: n.adi\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+    }
+
+    /// A head that never ended is not one to edit — better the old behaviour than a mangled head.
+    #[test]
+    fn forcing_close_leaves_an_unterminated_head_alone() {
+        let partial = b"GET / HTTP/1.1\r\nHost: nosh.adi\r\n";
+        assert_eq!(force_connection_close(partial), partial.to_vec());
+    }
+
+    #[test]
+    fn an_upgrade_is_recognised_from_either_header() {
+        assert!(is_upgrade_request(
+            b"GET /api/ws HTTP/1.1\r\nHost: n.adi\r\nUpgrade: websocket\r\n\r\n"
+        ));
+        assert!(is_upgrade_request(
+            b"GET /api/ws HTTP/1.1\r\nHost: n.adi\r\nConnection: keep-alive, Upgrade\r\n\r\n"
+        ));
+        assert!(!is_upgrade_request(
+            b"GET /api/x HTTP/1.1\r\nHost: n.adi\r\nConnection: keep-alive\r\n\r\n"
+        ));
+    }
+
+    /// Spin up a fake upstream that answers with `response`, proxy one request to it, and hand back
+    /// the bytes each side saw: `(what the upstream read, what the client read)`.
+    async fn proxied(router: Router, request: &[u8], response: &'static [u8]) -> (Vec<u8>, Vec<u8>) {
+        let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = upstream.local_addr().unwrap();
+        let received = tokio::spawn(async move {
+            let (mut sock, _) = upstream.accept().await.unwrap();
+            let head = read_head(&mut sock).await.unwrap();
+            sock.write_all(response).await.unwrap();
+            sock.shutdown().await.unwrap();
+            head
+        });
+
+        let router = Arc::new(Router::new(
+            &router
+                .routes
+                .iter()
+                .map(|r| ResolvedRoute {
+                    host: r.host.clone(),
+                    path: r.path.clone(),
+                    upstream: addr,
+                })
+                .collect::<Vec<_>>(),
+            None,
+        ));
+        let (mut probe, front) = tokio::io::duplex(16 * 1024);
+        let served = tokio::spawn(async move { handle(front, &router).await });
+        probe.write_all(request).await.unwrap();
+        // One request and no more, so the splice's client half sees an end and the task can finish.
+        probe.shutdown().await.unwrap();
+        let mut answered = Vec::new();
+        probe.read_to_end(&mut answered).await.unwrap();
+        served.await.unwrap().expect("handled");
+        (received.await.unwrap(), answered)
+    }
+
+    /// A plain answer, for the tests that only care what the upstream was sent.
+    const OK: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
+
+    fn carved_host() -> Router {
+        Router::new(
+            &[
+                route("nosh.adi", None, "127.0.0.1:1"),
+                route("nosh.adi", Some("/api"), "127.0.0.1:2"),
+            ],
+            None,
+        )
+    }
+
+    /// The regression this exists for: a page fetched over keep-alive used to send its `/api` calls
+    /// down the same connection, where the splice handed them to the frontend that served `/` — and
+    /// the dashboard reported its backend down while the backend was up and one path away.
+    #[tokio::test]
+    async fn on_a_carved_host_the_upstream_is_told_to_close_so_the_next_request_reroutes() {
+        let (received, _) = proxied(
+            carved_host(),
+            b"GET / HTTP/1.1\r\nHost: nosh.adi\r\nConnection: keep-alive\r\n\r\n",
+            OK,
+        )
+        .await;
+        assert_eq!(
+            received,
+            b"GET / HTTP/1.1\r\nHost: nosh.adi\r\nConnection: close\r\n\r\n".to_vec(),
+        );
+    }
+
+    /// The other side of the same rule: a host one service owns keeps its keep-alive, because every
+    /// request on that connection was going to the same place regardless.
+    #[tokio::test]
+    async fn a_host_owned_end_to_end_still_gets_its_connection_spliced_whole() {
+        const REQUEST: &[u8] = b"GET / HTTP/1.1\r\nHost: app.test\r\nConnection: keep-alive\r\n\r\n";
+        let (received, _) = proxied(router(), REQUEST, OK).await;
+        assert_eq!(received, REQUEST.to_vec());
+    }
+
+    /// The half the fix actually turns on. Telling the upstream to close is only a request — Bun,
+    /// which every dashboard here runs on, keeps the connection open regardless — so the client is
+    /// told in the response head, and it is the client that decides whether request two comes down
+    /// this socket or a fresh one the front door gets to route.
+    #[tokio::test]
+    async fn the_client_is_told_the_connection_ends_even_when_the_upstream_keeps_it_alive() {
+        // A Bun-shaped answer: no `Connection` header at all, and the socket left open.
+        const RESPONSE: &[u8] =
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\r\nhi";
+        let (_, answered) = proxied(
+            carved_host(),
+            b"GET / HTTP/1.1\r\nHost: nosh.adi\r\nConnection: keep-alive\r\n\r\n",
+            RESPONSE,
+        )
+        .await;
+        assert_eq!(
+            answered,
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\n\
+              Connection: close\r\n\r\nhi"
+                .to_vec(),
+            "status line, headers and body intact; only the connection header added",
+        );
+    }
+
+    /// `100 Continue` comes before the response it introduces and says nothing about the connection,
+    /// so it goes through untouched and the real head behind it is the one marked.
+    #[tokio::test]
+    async fn an_interim_response_passes_through_and_the_real_one_is_marked() {
+        const RESPONSE: &[u8] = b"HTTP/1.1 100 Continue\r\n\r\n\
+                                  HTTP/1.1 204 No Content\r\n\r\n";
+        let (_, answered) = proxied(
+            carved_host(),
+            b"POST /api/x HTTP/1.1\r\nHost: nosh.adi\r\nExpect: 100-continue\r\n\r\n",
+            RESPONSE,
+        )
+        .await;
+        assert_eq!(
+            answered,
+            b"HTTP/1.1 100 Continue\r\n\r\n\
+              HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        );
+    }
+
+    /// A host owned end to end is spliced whole in both directions — the response reaches the client
+    /// exactly as the upstream wrote it, keep-alive and all.
+    #[tokio::test]
+    async fn a_host_owned_end_to_end_has_its_response_left_alone() {
+        const RESPONSE: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi";
+        let (_, answered) = proxied(
+            router(),
+            b"GET / HTTP/1.1\r\nHost: app.test\r\nConnection: keep-alive\r\n\r\n",
+            RESPONSE,
+        )
+        .await;
+        assert_eq!(answered, RESPONSE.to_vec());
+    }
+
+    /// An upgrade is the one connection that legitimately belongs to a single upstream for its
+    /// lifetime — closing it after the handshake would break every WebSocket a dashboard opens.
+    #[tokio::test]
+    async fn a_websocket_upgrade_on_a_carved_host_keeps_its_head_verbatim() {
+        const REQUEST: &[u8] = b"GET /api/ws HTTP/1.1\r\nHost: nosh.adi\r\n\
+                                 Connection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
+        const SWITCHING: &[u8] = b"HTTP/1.1 101 Switching Protocols\r\n\
+                                   Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+        let (received, answered) = proxied(carved_host(), REQUEST, SWITCHING).await;
+        assert_eq!(received, REQUEST.to_vec(), "the handshake goes up untouched");
+        assert_eq!(
+            answered,
+            SWITCHING.to_vec(),
+            "and comes back with its `Connection: Upgrade` intact",
         );
     }
 
