@@ -293,8 +293,8 @@ pub struct HarnessClaudeSdkArguments {
 
 /// Arguments accepted by the `harness:adi` backend — ADI's own answering loop. `provider` selects
 /// which model API the loop calls; the remaining fields are the union of every provider's knobs
-/// (only the ones matching the chosen provider are ever set). Runnable once `provider` names one the
-/// loop implements (Anthropic, or a local Ollama); the others are typed and stored but not yet wired.
+/// (only the ones matching the chosen provider are ever set). Every provider is implemented, so an
+/// agent is runnable as soon as it names one.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct HarnessAdiArguments {

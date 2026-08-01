@@ -1053,28 +1053,34 @@ mod tests {
     }
 
     #[test]
-    fn harness_adi_is_typed_and_stored_but_not_runnable() {
+    fn harness_adi_runs_once_it_names_a_provider_and_not_before() {
         let store = scratch("harness-adi-raw");
+        let save = |name: &str, arguments: RawAgentArguments| {
+            let manifest = AgentManifest {
+                backend: "harness:adi".into(),
+                arguments,
+                ..StoredAgentManifest::default()
+            };
+            store.save(name, manifest).expect("save adi harness agent");
+            store.get(name).expect("get").expect("present").manifest
+        };
+
+        // A provider plus its knobs: stored through the raw UI path, typed on the way back, and
+        // runnable — every provider the manifest can name is implemented.
         let mut arguments = RawAgentArguments::new();
         arguments.insert("provider".into(), "gemini".into());
         arguments.insert("temperature".into(), serde_json::json!(0.7));
         arguments.insert("max_tokens".into(), serde_json::json!(4096.0));
-        let manifest = AgentManifest {
-            backend: "harness:adi".into(),
-            arguments,
-            ..StoredAgentManifest::default()
-        };
-
-        store
-            .save("adi-agent", manifest)
-            .expect("save adi harness agent");
-        let stored = store
-            .get("adi-agent")
-            .expect("get")
-            .expect("present")
-            .manifest;
+        let stored = save("adi-agent", arguments);
         assert_eq!(stored.backend, Backend::HarnessAdi);
-        assert!(!is_runnable(&stored), "harness:adi is not runnable yet");
+        assert!(is_runnable(&stored), "a configured adi agent is runnable");
+
+        // No provider is the not-yet-configured case, and stays unrunnable.
+        let blank = save("adi-agent-blank", RawAgentArguments::new());
+        assert!(
+            !is_runnable(&blank),
+            "harness:adi with no provider isn't configured yet"
+        );
     }
 
     #[test]

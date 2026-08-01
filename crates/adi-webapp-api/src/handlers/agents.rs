@@ -946,7 +946,7 @@ const CLAUDE_TOOLS: &[&str] = &[
 const CLAUDE_CLI_MODELS: &[&str] = &["opus", "sonnet", "haiku", "fable"];
 const CLAUDE_SDK_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"];
 const CODEX_MODELS: &[&str] = &["gpt-5-codex"];
-const ADI_MODELS: &[&str] = &["kimi-k2.6", "gemini-2.5-pro"];
+const ADI_MODELS: &[&str] = &["kimi-k3", "kimi-k2.6", "gemini-2.5-pro"];
 
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
 /// both the selectable backends and the field shape the client renders. Backends are
