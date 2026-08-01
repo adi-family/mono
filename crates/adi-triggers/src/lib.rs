@@ -57,7 +57,7 @@ pub use fire::Firing;
 pub use presets::{Preset, PresetField};
 pub use run::{RunState, Status};
 #[cfg(feature = "supervisor")]
-pub use dispatch::EventDispatcher;
+pub use dispatch::{EventDispatcher, EventObserver};
 #[cfg(feature = "supervisor")]
 pub use supervisor::Supervisor;
 pub use trigger::{

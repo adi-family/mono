@@ -29,6 +29,7 @@
 
 mod agent;
 pub mod arguments;
+pub mod awaits;
 mod backend;
 mod backends;
 mod error;
@@ -770,6 +771,11 @@ impl Agents {
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         let deleted = delete_run_in(&agent, &sessions_dir, run_id)?;
         if deleted {
+            // A wake registered against a conversation that no longer exists has nowhere to land, so
+            // it goes with it rather than firing into a `NotFound` a week from now. How many there
+            // were is the caller's business elsewhere; here it is tidying.
+            let _ = awaits::Awaits::with_config(self.config.clone())
+                .forget_conversation(name, run_id);
             self.emit(
                 "adi.agents.run.deleted",
                 &AgentRunDeleted {
@@ -829,6 +835,8 @@ impl Agents {
         validate_name(name)?;
         let removed = self.config.module(AGENTS_MODULE).remove_manifest(name)?;
         if removed {
+            // Nothing left to wake: every await this agent's conversations registered goes too.
+            let _ = awaits::Awaits::with_config(self.config.clone()).forget_agent(name);
             self.emit(
                 "adi.agents.deleted",
                 &AgentDeleted {

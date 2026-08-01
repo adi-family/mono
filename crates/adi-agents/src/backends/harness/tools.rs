@@ -18,6 +18,8 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
+use crate::awaits::{self, Awaits, Request};
+
 /// A tool as the model sees it: a name, a sentence about when to reach for it, and the JSON Schema
 /// of its arguments. Providers disagree only about where these three go on the wire.
 pub(super) struct ToolSpec {
@@ -25,6 +27,23 @@ pub(super) struct ToolSpec {
     pub description: &'static str,
     /// The JSON Schema `object` describing this tool's arguments.
     pub schema: fn() -> Value,
+}
+
+/// What a tool call knows about the turn making it.
+///
+/// Most tools need only [`cwd`](Self::cwd) — they act on files and processes, and the run's own
+/// directory is the whole of their world. [`Await`](TOOLS) needs the other two: a wake is delivered
+/// by replying into *this* conversation, so registering one means naming it.
+pub(super) struct Ctx<'a> {
+    /// The directory the run is about; every relative path resolves against it.
+    pub cwd: &'a Path,
+    /// The agent this turn belongs to.
+    pub agent: &'a str,
+    /// The conversation this turn belongs to — where a wake is delivered.
+    pub conv: &'a str,
+    /// Where a registered wake is written. Held here rather than opened at the call site so a test
+    /// can point it at a scratch store without touching the environment every other test reads.
+    pub awaits: Awaits,
 }
 
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
@@ -126,6 +145,40 @@ pub(super) const TOOLS: &[ToolSpec] = &[
             })
         },
     },
+    ToolSpec {
+        name: "Await",
+        description:
+            "Ask to be woken later, then carry on and finish this turn. When one of `events` is \
+             published — or the timer comes due — your `check` command decides whether it is really \
+             the moment: exit 0 wakes you, anything else leaves the await waiting. Without a check, \
+             the first event or deadline wakes you. **A check needs no events at all**: \
+             `every_seconds` with a `check` is a script of yours running on a schedule, waking you \
+             only when it says so — the way to wait on anything the platform publishes no event for \
+             (a build finishing, a file appearing, an endpoint coming up). Waking delivers a new \
+             message into this same \
+             conversation carrying your `note`, what happened, and what the check printed, and you \
+             continue with the whole transcript in front of you. A wake fires once — register \
+             another if you still need one. Be specific with patterns: `adi.agents.**` wakes you on \
+             your own runs.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "note": { "type": "string", "description": "What to tell yourself when you wake: why you asked and what to do next. Handed back verbatim, and it is all you get — the turn that wrote it is over." },
+                    "events": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Platform event patterns to wake on, e.g. `adi.tasks.created`, `adi.tasks.*` (one segment), `adi.**` (the tail).",
+                    },
+                    "after_seconds": { "type": "integer", "description": "Wake this many seconds from now." },
+                    "every_seconds": { "type": "integer", "description": "Run the check this often, starting one interval from now, until it passes. With no `events`, this is the whole await: your script on a schedule." },
+                    "check": { "type": "string", "description": "A shell command deciding whether it is really the moment. Exit 0 wakes you; anything else means not yet. Runs in this conversation's directory with $ADI_CAUSE, and $ADI_EVENT/$ADI_PAYLOAD when an event woke it. What it prints reaches you with the wake — so make it report what it found, not just succeed or fail." },
+                    "expires_in_seconds": { "type": "integer", "description": "Give up after this long and wake you anyway, saying it lapsed." },
+                },
+                "required": ["note"],
+            })
+        },
+    },
 ];
 
 /// How much of a tool's output goes back to the model. A turn replays its whole transcript on every
@@ -143,14 +196,15 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// The error half of the result is not a failure of the loop — it is the tool's *answer*, handed
 /// back to the model as a failed result so it can correct itself and try again, which is why every
 /// message here is written to be read by the model rather than by a log reader.
-pub(super) fn run(name: &str, input: &Value, cwd: &Path) -> std::result::Result<String, String> {
+pub(super) fn run(name: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     match name {
-        "Read" => read(input, cwd),
-        "Write" => write(input, cwd),
-        "Edit" => edit(input, cwd),
-        "Bash" => bash(input, cwd),
-        "Glob" => glob(input, cwd),
-        "Grep" => grep(input, cwd),
+        "Read" => read(input, ctx.cwd),
+        "Write" => write(input, ctx.cwd),
+        "Edit" => edit(input, ctx.cwd),
+        "Bash" => bash(input, ctx.cwd),
+        "Glob" => glob(input, ctx.cwd),
+        "Grep" => grep(input, ctx.cwd),
+        "Await" => await_wake(input, ctx),
         other => Err(format!(
             "no tool named {other} — the tools you have are: {}",
             TOOLS
@@ -369,6 +423,44 @@ fn grep(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
     Ok(truncate(&out))
 }
 
+/// Register a wake for this conversation. The turn is not interrupted: the model gets its
+/// confirmation back as a tool result and goes on to finish its answer, which is what makes
+/// "subscribe, then wrap up what I was doing" expressible at all.
+fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    let req = Request {
+        note: arg_str(input, "note")?.to_string(),
+        events: input
+            .get("events")
+            .and_then(Value::as_array)
+            .map(|list| {
+                list.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::trim)
+                    .filter(|e| !e.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        after_seconds: arg_u64(input, "after_seconds"),
+        every_seconds: arg_u64(input, "every_seconds"),
+        check: input
+            .get("check")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        expires_in_seconds: arg_u64(input, "expires_in_seconds"),
+        // The child was spawned into the run's own directory, so a check written with a relative
+        // path means what it meant while the model was looking at these files.
+        cwd: ctx.cwd.display().to_string(),
+    };
+    let registered =
+        awaits::register(&ctx.awaits, ctx.agent, ctx.conv, &req).map_err(|e| e.to_string())?;
+    Ok(format!(
+        "registered await {} — waking {}. Finish this turn; you will be woken with your note.",
+        registered.id,
+        registered.describe()
+    ))
+}
+
 // ---- shared helpers ----------------------------------------------------------------
 
 /// A relative path means "in the directory this run is about"; an absolute one means itself.
@@ -496,7 +588,10 @@ fn glob_here(p: &[char], t: &[char]) -> bool {
 
 /// Run `cmd` to completion, killing it if it outstays `timeout_ms`. `std` has no timed wait, so
 /// this polls — cheaply, and only while a command is actually running.
-fn wait_with_timeout(
+///
+/// Shared with [`crate::awaits`], whose checks are shell commands under a deadline for the same
+/// reason `Bash` is: an unbounded one would hold whoever is waiting on it for ever.
+pub(crate) fn wait_with_timeout(
     mut cmd: Command,
     timeout_ms: u64,
 ) -> std::result::Result<std::process::Output, String> {
@@ -551,6 +646,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch dir");
         dir
+    }
+
+    /// A tool context whose await store is scratch, so registering a wake in a test never reaches
+    /// the real one.
+    fn ctx_in<'a>(cwd: &'a Path, tag: &str) -> Ctx<'a> {
+        let root = std::env::temp_dir()
+            .join(format!("adi-tools-awaits-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        Ctx {
+            cwd,
+            agent: "watcher",
+            conv: "conv-1",
+            awaits: Awaits::with_config(adi_config::Config::with_root(root)),
+        }
     }
 
     #[test]
@@ -627,7 +736,39 @@ mod tests {
 
     #[test]
     fn an_unknown_tool_names_the_ones_that_exist() {
-        let err = run("Frobnicate", &json!({}), Path::new(".")).expect_err("unknown tool");
+        let ctx = ctx_in(Path::new("."), "unknown-tool");
+        let err = run("Frobnicate", &json!({}), &ctx).expect_err("unknown tool");
         assert!(err.contains("Read"), "{err}");
+        assert!(err.contains("Await"), "the wake tool is advertised too: {err}");
+    }
+
+    /// The wake tool's arguments reach the store, and a request that can never fire comes back as a
+    /// failed tool result the model can read and correct — not as a failure of the turn.
+    #[test]
+    fn await_registers_what_the_model_asked_for_and_explains_a_bad_request() {
+        let dir = scratch("await");
+        let ctx = ctx_in(&dir, "await");
+        let ok = await_wake(
+            &json!({ "note": "check the deploy", "events": ["adi.tasks.*"], "check": "true" }),
+            &ctx,
+        )
+        .expect("register");
+        assert!(ok.contains("adi.tasks.*"), "{ok}");
+        assert!(ok.contains("if the check passes"), "{ok}");
+
+        // Nothing to wake on: the model is told what is missing.
+        let err = await_wake(&json!({ "note": "waiting" }), &ctx).expect_err("must be refused");
+        assert!(err.contains("something to wake on"), "{err}");
+        // …and a missing note is the tool's own complaint, in the same voice as every other tool.
+        let err = await_wake(&json!({ "events": ["adi.tasks.*"] }), &ctx).expect_err("no note");
+        assert!(err.contains("`note`"), "{err}");
+
+        // …and what was registered is really in the store, keyed to this conversation.
+        let pending = ctx.awaits.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].note, "check the deploy");
+        assert_eq!(pending[0].cwd, dir.display().to_string());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

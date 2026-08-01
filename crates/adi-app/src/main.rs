@@ -8,6 +8,7 @@
 //! refresh, no re-embed). The API handlers live in [`adi_webapp_api::handlers`] and share
 //! their DTO types with that frontend.
 
+mod awaits;
 mod http;
 mod live;
 mod scan;
@@ -238,7 +239,12 @@ async fn main() -> anyhow::Result<()> {
     // Event triggers, in turn, are fired on demand: the dispatcher drains the shared event spool
     // (which task/agent mutations and the emit endpoint publish onto) and launches every enabled
     // event trigger whose patterns match a drained event.
-    let event_dispatcher = EventDispatcher::start(triggers.clone());
+    //
+    // Triggers are not the only subscriber: a harness run can register an *await* — "wake me when
+    // this is published" — and the await worker is what honors it. It watches from the dispatcher's
+    // side rather than draining the spool itself, because two drainers would race for records.
+    let event_dispatcher =
+        EventDispatcher::start_watched(triggers.clone(), awaits::start(agents.clone()));
     let dist = webapp_dist_override();
     if let Some(dir) = dist.as_ref() {
         info!(dist = %dir.display(), "serving webapp from disk (dev mode)");

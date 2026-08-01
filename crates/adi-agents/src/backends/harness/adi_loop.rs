@@ -102,8 +102,16 @@ pub(crate) fn run_turn(
     // The child was spawned into the run's own directory, so this is the directory the agent's
     // work is about — the one its relative paths resolve against.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    // `Awaits::open()` here rather than deeper down: this child shares the app's store through the
+    // same `$ADI_DIR` every other process here does, and holds no `Agents` of its own.
+    let ctx = tools::Ctx {
+        cwd: &cwd,
+        agent: &agent.name,
+        conv: conv_id,
+        awaits: crate::awaits::Awaits::open(),
+    };
     let wire = Wire::of(&args, model)?;
-    tool_loop(&wire, &args, &turns, &cwd, sink)
+    tool_loop(&wire, &args, &turns, &ctx, sink)
 }
 
 // ---- the loop ----------------------------------------------------------------------
@@ -143,7 +151,7 @@ fn tool_loop(
     wire: &Wire<'_>,
     args: &HarnessAdiArguments,
     turns: &[Turn],
-    cwd: &Path,
+    ctx: &tools::Ctx<'_>,
     sink: Sink<'_>,
 ) -> Result<String> {
     let max_rounds = args.max_turns.filter(|n| *n > 0).unwrap_or(MAX_ROUNDS);
@@ -177,7 +185,7 @@ fn tool_loop(
         let mut results = Vec::with_capacity(reply.calls.len());
         for call in &reply.calls {
             adi_events::tool_started(sink, &call.id, &call.name, &call.input);
-            let (output, ok) = match tools::run(&call.name, &call.input, cwd) {
+            let (output, ok) = match tools::run(&call.name, &call.input, ctx) {
                 Ok(out) => (out, true),
                 Err(err) => (err, false),
             };

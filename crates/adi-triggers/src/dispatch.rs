@@ -17,9 +17,17 @@ use std::time::Duration;
 use tokio::sync::watch;
 use tracing::{info, warn};
 
-use adi_events::Events;
+use adi_events::{EventRecord, Events};
 
 use crate::Triggers;
+
+/// A callback handed every drained event, beside the triggers it fires.
+///
+/// The dispatcher is the only thing that drains the spool — a second drainer would race it for
+/// records — so anything else in the app that reacts to platform events has to be told by this one.
+/// It runs on the dispatch tick, so an observer must return promptly: hand the event to a worker,
+/// don't do the work here.
+pub type EventObserver = Arc<dyn Fn(&EventRecord) + Send + Sync>;
 
 /// How often the spool is drained. Short, because event latency is user-visible ("I created a
 /// task, did my hook run?"), and draining an empty spool is a single cheap directory read.
@@ -32,14 +40,27 @@ const MAX_PER_TICK: usize = 200;
 
 /// Drains the event spool and fires matching event triggers. Cheap to clone behind an `Arc`; hold
 /// one for as long as events should be delivered, and [`stop`](Self::stop) it on the way out.
-#[derive(Debug)]
 pub struct EventDispatcher {
     triggers: Triggers,
     events: Events,
+    /// Told about every drained event, so something other than a trigger can react to one without
+    /// draining the spool itself. `None` for a dispatcher nobody is listening in on.
+    observer: Option<EventObserver>,
     /// Stops the dispatch loop.
     shutdown: watch::Sender<bool>,
     /// Flipped once the loop has exited, so [`stop`](Self::stop) can await a clean end.
     done: watch::Sender<bool>,
+}
+
+/// Hand-written because an [`EventObserver`] is a closure, which has nothing to print.
+impl std::fmt::Debug for EventDispatcher {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventDispatcher")
+            .field("triggers", &self.triggers)
+            .field("events", &self.events)
+            .field("observed", &self.observer.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl EventDispatcher {
@@ -50,7 +71,20 @@ impl EventDispatcher {
     /// If called outside a tokio runtime.
     #[must_use]
     pub fn start(triggers: Triggers) -> Arc<Self> {
-        let (dispatcher, rx) = Self::new(triggers);
+        let (dispatcher, rx) = Self::new(triggers, None);
+        tokio::spawn(Arc::clone(&dispatcher).run_loop(rx));
+        dispatcher
+    }
+
+    /// Start the dispatcher with someone listening in: `observer` is handed every drained event
+    /// alongside the triggers it fires. This is how the app wakes [awaiting
+    /// runs](adi_events) on an event without a second drainer racing this one for records.
+    ///
+    /// # Panics
+    /// If called outside a tokio runtime.
+    #[must_use]
+    pub fn start_watched(triggers: Triggers, observer: EventObserver) -> Arc<Self> {
+        let (dispatcher, rx) = Self::new(triggers, Some(observer));
         tokio::spawn(Arc::clone(&dispatcher).run_loop(rx));
         dispatcher
     }
@@ -59,11 +93,14 @@ impl EventDispatcher {
     /// (tests, tools that mutate trigger definitions without owning event delivery).
     #[must_use]
     pub fn inert(triggers: Triggers) -> Arc<Self> {
-        Self::new(triggers).0
+        Self::new(triggers, None).0
     }
 
     /// The shared state plus the shutdown receiver the loop watches. Touches no runtime.
-    fn new(triggers: Triggers) -> (Arc<Self>, watch::Receiver<bool>) {
+    fn new(
+        triggers: Triggers,
+        observer: Option<EventObserver>,
+    ) -> (Arc<Self>, watch::Receiver<bool>) {
         let events = Events::with_config(triggers.config().clone());
         let (shutdown, rx) = watch::channel(false);
         let (done, _) = watch::channel(false);
@@ -71,6 +108,7 @@ impl EventDispatcher {
             Arc::new(Self {
                 triggers,
                 events,
+                observer,
                 shutdown,
                 done,
             }),
@@ -151,6 +189,11 @@ impl EventDispatcher {
         };
 
         for ev in spooled.into_iter().take(MAX_PER_TICK) {
+            // Whoever is listening in hears about the event whether or not a trigger wanted it: an
+            // awaiting run is subscribed to the *bus*, not to anyone's trigger.
+            if let Some(observer) = self.observer.as_ref() {
+                observer(&ev.record);
+            }
             // The project this event names, read once from its payload — a subscriber restricted by
             // `trigger_on` fires only for a project in its allowlist (an empty allowlist, the
             // default, fires for every project).

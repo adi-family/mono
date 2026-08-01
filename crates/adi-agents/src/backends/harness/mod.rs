@@ -19,7 +19,10 @@
 mod adi_loop;
 mod claude_sdk;
 mod conversation;
-mod tools;
+// `pub(crate)` for one helper: an await's check is a shell command with a deadline, which is the
+// same thing `Bash` already runs, so [`crate::awaits`] borrows the timed wait rather than keeping a
+// second copy of it.
+pub(crate) mod tools;
 
 use std::path::{Path, PathBuf};
 

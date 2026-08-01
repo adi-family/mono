@@ -56,5 +56,10 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 
+[dev-dependencies]
+# The await worker's test points a real `Agents`/`Awaits` pair at a scratch store root, which is
+# the one place this crate names the config layer directly.
+adi-config = { workspace = true }
+
 [lints]
 workspace = true

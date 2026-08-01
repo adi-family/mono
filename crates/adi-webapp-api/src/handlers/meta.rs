@@ -89,6 +89,12 @@ matching event fires. {envelope} Publish one by hand with `{{{{cli}}}} events em
 the pending queue with `{{{{cli}}}} events list`. For an event's exact payload structure, read its \
 JSON Schema with `{{{{cli}}}} events types <name> --schema` (or GET /api/triggers → \
 `event_types[].schema`); `event_types[].example` is a concrete sample.\n\n\
+A trigger is not the only way to react to one. On the `harness:adi` backend you can **wait** for an \
+event yourself: the `Await` tool registers a wake against this conversation — on event patterns, on \
+a timer, or both — and you carry on and finish the turn. A shell `check` decides whether a wake is \
+really the moment (exit 0 wakes you), so a timer plus a check is a poll. When it fires you are \
+answered again in this same conversation, with your own note and the whole transcript in front of \
+you. Use it for anything you cannot finish now because you are waiting on the world.\n\n\
 Events currently published:\n\
 {events}",
         guides = prompt_section(),

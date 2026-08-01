@@ -36,6 +36,7 @@ name = "adi-app"
 version = "0.1.0"
 dependencies = [
  "adi-agents",
+ "adi-config",
  "adi-css",
  "adi-db",
  "adi-events",
