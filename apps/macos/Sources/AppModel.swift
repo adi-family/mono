@@ -25,8 +25,14 @@ final class AppModel: ObservableObject {
         // on a fresh one it installs + starts everything (one admin prompt for the DNS
         // route + front door). This is what makes services autostart when the app opens.
         perform(["up"])
+        // Unwrap *before* the Task, so it captures an immutable binding rather than the
+        // outer closure's mutable optional. Reading a captured `var` from concurrently
+        // executing code is rejected outright by Swift 5.10 ("reference to captured var
+        // 'self'"); newer compilers accept it, which is how this survived every local build
+        // and only surfaced on a CI runner with an older toolchain.
         timer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.refresh() }
+            guard let self else { return }
+            Task { @MainActor in self.refresh() }
         }
     }
 

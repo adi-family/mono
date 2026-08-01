@@ -66,7 +66,11 @@ jobs:
   # ── macOS: the notarized universal bundle, as a DMG ──────────────────────────────────────
   macos:
     needs: version
-    runs-on: macos-14
+    # macos-15, not -14: the older image ships Swift 5.10, which rejects concurrency patterns
+    # the Swift 6 toolchain on a developer's machine accepts. A release build that compiles
+    # locally and fails only here — 15 minutes in, after the Rust build — is a bad trade for
+    # an older image nothing else needs.
+    runs-on: macos-15
     timeout-minutes: 90
     env:
       ADI_VERSION: ${{ needs.version.outputs.version }}
@@ -92,6 +96,14 @@ jobs:
           [ -z "$missing" ] || { echo "::error::missing repository secrets:$missing"; exit 1; }
 
       - uses: Swatinem/rust-cache@v2
+
+      - name: Toolchain versions
+        run: |
+          # Printed because the app bundles Swift as well as Rust, and a Swift-version
+          # mismatch between here and a developer's machine is otherwise invisible in the log.
+          swiftc --version
+          xcodebuild -version
+          rustc --version
 
       - name: Rust targets (the bundle is universal)
         run: |
