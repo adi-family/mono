@@ -51,10 +51,14 @@ PKG="$BUILD/$PKG_NAME"
 BINS=(adi-mono adi-dns adi-hive adi-app adi-mesh)
 CRATES=(-p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-mesh)
 
-# The workspace version is the single source of truth (root Cargo.toml), same as the macOS and
-# Windows builds.
-VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -n1)"
-[ -n "$VERSION" ] || { echo "error: workspace version not found in $ROOT/Cargo.toml" >&2; exit 1; }
+# The git tag is the source of truth (scripts/version.sh), same as the macOS and Windows builds.
+# Exported so the binaries compile it in as `BUILT_VERSION` — the node's updater compares that
+# against the published manifest, and it must match the VERSION file this package ships.
+VERSION="$("$ROOT/scripts/version.sh")"
+export ADI_VERSION="$VERSION"
+
+# adi-app embeds the webapp at compile time and happily embeds nothing — see the script.
+"$ROOT/scripts/require-webapp-dist.sh"
 
 # ── pick a builder ──────────────────────────────────────────────────────────────────────────
 # Plain cargo by default now that nothing in the tree needs a C crypto library: it is a native

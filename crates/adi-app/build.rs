@@ -9,6 +9,10 @@
 use std::path::Path;
 
 fn main() {
+    // The reported version follows the release tag when one is building us — same rule as
+    // `adi-update::BUILT_VERSION`, so `/api/health` and `adi-mono --version` agree.
+    println!("cargo:rerun-if-env-changed=ADI_VERSION");
+
     let manifest = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let dist = Path::new(&manifest).join("../adi-webapp/dist");
     let _ = std::fs::create_dir_all(&dist);

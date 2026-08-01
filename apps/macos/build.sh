@@ -41,7 +41,17 @@ if [ "${1:-}" = "--regen-icon" ]; then
     exit 0
 fi
 
-echo "==> building adi-dns + adi-hive + adi-app + adi-mono (release, universal: ${RUST_TARGETS[*]})"
+# The git tag is the source of truth for the version (scripts/version.sh). Resolve it *before*
+# cargo runs and export it: the binaries compile `ADI_VERSION` in as `BUILT_VERSION`, and the
+# bundle's Info.plist is stamped with the same number below. The updater compares the installed
+# Info.plist against the published manifest, so the two must never be derived separately.
+VERSION="$("$ROOT/scripts/version.sh")"
+export ADI_VERSION="$VERSION"
+
+# adi-app embeds the webapp at compile time and happily embeds nothing — see the script.
+"$ROOT/scripts/require-webapp-dist.sh"
+
+echo "==> building adi-dns + adi-hive + adi-app + adi-mono (release, universal: ${RUST_TARGETS[*]}, v$VERSION)"
 ( cd "$ROOT" && MACOSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET" cargo build \
     -p adi-dns -p adi-hive -p adi-app -p adi-cli --release \
     "${RUST_TARGETS[@]/#/--target=}" )
@@ -57,11 +67,6 @@ echo "==> assembling $APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$SCRIPT_DIR/Info.plist" "$APP/Contents/Info.plist"
-# Stamp the bundle version from the workspace version — the single source of truth in
-# the root Cargo.toml. The auto-updater compares the installed app's Info.plist against
-# the published manifest, so the two must always be derived from the same number.
-VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -n1)"
-[ -n "$VERSION" ] || { echo "error: workspace version not found in $ROOT/Cargo.toml" >&2; exit 1; }
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$VERSION" "$APP/Contents/Info.plist"
 echo "    version: $VERSION"

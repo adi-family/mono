@@ -19,7 +19,7 @@ A Rust monorepo. All crates live under [`crates/`](crates/) and share one
     ├── adi-tasks/         # task tree stored under ~/.adi/mono/tasks
     ├── adi-mesh/          # the fleet over iroh: remote nodes at *.n.adi, raw port forwards (docs/fleet.md)
     ├── adi-ports-manager/ # port allocator: collision-free static + dynamic ports (library)
-    ├── adi-update/        # auto-update engine: one DMG swap updates every bundled binary (docs/adi-update.md)
+    ├── adi-update/        # auto-update engine: one artifact per platform, every binary in it (docs/adi-update.md)
     └── adi-app/           # the adi app served at app.adi: control-panel SPA + Rust /api backend
 ```
 

@@ -15,7 +15,7 @@ mod tools;
 mod triggers;
 mod update;
 
-use adi_core::{Adi, Service};
+use adi_core::{Adi, Service, VERSION};
 use clap::{Parser, Subcommand};
 
 use crate::agents::{AgentsCommand, run_agents};
@@ -32,7 +32,9 @@ use crate::triggers::{TriggersCommand, run_triggers};
 use crate::update::{UpdateCommand, run_update};
 
 #[derive(Debug, Parser)]
-#[command(name = "adi-mono", about = "Control the adi platform.", version)]
+// `version = VERSION`, not clap's default `version`: the default is CARGO_PKG_VERSION, which
+// stays at the workspace floor and would report an older number than the bundle it ships in.
+#[command(name = "adi-mono", about = "Control the adi platform.", version = VERSION)]
 struct Cli {
     #[command(subcommand)]
     command: Command,

@@ -21,6 +21,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 APP_NAME="ADI"
 BUILD="$SCRIPT_DIR/build"
 APP="$BUILD/$APP_NAME.app"
@@ -52,30 +53,31 @@ fi
 
 VERSION="$(plutil -extract CFBundleShortVersionString raw -o - "$APP/Contents/Info.plist")"
 [ -n "$VERSION" ] || { echo "error: could not read the app version" >&2; exit 1; }
-SHA256="$(shasum -a 256 "$DMG" | awk '{print $1}')"
-SIZE="$(stat -f%z "$DMG")"
-PUB_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-URL="https://github.com/$REPO/releases/download/v$VERSION/$APP_NAME.dmg"
+
+# The bundle was stamped from the git tag (scripts/version.sh). If HEAD is not that tag, this
+# cut would publish a release whose name doesn't match the commit it came from — which the CI
+# path can't get wrong but a local one can.
+TAG_VERSION="$("$ROOT/scripts/version.sh")"
+[ "$VERSION" = "$TAG_VERSION" ] || {
+    echo "error: the built app says v$VERSION but the tree resolves to v$TAG_VERSION" >&2
+    echo "       rebuild (drop --skip-build) so the bundle matches the tag" >&2
+    exit 1
+}
 
 # The updater rejects unstapled bundles only via Gatekeeper on first manual install;
 # still, warn early rather than shipping a build that will fail on other Macs.
 xcrun stapler validate "$DMG" >/dev/null 2>&1 \
     || echo "⚠ $DMG is not notarized/stapled — fine for testing, not for distribution."
 
-echo "==> writing $MANIFEST (v$VERSION)"
-NOTES_JSON="$(printf '%s' "${NOTES:-ADI v$VERSION}" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
-cat > "$MANIFEST" <<EOF
-{
-  "version": "$VERSION",
-  "pub_date": "$PUB_DATE",
-  "notes": "$NOTES_JSON",
-  "dmg": {
-    "url": "$URL",
-    "sha256": "$SHA256",
-    "size": $SIZE
-  }
-}
-EOF
+# macOS only: this script builds one platform. A release that should also update Linux and
+# Windows nodes is cut by .github/workflows/release.yml, which builds all three and passes
+# every artifact to the same generator.
+echo "==> writing $MANIFEST (v$VERSION, macOS only)"
+"$ROOT/scripts/manifest.sh" \
+    --version "$VERSION" \
+    --base-url "https://github.com/$REPO/releases/download/v$VERSION" \
+    --artifact "macos=$DMG" \
+    ${NOTES:+--notes "$NOTES"} > "$MANIFEST"
 cat "$MANIFEST"
 
 if ! $UPLOAD; then

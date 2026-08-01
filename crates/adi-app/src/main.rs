@@ -183,7 +183,12 @@ static WEBAPP: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/../adi-webapp/dist");
 
 /// Service identity reported at `/api/health`.
 const SERVICE: &str = "adi-app";
-const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The release tag this was built from when there is one (see `build.rs`), so `/api/health`
+/// reports the same number as the bundle it shipped in rather than the workspace floor.
+const VERSION: &str = match option_env!("ADI_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};
 
 /// Fallback listen port when `$PORT` is unset and no `addr` argument is given.
 const DEFAULT_PORT: u16 = 8090;

@@ -51,6 +51,14 @@ pub(crate) fn run_update(adi: Adi, command: UpdateCommand) {
                     println!("Latest:    {}", check.latest);
                     if check.update_available {
                         println!("Update available — run `adi-mono update run` to install.");
+                    } else if !check.has_artifact {
+                        // Distinguish "nothing newer" from "something newer that this
+                        // machine cannot have" — otherwise the report reads as up to date
+                        // while plainly showing a higher version on the line above.
+                        println!(
+                            "No update for this machine: release {} publishes no {} build.",
+                            check.latest, check.platform
+                        );
                     } else {
                         println!("Up to date.");
                     }
@@ -87,6 +95,16 @@ pub(crate) fn run_update(adi: Adi, command: UpdateCommand) {
                                 } else {
                                     " (services not restarted)"
                                 }
+                            );
+                        }
+                        RunOutcome::RolledBack { from, to, why } => {
+                            // Not an error exit: the machine is running a known-good version,
+                            // which is exactly what the rollback was for. Say it on stderr so
+                            // it lands in the agent's log rather than being mistaken for a
+                            // successful update in a script's stdout.
+                            eprintln!(
+                                "Rolled back {from} → {to}: {why}. \
+                                 The previous version is running; `update status` keeps the detail."
                             );
                         }
                     }

@@ -89,6 +89,13 @@ for b in adi-mono adi-dns adi-hive adi-app adi-mesh; do
     chmod 0755 "$PREFIX/bin/$b"
 done
 
+# Record the installed version beside the binaries. A node has no app bundle and so no
+# Info.plist, and this file is what `adi-mono update` reads to decide whether a published
+# release is newer than what is here. Without it the updater falls back to the version
+# compiled into whichever binary happens to be running, which drifts after the first update.
+cp "$HERE/VERSION" "$PREFIX/bin/VERSION" 2>/dev/null \
+    || die "missing $HERE/VERSION — incomplete package"
+
 PATH="$PREFIX/bin:$PATH"
 export PATH
 

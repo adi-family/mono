@@ -93,7 +93,7 @@ impl Adi {
     /// `on_enable` migrates the front door (proxy-only) before the control-panel agent
     /// binds the shared port — otherwise the old runner-supervised adi-app would collide
     /// with the new agent on it.
-    fn services(self) -> Vec<Box<dyn Service>> {
+    pub(crate) fn services(self) -> Vec<Box<dyn Service>> {
         vec![
             Box::new(Dns::new()),
             Box::new(App::new()),

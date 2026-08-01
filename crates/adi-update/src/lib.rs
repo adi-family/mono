@@ -1,32 +1,45 @@
 //! adi-update — the auto-update engine for the adi platform.
 //!
-//! One update covers everything: the published artifact is the whole notarized
-//! `ADI.app` bundle (as the release DMG), so every bundled binary — and any binary
-//! added in a future release — ships in a single swap. The engine:
+//! One update covers everything: the published artifact holds *every* binary — the whole
+//! notarized `ADI.app` bundle on macOS, the node's tarball of binaries on Linux and
+//! Windows — so a binary added in a future release ships in a single swap with no updater
+//! change. The engine:
 //!
-//! 1. fetches a small JSON [`Manifest`] (version, DMG url, sha256) from a
+//! 1. fetches a small JSON [`Manifest`] (version, per-platform url + sha256) from a
 //!    configurable URL ([`Settings`], `~/.adi/mono/update/config.toml`);
-//! 2. compares the published version with the installed app's `Info.plist`;
-//! 3. downloads the DMG, verifies its sha256 **and** its code signature / Team ID;
-//! 4. atomically swaps `/Applications/ADI.app` (previous install kept as a backup).
+//! 2. compares the published version with what is installed (the bundle's `Info.plist`,
+//!    or the `VERSION` file beside the node's binaries);
+//! 3. downloads this host's artifact and verifies its sha256 — plus, on macOS, the
+//!    bundle's code signature and Team ID;
+//! 4. runs the downloaded CLI to confirm it starts and reports the promised version;
+//! 5. swaps the live install, keeping the previous one as a backup to roll back to.
 //!
-//! Restarting services onto the new binaries is the caller's job (`adi-core`), since
-//! that's where the launchd knowledge lives. Everything shells out to the macOS
-//! toolchain (`curl`, `shasum`, `hdiutil`, `codesign`, `plutil`) — no network or
-//! crypto dependencies.
+//! Restarting services onto the new binaries — and rolling back when they don't come up —
+//! is the caller's job (`adi-core`), since that's where the supervisor knowledge lives.
+//! Everything shells out to tools the OS already ships (`curl`, `shasum`, `tar`, and on
+//! macOS `hdiutil`, `codesign`, `plutil`) — no network or crypto dependencies.
 
 mod engine;
 mod manifest;
+mod payload;
 mod settings;
 mod shell;
 mod state;
 mod version;
 
 pub use engine::{Check, DEFAULT_APP_PATH, DEFAULT_TEAM_ID, Engine, Error, Installed};
-pub use manifest::{Artifact, Manifest};
+pub use manifest::{Artifact, Manifest, host_platform};
 pub use settings::{DEFAULT_MANIFEST_URL, Settings};
 pub use state::State;
 pub use version::Version;
 
-/// The version compiled into this build — the workspace version every binary shares.
-pub const BUILT_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// The version compiled into this build.
+///
+/// The git tag is the release's source of truth (`scripts/version.sh`), and the packaging
+/// scripts export it as `ADI_VERSION` before invoking cargo — so a released binary reports
+/// the tag it was cut from, while a plain `cargo build` falls back to the workspace version.
+/// `build.rs` makes cargo notice when that variable changes.
+pub const BUILT_VERSION: &str = match option_env!("ADI_VERSION") {
+    Some(v) if !v.is_empty() => v,
+    _ => env!("CARGO_PKG_VERSION"),
+};

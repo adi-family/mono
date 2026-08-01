@@ -27,9 +27,13 @@ BUILD="$SCRIPT_DIR/build"
 PKG="$BUILD/$PKG_NAME"
 BINS=(adi-mono adi-dns adi-hive adi-app)
 
-# The workspace version is the single source of truth (root Cargo.toml), same as the macOS build.
-VERSION="$(sed -n 's/^version = "\(.*\)"$/\1/p' "$ROOT/Cargo.toml" | head -n1)"
-[ -n "$VERSION" ] || { echo "error: workspace version not found in $ROOT/Cargo.toml" >&2; exit 1; }
+# The git tag is the source of truth (scripts/version.sh), same as the macOS and Linux builds.
+# Exported so the binaries compile it in as `BUILT_VERSION`, matching the VERSION file below.
+VERSION="$("$ROOT/scripts/version.sh")"
+export ADI_VERSION="$VERSION"
+
+# adi-app embeds the webapp at compile time and happily embeds nothing — see the script.
+"$ROOT/scripts/require-webapp-dist.sh"
 
 if [ "${SKIP_BUILD:-}" != "1" ]; then
     command -v x86_64-w64-mingw32-gcc >/dev/null || {

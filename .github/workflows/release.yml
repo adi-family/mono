@@ -1,0 +1,313 @@
+name: Release
+
+# Cutting a release is `git tag v0.2.0 && git push --tags`. The tag is the source of truth for
+# the version: every job exports it as ADI_VERSION, `scripts/version.sh` hands that to the
+# packaging scripts, and the binaries compile it in — so the bundle's Info.plist, the node's
+# VERSION file, `adi-mono --version` and the published manifest can never disagree.
+#
+# The last job writes `manifest.json` — the file every installed copy of adi polls — and
+# attaches it to the release. `manifest_url` defaults to the *latest* release's copy, so
+# publishing here is the whole act of shipping an update to every machine.
+#
+# Required repository secrets (the macOS job is the only one that needs any):
+#   MACOS_CERT_P12         base64 of the "Developer ID Application" .p12
+#   MACOS_CERT_PASSWORD    its export password
+#   APPLE_ID               Apple ID used for notarization
+#   APPLE_APP_PASSWORD     app-specific password for that Apple ID
+#   APPLE_TEAM_ID          Developer team ID (must match adi-update's DEFAULT_TEAM_ID)
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (no leading v). Builds and uploads artifacts, publishes nothing.'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  # Pinned rather than "latest": a packaging tool that changes under a release build is a
+  # class of surprise worth spending one line to avoid.
+  TRUNK_VERSION: v0.21.14
+
+jobs:
+  # ── the version, resolved once and reused ────────────────────────────────────────────────
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${{ github.ref_name }}"
+            version="${tag#v}"
+            publish=true
+          else
+            version="${{ inputs.version }}"
+            tag="v$version"
+            publish=false
+          fi
+          # Same rule the client enforces: adi-update ignores anything that is not
+          # major[.minor[.patch]], so a tag it cannot parse would ship un-updatable machines.
+          case "$version" in
+            ''|*[!0-9.]*|*..*|.*|*.)
+              echo "::error::'$version' is not a major[.minor[.patch]] version — tag releases as v0.2.0"
+              exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+          echo "Releasing $tag (version $version, publish=$publish)"
+
+  # ── macOS: the notarized universal bundle, as a DMG ──────────────────────────────────────
+  macos:
+    needs: version
+    runs-on: macos-14
+    timeout-minutes: 90
+    env:
+      ADI_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the signing secrets are present
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          # Fail here rather than three minutes into a build that cannot be shipped anyway:
+          # an unsigned or un-notarized bundle is refused by Gatekeeper on every other Mac,
+          # and by adi-update's own Team ID check.
+          missing=""
+          for name in CERT CERT_PASSWORD APPLE_ID APPLE_APP_PASSWORD APPLE_TEAM_ID; do
+            eval "value=\${$name}"
+            [ -n "$value" ] || missing="$missing $name"
+          done
+          [ -z "$missing" ] || { echo "::error::missing repository secrets:$missing"; exit 1; }
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Rust targets (the bundle is universal)
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-aarch64-apple-darwin.tar.gz" \
+            | tar -xzf - -C /usr/local/bin
+          trunk --version
+
+      - name: Build the webapp
+        run: cd crates/adi-webapp && trunk build --release
+
+      - name: Import the Developer ID certificate
+        env:
+          CERT: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          # A throwaway keychain: unlocked for this job only, never the runner's login one.
+          KEYCHAIN="$RUNNER_TEMP/release.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          echo "$CERT" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" -P "$CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          # Without this, codesign blocks on an interactive "allow access?" prompt nobody
+          # is there to answer, and the job hangs until it times out.
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychain -d user -s "$KEYCHAIN" login.keychain-db
+          rm -f "$RUNNER_TEMP/cert.p12"
+          security find-identity -v -p codesigning "$KEYCHAIN"
+
+      - name: Build, sign, notarize, staple
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          AC_USER: ${{ secrets.APPLE_ID }}
+          AC_PASS: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: apps/macos/release.sh
+
+      - name: Confirm the DMG is stapled
+        run: |
+          # release.sh warns and continues when notarization is skipped; a release must not.
+          xcrun stapler validate apps/macos/build/ADI.dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: apps/macos/build/ADI.dmg
+          if-no-files-found: error
+
+  # ── Linux: the static musl node package ──────────────────────────────────────────────────
+  linux:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ADI_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Toolchain (musl, so one tarball runs on any distro)
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          rustup target add x86_64-unknown-linux-musl wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xzf - -C /usr/local/bin
+          trunk --version
+
+      - name: Build the webapp
+        run: cd crates/adi-webapp && trunk build --release
+
+      - name: Build the node package
+        run: apps/linux/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: apps/linux/build/adi-linux-x64.tar.gz
+          if-no-files-found: error
+
+  # ── Windows: cross-compiled with mingw, same as the local packaging route ────────────────
+  windows:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ADI_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Toolchain (mingw-w64)
+        run: |
+          sudo apt-get update && sudo apt-get install -y mingw-w64 zip
+          rustup target add x86_64-pc-windows-gnu wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xzf - -C /usr/local/bin
+          trunk --version
+
+      - name: Build the webapp
+        run: cd crates/adi-webapp && trunk build --release
+
+      - name: Build the Windows package
+        run: apps/windows/build.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: apps/windows/build/ADI-windows-x64.zip
+          if-no-files-found: error
+
+  # ── the manifest, and the release itself ─────────────────────────────────────────────────
+  publish:
+    needs: [version, macos, linux, windows]
+    # Run even when a platform job failed: a broken Windows cross-compile should not also
+    # withhold the macOS and Linux updates. What did not build is named in the release notes
+    # rather than silently omitted — an absent artifact means that platform stops updating,
+    # and nobody should have to diff two manifests to discover it.
+    if: ${{ !cancelled() && needs.version.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Assemble manifest.json
+        id: manifest
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
+          declare -a ARGS=() ASSETS=() MISSING=()
+
+          add() { # add <platform> <path>
+            if [ -f "$2" ]; then
+              ARGS+=(--artifact "$1=$2"); ASSETS+=("$2")
+            else
+              MISSING+=("$1")
+            fi
+          }
+          add macos          artifacts/macos/ADI.dmg
+          add linux-x86_64   artifacts/linux-x86_64/adi-linux-x64.tar.gz
+          add windows-x86_64 artifacts/windows-x86_64/ADI-windows-x64.zip
+
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            echo "::warning::no artifact built for: ${MISSING[*]} — those platforms will not see this release"
+          fi
+          [ ${#ARGS[@]} -gt 0 ] || { echo "::error::every platform failed to build; nothing to publish"; exit 1; }
+
+          NOTES="ADI v$VERSION"
+          [ ${#MISSING[@]} -eq 0 ] || NOTES="$NOTES (no build for: ${MISSING[*]})"
+
+          scripts/manifest.sh --version "$VERSION" --base-url "$BASE" --notes "$NOTES" "${ARGS[@]}" > manifest.json
+          cat manifest.json
+
+          # One line, space separated: this is interpolated straight into the `gh release
+          # create` argument list, and a multi-line output would break apart into separate
+          # shell commands there.
+          echo "assets=${ASSETS[*]} manifest.json" >> "$GITHUB_OUTPUT"
+          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
+
+      - name: Check the manifest is what the client expects
+        run: |
+          # The manifest is the one file that, if malformed, silently stops every machine from
+          # updating — including the machines that would receive the fix. Parse it here.
+          python3 - <<'PY'
+          import json, sys
+          m = json.load(open('manifest.json'))
+          assert m['version'], 'no version'
+          arts = m.get('artifacts') or {}
+          assert arts, 'no artifacts'
+          for name, a in arts.items():
+              assert a['url'].startswith('https://'), f'{name}: url must be https'
+              assert len(a['sha256']) == 64, f'{name}: sha256 looks wrong'
+              assert a.get('size', 0) > 0, f'{name}: empty artifact'
+          # Older clients read only the top-level `dmg`; if a macOS build exists it must be there.
+          if 'macos' in arts:
+              assert m.get('dmg', {}).get('sha256') == arts['macos']['sha256'], \
+                  'the legacy dmg field must mirror the macos artifact'
+          print('manifest OK:', m['version'], list(arts))
+          PY
+
+      - name: Publish the release
+        if: ${{ needs.version.outputs.publish == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          # --latest matters: the default manifest_url points at `releases/latest/download/`,
+          # so a release that is not marked latest reaches nobody.
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --title "ADI $TAG" \
+            --notes "${{ steps.manifest.outputs.notes }}" \
+            --latest \
+            ${{ steps.manifest.outputs.assets }}
+          echo "published: https://github.com/${{ github.repository }}/releases/tag/$TAG"
+
+      - name: Dry run summary
+        if: ${{ needs.version.outputs.publish != 'true' }}
+        run: |
+          echo "workflow_dispatch: artifacts and manifest built, nothing published."

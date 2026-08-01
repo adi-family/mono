@@ -1,19 +1,27 @@
-//! The update pipeline: check → download → verify → swap. Every step is guarded —
-//! checksum before mounting, code signature + Team ID before installing, and the
-//! previous install is renamed aside (not deleted) so a failed swap rolls back.
+//! The update pipeline: check → download → verify → preflight → swap. Every step is guarded —
+//! checksum before anything is unpacked, code signature + Team ID before a bundle is installed,
+//! the new CLI is made to run and state its version before the live install is touched, and the
+//! previous install is renamed aside (not deleted) so both a failed swap and a failed health
+//! check can put it back.
+//!
+//! What a payload *is* differs per platform (a DMG'd app bundle on macOS, a tarball of binaries
+//! on a node); that difference lives entirely in [`crate::payload`], so this module reads the
+//! same on every OS.
 
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::manifest::Manifest;
+use crate::manifest::{Manifest, host_platform};
+use crate::payload::Payload;
 use crate::settings::Settings;
 use crate::shell;
 use crate::state::{self, State};
 use crate::version::Version;
 
-/// Where the app bundle lives on a provisioned machine; override with `ADI_UPDATE_APP`
-/// (used by tests and non-standard installs).
+/// Where the app bundle lives on a provisioned Mac; override with `ADI_UPDATE_APP`
+/// (used by tests and non-standard installs). On Linux and Windows there is no bundle —
+/// the updater replaces the binaries beside the running executable, or `ADI_UPDATE_BIN_DIR`.
 pub const DEFAULT_APP_PATH: &str = "/Applications/ADI.app";
 
 /// The Apple Developer Team ID every genuine ADI release is signed with; a downloaded
@@ -23,7 +31,7 @@ pub const DEFAULT_TEAM_ID: &str = "752556J5V6";
 /// How long a stale lock (from a crashed updater) blocks the next run.
 const LOCK_STALE_SECS: u64 = 2 * 3600;
 
-/// Previous installs kept in `update/backups` for manual rollback.
+/// Previous installs kept in `update/backups` for rollback.
 const BACKUPS_KEPT: usize = 2;
 
 /// What went wrong, specific enough for the CLI/log line to be actionable.
@@ -31,16 +39,24 @@ const BACKUPS_KEPT: usize = 2;
 pub enum Error {
     /// Fetching or parsing the release manifest failed (offline, bad URL, bad JSON).
     Manifest(String),
-    /// Downloading the DMG failed.
+    /// The release publishes nothing for this OS/architecture.
+    Unsupported(String),
+    /// Downloading the artifact failed.
     Download(String),
     /// The downloaded bytes don't match the manifest's sha256.
     Checksum { expected: String, actual: String },
     /// Mounting or reading the DMG failed.
     Dmg(String),
+    /// Unpacking the tarball/zip failed.
+    Archive(String),
     /// The bundle's code signature or Team ID didn't verify.
     Signature(String),
-    /// Swapping the installed app failed (the previous install was rolled back).
+    /// The downloaded CLI wouldn't run, or reported a version the manifest didn't promise.
+    Preflight(String),
+    /// Swapping the installed payload failed (the previous install was rolled back).
     Install(String),
+    /// The new version installed but failed its health check; the previous one is back.
+    HealthCheck(String),
     /// Another updater run holds the lock.
     Busy(String),
 }
@@ -49,14 +65,18 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Manifest(e) => write!(f, "could not fetch the release manifest: {e}"),
+            Self::Unsupported(e) => write!(f, "no update published for this platform: {e}"),
             Self::Download(e) => write!(f, "could not download the update: {e}"),
             Self::Checksum { expected, actual } => write!(
                 f,
-                "downloaded DMG failed its checksum (expected sha256 {expected}, got {actual})"
+                "the download failed its checksum (expected sha256 {expected}, got {actual})"
             ),
             Self::Dmg(e) => write!(f, "could not open the downloaded DMG: {e}"),
+            Self::Archive(e) => write!(f, "could not unpack the downloaded archive: {e}"),
             Self::Signature(e) => write!(f, "downloaded app failed signature verification: {e}"),
+            Self::Preflight(e) => write!(f, "the downloaded build did not pass preflight: {e}"),
             Self::Install(e) => write!(f, "could not install the update: {e}"),
+            Self::HealthCheck(e) => write!(f, "the update was rolled back: {e}"),
             Self::Busy(e) => write!(f, "another update is already in progress: {e}"),
         }
     }
@@ -70,6 +90,12 @@ pub struct Check {
     pub installed: String,
     pub latest: String,
     pub update_available: bool,
+    /// The platform key this host looked for ([`host_platform`]).
+    pub platform: String,
+    /// Whether the published release carries an artifact for [`Self::platform`]. A newer
+    /// version that doesn't is *not* an available update — reporting one would leave every
+    /// scheduled run failing on a download that was never published.
+    pub has_artifact: bool,
     #[serde(skip)]
     pub manifest: Manifest,
 }
@@ -79,9 +105,9 @@ pub struct Check {
 pub struct Installed {
     pub from: String,
     pub to: String,
-    /// The live bundle path that now holds the new version.
-    pub app: PathBuf,
-    /// Where the previous install was moved (kept for manual rollback), if there was one.
+    /// The live path that now holds the new version — the app bundle, or the binary directory.
+    pub path: PathBuf,
+    /// Where the previous install was parked, if there was one. Rollback needs this.
     pub backup: Option<PathBuf>,
 }
 
@@ -119,38 +145,20 @@ impl Engine {
         State::load(&self.module)
     }
 
-    /// The bundle the updater manages: `ADI_UPDATE_APP` or [`DEFAULT_APP_PATH`].
+    /// The live install this host updates: `/Applications/ADI.app` on macOS, the directory
+    /// holding the running binaries elsewhere.
     #[must_use]
-    pub fn target_app() -> PathBuf {
-        std::env::var_os("ADI_UPDATE_APP")
-            .filter(|v| !v.is_empty())
-            .map_or_else(|| PathBuf::from(DEFAULT_APP_PATH), PathBuf::from)
+    pub fn target() -> PathBuf {
+        Payload::for_host().target()
     }
 
-    /// The version of the *installed* app (its `Info.plist`), which is what update
-    /// decisions compare against — the running CLI may be older or newer than the
-    /// bundle on disk. Falls back to the built-in version when no app is installed.
+    /// The version of the *installed* payload, which is what update decisions compare
+    /// against — the running CLI may be older or newer than what is installed. Falls back to
+    /// the built-in version when nothing is installed.
     #[must_use]
     pub fn installed_version() -> String {
-        let plist = Self::target_app().join("Contents/Info.plist");
-        if plist.exists() {
-            let out = shell::capture(&[
-                "/usr/bin/plutil",
-                "-extract",
-                "CFBundleShortVersionString",
-                "raw",
-                "-o",
-                "-",
-                &plist.to_string_lossy(),
-            ]);
-            if out.ok() {
-                let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                if !v.is_empty() {
-                    return v;
-                }
-            }
-        }
-        crate::BUILT_VERSION.to_string()
+        let payload = Payload::for_host();
+        payload.installed_version(&payload.target())
     }
 
     /// Fetch and parse the release manifest from the configured URL.
@@ -196,7 +204,10 @@ impl Engine {
         state.installed_version = Some(installed.clone());
         match &result {
             Ok(m) => {
-                let available = Version::is_newer(&m.version, &installed);
+                // A release with no artifact for this platform is not an available update —
+                // reporting one would leave `update run` failing on every scheduled check.
+                let available =
+                    Version::is_newer(&m.version, &installed) && m.artifact_for_host().is_some();
                 state.latest_version = Some(m.version.clone());
                 state.last_outcome = Some(
                     if available {
@@ -216,78 +227,64 @@ impl Engine {
         state.save(&self.module);
 
         let manifest = result?;
-        let update_available = Version::is_newer(&manifest.version, &installed);
+        let has_artifact = manifest.artifact_for_host().is_some();
+        let update_available = Version::is_newer(&manifest.version, &installed) && has_artifact;
         Ok(Check {
             installed,
             latest: manifest.version.clone(),
             update_available,
+            platform: host_platform(),
+            has_artifact,
             manifest,
         })
     }
 
-    /// Download, verify, and install the manifest's DMG, atomically swapping the
-    /// target bundle. The caller decides whether to restart services afterwards.
+    /// Download, verify, preflight, and install this release's artifact for the running
+    /// platform, replacing the live install. The caller decides whether to restart services
+    /// afterwards — and, if they fail to come up, calls [`Self::rollback`].
     ///
     /// # Errors
-    /// Any [`Error`]; on a failed swap the previous install is rolled back in place.
+    /// Any [`Error`]; nothing is swapped until the bytes are verified and the new CLI has run,
+    /// and a failure part-way through the swap puts the previous install back.
     pub fn install(&self, manifest: &Manifest) -> Result<Installed, Error> {
         let _lock = Lock::acquire(&self.module)?;
+        let payload = Payload::for_host();
+        let artifact = manifest.artifact_for_host().ok_or_else(|| {
+            Error::Unsupported(format!(
+                "release {} has no artifact for {}",
+                manifest.version,
+                host_platform()
+            ))
+        })?;
 
         let staging = self.module.raw_path("staging");
         let _ = fs::remove_dir_all(&staging);
         fs::create_dir_all(&staging).map_err(|e| Error::Install(e.to_string()))?;
 
-        // Download + checksum: nothing is mounted or executed until the bytes match.
-        let dmg = staging.join("ADI.dmg");
-        self.download(&manifest.dmg.url, &dmg)?;
-        let actual = sha256(&dmg)?;
-        let expected = manifest.dmg.sha256.trim().to_ascii_lowercase();
+        // Download + checksum: nothing is mounted, unpacked or executed until the bytes match.
+        let downloaded = staging.join(download_name(&artifact.url));
+        self.download(&artifact.url, &downloaded)?;
+        let actual = sha256(&downloaded)?;
+        let expected = artifact.sha256.trim().to_ascii_lowercase();
         if actual != expected {
             return Err(Error::Checksum { expected, actual });
         }
 
-        // Mount, verify the bundle's signature/team, and copy it out of the DMG.
-        let mnt = staging.join("mnt");
-        fs::create_dir_all(&mnt).map_err(|e| Error::Dmg(e.to_string()))?;
-        let staged = staging.join("ADI.app");
-        {
-            let _mount = Mount::attach(&dmg, &mnt)?;
-            let inner = find_app(&mnt)?;
-            verify_signature(&inner)?;
-            let copy = shell::run(&[
-                Path::new("/usr/bin/ditto").as_os_str(),
-                inner.as_os_str(),
-                staged.as_os_str(),
-            ]);
-            if !copy.ok() {
-                return Err(Error::Dmg(format!("ditto failed: {}", copy.text.trim())));
-            }
-        } // <- detach before touching the live install
+        // Authenticate and unpack, then make the new CLI prove it runs — all still off to the
+        // side, with the live install untouched.
+        let staged = payload.stage(&downloaded, &staging)?;
+        payload.preflight(&staged, &manifest.version)?;
 
-        // Swap: rename the old bundle aside, rename the new one in. Same-volume renames,
-        // so the window with no app at the target path is two atomic metadata ops.
-        let from = Self::installed_version();
-        let target = Self::target_app();
-        if let Some(parent) = target.parent() {
-            let _ = fs::create_dir_all(parent);
-        }
-        let backup = if target.exists() {
-            let dir = self.module.raw_path("backups");
-            fs::create_dir_all(&dir).map_err(|e| Error::Install(e.to_string()))?;
-            let dest = dir.join(format!("ADI.app.{from}.{}", state::now_unix()));
-            fs::rename(&target, &dest).map_err(|e| Error::Install(swap_hint(&e, &target)))?;
-            Some(dest)
-        } else {
-            None
-        };
-        if let Err(e) = fs::rename(&staged, &target) {
-            // Never leave the machine without an install: put the old bundle back.
-            if let Some(b) = &backup {
-                let _ = fs::rename(b, &target);
-            }
-            return Err(Error::Install(swap_hint(&e, &target)));
-        }
-        self.prune_backups();
+        let target = payload.target();
+        let from = payload.installed_version(&target);
+        let backup = payload.swap(
+            &staged,
+            &target,
+            &self.module.raw_path("backups"),
+            &from,
+            &manifest.version,
+        )?;
+        self.prune_backups(payload);
         let _ = fs::remove_dir_all(&staging);
 
         let mut state = self.state();
@@ -301,9 +298,34 @@ impl Engine {
         Ok(Installed {
             from,
             to: manifest.version.clone(),
-            app: target,
+            path: target,
             backup,
         })
+    }
+
+    /// Put the previous install back after a failed health check, recording why.
+    ///
+    /// # Errors
+    /// [`Error::Install`] when there is no backup to return to, or restoring it fails — at
+    /// which point the machine is running the new version and the caller must say so loudly.
+    pub fn rollback(&self, installed: &Installed, why: &str) -> Result<(), Error> {
+        let backup = installed.backup.as_ref().ok_or_else(|| {
+            Error::Install(format!(
+                "{} was a first install, so there is no previous version to roll back to",
+                installed.to
+            ))
+        })?;
+        Payload::for_host().restore(backup, &installed.path)?;
+
+        let mut state = self.state();
+        state.installed_version = Some(installed.from.clone());
+        state.last_outcome = Some("rolled-back".to_string());
+        state.last_error = Some(format!(
+            "{} failed its health check and was rolled back to {}: {why}",
+            installed.to, installed.from
+        ));
+        state.save(&self.module);
+        Ok(())
     }
 
     fn download(&self, url: &str, dest: &Path) -> Result<(), Error> {
@@ -329,8 +351,8 @@ impl Engine {
         Ok(())
     }
 
-    /// Keep only the newest [`BACKUPS_KEPT`] entries in `update/backups`.
-    fn prune_backups(&self) {
+    /// Keep only the newest [`BACKUPS_KEPT`] entries this payload kind owns.
+    fn prune_backups(&self, payload: Payload) {
         let dir = self.module.raw_path("backups");
         let Ok(entries) = fs::read_dir(&dir) else {
             return;
@@ -339,7 +361,7 @@ impl Engine {
             .filter_map(|e| e.ok().map(|e| e.path()))
             .filter(|p| {
                 p.file_name()
-                    .is_some_and(|n| n.to_string_lossy().starts_with("ADI.app."))
+                    .is_some_and(|n| payload.owns_backup(&n.to_string_lossy()))
             })
             .collect();
         backups.sort_by_key(|p| {
@@ -354,18 +376,25 @@ impl Engine {
     }
 }
 
-/// Map a swap failure to a message that names the usual culprit (macOS App Management
-/// blocks unentitled processes from replacing a signed bundle in /Applications).
-fn swap_hint(e: &std::io::Error, target: &Path) -> String {
-    if e.kind() == std::io::ErrorKind::PermissionDenied {
-        format!(
-            "{e} — macOS App Management may be blocking this process from replacing {}; \
-             run the update from the ADI background updater agent, or grant the invoking \
-             terminal App Management in System Settings → Privacy & Security",
-            target.display()
-        )
+/// The file name to save a download under: the URL's last segment when it is a plain file
+/// name, otherwise a neutral default. Never trusts the URL enough to let it escape staging.
+fn download_name(url: &str) -> String {
+    let tail = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    let safe = !tail.is_empty()
+        && tail != "."
+        && tail != ".."
+        && !tail.contains(['/', '\\'])
+        && Path::new(tail).file_name().is_some_and(|n| n == tail);
+    if safe {
+        tail.to_string()
     } else {
-        format!("{e} (replacing {})", target.display())
+        "adi-update-download".to_string()
     }
 }
 
@@ -388,104 +417,6 @@ fn sha256(path: &Path) -> Result<String, Error> {
         .next()
         .map(str::to_ascii_lowercase)
         .ok_or_else(|| Error::Download("shasum produced no output".to_string()))
-}
-
-/// The single `*.app` inside the mounted DMG.
-fn find_app(mnt: &Path) -> Result<PathBuf, Error> {
-    let entries = fs::read_dir(mnt).map_err(|e| Error::Dmg(e.to_string()))?;
-    entries
-        .filter_map(|e| e.ok().map(|e| e.path()))
-        .find(|p| p.extension().is_some_and(|ext| ext == "app"))
-        .ok_or_else(|| Error::Dmg("no .app bundle inside the DMG".to_string()))
-}
-
-/// Reject anything not signed as a genuine ADI release: the signature must verify
-/// (`codesign --verify --deep --strict`) and the signing Team ID must match.
-/// `ADI_UPDATE_INSECURE_SKIP_CODESIGN=1` skips this — for tests only.
-fn verify_signature(app: &Path) -> Result<(), Error> {
-    if std::env::var_os("ADI_UPDATE_INSECURE_SKIP_CODESIGN").is_some_and(|v| v == "1") {
-        eprintln!(
-            "adi-update: WARNING: skipping code-signature verification (ADI_UPDATE_INSECURE_SKIP_CODESIGN=1)"
-        );
-        return Ok(());
-    }
-    let verify = shell::run(&[
-        Path::new("/usr/bin/codesign").as_os_str(),
-        std::ffi::OsStr::new("--verify"),
-        std::ffi::OsStr::new("--deep"),
-        std::ffi::OsStr::new("--strict"),
-        app.as_os_str(),
-    ]);
-    if !verify.ok() {
-        return Err(Error::Signature(verify.text.trim().to_string()));
-    }
-    let expected_team = std::env::var("ADI_UPDATE_TEAM_ID")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .unwrap_or_else(|| DEFAULT_TEAM_ID.to_string());
-    let info = shell::run(&[
-        Path::new("/usr/bin/codesign").as_os_str(),
-        std::ffi::OsStr::new("-dv"),
-        std::ffi::OsStr::new("--verbose=4"),
-        app.as_os_str(),
-    ]);
-    let wanted = format!("TeamIdentifier={expected_team}");
-    if !info.text.lines().any(|l| l.trim() == wanted) {
-        return Err(Error::Signature(format!(
-            "bundle is not signed by team {expected_team}"
-        )));
-    }
-    Ok(())
-}
-
-/// Mounted-DMG guard: always detaches, even on an error path.
-#[derive(Debug)]
-struct Mount {
-    mnt: PathBuf,
-}
-
-impl Mount {
-    fn attach(dmg: &Path, mnt: &Path) -> Result<Self, Error> {
-        let out = shell::run(&[
-            Path::new("/usr/bin/hdiutil").as_os_str(),
-            std::ffi::OsStr::new("attach"),
-            dmg.as_os_str(),
-            std::ffi::OsStr::new("-nobrowse"),
-            std::ffi::OsStr::new("-noautoopen"),
-            std::ffi::OsStr::new("-readonly"),
-            std::ffi::OsStr::new("-mountpoint"),
-            mnt.as_os_str(),
-        ]);
-        if !out.ok() {
-            return Err(Error::Dmg(format!(
-                "hdiutil attach failed: {}",
-                out.text.trim()
-            )));
-        }
-        Ok(Self {
-            mnt: mnt.to_path_buf(),
-        })
-    }
-}
-
-impl Drop for Mount {
-    fn drop(&mut self) {
-        let gentle = shell::run(&[
-            Path::new("/usr/bin/hdiutil").as_os_str(),
-            std::ffi::OsStr::new("detach"),
-            self.mnt.as_os_str(),
-            std::ffi::OsStr::new("-quiet"),
-        ]);
-        if !gentle.ok() {
-            let _ = shell::run(&[
-                Path::new("/usr/bin/hdiutil").as_os_str(),
-                std::ffi::OsStr::new("detach"),
-                self.mnt.as_os_str(),
-                std::ffi::OsStr::new("-force"),
-                std::ffi::OsStr::new("-quiet"),
-            ]);
-        }
-    }
 }
 
 /// One-update-at-a-time lock (`update/update.lock`); a lock older than
@@ -557,25 +488,6 @@ mod tests {
     }
 
     #[test]
-    fn find_app_locates_the_bundle() {
-        let dir = scratch("findapp");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("ADI.app")).unwrap();
-        fs::create_dir_all(dir.join("noise")).unwrap();
-        assert_eq!(find_app(&dir).expect("found"), dir.join("ADI.app"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn find_app_errors_on_an_empty_dir() {
-        let dir = scratch("findapp-empty");
-        let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(&dir).unwrap();
-        assert!(matches!(find_app(&dir), Err(Error::Dmg(_))));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn sha256_matches_a_known_vector() {
         let dir = scratch("sha");
         let _ = fs::remove_dir_all(&dir);
@@ -586,6 +498,44 @@ mod tests {
             sha256(&file).expect("sha"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn download_name_keeps_the_asset_name_and_refuses_traversal() {
+        assert_eq!(download_name("https://x/y/ADI.dmg"), "ADI.dmg");
+        assert_eq!(
+            download_name("https://x/adi-linux-x64.tar.gz?token=1"),
+            "adi-linux-x64.tar.gz"
+        );
+        for hostile in [
+            "https://x/..",
+            "https://x/y/",
+            "https://x/%2e%2e/../etc/passwd/",
+        ] {
+            let name = download_name(hostile);
+            assert!(
+                !name.contains('/') && name != ".." ,
+                "{hostile} produced {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn rollback_without_a_backup_is_an_error_not_a_silent_noop() {
+        let dir = scratch("rollback-none");
+        let _ = fs::remove_dir_all(&dir);
+        let engine = Engine::with_module(adi_config::Config::with_root(&dir).module("update"));
+        let installed = Installed {
+            from: "0.1.0".to_string(),
+            to: "0.2.0".to_string(),
+            path: dir.join("ADI.app"),
+            backup: None,
+        };
+        assert!(matches!(
+            engine.rollback(&installed, "app never came up"),
+            Err(Error::Install(_))
+        ));
         let _ = fs::remove_dir_all(&dir);
     }
 }

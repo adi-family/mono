@@ -21,6 +21,11 @@ pub use update::{RunOutcome, Update, Updater};
 
 pub use adi_update::{Check as UpdateCheck, Error as UpdateError, State as UpdateState};
 
+/// The version this build was cut from — the release tag, via `scripts/version.sh`. Every
+/// frontend reports this one number so `adi-mono --version`, the bundle's `Info.plist` and
+/// the published manifest can never drift apart.
+pub use adi_update::BUILT_VERSION as VERSION;
+
 pub use adi_agents::arguments::AgentSummaryArguments;
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
