@@ -1,0 +1,90 @@
+# The Xcode project, as a file a human can read and a diff can show.
+#
+# `build.sh` regenerates AdiFleet.xcodeproj from this with `xcodegen`. The generated project is
+# committed too, so opening the app needs Xcode and nothing else — but this file is the source of
+# truth, and a setting changed only in Xcode's UI will be overwritten by the next generate.
+
+name: AdiFleet
+
+options:
+  bundleIdPrefix: family.adi
+  deploymentTarget:
+    iOS: "17.0"
+  createIntermediateGroups: true
+  # The Rust staticlib is built by `build.sh`, not by Xcode, so a stale artifact must never be
+  # silently linked: `build.sh` builds it before every `xcodebuild` invocation it makes.
+  generateEmptyDirectories: false
+
+settings:
+  base:
+    # Swift 5 language mode. Swift 6's strict concurrency has opinions about `@MainActor` views
+    # calling into an actor that are worth adopting deliberately, in their own change, rather than
+    # as a side effect of a project file.
+    SWIFT_VERSION: "5.0"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+
+targets:
+  AdiFleet:
+    type: application
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: AdiFleet
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: family.adi.fleet
+        PRODUCT_NAME: AdiFleet
+        INFOPLIST_FILE: AdiFleet/Info.plist
+        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 0.1.0
+        TARGETED_DEVICE_FAMILY: "1,2"
+
+        # The C surface. The header lives with the crate that implements it, so the two cannot drift.
+        SWIFT_OBJC_BRIDGING_HEADER: AdiFleet/Bridging-Header.h
+        HEADER_SEARCH_PATHS: $(SRCROOT)/../../crates/adi-mesh-ffi/include
+
+        # The Rust core. Always the release profile, in both Xcode configurations: a debug build of
+        # iroh is enormous (hundreds of MB of staticlib) and slow enough to be felt on a phone, and
+        # nothing in this app is debugged by stepping into Rust from Xcode.
+        OTHER_LDFLAGS: -ladi_mesh_ffi
+        LIBRARY_SEARCH_PATHS[sdk=iphonesimulator*]: $(SRCROOT)/../../target/aarch64-apple-ios-sim/release
+        LIBRARY_SEARCH_PATHS[sdk=iphoneos*]: $(SRCROOT)/../../target/aarch64-apple-ios/release
+
+        # Only arm64. The simulator SDK on Apple silicon still offers x86_64, and a build that
+        # takes it links against a Rust staticlib that does not have it — which surfaces as
+        # hundreds of "ignoring file … found architecture 'arm64'" warnings and then an undefined
+        # symbol for every entry point, rather than as the platform mismatch it is.
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+
+        # Automatic signing against whichever team is set here. The app needs no capability, no
+        # entitlement and no paid membership — a viewer only ever dials out — so any team with a
+        # development certificate can put it on a device. Override without editing this file:
+        #   DEVELOPMENT_TEAM=XXXXXXXXXX ./build.sh device
+        CODE_SIGN_STYLE: Automatic
+        # A free "Personal Team" is enough, and is what this is: the app declares no capability, so
+        # there is nothing here a paid membership would unlock. The cost of the free tier is that a
+        # build stops launching after seven days and has to be reinstalled.
+        DEVELOPMENT_TEAM: 752556J5V6
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG
+    dependencies:
+      # What the Rust core pulls in: TLS and key handling, and the interface/route watcher iroh
+      # uses to notice the network changing under a phone that moves between Wi-Fi and cellular.
+      - sdk: Security.framework
+      - sdk: SystemConfiguration.framework
+
+# Declared rather than left to Xcode's autocreation. An autocreated scheme is not written to disk,
+# so `xcodebuild -scheme AdiFleet` gets one with no buildables — which it reports as "Supported
+# platforms … is empty" and then as having no eligible destination at all, naming the SDK as the
+# culprit when the scheme is.
+schemes:
+  AdiFleet:
+    build:
+      targets:
+        AdiFleet: all
+    run:
+      config: Debug
+    archive:
+      config: Debug

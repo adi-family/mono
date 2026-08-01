@@ -657,10 +657,24 @@ pub fn mint_invite_for(
 /// deliberately *before* the peer-authorization check that the forward role applies: a joining
 /// node is by definition not yet authorized, and the nonce is what stands in its place.
 pub async fn serve_join(conn: Connection) {
+    serve_join_with(conn, |_| {}).await;
+}
+
+/// [`serve_join`], with the acceptance handed to `on_paired` before the connection closes.
+///
+/// The password exists in plaintext exactly once, here, on the side that minted it (§8) — and a
+/// viewer with no terminal to print it to needs that one copy. The iOS app takes it straight to the
+/// Keychain, so pairing a node also finishes the login for it; without this hook the phone would
+/// mint a password, hand it to the node, and then have to ask a human to type it back in.
+///
+/// It is a callback and not a return value so the existing callers cannot accidentally bind the
+/// credential to a variable, and so the copy's lifetime is the length of one call.
+pub async fn serve_join_with(conn: Connection, on_paired: impl FnOnce(&Accepted)) {
     let peer = conn.remote_id();
     match handshake(&conn, peer).await {
         Ok(JoinReply::Accepted(accepted)) => {
             info!(%peer, petname = %accepted.petname, "join: paired a new node");
+            on_paired(&accepted);
         }
         Ok(JoinReply::Refused { reason }) => {
             warn!(%peer, %reason, "join: refused");

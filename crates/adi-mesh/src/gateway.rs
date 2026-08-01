@@ -700,6 +700,18 @@ pub struct IrohDialer {
     endpoint: Endpoint,
 }
 
+impl IrohDialer {
+    /// Dial peers over `endpoint`.
+    ///
+    /// [`Gateway`] builds one for itself, but the pool is also useful on its own — a viewer that
+    /// has no local route table to serve (the iOS app) wants the dialling and backoff behaviour
+    /// without the node side that owns it here.
+    #[must_use]
+    pub fn new(endpoint: Endpoint) -> Self {
+        Self { endpoint }
+    }
+}
+
 impl Dialer for IrohDialer {
     type Conn = Connection;
 

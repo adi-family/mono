@@ -147,6 +147,14 @@ name = "adi-fs"
 version = "0.1.0"
 
 [[package]]
+name = "adi-harness-lab"
+version = "0.1.0"
+dependencies = [
+ "adi-agents",
+ "serde_json",
+]
+
+[[package]]
 name = "adi-hive"
 version = "0.1.0"
 dependencies = [
@@ -196,6 +204,20 @@ dependencies = [
  "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "adi-mesh-ffi"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "adi-mesh",
+ "anyhow",
+ "iroh",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -1,0 +1,32 @@
+[package]
+name = "adi-mesh-ffi"
+description = "The viewer half of the adi mesh behind a C ABI, so a platform that cannot run adi — an iPhone — can still reach a node by key: pair, then open <service>.<node> on a loopback port."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lib]
+# `staticlib` is what Xcode links; `rlib` is what `cargo test` needs to compile the unit tests
+# in-crate. Both, so the same source is the shipped artifact and the tested one.
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+# The mesh itself. Nothing here reimplements the wire protocol, the registry, or the pairing
+# handshake — this crate is a lifecycle and a C surface around them, and every behaviour the
+# contract pins (docs/fleet.md) stays pinned by that crate's tests.
+adi-mesh = { workspace = true }
+adi-config = { workspace = true }
+
+iroh = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "io-util", "sync", "time"] }
+tracing = "0.1"
+
+[lints]
+workspace = true

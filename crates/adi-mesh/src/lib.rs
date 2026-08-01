@@ -18,9 +18,13 @@ pub mod node;
 pub mod protocol;
 pub mod ticket;
 
+/// Splicing a local TCP connection to an iroh bi-stream. Public because the calling side is not
+/// only [`gateway::serve`]: a viewer with no front door in front of it — the iOS app, which reaches
+/// a node from a listener of its own — performs the same handshake and then needs the same pump.
+pub mod tunnel;
+
 mod client;
 mod daemon;
 mod host;
-mod tunnel;
 
 pub use daemon::{Daemon, current_ticket};

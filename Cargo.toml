@@ -18,6 +18,7 @@ default-members = [
     "crates/adi-hive",
     "crates/adi-hooks",
     "crates/adi-mesh",
+    "crates/adi-mesh-ffi",
     "crates/adi-ports-manager",
     "crates/adi-projects",
     "crates/adi-pty",
@@ -54,6 +55,7 @@ adi-fs = { path = "crates/adi-fs" }
 adi-hive = { path = "crates/adi-hive" }
 adi-hooks = { path = "crates/adi-hooks" }
 adi-mesh = { path = "crates/adi-mesh" }
+adi-mesh-ffi = { path = "crates/adi-mesh-ffi" }
 adi-osext = { path = "crates/adi-osext" }
 adi-ports-manager = { path = "crates/adi-ports-manager" }
 adi-projects = { path = "crates/adi-projects" }

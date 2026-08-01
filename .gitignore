@@ -4,6 +4,13 @@
 
 # macOS app build output (assembled .app bundle + packaged .dmg)
 apps/*/build/
+# Xcode's own derived data — build.sh points -derivedDataPath at these, and they hold a few
+# hundred MB of precompiled modules and build logs that rebuild from source in one command.
+apps/*/.build/
+apps/*/.build-device/
+# Xcode per-user state inside a generated project
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
 
 # Backtraces
 rustc-ice-*.txt
