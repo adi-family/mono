@@ -546,7 +546,12 @@ impl Agents {
     /// # Errors
     /// Returns [`Error::NotFound`] for an unknown agent, or argument / provider-configuration /
     /// HTTP / decoding errors from the loop.
-    pub fn run_adi_turn(&self, agent_name: &str, conv_id: &str) -> Result<String> {
+    pub fn run_adi_turn(
+        &self,
+        agent_name: &str,
+        conv_id: &str,
+        sink: crate::backends::adi_events::Sink<'_>,
+    ) -> Result<String> {
         let agent = self
             .get(agent_name)?
             .ok_or_else(|| Error::NotFound(agent_name.to_string()))?;
@@ -556,7 +561,7 @@ impl Agents {
         // in. The child was spawned *into* the run's directory and carries it in its environment,
         // so `current` reproduces it exactly, per-run choice included.
         let workdir = workspace::current(&self.config, &agent.manifest);
-        adi_turn_in(&self.decorated(&agent, &workdir), &sessions_dir, conv_id)
+        adi_turn_in(&self.decorated(&agent, &workdir), &sessions_dir, conv_id, sink)
     }
 
     /// Where a turn of `conv_id` must run: the directory that conversation started in. Every turn

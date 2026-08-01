@@ -366,11 +366,17 @@ pub(crate) fn unqueue_in(
     }
 }
 
-/// Run one `adi` conversation turn — read the transcript, call the provider, return the answer.
-/// See [`crate::Agents::run_adi_turn`]. Only the `adi` harness engine has a loop to run.
-pub(crate) fn adi_turn_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> Result<String> {
+/// Run one `adi` conversation turn — read the transcript, drive the provider and its tools, return
+/// the answer, writing the turn's events to `sink` as they happen. See
+/// [`crate::Agents::run_adi_turn`]. Only the `adi` harness engine has a loop to run.
+pub(crate) fn adi_turn_in(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    conv_id: &str,
+    sink: crate::backends::adi_events::Sink<'_>,
+) -> Result<String> {
     match &agent.manifest.backend {
-        Backend::HarnessAdi => harness::run_adi_turn(agent, sessions_dir, conv_id),
+        Backend::HarnessAdi => harness::run_adi_turn(agent, sessions_dir, conv_id, sink),
         other => Err(Error::Unsupported(format!(
             "backend {other} has no adi loop to run"
         ))),

@@ -197,12 +197,18 @@ fn main() {
         // `process::exit` skips the normal stdout flush.
         Command::HarnessTurn { agent, conv } => {
             use std::io::Write as _;
-            let (text, code) = match adi.agents().run_adi_turn(&agent, &conv) {
-                Ok(answer) => (answer, 0),
-                Err(e) => (format!("⚠ adi loop error: {e}"), 1),
-            };
+            // The loop writes its own events — commentary, each tool call, the answer — to stdout
+            // as it goes, so nothing is printed here on success: doing so would say the answer
+            // twice. A failure has written no answer event, and its one plain line is read back as
+            // the turn's text.
             let mut out = std::io::stdout();
-            let _ = out.write_all(text.as_bytes());
+            let code = match adi.agents().run_adi_turn(&agent, &conv, &mut out) {
+                Ok(_) => 0,
+                Err(e) => {
+                    let _ = writeln!(out, "⚠ adi loop error: {e}");
+                    1
+                }
+            };
             let _ = out.flush();
             std::process::exit(code);
         }

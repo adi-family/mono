@@ -13,12 +13,13 @@
 //!   (`--resume`) so the CLI reconstructs the full history. Spawned detached through the shared
 //!   [`super::detached`] machinery, under its own `harness/` runtime subdir.
 //! - `harness:adi` is ADI's own loop over a chosen model provider (see [`adi_loop`]): each turn
-//!   re-enters `adi-mono harness-turn`, replays the transcript, and calls the provider's chat API.
-//!   Runnable once a supported provider (Anthropic, or a local Ollama) is configured.
+//!   re-enters `adi-mono harness-turn`, replays the transcript, calls the provider's chat API, and
+//!   runs the [`tools`] it asks for until it answers. Runnable as soon as a provider is named.
 
 mod adi_loop;
 mod claude_sdk;
 mod conversation;
+mod tools;
 
 use std::path::{Path, PathBuf};
 
@@ -39,14 +40,22 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
     engine_supported(manifest).is_ok()
 }
 
-/// Run one `adi` conversation turn: read the transcript, call the provider, and return the answer
-/// text. Used by the `adi-mono harness-turn` child that an `adi` turn spawns — a plain sync process,
-/// since the blocking provider client must not run inside an async runtime.
+/// Run one `adi` conversation turn: read the transcript, drive the provider and its tools, and
+/// return the answer text. Used by the `adi-mono harness-turn` child that an `adi` turn spawns — a
+/// plain sync process, since the blocking provider client must not run inside an async runtime.
+///
+/// `sink` receives the turn's events as they happen (that child's stdout in production), which is
+/// what puts a running tool on screen before the turn settles.
 ///
 /// # Errors
 /// Returns argument, provider-configuration, or HTTP/decoding errors.
-pub fn run_adi_turn(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> Result<String> {
-    adi_loop::run_turn(agent, sessions_dir, conv_id)
+pub fn run_adi_turn(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    conv_id: &str,
+    sink: crate::backends::adi_events::Sink<'_>,
+) -> Result<String> {
+    adi_loop::run_turn(agent, sessions_dir, conv_id, sink)
 }
 
 /// Start a new conversation with `message` as its first turn. The returned launch's `run_id` is the

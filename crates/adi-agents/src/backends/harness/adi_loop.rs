@@ -1,23 +1,24 @@
-//! `harness:adi` — ADI's own answering loop over a chosen model provider.
+//! `harness:adi` — ADI's own agentic loop over a chosen model provider.
 //!
 //! Unlike `harness:claude-sdk`, there is no vendor CLI: each conversation turn spawns
 //! `adi-mono harness-turn --agent <name> --conv <id>`, which runs [`run_turn`]. That reads the
 //! conversation's committed transcript, calls the configured provider's chat API with the whole
-//! history, and prints the answer to stdout — which the detached machinery captures as the turn's
-//! output and [`super::conversation`] folds into the transcript, exactly like a Claude turn. So
-//! continuation here is transcript replay rather than a resumable session id.
+//! history, and writes the turn's events to stdout — which the detached machinery captures and
+//! [`super::conversation`] folds into the transcript, exactly like a Claude turn. So continuation
+//! here is transcript replay rather than a resumable session id.
 //!
-//! This is a plain conversational loop (no tool use yet — that is the natural next step), and it
-//! now speaks every provider the manifest can name: **Anthropic**'s Messages API, **OpenAI** and
+//! It speaks every provider the manifest can name: **Anthropic**'s Messages API, **`OpenAI`** and
 //! **Monshoot** (Moonshot's Kimi) over the shared chat-completions dialect, **Gemini**'s
-//! `generateContent`, and a local **Ollama**. The only thing [`validate`] still rejects is an
-//! agent that has not picked one.
+//! `generateContent`, and a local **Ollama**. The only thing [`validate`] rejects is an agent that
+//! has not picked one.
 //!
-//! Each arm sends exactly the arguments its provider understands, and the panel scopes the fields
-//! it offers to the chosen provider — so the union type in [`HarnessAdiArguments`] never leaks a
-//! knob into a request that would reject it.
+//! **A turn is a loop, not a call.** The model is offered the [`tools`](super::tools) every coding
+//! agent has — `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep` — and while it asks for them, this
+//! runs them and asks again, up to [`MAX_ROUNDS`]. The four providers disagree about how tools are
+//! declared, how a call comes back, and how a result is handed over; [`Wire`] is where those four
+//! disagreements live, so the loop itself is written once and reads the same for all of them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -26,9 +27,12 @@ use crate::StoredAgent;
 use crate::arguments::{
     HarnessAdiArguments, HarnessProvider, HarnessResponseFormat, HarnessThinking,
 };
+use crate::backends::adi_events::{self, Sink};
 use crate::error::{Error, Result};
+use crate::progress::TurnMetrics;
 
 use super::conversation::{self, Turn};
+use super::tools;
 
 /// Anthropic requires an explicit output cap, so default one when the agent sets none.
 const DEFAULT_MAX_TOKENS: u64 = 4096;
@@ -36,8 +40,12 @@ const DEFAULT_MAX_TOKENS: u64 = 4096;
 /// budget as the reply — a 4k cap routinely ends the turn mid-thought with an empty answer. So the
 /// Monshoot default is roomier; an agent that sets `max_tokens` still wins.
 const MONSHOOT_DEFAULT_MAX_TOKENS: u64 = 16_384;
-/// A generous per-turn ceiling — a local model can be slow, and a turn is one blocking call.
+/// A generous per-round ceiling — a local model can be slow, and a round is one blocking call.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(600);
+/// How many model round-trips one turn may take before the loop gives up. High enough for real
+/// work (read a few files, edit, check), low enough that a model stuck in a call/retry rut costs
+/// a bounded amount of money and time. An agent's `max_turns` overrides it.
+const MAX_ROUNDS: u64 = 16;
 
 /// The command a conversation turn spawns for an `adi` agent: re-enter this binary's hidden
 /// `harness-turn` subcommand, which reads the transcript and calls the provider.
@@ -52,7 +60,7 @@ pub(super) fn argv(agent_name: &str, conv_id: &str) -> Vec<String> {
     ]
 }
 
-/// Whether the loop can actually run these arguments. Every provider the manifest can name is now
+/// Whether the loop can actually run these arguments. Every provider the manifest can name is
 /// implemented, so the only thing left to reject is an agent that hasn't picked one — which is
 /// not-yet-configured rather than broken, hence `NotRunnable` and a hidden run button.
 pub(super) fn validate(args: &HarnessAdiArguments) -> Result<()> {
@@ -62,10 +70,15 @@ pub(super) fn validate(args: &HarnessAdiArguments) -> Result<()> {
     }
 }
 
-/// Run one turn: read the transcript, call the provider, and return its answer text. Called from the
-/// spawned `adi-mono harness-turn` child (a plain sync process — the blocking HTTP client must not
-/// run inside an async runtime).
-pub(crate) fn run_turn(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> Result<String> {
+/// Run one turn to completion, writing its events to `sink` as they happen and returning the
+/// answer. Called from the spawned `adi-mono harness-turn` child (a plain sync process — the
+/// blocking HTTP client must not run inside an async runtime).
+pub(crate) fn run_turn(
+    agent: &StoredAgent,
+    sessions_dir: &Path,
+    conv_id: &str,
+    sink: Sink<'_>,
+) -> Result<String> {
     let args = agent.manifest.typed_arguments::<HarnessAdiArguments>()?;
     validate(&args)?;
     let model = args
@@ -78,96 +91,306 @@ pub(crate) fn run_turn(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) 
         })?;
 
     // The committed transcript ends with the user turn this reply answers (conversation appended it
-    // before spawning us). Map it straight to provider chat messages.
+    // before spawning us).
     let turns = conversation::committed(sessions_dir, &agent.name, conv_id);
-    let messages = chat_messages(&turns);
-    if messages.is_empty() {
-        return Err(Error::Process("the conversation has no messages to answer".to_string()));
+    if turns.iter().all(|t| t.text.trim().is_empty()) {
+        return Err(Error::Process(
+            "the conversation has no messages to answer".to_string(),
+        ));
     }
 
-    match args.provider {
-        Some(HarnessProvider::Ollama) => ollama_chat(&args, model, messages),
-        Some(HarnessProvider::Anthropic) => anthropic_messages(&args, model, messages),
-        Some(HarnessProvider::Openai) => openai_chat(&args, model, messages, &OPENAI),
-        Some(HarnessProvider::Monshoot) => openai_chat(&args, model, messages, &MONSHOOT),
-        Some(HarnessProvider::Gemini) => gemini_generate(&args, model, messages),
-        // validate() already rejected the only remaining case: no provider at all.
-        None => Err(Error::NotRunnable("harness:adi".to_string())),
+    // The child was spawned into the run's own directory, so this is the directory the agent's
+    // work is about — the one its relative paths resolve against.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let wire = Wire::of(&args, model)?;
+    tool_loop(&wire, &args, &turns, &cwd, sink)
+}
+
+// ---- the loop ----------------------------------------------------------------------
+
+/// One tool call the model asked for.
+struct ToolCall {
+    /// The provider's own id where it has one; a synthesized `call-N` where it doesn't (Gemini and
+    /// Ollama identify a call only by position, so the loop supplies what the transcript needs).
+    id: String,
+    name: String,
+    input: Value,
+}
+
+/// What running one call produced. `ok` false is a tool that failed, which is an answer the model
+/// is expected to read and act on — not a failure of the turn.
+struct ToolResult {
+    call_id: String,
+    name: String,
+    output: String,
+    ok: bool,
+}
+
+/// One round-trip's outcome, in provider-neutral terms.
+struct Reply {
+    /// What the model wrote this round: commentary when calls follow, the answer when none do.
+    text: String,
+    calls: Vec<ToolCall>,
+    /// The assistant message exactly as the provider sent it. Echoed back verbatim on the next
+    /// round, because every one of these APIs wants its own message shape returned unaltered.
+    raw: Value,
+    input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+}
+
+/// Ask, run what was asked for, and ask again — until the model answers without calling anything.
+fn tool_loop(
+    wire: &Wire<'_>,
+    args: &HarnessAdiArguments,
+    turns: &[Turn],
+    cwd: &Path,
+    sink: Sink<'_>,
+) -> Result<String> {
+    let max_rounds = args.max_turns.filter(|n| *n > 0).unwrap_or(MAX_ROUNDS);
+    let mut messages = wire.seed(turns);
+    let mut metrics = TurnMetrics::default();
+
+    for round in 1..=max_rounds {
+        let reply = wire.round(&messages)?;
+        metrics.num_turns = Some(round);
+        add(&mut metrics.input_tokens, reply.input_tokens);
+        add(&mut metrics.output_tokens, reply.output_tokens);
+
+        if reply.calls.is_empty() {
+            if reply.text.trim().is_empty() {
+                metrics.is_error = true;
+                adi_events::metrics(sink, &metrics);
+                return Err(Error::Process(format!(
+                    "{} answered with neither text nor a tool call",
+                    wire.provider()
+                )));
+            }
+            adi_events::answer(sink, &reply.text);
+            adi_events::metrics(sink, &metrics);
+            return Ok(reply.text);
+        }
+
+        // Anything said before the calls is commentary — it belongs on the timeline, not in the
+        // answer, which is whatever the model writes once it stops reaching for tools.
+        adi_events::message(sink, &reply.text);
+
+        let mut results = Vec::with_capacity(reply.calls.len());
+        for call in &reply.calls {
+            adi_events::tool_started(sink, &call.id, &call.name, &call.input);
+            let (output, ok) = match tools::run(&call.name, &call.input, cwd) {
+                Ok(out) => (out, true),
+                Err(err) => (err, false),
+            };
+            adi_events::tool_finished(sink, &call.id, &call.name, &output, ok);
+            results.push(ToolResult {
+                call_id: call.id.clone(),
+                name: call.name.clone(),
+                output,
+                ok,
+            });
+        }
+        wire.append(&mut messages, &reply, &results);
+    }
+
+    metrics.is_error = true;
+    adi_events::metrics(sink, &metrics);
+    Err(Error::Process(format!(
+        "the turn was still calling tools after {max_rounds} rounds and was stopped — the steps \
+         above are what it did; raise the agent's max turns if the work genuinely needs more"
+    )))
+}
+
+fn add(total: &mut Option<u64>, more: Option<u64>) {
+    if let Some(n) = more {
+        *total = Some(total.unwrap_or(0) + n);
     }
 }
 
-/// The transcript's user/assistant turns as `{role, content}` chat messages (blank turns dropped).
-fn chat_messages(turns: &[Turn]) -> Vec<Value> {
-    turns
+// ---- the four wire formats ---------------------------------------------------------
+
+/// A provider's tool-calling dialect: how the conversation starts, how one round is sent and read,
+/// and how a round plus its tool results is appended for the next one.
+enum Wire<'a> {
+    Anthropic {
+        args: &'a HarnessAdiArguments,
+        model: &'a str,
+    },
+    /// `OpenAI` and Monshoot: the same chat-completions shape, differing only in [`OpenAiDialect`].
+    OpenAi {
+        args: &'a HarnessAdiArguments,
+        model: &'a str,
+        dialect: &'static OpenAiDialect,
+    },
+    Gemini {
+        args: &'a HarnessAdiArguments,
+        model: &'a str,
+    },
+    Ollama {
+        args: &'a HarnessAdiArguments,
+        model: &'a str,
+    },
+}
+
+impl<'a> Wire<'a> {
+    fn of(args: &'a HarnessAdiArguments, model: &'a str) -> Result<Self> {
+        Ok(match args.provider {
+            Some(HarnessProvider::Anthropic) => Self::Anthropic { args, model },
+            Some(HarnessProvider::Openai) => Self::OpenAi {
+                args,
+                model,
+                dialect: &OPENAI,
+            },
+            Some(HarnessProvider::Monshoot) => Self::OpenAi {
+                args,
+                model,
+                dialect: &MONSHOOT,
+            },
+            Some(HarnessProvider::Gemini) => Self::Gemini { args, model },
+            Some(HarnessProvider::Ollama) => Self::Ollama { args, model },
+            None => return Err(Error::NotRunnable("harness:adi".to_string())),
+        })
+    }
+
+    fn provider(&self) -> &'static str {
+        match self {
+            Self::Anthropic { .. } => "anthropic",
+            Self::OpenAi { dialect, .. } => dialect.provider,
+            Self::Gemini { .. } => "gemini",
+            Self::Ollama { .. } => "ollama",
+        }
+    }
+
+    /// The transcript as this provider's opening message list.
+    fn seed(&self, turns: &[Turn]) -> Vec<Value> {
+        let plain: Vec<&Turn> = turns
+            .iter()
+            .filter(|t| !t.text.trim().is_empty())
+            .collect();
+        match self {
+            // Gemini names the assistant `model` and carries the system prompt outside the list.
+            Self::Gemini { .. } => plain
+                .iter()
+                .map(|t| {
+                    let role = if t.role == "assistant" { "model" } else { "user" };
+                    json!({ "role": role, "parts": [{ "text": t.text }] })
+                })
+                .collect(),
+            // Everyone else takes `{role, content}` with the system prompt as the first message —
+            // except Anthropic, which has a `system` field; passing it as a message is accepted on
+            // current models, but the dedicated field is what the API documents, so it goes there.
+            Self::Anthropic { .. } => plain
+                .iter()
+                .map(|t| json!({ "role": t.role, "content": t.text }))
+                .collect(),
+            Self::OpenAi { args, .. } | Self::Ollama { args, .. } => {
+                let mut messages: Vec<Value> = plain
+                    .iter()
+                    .map(|t| json!({ "role": t.role, "content": t.text }))
+                    .collect();
+                if let Some(system) = system_prompt(args) {
+                    messages.insert(0, json!({ "role": "system", "content": system }));
+                }
+                messages
+            }
+        }
+    }
+
+    /// Send one round and read it back.
+    fn round(&self, messages: &[Value]) -> Result<Reply> {
+        match self {
+            Self::Anthropic { args, model } => anthropic_round(args, model, messages),
+            Self::OpenAi {
+                args,
+                model,
+                dialect,
+            } => openai_round(args, model, messages, dialect),
+            Self::Gemini { args, model } => gemini_round(args, model, messages),
+            Self::Ollama { args, model } => ollama_round(args, model, messages),
+        }
+    }
+
+    /// Append the assistant's round and one result per call, in this provider's shape.
+    fn append(&self, messages: &mut Vec<Value>, reply: &Reply, results: &[ToolResult]) {
+        messages.push(reply.raw.clone());
+        match self {
+            Self::Anthropic { .. } => {
+                // One user message carrying every result, which is the shape the API requires:
+                // a tool_result block per tool_use, all in the turn that answers them.
+                let blocks: Vec<Value> = results
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "type": "tool_result",
+                            "tool_use_id": r.call_id,
+                            "content": r.output,
+                            "is_error": !r.ok,
+                        })
+                    })
+                    .collect();
+                messages.push(json!({ "role": "user", "content": blocks }));
+            }
+            Self::OpenAi { .. } => messages.extend(results.iter().map(|r| {
+                json!({ "role": "tool", "tool_call_id": r.call_id, "content": r.output })
+            })),
+            // Ollama identifies a result by the tool's name rather than a call id.
+            Self::Ollama { .. } => messages.extend(
+                results
+                    .iter()
+                    .map(|r| json!({ "role": "tool", "tool_name": r.name, "content": r.output })),
+            ),
+            // Gemini answers a call with a functionResponse part, all of them in one user turn.
+            Self::Gemini { .. } => {
+                let parts: Vec<Value> = results
+                    .iter()
+                    .map(|r| {
+                        json!({
+                            "functionResponse": {
+                                "name": r.name,
+                                "response": { "output": r.output, "ok": r.ok },
+                            }
+                        })
+                    })
+                    .collect();
+                messages.push(json!({ "role": "user", "parts": parts }));
+            }
+        }
+    }
+}
+
+/// The tool set as JSON Schema function declarations — the shape `OpenAI`, Ollama and (nested one
+/// level deeper) Gemini all take.
+fn function_declarations() -> Vec<Value> {
+    tools::TOOLS
         .iter()
-        .filter(|t| !t.text.trim().is_empty())
-        .map(|t| json!({ "role": t.role, "content": t.text }))
+        .map(|t| {
+            json!({
+                "name": t.name,
+                "description": t.description,
+                "parameters": (t.schema)(),
+            })
+        })
         .collect()
-}
-
-// ---- Ollama (local) ----------------------------------------------------------------
-
-fn ollama_chat(args: &HarnessAdiArguments, model: &str, mut messages: Vec<Value>) -> Result<String> {
-    if let Some(system) = system_prompt(args) {
-        messages.insert(0, json!({ "role": "system", "content": system }));
-    }
-    let mut options = serde_json::Map::new();
-    put_f64(&mut options, "temperature", args.temperature);
-    put_f64(&mut options, "top_p", args.top_p);
-    put_u64(&mut options, "top_k", args.top_k);
-    put_u64(&mut options, "num_ctx", args.num_ctx);
-    put_f64(&mut options, "repeat_penalty", args.repeat_penalty);
-    put_f64(&mut options, "min_p", args.min_p);
-    put_u64(&mut options, "num_predict", args.max_tokens);
-    if let Some(seed) = args.seed {
-        options.insert("seed".to_string(), json!(seed));
-    }
-    if let Some(stops) = stop_sequences(args) {
-        options.insert("stop".to_string(), json!(stops));
-    }
-
-    let mut body = json!({
-        "model": model,
-        "messages": messages,
-        "stream": false,
-    });
-    if !options.is_empty() {
-        body["options"] = Value::Object(options);
-    }
-    if args.format.is_some() {
-        body["format"] = json!("json");
-    }
-    if args.think {
-        // Only sent when asked for: a model that can't think rejects the field outright.
-        body["think"] = json!(true);
-    }
-    if let Some(keep) = args.keep_alive.as_deref().filter(|k| !k.trim().is_empty()) {
-        body["keep_alive"] = json!(keep);
-    }
-
-    let base = base_url(args, "http://localhost:11434");
-    let url = format!("{base}/api/chat");
-    let resp = post_json(&url, &[], &body)?;
-    resp.get("message")
-        .and_then(|m| m.get("content"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
-        .ok_or_else(|| provider_shape_error("ollama", &resp))
 }
 
 // ---- Anthropic ---------------------------------------------------------------------
 
-fn anthropic_messages(
+fn anthropic_round(
     args: &HarnessAdiArguments,
     model: &str,
-    messages: Vec<Value>,
-) -> Result<String> {
+    messages: &[Value],
+) -> Result<Reply> {
     let key = api_key(args, "ANTHROPIC_API_KEY", "Anthropic")?;
 
     let mut body = json!({
         "model": model,
         "max_tokens": args.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
         "messages": messages,
+        // Anthropic keeps the schema under `input_schema` rather than `parameters`.
+        "tools": tools::TOOLS.iter().map(|t| json!({
+            "name": t.name,
+            "description": t.description,
+            "input_schema": (t.schema)(),
+        })).collect::<Vec<_>>(),
     });
     if let Some(system) = system_prompt(args) {
         body["system"] = json!(system);
@@ -202,25 +425,60 @@ fn anthropic_messages(
         ("anthropic-version", "2023-06-01"),
     ];
     let resp = post_json(&url, &headers, &body)?;
-    // The reply is an array of content blocks; concatenate the text ones.
-    let text = resp
+
+    // The reply is a list of content blocks: text ones make up what it said, tool_use ones are what
+    // it wants run. Both can appear in the same round, which is exactly the "here's what I'm about
+    // to do" narration the timeline wants to keep.
+    let blocks = resp
         .get("content")
         .and_then(Value::as_array)
-        .map(|blocks| {
-            blocks
-                .iter()
-                .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-                .filter_map(|b| b.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .filter(|t| !t.is_empty());
-    text.ok_or_else(|| provider_shape_error("anthropic", &resp))
+        .ok_or_else(|| provider_shape_error("anthropic", &resp))?;
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    for block in blocks {
+        match block.get("type").and_then(Value::as_str) {
+            Some("text") => {
+                if let Some(t) = block.get("text").and_then(Value::as_str) {
+                    text.push_str(t);
+                }
+            }
+            Some("tool_use") => calls.push(ToolCall {
+                id: block
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                name: block
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                input: block.get("input").cloned().unwrap_or_else(|| json!({})),
+            }),
+            _ => {}
+        }
+    }
+    if text.trim().is_empty()
+        && calls.is_empty()
+        && resp.get("stop_reason").and_then(Value::as_str) == Some("max_tokens")
+    {
+        return Err(out_of_budget_error(
+            model,
+            args.max_tokens.unwrap_or(DEFAULT_MAX_TOKENS),
+        ));
+    }
+    Ok(Reply {
+        text,
+        calls,
+        raw: json!({ "role": "assistant", "content": blocks }),
+        input_tokens: usage(&resp, &["usage", "input_tokens"]),
+        output_tokens: usage(&resp, &["usage", "output_tokens"]),
+    })
 }
 
 // ---- OpenAI dialect (OpenAI, and Monshoot's Kimi) ----------------------------------
 
-/// The two providers that speak OpenAI's `/v1/chat/completions`. They agree on the whole request
+/// The two providers that speak `OpenAI`'s `/v1/chat/completions`. They agree on the whole request
 /// body but disagree on where they live, which variable holds the key, and — the one that bites —
 /// what the output cap is called.
 struct OpenAiDialect {
@@ -228,8 +486,8 @@ struct OpenAiDialect {
     provider: &'static str,
     default_base: &'static str,
     default_key_env: &'static str,
-    /// OpenAI's reasoning models **reject** `max_tokens` and want `max_completion_tokens`;
-    /// Moonshot only knows `max_tokens`. An OpenAI-compatible third party that predates the
+    /// `OpenAI`'s reasoning models **reject** `max_tokens` and want `max_completion_tokens`;
+    /// Moonshot only knows `max_tokens`. An `OpenAI`-compatible third party that predates the
     /// rename is reachable through the `monshoot` provider with a `base_url` override.
     max_tokens_field: &'static str,
     /// The cap to send when the agent sets none — see [`MONSHOOT_DEFAULT_MAX_TOKENS`].
@@ -252,31 +510,32 @@ const MONSHOOT: OpenAiDialect = OpenAiDialect {
     default_max_tokens: MONSHOOT_DEFAULT_MAX_TOKENS,
 };
 
-/// One turn against an OpenAI-dialect chat-completions endpoint.
+/// One round against an `OpenAI`-dialect chat-completions endpoint.
 ///
 /// Two things about the reasoning models on both providers are worth knowing before reading the
 /// parse below. They think first, and the scratchpad comes back *beside* the answer (`reasoning`
-/// on OpenAI, `reasoning_content` on Kimi) while `content` holds the reply — so a turn that runs
+/// on `OpenAI`, `reasoning_content` on Kimi) while `content` holds the reply — so a round that runs
 /// out of budget mid-thought returns an **empty** `content` with `finish_reason: "length"`. That
 /// case gets its own error, because "raise max output tokens" is the fix and nothing else says so.
-/// And several of them (`kimi-k2.6`, OpenAI's o-series and gpt-5) accept only the default
+/// And several of them (`kimi-k2.6`, `OpenAI`'s o-series and gpt-5) accept only the default
 /// temperature, which is why nothing is sent unless the agent asked for it explicitly.
-fn openai_chat(
+fn openai_round(
     args: &HarnessAdiArguments,
     model: &str,
-    mut messages: Vec<Value>,
+    messages: &[Value],
     dialect: &OpenAiDialect,
-) -> Result<String> {
+) -> Result<Reply> {
     let key = api_key(args, dialect.default_key_env, dialect.provider)?;
-    if let Some(system) = system_prompt(args) {
-        messages.insert(0, json!({ "role": "system", "content": system }));
-    }
 
     let max_tokens = args.max_tokens.unwrap_or(dialect.default_max_tokens);
     let mut body = json!({
         "model": model,
         "messages": messages,
         "stream": false,
+        "tools": function_declarations()
+            .into_iter()
+            .map(|f| json!({ "type": "function", "function": f }))
+            .collect::<Vec<_>>(),
     });
     body[dialect.max_tokens_field] = json!(max_tokens);
     if let Some(t) = args.temperature {
@@ -311,19 +570,50 @@ fn openai_chat(
         .and_then(Value::as_array)
         .and_then(|c| c.first())
         .ok_or_else(|| provider_shape_error(dialect.provider, &resp))?;
-    let text = choice
+    let message = choice
         .get("message")
-        .and_then(|m| m.get("content"))
+        .ok_or_else(|| provider_shape_error(dialect.provider, &resp))?;
+    let text = message
+        .get("content")
         .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    // `arguments` is a JSON *string* here, not an object — the one place this dialect makes the
+    // caller parse a second time.
+    let calls: Vec<ToolCall> = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let f = c.get("function")?;
+                    Some(ToolCall {
+                        id: c
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map_or_else(|| format!("call-{i}"), str::to_string),
+                        name: f.get("name").and_then(Value::as_str)?.to_string(),
+                        input: parse_arguments(f.get("arguments")),
+                    })
+                })
+                .collect()
+        })
         .unwrap_or_default();
-    if !text.trim().is_empty() {
-        return Ok(text.to_string());
-    }
-    // Empty answer: say which of the two ways it happened, since only one has an obvious fix.
-    if choice.get("finish_reason").and_then(Value::as_str) == Some("length") {
+
+    if text.trim().is_empty()
+        && calls.is_empty()
+        && choice.get("finish_reason").and_then(Value::as_str) == Some("length")
+    {
         return Err(out_of_budget_error(model, max_tokens));
     }
-    Err(provider_shape_error(dialect.provider, &resp))
+    Ok(Reply {
+        text,
+        calls,
+        raw: message.clone(),
+        input_tokens: usage(&resp, &["usage", "prompt_tokens"]),
+        output_tokens: usage(&resp, &["usage", "completion_tokens"]),
+    })
 }
 
 // ---- Gemini ------------------------------------------------------------------------
@@ -331,23 +621,11 @@ fn openai_chat(
 /// Google's `generateContent` — the one provider here that isn't a chat-completions clone. Its
 /// differences, all visible below: the assistant role is called `model`, the system prompt is a
 /// `systemInstruction` of its own, every sampling knob lives under `generationConfig`, the model
-/// name is part of the URL rather than the body, and a 2.5-series reply interleaves *thought*
-/// parts with answer parts in one list — so the parse keeps only the parts that aren't thoughts.
-fn gemini_generate(args: &HarnessAdiArguments, model: &str, messages: Vec<Value>) -> Result<String> {
+/// name is part of the URL rather than the body, tool declarations nest one level deeper, and a
+/// 2.5-series reply interleaves *thought* parts with answer parts in one list — so the read keeps
+/// only the parts that aren't thoughts.
+fn gemini_round(args: &HarnessAdiArguments, model: &str, messages: &[Value]) -> Result<Reply> {
     let key = api_key(args, "GEMINI_API_KEY", "Gemini")?;
-
-    // Same turns, Google's spelling: `assistant` is `model`, and text is a part rather than a
-    // string. Anything that isn't an assistant turn is a user turn — the transcript has no others.
-    let contents: Vec<Value> = messages
-        .iter()
-        .map(|m| {
-            let role = match m.get("role").and_then(Value::as_str) {
-                Some("assistant") => "model",
-                _ => "user",
-            };
-            json!({ "role": role, "parts": [{ "text": m.get("content") }] })
-        })
-        .collect();
 
     let mut config = serde_json::Map::new();
     put_f64(&mut config, "temperature", args.temperature);
@@ -358,10 +636,16 @@ fn gemini_generate(args: &HarnessAdiArguments, model: &str, messages: Vec<Value>
         config.insert("stopSequences".to_string(), json!(stops));
     }
     if let Some(budget) = args.thinking_budget {
-        config.insert("thinkingConfig".to_string(), json!({ "thinkingBudget": budget }));
+        config.insert(
+            "thinkingConfig".to_string(),
+            json!({ "thinkingBudget": budget }),
+        );
     }
 
-    let mut body = json!({ "contents": contents });
+    let mut body = json!({
+        "contents": messages,
+        "tools": [{ "functionDeclarations": function_declarations() }],
+    });
     if let Some(system) = system_prompt(args) {
         body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
     }
@@ -388,53 +672,166 @@ fn gemini_generate(args: &HarnessAdiArguments, model: &str, messages: Vec<Value>
         .and_then(Value::as_array)
         .and_then(|c| c.first())
         .ok_or_else(|| provider_shape_error("gemini", &resp))?;
-    let text = candidate
+    let parts = candidate
         .get("content")
         .and_then(|c| c.get("parts"))
         .and_then(Value::as_array)
-        .map(|parts| {
-            parts
-                .iter()
-                .filter(|p| p.get("thought").and_then(Value::as_bool) != Some(true))
-                .filter_map(|p| p.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join("")
+        .cloned()
+        .unwrap_or_default();
+
+    let mut text = String::new();
+    let mut calls = Vec::new();
+    for (i, part) in parts.iter().enumerate() {
+        if part.get("thought").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        if let Some(t) = part.get("text").and_then(Value::as_str) {
+            text.push_str(t);
+        }
+        // A function call here carries no id of its own — position is its only identity, so the
+        // loop supplies one for the transcript and answers by name.
+        if let Some(fc) = part.get("functionCall") {
+            calls.push(ToolCall {
+                id: format!("call-{i}"),
+                name: fc
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                input: fc.get("args").cloned().unwrap_or_else(|| json!({})),
+            });
+        }
+    }
+
+    if text.trim().is_empty() && calls.is_empty() {
+        // The two ways an answer goes missing: the budget went entirely on thinking, or the reply
+        // was stopped (safety, recitation). Both name the reason Google gave, which is the whole
+        // diagnosis.
+        return match candidate.get("finishReason").and_then(Value::as_str) {
+            Some("MAX_TOKENS") => Err(out_of_budget_error(
+                model,
+                args.max_tokens.unwrap_or_default(),
+            )),
+            Some(reason) if reason != "STOP" => Err(Error::Process(format!(
+                "gemini stopped before writing an answer: {reason}"
+            ))),
+            _ => Err(provider_shape_error("gemini", &resp)),
+        };
+    }
+    Ok(Reply {
+        text,
+        calls,
+        raw: json!({ "role": "model", "parts": parts }),
+        input_tokens: usage(&resp, &["usageMetadata", "promptTokenCount"]),
+        output_tokens: usage(&resp, &["usageMetadata", "candidatesTokenCount"]),
+    })
+}
+
+// ---- Ollama (local) ----------------------------------------------------------------
+
+fn ollama_round(args: &HarnessAdiArguments, model: &str, messages: &[Value]) -> Result<Reply> {
+    let mut options = serde_json::Map::new();
+    put_f64(&mut options, "temperature", args.temperature);
+    put_f64(&mut options, "top_p", args.top_p);
+    put_u64(&mut options, "top_k", args.top_k);
+    put_u64(&mut options, "num_ctx", args.num_ctx);
+    put_f64(&mut options, "repeat_penalty", args.repeat_penalty);
+    put_f64(&mut options, "min_p", args.min_p);
+    put_u64(&mut options, "num_predict", args.max_tokens);
+    if let Some(seed) = args.seed {
+        options.insert("seed".to_string(), json!(seed));
+    }
+    if let Some(stops) = stop_sequences(args) {
+        options.insert("stop".to_string(), json!(stops));
+    }
+
+    let mut body = json!({
+        "model": model,
+        "messages": messages,
+        "stream": false,
+        "tools": function_declarations()
+            .into_iter()
+            .map(|f| json!({ "type": "function", "function": f }))
+            .collect::<Vec<_>>(),
+    });
+    if !options.is_empty() {
+        body["options"] = Value::Object(options);
+    }
+    if args.format.is_some() {
+        body["format"] = json!("json");
+    }
+    if args.think {
+        // Only sent when asked for: a model that can't think rejects the field outright.
+        body["think"] = json!(true);
+    }
+    if let Some(keep) = args.keep_alive.as_deref().filter(|k| !k.trim().is_empty()) {
+        body["keep_alive"] = json!(keep);
+    }
+
+    let base = base_url(args, "http://localhost:11434");
+    let url = format!("{base}/api/chat");
+    let resp = post_json(&url, &[], &body)?;
+
+    let message = resp
+        .get("message")
+        .ok_or_else(|| provider_shape_error("ollama", &resp))?;
+    let text = message
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    // Ollama returns already-parsed arguments (an object, not a string) and no call id.
+    let calls: Vec<ToolCall> = message
+        .get("tool_calls")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let f = c.get("function")?;
+                    Some(ToolCall {
+                        id: format!("call-{i}"),
+                        name: f.get("name").and_then(Value::as_str)?.to_string(),
+                        input: parse_arguments(f.get("arguments")),
+                    })
+                })
+                .collect()
         })
         .unwrap_or_default();
-    if !text.trim().is_empty() {
-        return Ok(text);
+
+    if text.trim().is_empty() && calls.is_empty() {
+        return Err(provider_shape_error("ollama", &resp));
     }
-    // The two ways an answer goes missing: the budget went entirely on thinking, or the reply was
-    // stopped (safety, recitation). Both name the reason Google gave, which is the whole diagnosis.
-    match candidate.get("finishReason").and_then(Value::as_str) {
-        Some("MAX_TOKENS") => Err(out_of_budget_error(
-            model,
-            args.max_tokens.unwrap_or_default(),
-        )),
-        Some(reason) if reason != "STOP" => Err(Error::Process(format!(
-            "gemini stopped before writing an answer: {reason}"
-        ))),
-        _ => Err(provider_shape_error("gemini", &resp)),
-    }
+    Ok(Reply {
+        text,
+        calls,
+        raw: message.clone(),
+        input_tokens: usage(&resp, &["prompt_eval_count"]),
+        output_tokens: usage(&resp, &["eval_count"]),
+    })
 }
 
 // ---- shared HTTP + argument helpers ------------------------------------------------
 
-/// The provider's API key, read from the environment variable the agent named (or the provider's
-/// conventional one). A missing key is a setup problem rather than a run failure — hence
-/// `Unsupported`, and hence the pointer to where the key belongs.
-fn api_key(args: &HarnessAdiArguments, default_env: &str, provider: &str) -> Result<String> {
-    let key_env = args
-        .api_key_env
-        .as_deref()
-        .map(str::trim)
-        .filter(|e| !e.is_empty())
-        .unwrap_or(default_env);
-    std::env::var(key_env).map_err(|_| {
-        Error::Unsupported(format!(
-            "no {provider} API key: environment variable {key_env} is unset (attach it as a secret on the agent)"
-        ))
-    })
+/// Tool arguments as an object, whichever way the provider sent them: an object already (Ollama,
+/// Gemini) or a JSON string to decode (`OpenAI`, Monshoot). A model that emits malformed JSON gets
+/// an empty object and, a moment later, the tool's own complaint about the missing argument —
+/// which is a better teacher than a parse error it never sees.
+fn parse_arguments(raw: Option<&Value>) -> Value {
+    match raw {
+        Some(Value::String(s)) => serde_json::from_str(s).unwrap_or_else(|_| json!({})),
+        Some(other) => other.clone(),
+        None => json!({}),
+    }
+}
+
+/// A usage counter from a response, by path.
+fn usage(resp: &Value, path: &[&str]) -> Option<u64> {
+    let mut node = resp;
+    for key in path {
+        node = node.get(key)?;
+    }
+    node.as_u64()
 }
 
 /// POST `body` as JSON with the given extra headers, returning the decoded JSON response. A non-2xx
@@ -479,6 +876,23 @@ fn out_of_budget_error(model: &str, max_tokens: u64) -> Error {
         "{model} spent its whole {max_tokens} token budget thinking and never wrote an answer — \
          raise the agent's max output tokens"
     ))
+}
+
+/// The provider's API key, read from the environment variable the agent named (or the provider's
+/// conventional one). A missing key is a setup problem rather than a run failure — hence
+/// `Unsupported`, and hence the pointer to where the key belongs.
+fn api_key(args: &HarnessAdiArguments, default_env: &str, provider: &str) -> Result<String> {
+    let key_env = args
+        .api_key_env
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .unwrap_or(default_env);
+    std::env::var(key_env).map_err(|_| {
+        Error::Unsupported(format!(
+            "no {provider} API key: environment variable {key_env} is unset (attach it as a secret on the agent)"
+        ))
+    })
 }
 
 /// The provider's endpoint: the agent's `base_url` override, or the provider's own host.
@@ -557,6 +971,25 @@ fn put_u64(map: &mut serde_json::Map<String, Value>, key: &str, value: Option<u6
 mod tests {
     use super::*;
 
+    fn args_for(provider: HarnessProvider) -> HarnessAdiArguments {
+        HarnessAdiArguments {
+            provider: Some(provider),
+            ..HarnessAdiArguments::default()
+        }
+    }
+
+    fn turn(role: &str, text: &str) -> Turn {
+        Turn {
+            role: role.into(),
+            text: text.into(),
+            at: 1,
+            pending: false,
+            queued: false,
+            steps: Vec::new(),
+            metrics: None,
+        }
+    }
+
     #[test]
     fn every_provider_runs_and_only_an_unconfigured_agent_does_not() {
         let mut args = HarnessAdiArguments::default();
@@ -570,7 +1003,11 @@ mod tests {
             HarnessProvider::Ollama,
         ] {
             args.provider = Some(provider);
-            assert!(validate(&args).is_ok(), "{} must be runnable", provider.as_str());
+            assert!(
+                validate(&args).is_ok(),
+                "{} must be runnable",
+                provider.as_str()
+            );
         }
     }
 
@@ -587,7 +1024,11 @@ mod tests {
             "https://api.moonshot.ai/v1/chat/completions"
         );
         assert_eq!(
-            versioned_url("https://generativelanguage.googleapis.com", "v1beta", "models/g:x"),
+            versioned_url(
+                "https://generativelanguage.googleapis.com",
+                "v1beta",
+                "models/g:x"
+            ),
             "https://generativelanguage.googleapis.com/v1beta/models/g:x"
         );
     }
@@ -601,25 +1042,86 @@ mod tests {
     }
 
     #[test]
-    fn gemini_renames_the_assistant_role_and_drops_nothing_else() {
-        let turn = |role: &str, text: &str, at: u64| Turn {
-            role: role.into(),
-            text: text.into(),
-            at,
-            pending: false,
-            queued: false,
-            steps: Vec::new(),
-            metrics: None,
+    fn gemini_seeds_the_assistant_turn_under_its_own_role_name() {
+        let args = args_for(HarnessProvider::Gemini);
+        let wire = Wire::of(&args, "gemini-2.5-pro").expect("wire");
+        let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "hello")]);
+        assert_eq!(seeded[0]["role"], "user");
+        assert_eq!(seeded[1]["role"], "model");
+        assert_eq!(seeded[1]["parts"][0]["text"], "hello");
+    }
+
+    #[test]
+    fn blank_turns_are_dropped_and_a_system_prompt_leads_the_chat_dialects() {
+        let mut args = args_for(HarnessProvider::Monshoot);
+        args.system_prompt = Some("be terse".into());
+        let wire = Wire::of(&args, "kimi-k3").expect("wire");
+        let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "  "), turn("user", "again")]);
+        assert_eq!(seeded.len(), 3, "the blank turn is dropped: {seeded:?}");
+        assert_eq!(seeded[0]["role"], "system");
+        assert_eq!(seeded[2]["content"], "again");
+    }
+
+    #[test]
+    fn each_provider_answers_a_call_the_way_its_api_expects() {
+        let reply = |calls: Vec<ToolCall>| Reply {
+            text: String::new(),
+            calls,
+            raw: json!({ "role": "assistant" }),
+            input_tokens: None,
+            output_tokens: None,
         };
-        let msgs = chat_messages(&[turn("user", "hi", 1), turn("assistant", "hello", 2)]);
-        let roles: Vec<&str> = msgs
-            .iter()
-            .map(|m| match m["role"].as_str() {
-                Some("assistant") => "model",
-                _ => "user",
-            })
-            .collect();
-        assert_eq!(roles, ["user", "model"]);
+        let call = || ToolCall {
+            id: "c1".into(),
+            name: "Read".into(),
+            input: json!({}),
+        };
+        let results = [ToolResult {
+            call_id: "c1".into(),
+            name: "Read".into(),
+            output: "contents".into(),
+            ok: true,
+        }];
+
+        // Anthropic: every result in one user message, each block naming the tool_use it answers.
+        let args = args_for(HarnessProvider::Anthropic);
+        let mut messages = Vec::new();
+        Wire::of(&args, "m")
+            .expect("wire")
+            .append(&mut messages, &reply(vec![call()]), &results);
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"][0]["type"], "tool_result");
+        assert_eq!(messages[1]["content"][0]["tool_use_id"], "c1");
+
+        // OpenAI dialect: one `tool` message per call, keyed by call id.
+        let args = args_for(HarnessProvider::Openai);
+        let mut messages = Vec::new();
+        Wire::of(&args, "m")
+            .expect("wire")
+            .append(&mut messages, &reply(vec![call()]), &results);
+        assert_eq!(messages[1]["role"], "tool");
+        assert_eq!(messages[1]["tool_call_id"], "c1");
+
+        // Gemini: a functionResponse part, answered by name because a call has no id.
+        let args = args_for(HarnessProvider::Gemini);
+        let mut messages = Vec::new();
+        Wire::of(&args, "m")
+            .expect("wire")
+            .append(&mut messages, &reply(vec![call()]), &results);
+        assert_eq!(messages[1]["parts"][0]["functionResponse"]["name"], "Read");
+    }
+
+    #[test]
+    fn tool_arguments_are_read_whichever_way_the_provider_sends_them() {
+        // OpenAI and Monshoot send a JSON string; Ollama and Gemini send the object itself.
+        assert_eq!(
+            parse_arguments(Some(&json!("{\"path\":\"a.rs\"}")))["path"],
+            "a.rs"
+        );
+        assert_eq!(parse_arguments(Some(&json!({"path": "a.rs"})))["path"], "a.rs");
+        // Malformed JSON degrades to an empty object, so the tool's own error teaches the model.
+        assert_eq!(parse_arguments(Some(&json!("{not json"))), json!({}));
+        assert_eq!(parse_arguments(None), json!({}));
     }
 
     #[test]
@@ -635,23 +1137,5 @@ mod tests {
                 "0000000000001-0000",
             ]
         );
-    }
-
-    #[test]
-    fn blank_turns_are_dropped_from_the_chat_history() {
-        let turn = |role: &str, text: &str, at: u64| Turn {
-            role: role.into(),
-            text: text.into(),
-            at,
-            pending: false,
-            queued: false,
-            steps: Vec::new(),
-            metrics: None,
-        };
-        let turns = vec![turn("user", "hi", 1), turn("assistant", "  ", 2), turn("user", "again", 3)];
-        let msgs = chat_messages(&turns);
-        assert_eq!(msgs.len(), 2);
-        assert_eq!(msgs[0]["role"], "user");
-        assert_eq!(msgs[1]["content"], "again");
     }
 }

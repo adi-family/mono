@@ -23,6 +23,7 @@ dependencies = [
  "adi-tasks",
  "adi-tools",
  "adi-workforce",
+ "regex",
  "reqwest 0.12.28",
  "schemars",
  "serde",

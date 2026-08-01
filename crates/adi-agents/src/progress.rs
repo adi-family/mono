@@ -180,8 +180,8 @@ pub fn parse(backend: &Backend, log: &[u8]) -> TurnContent {
         Backend::ProcessClaude | Backend::HarnessClaudeSdk => {
             crate::backends::claude_stream::parse(log)
         }
-        // Codex `--json` and the ADI loop's native events are wired later; until then their logs
-        // parse as plain text.
+        Backend::HarnessAdi => crate::backends::adi_events::parse(log),
+        // Codex `--json` is wired later; until then its logs parse as plain text.
         _ => TurnContent {
             text: text_of(log),
             steps: Vec::new(),

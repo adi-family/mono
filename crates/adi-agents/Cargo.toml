@@ -27,6 +27,8 @@ adi-pty = { workspace = true }
 adi-tasks = { workspace = true }
 # A run inherits its agent's resolved secrets (global + the agent's project) as env vars.
 adi-secrets = { workspace = true }
+# The `harness:adi` tool loop's Grep runs a real regular expression, and its Glob/Grep walk a tree.
+regex = "1"
 serde = { workspace = true }
 serde_json = { workspace = true }
 # A harness conversation mints a fresh session id (v4 UUID) for the Claude CLI to establish on the
