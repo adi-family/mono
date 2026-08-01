@@ -439,17 +439,47 @@
     line-height: 1.5;
   }
 
-  // --- the agent picker (left, under the head) ------------------------------------
-  // Which agent this screen is a chat with. Sits above the sessions it governs, so the list below
-  // always reads as "this agent's".
-  &__pickrow {
-    flex: none;
-    padding: var(--space-2) var(--space-3);
-    border-bottom: 1px solid var(--border);
+  // --- the agent chooser (centre) --------------------------------------------------
+  // Which agent this screen is a chat with. It rides in the centre pane, in the line that says what
+  // it decides — the composer's title, or the Start affordance a terminal agent shows instead — the
+  // way a model chooser sits with the composer it governs.
+  &__agentpick {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
   }
-  &__pick {
-    width: 100%;
-    padding: 5px 8px;
+  &__agentsel {
+    appearance: none;
+    max-width: min(50vw, 320px);
+    padding: 2px 26px 2px 9px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font-family: var(--font-mono);
+    font-size: .92em;
+    font-weight: inherit;
+    line-height: inherit;
+    cursor: pointer;
+    transition: background var(--transition), border-color var(--transition);
+
+    &:hover { background: var(--surface-2); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  }
+  // Pointer-events off, so a click on the chevron still opens the select under it.
+  &__agentcaret {
+    position: absolute;
+    right: 9px;
+    color: var(--muted);
+    font-size: .7em;
+    pointer-events: none;
+  }
+  // The chooser's line in a terminal agent's idle pane, where there is no title to sit in.
+  &__pickline {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
     font-size: var(--text-sm);
   }
   &__pickhint {
@@ -457,8 +487,8 @@
     font-size: var(--text-sm);
   }
 
-  // The rule that opens each band of the rail — Recent, the picked agent's own sessions, every
-  // other agent's. Topmost band has nothing above it to be ruled off from, so it drops the line.
+  // The rule that opens a band of the rail — only the Hidden one now that the sessions above it are
+  // a single list. Topmost band has nothing above it to be ruled off from, so it drops the line.
   &__divider {
     margin-top: var(--space-3);
     padding: 10px 10px 4px;
@@ -520,21 +550,12 @@
       background: var(--surface-2);
       border-color: var(--border);
     }
-    // Another agent's session: indented under its agent's name and dimmed, so the picked agent's
-    // own sessions stay the ones the eye lands on. No delete rides these rows — clicking one
-    // switches the screen to that agent, which is where a chat can be acted on.
-    &--other {
-      padding-left: 20px;
-      padding-right: 10px;
+    // A row in the Hidden band: the same strip, dimmed — a session put away is there to be found
+    // again, not to be read past. Its right edge holds an unhide where a live row holds the delete.
+    &--hidden {
       color: var(--muted);
       &:hover { color: var(--ink); }
     }
-    // A row in the Recent band. It spans every agent, so nothing is indented under a name here and
-    // the full width is the title's; the agent it belongs to rides in the line beneath.
-    &--recent { padding-right: 10px; }
-    // A row in the Hidden band: another agent's strip, but with an unhide at its right edge — so it
-    // takes the room back that `--other` gave to the title.
-    &--hidden { padding-right: 26px; }
   }
   &__session-main { display: flex; flex-direction: column; min-width: 0; }
   &__session-title {
@@ -658,17 +679,18 @@
     .adi-form { width: min(100%, 620px); }
   }
   &__compose-intro { text-align: center; }
+  // The title ends in the agent chooser, so it wraps as a line of text and a control rather than as
+  // a heading alone — centred together, and never overflowing on a narrow pane.
   &__compose-title {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
     margin: 0 0 6px;
     font-size: var(--text-xl);
     font-weight: 650;
     letter-spacing: -.02em;
-  }
-  // The agent the composer would start the chat on — set in the mono face the rest of the app
-  // names agents in, so it reads as a name rather than as part of the sentence.
-  &__compose-agent {
-    font-family: var(--font-mono);
-    font-size: .92em;
   }
   &__compose-sub {
     margin: 0;
@@ -713,12 +735,105 @@
   }
   &__dash-open { color: var(--muted); font-size: var(--text-sm); }
 
-  // On a narrow viewport the rails collapse under the chat rather than squeezing it to nothing.
+  // --- the narrow-viewport bar and drawers ----------------------------------------
+  // Hidden by default: above the breakpoint both rails have a column of their own and there is
+  // nothing to summon.
+  &__mobilebar { display: none; }
+  &__drawer-close { display: none; }
+
+  &__drawer-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    // 44px is Apple's minimum touch target, and this is the control the whole screen depends on.
+    min-height: 44px;
+    padding: 0 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 600;
+    cursor: pointer;
+
+    &:active { background: var(--surface-2); }
+  }
+  &__drawer-icon { font-size: 15px; line-height: 1; }
+
+  // Below `.adi-menu`'s 59/60 on purpose: a session's right-click menu is opened *from* the
+  // drawer, so it has to draw over it — and its own dismiss-scrim has to sit over the drawer too,
+  // or a tap on the rail would leave the menu hanging.
+  &__scrim {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: rgb(0 0 0 / 45%);
+  }
+
+  // On a narrow viewport the rails leave the grid entirely and become drawers over the chat. They
+  // used to be `display: none`, which is why a phone could see a conversation but never the list
+  // of them.
   @media (max-width: 900px) {
-    grid-template-columns: 1fr;
-    grid-auto-rows: minmax(0, auto);
-    &__side { display: none; }
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+
+    &__mobilebar {
+      display: flex;
+      align-items: center;
+      gap: var(--space-2);
+      // `viewport-fit=cover` means the bar can sit under a notch in landscape.
+      padding: var(--space-2) max(var(--space-3), env(safe-area-inset-left))
+               var(--space-2) max(var(--space-3), env(safe-area-inset-right));
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    &__drawer-close {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 32px;
+      margin-right: -6px;
+      border: none;
+      border-radius: var(--radius-sm);
+      background: none;
+      color: var(--muted);
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    &__scrim { display: block; }
+
+    &__side {
+      position: fixed;
+      z-index: 50;
+      top: 0;
+      bottom: 0;
+      width: min(86vw, 340px);
+      border: none;
+      box-shadow: 0 0 40px rgb(0 0 0 / 35%);
+      // Off-screen until opened. `transform` rather than `display`, so the panel animates and so
+      // its scroll position survives being closed and reopened.
+      transition: transform .22s ease;
+
+      &--left  { left: 0;  transform: translateX(-101%); }
+      &--right { right: 0; transform: translateX(101%); }
+      &.is-open { transform: none; }
+    }
+    &__side-body {
+      // Clear the home indicator: the last row of a long list is otherwise unreachable.
+      padding-bottom: max(var(--space-2), env(safe-area-inset-bottom));
+    }
+
     &__chat { min-height: 0; }
+  }
+
+  // A drawer that slid in is motion for its own sake to someone who asked for less of it; the panel
+  // still opens, it just arrives.
+  @media (prefers-reduced-motion: reduce) {
+    &__side { transition: none; }
   }
 }
 

@@ -15,7 +15,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
-use crate::state::{AgentsWatch, Flash, ROOT_AGENT, SessionMenu, State};
+use crate::state::{AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SessionMenu, State};
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, body_row, configurable_table, placeholder_row, sort_rows,
 };
@@ -321,11 +321,11 @@ fn stop_one_run(state: State, watch: AgentsWatch, run_id: String) {
 /// explicit confirmation, since nothing here is recoverable. A live run is stopped by the server
 /// first. If the deleted run is the one on screen, its detail view closes rather than polling a
 /// conversation that no longer exists.
-fn delete_one_run(state: State, watch: AgentsWatch, run_id: String, title: String) {
-    let Some(name) = watch.name.get_untracked() else {
-        return;
-    };
-    if run_id.is_empty() {
+///
+/// `agent` is named rather than taken from the watch, because the sessions rail lists every agent's
+/// chats at once: the row's own agent is the one to delete from, not whichever one is on screen.
+fn delete_one_run(state: State, watch: AgentsWatch, agent: String, run_id: String, title: String) {
+    if agent.is_empty() || run_id.is_empty() {
         return;
     }
     let what = if title.trim().is_empty() {
@@ -338,13 +338,17 @@ fn delete_one_run(state: State, watch: AgentsWatch, run_id: String, title: Strin
     )) {
         return;
     }
-    if watch.run_id.get_untracked().as_deref() == Some(run_id.as_str()) {
+    // Only when it is *this* conversation on screen — the rail can delete another agent's chat, and
+    // the run ids of two different agents are no reason to close what is open.
+    if watch.name.get_untracked().as_deref() == Some(agent.as_str())
+        && watch.run_id.get_untracked().as_deref() == Some(run_id.as_str())
+    {
         close_run_view(watch);
     }
     spawn_local(async move {
-        match fetch::delete_run(name.clone(), run_id).await {
+        match fetch::delete_run(agent.clone(), run_id).await {
             Ok(runs) => {
-                if watch.name.get_untracked().as_deref() == Some(name.as_str()) {
+                if watch.name.get_untracked().as_deref() == Some(agent.as_str()) {
                     watch.runs.set(runs.runs);
                 }
                 // The agent list carries a running flag that a deleted live run may have settled.
@@ -1379,7 +1383,8 @@ fn run_row(
                 }})}
                 <button class="adi-btn adi-btn--link adi-btn--danger" title=delete_title
                     on:click=move |_| delete_one_run(
-                        state, watch, del_id.clone(), del_title.clone(),
+                        state, watch, watch.name.get_untracked().unwrap_or_default(),
+                        del_id.clone(), del_title.clone(),
                     )>"Delete"</button>
             </td>
         </tr>
@@ -1495,28 +1500,54 @@ fn truncate_task(task: &str) -> String {
 }
 
 // ---- chat home (`/` once the root agent exists) ------------------------------------------------
-// The app *is* the chat: the watched agent's sessions on the left, its conversation in the centre,
+// The app *is* the chat: every agent's sessions on the left, the open conversation in the centre,
 // the dashboards list on the right. Built on the same live-view machinery as the Agents page, so a
 // pty agent shows a live terminal + input and a headless one shows its conversations.
 //
-// Which agent that is, is the user's to pick: the left rail's picker names it, and every other
-// agent's sessions are listed under it — so one screen reaches all of them, not only the root.
+// The rail is one list, newest activity first, whichever agent a session belongs to — so a click
+// reaches any of them, not only the root. The picker above it says which agent "+ New" starts on.
 
 /// The three-pane chat home. `watch` is expected to already point at an agent — the root one, until
 /// the picker moves it (the caller sets the name + interactive flag and drives the 1s poll).
-/// `state.agents` feeds the picker, `state.all_chats` the other agents' sessions, and
-/// `state.dashboards` the right rail.
+/// `state.agents` feeds the picker, `state.all_chats` the sessions rail, and `state.dashboards` the
+/// right one.
 pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         <div class="adi-chome">
-            <aside class="adi-chome__side adi-chome__side--left">
+            // Narrow viewports only (the stylesheet hides it above the breakpoint): the two rails
+            // have no column of their own down there, so this is the only way to reach them.
+            <div class="adi-chome__mobilebar">
+                <button class="adi-chome__drawer-btn" type="button"
+                    aria-label="Show sessions"
+                    on:click=move |_| toggle_drawer(state, ChatDrawer::Sessions)>
+                    <span class="adi-chome__drawer-icon" aria-hidden="true">"\u{2630}"</span>
+                    <span>"Sessions"</span>
+                </button>
+                <span class="adi-spacer"></span>
+                <button class="adi-chome__drawer-btn" type="button"
+                    aria-label="Show dashboards"
+                    on:click=move |_| toggle_drawer(state, ChatDrawer::Dashboards)>
+                    <span>"Dashboards"</span>
+                </button>
+            </div>
+
+            // One scrim for whichever drawer is open. Rendered only while one is, so it never sits
+            // over the chat on a wide viewport where the drawers do not exist.
+            {move || {
+                state.chat_drawer.get().map(|_| view! {
+                    <div class="adi-chome__scrim"
+                        on:click=move |_| state.chat_drawer.set(None)></div>
+                })
+            }}
+
+            <aside class="adi-chome__side adi-chome__side--left"
+                class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Sessions)>
                 <div class="adi-chome__side-head">
                     <span class="adi-chome__side-title">"Sessions"</span>
                     <span class="adi-spacer"></span>
                     {move || chat_new_button(state, watch)}
-                </div>
-                <div class="adi-chome__pickrow">
-                    {move || chat_agent_picker(state, watch)}
+                    <button class="adi-chome__drawer-close" type="button" aria-label="Close"
+                        on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
                 </div>
                 <div class="adi-chome__side-body">
                     {move || chat_rail(state, watch)}
@@ -1527,11 +1558,14 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                 {move || chat_center(state, watch)}
             </main>
 
-            <aside class="adi-chome__side adi-chome__side--right">
+            <aside class="adi-chome__side adi-chome__side--right"
+                class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Dashboards)>
                 <div class="adi-chome__side-head">
                     <span class="adi-chome__side-title">"Dashboards"</span>
                     <span class="adi-spacer"></span>
                     <a class="adi-chome__side-link" href="/extended/dashboards">"Manage"</a>
+                    <button class="adi-chome__drawer-close" type="button" aria-label="Close"
+                        on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
                 </div>
                 <div class="adi-chome__side-body">
                     {move || chat_dashboards(state)}
@@ -1547,38 +1581,69 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
     .into_any()
 }
 
-/// The rail's agent picker — which agent this screen is a chat with. Every registered agent is an
-/// option (the root agent first, then the list's own name order), and one that is live right now
-/// carries a dot. Choosing one repoints the whole screen at once: the sessions below, the
-/// conversation in the centre, and the agent "+ New" starts a session on.
+/// Open `which` as a drawer, or close it if it is the one already open.
+///
+/// Toggling rather than only opening is what makes the same button dismiss what it summoned, which
+/// is the gesture a person tries first — the scrim and the ✕ are the other two.
+fn toggle_drawer(state: State, which: ChatDrawer) {
+    state.chat_drawer.update(|open| {
+        *open = if *open == Some(which) { None } else { Some(which) };
+    });
+}
+
+/// The agent chooser — which agent this screen is a chat with. It sits where a new chat is *started*
+/// (the composer's own title, and the Start affordance a terminal agent shows in its place) rather
+/// than over the sessions list, the way a model chooser sits with the composer it governs: the one
+/// thing to settle before typing is who the message goes to.
+///
+/// **Starred agents only** — a fleet grows a long tail of one-off and machine-made agents, and this
+/// is a short list to choose a chat from, not a register of everything installed. The agent already
+/// on screen is always an option whether or not it is starred, so the control can't misreport what
+/// the centre pane is showing; the Agents page is where anything else is reached (and starred).
+///
+/// The root agent leads, then the list's own name order, and one that is live right now carries a
+/// dot. Choosing one repoints the conversation in the centre and the agent "+ New" starts a session
+/// on; the rail lists every agent's sessions either way, so it only moves in that a different row of
+/// it is now the open one.
 fn chat_agent_picker(state: State, watch: AgentsWatch) -> AnyView {
     let Some(list) = state.agents.get() else {
         return view! { <span class="adi-chome__pickhint">"Loading agents…"</span> }.into_any();
     };
-    let mut agents = list.agents;
+    let current = watch.name.get().unwrap_or_default();
+    let mut agents: Vec<_> = list
+        .agents
+        .into_iter()
+        .filter(|a| a.starred || a.name == current)
+        .collect();
     if agents.is_empty() {
-        return view! { <span class="adi-chome__pickhint">"No agents yet"</span> }.into_any();
+        return view! { <span class="adi-chome__pickhint">"No starred agents"</span> }.into_any();
     }
     // The root agent leads — it's the one the app is set up around. A stable sort, so the rest keep
     // the order the list arrived in (by name) behind it.
     agents.sort_by_key(|a| a.name != ROOT_AGENT);
-    let current = watch.name.get().unwrap_or_default();
     view! {
-        <select class="adi-input adi-chome__pick" title="which agent this chat runs on"
-            prop:value=current.clone()
-            on:change=move |ev| switch_agent(state, watch, event_target_value(&ev))>
-            {agents.into_iter().map(|a| {
-                let selected = a.name == current;
-                // An option carries no markup, so the live dot rides in its text — worth spotting
-                // in a collapsed select, which is all you see of the other agents until you open it.
-                let label = if a.running {
-                    format!("\u{25CF} {}", a.name)
-                } else {
-                    a.name.clone()
-                };
-                view! { <option value=a.name selected=selected>{label}</option> }
-            }).collect::<Vec<_>>()}
-        </select>
+        <span class="adi-chome__agentpick">
+            <select class="adi-chome__agentsel"
+                title="which agent this chat runs on — starred agents only"
+                prop:value=current.clone()
+                on:change=move |ev| switch_agent(state, watch, event_target_value(&ev))>
+                {agents.into_iter().map(|a| {
+                    let selected = a.name == current;
+                    // An option carries no markup, so the live dot rides in its text — worth
+                    // spotting in a collapsed select, which is all you see of the other agents
+                    // until you open it.
+                    let label = if a.running {
+                        format!("\u{25CF} {}", a.name)
+                    } else {
+                        a.name.clone()
+                    };
+                    view! { <option value=a.name selected=selected>{label}</option> }
+                }).collect::<Vec<_>>()}
+            </select>
+            // The chevron the native control gives up under `appearance: none`, laid over the room
+            // the select reserves for it.
+            <span class="adi-chome__agentcaret" aria-hidden="true">"\u{25BE}"</span>
+        </span>
     }
     .into_any()
 }
@@ -1613,139 +1678,139 @@ fn last_touch(r: &AgentRunInfo) -> u64 {
     r.last_activity.max(r.started_at)
 }
 
-/// How recently a session must have moved to ride in the rail's **Recent** band: ten minutes. Long
-/// enough that a chat you stepped away from is still waiting at the top when you come back, short
-/// enough that the band stays a handful of rows rather than a second history.
-const RECENT_WINDOW_MS: u64 = 10 * 60 * 1_000;
-
-/// The whole left rail, in the order it reads: the Recent band (favourites, then everyone else),
-/// then the picked agent's own sessions, then every other agent's grouped under its name, and last
-/// the collapsed Hidden band.
+/// The whole left rail: every agent's sessions in one flat list, most recently updated first, and
+/// the collapsed Hidden band under it.
 ///
-/// One function rather than four siblings in the view, because the heading over the picked agent's
-/// list is only earned when a Recent band renders above it — without one, that list *is* the top of
-/// the rail and the picker right above already names whose it is.
+/// One list rather than a band per agent, because "what was I just doing" is how a person looks for
+/// a chat — so the agent a session belongs to is a line under its title rather than a heading to
+/// scroll past. The picker above still names the agent "+ New" starts a session on; it no longer
+/// decides what the rail shows.
 ///
-/// A session the user has hidden ([`set_session_hidden`]) is left out of every band above and rides
-/// only in the last one. Hiding is a rail preference, so it stops here: the Agents page's history
+/// A session the user has hidden ([`set_session_hidden`]) is left out of the list and rides only in
+/// the band beneath it. Hiding is a rail preference, so it stops here: the Agents page's history
 /// tables still list everything, which is what a workbench is for.
 fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
-    let recent = chat_recent_sessions(state, watch);
-    let heading = recent.is_some().then(|| chat_band("All sessions"));
     view! {
-        {recent}
-        {heading}
-        {chat_sessions(state, watch)}
-        {chat_other_sessions(state, watch)}
+        {chat_all_sessions(state, watch)}
         {chat_hidden_sessions(state, watch)}
     }
     .into_any()
 }
 
-/// One row of the Recent band. The band spans every agent, so a row has to carry which agent it
-/// belongs to — the rest of the rail gets that from the group header it sits under.
-struct Recent {
+/// One row of the rail. The list spans every agent, so a row has to carry which agent it belongs to
+/// — there is no group heading above it to say so.
+struct SessionRow {
     agent: String,
     /// The conversation, or `None` for an interactive agent's live pty session — which has no run
     /// id, being the agent's single session rather than one of many.
     run: Option<AgentRunInfo>,
-    /// Unix millis this session last moved; what the band sorts on.
+    /// Unix millis this session last moved; what the rail sorts on.
     when: u64,
     running: bool,
 }
 
-/// The rail's **Recent** band: every session that moved inside [`RECENT_WINDOW_MS`], whichever agent
-/// it belongs to — starred agents' sessions first, then everyone else's, each newest first. A hidden
-/// session is never here, however lately it moved. `None` when nothing has moved lately, so the band
-/// takes no room on a quiet screen.
+/// Every visible session, whichever agent it belongs to, newest activity first.
 ///
-/// This sits at the top because what you were *just* doing is what you most often want back, and a
-/// row leaving the band loses nothing: it is still in its agent's group further down, where it was
-/// all along. A live run stays in the band however long it has been quietly working — it is active
-/// by definition, which is the thing the band is for.
-fn chat_recent_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
-    let all = state.all_chats.get()?;
-    let agents = state.agents.get().map(|s| s.agents).unwrap_or_default();
-    let starred: std::collections::HashSet<&str> = agents
-        .iter()
-        .filter(|a| a.starred)
-        .map(|a| a.name.as_str())
-        .collect();
-    // A pty agent keeps no run history, so whether its session counts as recent is the agents
-    // list's answer (is it live?) rather than anything in its — empty — runs.
-    let live: std::collections::HashSet<&str> = agents
-        .iter()
-        .filter(|a| a.running)
-        .map(|a| a.name.as_str())
-        .collect();
+/// The watched agent's conversations come from `watch.runs` when it has any — that list is updated
+/// the moment a chat is deleted or hidden, so the rail doesn't go on showing a row that has just
+/// gone — and from the cross-agent index otherwise. A pty agent keeps no run history, so it
+/// contributes one row for its live session, sorted as though it moved just now: it is active by
+/// definition and has no older timestamp to be placed by. That row shows while the session runs, or
+/// while its agent is the one on screen — otherwise there is nothing there to open.
+fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
+    let all = state.all_chats.get();
+    let watched = watch.name.get().unwrap_or_default();
+    // A pty agent's run history is empty either way; the agents list is what says it's live now.
+    let live: std::collections::HashSet<String> = state
+        .agents
+        .get()
+        .map(|s| {
+            s.agents
+                .into_iter()
+                .filter(|a| a.running)
+                .map(|a| a.name)
+                .collect()
+        })
+        .unwrap_or_default();
     let now = js_sys::Date::now() as u64;
 
-    let (mut fav, mut rest): (Vec<Recent>, Vec<Recent>) = (Vec::new(), Vec::new());
-    for ar in &all.agents {
-        let bucket = if starred.contains(ar.name.as_str()) {
-            &mut fav
-        } else {
-            &mut rest
-        };
+    let mut rows: Vec<SessionRow> = Vec::new();
+    let mut listed_watched = false;
+    for ar in all.iter().flat_map(|a| a.agents.iter()) {
+        let is_watched = ar.name == watched;
+        listed_watched |= is_watched;
         if ar.interactive {
-            if live.contains(ar.name.as_str()) {
-                bucket.push(Recent {
+            let running = live.contains(&ar.name);
+            if running || is_watched {
+                rows.push(SessionRow {
                     agent: ar.name.clone(),
                     run: None,
                     when: now,
-                    running: true,
+                    running,
                 });
             }
             continue;
         }
-        for r in &ar.runs {
-            if r.hidden {
-                continue;
-            }
-            let when = last_touch(r);
-            if !r.running && now.saturating_sub(when) > RECENT_WINDOW_MS {
-                continue;
-            }
-            bucket.push(Recent {
-                agent: ar.name.clone(),
-                run: Some(r.clone()),
-                when,
-                running: r.running,
+        let runs = if is_watched {
+            let own = watch.runs.get();
+            if own.is_empty() { ar.runs.clone() } else { own }
+        } else {
+            ar.runs.clone()
+        };
+        rows.extend(runs.into_iter().filter(|r| !r.hidden).map(|r| SessionRow {
+            agent: ar.name.clone(),
+            when: last_touch(&r),
+            running: r.running,
+            run: Some(r),
+        }));
+    }
+    // The cross-agent index hasn't arrived yet (or doesn't carry this agent): the watch alone still
+    // knows what is on screen, which is the one thing the rail must never be missing.
+    if !listed_watched && !watched.is_empty() {
+        if watch.interactive.get() {
+            rows.push(SessionRow {
+                agent: watched.clone(),
+                run: None,
+                when: now,
+                running: watch.peek.get().is_some_and(|p| p.running),
             });
+        } else {
+            rows.extend(watch.runs.get().into_iter().filter(|r| !r.hidden).map(|r| {
+                SessionRow {
+                    agent: watched.clone(),
+                    when: last_touch(&r),
+                    running: r.running,
+                    run: Some(r),
+                }
+            }));
         }
     }
-    if fav.is_empty() && rest.is_empty() {
-        return None;
-    }
-    fav.sort_by(|a, b| b.when.cmp(&a.when));
-    rest.sort_by(|a, b| b.when.cmp(&a.when));
-
-    // Both halves are only worth naming when there is another half to tell them apart from.
-    let split = !fav.is_empty() && !rest.is_empty();
-    let mut out: Vec<AnyView> = Vec::new();
-    for (items, label) in [(fav, "Recent \u{00b7} favourites"), (rest, "Recent \u{00b7} other agents")] {
-        if items.is_empty() {
-            continue;
+    if rows.is_empty() {
+        return view! {
+            <div class="adi-chome__empty">
+                "No chats yet — press New to start one."
+            </div>
         }
-        out.push(chat_band(if split { label } else { "Recent" }));
-        out.extend(
-            items
-                .into_iter()
-                .map(|item| chat_recent_row(state, watch, item)),
-        );
+        .into_any();
     }
-    Some(out.into_any())
+    // Most recently updated first. A stable sort, so sessions that last moved at the same instant —
+    // the live pty rows, all stamped "now" — keep the order the index listed them in.
+    rows.sort_by(|a, b| b.when.cmp(&a.when));
+    rows.into_iter()
+        .map(|row| chat_session_row(state, watch, row))
+        .collect::<Vec<_>>()
+        .into_any()
 }
 
-/// One session in the Recent band: its task over the agent it belongs to and when it last moved.
-/// Clicking opens it — repointing the whole screen when it belongs to another agent, and only
-/// selecting the conversation when it is already the picked one, so a click there doesn't tear the
-/// centre pane down and rebuild it. Right-clicking offers to hide it.
-fn chat_recent_row(state: State, watch: AgentsWatch, item: Recent) -> AnyView {
-    let Recent { agent, run, when, running } = item;
+/// One session in the rail: its task, then the agent it belongs to and when it last moved. Clicking
+/// opens it — repointing the whole screen when it belongs to another agent, and only selecting the
+/// conversation when it is already the picked one, so a click on a chat of the agent on screen
+/// doesn't tear the centre pane down and rebuild it. Right-clicking offers to hide it, and a delete
+/// rides the row's right edge.
+fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
+    let SessionRow { agent, run, when, running } = item;
     let dot = if running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
-    let watched = watch.name.get();
-    let on_this_agent = watched.as_deref() == Some(agent.as_str());
+    let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
     let (title, sub, run_id) = match run {
         Some(r) => {
             let t = truncate_task(&r.message);
@@ -1753,7 +1818,7 @@ fn chat_recent_row(state: State, watch: AgentsWatch, item: Recent) -> AnyView {
             (t, format!("{agent} \u{00b7} {}", run_age(when)), r.run_id)
         }
         None => (
-            "Live session".to_string(),
+            if running { "Live session" } else { "No live session" }.to_string(),
             format!("{agent} \u{00b7} interactive terminal"),
             String::new(),
         ),
@@ -1762,29 +1827,44 @@ fn chat_recent_row(state: State, watch: AgentsWatch, item: Recent) -> AnyView {
     let is_sel = on_this_agent
         && (run_id.is_empty() && watch.interactive.get()
             || !run_id.is_empty() && watch.run_id.get().as_deref() == Some(run_id.as_str()));
-    let cls = if is_sel {
-        "adi-chome__session adi-chome__session--recent is-active"
-    } else {
-        "adi-chome__session adi-chome__session--recent"
-    };
+    let cls = if is_sel { "adi-chome__session is-active" } else { "adi-chome__session" };
     let hint = format!("open this session with {agent}");
     let menu = SessionRef::of(&agent, &run_id, &title, false);
+    // Only a conversation can be deleted: a pty agent's live session is started and stopped from the
+    // centre pane, and keeps no transcript to take with it.
+    let del = (!run_id.is_empty()).then(|| {
+        let (del_agent, del_id, del_title) = (agent.clone(), run_id.clone(), title.clone());
+        view! {
+            <button class="adi-chome__session-del" type="button"
+                title="delete this chat and its transcript"
+                on:click=move |_| delete_one_run(
+                    state, watch, del_agent.clone(), del_id.clone(), del_title.clone(),
+                )>"\u{2715}"</button>
+        }
+    });
     view! {
-        <button class=cls type="button" title=hint
-            on:click=move |_| {
-                if run_id.is_empty() {
-                    point_watch(watch, agent.clone(), true);
-                } else {
-                    open_session(watch, &agent, &run_id);
+        <div class="adi-chome__sessionrow">
+            <button class=cls type="button" title=hint
+                on:click=move |_| {
+                    if run_id.is_empty() {
+                        point_watch(watch, agent.clone(), true);
+                    } else {
+                        open_session(watch, &agent, &run_id);
+                    }
+                    // Picking a session is the drawer's whole purpose, so it gets out of the way —
+                    // otherwise the chat you just chose opens behind the list you chose it from.
+                    // Inert on a wide viewport, where nothing is ever open.
+                    state.chat_drawer.set(None);
                 }
-            }
-            on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
-            <span class=dot></span>
-            <span class="adi-chome__session-main">
-                <span class="adi-chome__session-title">{title}</span>
-                <span class="adi-chome__session-when">{sub}</span>
-            </span>
-        </button>
+                on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
+                <span class=dot></span>
+                <span class="adi-chome__session-main">
+                    <span class="adi-chome__session-title">{title}</span>
+                    <span class="adi-chome__session-when">{sub}</span>
+                </span>
+            </button>
+            {del}
+        </div>
     }
     .into_any()
 }
@@ -1907,98 +1987,6 @@ fn open_session(watch: AgentsWatch, agent: &str, run_id: &str) {
     }
 }
 
-/// A band heading in the sessions rail — the rule and label that open the Recent band, the picked
-/// agent's own list, and the other agents' groups below them.
-fn chat_band(label: &str) -> AnyView {
-    view! { <div class="adi-chome__divider">{label.to_string()}</div> }.into_any()
-}
-
-/// The rail's **other agents** section: every *other* agent's sessions, grouped under its name, so
-/// one screen reaches all of them. A headless agent contributes its conversations; a pty agent
-/// contributes its live session, and only while it runs — it keeps no history, so an ended one has
-/// nothing to list (its picker entry is still the way back to it). These rows only *select*: a click
-/// switches the screen to that agent, which is where its per-chat delete lives.
-fn chat_other_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    let Some(all) = state.all_chats.get() else {
-        return ().into_any();
-    };
-    let current = watch.name.get().unwrap_or_default();
-    // A pty agent's run history is empty either way; the agents list is what says it's live now.
-    let live: std::collections::HashSet<String> = state
-        .agents
-        .get()
-        .map(|s| {
-            s.agents
-                .into_iter()
-                .filter(|a| a.running)
-                .map(|a| a.name)
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let mut out: Vec<AnyView> = Vec::new();
-    for ar in all.agents {
-        if ar.name == current {
-            continue;
-        }
-        if ar.interactive {
-            if !live.contains(&ar.name) {
-                continue;
-            }
-            out.push(chat_group(&ar.name));
-            out.push(chat_other_live(watch, &ar.name));
-        } else {
-            // Most recently touched first — the server sends them newest-*started* first, which
-            // buries a long conversation you answered a minute ago under fresher, deader ones. A
-            // hidden one is left out here and listed in the Hidden band instead; an agent whose every
-            // session is hidden drops out of the rail with them, name and all.
-            let mut runs: Vec<AgentRunInfo> =
-                ar.runs.iter().filter(|r| !r.hidden).cloned().collect();
-            if runs.is_empty() {
-                continue;
-            }
-            runs.sort_by_key(|r| std::cmp::Reverse(last_touch(r)));
-            out.push(chat_group(&ar.name));
-            for r in &runs {
-                out.push(chat_other_row(state, watch, &ar.name, r));
-            }
-        }
-    }
-    if out.is_empty() {
-        return ().into_any();
-    }
-    view! {
-        {chat_band("Other agents")}
-        {out}
-    }
-    .into_any()
-}
-
-/// One of another agent's conversations: the same strip as the selected agent's own sessions, minus
-/// the delete — a click here switches the screen to that chat rather than acting on it in place.
-/// Right-clicking offers to hide it, which needs no switch.
-fn chat_other_row(state: State, watch: AgentsWatch, agent: &str, r: &AgentRunInfo) -> AnyView {
-    let title = truncate_task(&r.message);
-    let title = if title.trim().is_empty() { "New chat".to_string() } else { title };
-    let when = run_age(last_touch(r));
-    let dot = if r.running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
-    let hint = format!("open this chat with {agent}");
-    let (name, rid) = (agent.to_string(), r.run_id.clone());
-    let menu = SessionRef::of(agent, &r.run_id, &title, false);
-    view! {
-        <button class="adi-chome__session adi-chome__session--other" type="button" title=hint
-            on:click=move |_| point_conversation(watch, name.clone(), rid.clone(), false)
-            on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
-            <span class=dot></span>
-            <span class="adi-chome__session-main">
-                <span class="adi-chome__session-title">{title}</span>
-                <span class="adi-chome__session-when">{when}</span>
-            </span>
-        </button>
-    }
-    .into_any()
-}
-
 /// The rail's **Hidden** band: every session put away with Hide, whichever agent it belongs to,
 /// newest first. `None` when nothing is hidden, so a rail no one has hidden anything in never
 /// mentions the idea.
@@ -2059,7 +2047,7 @@ fn chat_hidden_row(state: State, watch: AgentsWatch, agent: &str, r: &AgentRunIn
     let (show_name, show_id) = (agent.to_string(), r.run_id.clone());
     view! {
         <div class="adi-chome__sessionrow">
-            <button class="adi-chome__session adi-chome__session--other adi-chome__session--hidden"
+            <button class="adi-chome__session adi-chome__session--hidden"
                 type="button" title=hint
                 on:click=move |_| open_session(watch, &open_name, &open_id)
                 on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
@@ -2079,26 +2067,10 @@ fn chat_hidden_row(state: State, watch: AgentsWatch, agent: &str, r: &AgentRunIn
     .into_any()
 }
 
-/// Another agent's live pty session: one row, since a terminal agent's session *is* its history.
-fn chat_other_live(watch: AgentsWatch, agent: &str) -> AnyView {
-    let hint = format!("watch {agent}'s live session");
-    let name = agent.to_string();
-    view! {
-        <button class="adi-chome__session adi-chome__session--other" type="button" title=hint
-            on:click=move |_| point_watch(watch, name.clone(), true)>
-            <span class="adi-chome__dot adi-chome__dot--on"></span>
-            <span class="adi-chome__session-main">
-                <span class="adi-chome__session-title">"Live session"</span>
-                <span class="adi-chome__session-when">"interactive terminal"</span>
-            </span>
-        </button>
-    }
-    .into_any()
-}
-
 /// The sessions rail's "New" action: for a pty agent it (re)starts the live session; for a headless
 /// one it clears the selection so the centre shows the new-conversation composer. Either way it acts
-/// on the *picked* agent — the one the rail's picker names.
+/// on the *picked* agent — the one the rail's picker names, which is what the picker is still for
+/// now that the list below it spans every agent.
 fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
     if watch.interactive.get() {
         let name = watch.name.get().unwrap_or_default();
@@ -2119,77 +2091,6 @@ fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
     }
 }
 
-/// The sessions rail's body for the *picked* agent: a pty agent has a single live session; a
-/// headless one lists its conversations (newest first), each selectable into the centre, and each
-/// offering Hide on a right-click. Every other agent's sessions follow below it — see
-/// [`chat_other_sessions`].
-fn chat_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    if watch.interactive.get() {
-        let running = watch.peek.get().is_some_and(|p| p.running);
-        let dot = if running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
-        let label = if running { "Live session" } else { "No live session" };
-        return view! {
-            <div class="adi-chome__session is-active">
-                <span class=dot></span>
-                <span class="adi-chome__session-main">
-                    <span class="adi-chome__session-title">{label}</span>
-                    <span class="adi-chome__session-when">"interactive terminal"</span>
-                </span>
-            </div>
-        }
-        .into_any();
-    }
-    // A hidden session is left out here and listed in the Hidden band at the foot of the rail.
-    let mut runs: Vec<AgentRunInfo> = watch.runs.get().into_iter().filter(|r| !r.hidden).collect();
-    if runs.is_empty() {
-        return view! {
-            <div class="adi-chome__empty">
-                "No chats with this agent yet — press New to start one."
-            </div>
-        }
-        .into_any();
-    }
-    // Most recently touched first, as in every other band of the rail.
-    runs.sort_by_key(|r| std::cmp::Reverse(last_touch(r)));
-    let selected = watch.run_id.get();
-    let agent = watch.name.get().unwrap_or_default();
-    runs.into_iter()
-        .map(|r| {
-            let is_sel = selected.as_deref() == Some(r.run_id.as_str());
-            let title = truncate_task(&r.message);
-            let title = if title.trim().is_empty() { "New chat".to_string() } else { title };
-            let when = run_age(last_touch(&r));
-            let dot = if r.running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
-            let cls = if is_sel { "adi-chome__session is-active" } else { "adi-chome__session" };
-            let rid = r.run_id.clone();
-            let del_id = r.run_id.clone();
-            let del_title = title.clone();
-            let menu = SessionRef::of(&agent, &r.run_id, &title, false);
-            // A row, not a bare button: the strip selects the chat and a delete rides at its right
-            // edge — and one button may not nest inside another, so they are siblings.
-            view! {
-                <div class="adi-chome__sessionrow">
-                    <button class=cls type="button"
-                        on:click=move |_| select_run(watch, rid.clone())
-                        on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
-                        <span class=dot></span>
-                        <span class="adi-chome__session-main">
-                            <span class="adi-chome__session-title">{title}</span>
-                            <span class="adi-chome__session-when">{when}</span>
-                        </span>
-                    </button>
-                    <button class="adi-chome__session-del" type="button"
-                        title="delete this chat and its transcript"
-                        on:click=move |_| delete_one_run(
-                            state, watch, del_id.clone(), del_title.clone(),
-                        )>"\u{2715}"</button>
-                </div>
-            }
-        })
-        .collect::<Vec<_>>()
-        .into_any()
-}
-
 /// The centre pane: a pty agent's live terminal (+ input), or a headless agent's selected
 /// conversation (or the new-conversation composer when nothing is selected).
 fn chat_center(state: State, watch: AgentsWatch) -> AnyView {
@@ -2199,7 +2100,7 @@ fn chat_center(state: State, watch: AgentsWatch) -> AnyView {
     if watch.interactive.get() {
         chat_center_pty(state, watch, name)
     } else {
-        chat_center_headless(state, watch, name)
+        chat_center_headless(state, watch)
     }
 }
 
@@ -2224,6 +2125,12 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
                         view! {
                             <div class="adi-chome__center-empty">
                                 <p>{msg}</p>
+                                // The same chooser the composer carries: a terminal agent has no
+                                // composer to hang it under, and this is where its session starts.
+                                <p class="adi-chome__pickline">
+                                    "Session with "
+                                    {move || chat_agent_picker(state, watch)}
+                                </p>
                                 <button class="adi-btn adi-btn--primary" type="button"
                                     on:click=move |_| run_now(state, name.clone(),
                                         at_run_limit(state.agents.get_untracked().as_ref(), &name))>
@@ -2242,9 +2149,10 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
 }
 
 /// The headless centre: the selected conversation's transcript (+ reply), or a composer to start a
-/// new one when no session is selected. The composer names `agent` — with several agents to pick
-/// between, which one a new chat would go to is the thing worth saying out loud.
-fn chat_center_headless(state: State, watch: AgentsWatch, agent: String) -> AnyView {
+/// new one when no session is selected. The composer's title *is* the agent chooser — with several
+/// agents to pick between, which one a new chat goes to is both the thing worth saying out loud and
+/// the thing worth being able to change right there.
+fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         <div class="adi-chome__chatwrap">
             {move || match watch.run_id.get() {
@@ -2257,7 +2165,7 @@ fn chat_center_headless(state: State, watch: AgentsWatch, agent: String) -> AnyV
                         <div class="adi-chome__compose-intro">
                             <h2 class="adi-chome__compose-title">
                                 "Start a chat with "
-                                <span class="adi-chome__compose-agent">{agent.clone()}</span>
+                                {move || chat_agent_picker(state, watch)}
                             </h2>
                             <p class="adi-chome__compose-sub">
                                 "Ask it to set something up — or pick a past session on the left."

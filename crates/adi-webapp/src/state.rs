@@ -83,6 +83,13 @@ pub(crate) struct State {
     /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
     /// a reload closes it again.
     pub(crate) show_hidden: RwSignal<bool>,
+    /// Which side rail is open as a drawer, on a viewport too narrow to seat both beside the chat.
+    /// `None` on a wide one, where the rails are always in the layout and this is never read.
+    ///
+    /// It lives here rather than in the view for the same reason [`Self::show_hidden`] does: the
+    /// chat home is re-rendered whenever `/api/meta` moves, and a signal created inside it would
+    /// take the open drawer with it every time a poll landed.
+    pub(crate) chat_drawer: RwSignal<Option<ChatDrawer>>,
     /// How every table on the site is sorted and arranged. See [`Tables`].
     pub(crate) tables: Tables,
 }
@@ -224,9 +231,22 @@ impl State {
             row_menu: RwSignal::new(None),
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
+            chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
         }
     }
+}
+
+/// A side rail of the chat home, when it is showing as a drawer over the conversation.
+///
+/// Only one is ever open: they come in from opposite edges and each covers most of the screen, so
+/// two at once would be two scrims and a chat you cannot see either way.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ChatDrawer {
+    /// The left rail: the agent picker and its sessions.
+    Sessions,
+    /// The right rail: the live dashboards.
+    Dashboards,
 }
 
 /// The right rail's store browser: a lazily-expanded tree over `~/.adi/mono` (served through

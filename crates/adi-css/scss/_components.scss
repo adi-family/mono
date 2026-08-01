@@ -794,6 +794,63 @@ $runlog-dim: #8b93a1;
 
 .adi-chat__denied { color: var(--warn); }
 
+// ---- the transcript on a phone ------------------------------------------------------
+// Everything above is sized for the chat home's centre pane on a desktop: a column between two
+// rails, read at arm's length, where 12px prose and 11px code are dense but comfortable. On a
+// phone that column *is* the screen and it is held a foot from your face, where the same numbers
+// read as fine print. This is the one place the design changes scale rather than layout — the
+// bubbles still hug their side, code still scrolls inside them, nothing moves.
+//
+// Last in the section on purpose: a media query adds no specificity, so these have to come after
+// the rules they raise or source order would quietly discard them.
+@include narrow {
+  .adi-chat {
+    gap: 10px;
+    // The reply box sits above the transcript, so it is the *last message* that has to clear the
+    // home indicator on a device with `viewport-fit=cover`.
+    padding: 10px 10px max(14px, env(safe-area-inset-bottom));
+  }
+
+  // A 82% cap gives away a fifth of a 390px screen to margin on both sides at once.
+  .adi-chat__turn {
+    max-width: 94%;
+    padding: 9px 12px;
+  }
+  .adi-chat__role { font-size: 11.5px; }
+
+  .adi-md {
+    font-size: 14px;
+    line-height: 1.55;
+  }
+  .adi-md__p { margin-bottom: 8px; }
+  .adi-md__h1 { font-size: 17px; }
+  .adi-md__h2 { font-size: 16px; }
+  .adi-md__h3 { font-size: 15px; }
+  .adi-md__h4, .adi-md__h5, .adi-md__h6 { font-size: 14px; }
+  .adi-md__list { padding-left: 20px; }
+  .adi-md__list li { margin: 4px 0; }
+
+  // Code stays a step below prose, but legibly so.
+  .adi-md__code { font-size: 12.5px; }
+  .adi-md__pre {
+    padding: 10px;
+    // Momentum scrolling, so a long line is flicked sideways rather than dragged pixel by pixel.
+    -webkit-overflow-scrolling: touch;
+
+    code { font-size: 12.5px; line-height: 1.5; }
+  }
+  .adi-md__table-wrap {
+    -webkit-overflow-scrolling: touch;
+
+    .adi-md__table {
+      font-size: 13px;
+
+      th,
+      td { padding: 5px 9px; }
+    }
+  }
+}
+
 // Token colours. Deliberately few: structure (keys), literals, and comments are what you
 // scan a config for — colouring every operator turns a manifest into confetti.
 .tok {
@@ -1553,6 +1610,29 @@ $runlog-dim: #8b93a1;
   // height whether or not they explain themselves, and rows keep aligning on their inputs.
 }
 
+// On a phone a form's controls take a row each.
+//
+// `flex-wrap: wrap` above is not enough on its own, and the run bar is where you see why: the
+// composer is `flex: 1; min-width: 0`, so instead of pushing the next control onto a new line it
+// gives up its own width — and a three-control strip becomes three slivers a few characters wide,
+// all on one row, none of them usable. Giving each a full basis makes them wrap for real.
+//
+// Toolbars are exempt: they are rows of small bare buttons, and stacking those turns one strip into
+// a column the height of the screen.
+@include narrow {
+  .adi-form:not(.adi-form--toolbar) {
+    padding: 10px;
+
+    > .adi-input,
+    > select.adi-input,
+    > .adi-btn {
+      flex: 1 1 100%;
+      width: 100%;
+      min-width: 0;
+    }
+  }
+}
+
 // Explanatory copy hanging below a form or panel body — the written-out version of what
 // a field's hint says in one line. Aligns to the form's own gutter.
 .adi-hint {
@@ -1739,6 +1819,21 @@ textarea.adi-input--composer {
   max-height: 40vh;
   overflow-y: auto;
   resize: none;
+}
+
+// iOS zooms the page in when a field it focuses has text under 16px — and it does not zoom back
+// out. One tap on the composer and the whole transcript is wider than the screen, with no gesture
+// that obviously undoes it. The type scale here tops out at 13.5px, so *every* field on the site
+// does this; the fix belongs with the fields rather than with the chat, and 16px is the threshold
+// itself, not a taste. Wide viewports keep the compact scale.
+//
+// Placed after the field rules above so it out-orders them at equal specificity.
+@include narrow {
+  .adi-input,
+  .adi-textarea,
+  select.adi-input {
+    font-size: 16px;
+  }
 }
 
 .adi-textarea {
