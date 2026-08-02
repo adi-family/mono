@@ -30,6 +30,12 @@ use crate::run::Turn;
 /// at once, and small enough that the whole cache is a rounding error beside one parsed log.
 const CAPACITY: usize = 64;
 
+/// How many *moments* are kept — see [`last_turn_at`], whose entries are one number rather than a
+/// parse. Sized for every session a listing walks rather than the few being read: the rail asks this
+/// of each session an agent has on every poll, and a cache that evicted between polls would re-read
+/// them all every time, which is the entire cost it exists to avoid.
+const MOMENTS: usize = 1024;
+
 /// A file's identity: two cheap `stat` fields that together change whenever its bytes do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stamp {
@@ -63,13 +69,17 @@ struct Memo<T> {
     entries: Mutex<HashMap<PathBuf, Entry<T>>>,
     /// Monotonic "logical clock" stamped onto every hit, so eviction can order entries by use.
     tick: AtomicU64,
+    /// How many entries to keep. Per-map rather than one constant, because what an entry *costs*
+    /// differs by orders of magnitude between a parsed transcript and a single number.
+    capacity: usize,
 }
 
 impl<T> Memo<T> {
-    fn new() -> Self {
+    fn new(capacity: usize) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
             tick: AtomicU64::new(0),
+            capacity,
         }
     }
 
@@ -120,15 +130,15 @@ impl<T> Memo<T> {
                 used: tick,
             },
         );
-        evict(&mut entries);
+        evict(&mut entries, self.capacity);
         value
     }
 }
 
 /// Keep the cache bounded by dropping the least recently used entries once it is over capacity.
-/// Halving rather than trimming to exactly `CAPACITY` keeps this from running on every insert.
-fn evict<T>(entries: &mut HashMap<PathBuf, Entry<T>>) {
-    if entries.len() <= CAPACITY {
+/// Halving rather than trimming to exactly `capacity` keeps this from running on every insert.
+fn evict<T>(entries: &mut HashMap<PathBuf, Entry<T>>, capacity: usize) {
+    if entries.len() <= capacity {
         return;
     }
     let mut ticks: Vec<u64> = entries.values().map(|e| e.used).collect();
@@ -139,10 +149,14 @@ fn evict<T>(entries: &mut HashMap<PathBuf, Entry<T>>) {
 
 /// The same content, arrived at through a runner's event stream. Its own map rather than a shared
 /// one: two parsers keyed on the same path would each serve the other's answer.
-static EVENTS: LazyLock<Memo<TurnContent>> = LazyLock::new(Memo::new);
+static EVENTS: LazyLock<Memo<TurnContent>> = LazyLock::new(|| Memo::new(CAPACITY));
 
 /// Parsed conversation transcripts — the committed turns of a `<conv_id>.jsonl`.
-static TRANSCRIPTS: LazyLock<Memo<Vec<Turn>>> = LazyLock::new(Memo::new);
+static TRANSCRIPTS: LazyLock<Memo<Vec<Turn>>> = LazyLock::new(|| Memo::new(CAPACITY));
+
+/// When each transcript's last turn was recorded — the listing's question, kept apart from the
+/// parses because it is asked of *every* session rather than of the one being read.
+static LAST_TURNS: LazyLock<Memo<Option<u64>>> = LazyLock::new(|| Memo::new(MOMENTS));
 
 /// A turn's events, folded into content by the caller — memoized on the log they were read from.
 ///
@@ -165,6 +179,17 @@ pub(crate) fn folded_events(
         path.with_extension("log.partial")
     };
     EVENTS.get_or_insert_as(key, path, fold)
+}
+
+/// When the last turn on a transcript was recorded, as the caller's `read` works it out — memoized
+/// on the file, so the answer is re-read only after a turn has been appended.
+///
+/// A listing asks this of every session an agent has, on every poll, where [`transcript`] is asked
+/// only of the chat on screen. That is the whole reason it is its own map with its own capacity: one
+/// number per session is nothing to keep, and keeping them is what makes a rail of a hundred
+/// conversations cost a `stat` each rather than a re-read each.
+pub(crate) fn last_turn_at(path: &Path, read: impl FnOnce() -> Option<u64>) -> Option<u64> {
+    *LAST_TURNS.get_or_insert(path, read)
 }
 
 /// One conversation's committed turns, oldest first. Same deal: the transcript is re-read only
@@ -199,7 +224,7 @@ mod tests {
         let path = dir.join("log");
         std::fs::write(&path, "one").unwrap();
 
-        let memo: Memo<String> = Memo::new();
+        let memo: Memo<String> = Memo::new(CAPACITY);
         let parses = std::cell::Cell::new(0);
         let read = || {
             memo.get_or_insert(&path, || {
@@ -224,7 +249,7 @@ mod tests {
     /// remembered as if it had been read.
     #[test]
     fn a_missing_file_is_answered_but_not_cached() {
-        let memo: Memo<String> = Memo::new();
+        let memo: Memo<String> = Memo::new(CAPACITY);
         let missing = std::env::temp_dir().join("adi-memo-nothing-here");
         let _ = std::fs::remove_file(&missing);
 
@@ -236,7 +261,7 @@ mod tests {
     #[test]
     fn eviction_keeps_the_recently_used_and_bounds_the_cache() {
         let dir = scratch("evict");
-        let memo: Memo<String> = Memo::new();
+        let memo: Memo<String> = Memo::new(CAPACITY);
         let mut paths = Vec::new();
         for i in 0..=CAPACITY {
             let path = dir.join(format!("f{i}"));

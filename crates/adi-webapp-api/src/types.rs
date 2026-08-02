@@ -1050,9 +1050,10 @@ pub struct AgentRunInfo {
     pub run_id: String,
     /// Unix milliseconds the run started.
     pub started_at: u64,
-    /// Unix milliseconds the run last did anything — what "recently active" is judged on. Never
-    /// earlier than `started_at`; defaults to 0 only when an older server omits it, and a client
-    /// should then read it as `started_at`.
+    /// Unix milliseconds the run last *said* something — the moment on the last turn of its
+    /// transcript, and what "recently active" is judged on. A chat being opened, read, or spooled
+    /// into never moves it; only a message does. Never earlier than `started_at`; defaults to 0 only
+    /// when an older server omits it, and a client should then read it as `started_at`.
     #[serde(default)]
     pub last_activity: u64,
     /// The task the run was launched with.

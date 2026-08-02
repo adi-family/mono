@@ -29,7 +29,7 @@
 //! that is the whole point of the layering: adding an engine must not mean teaching the store a
 //! wire format.
 
-use std::io::Write as _;
+use std::io::{Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -153,6 +153,68 @@ pub(super) fn append(dir: &Path, id: &str, mut turn: Turn) -> Result<()> {
 /// file only ever grows, so any new turn moves the stamp.
 pub(super) fn load(dir: &Path, id: &str) -> Arc<Vec<Turn>> {
     memo::transcript(&path(dir, id))
+}
+
+/// Where the search for the last line starts, doubling from there until it finds one.
+///
+/// Big enough that an ordinary turn is found in the first read, small enough that a listing walking
+/// a hundred sessions is not reading a hundred megabytes to look at a hundred numbers.
+const FIRST_WINDOW: u64 = 64 * 1024;
+
+/// Just the moment off a turn's line. A listing asks when a conversation last spoke, not what it
+/// said, and everything else on the line — a whole answer, and every tool call that produced it —
+/// is skipped rather than built.
+#[derive(Deserialize)]
+struct At {
+    #[serde(default)]
+    at: u64,
+}
+
+/// When the last turn on this transcript was recorded, or `None` when there is no turn to read one
+/// from (no file, an empty one, or a last line torn by a crash mid-append).
+///
+/// The tail alone, never [`load`]: this answers a *listing*, which asks it of every session an agent
+/// has, where `load` is asked of the one conversation on screen. Its memo holds a handful of files;
+/// reading whole transcripts here would parse every megabyte of every conversation on every poll and
+/// evict the open chat's parse while doing it. Memoized in its own right, so a session that has said
+/// nothing since the last poll costs a `stat`.
+pub(super) fn last_at(dir: &Path, id: &str) -> Option<u64> {
+    let path = path(dir, id);
+    memo::last_turn_at(&path, || {
+        let line = last_line(&path)?;
+        serde_json::from_str::<At>(&line).ok().map(|turn| turn.at)
+    })
+}
+
+/// The last whole line of `path`, or `None` when it has none.
+///
+/// Read backwards in windows that double until one holds a line break, rather than by reading the
+/// file: a transcript is every turn of a conversation and runs to tens of megabytes, while what is
+/// wanted is its last line. The doubling is why there is no fixed window — a single turn carries the
+/// timeline that produced it, tool output and all, so real answers of a quarter-megabyte are
+/// ordinary and any constant would eventually answer with the turn *before* the last one.
+fn last_line(path: &Path) -> Option<String> {
+    let mut file = std::fs::File::open(path).ok()?;
+    let len = file.metadata().ok()?.len();
+    let mut window = FIRST_WINDOW;
+    loop {
+        let from = len.saturating_sub(window);
+        file.seek(SeekFrom::Start(from)).ok()?;
+        let mut tail = Vec::new();
+        file.read_to_end(&mut tail).ok()?;
+        // Lossy is safe: a window that starts mid-file starts mid-line, and everything before the
+        // last break — which is where any character it cut in half would be — is dropped here.
+        let text = String::from_utf8_lossy(&tail);
+        let text = text.trim_end();
+        if let Some(end) = text.rfind('\n') {
+            return Some(text[end + 1..].to_string());
+        }
+        if from == 0 {
+            // No break anywhere in the file: it is a single line, and that line is the last turn.
+            return (!text.is_empty()).then(|| text.to_string());
+        }
+        window *= 2;
+    }
 }
 
 /// The full view: what was persisted, what is being said right now, and what is still waiting.
@@ -331,6 +393,36 @@ mod tests {
         assert_eq!(turns[1].text, "after the tear");
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a listing reads: the last turn's moment, off the tail of the file rather than out of a
+    /// parse of the whole conversation — including when that turn is far bigger than the window the
+    /// search starts at, which is the ordinary case for an answer that used tools.
+    #[test]
+    fn the_last_moment_is_read_off_the_tail_however_big_the_turn() {
+        let dir = scratch("last-at");
+        let id = "0000000000007-0000";
+        assert!(last_at(&dir, id).is_none(), "no transcript, no moment");
+
+        append(&dir, id, Turn { at: 1_000, ..user_turn("first") }).expect("append");
+        assert_eq!(last_at(&dir, id), Some(1_000), "the only line is the last one");
+        append(&dir, id, Turn { at: 2_000, ..user_turn("second") }).expect("append");
+        assert_eq!(last_at(&dir, id), Some(2_000), "and later lines win");
+
+        // A turn whose own line dwarfs the first window: the search widens to it rather than
+        // answering with the turn before, which is what a fixed window would do.
+        let huge = "x".repeat(usize::try_from(FIRST_WINDOW).expect("fits") * 3);
+        append(&dir, id, Turn { at: 3_000, ..user_turn(huge) }).expect("append");
+        assert_eq!(last_at(&dir, id), Some(3_000), "the window grew to the line");
+
+        // A crash mid-append leaves a torn last line; that is no moment at all, and is said so
+        // rather than guessed at — a caller sorts by this.
+        let torn = scratch("last-at-torn");
+        std::fs::write(path(&torn, id), "{\"role\":\"user\",\"at\":4\n").expect("write");
+        assert!(last_at(&torn, id).is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&torn);
     }
 
     /// The whole view in one place: what is on disk, the answer being written, and the questions

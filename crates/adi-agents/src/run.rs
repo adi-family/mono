@@ -67,9 +67,11 @@ pub struct RunInfo {
     pub run_id: String,
     /// Unix milliseconds the run started (encoded in, and recovered from, the run id).
     pub started_at: u64,
-    /// Unix milliseconds the run last did anything — the newest change to any file it keeps (its
-    /// log, a harness conversation's transcript). Never earlier than `started_at`, so a run whose
-    /// files carry no usable timestamp still sorts by when it began.
+    /// Unix milliseconds the run last *said* something — the moment on the last turn of its
+    /// transcript. Not the newest change to its files: a run spooling into its log, or a reader
+    /// committing an answer that finished hours ago, is not the conversation speaking, and a listing
+    /// sorted by this must not reshuffle for either. Never earlier than `started_at`, so a run with
+    /// no transcript to read still sorts by when it began.
     pub last_activity: u64,
     /// The task the run was launched with.
     pub message: String,

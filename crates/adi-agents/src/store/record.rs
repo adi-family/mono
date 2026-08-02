@@ -57,11 +57,13 @@ pub struct SessionRecord {
     /// from when a sidecar is missing or predates the field.
     #[serde(default)]
     pub started_at: u64,
-    /// Unix milliseconds the session last did anything.
+    /// Unix milliseconds the session last *said* something — the moment on the last turn of its
+    /// transcript, or its start when it has none.
     ///
-    /// Derived on every read from the mtimes of the files it owns, never stored: a written copy
-    /// would be stale the moment the log grew, and a second truth about the same fact is exactly
-    /// what this refactor is removing.
+    /// Derived on every read, never stored: a written copy would be stale the moment a turn landed,
+    /// and a second truth about the same fact is exactly what this refactor is removing. Read from
+    /// the transcript rather than from the files' mtimes, so only a message moves it — see
+    /// [`last_activity`](super::last_activity).
     #[serde(skip)]
     pub last_activity: u64,
     /// Whether a reader has hidden this session from the rail. A listing preference and nothing

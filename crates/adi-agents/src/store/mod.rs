@@ -31,9 +31,8 @@ mod record;
 mod session;
 mod transcript;
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::time::UNIX_EPOCH;
 
 use crate::Backend;
 use crate::error::{Error, Result};
@@ -149,11 +148,7 @@ impl SessionStore {
             return None;
         }
         let mut session = record::read(&dir, agent, id);
-        session.last_activity = last_activity(&dir)
-            .get(id)
-            .copied()
-            .unwrap_or(0)
-            .max(session.started_at);
+        session.last_activity = last_activity(&dir, id, session.started_at);
         Some(session)
     }
 
@@ -161,18 +156,11 @@ impl SessionStore {
     #[must_use]
     pub fn list(&self, agent: &str) -> Vec<SessionRecord> {
         let dir = self.agent_dir(agent);
-        let touched = last_activity(&dir);
         let mut sessions: Vec<SessionRecord> = session_ids(&dir)
             .into_iter()
             .map(|id| {
                 let mut session = record::read(&dir, agent, &id);
-                // A session that left no readable mtime behind falls back to when it began, so the
-                // field is always a moment the session existed rather than the epoch.
-                session.last_activity = touched
-                    .get(&id)
-                    .copied()
-                    .unwrap_or(0)
-                    .max(session.started_at);
+                session.last_activity = last_activity(&dir, &id, session.started_at);
                 session
             })
             .collect();
@@ -191,8 +179,8 @@ impl SessionStore {
     ///
     /// Returns whether there was a session there to flag; an unknown id is `false`, so a stale click
     /// is idempotent rather than an error. Writing the record is deliberately *not* activity — a
-    /// hidden session brought back must not have jumped to the top of the rail in the meantime,
-    /// which is why the sidecar is the one file [`last_activity`] leaves out.
+    /// hidden session brought back must not have jumped to the top of the rail in the meantime —
+    /// and it cannot be, now that [`last_activity`] reads the transcript rather than the files.
     ///
     /// # Errors
     /// Returns write errors.
@@ -423,45 +411,21 @@ fn session_ids(dir: &Path) -> BTreeSet<String> {
         .collect()
 }
 
-/// When each session in `dir` last did anything, as unix millis keyed by id.
+/// When this session last did anything, as unix millis: the moment on the last turn of its
+/// transcript, never earlier than its start.
 ///
-/// A session owns the whole `<id>.*` namespace, and the files it writes as it works — the log, a
-/// transcript, whatever a runner spools beside them — are appended to for as long as it is talking.
-/// So the newest mtime across its files is the last moment it moved. Sessions whose files carry no
-/// readable mtime are simply absent; the caller falls back to their start.
+/// **A message, and nothing else.** This used to be the newest mtime across every file the session
+/// owns, which read as "the last moment it moved" — and moving is not speaking. A run spooling into
+/// its log, a runner parking a sidecar, and above all a finished answer being *committed by the act
+/// of opening the chat* (see `settle` in the agent layer) all touched a file, and each one sent a
+/// conversation whose last word was said days ago back to the top of a rail sorted by this. The
+/// transcript's last turn is the one thing that only changes when something is actually said.
 ///
-/// The record is the one file left out. It is written at creation (which `started_at` already
-/// reports) and then only when a *reader* changes its mind — hiding a session, or a runner parking
-/// its state slot. Counting that as activity would have a hide read as the session having just
-/// moved, and send a chat somebody just put away back to the top of the rail.
-fn last_activity(dir: &Path) -> BTreeMap<String, u64> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return BTreeMap::new();
-    };
-    let mut newest: BTreeMap<String, u64> = BTreeMap::new();
-    for entry in entries.flatten() {
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        let Some((id, rest)) = name.split_once('.') else {
-            continue;
-        };
-        if rest == record::META_SUFFIX {
-            continue;
-        }
-        let Some(ms) = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .and_then(|d| u64::try_from(d.as_millis()).ok())
-        else {
-            continue;
-        };
-        let slot = newest.entry(id.to_string()).or_default();
-        *slot = (*slot).max(ms);
-    }
-    newest
+/// A session with no transcript to read — one created but never sent to, or a run migrated from a
+/// layout that kept none — falls back to its start, so this is always a moment the session existed
+/// rather than the epoch.
+fn last_activity(dir: &Path, id: &str, started_at: u64) -> u64 {
+    transcript::last_at(dir, id).unwrap_or(0).max(started_at)
 }
 
 /// Remove every file a session owns.
@@ -487,7 +451,7 @@ fn remove_session_files(dir: &Path, id: &str) {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
-    use std::time::{Duration, SystemTime};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     use super::*;
 
@@ -657,38 +621,77 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Activity follows the files, not the clock the session started on — that is what makes a long,
-    /// quiet conversation sort below one answered a minute ago — and it never precedes the start.
+    /// Activity is the last thing *said*, not the clock the session started on — that is what makes
+    /// a long, quiet conversation sort below one answered a minute ago — and it never precedes the
+    /// start.
     #[test]
-    fn activity_follows_the_files_but_never_precedes_the_start() {
+    fn activity_is_the_last_turn_but_never_precedes_the_start() {
         let store = scratch("activity");
         let now = now_ms();
-        let dir = store.agent_dir("talker");
 
-        // Started an hour ago, wrote just now: it must read as active now, not an hour back.
+        // Started an hour ago, spoke a minute ago: it must read as active a minute ago.
         let quiet = format!("{:013}-0001", now - 3_600_000);
         seed(&store, "talker", &quiet, "old but busy");
-        std::fs::write(record::log_path(&dir, &quiet), "hello").unwrap();
-        std::fs::write(dir.join(format!("{quiet}.jsonl")), "{}\n").unwrap();
+        let spoke = now - 60_000;
+        store
+            .append_turn("talker", &quiet, Turn { at: spoke, ..user_turn("still here") })
+            .expect("append");
 
-        // An id claiming to start in an hour: its files are already older than that.
+        // An id claiming to start in an hour: what it said is already older than that.
         let future = format!("{:013}-0002", now + 3_600_000);
         seed(&store, "talker", &future, "from the future");
-        std::fs::write(record::log_path(&dir, &future), "hello").unwrap();
+        store
+            .append_turn("talker", &future, Turn { at: now, ..user_turn("said now") })
+            .expect("append");
 
         let busy = store.get("talker", &quiet).expect("listed");
         assert_eq!(busy.started_at, now - 3_600_000, "start comes from the id");
-        assert!(
-            busy.last_activity >= now - 60_000,
-            "activity comes from the files, not the id: {} vs {now}",
-            busy.last_activity,
-        );
+        assert_eq!(busy.last_activity, spoke, "activity is the turn's own moment");
 
         let odd = store.get("talker", &future).expect("listed");
         assert_eq!(
             odd.last_activity, odd.started_at,
-            "an mtime older than the start never drags activity backwards",
+            "a turn older than the start never drags activity backwards",
         );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The regression this derivation exists for: everything a session *writes* while it works — its
+    /// log, its queue, whatever sidecar a runner spools — leaves the rail's ordering alone. Only a
+    /// turn moves it, so a chat cannot jump to the top for having been read, spooled into, or hidden.
+    #[test]
+    fn only_a_turn_counts_as_activity() {
+        let store = scratch("only-turns");
+        let now = now_ms();
+        let dir = store.agent_dir("talker");
+        let id = format!("{:013}-0001", now - 3_600_000);
+        seed(&store, "talker", &id, "answered a while back");
+        let answered = now - 1_800_000;
+        store
+            .append_turn("talker", &id, Turn { at: answered, ..user_turn("what is it") })
+            .expect("append");
+
+        // Everything but a turn, all written just now.
+        std::fs::write(record::log_path(&dir, &id), "the engine spooling").unwrap();
+        std::fs::write(dir.join(format!("{id}.invented-later")), "a runner's own").unwrap();
+        store.enqueue("talker", &id, "waiting").expect("enqueue");
+        store.set_hidden("talker", &id, true).expect("hide");
+        store
+            .set_runner_state("talker", &id, serde_json::json!({ "pid": 4711 }))
+            .expect("park state");
+
+        assert_eq!(
+            store.get("talker", &id).expect("listed").last_activity,
+            answered,
+            "none of that is the conversation saying anything",
+        );
+
+        // And a turn does move it.
+        store
+            .append_turn("talker", &id, Turn { at: now, ..user_turn("still there?") })
+            .expect("append");
+        assert_eq!(store.get("talker", &id).expect("listed").last_activity, now);
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

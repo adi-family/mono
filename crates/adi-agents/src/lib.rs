@@ -1130,11 +1130,37 @@ fn live_content(runner: &dyn Runner, session: &SessionRef<'_>, running: bool) ->
 /// The lazy clock the whole conversation machinery runs on: there is no reaper, so a finished turn
 /// is folded into the transcript by the next read of it. A no-op when the last turn is already an
 /// answer, which is what makes it safe to call before every read and every send.
+///
+/// The answer is dated **when the engine finished it**, not when this ran. Those are the same
+/// moment only when somebody happened to be watching; an agent that answered overnight settles the
+/// first time its chat is opened, and stamping that instant would have opening a conversation
+/// backdate to nothing and re-date it to now — moving it to the top of every listing sorted by when
+/// it last spoke, for no other reason than that it was read.
 fn settle(store: &SessionStore, agent: &str, id: &str, content: &TurnContent) {
-    if store.turns(agent, id).last().map(|turn| turn.role.as_str()) != Some(store::ROLE_USER) {
+    let turns = store.turns(agent, id);
+    let Some(question) = turns.last().filter(|turn| turn.role == store::ROLE_USER) else {
         return;
+    };
+    let mut turn = assistant_turn(content);
+    if let Some(finished) = finished_at(&store.log_path(agent, id)) {
+        // Never before the question it answers, and never ahead of the clock reading it: a log
+        // stamped by a machine whose time has since moved must not pin a chat to the top for ever.
+        let now = turn.at;
+        turn.at = finished.max(question.at).min(now);
     }
-    let _ = store.append_turn(agent, id, assistant_turn(content));
+    let _ = store.append_turn(agent, id, turn);
+}
+
+/// When the engine last wrote to a session's log, as unix millis — how a turn that nobody watched
+/// end says when it ended.
+///
+/// The log is the engine's own output, recreated for each turn and appended to until it stops, so
+/// its mtime is the last moment this turn produced anything. `None` when there is no log or the
+/// platform reports no mtime, which reads as "no better answer than now".
+fn finished_at(log: &std::path::Path) -> Option<u64> {
+    let modified = std::fs::metadata(log).and_then(|meta| meta.modified()).ok()?;
+    let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(since.as_millis()).ok()
 }
 
 /// The launch handle a caller gets back: the pane a terminal opened, or the child a headless runner
@@ -2120,6 +2146,80 @@ mod tests {
             ["and then?"],
             "and it keeps its place rather than being dropped"
         );
+    }
+
+    /// Settling is a *reader's* act, and it must not read as the conversation having just spoken. An
+    /// agent that answered overnight is committed by whoever opens the chat in the morning; stamped
+    /// with that instant, every listing sorted by when a session last spoke would move the chat to
+    /// the top for the sole reason that somebody looked at it.
+    #[test]
+    fn an_answer_settled_long_after_it_finished_keeps_the_moment_it_finished() {
+        let store = scratch("settle-time");
+        store
+            .save("chatty", spec("harness:claude-sdk"))
+            .expect("save");
+        let agent = store.get("chatty").expect("get").expect("present");
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("chatty", Backend::HarnessClaudeSdk, "/tmp", "set the port")
+            .expect("open a conversation")
+            .id;
+
+        let now = now_unix() * 1_000;
+        let asked = now - 10_800_000; // three hours ago
+        sessions
+            .append_turn(
+                "chatty",
+                &conv,
+                store::Turn {
+                    at: asked,
+                    ..store::user_turn("set the port")
+                },
+            )
+            .expect("the question");
+        let log = sessions.log_path("chatty", &conv);
+        std::fs::write(
+            &log,
+            format!(
+                "{}\n",
+                serde_json::json!({ "type": "result", "result": "Moved it to 81." }),
+            ),
+        )
+        .expect("write the log");
+        // The engine stopped writing two hours ago, and nobody has opened the chat since.
+        let finished = std::time::SystemTime::now() - Duration::from_secs(7_200);
+        std::fs::File::options()
+            .write(true)
+            .open(&log)
+            .expect("open the log")
+            .set_modified(finished)
+            .expect("back-date it");
+        sessions
+            .session("chatty", &conv)
+            .set_state(serde_json::json!({ "pid": dead_pid() }))
+            .expect("a finished turn");
+
+        let turns = store.transcript(&agent, &conv);
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        let settled = turns[1].at;
+        assert!(
+            settled > asked && settled < now - 3_600_000,
+            "the answer is dated when the engine finished it, not when it was read: \
+             {settled} is not two hours back from {now}",
+        );
+        assert_eq!(
+            store.transcript(&agent, &conv)[1].at,
+            settled,
+            "and it stays there — a second reader is not a second answer",
+        );
+        // What the listing then sorts by is that moment; that the record reads it off the last turn
+        // rather than off the files is `store::tests::only_a_turn_counts_as_activity`. Here it is
+        // floored by the session's start, which this test opened a moment ago.
+        let runs = store.runs(&agent);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].last_activity, runs[0].started_at.max(settled));
+
+        let _ = std::fs::remove_dir_all(store.config.root());
     }
 
     /// A pid that certainly names nothing: a child run to completion and reaped. Not a made-up
