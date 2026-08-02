@@ -1,9 +1,12 @@
 //! Memoized reads of the files a run leaves behind.
 //!
-//! A conversation's transcript and its engine log are append-only, and both are re-read on **every
+//! A session's transcript and its engine log are append-only, and both are re-read on **every
 //! poll**: the open chat asks twice a second, and a settled turn's answer never changes again. Left
 //! alone that means deserializing the same megabytes over and over — parsing a large event log with
 //! `serde_json` costs hundreds of milliseconds, which is most of what a `peek` used to spend.
+//!
+//! The log side is keyed on bytes, not on a backend: a runner hands in the fold, so nothing here
+//! knows one engine's wire format from another's (see [`folded_events`]).
 //!
 //! So each file's parsed form is kept, keyed by the file's identity on disk ([`Stamp`]: length plus
 //! mtime). Both files only ever grow, so any change moves the length; the mtime is carried too, for
@@ -20,8 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
-use crate::backend::Backend;
-use crate::progress::{self, MAX_PARSE_BYTES, TurnContent};
+use crate::progress::TurnContent;
 use crate::run::Turn;
 
 /// How many parsed files are kept. Generous next to the handful of conversations a person watches
@@ -83,6 +85,16 @@ impl<T> Memo<T> {
     /// across it would make every other conversation's poll wait on this one. Two callers racing on
     /// the same cold file both parse it, which is merely the work they would each have done anyway.
     fn get_or_insert(&self, path: &Path, parse: impl FnOnce() -> T) -> Arc<T> {
+        self.get_or_insert_as(path.to_path_buf(), path, parse)
+    }
+
+    /// The same, filed under `key` rather than under the file it was read from.
+    ///
+    /// For a reader whose answer depends on something besides the bytes — whether the writer has
+    /// exited, say, which decides if a trailing half-line may be taken. Those are two different
+    /// parses of one unchanged file, and filing both under the file would serve one where the other
+    /// was asked for.
+    fn get_or_insert_as(&self, key: PathBuf, path: &Path, parse: impl FnOnce() -> T) -> Arc<T> {
         let Some(stamp) = Stamp::of(path) else {
             // No file to key on — parse whatever the caller makes of that, but remember nothing.
             return Arc::new(parse());
@@ -90,7 +102,7 @@ impl<T> Memo<T> {
         let tick = self.tick.fetch_add(1, Ordering::Relaxed);
         {
             let mut entries = self.lock();
-            if let Some(entry) = entries.get_mut(path)
+            if let Some(entry) = entries.get_mut(&key)
                 && entry.stamp == stamp
             {
                 entry.used = tick;
@@ -101,7 +113,7 @@ impl<T> Memo<T> {
         let value = Arc::new(parse());
         let mut entries = self.lock();
         entries.insert(
-            path.to_path_buf(),
+            key,
             Entry {
                 stamp,
                 value: Arc::clone(&value),
@@ -125,17 +137,34 @@ fn evict<T>(entries: &mut HashMap<PathBuf, Entry<T>>) {
     entries.retain(|_, e| e.used >= cutoff);
 }
 
-/// Parsed engine logs — a run's captured output as [`TurnContent`].
-static LOGS: LazyLock<Memo<TurnContent>> = LazyLock::new(Memo::new);
+/// The same content, arrived at through a runner's event stream. Its own map rather than a shared
+/// one: two parsers keyed on the same path would each serve the other's answer.
+static EVENTS: LazyLock<Memo<TurnContent>> = LazyLock::new(Memo::new);
 
 /// Parsed conversation transcripts — the committed turns of a `<conv_id>.jsonl`.
 static TRANSCRIPTS: LazyLock<Memo<Vec<Turn>>> = LazyLock::new(Memo::new);
 
-/// One run's captured output, parsed into its progress content. Re-parsed only when the log has
-/// actually grown since the last read; a finished run is parsed exactly once, however often it is
-/// polled afterwards.
-pub(crate) fn parsed_log(backend: &Backend, path: &Path) -> Arc<TurnContent> {
-    LOGS.get_or_insert(path, || progress::parse(backend, &read_capped(path)))
+/// A turn's events, folded into content by the caller — memoized on the log they were read from.
+///
+/// Same bargain as [`parsed_log`], for the runner-driven path: a runner turns bytes into events on
+/// every call, and an open chat asks twice a second. The log is the thing that changes, so it is the
+/// thing keyed on; `fold` runs only when it has.
+///
+/// `complete` is part of the key rather than a hint. A runner reads only whole lines while the
+/// writer is still going and takes the remainder once it has exited, so the same unchanged bytes
+/// have two answers — and a child that exits without a trailing newline would otherwise settle
+/// under the running one, committing an answer with its last line missing.
+pub(crate) fn folded_events(
+    path: &Path,
+    complete: bool,
+    fold: impl FnOnce() -> TurnContent,
+) -> Arc<TurnContent> {
+    let key = if complete {
+        path.to_path_buf()
+    } else {
+        path.with_extension("log.partial")
+    };
+    EVENTS.get_or_insert_as(key, path, fold)
 }
 
 /// One conversation's committed turns, oldest first. Same deal: the transcript is re-read only
@@ -150,18 +179,6 @@ pub(crate) fn transcript(path: &Path) -> Arc<Vec<Turn>> {
             .filter_map(|l| serde_json::from_str::<Turn>(l).ok())
             .collect()
     })
-}
-
-/// Read a log file whole, from the start, up to the progress parse cap. Reading from the start (not
-/// a tail) keeps the beginning of a streamed event log, so early tool steps survive.
-fn read_capped(path: &Path) -> Vec<u8> {
-    use std::io::Read as _;
-    let Ok(file) = std::fs::File::open(path) else {
-        return Vec::new();
-    };
-    let mut buf = Vec::new();
-    let _ = file.take(MAX_PARSE_BYTES).read_to_end(&mut buf);
-    buf
 }
 
 #[cfg(test)]

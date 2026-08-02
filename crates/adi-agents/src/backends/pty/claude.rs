@@ -4,7 +4,7 @@ use crate::arguments::{ClaudeEffort, ClaudePermissionMode, PtyClaudeArguments};
 use crate::backends::push_option;
 
 /// Build the Claude CLI command run by the shared pty executor.
-pub(super) fn argv(config: &PtyClaudeArguments) -> Vec<String> {
+pub(crate) fn argv(config: &PtyClaudeArguments) -> Vec<String> {
     let mut argv = vec!["claude".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(

@@ -3,8 +3,11 @@
 //! ([`BackendCapabilities`]) that says which of these a backend can actually surface.
 //!
 //! Each engine emits progress its own way (Claude's `stream-json`, Codex's `--json`, the ADI loop's
-//! own events); [`parse`] turns a run/turn's captured log into a common [`TurnContent`] regardless.
-//! A backend with no structured output (or an old plain-text log) simply yields text-only content.
+//! own events), and each *runner* parses the formats that are its own into this common shape. There
+//! is deliberately no `parse(backend, log)` here any more: a table of every engine's wire format,
+//! sitting a layer above the code that knows them, was one more place that had to be taught about a
+//! new backend — and one more place to forget. A backend with no structured output (or an old
+//! plain-text log) simply yields text-only content, via [`text_of`].
 
 use serde::{Deserialize, Serialize};
 
@@ -110,9 +113,17 @@ pub struct BackendCapabilities {
     pub metrics: bool,
 }
 
-/// The capability profile for a backend. This is the honest matrix: pty is a live pane with no
-/// history/replies/steps; process runs keep history and (for the CLIs that emit events) steps, but
-/// are one-shot; harness runs additionally answer; wasm contributes only dispatch metrics.
+/// What a backend can surface, **asked of the runner that runs it** rather than kept as a matrix
+/// here.
+///
+/// A hand-maintained table is a second truth: it says a backend reports thinking while the runner
+/// that parses its stream knows it does not, and nothing makes the two agree. So each flag is
+/// derived from what the runner already has to answer anyway — whether it drives a terminal, whether
+/// a later send continues the same thread, and which event kinds it can ever emit.
+///
+/// A backend nothing here runs keeps the all-false descriptor, with one exception: `wasm:*` is
+/// dispatched synchronously and has no process to manage, but its outcome still carries turns and
+/// tokens, so it reports metrics. That is the profile the UI has always rendered for it.
 #[must_use]
 pub fn capabilities(backend: &Backend) -> BackendCapabilities {
     let base = BackendCapabilities {
@@ -124,72 +135,32 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
         thinking: false,
         metrics: false,
     };
-    match backend {
-        Backend::PtyClaude | Backend::PtyCodex => BackendCapabilities {
-            interactive: true,
-            live_text: true,
+    let Some(runner) = crate::runner::runner_for(backend) else {
+        return BackendCapabilities {
+            metrics: matches!(backend, Backend::Wasm),
             ..base
-        },
-        Backend::ProcessClaude => BackendCapabilities {
-            history: true,
-            live_text: true,
-            tool_steps: true,
-            thinking: true,
-            metrics: true,
-            ..base
-        },
-        Backend::ProcessCodex => BackendCapabilities {
-            history: true,
-            live_text: true,
-            tool_steps: true,
-            metrics: true,
-            ..base
-        },
-        Backend::HarnessClaudeSdk => BackendCapabilities {
-            history: true,
-            answerable: true,
-            live_text: true,
-            tool_steps: true,
-            thinking: true,
-            metrics: true,
-            ..base
-        },
-        Backend::HarnessAdi => BackendCapabilities {
-            history: true,
-            answerable: true,
-            live_text: true,
-            tool_steps: true,
-            metrics: true,
-            ..base
-        },
-        Backend::Wasm => BackendCapabilities {
-            // Dispatched synchronously (no run panel), but its outcome carries turns/tokens.
-            metrics: true,
-            ..base
-        },
-        Backend::Other(_) => base,
+        };
+    };
+    let interactive = runner.as_terminal().is_some();
+    let kinds = runner.emits();
+    BackendCapabilities {
+        interactive,
+        // A pane is the run: it keeps nothing to page through afterwards, while everything else
+        // spools a log the store files as history.
+        history: !interactive,
+        // Continuing a thread you *type* into is not a reply box, so a terminal never claims it
+        // however resumable its session is.
+        answerable: runner.resumes() && !interactive,
+        // Anything with a runner produces something to watch — a live pane, or a log to tail.
+        live_text: true,
+        tool_steps: kinds.tool_call,
+        thinking: kinds.thinking,
+        metrics: kinds.metrics,
     }
 }
 
 /// Parse a run/turn's captured log into its [`TurnContent`], per the backend's engine format. An
 /// unrecognised or plain-text log (old logs, non-streaming output) yields text-only content, so this
-/// never fails — the worst case is "just the answer, no steps".
-#[must_use]
-pub fn parse(backend: &Backend, log: &[u8]) -> TurnContent {
-    match backend {
-        Backend::ProcessClaude | Backend::HarnessClaudeSdk => {
-            crate::backends::claude_stream::parse(log)
-        }
-        Backend::HarnessAdi => crate::backends::adi_events::parse(log),
-        // Codex `--json` is wired later; until then its logs parse as plain text.
-        _ => TurnContent {
-            text: text_of(log),
-            steps: Vec::new(),
-            metrics: None,
-        },
-    }
-}
-
 /// A best-effort UTF-8 view of a log, trimmed — the plain-text fallback answer.
 pub(crate) fn text_of(log: &[u8]) -> String {
     String::from_utf8_lossy(log).trim().to_string()
@@ -198,4 +169,62 @@ pub(crate) fn text_of(log: &[u8]) -> String {
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The matrix, spelled out. [`capabilities`] is now *derived* from each backend's runner, and
+    /// this is the check that deriving it did not quietly change what a reader renders: every flag
+    /// below is the value the hand-maintained table returned before the runners existed.
+    ///
+    /// Read as (interactive, history, answerable, live_text, tool_steps, thinking, metrics).
+    #[test]
+    fn the_derived_matrix_is_the_one_the_ui_has_always_rendered() {
+        for (wire, want) in [
+            ("pty:claude", [true, false, false, true, false, false, false]),
+            ("pty:codex", [true, false, false, true, false, false, false]),
+            (
+                "process:claude",
+                [false, true, false, true, true, true, true],
+            ),
+            (
+                "process:codex",
+                [false, true, false, true, true, false, true],
+            ),
+            (
+                "harness:claude-sdk",
+                [false, true, true, true, true, true, true],
+            ),
+            (
+                "harness:adi",
+                [false, true, true, true, true, false, true],
+            ),
+            (
+                "wasm:loop-script",
+                [false, false, false, false, false, false, true],
+            ),
+            // A plugin backend nothing here runs can surface nothing at all.
+            (
+                "cloud:worker",
+                [false, false, false, false, false, false, false],
+            ),
+        ] {
+            let got = capabilities(&Backend::from(wire));
+            assert_eq!(
+                [
+                    got.interactive,
+                    got.history,
+                    got.answerable,
+                    got.live_text,
+                    got.tool_steps,
+                    got.thinking,
+                    got.metrics,
+                ],
+                want,
+                "{wire} renders differently than it used to",
+            );
+        }
+    }
 }

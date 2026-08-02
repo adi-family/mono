@@ -62,17 +62,6 @@ pub(crate) fn resolve(
         .unwrap_or_else(|| config.root().to_path_buf())
 }
 
-/// The directory a run is *already* in, for code that executes inside the spawned child (the `adi`
-/// loop's `harness-turn`). The child was launched in the resolved directory and carries it in its
-/// environment, so reading it back is exact — including a per-run directory that the manifest alone
-/// could not reproduce. Falls back to resolving from the manifest when the variable is absent.
-pub(crate) fn current(config: &Config, manifest: &StoredAgentManifest) -> PathBuf {
-    std::env::var_os(WORKDIR_ENV)
-        .map(PathBuf::from)
-        .filter(|d| !d.as_os_str().is_empty())
-        .unwrap_or_else(|| resolve(config, manifest, None))
-}
-
 /// The manifest's own `working_dir`, read straight off the raw arguments — see [`WORKING_DIR`].
 fn declared(arguments: &RawAgentArguments) -> Option<String> {
     arguments

@@ -39,11 +39,16 @@ mod limits;
 mod memo;
 pub mod progress;
 mod run;
+pub mod runner;
+pub mod store;
 mod tool_help;
 pub mod wasm;
 mod workspace;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 
 use adi_config::{Config, ConfigFile, now_unix};
 
@@ -68,43 +73,40 @@ pub use run::{
 pub use wasm::DispatchOutcome;
 
 use agent::validate_name;
-use run::{
-    adi_turn_in, advance_in, can_advance_in, conversation_dir_in, delete_run_in, is_running_in,
-    launch_in, peek_in, peek_run_in, reply_in, runs_in, set_run_hidden_in, stop_in, stop_run_in,
-    transcript_in, unqueue_in,
-};
+use runner::{RunEvent, RunSpec, Runner, Session, runner_for};
+use store::{SessionRecord, SessionRef, SessionStore, assistant_turn, user_turn};
 
 const AGENTS_MODULE: &str = "agents";
 const WORKFORCE_MODULE: &str = "workforce";
 const SESSIONS_MODULE: &str = "sessions";
 const MANIFEST_EXT: &str = "toml";
 
+/// How long a stopped run is given to end itself before it is killed.
+///
+/// Long enough for a vendor CLI to finish the request it is blocked on and write out what it has;
+/// short enough that a human who clicked Stop does not sit watching a run they have already ended.
+/// A run that ignores the whole of it was never going to stop cooperatively.
+const STOP_GRACE: Duration = Duration::from_secs(5);
+
+/// Serializes "is a turn already running?" with the send that follows it.
+///
+/// A session has one log slot, so one turn may be in flight at a time. The app server answers
+/// requests concurrently and an open chat polls *two* endpoints a second — the run list and the
+/// transcript, both of which advance the queue — so without this the check and the send could
+/// interleave and start two children into the same slot, each clobbering the other's log. Turn
+/// starts are rare and take milliseconds, so one gate costs nothing; reads never take it.
+static TURN_GATE: Mutex<()> = Mutex::new(());
+
+/// Hold the turn gate. A previous panic while holding it says nothing about what is on disk, so a
+/// poisoned lock is taken anyway rather than propagating that panic into every later turn.
+fn turn_gate() -> MutexGuard<'static, ()> {
+    TURN_GATE.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// An on-disk agent registry.
 #[derive(Debug, Clone)]
 pub struct Agents {
     config: Config,
-}
-
-/// The resolved inputs a launch or reply needs from the store: the sessions/runs dir, the
-/// working directory, the `PATH` the run resolves commands on, and the environment it is launched
-/// with (its attached secrets, the pointer to its scope's database, where it starts, and its own
-/// declared vars).
-struct LaunchContext {
-    /// The agent as it is *launched* — the stored definition with its tools' own help and its
-    /// location folded into the system prompt (see [`tool_help`], [`workspace`]). Launch from this,
-    /// never from the stored agent, or the run's `.bin` holds commands its prompt never mentions
-    /// and it starts in a directory nothing told it about.
-    agent: StoredAgent,
-    sessions_dir: PathBuf,
-    /// Where this run's process starts — already resolved through [`workspace::resolve`], so it is
-    /// the whole answer. Executors spawn into it directly and no longer consult the manifest
-    /// themselves; two places deciding one directory is how they drift.
-    base_dir: PathBuf,
-    /// Already assembled (see [`launch::run_path`]): the agent's `.bin`, the dirs its manifest
-    /// declares, and the standard tool dirs. Executors apply it verbatim — after the vars below, so
-    /// nothing injected there can shadow it.
-    run_path: String,
-    run_env: Vec<(String, String)>,
 }
 
 impl Default for Agents {
@@ -292,30 +294,81 @@ impl Agents {
         self.set_limits(limits)
     }
 
-    /// What is running right now, totalled and divided between projects — one walk of the run
-    /// directories, weighed against [`Self::limits`].
+    /// This store's sessions: the record, the queue, the transcript, and the log of every run.
     ///
-    /// The agent list is only read when something is actually running, so the common case (an idle
-    /// machine asking whether it may start something) costs a directory scan and nothing else. A pty
-    /// session keeps no run directory to name an agent from, so live sessions are matched against
-    /// the agent list instead — again, only when a session is up.
+    /// Cheap to build — a path and no cached state — so it is taken per call rather than held.
+    /// Opening it also brings anything still filed the old way
+    /// (`<sessions>/<process|harness>/<agent>/`) into the flat layout. That runs on **every** open
+    /// rather than once per process, because a store is opened by the app, the CLI, and every
+    /// trigger's child: no one of them can be the one that does it. It is idempotent and, with
+    /// nothing old to find, costs two failed directory reads.
+    ///
+    /// Best-effort, deliberately. A store that could not be moved forward is one whose old history
+    /// reads as missing, which is bad — but a run refused because a migration failed is worse.
+    fn sessions(&self) -> SessionStore {
+        let store = SessionStore::new(self.config.module(SESSIONS_MODULE).dir());
+        let _ = store.migrate_legacy(|agent| self.backend_of(agent));
+        store
+    }
+
+    /// Which engine an agent runs, for a session whose own record cannot say: the old layout named
+    /// the *executor*, and `process:claude` and `process:codex` shared a directory.
+    fn backend_of(&self, agent: &str) -> Backend {
+        self.get(agent)
+            .ok()
+            .flatten()
+            .map(|a| a.manifest.backend)
+            .unwrap_or_default()
+    }
+
+    /// The runner for this agent's backend, or the honest refusal.
+    ///
+    /// # Errors
+    /// [`Error::NotRunnable`] when nothing here runs that backend.
+    fn runner_of(agent: &StoredAgent) -> Result<Box<dyn Runner>> {
+        runner_for(&agent.manifest.backend)
+            .ok_or_else(|| Error::NotRunnable(agent.manifest.backend.to_string()))
+    }
+
+    /// Whether this session's work is still in flight, asked of whichever runner started it.
+    ///
+    /// The record's own backend, not the agent's current one: re-pointing an agent at another
+    /// engine must not make its existing runs unreadable, which is the whole reason the backend is
+    /// a field of the session rather than a directory it lives in.
+    fn session_is_alive(store: &SessionStore, record: &SessionRecord) -> bool {
+        runner_for(&record.backend)
+            .is_some_and(|runner| runner.is_alive(&store.session(&record.agent, &record.id)))
+    }
+
+    /// What is running right now, totalled and divided between projects — one walk of the session
+    /// store, weighed against [`Self::limits`].
+    ///
+    /// Every agent's sessions are counted, including those of an agent whose definition has since
+    /// been deleted: what bounds the machine is the processes that exist, not the manifests that
+    /// explain them. The agent list is only read when something is actually running (it is needed
+    /// solely to attribute a run to a project), so the common case — an idle machine asking whether
+    /// it may start something — costs a directory scan and nothing else.
     #[must_use]
     pub fn run_load(&self) -> RunLoad {
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        let mut by_agent = run::running_by_agent_in(&sessions_dir);
-        let sessions = run::running_sessions();
-        if by_agent.is_empty() && sessions.is_empty() {
-            return RunLoad::default();
-        }
-        let agents = self.list().unwrap_or_default();
-        for agent in &agents {
-            if sessions.contains(&run::session_name(&agent.name)) {
-                *by_agent.entry(agent.name.clone()).or_default() += 1;
+        let store = self.sessions();
+        let mut by_agent: BTreeMap<String, usize> = BTreeMap::new();
+        for agent in agent_dirs(&store) {
+            let live = store
+                .list(&agent)
+                .iter()
+                .filter(|record| Self::session_is_alive(&store, record))
+                .count();
+            if live > 0 {
+                by_agent.insert(agent, live);
             }
+        }
+        if by_agent.is_empty() {
+            return RunLoad::default();
         }
         RunLoad::new(
             &by_agent,
-            agents
+            self.list()
+                .unwrap_or_default()
                 .into_iter()
                 .map(|a| (a.name, a.manifest.project.clone())),
         )
@@ -406,7 +459,8 @@ impl Agents {
         self.launch_run(name, message, working_dir, true)
     }
 
-    /// The one launch path: resolve the agent, weigh the cap unless `force`, spawn, announce.
+    /// The one launch path: resolve the agent, weigh the cap unless `force`, open a session, send,
+    /// announce.
     fn launch_run(
         &self,
         name: &str,
@@ -422,15 +476,38 @@ impl Agents {
         {
             return Err(full);
         }
-        let ctx = self.launch_context(&agent, working_dir);
-        let launch = launch_in(
-            &ctx.agent,
-            &ctx.sessions_dir,
-            &ctx.base_dir,
-            &ctx.run_path,
+        let runner = Self::runner_of(&agent)?;
+        // One pane per agent, so a second Run is not a launch — it would type this task into the
+        // session already open. Say so instead.
+        if runner.as_terminal().is_some() && self.is_running(&agent) {
+            return Err(Error::AlreadyRunning(name.to_string()));
+        }
+
+        let spec = self.launch_spec(&agent, working_dir);
+        // Fail before anything is written down: a mistyped argument should leave no session behind.
+        runner.check(&spec)?;
+        let store = self.sessions();
+        let record = store.create(
+            &agent.name,
+            agent.manifest.backend.clone(),
+            &spec.cwd,
             message,
-            &ctx.run_env,
         )?;
+        let session = store.session(&agent.name, &record.id);
+        // The opening question, recorded as a turn so the run reads as a conversation from its
+        // first line. Not for a terminal: its launch message is deliberately never typed (the TUI
+        // is still drawing its first frame), so recording it as asked would be a lie.
+        if runner.as_terminal().is_none() {
+            store.append_turn(&agent.name, &record.id, user_turn(message))?;
+        }
+        runner.send(&spec, &session, message)?;
+        // Only now, with this run's own files in place: pruning first would count it as one of the
+        // old ones. A run somebody else is still watching is never swept.
+        store.prune_old(&agent.name, |record| {
+            Self::session_is_alive(&store, record)
+        });
+
+        let launch = launch_of(&agent, runner.as_ref(), &session);
         self.emit(
             "adi.agents.run.started",
             &AgentRunStarted::of(name, message, &launch),
@@ -453,26 +530,45 @@ impl Agents {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        let may_start = !self.at_capacity_for(&agent);
-        let dir = self.conversation_dir(&agent, conv_id);
-        let ctx = self.launch_context(&agent, dir.to_str());
-        let sent = reply_in(
-            &ctx.agent,
-            &ctx.sessions_dir,
-            &ctx.base_dir,
-            &ctx.run_path,
-            conv_id,
-            message,
-            &ctx.run_env,
-            may_start,
-        )?;
-        if let Sent::Started(launch) = &sent {
-            self.emit(
-                "adi.agents.run.started",
-                &AgentRunStarted::of(name, message, launch),
-            );
+        let runner = Self::runner_of(&agent)?;
+        if !answerable(runner.as_ref()) {
+            return Err(Error::Unsupported(format!(
+                "backend {} isn't answerable — only a backend that continues the same thread keeps \
+                 conversations you can reply to",
+                agent.manifest.backend
+            )));
         }
-        Ok(sent)
+        let store = self.sessions();
+        let record = store
+            .get(name, conv_id)
+            .ok_or_else(|| Error::NotFound(format!("{name}: no conversation {conv_id}")))?;
+        let may_start = !self.at_capacity_for(&agent);
+
+        let _gate = turn_gate();
+        let session = store.session(name, conv_id);
+        // Still answering, or no slot free: the message keeps its place and is asked when one of
+        // those changes. Nothing typed into a chat is ever refused.
+        if !may_start || runner.is_alive(&session) {
+            let place = store.enqueue(name, conv_id, message)?;
+            return Ok(Sent::Queued { place });
+        }
+        // Idle, but with a queue no read has drained yet: join the back of the line and start its
+        // head instead, so messages are always answered in the order they were typed.
+        let next = if store.queue_len(name, conv_id) > 0 {
+            store.enqueue(name, conv_id, message)?;
+            store
+                .dequeue(name, conv_id)?
+                .unwrap_or_else(|| message.to_string())
+        } else {
+            message.to_string()
+        };
+
+        let launch = self.start_turn(&agent, &store, runner.as_ref(), &record, &next)?;
+        self.emit(
+            "adi.agents.run.started",
+            &AgentRunStarted::of(name, &next, &launch),
+        );
+        Ok(Sent::Started(launch))
     }
 
     /// A harness conversation's transcript, oldest first (empty for backends that keep no
@@ -485,8 +581,22 @@ impl Agents {
     #[must_use]
     pub fn transcript(&self, agent: &StoredAgent, conv_id: &str) -> Vec<Turn> {
         self.advance_queue(agent, conv_id);
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        transcript_in(agent, &sessions_dir, conv_id)
+        let Some(runner) = runner_for(&agent.manifest.backend) else {
+            return Vec::new();
+        };
+        let store = self.sessions();
+        if store.get(&agent.name, conv_id).is_none() {
+            return Vec::new();
+        }
+        let session = store.session(&agent.name, conv_id);
+        let running = runner.is_alive(&session);
+        let live = live_content(runner.as_ref(), &session, running);
+        // Commit the answer before showing it, so what a reader sees settle is the same text that
+        // is on disk a moment later. A no-op while a turn is in flight, or once it has landed.
+        if !running {
+            settle(&store, &agent.name, conv_id, &live);
+        }
+        store.transcript(&agent.name, conv_id, Some(live), running)
     }
 
     /// Drop one message from a conversation's queue by its position, for something you have thought
@@ -496,11 +606,13 @@ impl Agents {
     /// Returns name validation errors.
     pub fn unqueue(&self, name: &str, conv_id: &str, index: usize) -> Result<bool> {
         validate_name(name)?;
-        let Some(agent) = self.get(name)? else {
+        if self.get(name)?.is_none() {
             return Ok(false);
-        };
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        Ok(unqueue_in(&agent, &sessions_dir, conv_id, index))
+        }
+        // Gated: this is a read-modify-write of the same file a starting turn pops from, and an
+        // ungated pair could write back an entry that has just been asked.
+        let _gate = turn_gate();
+        self.sessions().unqueue(name, conv_id, index)
     }
 
     /// Start a conversation's next queued message, if it is idle and one is waiting; reports whether
@@ -510,23 +622,33 @@ impl Agents {
     /// This is the platform starting a run by itself, so the [run cap](RunLimits) binds absolutely:
     /// at capacity the message stays at the head of its queue and the next poll asks again.
     fn advance_queue(&self, agent: &StoredAgent, conv_id: &str) -> bool {
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        if !can_advance_in(agent, &sessions_dir, conv_id) {
+        let store = self.sessions();
+        // The cheap gate, taken without the lock and re-taken under it: nothing waiting is nearly
+        // every poll, and it must not cost the tool sync a launch spec pays for.
+        if store.queue_len(&agent.name, conv_id) == 0 {
             return false;
         }
-        if self.at_capacity_for(agent) {
+        let Some(runner) = runner_for(&agent.manifest.backend) else {
+            return false;
+        };
+        if !answerable(runner.as_ref()) || self.at_capacity_for(agent) {
             return false;
         }
-        let dir = self.conversation_dir(agent, conv_id);
-        let ctx = self.launch_context(agent, dir.to_str());
-        let Some((message, launch)) = advance_in(
-            &ctx.agent,
-            &ctx.sessions_dir,
-            &ctx.base_dir,
-            &ctx.run_path,
-            conv_id,
-            &ctx.run_env,
-        ) else {
+        let Some(record) = store.get(&agent.name, conv_id) else {
+            return false;
+        };
+
+        let _gate = turn_gate();
+        // Re-decided here, where only one poller can be holding the gate.
+        if runner.is_alive(&store.session(&agent.name, conv_id)) {
+            return false;
+        }
+        // Dropped from the queue *before* the turn starts: a message that fails to launch has still
+        // had its turn, and leaving it at the head would retry it on every poll for ever.
+        let Ok(Some(message)) = store.dequeue(&agent.name, conv_id) else {
+            return false;
+        };
+        let Ok(launch) = self.start_turn(agent, &store, runner.as_ref(), &record, &message) else {
             return false;
         };
         self.emit(
@@ -534,6 +656,41 @@ impl Agents {
             &AgentRunStarted::of(&agent.name, &message, &launch),
         );
         true
+    }
+
+    /// Ask `message` in an existing session: settle whatever the last turn left behind, record the
+    /// question, and send it.
+    ///
+    /// The session's own directory is re-used verbatim — an engine's session store is keyed by the
+    /// directory it ran in, so re-resolving on turn five would make the thread unresumable and put
+    /// the files earlier turns wrote out of reach.
+    fn start_turn(
+        &self,
+        agent: &StoredAgent,
+        store: &SessionStore,
+        runner: &dyn Runner,
+        record: &SessionRecord,
+        message: &str,
+    ) -> Result<Launch> {
+        let session = store.session(&agent.name, &record.id);
+        // Commit the previous turn's answer before the next question goes in, so the transcript
+        // stays a clean question/answer sequence rather than two questions in a row. Nothing is in
+        // flight here — every caller has taken the turn gate and found the session idle — so that
+        // answer is whole.
+        settle(
+            store,
+            &agent.name,
+            &record.id,
+            &live_content(runner, &session, false),
+        );
+
+        let spec = self.spec_in(agent, session_dir(&self.config, record));
+        // Checked before the question is written down, so a spec this engine cannot run leaves no
+        // dangling unanswered turn in the transcript.
+        runner.check(&spec)?;
+        store.append_turn(&agent.name, &record.id, user_turn(message))?;
+        runner.send(&spec, &session, message)?;
+        Ok(launch_of(agent, runner, &session))
     }
 
     /// Run one turn of a `harness:adi` conversation: read its transcript, call the configured model
@@ -544,9 +701,14 @@ impl Agents {
     /// This blocks on the provider HTTP call, so it must run in a sync context (the CLI child), never
     /// inside the app server's async runtime.
     ///
+    /// The loop's system prompt is **not** assembled here. The runner composed it — the agent's own
+    /// instructions, its location, its tools' help — and exported it to this child, which reads it
+    /// back in `adi_loop::run_turn`. Re-deriving it here would be a second composition path for the
+    /// same prompt, and two paths that have to agree eventually don't.
+    ///
     /// # Errors
-    /// Returns [`Error::NotFound`] for an unknown agent, or argument / provider-configuration /
-    /// HTTP / decoding errors from the loop.
+    /// Returns [`Error::NotFound`] for an unknown agent, [`Error::Unsupported`] for a backend with
+    /// no loop of its own to run, or argument / provider-configuration / HTTP / decoding errors.
     pub fn run_adi_turn(
         &self,
         agent_name: &str,
@@ -556,59 +718,64 @@ impl Agents {
         let agent = self
             .get(agent_name)?
             .ok_or_else(|| Error::NotFound(agent_name.to_string()))?;
+        // The one verb no runner has: every other engine answers a turn in a child process the
+        // runner spawned, while the `adi` loop *is* that child. So it stays a direct call, and the
+        // backend check that used to be a dispatch match is now the two lines it always was.
+        if agent.manifest.backend != Backend::HarnessAdi {
+            return Err(Error::Unsupported(format!(
+                "backend {} has no adi loop to run",
+                agent.manifest.backend
+            )));
+        }
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        // The `adi` loop builds its own system message here, in the turn child — not from the argv
-        // the launch assembled — so this is where its tool help and its location have to be folded
-        // in. The child was spawned *into* the run's directory and carries it in its environment,
-        // so `current` reproduces it exactly, per-run choice included.
-        let workdir = workspace::current(&self.config, &agent.manifest);
-        adi_turn_in(&self.decorated(&agent, &workdir), &sessions_dir, conv_id, sink)
+        backends::harness::run_adi_turn(&agent, &sessions_dir, conv_id, sink)
     }
 
-    /// Where a turn of `conv_id` must run: the directory that conversation started in. Every turn
-    /// re-enters it, so a thread stays in one place for its whole life — the Claude session store is
-    /// keyed by cwd, so answering from elsewhere would leave the session unresumable, and the files
-    /// earlier turns wrote by relative path are only where they are.
-    ///
-    /// A conversation from before the directory was recorded gets the **store root**, which is
-    /// where every run started back then — not a fresh resolve, which would now hand a
-    /// project-scoped agent its project directory and strand its existing threads.
-    fn conversation_dir(&self, agent: &StoredAgent, conv_id: &str) -> PathBuf {
-        conversation_dir_in(agent, self.config.module(SESSIONS_MODULE).dir(), conv_id)
-            .unwrap_or_else(|| self.config.root().to_path_buf())
+    /// The spec a *fresh* run starts with. `run_dir` is this launch's own working directory, for a
+    /// caller pointing one agent at a different target each run; `None` leaves the manifest and the
+    /// agent's project to decide (see [`workspace::resolve`] for the full precedence).
+    fn launch_spec(&self, agent: &StoredAgent, run_dir: Option<&str>) -> RunSpec {
+        self.spec_in(
+            agent,
+            workspace::resolve(&self.config, &agent.manifest, run_dir),
+        )
     }
 
-    /// The shared per-launch context: where runs live, the cwd, the agent's `.bin`, and the
-    /// environment its run gets — resolved the same way whether launching a fresh run or answering
-    /// a reply.
+    /// Everything a run needs, resolved and already on disk: where it starts, the `PATH` it
+    /// resolves commands on, the environment it is launched with, its engine's configuration, and
+    /// its tools' own help as data.
     ///
-    /// `run_dir` is this launch's own working directory, for a caller pointing one agent at a
-    /// different target each run; `None` leaves the manifest and the agent's project to decide. See
-    /// [`workspace::resolve`] for the full precedence. A conversation's replies must run in the same
-    /// cwd as its first turn, so the engine's session store lines up — the conversation pins the
-    /// directory it started in and re-enters that, whatever is resolved here later.
-    fn launch_context(&self, agent: &StoredAgent, run_dir: Option<&str>) -> LaunchContext {
-        let base_dir = workspace::resolve(&self.config, &agent.manifest, run_dir);
+    /// **This is the write path.** Assembling a spec syncs the agent's `.bin` of enabled tools and
+    /// asks each of them to describe itself, so it is never built to answer a read — that is what
+    /// the cheap gates in front of it exist for.
+    ///
+    /// Nothing here writes into the agent's prompt. The tools travel as [`ToolHelp`](adi_tools::ToolHelp)
+    /// and the prompt travels as the user wrote it, because *where* help belongs — an appended
+    /// system prompt, a system message, or nowhere at all for an engine whose "system prompt" is
+    /// really its opening user turn — is a fact about the engine, and the runner is the only layer
+    /// that knows it.
+    fn spec_in(&self, agent: &StoredAgent, cwd: PathBuf) -> RunSpec {
+        let tools = adi_tools::Tools::with_config(self.config.clone());
         // Best-effort: a sync failure (or no tools) just means no extra bin on PATH, never a blocked run.
-        let bin_dir = adi_tools::Tools::with_config(self.config.clone())
+        let bin_dir = tools
             .sync_agent_bin(&agent.name, &agent.manifest.bin_tools)
             .ok();
         // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
         // store's Config (test stores stay isolated). Best-effort: a missing/undecryptable secret is skipped.
-        let mut run_env = attached_secret_env(&self.config, &agent.manifest.secrets);
+        let mut env = attached_secret_env(&self.config, &agent.manifest.secrets);
         // Point the run at its scope's shared database (a project agent gets that project's), so
         // `adi-db` in its shell and `import … from "@adi/db"` in its `ts` code both resolve without
         // the agent being told where the file is. Secrets are listed first, so a secret named
         // `ADI_DB` would be overridden here rather than silently redirecting the run's database.
-        run_env.extend(self.config.db_env(agent.manifest.project.as_deref()));
+        env.extend(self.config.db_env(agent.manifest.project.as_deref()));
         // Where the run starts, what it is called, and what it is scoped to. A run that has to be
         // *told* its directory in prose gets it wrong; a script it writes can't be told at all.
-        run_env.extend(workspace::env(&self.config, agent, &base_dir));
+        env.extend(workspace::env(&self.config, agent, &cwd));
         // The agent's own declared vars last, so an explicit `[env]` entry wins over a secret or
         // the database pointer it collides with — it is the most specific statement about this
         // agent there is. `PATH` is dropped rather than honoured: it is built from the manifest's
         // `path` below and applied after every var, so a `PATH` here would be silently overridden.
-        run_env.extend(
+        env.extend(
             agent
                 .manifest
                 .env
@@ -616,49 +783,25 @@ impl Agents {
                 .filter(|(key, _)| key.as_str() != "PATH")
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
-        LaunchContext {
-            agent: self.decorated(agent, &base_dir),
-            sessions_dir: self.config.module(SESSIONS_MODULE).dir().to_path_buf(),
-            base_dir,
-            run_path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
-            run_env,
+        // Stated, not merely exported: `ADI_WORKDIR` is there for scripts, but the agent itself
+        // reads prose, and one that has to infer its directory infers it wrong.
+        let workspace_note =
+            Some(workspace::block(&self.config, agent, &cwd)).filter(|note| !note.trim().is_empty());
+        RunSpec {
+            cwd,
+            path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
+            env,
+            arguments: agent.manifest.arguments_value(),
+            // Asked once per launch, not stored: enabling a tool, editing its help, or upgrading
+            // the CLI underneath it shows up on the next run without anyone rewriting a prompt.
+            tools: if agent.manifest.bin_tools.is_empty() {
+                Vec::new()
+            } else {
+                tools.help_for(&agent.manifest.bin_tools)
+            },
+            system_prompt: agent.manifest.system_prompt(),
+            workspace_note,
         }
-    }
-
-    /// The agent as it should be launched: its stored definition with two things it otherwise has no
-    /// way to know appended to its system prompt — the enabled tools' own help, so it knows what the
-    /// commands on its `PATH` are and how to call them, and where the run starts, so it neither
-    /// guesses at a directory nor `cd`s into one. The user's prompt is untouched and leads; nothing
-    /// is written back to the store.
-    ///
-    /// Best-effort at every step — this decorates a prompt and must never cost a run. A backend
-    /// whose `system_prompt` isn't one (see [`tool_help::applies_to`]), an agent with no tools, or a
-    /// decorated manifest its own backend would reject: each falls back to launching the agent
-    /// exactly as stored.
-    fn decorated(&self, agent: &StoredAgent, workdir: &std::path::Path) -> StoredAgent {
-        if !tool_help::applies_to(&agent.manifest.backend) {
-            return agent.clone();
-        }
-        let mut decorated = agent.clone();
-        // Location first: it is the shorter block and the one that governs every path in the
-        // sections above and below it.
-        tool_help::fold_into(
-            &mut decorated.manifest.arguments,
-            &workspace::block(&self.config, agent, workdir),
-        );
-        if !agent.manifest.bin_tools.is_empty() {
-            let tools = adi_tools::Tools::with_config(self.config.clone());
-            if let Some(block) = tool_help::block(&tools.help_for(&agent.manifest.bin_tools)) {
-                tool_help::fold_into(&mut decorated.manifest.arguments, &block);
-            }
-        }
-        // A backend whose arguments are `deny_unknown_fields` would reject a `system_prompt` it has
-        // no field for. None do today; if one ever doesn't, its runs keep working undecorated
-        // rather than failing at launch.
-        if arguments::validate_builtin(&decorated.manifest).is_err() {
-            return agent.clone();
-        }
-        decorated
     }
 
     /// Dispatches a message synchronously to a `wasm:*` agent.
@@ -683,16 +826,27 @@ impl Agents {
 
     #[must_use]
     pub fn is_running(&self, agent: &StoredAgent) -> bool {
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        is_running_in(agent, &sessions_dir)
+        let store = self.sessions();
+        store
+            .list(&agent.name)
+            .iter()
+            .any(|record| Self::session_is_alive(&store, record))
     }
 
     /// A read-only live snapshot of an agent for the live view: a pty screen capture for interactive
     /// backends, or the latest run's log tail for the headless backends.
     #[must_use]
     pub fn peek(&self, agent: &StoredAgent) -> Peek {
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        peek_in(agent, &sessions_dir)
+        let store = self.sessions();
+        // Newest first, so this is the run somebody watching the agent means. A terminal has no run
+        // list at all — its pane is the agent's, whichever session opened it — so `peek_run` finds
+        // it from the name and the id it is handed does not matter.
+        let latest = store
+            .list(&agent.name)
+            .first()
+            .map(|record| record.id.clone())
+            .unwrap_or_default();
+        self.peek_run(agent, &latest)
     }
 
     /// The run history of a headless agent, newest first (empty for interactive backends, whose
@@ -703,8 +857,15 @@ impl Agents {
     /// chat, not only the one you have open.
     #[must_use]
     pub fn runs(&self, agent: &StoredAgent) -> Vec<RunInfo> {
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        let runs = runs_in(agent, &sessions_dir);
+        let Some(runner) = runner_for(&agent.manifest.backend) else {
+            return Vec::new();
+        };
+        // An interactive backend's live pane *is* its run: there is no history to page through.
+        if runner.as_terminal().is_some() {
+            return Vec::new();
+        }
+        let store = self.sessions();
+        let runs = Self::list_runs(&store, agent, runner.as_ref());
         let idle: Vec<String> = runs
             .iter()
             .filter(|r| !r.running)
@@ -716,17 +877,54 @@ impl Agents {
         // Only re-read when something actually started — the answer must not report a conversation
         // as idle in the very breath it started its next turn.
         if advanced {
-            return runs_in(agent, &sessions_dir);
+            return Self::list_runs(&store, agent, runner.as_ref());
         }
         runs
+    }
+
+    /// One agent's sessions as run history, newest first — the store's records with each one's
+    /// liveness asked of the runner.
+    fn list_runs(store: &SessionStore, agent: &StoredAgent, runner: &dyn Runner) -> Vec<RunInfo> {
+        store
+            .list(&agent.name)
+            .into_iter()
+            .map(|record| RunInfo {
+                running: runner.is_alive(&store.session(&agent.name, &record.id)),
+                run_id: record.id,
+                started_at: record.started_at,
+                last_activity: record.last_activity,
+                message: record.message,
+                hidden: record.hidden,
+            })
+            .collect()
     }
 
     /// A read-only snapshot of one specific run of a headless agent (or the pty screen, for an
     /// interactive backend, where `run_id` is ignored).
     #[must_use]
     pub fn peek_run(&self, agent: &StoredAgent, run_id: &str) -> Peek {
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        peek_run_in(agent, &sessions_dir, run_id)
+        let Some(runner) = runner_for(&agent.manifest.backend) else {
+            return empty_peek();
+        };
+        let store = self.sessions();
+        let session = store.session(&agent.name, run_id);
+        let running = runner.is_alive(&session);
+        if let Some(terminal) = runner.as_terminal() {
+            return Peek {
+                running,
+                output: terminal.capture(&session).unwrap_or_default(),
+                // A pane has no external attach command; it is viewed only in the control panel.
+                attach: String::new(),
+                interactive: true,
+            };
+        }
+        let log = session.log_path();
+        Peek {
+            running,
+            output: backends::detached::tail_of(log, run::MAX_LOG_TAIL).unwrap_or_default(),
+            attach: format!("tail -f {}", log.display()),
+            interactive: false,
+        }
     }
 
     /// Stops one specific run of an agent, returning whether a live run was found.
@@ -738,8 +936,16 @@ impl Agents {
         let Some(agent) = self.get(name)? else {
             return Ok(false);
         };
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        let stopped = stop_run_in(&agent, &sessions_dir, run_id)?;
+        let Some(runner) = runner_for(&agent.manifest.backend) else {
+            return Ok(false);
+        };
+        let store = self.sessions();
+        let stopped = runner
+            .stop(&store.session(name, run_id), STOP_GRACE)?
+            .was_running;
+        // Whatever was waiting behind this answer was written expecting it, so it goes with it
+        // rather than marching on into a conversation somebody has just interrupted.
+        store.clear_queue(name, run_id)?;
         if stopped {
             self.emit(
                 "adi.agents.run.stopped",
@@ -768,8 +974,16 @@ impl Agents {
         let Some(agent) = self.get(name)? else {
             return Ok(false);
         };
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        let deleted = delete_run_in(&agent, &sessions_dir, run_id)?;
+        let store = self.sessions();
+        if store.get(name, run_id).is_none() {
+            return Ok(false);
+        }
+        // Stop it first. The store cannot signal anything — that is the runner's half — so a child
+        // still running here would outlive its own log and write into a slot nothing is reading.
+        if let Some(runner) = runner_for(&agent.manifest.backend) {
+            runner.stop(&store.session(name, run_id), STOP_GRACE)?;
+        }
+        let deleted = store.delete(name, run_id)?;
         if deleted {
             // A wake registered against a conversation that no longer exists has nowhere to land, so
             // it goes with it rather than firing into a `NotFound` a week from now. How many there
@@ -799,11 +1013,10 @@ impl Agents {
     /// history (a pty session is not a run, so there is nothing to mark).
     pub fn set_run_hidden(&self, name: &str, run_id: &str, hidden: bool) -> Result<bool> {
         validate_name(name)?;
-        let Some(agent) = self.get(name)? else {
+        if self.get(name)?.is_none() {
             return Ok(false);
-        };
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        set_run_hidden_in(&agent, &sessions_dir, run_id, hidden)
+        }
+        self.sessions().set_hidden(name, run_id, hidden)
     }
 
     /// Stops a run, returning whether one was found.
@@ -815,8 +1028,22 @@ impl Agents {
         let Some(agent) = self.get(name)? else {
             return Ok(false);
         };
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        let stopped = stop_in(&agent, &sessions_dir)?;
+        let Some(runner) = runner_for(&agent.manifest.backend) else {
+            return Ok(false);
+        };
+        // Every live session of the agent, not only the ones a run list would show: a terminal
+        // keeps no history, and stopping "the agent" has always meant closing its pane too.
+        let store = self.sessions();
+        let mut stopped = false;
+        for record in store.list(name) {
+            if runner
+                .stop(&store.session(name, &record.id), STOP_GRACE)?
+                .was_running
+            {
+                store.clear_queue(name, &record.id)?;
+                stopped = true;
+            }
+        }
         if stopped {
             self.emit(
                 "adi.agents.run.stopped",
@@ -845,6 +1072,134 @@ impl Agents {
             );
         }
         Ok(removed)
+    }
+}
+
+/// Whether this runner keeps a thread a reply can continue — a live pane is typed into, not replied
+/// to, however resumable its session is. The same rule [`capabilities`] reports as `answerable`.
+fn answerable(runner: &dyn Runner) -> bool {
+    runner.resumes() && runner.as_terminal().is_none()
+}
+
+/// Where a turn of this session runs: the directory it was opened in, re-entered by every later
+/// turn so a thread stays in one place for its whole life.
+///
+/// A record with no directory — one whose sidecar was lost, or a session from before the field
+/// existed — falls back to the store root, which is where every run started back then. Not a fresh
+/// resolve: that would now hand a project-scoped agent its project directory and strand the threads
+/// it already has.
+fn session_dir(config: &Config, record: &SessionRecord) -> PathBuf {
+    if record.cwd.as_os_str().is_empty() {
+        config.root().to_path_buf()
+    } else {
+        record.cwd.clone()
+    }
+}
+
+/// This session's events, folded into one turn's content: its timeline in order, its answer, and
+/// whatever telemetry the engine closed with.
+///
+/// Read from the top (`None` cursor) rather than incrementally, because what a reader wants is the
+/// whole turn rather than what changed since it last asked. Memoized on the log, so an open chat
+/// polling twice a second does not re-parse a finished turn on every tick.
+///
+/// `running` only keys the memo — a runner reads a live log differently from a finished one, and
+/// the two answers must not be served for each other.
+fn live_content(runner: &dyn Runner, session: &SessionRef<'_>, running: bool) -> TurnContent {
+    let content = memo::folded_events(session.log_path(), !running, || {
+        let Ok(batch) = runner.events(session, None) else {
+            return TurnContent::default();
+        };
+        let mut content = TurnContent::default();
+        for event in batch.events {
+            match event {
+                RunEvent::Step(step) => content.steps.push(step),
+                RunEvent::Answer { text } => content.text = text,
+                RunEvent::Metrics(metrics) => content.metrics = Some(metrics),
+                // The turn ending is not part of what it said; liveness is asked of the runner.
+                RunEvent::Finished { .. } => {}
+            }
+        }
+        content
+    });
+    (*content).clone()
+}
+
+/// Commit `content` as this session's answer, if the last thing said was a question.
+///
+/// The lazy clock the whole conversation machinery runs on: there is no reaper, so a finished turn
+/// is folded into the transcript by the next read of it. A no-op when the last turn is already an
+/// answer, which is what makes it safe to call before every read and every send.
+fn settle(store: &SessionStore, agent: &str, id: &str, content: &TurnContent) {
+    if store.turns(agent, id).last().map(|turn| turn.role.as_str()) != Some(store::ROLE_USER) {
+        return;
+    }
+    let _ = store.append_turn(agent, id, assistant_turn(content));
+}
+
+/// The launch handle a caller gets back: the pane a terminal opened, or the child a headless runner
+/// started.
+///
+/// `command` is the engine rather than the argv it built. The exact command line is the runner's
+/// business now and no longer crosses this boundary — which is the point of the split, and costs a
+/// caller only a hint it printed for a human.
+fn launch_of(agent: &StoredAgent, runner: &dyn Runner, session: &SessionRef<'_>) -> Launch {
+    let command = agent.manifest.backend.to_string();
+    if runner.as_terminal().is_some() {
+        return Launch::Pty {
+            command,
+            session: state_str(session, "session")
+                .unwrap_or_else(|| run::session_name(&agent.name)),
+        };
+    }
+    Launch::Process {
+        command,
+        // A runner whose engine lives elsewhere records no pid, and there is no local process to
+        // name: `0` says exactly that, and the run is still addressed by its id.
+        pid: state_str(session, "pid")
+            .and_then(|pid| pid.parse().ok())
+            .unwrap_or(0),
+        log: session.log_path().to_path_buf(),
+        run_id: session.id().to_string(),
+    }
+}
+
+/// One conventional field of a runner's state slot, as a string.
+///
+/// The slot is the runner's own space and this is the one place anything above reads it — for the
+/// two handles a launch has always reported: the pane a terminal opened and the pid a local child
+/// got. A slot with neither reads as absent rather than as an error.
+fn state_str(session: &SessionRef<'_>, key: &str) -> Option<String> {
+    let value = session.state()?;
+    let field = value.get(key)?;
+    field
+        .as_str()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| field.as_u64().map(|n| n.to_string()))
+}
+
+/// Every agent with sessions filed under this store, from the one directory level between its root
+/// and a session id.
+fn agent_dirs(store: &SessionStore) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(store.dir()) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .collect()
+}
+
+/// The snapshot of a backend nothing here runs: nothing to show, nothing to attach to.
+fn empty_peek() -> Peek {
+    Peek {
+        running: false,
+        output: String::new(),
+        attach: String::new(),
+        interactive: false,
     }
 }
 
@@ -1326,23 +1681,23 @@ mod tests {
         let agent = store.save("solver", m).expect("save");
         let agent = store.get(&agent.name).expect("get").expect("present");
 
-        let ctx = store.launch_context(&agent, None);
-        let env: std::collections::BTreeMap<_, _> = ctx.run_env.into_iter().collect();
+        let spec = store.launch_spec(&agent, None);
+        let env: std::collections::BTreeMap<_, _> = spec.env.into_iter().collect();
         assert_eq!(env.get("NODE_ENV").map(String::as_str), Some("development"));
         assert_eq!(env.get("SHARED").map(String::as_str), Some("from-env"));
         assert!(!env.contains_key("PATH"), "PATH must not come from [env]");
 
-        let dirs: Vec<_> = std::env::split_paths(&ctx.run_path).collect();
+        let dirs: Vec<_> = std::env::split_paths(&spec.path).collect();
         assert!(
             dirs.iter()
                 .any(|d| d == std::path::Path::new("/opt/node22/bin")),
             "{}",
-            ctx.run_path
+            spec.path
         );
         assert!(
             !dirs.iter().any(|d| d == std::path::Path::new("/nowhere")),
             "{}",
-            ctx.run_path
+            spec.path
         );
     }
 
@@ -1401,41 +1756,35 @@ mod tests {
         store.get(name).expect("read back").expect("the agent")
     }
 
-    /// The whole seam, end to end: a tool that answers `llm help` is asked at launch, and what it
-    /// said arrives in the prompt the agent is launched with — behind the agent's own instructions,
-    /// which are left exactly as written.
+    /// The store's half of the seam, end to end: a tool that answers `llm help` is really asked, and
+    /// what it said reaches the spec as *data*. Where that data lands in a prompt is the runner's
+    /// half — see `runner::detached`'s `tool_help_reaches_claudes_system_prompt_and_never_codexs`.
+    ///
+    /// Split deliberately. The store used to fold the help into `manifest.arguments.system_prompt`
+    /// and then re-validate, because a backend with `deny_unknown_fields` would reject a key it had
+    /// no field for. The runner appends to argv instead and never touches the stored arguments, so
+    /// that whole failure mode — and the fallback that swallowed it — is gone rather than moved.
     #[test]
     fn a_launch_carries_the_enabled_tools_own_help() {
         let store = scratch("tool-help");
         let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
         let agent = agent_with_tools(&store, "helper", "harness:claude-sdk", vec![id]);
 
-        let launched = store.decorated(&agent, store.config.root());
-        let prompt = launched.manifest.arguments["system_prompt"]
-            .as_str()
-            .expect("a prompt");
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
 
-        assert!(
-            prompt.starts_with("You are a careful operator."),
-            "{prompt}"
+        assert_eq!(
+            spec.system_prompt.as_deref(),
+            Some("You are a careful operator."),
+            "the agent's own instructions travel unmodified"
         );
-        assert!(prompt.contains("# Your tools"), "{prompt}");
-        assert!(prompt.contains("## greet"), "{prompt}");
-        assert!(prompt.contains("Usage: greet <name>"), "{prompt}");
+        let help = spec.tools.iter().find(|t| t.name == "greet").expect("greet");
+        assert!(
+            help.help
+                .as_deref()
+                .is_some_and(|h| h.contains("Usage: greet <name>")),
+            "{help:?}"
+        );
 
-        // And it survives the typed decode every backend performs before building its argv — where
-        // `deny_unknown_fields` would reject a key the backend has no field for. For claude-sdk
-        // this value goes straight into `--append-system-prompt`.
-        let typed: arguments::HarnessClaudeSdkArguments = launched
-            .manifest
-            .typed_arguments()
-            .expect("typed arguments");
-        assert!(
-            typed
-                .system_prompt
-                .expect("a system prompt")
-                .contains("Usage: greet <name>")
-        );
         // Derived, never stored: the manifest on disk still holds only what the user wrote.
         let stored = store.get("helper").expect("read back").expect("the agent");
         assert_eq!(
@@ -1444,63 +1793,92 @@ mod tests {
         );
     }
 
-    /// The prompt every launch carries: where the run starts. An agent with no tools still gets it —
-    /// having no tools says nothing about needing to know where it is — and it still gets no tool
-    /// section, so the registry is never read.
+    /// Every spec states where the run starts. An agent with no tools still gets it — having no
+    /// tools says nothing about needing to know where it is — and it still gets no tool section, so
+    /// the registry is never read.
     #[test]
     fn every_launch_states_where_the_run_starts() {
         let store = scratch("workspace-block");
         let agent = agent_with_tools(&store, "bare", "harness:claude-sdk", Vec::new());
-        let prompt = store
-            .decorated(&agent, store.config.root())
-            .manifest
-            .arguments["system_prompt"]
-            .as_str()
-            .expect("a prompt")
-            .to_string();
 
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        let note = spec.workspace_note.expect("the location is stated");
+
+        assert!(note.contains("# Where you are"), "{note}");
         assert!(
-            prompt.starts_with("You are a careful operator."),
-            "{prompt}"
+            note.contains(&store.config.root().display().to_string()),
+            "{note}"
         );
-        assert!(prompt.contains("# Where you are"), "{prompt}");
-        assert!(
-            prompt.contains(&store.config.root().display().to_string()),
-            "{prompt}"
-        );
-        assert!(!prompt.contains("# Your tools"), "{prompt}");
+        assert!(spec.tools.is_empty(), "{:?}", spec.tools);
     }
 
-    /// The per-run directory is what the prompt states — not the manifest's, or the run is told one
-    /// thing and started in another.
+    /// The per-run directory reaches the spec — as the directory the run is *started* in, and in
+    /// the environment, for the scripts a run writes.
     #[test]
-    fn the_prompt_states_the_directory_the_run_actually_gets() {
+    fn the_spec_carries_the_directory_the_run_actually_gets() {
         let store = scratch("workspace-block-run-dir");
         let agent = agent_with_tools(&store, "passive", "harness:claude-sdk", Vec::new());
-        let ctx = store.launch_context(&agent, Some("/targets/crescendo-ai"));
+        let spec = store.launch_spec(&agent, Some("/targets/crescendo-ai"));
 
-        assert_eq!(ctx.base_dir, std::path::Path::new("/targets/crescendo-ai"));
+        assert_eq!(spec.cwd, std::path::Path::new("/targets/crescendo-ai"));
         assert!(
-            ctx.agent.manifest.arguments["system_prompt"]
-                .as_str()
-                .expect("a prompt")
-                .contains("/targets/crescendo-ai"),
-            "{:?}",
-            ctx.agent.manifest.arguments["system_prompt"]
-        );
-        // And the same directory is in the environment, for the scripts a run writes.
-        assert!(
-            ctx.run_env
+            spec.env
                 .iter()
                 .any(|(k, v)| k == "ADI_WORKDIR" && v == "/targets/crescendo-ai"),
             "{:?}",
-            ctx.run_env
+            spec.env
         );
     }
 
-    /// Write a conversation sidecar for `agent` by hand, as the harness would. `working_dir` is
-    /// `None` for a conversation from before the field existed. Returns its id.
-    fn seed_conversation(store: &Agents, agent: &str, working_dir: Option<&str>) -> String {
+    /// The seam this stage moved: the spec hands the runner the agent's prompt **as written** and
+    /// its tools **as data**. Nothing above the runner folds one into the other, because where tool
+    /// help belongs is a fact about the engine — the same help is a system prompt for Claude and an
+    /// opening user turn for Codex.
+    #[test]
+    fn a_launch_spec_carries_the_prompt_as_written_and_the_tools_as_data() {
+        let store = scratch("spec-tools");
+        let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
+        let agent = agent_with_tools(&store, "helper", "harness:claude-sdk", vec![id]);
+
+        let spec = store.launch_spec(&agent, None);
+        assert_eq!(
+            spec.system_prompt.as_deref(),
+            Some("You are a careful operator."),
+            "the user's prompt is untouched",
+        );
+        assert_eq!(spec.tools.len(), 1);
+        assert_eq!(spec.tools[0].name, "greet");
+        assert_eq!(
+            spec.tools[0].help.as_deref(),
+            Some("Usage: greet <name>"),
+            "the tool's own help travels with it",
+        );
+        // The engine's configuration goes down whole and uninterpreted, so each runner can decode
+        // its own typed arguments out of it.
+        assert_eq!(
+            spec.arguments["system_prompt"].as_str(),
+            Some("You are a careful operator."),
+        );
+
+        // An agent with no tools asks the registry for nothing.
+        let bare = agent_with_tools(&store, "bare", "harness:claude-sdk", Vec::new());
+        assert!(store.launch_spec(&bare, None).tools.is_empty());
+    }
+
+    /// Open a conversation of `agent` in the session store, as a launch would. `cwd` is where it
+    /// was started — the directory every later turn re-enters. Returns its id.
+    fn seed_conversation(store: &Agents, agent: &str, backend: &str, cwd: &str) -> String {
+        store
+            .sessions()
+            .create(agent, Backend::from(backend), cwd, "go")
+            .expect("open a conversation")
+            .id
+    }
+
+    /// Write a conversation the *old* way — `<sessions>/harness/<agent>/<id>.json` — for the tests
+    /// that check what opening the store makes of it. `working_dir` is absent for a conversation
+    /// from before the field existed.
+    fn seed_legacy_conversation(store: &Agents, agent: &str, working_dir: Option<&str>) -> String {
         let dir = store
             .config
             .module(SESSIONS_MODULE)
@@ -1514,47 +1892,45 @@ mod tests {
             meta["working_dir"] = serde_json::Value::String(d.to_string());
         }
         std::fs::write(dir.join(format!("{conv_id}.json")), meta.to_string()).expect("write meta");
+        std::fs::write(dir.join(format!("{conv_id}.log")), "what it said").expect("write log");
         conv_id.to_string()
     }
 
-    /// Seed a live run of `agent` under `subdir`: a PID file naming *this* process, which is exactly
-    /// what a running run looks like to the counter.
-    fn seed_live_run(store: &Agents, subdir: &str, agent: &str, run_id: &str) {
-        let dir = store
-            .config
-            .module(SESSIONS_MODULE)
-            .dir()
-            .join(subdir)
-            .join(agent);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(
-            dir.join(format!("{run_id}.pid")),
-            format!("{}\n", std::process::id()),
-        )
-        .expect("write pid");
+    /// Seed a live run of `agent`: a session whose runner state names *this* process, which is
+    /// exactly what a running run looks like to the counter. Returns its id.
+    fn seed_live_run(store: &Agents, backend: &str, agent: &str) -> String {
+        let sessions = store.sessions();
+        let record = sessions
+            .create(agent, Backend::from(backend), "/tmp", "seeded")
+            .expect("create");
+        sessions
+            .session(agent, &record.id)
+            .set_state(serde_json::json!({ "pid": std::process::id() }))
+            .expect("record a live pid");
+        record.id
     }
 
-    /// Live runs are counted across agents and across backends — one number, whoever started them.
+    /// Live runs are counted across agents and across backends — one number, whoever started them,
+    /// and whether or not the agent that started them still has a definition.
     #[test]
     fn the_run_count_spans_every_agent_and_backend() {
         let store = scratch("run-count");
         assert_eq!(store.running_count(), 0);
 
-        seed_live_run(&store, "process", "recon", "0000000000001-0000");
-        seed_live_run(&store, "process", "recon", "0000000000002-0000");
-        seed_live_run(&store, "harness", "chatty", "0000000000003-0000");
+        seed_live_run(&store, "process:claude", "recon");
+        seed_live_run(&store, "process:codex", "recon");
+        seed_live_run(&store, "harness:claude-sdk", "chatty");
         assert_eq!(store.running_count(), 3);
 
-        // A finished run drops its PID file, and a stale one naming a dead process doesn't count.
-        std::fs::write(
-            store
-                .config
-                .module(SESSIONS_MODULE)
-                .dir()
-                .join("process/recon/0000000000004-0000.pid"),
-            "4294967294\n",
-        )
-        .expect("write stale pid");
+        // A run whose child has exited doesn't count: its recorded pid names nothing alive.
+        let sessions = store.sessions();
+        let done = sessions
+            .create("recon", Backend::ProcessClaude, "/tmp", "finished")
+            .expect("create");
+        sessions
+            .session("recon", &done.id)
+            .set_state(serde_json::json!({ "pid": 4_294_967_294u32 }))
+            .expect("a pid naming nothing");
         assert_eq!(store.running_count(), 3);
     }
 
@@ -1574,14 +1950,14 @@ mod tests {
             })
             .expect("set the limit");
 
-        seed_live_run(&store, "process", "other", "0000000000001-0000");
+        seed_live_run(&store, "process:claude", "other");
         assert!(
             store.run_in("solver", "go", None).is_ok()
                 || matches!(store.run_in("solver", "go", None), Err(Error::NotRunnable(_))),
             "one live run of two is below the cap, so the launch reaches the backend"
         );
 
-        seed_live_run(&store, "harness", "other", "0000000000002-0000");
+        seed_live_run(&store, "harness:claude-sdk", "other");
         assert!(
             matches!(
                 store.run_in("solver", "go", None),
@@ -1640,7 +2016,7 @@ mod tests {
             .expect("set the project cap");
 
         // One live run of the project fills its cap…
-        seed_live_run(&store, "harness", "solver", "0000000000001-0000");
+        seed_live_run(&store, "harness:claude-sdk", "solver");
         assert_eq!(store.run_load().in_project("bugbounty"), 1);
         assert!(
             matches!(
@@ -1691,7 +2067,7 @@ mod tests {
             .set_project_limit("bugbounty", 5)
             .expect("a roomier project cap");
 
-        seed_live_run(&store, "process", "other", "0000000000001-0000");
+        seed_live_run(&store, "process:claude", "other");
         assert!(
             matches!(
                 store.run_in("solver", "go", None),
@@ -1714,14 +2090,14 @@ mod tests {
             .save("chatty", spec("harness:claude-sdk"))
             .expect("save");
         let agent = store.get("chatty").expect("get").expect("present");
-        let conv = seed_conversation(&store, "chatty", None);
+        let conv = seed_conversation(&store, "chatty", "harness:claude-sdk", "/tmp");
         store
             .set_limits(RunLimits {
                 max_concurrent_runs: 1,
                 ..RunLimits::default()
             })
             .expect("set the limit");
-        seed_live_run(&store, "process", "other", "0000000000001-0000");
+        seed_live_run(&store, "process:claude", "other");
 
         assert_eq!(
             store.reply("chatty", &conv, "and then?").expect("reply"),
@@ -1730,34 +2106,258 @@ mod tests {
         );
         // And the platform does not start it by itself while the cap is still full, even though the
         // conversation is idle and the message is waiting.
-        let sessions_dir = store.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        assert!(
-            can_advance_in(&agent, &sessions_dir, &conv),
+        assert_eq!(
+            store.sessions().queued("chatty", &conv),
+            ["and then?"],
             "the queued message is otherwise ready to start"
         );
         assert!(
             !store.advance_queue(&agent, &conv),
             "an automatic start waits for a free slot"
         );
+        assert_eq!(
+            store.sessions().queued("chatty", &conv),
+            ["and then?"],
+            "and it keeps its place rather than being dropped"
+        );
     }
 
-    /// A conversation answers from the directory it started in, however the manifest resolves now.
+    /// A pid that certainly names nothing: a child run to completion and reaped. Not a made-up
+    /// number — pid 1 answers "alive", which would quietly invert every assertion about a finished
+    /// run. And never *this* process: stopping a session recorded against it would signal the whole
+    /// test run's process group.
+    fn dead_pid() -> u32 {
+        #[cfg(unix)]
+        let mut child = std::process::Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .expect("spawn");
+        #[cfg(not(unix))]
+        let mut child = std::process::Command::new("cmd")
+            .args(["/c", "exit"])
+            .spawn()
+            .expect("spawn");
+        let pid = child.id();
+        let _ = child.wait();
+        pid
+    }
+
+    /// The whole conversation loop, through the store and the runner rather than a backend: a turn
+    /// whose child has exited is folded into the transcript on the next read, and a message said
+    /// while one is still in flight waits its turn in the queue.
+    #[test]
+    fn a_finished_turn_settles_and_a_message_said_mid_answer_waits_its_turn() {
+        let store = scratch("conv-lifecycle");
+        store
+            .save("chatty", spec("harness:claude-sdk"))
+            .expect("save");
+        let agent = store.get("chatty").expect("get").expect("present");
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("chatty", Backend::HarnessClaudeSdk, "/tmp", "set the port")
+            .expect("open a conversation")
+            .id;
+        sessions
+            .append_turn("chatty", &conv, store::user_turn("set the port"))
+            .expect("the question");
+        // What the turn child left in the log, and a pid that no longer names it.
+        std::fs::write(
+            sessions.log_path("chatty", &conv),
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "type": "result",
+                    "result": "Moved it to 81.",
+                    "usage": { "input_tokens": 12, "output_tokens": 3 },
+                }),
+            ),
+        )
+        .expect("write the log");
+        sessions
+            .session("chatty", &conv)
+            .set_state(serde_json::json!({ "pid": dead_pid() }))
+            .expect("a finished turn");
+
+        let turns = store.transcript(&agent, &conv);
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        assert_eq!(turns[1].role, "assistant");
+        assert_eq!(turns[1].text, "Moved it to 81.");
+        assert!(!turns[1].pending, "its child is gone; nothing is streaming");
+        assert_eq!(
+            turns[1].metrics.as_ref().and_then(|m| m.input_tokens),
+            Some(12),
+            "the engine's telemetry comes back through the runner's events",
+        );
+        assert_eq!(
+            sessions.turns("chatty", &conv).len(),
+            2,
+            "the answer was committed, not synthesized on every read",
+        );
+        assert_eq!(
+            store.transcript(&agent, &conv).len(),
+            2,
+            "and reading again does not fold a second one",
+        );
+        // The run list speaks of the same session, with the task it was opened with.
+        let runs = store.runs(&agent);
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].run_id, conv);
+        assert_eq!(runs[0].message, "set the port");
+        assert!(!runs[0].running);
+
+        // Now a turn *is* in flight: anything said joins the queue rather than starting a second
+        // child into the same slot.
+        sessions
+            .session("chatty", &conv)
+            .set_state(serde_json::json!({ "pid": std::process::id() }))
+            .expect("a live turn");
+        assert_eq!(
+            store.reply("chatty", &conv, "and restart it").expect("reply"),
+            Sent::Queued { place: 1 },
+        );
+        assert_eq!(
+            store.reply("chatty", &conv, "then tell me").expect("reply"),
+            Sent::Queued { place: 2 },
+        );
+        let waiting = store.transcript(&agent, &conv);
+        assert_eq!(
+            waiting[2..]
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>(),
+            ["and restart it", "then tell me"],
+            "the queue trails the transcript in the order it will be asked",
+        );
+        assert!(waiting[2..].iter().all(|t| t.queued));
+        assert!(
+            store.unqueue("chatty", &conv, 0).expect("unqueue"),
+            "a message can be taken back before it is ever asked",
+        );
+        assert_eq!(sessions.queued("chatty", &conv), ["then tell me"]);
+
+        // Stopping drops the whole line. What was queued was written expecting the answer that is
+        // being cut short, so marching on into a conversation the human just interrupted would
+        // answer questions they no longer asked.
+        //
+        // Stopped from a *settled* pid on purpose: signalling a live one here would mean signalling
+        // this test process's own group. That the signal path itself escalates TERM → KILL is
+        // asserted against a real child in `runner::detached`.
+        sessions
+            .session("chatty", &conv)
+            .set_state(serde_json::json!({ "pid": dead_pid() }))
+            .expect("a finished turn");
+        store.stop_run("chatty", &conv).expect("stop");
+        assert!(
+            sessions.queued("chatty", &conv).is_empty(),
+            "stopping an answer forgets what was queued behind it",
+        );
+
+        // A backend that keeps no thread has nothing to reply into.
+        store.save("solo", spec("process:claude")).expect("save");
+        assert!(matches!(
+            store.reply("solo", &conv, "hi"),
+            Err(Error::Unsupported(_))
+        ));
+    }
+
+    /// The lifecycle verbs all address one session: the run list, the snapshot, the hide flag, the
+    /// stop that forgets what was queued behind it, and the delete that takes the lot.
+    #[test]
+    fn the_run_list_the_peek_and_the_delete_all_speak_of_the_same_session() {
+        let store = scratch("run-lifecycle");
+        store.save("recon", spec("process:claude")).expect("save");
+        let agent = store.get("recon").expect("get").expect("present");
+        let sessions = store.sessions();
+        let first = sessions
+            .create("recon", Backend::ProcessClaude, "/tmp", "map the site")
+            .expect("create")
+            .id;
+        let second = sessions
+            .create("recon", Backend::ProcessClaude, "/tmp", "read the bundles")
+            .expect("create")
+            .id;
+        std::fs::write(sessions.log_path("recon", &second), "line one\nline two\n")
+            .expect("write the log");
+
+        let runs = store.runs(&agent);
+        assert_eq!(runs.len(), 2, "newest first");
+        assert_eq!(runs[0].run_id, second);
+        assert_eq!(runs[0].message, "read the bundles");
+        assert!(runs.iter().all(|r| !r.running && !r.hidden));
+
+        let peek = store.peek_run(&agent, &second);
+        assert!(!peek.interactive);
+        assert!(!peek.running);
+        assert_eq!(peek.output, "line one\nline two");
+        assert!(peek.attach.starts_with("tail -f "), "{}", peek.attach);
+        // With no run named, the newest is what a watcher means.
+        assert_eq!(store.peek(&agent).output, peek.output);
+
+        assert!(
+            store.set_run_hidden("recon", &first, true).expect("hide"),
+            "an existing run is there to flag",
+        );
+        assert!(
+            store.runs(&agent).iter().any(|r| r.run_id == first && r.hidden),
+            "hiding is a flag, and the run stays in the history",
+        );
+        assert!(
+            !store.set_run_hidden("recon", "0000000000001-0000", true).expect("absent"),
+            "a run that isn't there is nothing to flag",
+        );
+
+        // Stopping an answer forgets what was written expecting it.
+        sessions
+            .enqueue("recon", &second, "and then diff them")
+            .expect("enqueue");
+        assert!(
+            !store.stop_run("recon", &second).expect("stop"),
+            "nothing was live to signal",
+        );
+        assert!(sessions.queued("recon", &second).is_empty());
+
+        assert!(store.delete_run("recon", &second).expect("delete"));
+        assert_eq!(store.runs(&agent).len(), 1);
+        assert!(!sessions.log_path("recon", &second).exists());
+        assert!(
+            !store.delete_run("recon", &second).expect("delete again"),
+            "deleting what is already gone settles quietly",
+        );
+    }
+
+    /// A conversation answers from the directory it started in, however the manifest resolves now —
+    /// the engine's session store is keyed by cwd, so answering from elsewhere would leave it
+    /// unresumable and put the files earlier turns wrote out of reach.
     #[test]
     fn a_conversation_re_enters_the_directory_it_started_in() {
         let store = scratch("conv-pinned");
         let agent = agent_with_tools(&store, "passive", "harness:claude-sdk", Vec::new());
-        let conv = seed_conversation(&store, "passive", Some("/targets/crescendo-ai"));
+        let conv = seed_conversation(
+            &store,
+            "passive",
+            "harness:claude-sdk",
+            "/targets/crescendo-ai",
+        );
+        let record = store.sessions().get("passive", &conv).expect("the session");
+        assert_eq!(record.cwd, std::path::Path::new("/targets/crescendo-ai"));
         assert_eq!(
-            store.conversation_dir(&agent, &conv),
-            std::path::Path::new("/targets/crescendo-ai")
+            session_dir(&store.config, &record),
+            std::path::Path::new("/targets/crescendo-ai"),
+        );
+        // …and it is the agent's own resolve that is *not* consulted a second time.
+        assert_ne!(
+            workspace::resolve(&store.config, &agent.manifest, None),
+            record.cwd
         );
     }
 
-    /// A conversation started before the directory was recorded ran in the store root. It has to
-    /// keep answering from there — a fresh resolve would now hand a project agent its project
-    /// directory, and the Claude session it resumes is keyed by the cwd it was established under.
+    /// A conversation from the old layout comes forward when the store is opened, keeping the
+    /// directory it ran in. One that predates the recorded directory entirely ran in the store root,
+    /// and has to keep answering from there: a fresh resolve would now hand this project agent its
+    /// project directory, and the Claude session it resumes is keyed by the cwd it was established
+    /// under.
     #[test]
-    fn a_conversation_from_before_the_field_stays_in_the_store_root() {
+    fn a_legacy_conversation_is_brought_forward_with_the_directory_it_ran_in() {
         let store = scratch("conv-legacy");
         let mut manifest = spec("harness:claude-sdk");
         manifest.project = Some("bugbounty".into());
@@ -1771,22 +2371,53 @@ mod tests {
             project
         );
 
-        let conv = seed_conversation(&store, "legacy", None);
-        assert_eq!(store.conversation_dir(&agent, &conv), store.config.root());
+        let conv = seed_legacy_conversation(&store, "legacy", None);
+        // Opening the store is what moves it; the backend comes from the agent's manifest, because
+        // the old path only ever named the executor.
+        let record = store.sessions().get("legacy", &conv).expect("brought forward");
+        assert_eq!(record.cwd, store.config.root());
+        assert_eq!(record.backend, Backend::HarnessClaudeSdk);
+        assert_eq!(record.message, "go");
+        assert!(store.runs(&agent).iter().any(|r| r.run_id == conv));
     }
 
-    /// Codex takes its `system_prompt` as the opening user turn, so anything folded in would land
-    /// there as a question. Its agents keep the prompt they were given — tools, location, and all.
+    /// The same move, for a conversation that *did* record where it ran.
     #[test]
-    fn a_codex_agent_keeps_its_prompt_as_written() {
+    fn a_legacy_conversation_keeps_its_recorded_directory() {
+        let store = scratch("conv-legacy-dir");
+        let agent = agent_with_tools(&store, "passive", "harness:claude-sdk", Vec::new());
+        let conv = seed_legacy_conversation(&store, "passive", Some("/targets/crescendo-ai"));
+        let record = store.sessions().get(&agent.name, &conv).expect("brought forward");
+        assert_eq!(record.cwd, std::path::Path::new("/targets/crescendo-ai"));
+    }
+
+    /// Codex takes its `system_prompt` as the opening user turn, so tool help or a location block
+    /// folded in would arrive as something to answer. That rule now lives in the runner, which is
+    /// the layer that knows it — the spec carries the same data for every engine, and the store
+    /// never edits an agent's stored prompt on the way past.
+    ///
+    /// What is asserted here is the store's side of it. That Codex's argv is left clean is asserted
+    /// where the decision is made, in `runner::detached` and `runner::pty`.
+    #[test]
+    fn a_codex_agents_stored_prompt_is_never_rewritten() {
         let store = scratch("tool-help-codex");
         let id = tool_answering_llm_help(&store, "greet", "Usage: greet <name>");
         let agent = agent_with_tools(&store, "coder", "pty:codex", vec![id]);
-        assert_eq!(store.decorated(&agent, store.config.root()), agent);
+
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        assert_eq!(
+            spec.system_prompt.as_deref(),
+            Some("You are a careful operator.")
+        );
+        assert_eq!(
+            store.get("coder").expect("read back").expect("the agent"),
+            agent
+        );
     }
 
     /// A tool ticked on but no longer registered (deleted, or archived out from under the agent)
-    /// contributes nothing — being the only one, it leaves no tool section behind.
+    /// contributes nothing — being the only one, it leaves the spec with no tools at all, so no
+    /// runner has a section to write.
     #[test]
     fn an_unregistered_tool_adds_nothing() {
         let store = scratch("tool-help-ghost");
@@ -1796,13 +2427,7 @@ mod tests {
             "harness:claude-sdk",
             vec!["no-such-tool".into()],
         );
-        let prompt = store
-            .decorated(&agent, store.config.root())
-            .manifest
-            .arguments["system_prompt"]
-            .as_str()
-            .expect("a prompt")
-            .to_string();
-        assert!(!prompt.contains("# Your tools"), "{prompt}");
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+        assert!(spec.tools.is_empty(), "{:?}", spec.tools);
     }
 }

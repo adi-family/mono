@@ -7,7 +7,7 @@ use crate::backends::push_option;
 /// resolved directory (see `super::engine_argv`) — passed as `--cd` because it scopes Codex's
 /// sandbox, not just where the process starts. The manifest's own `working_dir` already fed into
 /// that resolution, so it is not read again here.
-pub(super) fn argv(config: &PtyCodexArguments, workspace: Option<&str>) -> Vec<String> {
+pub(crate) fn argv(config: &PtyCodexArguments, workspace: Option<&str>) -> Vec<String> {
     let mut argv = vec!["codex".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(

@@ -4,10 +4,17 @@
 //! `PATH` — so the commands are *there*, but nothing said they were. An agent had to already know
 //! the names, or discover them by listing a directory it was never told about. So at launch each
 //! tool is asked to describe itself (`llm help`, else `help`; see [`adi_tools::ToolHelp`]) and the
-//! answers are folded into the agent's system prompt.
+//! answers are rendered into the prompt section this module builds.
 //!
-//! Two properties this leans on. It is **appended, never substituted**: whatever the agent's own
-//! prompt says survives, with the tool section behind it. And it is **derived at launch, not
+//! **Rendering only.** Where the section goes — and whether it goes anywhere at all — is a fact
+//! about the engine, so the runner decides it. This module used to also answer "which backends take
+//! it" and edit the stored arguments in place; both moved down, because the answer was never about
+//! tools. Codex is the case that makes it concrete: it has no append-system-prompt flag, so its
+//! `system_prompt` is pushed as the opening *user* turn, where help arrives as a wall of usage text
+//! to answer rather than as background. Its runners hand it neither this nor the location block.
+//!
+//! Two properties the section leans on. It is **appended, never substituted**: whatever the agent's
+//! own prompt says survives, with the tool section behind it. And it is **derived at launch, not
 //! stored**: the manifest keeps only the user's prompt, so enabling a tool, editing its help, or
 //! upgrading the CLI underneath it shows up on the next run without anyone rewriting a prompt.
 
@@ -15,33 +22,12 @@ use std::fmt::Write as _;
 
 use adi_tools::ToolHelp;
 
-use crate::agent::RawAgentArguments;
-use crate::backend::Backend;
-
-/// The key every backend's arguments spell its system prompt under.
-const SYSTEM_PROMPT: &str = "system_prompt";
-
 /// The most the whole tool section may add to a prompt. A tool's own help is already capped; this
 /// caps their sum, so a fleet of well-documented tools can't bury the agent's instructions.
 const MAX_BLOCK_CHARS: usize = 20_000;
 
 const HEADING: &str = "# Your tools\n\nThese commands are on your PATH — run them from your shell. \
 Each one's own help follows, so you can use it without guessing at its arguments.";
-
-/// Whether this backend's `system_prompt` argument is really a *system* prompt — the only place
-/// tool help belongs.
-///
-/// The Claude backends fold it into `--append-system-prompt`, and the adi loop sends it as the
-/// conversation's system message: in both, help arrives as context. Codex has no such flag — its
-/// `system_prompt` is pushed as the opening *user* prompt, so help would arrive as a question to
-/// answer rather than as background, and an agent with no prompt of its own would open its session
-/// by reading a wall of usage text. Those are left alone.
-pub(crate) fn applies_to(backend: &Backend) -> bool {
-    matches!(
-        backend,
-        Backend::PtyClaude | Backend::ProcessClaude | Backend::HarnessClaudeSdk | Backend::HarnessAdi
-    )
-}
 
 /// The prompt section describing `tools`, or `None` when there is nothing to say. A tool with no
 /// help is still listed — that the command exists, under that name, is the half worth having.
@@ -88,23 +74,6 @@ fn section(tool: &ToolHelp) -> String {
     out
 }
 
-/// Append `block` to the arguments' system prompt, in place. The agent's own prompt leads and the
-/// tool section follows, so instructions are read before inventory. A backend that had no prompt
-/// gets the section alone.
-pub(crate) fn fold_into(arguments: &mut RawAgentArguments, block: &str) {
-    let existing = arguments
-        .get(SYSTEM_PROMPT)
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or_default()
-        .trim();
-    let merged = if existing.is_empty() {
-        block.to_string()
-    } else {
-        format!("{existing}\n\n{block}")
-    };
-    arguments.insert(SYSTEM_PROMPT.to_string(), serde_json::Value::String(merged));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,27 +83,6 @@ mod tests {
             name: name.to_string(),
             description: description.map(ToString::to_string),
             help: help.map(ToString::to_string),
-        }
-    }
-
-    #[test]
-    fn only_backends_whose_prompt_is_a_system_prompt_take_it() {
-        for backend in [
-            Backend::PtyClaude,
-            Backend::ProcessClaude,
-            Backend::HarnessClaudeSdk,
-            Backend::HarnessAdi,
-        ] {
-            assert!(applies_to(&backend), "{backend} should take tool help");
-        }
-        // Codex puts `system_prompt` in the opening user turn; help there would be a question.
-        for backend in [
-            Backend::PtyCodex,
-            Backend::ProcessCodex,
-            Backend::Wasm,
-            Backend::from("cloud:worker"),
-        ] {
-            assert!(!applies_to(&backend), "{backend} should not take tool help");
         }
     }
 
@@ -176,28 +124,4 @@ mod tests {
         assert!(block.contains("more tools on your PATH"), "{block}");
     }
 
-    #[test]
-    fn the_agents_own_prompt_leads_and_survives() {
-        let mut arguments = RawAgentArguments::new();
-        arguments.insert(
-            SYSTEM_PROMPT.to_string(),
-            serde_json::Value::String("  You are a careful operator.  ".into()),
-        );
-        fold_into(&mut arguments, "# Your tools\n\n## adi-db");
-
-        let merged = arguments[SYSTEM_PROMPT].as_str().expect("a string");
-        assert!(merged.starts_with("You are a careful operator."));
-        assert!(merged.ends_with("## adi-db"));
-        // Other arguments are untouched, and the prompt is one value, not two.
-        assert_eq!(arguments.len(), 1);
-    }
-
-    #[test]
-    fn an_agent_with_no_prompt_gets_the_section_alone() {
-        let mut arguments = RawAgentArguments::new();
-        arguments.insert("model".to_string(), serde_json::Value::String("opus".into()));
-        fold_into(&mut arguments, "# Your tools");
-        assert_eq!(arguments[SYSTEM_PROMPT].as_str(), Some("# Your tools"));
-        assert_eq!(arguments["model"].as_str(), Some("opus"));
-    }
 }

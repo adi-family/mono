@@ -1,13 +1,21 @@
-//! Backend-agnostic run dispatch.
+//! The vocabulary a run is described in, and the few things askable without one.
+//!
+//! This used to be the dispatch layer: fourteen `match`es over [`Backend`], one per verb, each a
+//! separate place that had to learn every engine. All of it is gone. [`crate::Agents`] goes through
+//! the session store and one runner lookup ([`crate::runner::runner_for`]), so what remains here is
+//! the shared vocabulary — [`Launch`], [`Sent`], [`Peek`], [`RunInfo`] — plus the handful of
+//! questions that are answered *without* a stored session, and so have nowhere else to live.
 
-use crate::backend::Backend;
-use crate::backends::{harness, process, pty};
-use crate::error::{Error, Result};
-use crate::{StoredAgent, StoredAgentManifest};
 use std::path::{Path, PathBuf};
 
-pub use harness::Turn;
-pub use pty::{capture_pane, running_sessions, send_keys, session_name};
+use crate::StoredAgentManifest;
+use crate::backend::Backend;
+use crate::backends::pty;
+use crate::error::{Error, Result};
+use crate::runner::{RunSpec, Session, runner_for};
+
+pub use crate::store::Turn;
+pub use pty::{running_sessions, session_name};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Launch {
@@ -72,384 +80,99 @@ pub struct RunInfo {
     pub hidden: bool,
 }
 
+/// Whether this agent could run at all: something here runs its backend, and that runner accepts
+/// its arguments.
+///
+/// Asked of the runner rather than matched per backend, and answered with **no side effects** — the
+/// spec it checks against carries only the stored arguments, since nothing else bears on "would the
+/// Run button work". A real launch builds the full spec (cwd, `.bin`, `PATH`, environment), which
+/// writes to disk and has no business happening on a page render.
 #[must_use]
 pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
-    match &manifest.backend {
-        Backend::PtyClaude | Backend::PtyCodex => pty::is_runnable(manifest),
-        Backend::ProcessClaude | Backend::ProcessCodex => process::is_runnable(manifest),
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => harness::is_runnable(manifest),
-        _ => false,
-    }
+    let Some(runner) = runner_for(&manifest.backend) else {
+        return false;
+    };
+    runner
+        .check(&RunSpec {
+            cwd: PathBuf::new(),
+            path: String::new(),
+            env: Vec::new(),
+            arguments: manifest.arguments_value(),
+            tools: Vec::new(),
+            system_prompt: None,
+            workspace_note: None,
+        })
+        .is_ok()
 }
 
-/// Whether a backend runs an interactive session (a pty screen you type into) rather than a headless,
-/// history-keeping run.
-fn is_interactive(backend: &Backend) -> bool {
-    matches!(backend, Backend::PtyClaude | Backend::PtyCodex)
-}
-
-/// Launch an agent. `base_dir` is the default working directory a run starts in when the agent
-/// defines no explicit `working_dir` of its own — the ADI mono store root, threaded from the store.
-/// `run_path` is the already-assembled `PATH` the run resolves commands on — its own `.bin` of
-/// enabled tools, the dirs its manifest declares, then the standard ones (see `launch::run_path`).
-pub(crate) fn launch_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    base_dir: &Path,
-    run_path: &str,
-    message: &str,
-    run_env: &[(String, String)],
-) -> Result<Launch> {
-    match &agent.manifest.backend {
-        Backend::PtyClaude | Backend::PtyCodex => {
-            pty::launch(agent, base_dir, run_path, run_env)
-        }
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::launch(agent, sessions_dir, base_dir, run_path, message, run_env)
-        }
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::launch(agent, sessions_dir, base_dir, run_path, message, run_env)
-        }
-        other => Err(Error::NotRunnable(other.to_string())),
-    }
-}
-
-/// The live detached runs of every agent that has any, keyed by agent name — the raw material both
-/// concurrency caps are computed from (the global one sums it; the per-project one sums the agents
-/// filed under that project).
+/// A live pane, addressed by the agent that owns it and nothing else.
 ///
-/// Read from PID files, so a run started by another process (the CLI, a trigger's `adi-agents run`)
-/// counts too. Pty sessions are not here: they live inside the process that opened them and keep no
-/// run directory to name an agent from — see [`running_sessions`], which the caller matches against
-/// the agents it already holds.
-pub(crate) fn running_by_agent_in(sessions_dir: &Path) -> std::collections::BTreeMap<String, usize> {
-    let mut by_agent = process::running_by_agent(sessions_dir);
-    for (agent, live) in harness::running_by_agent(sessions_dir) {
-        *by_agent.entry(agent).or_default() += live;
-    }
-    by_agent
+/// The terminal half of a runner ([`crate::runner::Terminal`]) is reached through a
+/// [`Session`], but a pane is keyed by *name* — one per agent, shared with everything else that
+/// lists `adi-agent-*` — so the three free functions below can drive it without a stored session to
+/// hand over. Nothing is kept: the name is derived from the agent, so there is no state worth
+/// writing down and `set_state` says so by discarding it.
+#[derive(Debug)]
+struct Pane {
+    agent: String,
+    /// Unused — a terminal writes no log. It is here because [`Session::log_path`] hands out a
+    /// borrow, which has to point at something.
+    log: PathBuf,
 }
 
-/// A headless agent's run history, newest first. Interactive (pty) backends have no history — their
-/// live session *is* the run — so this is empty for them.
-pub(crate) fn runs_in(agent: &StoredAgent, sessions_dir: &Path) -> Vec<RunInfo> {
-    match &agent.manifest.backend {
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::list_runs(sessions_dir, &agent.name)
-        }
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::list_runs(sessions_dir, &agent.name)
-        }
-        _ => Vec::new(),
+impl Session for Pane {
+    // A pane has no session id: it is one per agent, and the store never files it.
+    #[allow(clippy::unnecessary_literal_bound)]
+    fn id(&self) -> &str {
+        ""
     }
-}
-
-/// A snapshot of one specific detached run, or of the pty screen for an interactive backend
-/// (`run_id` is ignored there — an interactive agent has a single session, not runs).
-pub(crate) fn peek_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> Peek {
-    match &agent.manifest.backend {
-        Backend::PtyClaude | Backend::PtyCodex => pty_peek(agent),
-        Backend::ProcessClaude | Backend::ProcessCodex => detached_peek(
-            process::is_running(sessions_dir, &agent.name, run_id),
-            process::tail_log(sessions_dir, &agent.name, run_id),
-            &process::log_path(sessions_dir, &agent.name, run_id),
-        ),
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => detached_peek(
-            harness::is_running(sessions_dir, &agent.name, run_id),
-            harness::tail_log(sessions_dir, &agent.name, run_id),
-            &harness::log_path(sessions_dir, &agent.name, run_id),
-        ),
-        _ => empty_peek(),
+    fn agent(&self) -> &str {
+        &self.agent
+    }
+    fn has_started(&self) -> bool {
+        false
+    }
+    fn state(&self) -> Option<serde_json::Value> {
+        None
+    }
+    fn set_state(&self, _value: serde_json::Value) -> Result<()> {
+        Ok(())
+    }
+    fn log_path(&self) -> &Path {
+        &self.log
     }
 }
 
-/// A name-based snapshot: the pty screen for interactive backends, or the latest run for headless
-/// ones — a convenience for callers that don't track a specific run (the pty live view).
-pub(crate) fn peek_in(agent: &StoredAgent, sessions_dir: &Path) -> Peek {
-    if is_interactive(&agent.manifest.backend) {
-        return pty_peek(agent);
-    }
-    match runs_in(agent, sessions_dir).first() {
-        Some(latest) => peek_run_in(agent, sessions_dir, &latest.run_id),
-        None => empty_peek(),
-    }
+/// Do something with the pane of `agent_name`, through whichever runner drives terminals.
+///
+/// The engine is irrelevant here: `pty:claude` and `pty:codex` differ only in the command they open
+/// a pane *with*, and typing into one or reading its screen is the same act either way. So this asks
+/// one terminal runner and lets [`crate::runner::Runner::as_terminal`] answer for all of them.
+fn with_pane<T>(agent_name: &str, f: impl FnOnce(&dyn crate::runner::Terminal, &Pane) -> T) -> Option<T> {
+    let runner = runner_for(&Backend::PtyClaude)?;
+    let terminal = runner.as_terminal()?;
+    let pane = Pane {
+        agent: agent_name.to_string(),
+        log: PathBuf::new(),
+    };
+    Some(f(terminal, &pane))
 }
 
-fn pty_peek(agent: &StoredAgent) -> Peek {
-    Peek {
-        // A pty session lives only in-process, so liveness is the child's state — not whether a
-        // capture exists (a dead session keeps its final screen capturable).
-        running: pty::is_running(&agent.name),
-        output: pty::capture_pane(&agent.name).unwrap_or_default(),
-        // A pty session has no external attach command; it is viewed only in the control panel.
-        attach: String::new(),
-        interactive: true,
-    }
+/// Type into an agent's live pane.
+///
+/// # Errors
+/// Returns [`Error::NotRunning`] when there is no pane to type into, plus validation and pty errors.
+pub fn send_keys(agent_name: &str, text: &str, key: &str) -> Result<()> {
+    with_pane(agent_name, |terminal, pane| {
+        terminal.send_keys(pane, text, key)
+    })
+    .unwrap_or_else(|| Err(Error::NotRunning(agent_name.to_string())))
 }
 
-fn detached_peek(running: bool, output: Option<String>, log: &Path) -> Peek {
-    Peek {
-        running,
-        output: output.unwrap_or_default(),
-        attach: format!("tail -f {}", log.display()),
-        interactive: false,
-    }
-}
-
-fn empty_peek() -> Peek {
-    Peek {
-        running: false,
-        output: String::new(),
-        attach: String::new(),
-        interactive: false,
-    }
-}
-
-/// Whether the agent has any live run (any headless run still alive, or a live pty session).
-pub(crate) fn is_running_in(agent: &StoredAgent, sessions_dir: &Path) -> bool {
-    match &agent.manifest.backend {
-        Backend::PtyClaude | Backend::PtyCodex => pty::is_running(&agent.name),
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::any_running(sessions_dir, &agent.name)
-        }
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::any_running(sessions_dir, &agent.name)
-        }
-        _ => false,
-    }
-}
-
-/// Stop one specific detached run, or the pty session for an interactive backend (`run_id`
-/// ignored). Returns whether a live run was found and signalled.
-pub(crate) fn stop_run_in(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> Result<bool> {
-    match &agent.manifest.backend {
-        Backend::PtyClaude | Backend::PtyCodex => pty::stop(&agent.name),
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::stop(sessions_dir, &agent.name, run_id)
-        }
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::stop(sessions_dir, &agent.name, run_id)
-        }
-        _ => Ok(false),
-    }
-}
-
-/// Delete one specific run of a headless agent, removing it and everything it kept. Interactive
-/// (pty) backends keep no run history, so there is nothing there to delete.
-pub(crate) fn delete_run_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    run_id: &str,
-) -> Result<bool> {
-    match &agent.manifest.backend {
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::delete(sessions_dir, &agent.name, run_id)
-        }
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::delete(sessions_dir, &agent.name, run_id)
-        }
-        other => Err(Error::Unsupported(format!(
-            "backend {other} keeps no run history, so it has no run to delete"
-        ))),
-    }
-}
-
-/// Hide (or unhide) one specific run of a headless agent from the chat rail. Interactive (pty)
-/// backends keep no run history — their live session is the run — so there is no per-run record to
-/// mark, and nothing to hide.
-pub(crate) fn set_run_hidden_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    run_id: &str,
-    hidden: bool,
-) -> Result<bool> {
-    match &agent.manifest.backend {
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process::set_hidden(sessions_dir, &agent.name, run_id, hidden)
-        }
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::set_hidden(sessions_dir, &agent.name, run_id, hidden)
-        }
-        other => Err(Error::Unsupported(format!(
-            "backend {other} keeps no run history, so it has no session to hide"
-        ))),
-    }
-}
-
-/// Say something into one of an agent's conversations: start the next turn, or queue the message
-/// behind the answer still in flight — or, when `may_start` is false, behind the run cap. Only
-/// harness backends keep conversations; anything else has no thread to continue.
-pub(crate) fn reply_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    base_dir: &Path,
-    run_path: &str,
-    conv_id: &str,
-    message: &str,
-    run_env: &[(String, String)],
-    may_start: bool,
-) -> Result<Sent> {
-    match &agent.manifest.backend {
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => harness::reply(
-            agent,
-            sessions_dir,
-            base_dir,
-            run_path,
-            conv_id,
-            message,
-            run_env,
-            may_start,
-        ),
-        other => Err(Error::Unsupported(format!(
-            "backend {other} isn't answerable — only harness backends keep conversations you can reply to"
-        ))),
-    }
-}
-
-/// Start a conversation's next queued message when it is idle and one is waiting. Only harness
-/// backends have a queue; for anything else there is nothing to advance.
-pub(crate) fn advance_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    base_dir: &Path,
-    run_path: &str,
-    conv_id: &str,
-    run_env: &[(String, String)],
-) -> Option<(String, Launch)> {
-    match &agent.manifest.backend {
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::advance(agent, sessions_dir, base_dir, run_path, conv_id, run_env)
-        }
-        _ => None,
-    }
-}
-
-/// The directory a conversation was started in, for the caller to re-enter on every later turn.
-/// `None` when the backend keeps no conversation, or when this one predates the recorded field —
-/// see [`harness::pinned_dir`] for why the fallback is the store root rather than a fresh resolve.
-pub(crate) fn conversation_dir_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    conv_id: &str,
-) -> Option<PathBuf> {
-    match &agent.manifest.backend {
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::pinned_dir(sessions_dir, &agent.name, conv_id)
-        }
-        _ => None,
-    }
-}
-
-/// Whether [`advance_in`] would start anything — the cheap gate a poll asks before paying for a
-/// launch context.
-pub(crate) fn can_advance_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> bool {
-    match &agent.manifest.backend {
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::can_advance(sessions_dir, &agent.name, conv_id)
-        }
-        _ => false,
-    }
-}
-
-/// Drop one queued message of a conversation, by its position in the queue.
-pub(crate) fn unqueue_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    conv_id: &str,
-    index: usize,
-) -> bool {
-    match &agent.manifest.backend {
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::unqueue(sessions_dir, &agent.name, conv_id, index)
-        }
-        _ => false,
-    }
-}
-
-/// Run one `adi` conversation turn — read the transcript, drive the provider and its tools, return
-/// the answer, writing the turn's events to `sink` as they happen. See
-/// [`crate::Agents::run_adi_turn`]. Only the `adi` harness engine has a loop to run.
-pub(crate) fn adi_turn_in(
-    agent: &StoredAgent,
-    sessions_dir: &Path,
-    conv_id: &str,
-    sink: crate::backends::adi_events::Sink<'_>,
-) -> Result<String> {
-    match &agent.manifest.backend {
-        Backend::HarnessAdi => harness::run_adi_turn(agent, sessions_dir, conv_id, sink),
-        other => Err(Error::Unsupported(format!(
-            "backend {other} has no adi loop to run"
-        ))),
-    }
-}
-
-/// A run's turns, oldest first. For a harness backend this is the answerable conversation; for a
-/// one-shot process run it is the task and its single parsed answer (so both render as the same
-/// progress feed). Interactive (pty) and wasm backends keep no turn transcript.
-pub(crate) fn transcript_in(agent: &StoredAgent, sessions_dir: &Path, conv_id: &str) -> Vec<Turn> {
-    match &agent.manifest.backend {
-        Backend::HarnessClaudeSdk | Backend::HarnessAdi => {
-            harness::transcript(sessions_dir, &agent.name, conv_id, &agent.manifest.backend)
-        }
-        Backend::ProcessClaude | Backend::ProcessCodex => {
-            process_run_turns(agent, sessions_dir, conv_id)
-        }
-        _ => Vec::new(),
-    }
-}
-
-/// Synthesize a one-shot process run as a two-turn transcript: the task it was launched with (a user
-/// turn) and its parsed output (a single assistant turn, still `pending` while the run is live). This
-/// lets a headless run render through the same progress feed as a conversation.
-fn process_run_turns(agent: &StoredAgent, sessions_dir: &Path, run_id: &str) -> Vec<Turn> {
-    let task = process::list_runs(sessions_dir, &agent.name)
-        .into_iter()
-        .find(|r| r.run_id == run_id)
-        .map(|r| r.message)
-        .unwrap_or_default();
-    let running = process::is_running(sessions_dir, &agent.name, run_id);
-    // Memoized on the log's identity: a finished run is parsed once, not once per poll.
-    let content = crate::memo::parsed_log(
-        &agent.manifest.backend,
-        &process::log_path(sessions_dir, &agent.name, run_id),
-    );
-
-    let mut turns = Vec::new();
-    if !task.trim().is_empty() {
-        turns.push(Turn {
-            role: "user".to_string(),
-            text: task,
-            at: 0,
-            pending: false,
-            queued: false,
-            steps: Vec::new(),
-            metrics: None,
-        });
-    }
-    turns.push(Turn {
-        role: "assistant".to_string(),
-        text: content.text.clone(),
-        at: 0,
-        pending: running,
-        queued: false,
-        steps: content.steps.clone(),
-        metrics: content.metrics.clone(),
-    });
-    turns
-}
-
-/// Stop the agent wholesale: the pty session, or every live run of a headless agent.
-pub(crate) fn stop_in(agent: &StoredAgent, sessions_dir: &Path) -> Result<bool> {
-    if is_interactive(&agent.manifest.backend) {
-        return pty::stop(&agent.name);
-    }
-    let mut stopped = false;
-    for run in runs_in(agent, sessions_dir) {
-        if run.running && stop_run_in(agent, sessions_dir, &run.run_id)? {
-            stopped = true;
-        }
-    }
-    Ok(stopped)
+/// An agent's visible screen, or `None` when there is nothing to capture.
+#[must_use]
+pub fn capture_pane(agent_name: &str) -> Option<String> {
+    with_pane(agent_name, |terminal, pane| terminal.capture(pane)).flatten()
 }
 
 #[cfg(test)]
@@ -485,14 +208,23 @@ mod tests {
         }
     }
 
+    /// The same refusal [`is_runnable`] reports to the UI, asked of the verb a launch actually
+    /// calls. `Agents::run` checks the spec before it appends a turn or spawns anything, so a
+    /// backend that cannot run is rejected with nothing written — the two must not drift apart.
     #[test]
-    fn an_unimplemented_executor_is_rejected_before_launch() {
-        let agent = StoredAgent {
-            name: "planner".into(),
-            manifest: manifest("harness:adi"),
-        };
+    fn an_unconfigured_engine_is_rejected_before_launch() {
+        let manifest = manifest("harness:adi");
+        let runner = runner_for(&manifest.backend).expect("harness:adi has a runner");
         assert!(matches!(
-            launch_in(&agent, Path::new("/unused"), Path::new("/unused"), "", "run", &[]),
+            runner.check(&RunSpec {
+                cwd: PathBuf::new(),
+                path: String::new(),
+                env: Vec::new(),
+                arguments: manifest.arguments_value(),
+                tools: Vec::new(),
+                system_prompt: None,
+                workspace_note: None,
+            }),
             Err(Error::NotRunnable(backend)) if backend == "harness:adi"
         ));
     }

@@ -5,9 +5,20 @@
 use crate::arguments::{ClaudeEffort, ClaudePermissionMode, HarnessClaudeSdkArguments};
 use crate::backends::push_option;
 
-use super::conversation::Continuation;
+/// Which continuation flag a turn's command carries.
+///
+/// Lives here, with the only engine that has such a flag, rather than in any shared vocabulary.
+/// Nothing above chooses between these: the runner derives the variant from whether the session has
+/// started ([`crate::runner::Session::has_started`]), so "fresh or resumed" never becomes a
+/// parameter a caller can get wrong.
+pub(crate) enum Continuation<'a> {
+    /// The conversation's first turn — establish the session under this id.
+    First { session_id: &'a str },
+    /// A follow-up — resume the established session.
+    Resume { session_id: &'a str },
+}
 
-pub(super) fn argv(
+pub(crate) fn argv(
     config: &HarnessClaudeSdkArguments,
     message: &str,
     cont: &Continuation<'_>,

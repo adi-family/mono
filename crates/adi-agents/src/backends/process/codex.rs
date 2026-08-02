@@ -6,7 +6,7 @@ use crate::backends::push_option;
 /// `workspace` is the run's resolved directory (see `super::engine_run`), passed as `--cd` because
 /// it scopes Codex's sandbox, not just where the process starts. The manifest's own `working_dir`
 /// already fed into that resolution, so it is not read again here.
-pub(super) fn argv(
+pub(crate) fn argv(
     config: &ProcessCodexArguments,
     message: &str,
     workspace: Option<&str>,

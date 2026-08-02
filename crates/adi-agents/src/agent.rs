@@ -8,6 +8,9 @@ use crate::error::{Error, Result};
 
 pub type RawAgentArguments = BTreeMap<String, serde_json::Value>;
 
+/// The key every backend's arguments spell their system prompt under.
+const SYSTEM_PROMPT: &str = "system_prompt";
+
 pub type StoredAgentManifest = AgentManifest<RawAgentArguments>;
 
 pub type StoredAgent = Agent<RawAgentArguments>;
@@ -121,6 +124,29 @@ impl AgentManifest<RawAgentArguments> {
     /// Returns [`Error::Arguments`] when the stored object does not match `Args`.
     pub fn typed_arguments<Args: DeserializeOwned>(&self) -> Result<Args> {
         decode_arguments(self.arguments.clone())
+    }
+
+    /// The stored arguments as one JSON object — the engine configuration a
+    /// [`RunSpec`](crate::runner::RunSpec) carries, uninterpreted.
+    ///
+    /// The map *is* the document; this only changes its container, so each runner can deserialize
+    /// its own typed struct out of it without any layer above holding a table of argument types.
+    pub(crate) fn arguments_value(&self) -> serde_json::Value {
+        serde_json::Value::Object(self.arguments.clone().into_iter().collect())
+    }
+
+    /// The agent's own system prompt, exactly as it was written, or `None` when it has none.
+    ///
+    /// Read off the raw arguments rather than a decoded struct because every backend spells it under
+    /// the same key, which is what lets one reader answer for all of them. Nothing above the runner
+    /// writes into it.
+    pub(crate) fn system_prompt(&self) -> Option<String> {
+        self.arguments
+            .get(SYSTEM_PROMPT)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|prompt| !prompt.is_empty())
+            .map(ToString::to_string)
     }
 
     /// # Errors

@@ -5,7 +5,7 @@ use crate::arguments::{
 };
 use crate::backends::push_option;
 
-pub(super) fn argv(config: &ProcessClaudeArguments, message: &str) -> Vec<String> {
+pub(crate) fn argv(config: &ProcessClaudeArguments, message: &str) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(

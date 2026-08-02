@@ -31,7 +31,7 @@ use crate::backends::adi_events::{self, Sink};
 use crate::error::{Error, Result};
 use crate::progress::TurnMetrics;
 
-use super::conversation::{self, Turn};
+use crate::store::Turn;
 use super::tools;
 
 /// Anthropic requires an explicit output cap, so default one when the agent sets none.
@@ -49,7 +49,7 @@ const MAX_ROUNDS: u64 = 16;
 
 /// The command a conversation turn spawns for an `adi` agent: re-enter this binary's hidden
 /// `harness-turn` subcommand, which reads the transcript and calls the provider.
-pub(super) fn argv(agent_name: &str, conv_id: &str) -> Vec<String> {
+pub(crate) fn argv(agent_name: &str, conv_id: &str) -> Vec<String> {
     vec![
         "adi-mono".to_string(),
         "harness-turn".to_string(),
@@ -63,7 +63,7 @@ pub(super) fn argv(agent_name: &str, conv_id: &str) -> Vec<String> {
 /// Whether the loop can actually run these arguments. Every provider the manifest can name is
 /// implemented, so the only thing left to reject is an agent that hasn't picked one — which is
 /// not-yet-configured rather than broken, hence `NotRunnable` and a hidden run button.
-pub(super) fn validate(args: &HarnessAdiArguments) -> Result<()> {
+pub(crate) fn validate(args: &HarnessAdiArguments) -> Result<()> {
     match args.provider {
         None => Err(Error::NotRunnable("harness:adi".to_string())),
         Some(_) => Ok(()),
@@ -79,8 +79,15 @@ pub(crate) fn run_turn(
     conv_id: &str,
     sink: Sink<'_>,
 ) -> Result<String> {
-    let args = agent.manifest.typed_arguments::<HarnessAdiArguments>()?;
+    let mut args = agent.manifest.typed_arguments::<HarnessAdiArguments>()?;
     validate(&args)?;
+    // The runner composes this run's system prompt — the agent's own instructions with its tools'
+    // help behind them — and exports it, because this loop has no command-line flag to carry one.
+    // It wins over the stored arguments; a turn spawned by anything that exported nothing falls
+    // back to them, which is exactly what happened before the runner existed.
+    if let Some(prompt) = composed_prompt() {
+        args.system_prompt = Some(prompt);
+    }
     let model = args
         .model
         .as_deref()
@@ -90,9 +97,10 @@ pub(crate) fn run_turn(
             Error::Unsupported("the adi loop needs a model — set one on the agent".to_string())
         })?;
 
-    // The committed transcript ends with the user turn this reply answers (conversation appended it
-    // before spawning us).
-    let turns = conversation::committed(sessions_dir, &agent.name, conv_id);
+    // The committed transcript ends with the user turn this reply answers (the agent layer appended
+    // it before spawning us). Read straight from the session store: the turn child and the process
+    // that launched it are different processes sharing one directory, so the store *is* the channel.
+    let turns = crate::store::SessionStore::new(sessions_dir).turns(&agent.name, conv_id);
     if turns.iter().all(|t| t.text.trim().is_empty()) {
         return Err(Error::Process(
             "the conversation has no messages to answer".to_string(),
@@ -948,6 +956,14 @@ fn system_prompt(args: &HarnessAdiArguments) -> Option<String> {
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(str::to_string)
+}
+
+/// The prompt the runner composed for this turn and handed down in the environment, if it did.
+fn composed_prompt() -> Option<String> {
+    std::env::var(crate::runner::detached::SYSTEM_PROMPT_ENV)
+        .ok()
+        .map(|prompt| prompt.trim().to_string())
+        .filter(|prompt| !prompt.is_empty())
 }
 
 /// The comma-separated `stop` argument split into a non-empty list of stop strings.
