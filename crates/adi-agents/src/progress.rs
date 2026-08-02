@@ -121,9 +121,7 @@ pub struct BackendCapabilities {
 /// derived from what the runner already has to answer anyway — whether it drives a terminal, whether
 /// a later send continues the same thread, and which event kinds it can ever emit.
 ///
-/// A backend nothing here runs keeps the all-false descriptor, with one exception: `wasm:*` is
-/// dispatched synchronously and has no process to manage, but its outcome still carries turns and
-/// tokens, so it reports metrics. That is the profile the UI has always rendered for it.
+/// A backend nothing here runs keeps the all-false descriptor.
 #[must_use]
 pub fn capabilities(backend: &Backend) -> BackendCapabilities {
     let base = BackendCapabilities {
@@ -136,10 +134,7 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
         metrics: false,
     };
     let Some(runner) = crate::runner::runner_for(backend) else {
-        return BackendCapabilities {
-            metrics: matches!(backend, Backend::Wasm),
-            ..base
-        };
+        return base;
     };
     let interactive = runner.as_terminal().is_some();
     let kinds = runner.emits();
@@ -200,10 +195,6 @@ mod tests {
             (
                 "harness:adi",
                 [false, true, true, true, true, false, true],
-            ),
-            (
-                "wasm:loop-script",
-                [false, false, false, false, false, false, true],
             ),
             // A plugin backend nothing here runs can surface nothing at all.
             (

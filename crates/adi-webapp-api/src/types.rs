@@ -1129,35 +1129,6 @@ pub struct AgentKeys {
     pub key: String,
 }
 
-/// Request body writing a wasm agent's employee source — `POST /api/agents/code/save`. The
-/// target file is the agent's `src` argument; replies with the fresh [`AgentCode`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SaveAgentCode {
-    pub name: String,
-    #[serde(default)]
-    pub code: String,
-}
-
-/// A wasm agent's employee source file — the answer to `POST /api/agents/code` and
-/// `/api/agents/code/save`. `path` is the manifest's `src` argument, resolved server-side.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgentCode {
-    pub name: String,
-    pub path: String,
-    pub code: String,
-}
-
-/// The answer to `POST /api/agents/build` — the TS→WASM build's combined output plus the fresh
-/// agents state (a successful build fills in an empty `wasm` argument, changing the list).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentBuildResult {
-    pub ok: bool,
-    pub output: String,
-    /// The compiled component path the build targets (`<src dir>/build/<name>.wasm`).
-    pub wasm: String,
-    pub state: AgentsState,
-}
-
 /// `POST /api/agents/peek` — a read-only snapshot of a running agent's pty screen (the text the
 /// live view shows), polled by the Agents page's live view.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

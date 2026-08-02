@@ -34,7 +34,7 @@ jobs:
       # agent backend (tasklist/taskkill liveness). `--no-fail-fast` reports every failure at
       # once rather than stopping at the first crate.
       #
-      # The build step below still compiles the *entire* tree (hooks/triggers/tools/workforce)
+      # The build step below still compiles the *entire* tree (hooks/triggers/tools)
       # for Windows. Those crates' unit tests are not run here because they exercise Unix *shell*
       # features (`sh -c` triggers/hooks/runners, process-group orphan reaping) — the surface
       # explicitly documented as not-yet-ported in apps/windows/README.md.

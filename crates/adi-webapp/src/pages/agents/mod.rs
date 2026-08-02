@@ -11,7 +11,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{AgentCodeEditor, AgentsForm, AgentsWatch, Flash, State};
+use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{
     Key, body_row, configurable_table, flash_view, menu_item, placeholder_row, row_actions,
     sort_rows, updated_text,
@@ -21,7 +21,6 @@ use crate::ui::{
 pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags", ""];
 
 mod actions;
-mod code;
 mod emitted_form;
 mod form;
 
@@ -30,7 +29,6 @@ pub(crate) use actions::{
     CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, agent_actions, all_chats_view,
     chat_home_view, live_view, poll_watch, project_run_limit_view, run_limit_view,
 };
-use code::{code_editor_view, open_code_editor};
 pub(crate) use form::load_agent_into_form;
 use form::{
     agent_argument_values, agent_environment_fields, agent_form_fields, agent_param_applies,
@@ -42,12 +40,7 @@ use form::{
 /// params. ▶ Run starts either an interactive pty session or a headless background process;
 /// deeper orchestration is future work. The form adapts its params to the chosen backend, and
 /// for the `harness:adi` backend also to its chosen provider.
-pub(crate) fn agents_view(
-    state: State,
-    form: AgentsForm,
-    watch: AgentsWatch,
-    code: AgentCodeEditor,
-) -> AnyView {
+pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
     let agents = state.agents;
     let secs_since = state.secs_since;
     let flash = state.flash;
@@ -68,8 +61,6 @@ pub(crate) fn agents_view(
 
         {move || live_view(state, watch)}
 
-        {move || code_editor_view(state, code)}
-
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <span class="adi-chip adi-mono" title="Agents defined">
@@ -82,7 +73,7 @@ pub(crate) fn agents_view(
             </div>
 
             {configurable_table(state.tables.agents, COLS,
-                move || agent_rows(state, form, watch, code))}
+                move || agent_rows(state, form, watch))}
         </section>
 
         <section class="adi-panel">
@@ -329,13 +320,8 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
 }
 
 /// Render the agents table body: a loading/empty placeholder, or one row per agent with Run or
-/// View (live session), Code (wasm employees), Edit (loads it into the form), and Delete actions.
-fn agent_rows(
-    state: State,
-    form: AgentsForm,
-    watch: AgentsWatch,
-    code: AgentCodeEditor,
-) -> AnyView {
+/// View (live session), Edit (loads it into the form), and Delete actions.
+fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
     let table = state.tables.agents;
     let layout = table.layout.get();
     let Some(st) = state.agents.get() else {
@@ -352,23 +338,17 @@ fn agent_rows(
     agents
         .into_iter()
         .map(|a| {
-            let is_wasm = a.executor == "wasm";
-            let code_name = a.name.clone();
             let del_name = a.name.clone();
             let a_edit = a.clone();
-            // Run/View/Stop stay inline (the live controls); Code (wasm only), Edit, and the
-            // destructive Delete move into the kebab.
-            let mut items = Vec::new();
-            if is_wasm {
-                items.push(menu_item(state, "{ } Code", false, move || {
-                    open_code_editor(state, code, code_name.clone());
-                }));
-            }
-            items.push(menu_item(state, "Edit", false, move || load_agent_into_form(form, &a_edit)));
-            items.push(menu_item(state, "Delete", true, move || {
-                apply_agents(state, None, format!("Deleted {del_name}."),
-                    fetch::delete_agent(del_name.clone()));
-            }));
+            // Run/View/Stop stay inline (the live controls); Edit and the destructive Delete
+            // move into the kebab.
+            let items = vec![
+                menu_item(state, "Edit", false, move || load_agent_into_form(form, &a_edit)),
+                menu_item(state, "Delete", true, move || {
+                    apply_agents(state, None, format!("Deleted {del_name}."),
+                        fetch::delete_agent(del_name.clone()));
+                }),
+            ];
             let actions = row_actions(state, format!("agent:{}", a.name), agent_actions(state, watch, &a), items);
             body_row(&shown, |col| agent_cell(col, &a), Some(actions))
         })

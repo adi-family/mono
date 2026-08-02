@@ -616,8 +616,8 @@ impl DbConsole {
 
 /// The Tools page's script editor panel: which tool's script is open (`None` = closed), the
 /// resolved on-disk path, the runtime (for syntax highlighting), the edit buffer with its saved
-/// baseline, a busy flag, and any load error. Mirrors [`AgentCodeEditor`]. `Copy` so it threads
-/// into the view and async handlers.
+/// baseline, a busy flag, and any load error. `Copy` so it threads into the view and async
+/// handlers.
 #[derive(Clone, Copy)]
 pub(crate) struct ToolEditor {
     /// The open tool's id, or `None` while the editor is closed.
@@ -923,52 +923,6 @@ impl HookEditor {
         self.open.set(None);
         self.original.set(String::new());
         self.buffer.set(String::new());
-    }
-}
-
-/// The Agents page's employee-code editor: which wasm agent's TypeScript source is open
-/// (`None` = closed), the file path it was read from, the edit buffer with its saved baseline,
-/// and the last build's outcome. `Copy` so it threads into the view and async handlers.
-#[derive(Clone, Copy)]
-pub(crate) struct AgentCodeEditor {
-    /// The open agent's name, or `None` while the editor is closed.
-    pub(crate) open: RwSignal<Option<String>>,
-    /// The source file path the server resolved from the agent's `src` argument.
-    pub(crate) path: RwSignal<String>,
-    /// The last-loaded/saved content — compared against `buffer` to detect edits.
-    pub(crate) original: RwSignal<String>,
-    /// The editable textarea buffer.
-    pub(crate) buffer: RwSignal<String>,
-    /// Whether a read/write/build is in flight (disables the editor's buttons).
-    pub(crate) busy: RwSignal<bool>,
-    /// The last build's (succeeded, combined output), or `None` before the first build.
-    pub(crate) build: RwSignal<Option<(bool, String)>>,
-    /// Why the source couldn't be loaded, or `None` when it loaded fine. The panel opens either
-    /// way: an unreadable `src` has to say so in place, since the action scrolls here.
-    pub(crate) error: RwSignal<Option<String>>,
-}
-
-impl AgentCodeEditor {
-    pub(crate) fn new() -> Self {
-        Self {
-            open: RwSignal::new(None),
-            path: RwSignal::new(String::new()),
-            original: RwSignal::new(String::new()),
-            buffer: RwSignal::new(String::new()),
-            busy: RwSignal::new(false),
-            build: RwSignal::new(None),
-            error: RwSignal::new(None),
-        }
-    }
-
-    /// Close the editor and drop its buffers.
-    pub(crate) fn close(self) {
-        self.open.set(None);
-        self.path.set(String::new());
-        self.original.set(String::new());
-        self.buffer.set(String::new());
-        self.build.set(None);
-        self.error.set(None);
     }
 }
 

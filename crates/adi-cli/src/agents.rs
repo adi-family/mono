@@ -30,7 +30,7 @@ pub(crate) enum AgentsCommand {
     Save {
         name: String,
         /// The `executor:what` backend, e.g. `pty:claude`, `process:codex`,
-        /// `harness:claude-sdk`, `harness:adi`, `wasm:loop-script`.
+        /// `harness:claude-sdk`, `harness:adi`.
         #[arg(long)]
         backend: String,
         #[arg(long)]
@@ -87,18 +87,13 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
-    /// Launch an agent in its backend. Pty executors open an interactive session,
-    /// process executors run a headless CLI in the background, and `wasm:*` agents dispatch
-    /// synchronously.
+    /// Launch an agent in its backend. Pty executors open an interactive session and
+    /// process executors run a headless CLI in the background.
     Run {
         name: String,
-        /// The task sent to a process backend or wasm handler (ignored by pty backends).
+        /// The task sent to a process backend (ignored by pty backends).
         #[arg(short, long, default_value = "run")]
         message: String,
-        /// The trigger handler to dispatch into (wasm backends only); defaults to the
-        /// agent's first subscription.
-        #[arg(long)]
-        handler: Option<String>,
         /// Where this run starts, overriding the agent's own `working_dir` and its project
         /// directory. For pointing one agent at a different target each run.
         #[arg(long, value_name = "PATH")]
@@ -243,59 +238,37 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         AgentsCommand::Run {
             name,
             message,
-            handler,
             dir,
             force,
         } => {
-            let is_wasm = store
-                .get(&name)
-                .map_err(|e| e.to_string())?
-                .ok_or_else(|| format!("no such agent: {name}"))?
-                .manifest
-                .executor()
-                == "wasm";
-            if is_wasm {
-                let outcome = store
-                    .run_wasm(&name, handler.as_deref(), &message)
-                    .map_err(|e| e.to_string())?;
-                println!(
-                    "Dispatched to agent {} via {} (llm turns: {}, tokens: {}/{}).",
-                    outcome.employee,
-                    outcome.subscription,
-                    outcome.turns,
-                    outcome.input_tokens,
-                    outcome.output_tokens,
-                );
+            let launch = if force {
+                store.force_run_in(&name, &message, dir.as_deref())
             } else {
-                let launch = if force {
-                    store.force_run_in(&name, &message, dir.as_deref())
-                } else {
-                    store.run_in(&name, &message, dir.as_deref())
+                store.run_in(&name, &message, dir.as_deref())
+            }
+            .map_err(|e| match e {
+                // The refusal is the one error a human can act on from here, so it says how.
+                AgentsError::TooManyRunning { .. } => {
+                    format!("{e}: re-run with --force to launch it anyway")
                 }
-                .map_err(|e| match e {
-                    // The refusal is the one error a human can act on from here, so it says how.
-                    AgentsError::TooManyRunning { .. } => {
-                        format!("{e}: re-run with --force to launch it anyway")
-                    }
-                    other => other.to_string(),
-                })?;
-                match launch {
-                    Launch::Pty { command, session } => {
-                        println!("Started agent {name} in session {session}.");
-                        println!("  command: {command}");
-                        println!("  view:    in the control panel's live view (no external attach)");
-                    }
-                    Launch::Process {
-                        command,
-                        pid,
-                        log,
-                        run_id,
-                    } => {
-                        println!("Started agent {name} as background process {pid}.");
-                        println!("  run:     {run_id}");
-                        println!("  command: {command}");
-                        println!("  log:     {}", log.display());
-                    }
+                other => other.to_string(),
+            })?;
+            match launch {
+                Launch::Pty { command, session } => {
+                    println!("Started agent {name} in session {session}.");
+                    println!("  command: {command}");
+                    println!("  view:    in the control panel's live view (no external attach)");
+                }
+                Launch::Process {
+                    command,
+                    pid,
+                    log,
+                    run_id,
+                } => {
+                    println!("Started agent {name} as background process {pid}.");
+                    println!("  run:     {run_id}");
+                    println!("  command: {command}");
+                    println!("  log:     {}", log.display());
                 }
             }
         }

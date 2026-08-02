@@ -943,7 +943,6 @@ mod tests {
             assert!(emits.message && emits.tool_call && emits.metrics);
             assert!(!emits.thinking);
         }
-        assert!(!DetachedRunner::new(Backend::Wasm).emits().any());
     }
 
     /// The command is built before anything is spawned, so a spec this engine cannot run leaves no

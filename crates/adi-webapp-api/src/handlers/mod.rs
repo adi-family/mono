@@ -451,22 +451,11 @@ mod tests {
                 .iter()
                 .any(|b| b["id"] == "harness:adi" && b["executor"] == "harness")
         );
-        assert!(
-            backends
-                .iter()
-                .any(|b| b["id"] == "wasm:loop-script" && b["executor"] == "wasm")
-        );
+        // The retired wasm employee backend is gone from the catalog.
+        assert!(!backends.iter().any(|b| b["executor"] == "wasm"));
 
         let fields = v["form"]["fields"].as_array().unwrap();
         assert!(fields.iter().any(|f| f["name"] == "api_key_env"));
-        assert!(fields.iter().any(|f| {
-            f["name"] == "wasm"
-                && f["backend_ids"]
-                    .as_array()
-                    .unwrap()
-                    .iter()
-                    .any(|id| id == "wasm:loop-script")
-        }));
         assert!(fields.iter().any(|f| {
             f["name"] == "permission_mode"
                 && f["backend_ids"]
@@ -533,38 +522,6 @@ mod tests {
         let store = temp_agents();
         let Response { status, .. } = run_agent(&store, br#"{"name":"ghost"}"#);
         assert_eq!(status, 404);
-    }
-
-    #[test]
-    fn agent_code_reads_and_writes_the_src_argument_file() {
-        let store = temp_agents();
-
-        let _ = save_agent(&store, br#"{"name":"emp","backend":"wasm:loop-script"}"#);
-        assert_eq!(agent_code(&store, br#"{"name":"emp"}"#).status, 400);
-        assert_eq!(agent_code(&store, br#"{"name":"ghost"}"#).status, 404);
-
-        let src = std::env::temp_dir().join(format!(
-            "adi-webapp-api-agent-code-{}.ts",
-            std::process::id()
-        ));
-        std::fs::write(&src, "export const main = () => {};\n").unwrap();
-        let body = format!(
-            r#"{{"name":"emp","backend":"wasm:loop-script","arguments":{{"src":{}}}}}"#,
-            serde_json::to_string(&src.display().to_string()).unwrap()
-        );
-        let _ = save_agent(&store, body.as_bytes());
-
-        let Response { status, body } = agent_code(&store, br#"{"name":"emp"}"#);
-        assert_eq!(status, 200);
-        let v: Value = serde_json::from_str(&body).unwrap();
-        assert_eq!(v["code"], "export const main = () => {};\n");
-        assert_eq!(v["path"], src.display().to_string());
-
-        let save = serde_json::json!({"name": "emp", "code": "// edited\n"}).to_string();
-        let Response { status, .. } = save_agent_code(&store, save.as_bytes());
-        assert_eq!(status, 200);
-        assert_eq!(std::fs::read_to_string(&src).unwrap(), "// edited\n");
-        let _ = std::fs::remove_file(&src);
     }
 
     #[test]

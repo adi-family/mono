@@ -77,10 +77,12 @@ export function dbPath(project?: string | null): string {
   if (!project) {
     return process.env.ADI_DB || join(storeRoot(), "db", "global.db");
   }
+
   // The id is about to become a path segment; reject anything that isn't one.
   if (project === "." || project === ".." || !/^[A-Za-z0-9._-]+$/.test(project)) {
     throw new Error(`invalid project id: ${JSON.stringify(project)}`);
   }
+
   return join(storeRoot(), "db", "projects", `${project}.db`);
 }
 

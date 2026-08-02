@@ -4,10 +4,9 @@
 //! `dyn Runner` and never learns which engine it got, which is what stops "add a backend" from
 //! meaning "find every match in the crate and add an arm to it".
 //!
-//! A backend with no runner is not an error here. `wasm:loop-script` is dispatched synchronously and
-//! has no process to manage; an unknown or empty backend has nothing to run at all. Both answer
-//! `None`, and the caller turns that into [`Error::NotRunnable`](crate::Error::NotRunnable) at the
-//! point where it actually matters.
+//! A backend with no runner is not an error here: an unknown or empty backend has nothing to run at
+//! all. It answers `None`, and the caller turns that into
+//! [`Error::NotRunnable`](crate::Error::NotRunnable) at the point where it actually matters.
 
 use crate::backend::Backend;
 
@@ -24,8 +23,6 @@ pub fn runner_for(backend: &Backend) -> Option<Box<dyn Runner>> {
         | Backend::ProcessCodex
         | Backend::HarnessClaudeSdk
         | Backend::HarnessAdi => Some(Box::new(DetachedRunner::new(backend.clone()))),
-        // Dispatched synchronously, with no process to manage — see `crate::wasm`.
-        Backend::Wasm => None,
         // A plugin backend, or the empty default: kept verbatim through the store, run by nobody.
         Backend::Other(_) => None,
     }

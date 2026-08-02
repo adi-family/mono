@@ -42,7 +42,6 @@ mod run;
 pub mod runner;
 pub mod store;
 mod tool_help;
-pub mod wasm;
 mod workspace;
 
 use std::collections::BTreeMap;
@@ -70,14 +69,12 @@ pub use run::{
     Launch, Peek, RunInfo, Sent, Turn, capture_pane, is_runnable, running_sessions, send_keys,
     session_name,
 };
-pub use wasm::DispatchOutcome;
 
 use agent::validate_name;
 use runner::{RunEvent, RunSpec, Runner, Session, runner_for};
 use store::{SessionRecord, SessionRef, SessionStore, assistant_turn, user_turn};
 
 const AGENTS_MODULE: &str = "agents";
-const WORKFORCE_MODULE: &str = "workforce";
 const SESSIONS_MODULE: &str = "sessions";
 const MANIFEST_EXT: &str = "toml";
 
@@ -802,26 +799,6 @@ impl Agents {
             system_prompt: agent.manifest.system_prompt(),
             workspace_note,
         }
-    }
-
-    /// Dispatches a message synchronously to a `wasm:*` agent.
-    ///
-    /// # Errors
-    /// Returns lookup, backend, component loading, or dispatch errors.
-    pub fn run_wasm(
-        &self,
-        name: &str,
-        handler: Option<&str>,
-        message: &str,
-    ) -> Result<DispatchOutcome> {
-        let agent = self
-            .get(name)?
-            .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        if !wasm::is_wasm(&agent) {
-            return Err(Error::NotRunnable(agent.manifest.backend.to_string()));
-        }
-        let workforce_dir = self.config.module(WORKFORCE_MODULE).dir().to_path_buf();
-        wasm::dispatch(&agent, &workforce_dir, handler, message)
     }
 
     #[must_use]

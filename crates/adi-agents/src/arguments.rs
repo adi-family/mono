@@ -140,7 +140,6 @@ pub(crate) fn validate_builtin(manifest: &StoredAgentManifest) -> AgentResult<()
             .typed_arguments::<HarnessClaudeSdkArguments>()
             .map(drop),
         Backend::HarnessAdi => manifest.typed_arguments::<HarnessAdiArguments>().map(drop),
-        Backend::Wasm => manifest.typed_arguments::<WasmArguments>().map(drop),
         Backend::Other(_) => Ok(()),
     }
 }
@@ -408,28 +407,6 @@ pub struct HarnessAdiArguments {
         deserialize_with = "option_u64"
     )]
     pub seed: Option<u64>,
-}
-
-/// Arguments accepted by `wasm:loop-script` agents.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
-pub struct WasmArguments {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub system_prompt: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub model: Option<String>,
-    #[serde(
-        default,
-        skip_serializing_if = "Option::is_none",
-        deserialize_with = "option_u64"
-    )]
-    pub max_turns: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub src: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wasm: Option<String>,
 }
 
 /// The small typed projection used by human-readable list output.

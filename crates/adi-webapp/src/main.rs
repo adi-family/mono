@@ -49,7 +49,7 @@ use routing::{
     project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
-    AgentCodeEditor, AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, FleetForm,
+    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, FleetForm,
     Flash, Form, HookLogView,
     MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, State, Status, TasksForm, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
@@ -926,7 +926,6 @@ fn App() -> impl IntoView {
     let hook_log = HookLogView::new();
     let term_watch = TermWatch::new();
     let agents_watch = AgentsWatch::new();
-    let agents_code = AgentCodeEditor::new();
 
     // The Tools page's create/link form, and the run + script-editor panels it shares with a
     // project's Tools panel (page-scoped so they survive re-renders and thread into both).
@@ -1247,7 +1246,7 @@ fn App() -> impl IntoView {
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run),
                         Route::StoreFile => store_file_view(state),
                         Route::Tasks => tasks_view(state, tasks_form),
-                        Route::Agents => agents_view(state, agents_form, agents_watch, agents_code),
+                        Route::Agents => agents_view(state, agents_form, agents_watch),
                         Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
                         Route::Secrets => secrets_view(state, secrets_form),
                         Route::Database => database_view(state, db_console),

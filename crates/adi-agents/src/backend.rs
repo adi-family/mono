@@ -18,7 +18,6 @@ pub enum Backend {
     /// once any provider is configured (Anthropic, OpenAI, Gemini, Monshoot, or a local Ollama) —
     /// each turn calls that provider's chat API over the conversation transcript.
     HarnessAdi,
-    Wasm,
     /// A backend this crate doesn't run itself — a plugin backend, or the empty default.
     Other(String),
 }
@@ -33,19 +32,17 @@ impl Backend {
             Self::ProcessCodex => "process:codex",
             Self::HarnessClaudeSdk => "harness:claude-sdk",
             Self::HarnessAdi => "harness:adi",
-            Self::Wasm => "wasm:loop-script",
             Self::Other(value) => value,
         }
     }
 
-    /// The executor (`pty` / `process` / `harness` / `wasm`) — the part before the `:`. An
+    /// The executor (`pty` / `process` / `harness`) — the part before the `:`. An
     /// [`Other`](Self::Other) backend with no `:` (or the empty default) has no executor: `""`.
     pub(crate) fn executor(&self) -> &str {
         match self {
             Self::PtyClaude | Self::PtyCodex => "pty",
             Self::ProcessClaude | Self::ProcessCodex => "process",
             Self::HarnessClaudeSdk | Self::HarnessAdi => "harness",
-            Self::Wasm => "wasm",
             Self::Other(value) => value.split_once(':').map_or("", |(executor, _)| executor),
         }
     }
@@ -70,7 +67,6 @@ impl From<&str> for Backend {
             "process:codex" => Self::ProcessCodex,
             "harness:claude-sdk" => Self::HarnessClaudeSdk,
             "harness:adi" => Self::HarnessAdi,
-            "wasm:loop-script" => Self::Wasm,
             other => Self::Other(other.to_string()),
         }
     }
@@ -88,7 +84,6 @@ impl From<String> for Backend {
             "process:codex" => Self::ProcessCodex,
             "harness:claude-sdk" => Self::HarnessClaudeSdk,
             "harness:adi" => Self::HarnessAdi,
-            "wasm:loop-script" => Self::Wasm,
             // Reuse the already-owned string instead of re-allocating.
             _ => Self::Other(value),
         }
@@ -128,7 +123,6 @@ mod tests {
             "process:codex",
             "harness:claude-sdk",
             "harness:adi",
-            "wasm:loop-script",
         ] {
             let backend = Backend::from(wire);
             assert!(
@@ -162,6 +156,9 @@ mod tests {
             "cloud:worker",
             "harness:unknown",
             "pty:unknown",
+            // The retired wasm employee backend. A manifest still carrying it round-trips
+            // through the store untouched; nothing runs it.
+            "wasm:loop-script",
             "weird",
             "",
         ] {
@@ -177,7 +174,6 @@ mod tests {
         assert_eq!(Backend::ProcessCodex.executor(), "process");
         assert_eq!(Backend::HarnessClaudeSdk.executor(), "harness");
         assert_eq!(Backend::HarnessAdi.executor(), "harness");
-        assert_eq!(Backend::Wasm.executor(), "wasm");
         assert_eq!(Backend::from("harness:plugin").executor(), "harness");
         assert_eq!(Backend::from("weird").executor(), "");
         assert_eq!(Backend::default().executor(), "");

@@ -9,7 +9,6 @@ environment's root agent); everything else is an ordinary definition.
 - `process:claude` / `process:codex` — the same CLI headless, one `--print` turn.
 - `harness:claude-sdk` — `claude --print` under ADI's harness (a turn cap + scoped tools).
 - `harness:adi` — ADI's own agent loop, multi-provider (needs a provider API key).
-- `wasm:*` — a Workforce employee whose loop is set by its own config.
 
 ## Do it
 - List: `{{cli}} agents list` or `GET /api/agents`. Panel: `/agents`.
