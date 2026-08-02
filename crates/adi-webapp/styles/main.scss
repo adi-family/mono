@@ -432,6 +432,29 @@
     padding: 3px 10px;
     font-size: var(--text-sm);
   }
+  // The rail's "starred only" toggle, left of "+ New". A quiet glyph until it is on, when it fills
+  // and takes the accent — the list below is then showing less than everything, and the only thing
+  // saying so is this.
+  &__starred {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color var(--transition), background var(--transition);
+
+    &:hover { color: var(--ink); background: var(--surface-2); }
+    &.is-on { color: var(--accent); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  }
   &__empty {
     padding: var(--space-3);
     color: var(--muted);

@@ -83,6 +83,17 @@ pub(crate) struct State {
     /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
     /// a reload closes it again.
     pub(crate) show_hidden: RwSignal<bool>,
+    /// Whether the chat rail is narrowed to the sessions of **starred** agents. **On** by default,
+    /// matching the agent picker above it: a fleet's long tail of one-off and machine-made agents
+    /// is not what the rail is for, and starring is already how this app says which agents matter.
+    /// Turning it off is the way to reach everything else.
+    ///
+    /// Page state rather than a stored preference, like the two signals around it — a reload comes
+    /// back to the starred shortlist.
+    ///
+    /// The agent currently on screen is exempt while it is on, the same escape hatch the agent
+    /// picker gives itself: a filter must never hide what the centre pane is showing.
+    pub(crate) starred_only: RwSignal<bool>,
     /// Which side rail is open as a drawer, on a viewport too narrow to seat both beside the chat.
     /// `None` on a wide one, where the rails are always in the layout and this is never read.
     ///
@@ -231,6 +242,7 @@ impl State {
             row_menu: RwSignal::new(None),
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
+            starred_only: RwSignal::new(true),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
         }

@@ -1545,6 +1545,7 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                 <div class="adi-chome__side-head">
                     <span class="adi-chome__side-title">"Sessions"</span>
                     <span class="adi-spacer"></span>
+                    {move || chat_starred_button(state)}
                     {move || chat_new_button(state, watch)}
                     <button class="adi-chome__drawer-close" type="button" aria-label="Close"
                         on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
@@ -1678,6 +1679,55 @@ fn last_touch(r: &AgentRunInfo) -> u64 {
     r.last_activity.max(r.started_at)
 }
 
+/// The rail's **starred only** toggle, in the Sessions head beside "+ New".
+///
+/// A fleet grows a long tail of one-off and machine-made agents, and their chats land in the same
+/// flat list as the handful of agents actually worked with. This narrows the rail to the agents
+/// starred on the Agents page — the same shortlist the agent picker already draws from, now
+/// answering "show me only the sessions I care about" as well as "which agent does + New start".
+///
+/// On by default, so the rail opens as the same shortlist the picker does. The glyph fills and takes
+/// the accent while it is on, because a list showing less than everything has to say so — and it is
+/// the only thing here that says it. Clicking it off is how the long tail is reached, for as long as
+/// the page is open; the setting is not stored, so a reload comes back to the shortlist.
+fn chat_starred_button(state: State) -> AnyView {
+    let on = state.starred_only.get();
+    let (glyph, hint) = if on {
+        ("\u{2605}", "showing starred agents only \u{2014} click to show every session")
+    } else {
+        ("\u{2606}", "show only sessions from starred agents")
+    };
+    view! {
+        <button class="adi-chome__starred" class:is-on=on type="button"
+            title=hint aria-label=hint aria-pressed=on.to_string()
+            on:click=move |_| state.starred_only.update(|v| *v = !*v)>{glyph}</button>
+    }
+    .into_any()
+}
+
+/// Which agents the rail may list, or `None` when it may list them all.
+///
+/// `Some` only while [`State::starred_only`] is on *and* the agents list has arrived — without it
+/// there is nothing to say which agents are starred, and narrowing on an empty answer would blank
+/// the rail for a beat on every load. The watched agent is always in the set, so the filter can
+/// never hide the conversation the centre pane is showing (the rule [`chat_agent_picker`] follows).
+fn starred_agents(state: State, watched: &str) -> Option<std::collections::HashSet<String>> {
+    if !state.starred_only.get() {
+        return None;
+    }
+    let list = state.agents.get()?;
+    let mut keep: std::collections::HashSet<String> = list
+        .agents
+        .into_iter()
+        .filter(|a| a.starred)
+        .map(|a| a.name)
+        .collect();
+    if !watched.is_empty() {
+        keep.insert(watched.to_string());
+    }
+    Some(keep)
+}
+
 /// The whole left rail: every agent's sessions in one flat list, most recently updated first, and
 /// the collapsed Hidden band under it.
 ///
@@ -1733,10 +1783,15 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         })
         .unwrap_or_default();
     let now = js_sys::Date::now() as u64;
+    // `None` unless the head's ★ is on, in which case only these agents' sessions are listed.
+    let keep = starred_agents(state, &watched);
 
     let mut rows: Vec<SessionRow> = Vec::new();
     let mut listed_watched = false;
     for ar in all.iter().flat_map(|a| a.agents.iter()) {
+        if keep.as_ref().is_some_and(|k| !k.contains(&ar.name)) {
+            continue;
+        }
         let is_watched = ar.name == watched;
         listed_watched |= is_watched;
         if ar.interactive {
@@ -1786,12 +1841,14 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         }
     }
     if rows.is_empty() {
-        return view! {
-            <div class="adi-chome__empty">
-                "No chats yet — press New to start one."
-            </div>
-        }
-        .into_any();
+        // Which of the two emptinesses this is: nothing to show, or nothing left after the filter —
+        // said apart, so the ★ never reads as "you have no chats".
+        let msg = if keep.is_some() {
+            "No chats from starred agents — star one on the Agents page, or turn ★ off."
+        } else {
+            "No chats yet — press New to start one."
+        };
+        return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
     }
     // Most recently updated first. A stable sort, so sessions that last moved at the same instant —
     // the live pty rows, all stamped "now" — keep the order the index listed them in.
@@ -1996,9 +2053,13 @@ fn open_session(watch: AgentsWatch, agent: &str, run_id: &str) {
 /// Unhide — as does the ↩ that rides the row's right edge.
 fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let all = state.all_chats.get()?;
+    // The ★ narrows this band with the list above it — one filter over the whole rail, or unhiding
+    // would offer chats the rail has just been told not to show.
+    let keep = starred_agents(state, &watch.name.get().unwrap_or_default());
     let mut rows: Vec<(String, AgentRunInfo)> = all
         .agents
         .iter()
+        .filter(|ar| keep.as_ref().is_none_or(|k| k.contains(&ar.name)))
         .flat_map(|ar| {
             ar.runs
                 .iter()
@@ -2167,9 +2228,6 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
                                 "Start a chat with "
                                 {move || chat_agent_picker(state, watch)}
                             </h2>
-                            <p class="adi-chome__compose-sub">
-                                "Ask it to set something up — or pick a past session on the left."
-                            </p>
                         </div>
                         {run_bar(state, watch)}
                     </div>

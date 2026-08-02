@@ -844,6 +844,7 @@ fn App() -> impl IntoView {
         row_menu: RwSignal::new(None),
         session_menu: RwSignal::new(None),
         show_hidden: RwSignal::new(false),
+        starred_only: RwSignal::new(true),
         chat_drawer: RwSignal::new(None),
         // Each table restores the arrangement its user last left, else its declared columns.
         tables: state::Tables::new(),
