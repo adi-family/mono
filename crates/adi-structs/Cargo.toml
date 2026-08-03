@@ -1,0 +1,27 @@
+[package]
+name = "adi-structs"
+description = "Dev tool: distills every struct, enum and type alias a crate declares into its own `structs.gen.md`, so the shapes the code moves around can be read — and diffed — on one page."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+# A repo-side tool, never shipped. It is also absent from the workspace's `default-members`,
+# so a plain `cargo build` / `cargo test` never pays for it.
+publish = false
+
+[[bin]]
+name = "adi-structs"
+path = "src/main.rs"
+
+[dependencies]
+# The item shapes come straight out of the source text, sliced by span, so a rendered type reads
+# exactly as it was written. That slicing needs proc-macro2's `span-locations`.
+proc-macro2 = { version = "1", features = ["span-locations"] }
+syn = { version = "2", features = ["full", "parsing", "printing"] }
+# Crate descriptions for the page header come from each member's manifest.
+toml = { workspace = true }
+
+[lints]
+workspace = true

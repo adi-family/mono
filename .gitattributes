@@ -1,0 +1,4 @@
+# The per-crate type pages are written by `cargo run -p adi-structs`, never by hand. Marking them
+# generated collapses them by default in GitHub diffs and keeps them out of language statistics —
+# the diff is still there to read when a review wants to see the data model move.
+crates/*/structs.gen.md linguist-generated=true

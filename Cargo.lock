@@ -254,6 +254,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-structs"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "syn 2.0.118",
+ "toml 0.8.23",
+]
+
+[[package]]
 name = "adi-tasks"
 version = "0.1.0"
 dependencies = [
