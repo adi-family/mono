@@ -1,0 +1,6 @@
+# Per-episode sandboxes and raw results — regenerate by re-running the benchmark.
+runs/
+results.jsonl
+summary.csv
+__pycache__/
+.tokencache.json
