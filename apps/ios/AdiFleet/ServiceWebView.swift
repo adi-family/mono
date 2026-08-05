@@ -50,6 +50,15 @@ struct ServiceView: View {
         }
         .navigationTitle("\(service) · \(node.petname)")
         .navigationBarTitleDisplayMode(.inline)
+        // The bar goes away for the page itself, and only for the page. A dashboard is one origin
+        // with its own header (`docs/fleet.md` §4), so a second one stacked above it spends ~44pt
+        // restating the row that was just tapped — on a phone that is the difference between one
+        // panel visible and two.
+        //
+        // Kept for the loading and failure states on purpose: those have nothing to fill the screen
+        // with, and the failure state in particular is the one place a person needs an obvious way
+        // back rather than a gesture they have to know about.
+        .toolbar(port == nil ? .visible : .hidden, for: .navigationBar)
         .task {
             if share {
                 asking = true
@@ -139,7 +148,12 @@ private struct WebView: UIViewRepresentable {
         // non-persistent store would throw that away on every launch.
         let view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         view.navigationDelegate = context.coordinator
-        view.allowsBackForwardNavigationGestures = true
+        // Off, and that is what makes hiding the navigation bar safe. Both this and the stack's
+        // interactive pop want the same left-edge swipe, and with no bar on screen the pop is the
+        // only way out — so the two cannot both have it. In-page history is the smaller loss: a
+        // dashboard is a single-origin app with its own controls, while being unable to leave it is
+        // a dead end.
+        view.allowsBackForwardNavigationGestures = false
         view.load(URLRequest(url: url))
         return view
     }
