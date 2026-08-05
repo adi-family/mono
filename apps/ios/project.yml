@@ -39,6 +39,17 @@ targets:
         MARKETING_VERSION: 0.1.0
         TARGETED_DEVICE_FAMILY: "1,2"
 
+        # App Store Connect refuses a build with no icon, so this is not decoration. One
+        # 1024×1024 entry is all iOS 17 wants — the system derives every other size and applies
+        # the corner mask itself, which is why the art is full-bleed with no rounded corners or
+        # alpha of its own (it is `apps/macos/ADI.icns` with its macOS padding cropped away).
+        #
+        # Compiling it needs a **simulator runtime matching the SDK**, even for a device build:
+        # without one, actool fails every build with "No simulator runtime version from [...]
+        # available to use with iphonesimulator SDK version". Install with
+        # `xcodebuild -downloadPlatform iOS` (~8.5 GB) if a checkout suddenly cannot build.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
         # The C surface. The header lives with the crate that implements it, so the two cannot drift.
         SWIFT_OBJC_BRIDGING_HEADER: AdiFleet/Bridging-Header.h
         HEADER_SEARCH_PATHS: $(SRCROOT)/../../crates/adi-mesh-ffi/include

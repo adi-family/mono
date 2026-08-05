@@ -10,6 +10,7 @@
 		060FC297C72073A05484A82A /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 74AB47C0B6791E8F7657B6C8 /* SystemConfiguration.framework */; };
 		258DE79A1FE477BEF77454AE /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C479E979A7B9FBAE75B67D4E /* PairView.swift */; };
 		29957511B7645E68FFC80926 /* Mesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9022E6221D9CC1870992A9F6 /* Mesh.swift */; };
+		2AE770396A73DBCBC45811BC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F738BDAB8A92EFA4D13E943E /* Assets.xcassets */; };
 		4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */; };
 		4FF44BF699BB2558112D36D2 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 135E1D5460ED7431969EB180 /* Security.framework */; };
 		75E28B5E6570CEF41BC0A80A /* AdiFleetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE5E4124908EE0786E73BA6 /* AdiFleetApp.swift */; };
@@ -33,6 +34,7 @@
 		AC93220237C7671FE362AFB6 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		C479E979A7B9FBAE75B67D4E /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
 		D074423A31FA51BC8156B3CF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		F738BDAB8A92EFA4D13E943E /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -69,6 +71,7 @@
 			isa = PBXGroup;
 			children = (
 				0FE5E4124908EE0786E73BA6 /* AdiFleetApp.swift */,
+				F738BDAB8A92EFA4D13E943E /* Assets.xcassets */,
 				11F0C3FB658F3828AAC70CA1 /* Bridging-Header.h */,
 				D074423A31FA51BC8156B3CF /* ContentView.swift */,
 				9B455AF868E08BF351E128AE /* FleetModel.swift */,
@@ -99,6 +102,7 @@
 			buildConfigurationList = D97CA9CAB975740C9F4F9043 /* Build configuration list for PBXNativeTarget "AdiFleet" */;
 			buildPhases = (
 				3CF45D5333A62BC0A2319B70 /* Sources */,
+				728E0E4C26C2A02B45E36031 /* Resources */,
 				D2A56861165389D9BC35351E /* Frameworks */,
 			);
 			buildRules = (
@@ -145,6 +149,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		728E0E4C26C2A02B45E36031 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2AE770396A73DBCBC45811BC /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		3CF45D5333A62BC0A2319B70 /* Sources */ = {

@@ -39,9 +39,23 @@
 			</array>
 		</dict>
 	</array>
+	<!-- iPhone: no upside-down, which is the platform convention and what a phone held to read a
+	     dashboard actually wants. -->
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationLandscapeLeft</string>
+		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<!-- iPad: all four, and not by preference. The app ships for iPad too
+	     (TARGETED_DEVICE_FAMILY "1,2"), and App Store Connect *rejects* an iPad build that omits
+	     any of them unless it also declares UIRequiresFullScreen — a split-screen app cannot be
+	     told which way the device is held. Validation caught this as error 90474; the same thing
+	     shows up locally as the "All interface orientations must be supported" build warning. -->
+	<key>UISupportedInterfaceOrientations~ipad</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
