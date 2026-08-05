@@ -30,10 +30,15 @@ WKWebView → 127.0.0.1:<port>  (a listener inside this app)
 it with [xcodegen](https://github.com/yonaskolb/XcodeGen) and committed so that opening the app needs
 only Xcode. A setting changed in Xcode's UI is lost at the next `build.sh project`.
 
-Signing uses the free **Personal Team** in `project.yml`; override it with
-`DEVELOPMENT_TEAM=XXXXXXXXXX ./build.sh device`. The app declares no capability, so there is nothing
-a paid membership would unlock — the only cost of the free tier is that a build stops launching
-after seven days and has to be reinstalled.
+Signing uses the team in `project.yml` — the paid **IHOR HERASYMOVYCH** team, `752556J5V6`.
+Override it with `DEVELOPMENT_TEAM=XXXXXXXXXX ./build.sh device`.
+
+The app declares no capability, so a free **Personal Team** signs it just as well — but the two
+differ in one way worth planning around. A free team's provisioning profile lasts **seven days**,
+after which the build stops launching and has to be reinstalled; a paid one is minted for a **year**
+(check with `security cms -D -i .build-device/Products/AdiFleet.app/embedded.mobileprovision |
+plutil -p -`, which is also how to tell which you actually got — `codesign -dv` reports the team
+identifier, and the certificate's own name can name a different one).
 
 ### Neither build uses `-destination`, on purpose
 

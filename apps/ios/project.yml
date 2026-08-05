@@ -62,9 +62,12 @@ targets:
         # development certificate can put it on a device. Override without editing this file:
         #   DEVELOPMENT_TEAM=XXXXXXXXXX ./build.sh device
         CODE_SIGN_STYLE: Automatic
-        # A free "Personal Team" is enough, and is what this is: the app declares no capability, so
-        # there is nothing here a paid membership would unlock. The cost of the free tier is that a
-        # build stops launching after seven days and has to be reinstalled.
+        # A free "Personal Team" would be enough — the app declares no capability, so there is
+        # nothing here a paid membership unlocks — but this is not one. 752556J5V6 is the paid
+        # "IHOR HERASYMOVYCH" team, and the difference is worth knowing before you plan around it:
+        # a free team's provisioning profile expires after **seven days** and the build stops
+        # launching, while this one is minted for a **year** (the installed build's profile runs to
+        # 2027-07-31). Nothing here has to be reinstalled weekly.
         DEVELOPMENT_TEAM: 752556J5V6
       configs:
         Debug:
