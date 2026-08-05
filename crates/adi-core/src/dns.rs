@@ -1119,6 +1119,11 @@ impl Dns {
             &linux_plan::capability_steps(&hive_binary_path()),
         );
 
+        // Same reason as `on_enable`: this file is the node's route table for the mesh gateway,
+        // not just the front door's config, so it is written even when neither privileged step
+        // above succeeded and no front door will run.
+        write_frontdoor_config();
+
         // The front door itself is ordinary user work — but only worth starting if it can bind.
         if granted || frontdoor_can_bind() {
             install_frontdoor_unit();
@@ -1295,6 +1300,14 @@ impl Service for Dns {
     ///   the command that fixes it — the case that used to be a silent no-op.
     #[cfg(target_os = "linux")]
     fn on_enable(&self) {
+        // The rendered front-door config is also the node's **route table**: the mesh gateway
+        // resolves an incoming service label against it (`docs/fleet.md` §6), falling back to this
+        // generated file when there is no hand-managed `hive/hive.yaml`. So it is written whether
+        // or not a front door can be supervised. Writing it only alongside the unit was the bug
+        // that made a mesh-only node — the normal case, since binding :80 needs a capability the
+        // node never has to grant — answer every request with `ServiceUnknown` while looking
+        // perfectly healthy: paired, authorized, reachable, serving nothing.
+        write_frontdoor_config();
         if !frontdoor_can_bind() {
             report_frontdoor_blocked();
             return;

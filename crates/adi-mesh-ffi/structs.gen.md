@@ -4,11 +4,12 @@
 
 > The viewer half of the adi mesh behind a C ABI, so a platform that cannot run adi — an iPhone — can still reach a node by key: pair, then open <service>.<node> on a loopback port.
 
-4 structs · 1 enum · 1 type alias across 3 files.
+11 structs · 1 enum · 1 type alias across 4 files.
 
 ## Index
 
 - [`src/lib.rs`](#srclibrs) — `Reply`
+- [`src/viewer/catalog.rs`](#srcviewercatalogrs) — `Catalog`, `DashboardInfo`, `DashboardsReply`, `RawDashboard`, `FleetReply`, `RawPeer`, `HttpReply`
 - [`src/viewer/ports.rs`](#srcviewerportsrs) — `PortMap`
 - [`src/viewer.rs`](#srcviewerrs) — `NodeInfo`, `Paired`, `Shared`, `Viewer`
 
@@ -32,6 +33,105 @@ enum Reply<T> {
         ok: bool,
         error: String,
     },
+}
+```
+
+---
+
+## `src/viewer/catalog.rs`
+
+### struct `Catalog`
+
+A node's dashboards, as this phone may see them.
+
+```rust
+#[derive(Debug, Serialize)]
+pub struct Catalog {
+    pub me: Option<String>,
+    pub dashboards: Vec<DashboardInfo>,
+}
+```
+
+### struct `DashboardInfo`
+
+One dashboard on a node.
+
+```rust
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct DashboardInfo {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub service: Option<String>,
+    pub running: bool,
+    pub allowed: bool,
+}
+```
+
+### struct `DashboardsReply`
+
+`GET /api/dashboards`. Every field is optional here even where the panel's own DTO makes it required: this is the *client* half of a version skew, and one missing key should cost the row its detail, never the whole listing.
+
+```rust
+#[derive(Debug, Deserialize)]
+struct DashboardsReply {
+    #[serde(default)]
+    dashboards: Vec<RawDashboard>,
+}
+```
+
+### struct `RawDashboard`
+
+```rust
+#[derive(Debug, Deserialize)]
+struct RawDashboard {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    frontend_running: bool,
+    #[serde(default)]
+    archived_at: Option<u64>,
+}
+```
+
+### struct `FleetReply`
+
+`GET /api/fleet` — the node's own view of who it has paired with, which is where this phone finds both its petname there and the grants it actually holds.
+
+```rust
+#[derive(Debug, Deserialize)]
+struct FleetReply {
+    #[serde(default)]
+    nodes: Vec<RawPeer>,
+}
+```
+
+### struct `RawPeer`
+
+```rust
+#[derive(Debug, Deserialize)]
+struct RawPeer {
+    petname: String,
+    key: String,
+    #[serde(default)]
+    grants: Vec<String>,
+}
+```
+
+### struct `HttpReply`
+
+A parsed HTTP response: the status, and everything after the blank line.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+struct HttpReply {
+    status: u16,
+    body: Vec<u8>,
 }
 ```
 

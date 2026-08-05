@@ -4,7 +4,7 @@
 
 > adi-family peer mesh over iroh: expose a machine's allow-listed local ports to authorized peers, and forward a local port to a peer's allowed port — peer-to-peer (QUIC + relay-assisted NAT traversal), no public IP required.
 
-24 structs · 10 enums across 9 files.
+25 structs · 10 enums across 9 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/config.rs`](#srcconfigrs) — `MeshConfig`, `HostConfig`, `Forward`
 - [`src/daemon.rs`](#srcdaemonrs) — `Daemon`
 - [`src/fleet.rs`](#srcfleetrs) — `Scope`, `Grant`, `Target`, `NodeRecord`, `NameProblem`, `Pairing`, `NicknameChange`, `FleetRegistry`
-- [`src/gateway.rs`](#srcgatewayrs) — `Snapshot`, `Routes`, `Peer`, `Gateway`, `IrohDialer`, `Pool`, `Slot`, `SlotState`
+- [`src/gateway.rs`](#srcgatewayrs) — `Snapshot`, `Routes`, `Peer`, `Gateway`, `Admitted`, `IrohDialer`, `Pool`, `Slot`, `SlotState`
 - [`src/join.rs`](#srcjoinrs) — `Invite`, `PendingInvite`, `ClaimError`, `InviteBook`, `JoinRequest`, `Accepted`, `JoinReply`, `Joined`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/node.rs`](#srcnoders) — `NodeConfig`
@@ -269,6 +269,18 @@ pub struct Gateway {
     registry: Snapshot<FleetRegistry>,
     routes: Snapshot<Routes>,
     pool: Pool<IrohDialer>,
+}
+```
+
+### struct `Admitted`
+
+A peer's request, admitted: the local service it goes to, and whether this connection carries only it.
+
+```rust
+#[derive(Debug)]
+struct Admitted {
+    upstream: TcpStream,
+    single_request: bool,
 }
 ```
 
