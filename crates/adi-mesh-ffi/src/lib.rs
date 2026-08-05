@@ -179,6 +179,61 @@ pub unsafe extern "C" fn adi_mesh_open(
     })
 }
 
+/// The dashboards `node` publishes, as [`viewer::Catalog`].
+///
+/// Asked of the node's own control panel over the mesh, with the credential the phone holds for
+/// it — see [`viewer::Catalog`] for why the list cannot come from the protocol itself. Every row
+/// says whether this phone may open it; [`adi_mesh_allow`] is how a `false` becomes a `true`.
+///
+/// # Safety
+/// `node`, `username` and `password` must be valid NUL-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn adi_mesh_dashboards(
+    node: *const c_char,
+    username: *const c_char,
+    password: *const c_char,
+) -> *mut c_char {
+    let (node, username, password) =
+        unsafe { (borrow(node), borrow(username), borrow(password)) };
+    with_viewer(|viewer| {
+        let node = node.context_missing("node")?;
+        let username = username.context_missing("username")?;
+        let password = password.context_missing("password")?;
+        viewer.dashboards(node, username, password)
+    })
+}
+
+/// Ask `node` to let this phone open `service`. Returns `{"petname": "<what the node calls us>"}`.
+///
+/// The grant is added through the node's control panel, which the phone is already inside — see
+/// `viewer::catalog` for why that is a reach and not an escalation.
+///
+/// # Safety
+/// `node`, `service`, `username` and `password` must be valid NUL-terminated C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn adi_mesh_allow(
+    node: *const c_char,
+    service: *const c_char,
+    username: *const c_char,
+    password: *const c_char,
+) -> *mut c_char {
+    let (node, service, username, password) = unsafe {
+        (
+            borrow(node),
+            borrow(service),
+            borrow(username),
+            borrow(password),
+        )
+    };
+    with_viewer(|viewer| {
+        let node = node.context_missing("node")?;
+        let service = service.context_missing("service")?;
+        let username = username.context_missing("username")?;
+        let password = password.context_missing("password")?;
+        Ok(serde_json::json!({ "petname": viewer.allow(node, service, username, password)? }))
+    })
+}
+
 /// Drain the pairings that completed since the last call, as an array of [`viewer::Paired`].
 ///
 /// **Each pairing is returned exactly once**, and it carries the plaintext password. The caller is
@@ -247,12 +302,17 @@ mod tests {
     fn every_entry_point_answers_before_the_mesh_is_started() {
         // The contract the Swift side leans on: a call made too early is a readable failure, not a
         // crash and not a hang. `start` is excluded — it is the one that changes the state.
+        let null = std::ptr::null();
         for reply in [
             adi_mesh_status(),
             adi_mesh_invite(),
             adi_mesh_nodes(),
             adi_mesh_take_pairings(),
             adi_mesh_resume(),
+            // The argument-taking ones answer the same way, and answer it *before* looking at
+            // their arguments: "the mesh is not started" is the fix, not "your node is null".
+            unsafe { adi_mesh_dashboards(null, null, null) },
+            unsafe { adi_mesh_allow(null, null, null, null) },
         ] {
             let value = read(reply);
             assert_eq!(value["ok"], false);

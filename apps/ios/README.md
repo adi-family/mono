@@ -58,6 +58,32 @@ Pairing is pull-only (`docs/fleet.md` §8), so the phone mints and the node spen
 straight into the Keychain — `ThisDeviceOnly`, so it cannot follow an iCloud account onto a device
 that was never paired. Only a rotated password brings up a prompt.
 
+## Dashboards
+
+A node's dashboards are listed under it by name, and a tap opens one full-screen on its own origin
+— the same page, the same `/api`, as on the machine itself (`docs/fleet.md` §4).
+
+Two things had to be true for that, and neither is a protocol change:
+
+**The list comes from the node's control panel.** `adi/mesh/http/1` deliberately cannot answer
+"what do you serve?" — the node refuses an unauthorized peer *before* it looks at its route table,
+so that nobody can enumerate a machine's services by watching two refusals differ. But `app` is a
+service like any other: it is what the default grant names, it is behind the node's password, and it
+already publishes `GET /api/dashboards`. A phone holding that password is entitled to the answer, so
+it just asks (`viewer::catalog`).
+
+**A dashboard nobody has named is not shared yet.** §8 makes the default grant `http:app` and
+nothing else, on purpose — pairing a phone must not hand it every page on the machine. So a freshly
+paired node lists its dashboards with *Not shared with this phone yet*, and the tap asks for the
+grant (`POST /api/fleet/grants/add`) before binding the port. That asks through the panel the phone
+is already inside, with the same password, so it is a reach and not an escalation: `http:app` can
+already create dashboards and run tasks. What the grant buys is the browser reaching the page
+directly, on its own origin, instead of driving it through the panel.
+
+The grant is mirrored into the phone's own registry afterwards, so its node list agrees with what
+the node will actually serve — the same thing pairing does for the grants it writes. The mirror is
+never consulted when opening: the node decides every request on its own copy (§5).
+
 ## Two decisions worth knowing
 
 **A port per service, not one gateway.** On a Mac the front door owns `*.n.adi` and hands the
@@ -73,9 +99,10 @@ forbids rewriting `Host` so that a node's absolute redirects land back on the or
 actually on — and here that origin *is* the loopback port. Routing on the far side never reads
 `Host`; it uses the service label in the frame.
 
-**Services are named, not discovered.** The protocol has no "list your services" call, so the app
-shows what the node's grants name. `http:app` lists one service; `http:*` lists what it can and
-offers a field to name another. Nothing here guesses.
+**Everything but a dashboard is named, not discovered.** The protocol still has no "list your
+services" call, and dashboards are only listed because the control panel knows them by name (above).
+For the rest, the app shows what the node's grants name: `http:app` lists one service; `http:*` lists
+what it can and offers a field to name another. Nothing here guesses.
 
 ## What is not built
 

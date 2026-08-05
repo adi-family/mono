@@ -52,7 +52,9 @@ use std::sync::{Mutex as SyncMutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use adi_hive::config::Hive;
-use adi_hive::proxy::{Decision, Router as HiveRouter};
+use adi_hive::proxy::{
+    Decision, Router as HiveRouter, force_connection_close, is_upgrade_request,
+};
 use anyhow::Context as _;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointId};
@@ -276,6 +278,14 @@ impl Routes {
             _ => None,
         }
     }
+
+    /// Whether this label's host is shared by two services on different path prefixes, asked of
+    /// the same table and the same rule the front door uses.
+    #[must_use]
+    pub fn carved(&self, service: &str) -> bool {
+        self.router
+            .host_is_carved(&format!("{service}.{LOCAL_ZONE}"))
+    }
 }
 
 /// One paired peer, as the node side needs it for a single connection: what we call it, and the
@@ -297,6 +307,11 @@ pub trait NodeSide: Send + Sync + 'static {
 
     /// Where `service` lives locally for this request target.
     fn resolve(&self, service: &str, target: &str) -> Option<SocketAddr>;
+
+    /// Whether `service`'s host is *carved up* — some route on it claims a path prefix, so which
+    /// upstream answers depends on the request and not merely on the label. Every dashboard is
+    /// (its backend claims `/api`, `docs/fleet.md` §4).
+    fn carved(&self, service: &str) -> bool;
 
     /// The Basic-auth realm — this node's name, which is what a browser shows in its prompt.
     fn realm(&self) -> String;
@@ -381,6 +396,10 @@ impl NodeSide for Gateway {
         self.routes.get().resolve(service, target)
     }
 
+    fn carved(&self, service: &str) -> bool {
+        self.routes.get().carved(service)
+    }
+
     /// The realm a node challenges with: its own nickname, which is the same string it offered
     /// at pairing ([`crate::node::nickname`]).
     ///
@@ -446,14 +465,18 @@ async fn serve_stream<N: NodeSide>(
     mut send: SendStream,
     mut recv: RecvStream,
 ) -> anyhow::Result<()> {
-    let Some(upstream) = negotiate(peer, node.as_ref(), &mut send, &mut recv).await? else {
+    let Some(admitted) = negotiate(peer, node.as_ref(), &mut send, &mut recv).await? else {
         // Already answered — a status byte, or a `401` on an accepted stream. Finishing the
         // stream is enough: the connection is shared and stays up, so the peer reliably reads
         // what we wrote without us lingering on it the way a per-tunnel connection must.
         let _ = send.finish();
         return Ok(());
     };
-    tunnel::splice(upstream, send, recv).await;
+    if admitted.single_request {
+        tunnel::splice_closing(admitted.upstream, send, recv).await;
+    } else {
+        tunnel::splice(admitted.upstream, send, recv).await;
+    }
     Ok(())
 }
 
@@ -470,7 +493,7 @@ async fn negotiate<N, W, R>(
     node: &N,
     send: &mut W,
     recv: &mut R,
-) -> anyhow::Result<Option<TcpStream>>
+) -> anyhow::Result<Option<Admitted>>
 where
     N: NodeSide + ?Sized,
     W: AsyncWrite + Unpin,
@@ -526,8 +549,38 @@ where
         }
     }
 
+    // On a carved host the upstream above was chosen from *this* request, and what follows is a
+    // byte splice — so every later request on this connection would land on it too. A browser
+    // makes that wrong at once: it loads the page, then sends the page's `/api` calls down the
+    // same keep-alive connection, where they reach the frontend that served `/` and the dashboard
+    // reports its own backend down. So the connection is told to end with this exchange, both
+    // ways: here in the request head, and in the response head by [`tunnel::splice_closing`].
+    //
+    // An upgrade is exempt for the reason splicing exists: past its handshake the connection stops
+    // being a sequence of requests and belongs to one upstream by definition.
+    let single_request = node.carved(&service) && !is_upgrade_request(&head);
+    let head = if single_request {
+        force_connection_close(&head)
+    } else {
+        head
+    };
+
     upstream.write_all(&head).await?;
-    Ok(Some(upstream))
+    Ok(Some(Admitted {
+        upstream,
+        single_request,
+    }))
+}
+
+/// A peer's request, admitted: the local service it goes to, and whether this connection carries
+/// only it.
+#[derive(Debug)]
+struct Admitted {
+    /// The local service, connected, with the request head already written to it.
+    upstream: TcpStream,
+    /// Whether the client must be told the connection ends with this request — true on a carved
+    /// host, where the next request may belong to the other service.
+    single_request: bool,
 }
 
 /// May this peer have this service, and where does it live?
@@ -1219,6 +1272,10 @@ mod tests {
             self.routes.resolve(service, target)
         }
 
+        fn carved(&self, service: &str) -> bool {
+            self.routes.carved(service)
+        }
+
         fn realm(&self) -> String {
             "laptop-b".to_string()
         }
@@ -1256,7 +1313,7 @@ mod tests {
         peer: EndpointId,
         service: &str,
         head: &str,
-    ) -> (Vec<u8>, Option<TcpStream>) {
+    ) -> (Vec<u8>, Option<Admitted>) {
         let (mut client, server) = tokio::io::duplex(64 * 1024);
         let (mut recv, mut send) = tokio::io::split(server);
         protocol::write_http_request(&mut client, service)
@@ -1527,18 +1584,92 @@ mod tests {
         .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
 
         let head = get_head("nosh.laptop-b.n.adi", "/api/tasks", &basic("igor", "hunter2"));
-        let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
+        let (reply, admitted) = negotiate_over(&node, key, "nosh", &head).await;
         assert_eq!(reply, vec![HttpStatus::Ok as u8]);
-        assert!(upstream.is_some());
+        let admitted = admitted.expect("the backend was handed over");
+        assert!(
+            admitted.single_request,
+            "a carved host may not hand over the whole connection"
+        );
 
         let (mut served, _) = backend.accept().await.expect("the backend was connected");
-        let mut got = vec![0u8; head.len()];
-        served.read_exact(&mut got).await.expect("the head arrived");
-        assert_eq!(String::from_utf8_lossy(&got), head);
+        let got = read_head(&mut served).await.expect("the head arrived");
+        let got = String::from_utf8_lossy(&got).into_owned();
+        assert!(
+            got.starts_with("GET /api/tasks HTTP/1.1\r\nHost: nosh.laptop-b.n.adi\r\n"),
+            "the request line and `Host` stay untouched: {got}"
+        );
+        assert!(
+            got.contains("Authorization: Basic aWdvcjpodW50ZXIy\r\n"),
+            "and so does every header that is not about connection reuse: {got}"
+        );
+        assert!(
+            got.contains("Connection: close\r\n"),
+            "the one rewrite: this connection carries this request and no other, or the page's \
+             next `/api` call would ride the same splice to the frontend — {got}"
+        );
         // The frontend was only probed (the fallback route) and dropped, never written to.
         let (mut probed, _) = frontend.accept().await.expect("probed");
         let mut sink = [0u8; 8];
         assert_eq!(probed.read(&mut sink).await.expect("read"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_host_one_service_owns_end_to_end_keeps_its_head_verbatim() {
+        // The rewrite is scoped to the reason for it. A node's control panel owns `app.adi`
+        // whole, so every request on that connection resolves the same way and the connection may
+        // be handed over as it came — which is also what keeps a phone's listing cheap.
+        let key = some_key();
+        let (listener, port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[("app", "app.adi", None, port)]))
+            .with_peer(key, peer_named("phone", &["http:app"], "adi", "hunter2"));
+
+        let head = get_head("app.laptop-b.n.adi", "/api/dashboards", &basic("adi", "hunter2"));
+        let (_, admitted) = negotiate_over(&node, key, "app", &head).await;
+        assert!(!admitted.expect("handed over").single_request);
+
+        let (mut served, _) = listener.accept().await.expect("connected");
+        let mut got = vec![0u8; head.len()];
+        served.read_exact(&mut got).await.expect("the head arrived");
+        assert_eq!(String::from_utf8_lossy(&got), head, "byte for byte");
+    }
+
+    #[tokio::test]
+    async fn an_upgrade_on_a_carved_host_is_left_alone() {
+        // Past its handshake a WebSocket stops being a sequence of requests and belongs to one
+        // upstream by definition — which is the case splicing was written for. Telling it to
+        // close would break the very connection the client is trying to keep.
+        let key = some_key();
+        let (frontend, frontend_port) = idle_upstream().await;
+        let (_backend, backend_port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[
+            ("frontend", "nosh.adi", None, frontend_port),
+            ("backend", "nosh.adi", Some("/api"), backend_port),
+        ]))
+        .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+
+        let head = get_head(
+            "nosh.laptop-b.n.adi",
+            "/live",
+            &format!(
+                "{}Upgrade: websocket\r\nConnection: Upgrade\r\n",
+                basic("igor", "hunter2")
+            ),
+        );
+        let (_, admitted) = negotiate_over(&node, key, "nosh", &head).await;
+        assert!(
+            !admitted.expect("handed over").single_request,
+            "an upgrade keeps its connection"
+        );
+
+        let (mut served, _) = frontend.accept().await.expect("connected");
+        let mut got = vec![0u8; head.len()];
+        served.read_exact(&mut got).await.expect("the head arrived");
+        assert_eq!(
+            String::from_utf8_lossy(&got),
+            head,
+            "an upgrade head is forwarded verbatim, `Connection: Upgrade` included"
+        );
     }
 
     // -- C5: the pool ---------------------------------------------------------------------

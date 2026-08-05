@@ -58,7 +58,20 @@ struct ContentView: View {
         List {
             ForEach(model.nodes) { node in
                 Section {
-                    ForEach(node.services, id: \.self) { service in
+                    ForEach(model.dashboards[node.petname] ?? []) { dashboard in
+                        DashboardRow(node: node, dashboard: dashboard)
+                    }
+                    if model.listing.contains(node.petname) && model.dashboards[node.petname] == nil {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                            Text("Asking \(node.petname) what it has…")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    // A dashboard is a service, so anything already listed above would otherwise
+                    // appear twice — once by name and once by label.
+                    ForEach(services(of: node), id: \.self) { service in
                         NavigationLink(value: Route(node: node, service: service)) {
                             Label(service, systemImage: icon(for: service))
                         }
@@ -72,12 +85,7 @@ struct ContentView: View {
                 } header: {
                     header(for: node)
                 } footer: {
-                    if node.renamedItself, let pending = node.pending_nickname {
-                        // §2 rule 4: a node that renames itself files a notice; it never takes over
-                        // the links this device already has.
-                        Label("This node now calls itself “\(pending)”. Your name for it is unchanged.",
-                              systemImage: "info.circle")
-                    }
+                    footer(for: node)
                 }
                 .swipeActions {
                     Button("Unpair", role: .destructive) {
@@ -88,11 +96,17 @@ struct ContentView: View {
         }
         .navigationDestination(for: Route.self) { route in
             if let service = route.service {
-                ServiceView(node: route.node, service: service)
+                ServiceView(node: route.node, service: service, share: route.share, model: model)
             } else {
-                AnyServiceView(node: route.node)
+                AnyServiceView(node: route.node, model: model)
             }
         }
+    }
+
+    /// A node's plain services, minus the ones already on screen as a dashboard by name.
+    private func services(of node: Node) -> [String] {
+        let named = Set((model.dashboards[node.petname] ?? []).compactMap(\.service))
+        return node.services.filter { !named.contains($0) }
     }
 
     private func header(for node: Node) -> some View {
@@ -110,6 +124,23 @@ struct ContentView: View {
             Text(node.shortKey)
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.tertiary)
+        }
+    }
+
+    /// What a node has to say for itself under its section: a nickname it has declared, and why
+    /// its dashboards could not be listed.
+    @ViewBuilder
+    private func footer(for node: Node) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if node.renamedItself, let pending = node.pending_nickname {
+                // §2 rule 4: a node that renames itself files a notice; it never takes over the
+                // links this device already has.
+                Label("This node now calls itself “\(pending)”. Your name for it is unchanged.",
+                      systemImage: "info.circle")
+            }
+            if let problem = model.listingFailure[node.petname] {
+                Label(problem, systemImage: "exclamationmark.triangle")
+            }
         }
     }
 
@@ -138,16 +169,74 @@ struct ContentView: View {
     }
 }
 
-/// Where a tap goes. `service == nil` means "let me name one", which is what a `http:*` grant
-/// allows and what the protocol cannot enumerate for us.
+/// One dashboard, as a row.
+///
+/// The row is a link whether or not the node has shared it: a dashboard this phone may not open
+/// yet is one tap away from being one it may, and hiding that behind a separate control would make
+/// the common case — your own machine, which you have the password for — the awkward one. What the
+/// subtitle owes the reader is that the tap will ask.
+private struct DashboardRow: View {
+    let node: Node
+    let dashboard: NodeDashboard
+
+    var body: some View {
+        if let service = dashboard.service {
+            NavigationLink(value: Route(node: node, service: service, share: !dashboard.allowed)) {
+                label
+            }
+        } else {
+            // Nothing to route to: a dashboard with no `<label>.adi` host of its own is reachable
+            // on the node and nowhere else (`docs/fleet.md` §4).
+            label.foregroundStyle(.secondary)
+        }
+    }
+
+    private var label: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(dashboard.name)
+                if let note = subtitle {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        } icon: {
+            Image(systemName: "rectangle.3.group")
+        }
+    }
+
+    /// The one thing worth saying about this dashboard, in the order it matters: it cannot be
+    /// opened, it has not been shared, it is not running, or what it is for.
+    private var subtitle: String? {
+        if dashboard.service == nil {
+            return "No address on \(node.petname) yet, so there is nothing to open"
+        }
+        if !dashboard.allowed {
+            return "Not shared with this phone yet — tap to ask \(node.petname)"
+        }
+        if !dashboard.running {
+            return "Not running on \(node.petname)"
+        }
+        return dashboard.description
+    }
+}
+
+/// Where a tap goes.
+///
+/// `service == nil` means "let me name one", which is what a `http:*` grant allows and what the
+/// protocol cannot enumerate for us. `share` means the node has not granted this label yet, so
+/// opening it asks first.
 private struct Route: Hashable {
     let node: Node
     let service: String?
+    var share = false
 }
 
 /// For a node that granted `http:*`: ask which service, since nothing on the wire can list them.
 private struct AnyServiceView: View {
     let node: Node
+    let model: FleetModel
     @State private var service = ""
 
     var body: some View {
@@ -158,7 +247,7 @@ private struct AnyServiceView: View {
                     .autocorrectionDisabled()
                     .font(.system(.body, design: .monospaced))
                 NavigationLink("Open") {
-                    ServiceView(node: node, service: service)
+                    ServiceView(node: node, service: service, model: model)
                 }
                 .disabled(service.isEmpty)
             } header: {

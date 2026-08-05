@@ -11,9 +11,15 @@ import WebKit
 struct ServiceView: View {
     let node: Node
     let service: String
+    /// True when the node has not granted this label yet, so it is asked to before the port is
+    /// bound. Doing it in this order matters: a listener bound to a service the node refuses would
+    /// answer every request with the same refusal page, and reloading would never clear it.
+    var share = false
+    let model: FleetModel
 
     @State private var port: UInt16?
     @State private var failure: String?
+    @State private var asking = false
     @State private var challenge = AuthChallenge()
 
     var body: some View {
@@ -32,12 +38,28 @@ struct ServiceView: View {
                     Text(failure)
                 }
             } else {
-                ProgressView().controlSize(.large)
+                VStack(spacing: 12) {
+                    ProgressView().controlSize(.large)
+                    if asking {
+                        Text("Asking \(node.petname) to share \(service)…")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
         .navigationTitle("\(service) · \(node.petname)")
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            if share {
+                asking = true
+                let refusal = await model.share(service, on: node)
+                asking = false
+                if let refusal {
+                    failure = refusal
+                    return
+                }
+            }
             do {
                 port = try await Mesh.shared.open(node: node.petname, service: service)
             } catch {

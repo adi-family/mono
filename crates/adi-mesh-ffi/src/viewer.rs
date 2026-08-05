@@ -44,7 +44,10 @@ use tokio::sync::watch;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
+mod catalog;
 mod ports;
+
+pub use catalog::{Catalog, DashboardInfo};
 
 /// How long to wait for a home relay before settling for the address we have.
 ///
@@ -331,6 +334,48 @@ impl Viewer {
         Ok(port)
     }
 
+    /// The dashboards `node` publishes, and which of them this phone may open.
+    ///
+    /// The credential is the node's own Basic-auth pair — the human-scoped half of §5 — and it is
+    /// passed in per call rather than held: on a phone it lives in the Keychain, and a copy kept
+    /// here would be a second place for it to leak from.
+    ///
+    /// # Errors
+    /// If the node is not paired, cannot be reached, or refuses the credential.
+    pub fn dashboards(
+        &self,
+        node: &str,
+        username: &str,
+        password: &str,
+    ) -> anyhow::Result<Catalog> {
+        let (key, grants) = paired(node)?;
+        let me = self.key();
+        let shared = Arc::clone(&self.shared);
+        self.rt
+            .block_on(async move { catalog::fetch(&shared, key, &me, (username, password), &grants).await })
+    }
+
+    /// Ask `node` to let this phone open `service`, returning the petname it granted under.
+    ///
+    /// # Errors
+    /// If the node is not paired, cannot be reached, no longer lists this phone, or refuses.
+    pub fn allow(
+        &self,
+        node: &str,
+        service: &str,
+        username: &str,
+        password: &str,
+    ) -> anyhow::Result<String> {
+        let (key, _) = paired(node)?;
+        let me = self.key();
+        let shared = Arc::clone(&self.shared);
+        let petname = self
+            .rt
+            .block_on(async move { catalog::allow(&shared, key, &me, service, (username, password)).await })?;
+        mirror_grant(node, service);
+        Ok(petname)
+    }
+
     /// Take the pairings that completed since the last call, draining the queue.
     #[must_use]
     pub fn take_pairings(&self) -> Vec<Paired> {
@@ -580,11 +625,57 @@ async fn gateway_error(tcp: &mut TcpStream, headline: &str, detail: &str) -> any
 // Grants → a service list
 // ---------------------------------------------------------------------------------------
 
+/// A paired node's key, and this phone's own record of what it was granted there.
+///
+/// Read fresh from the registry on every call rather than cached: a node forgotten between two
+/// taps must stop being reachable at the next one, not at the next launch.
+fn paired(node: &str) -> anyhow::Result<(EndpointId, Vec<Grant>)> {
+    let registry = FleetRegistry::load()?;
+    let record = registry
+        .get(node)
+        .with_context(|| format!("no node called {node:?} is paired with this phone"))?;
+    let key = record
+        .endpoint_id()
+        .with_context(|| format!("the key recorded for {node:?} is not a valid endpoint id"))?;
+    Ok((key, record.grants.clone()))
+}
+
+/// Record on this side the grant a node has just added for this phone.
+///
+/// Pairing writes the same rule into both registries (`join.rs`), and this keeps that property
+/// true for a grant added afterwards — otherwise the node would happily serve a dashboard that
+/// this phone's own node list never mentions, and `http:*` would be the only way to see one.
+///
+/// It is a mirror and never a source: [`Viewer::open`] does not consult it, and the node decides
+/// every request on its own copy (`docs/fleet.md` §5). So a failure to write it is logged and
+/// nothing more — the dashboard still opens.
+fn mirror_grant(node: &str, service: &str) {
+    let mut registry = match FleetRegistry::load() {
+        Ok(registry) => registry,
+        Err(e) => {
+            warn!(error = %e, "could not mirror the new grant locally");
+            return;
+        }
+    };
+    let Some(record) = registry.get_mut(node) else {
+        return;
+    };
+    if !record.grant(Grant::Http(Scope::One(service.to_string()))) {
+        return; // Already held here; nothing to write.
+    }
+    if let Err(e) = registry.save() {
+        warn!(error = %e, "could not save the mirrored grant");
+    }
+}
+
 /// The service labels a grant list names, and whether it also allows any label at all.
 ///
-/// The protocol has no "list your services" call, so this is everything a viewer can honestly say
-/// about a node before asking it for something. `http:*` therefore returns `any_service`, and the
-/// UI turns that into a field a human types into rather than a list it pretends to know.
+/// The protocol has no "list your services" call, so this is everything a viewer can say about a
+/// node from its own registry. `http:*` therefore returns `any_service`, and the UI turns that
+/// into a field a human types into rather than a list it pretends to know.
+///
+/// Dashboards are the one thing that *is* enumerable, and not from here: [`catalog`] asks the
+/// node's control panel, which knows them by name.
 fn grantable_services(grants: &[Grant]) -> (Vec<String>, bool) {
     let mut named = Vec::new();
     let mut any = false;

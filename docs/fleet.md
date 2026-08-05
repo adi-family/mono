@@ -110,6 +110,16 @@ from modifying the node.
   too — a gate that only covers plain requests is not a gate.
 - Fail-closed: a node refuses to bind a non-loopback address unless credentials are configured.
 
+**Grants are added through the panel, and that is not a hole in the first layer.** A peer that holds
+`http:app` and the node's password can call `POST /api/fleet/grants/add` and give itself `http:nosh`
+— which is exactly how a phone opens a dashboard it was not granted at pairing (`apps/ios`). Nothing
+is escalated by it: the control panel already creates dashboards, moves ports and runs tasks, so a
+peer that can ask for a grant can already ask for far more. What the grant changes is reach, not
+authority — the browser gets the page on its own origin (§4) instead of driving it through the
+panel. Both layers still have to be passed to reach the panel at all, which is the property that
+matters: a key nobody authorized gets nothing, and an authorized key without the password gets a
+`401`.
+
 ## 6. What runs on a node
 
 `adi-mono`, `adi-hive`, `adi-dns`, `adi-app`, and the mesh daemon. The node keeps its own hive

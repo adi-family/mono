@@ -16,7 +16,7 @@ enum Keychain {
     private static let service = "family.adi.fleet.node"
 
     /// What a node's services demand.
-    struct Credential: Codable {
+    struct Credential: Codable, Sendable {
         let username: String
         let password: String
     }

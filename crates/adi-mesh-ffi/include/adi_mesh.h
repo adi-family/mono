@@ -37,6 +37,18 @@ char *adi_mesh_nodes(void);
 // Bind (or reuse) the loopback port serving `service` on `node`. value: {"port": <number>}
 char *adi_mesh_open(const char *node, const char *service);
 
+// The dashboards `node` publishes, asked of its control panel over the mesh with the credential
+// this device holds for it. `allowed` says whether this device's grants already cover the row;
+// `service` is NULL for a dashboard that declares no <label>.adi host and so cannot be opened.
+// value: {"me": "<what the node calls this device>" | null,
+//         "dashboards": [{"id", "name", "description", "service", "running", "allowed"}]}
+char *adi_mesh_dashboards(const char *node, const char *username, const char *password);
+
+// Ask `node` to grant this device `http:<service>` — how a dashboard with "allowed": false
+// becomes one this device may open. value: {"petname": "<what the node calls this device>"}
+char *adi_mesh_allow(const char *node, const char *service, const char *username,
+                     const char *password);
+
 // Drain pairings completed since the last call; each is returned EXACTLY ONCE and carries the
 // plaintext password, which belongs in the Keychain and nowhere else.
 // value: [{"petname", "username", "password"}]

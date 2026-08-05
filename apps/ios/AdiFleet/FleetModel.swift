@@ -20,6 +20,18 @@ final class FleetModel {
     /// The petname of the node paired most recently, so the list can say which row is new.
     private(set) var justPaired: String?
 
+    /// Each node's dashboards, by petname, once it has answered. A node that has not answered yet
+    /// is *absent*; one that answered with nothing is an empty array — and the two read
+    /// differently on screen, which is the point of not defaulting to `[]`.
+    private(set) var dashboards: [String: [NodeDashboard]] = [:]
+    /// Petnames with a listing in flight, so a section can say so rather than look empty.
+    private(set) var listing: Set<String> = []
+    /// Why a node's listing failed, by petname.
+    ///
+    /// Deliberately not `failure`: one sleeping node must not raise an alert over the whole fleet,
+    /// and the sentence belongs next to the node it is about.
+    private(set) var listingFailure: [String: String] = [:]
+
     private var started = false
 
     /// Start the mesh and load what it already knows. Safe to call more than once.
@@ -32,20 +44,90 @@ final class FleetModel {
             failure = error.localizedDescription
             return
         }
-        await refresh()
-        // Detached, because the relay handshake takes seconds and the node list must be on screen
-        // before then. `start()` awaiting this would mean a launch that looks hung.
+        await collectPairings()
+        await reloadNodes()
+        // Both detached, and for the same reason: the relay handshake takes seconds and a node
+        // that is asleep takes the core's whole step timeout to say so. The node list is a file
+        // read and is on screen immediately; a launch that waited for either of these would look
+        // hung while it had everything it needed to draw.
+        Task { await listEverything() }
         Task { await pollReadiness() }
     }
 
     /// Re-read the node list and collect any pairing that completed.
     func refresh() async {
         await collectPairings()
+        await reloadNodes()
+        await listEverything()
+    }
+
+    /// Just the node list — the part that is a file read and always answers.
+    private func reloadNodes() async {
         do {
             nodes = try await Mesh.shared.nodes()
         } catch {
             failure = error.localizedDescription
         }
+    }
+
+    /// Ask every node for its dashboards, all at once.
+    ///
+    /// Concurrently, because these are independent machines: one asleep would otherwise add its
+    /// whole timeout to the wait for every node after it.
+    private func listEverything() async {
+        let nodes = nodes
+        await withTaskGroup(of: Void.self) { group in
+            for node in nodes {
+                group.addTask { @MainActor in await self.list(node) }
+            }
+        }
+    }
+
+    /// Ask one node what dashboards it has.
+    ///
+    /// A node this phone has no password for is not asked at all. That is not a failure to report
+    /// as one: the panel's own gate is what the password answers (`docs/fleet.md` §5), and opening
+    /// the node's control panel once is what fills the Keychain — so the sentence says that.
+    func list(_ node: Node) async {
+        guard let credential = Keychain.credential(for: node.petname) else {
+            listingFailure[node.petname] =
+                "No password for \(node.petname) on this phone yet — open its control panel once and sign in."
+            return
+        }
+        listing.insert(node.petname)
+        defer { listing.remove(node.petname) }
+        do {
+            let catalog = try await Mesh.shared.dashboards(node: node.petname, credential: credential)
+            dashboards[node.petname] = catalog.dashboards
+            listingFailure[node.petname] = nil
+        } catch {
+            listingFailure[node.petname] = error.localizedDescription
+        }
+    }
+
+    /// Ask `node` to share `dashboard` with this phone, so its page can be opened directly.
+    ///
+    /// The grant is the node's to make and this only asks for it — through the same control panel
+    /// the phone is already inside, with the same password. On success the row stops saying it is
+    /// unshared straight away rather than at the next listing, because the person is looking at it.
+    ///
+    /// Returns the error to show, or `nil` when the node agreed.
+    func share(_ service: String, on node: Node) async -> String? {
+        guard let credential = Keychain.credential(for: node.petname) else {
+            return "This phone has no password for \(node.petname), so it cannot ask for anything."
+        }
+        do {
+            try await Mesh.shared.allow(node: node.petname, service: service, credential: credential)
+        } catch {
+            return error.localizedDescription
+        }
+        dashboards[node.petname] = dashboards[node.petname]?.map {
+            $0.service == service ? $0.shared() : $0
+        }
+        // The core mirrored the grant into this phone's own registry, so the node's service list
+        // has changed too.
+        await reloadNodes()
+        return nil
     }
 
     /// Called when the app returns to the foreground: the OS froze the process, so every pooled
@@ -74,7 +156,11 @@ final class FleetModel {
         do {
             _ = try await Mesh.shared.forget(node: node.petname)
             Keychain.remove(for: node.petname)
-            await refresh()
+            // Nothing of a forgotten node stays behind: its listing would otherwise reappear under
+            // a re-used petname that is a different machine.
+            dashboards[node.petname] = nil
+            listingFailure[node.petname] = nil
+            await reloadNodes()
         } catch {
             failure = error.localizedDescription
         }

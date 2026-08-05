@@ -327,14 +327,6 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
     };
     server.write_all(&head).await?;
 
-    // Asking the upstream to close is the polite half and frees the socket early, but it is only a
-    // request: Bun's server — which every dashboard here runs on — reads `Connection: close` and
-    // keeps the connection open regardless. The half that actually decides is the client, so the
-    // response head says it too, on its way past.
-    if single_request {
-        forward_closing_response_head(&mut server, &mut client).await?;
-    }
-
     // `tokio::io::split` rather than TcpStream's inherent borrow-split: the client half is generic
     // now, and this is the one form that works for any stream (TLS included).
     let (mut cread, mut cwrite) = tokio::io::split(client);
@@ -343,7 +335,26 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
         let _ = tokio::io::copy(&mut cread, &mut swrite).await;
         let _ = swrite.shutdown().await;
     };
+    // Asking the upstream to close is the polite half and frees the socket early, but it is only a
+    // request: Bun's server — which every dashboard here runs on — reads `Connection: close` and
+    // keeps the connection open regardless. The half that actually decides is the client, so the
+    // response head says it too, on its way past.
+    //
+    // This waits for the upstream to answer, so it belongs *inside* the server→client direction and
+    // not before the splice. Awaited before it, it deadlocks every request whose body did not fit in
+    // the bytes [`read_head`] already consumed: the rest of that body is still sitting in the client
+    // socket with nothing pumping it, the upstream is waiting out its `Content-Length`, and so the
+    // response head being waited on here is one the upstream cannot send yet. Both halves must run
+    // together — the head rewrite is the first thing this direction does, not the last thing before
+    // the other direction starts.
     let server_to_client = async {
+        if single_request
+            && let Err(e) = forward_closing_response_head(&mut sread, &mut cwrite).await
+        {
+            debug!(%host, %upstream, error = %e, "forwarding response head failed");
+            let _ = cwrite.shutdown().await;
+            return;
+        }
         let _ = tokio::io::copy(&mut sread, &mut cwrite).await;
         let _ = cwrite.shutdown().await;
     };
@@ -362,7 +373,14 @@ async fn handle<S: ClientStream>(mut client: S, router: &Router) -> anyhow::Resu
 /// A head that never terminates — a truncated upstream, or one past [`MAX_HEAD`] — is forwarded as
 /// it came. The connection then behaves as it did before this rewrite existed, which is the right
 /// failure: degraded, not broken.
-async fn forward_closing_response_head<S: ClientStream, C: ClientStream>(
+///
+/// Public for the same reason [`Router`] is: the mesh gateway splices a carved host too, from the
+/// other side of the machine, and a second implementation of this rewrite would be a second set of
+/// rules to keep in step.
+///
+/// # Errors
+/// Any read or write error on either side.
+pub async fn forward_closing_response_head<S: AsyncRead + Unpin, C: AsyncWrite + Unpin>(
     server: &mut S,
     client: &mut C,
 ) -> anyhow::Result<()> {
@@ -403,7 +421,7 @@ fn is_informational(head: &[u8]) -> bool {
 }
 
 /// Read until the blank line ending the head, a size cap, or a timeout; the returned buffer is forwarded verbatim (may include first body bytes).
-async fn read_head<S: ClientStream>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
+async fn read_head<S: AsyncRead + Unpin>(stream: &mut S) -> anyhow::Result<Vec<u8>> {
     use anyhow::Context as _;
     let mut buf = Vec::new();
     let mut chunk = [0u8; 1024];
@@ -457,7 +475,11 @@ const REUSE_HEADERS: [&[u8]; 3] = [b"connection", b"keep-alive", b"proxy-connect
 /// Whether the client is asking to leave HTTP behind on this connection (a WebSocket handshake, or
 /// any other `Upgrade`). Read from both spellings: the `Upgrade` header, and `upgrade` listed as a
 /// token in `Connection`.
-fn is_upgrade_request(head: &[u8]) -> bool {
+///
+/// Public because the mesh gateway must exempt exactly the same requests it does — see
+/// [`forward_closing_response_head`].
+#[must_use]
+pub fn is_upgrade_request(head: &[u8]) -> bool {
     let text = String::from_utf8_lossy(head);
     for line in text.split("\r\n") {
         if line.is_empty() {
@@ -490,7 +512,10 @@ fn is_upgrade_request(head: &[u8]) -> bool {
 /// normalisation pass. A head whose end never arrived (a peer that stopped mid-headers, or one that
 /// ran past [`MAX_HEAD`]) is returned untouched — it cannot be edited safely, and forwarding it
 /// verbatim is what used to happen anyway.
-fn force_connection_close(head: &[u8]) -> Vec<u8> {
+///
+/// Public for the mesh gateway — see [`forward_closing_response_head`].
+#[must_use]
+pub fn force_connection_close(head: &[u8]) -> Vec<u8> {
     let Some(end) = head_end(head) else {
         return head.to_vec();
     };
@@ -994,10 +1019,19 @@ mod tests {
         let addr = upstream.local_addr().unwrap();
         let received = tokio::spawn(async move {
             let (mut sock, _) = upstream.accept().await.unwrap();
-            let head = read_head(&mut sock).await.unwrap();
+            // The whole request, not just its head: a real backend answers only once it holds the
+            // body, and that ordering is precisely what the splice has to get right.
+            let mut req = read_head(&mut sock).await.unwrap();
+            let want = head_end(&req).unwrap_or(req.len()) + content_length(&req).unwrap_or(0);
+            while req.len() < want {
+                let mut chunk = [0u8; 4096];
+                let n = sock.read(&mut chunk).await.unwrap();
+                assert_ne!(n, 0, "upstream hit EOF at {} of {want} bytes", req.len());
+                req.extend_from_slice(&chunk[..n]);
+            }
             sock.write_all(response).await.unwrap();
             sock.shutdown().await.unwrap();
-            head
+            req
         });
 
         let router = Arc::new(Router::new(
@@ -1026,6 +1060,16 @@ mod tests {
     /// A plain answer, for the tests that only care what the upstream was sent.
     const OK: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n";
 
+    /// `Content-Length` off a head, so the fake upstream knows how much body to wait for.
+    fn content_length(head: &[u8]) -> Option<usize> {
+        String::from_utf8_lossy(head)
+            .split("\r\n")
+            .take_while(|line| !line.is_empty())
+            .filter_map(|line| line.split_once(':'))
+            .find(|(name, _)| name.trim().eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse().ok())
+    }
+
     fn carved_host() -> Router {
         Router::new(
             &[
@@ -1051,6 +1095,29 @@ mod tests {
             received,
             b"GET / HTTP/1.1\r\nHost: nosh.adi\r\nConnection: close\r\n\r\n".to_vec(),
         );
+    }
+
+    /// The deadlock the splice ordering exists to avoid. The response-head rewrite waits on the
+    /// upstream, so running it *before* the splice stranded every request whose body did not fit in
+    /// the bytes [`read_head`] had already taken: the rest sat unread in the client socket, the
+    /// upstream waited out its `Content-Length`, and the head being waited for could never arrive.
+    /// A body under ~1 KB rode along in that first read and worked, which is why only long writes —
+    /// saving a full draft — hung, and why the rest of a dashboard looked healthy.
+    #[tokio::test]
+    async fn a_carved_host_carries_a_body_larger_than_the_first_read() {
+        let body = "x".repeat(8 * 1024);
+        let request = format!(
+            "POST /api/save HTTP/1.1\r\nHost: nosh.adi\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        let (received, answered) = proxied(carved_host(), request.as_bytes(), OK).await;
+        assert!(
+            received.ends_with(body.as_bytes()),
+            "upstream got {} body bytes, not {}",
+            received.len() - head_end(&received).unwrap_or(0),
+            body.len(),
+        );
+        assert!(answered.starts_with(b"HTTP/1.1 200 OK"), "no response reached the client");
     }
 
     /// The other side of the same rule: a host one service owns keeps its keep-alive, because every

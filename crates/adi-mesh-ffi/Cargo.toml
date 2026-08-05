@@ -22,6 +22,10 @@ adi-config = { workspace = true }
 
 iroh = { workspace = true }
 
+# The node's control panel is reached with the same Basic-auth header a browser would send
+# (docs/fleet.md §5), so the credential has to be encoded exactly once, here.
+base64 = { workspace = true }
+
 serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = "1"
