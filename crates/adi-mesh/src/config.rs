@@ -23,6 +23,18 @@ pub struct MeshConfig {
     pub host: HostConfig,
     /// Local ports this machine forwards to a peer's port.
     pub forwards: Vec<Forward>,
+    /// The relay servers this machine may call home (`docs/fleet.md` §9). **Empty means n0's
+    /// public relays**, which is what every machine used before this field existed.
+    ///
+    /// A **list**, not one URL, and that is the whole scaling story. iroh measures every relay in
+    /// the map and each machine settles on its own nearest as its home relay, so adding a second
+    /// region is a line here rather than a re-issue of anything: nothing routes through a relay
+    /// name a peer was once told, because a peer is dialled by key and resolved through discovery.
+    ///
+    /// Strings rather than `RelayUrl` for the same reason [`HostConfig::authorized_peers`] holds
+    /// strings: this file parses and tests without pulling iroh in. They are turned into a relay
+    /// map where the endpoint is built — see [`crate::relay::relay_mode`].
+    pub relays: Vec<String>,
 }
 
 /// The serving side: the ports peers may reach, and which peers may reach them.
@@ -209,5 +221,54 @@ port = 5432
         let cfg: MeshConfig = toml::from_str("").expect("empty parses");
         assert!(cfg.host.allow.is_empty());
         assert!(cfg.forwards.is_empty());
+        assert!(
+            cfg.relays.is_empty(),
+            "no relays configured is the public-relay default, and must stay expressible"
+        );
+    }
+
+    #[test]
+    fn relays_parse_as_a_list_and_round_trip() {
+        let cfg: MeshConfig = toml::from_str(
+            r#"
+relays = [
+  "https://mad.mono-relay.withadi.dev",
+  "https://fra.mono-relay.withadi.dev",
+]
+
+[host]
+allow = [3000]
+"#,
+        )
+        .expect("parses");
+        assert_eq!(
+            cfg.relays,
+            vec![
+                "https://mad.mono-relay.withadi.dev".to_string(),
+                "https://fra.mono-relay.withadi.dev".to_string(),
+            ],
+        );
+        assert_eq!(cfg.host.allow, vec![3000], "the rest of the file is untouched");
+
+        // A machine that saves its config must not lose its relays — this file is edited by hand
+        // *and* rewritten by every `mesh allow`/`grant` mutation.
+        let round_tripped: MeshConfig =
+            toml::from_str(&toml::to_string(&cfg).expect("serializes")).expect("re-parses");
+        assert_eq!(round_tripped.relays, cfg.relays);
+    }
+
+    #[test]
+    fn a_config_written_before_relays_existed_still_loads() {
+        // adi-app, the CLI and a node's binaries are versioned apart, so an older `mesh.toml` has
+        // to keep working — as "the public relays", which is exactly what it meant.
+        let cfg: MeshConfig = toml::from_str(
+            r#"
+[host]
+allow = [3000]
+authorized_peers = ["abc123"]
+"#,
+        )
+        .expect("parses");
+        assert!(cfg.relays.is_empty());
     }
 }

@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 use crate::config::MeshConfig;
 use crate::gateway::{self, Gateway};
-use crate::{client, host, identity, join, protocol, ticket};
+use crate::{client, host, identity, join, protocol, relay, ticket};
 
 /// How long to wait for a home relay before publishing a (possibly direct-only) ticket.
 const TICKET_RELAY_WAIT: Duration = Duration::from_secs(8);
@@ -44,7 +44,7 @@ impl Daemon {
     pub async fn start() -> anyhow::Result<Self> {
         let cfg = MeshConfig::load()?;
         let secret = identity::load_or_create()?;
-        let endpoint = Endpoint::builder(presets::N0)
+        let mut builder = Endpoint::builder(presets::N0)
             .secret_key(secret)
             // Every ALPN on one endpoint, so a machine keeps one identity and one relay session
             // whether a peer wants a raw port, a service (`docs/fleet.md` §7), or to be paired.
@@ -54,9 +54,15 @@ impl Daemon {
                 protocol::ALPN.to_vec(),
                 protocol::HTTP_ALPN.to_vec(),
                 join::ALPN.to_vec(),
-            ])
-            .bind()
-            .await?;
+            ]);
+        // After the preset, never instead of it: `presets::N0` also brings the pkarr publisher and
+        // the DNS lookup, and those stay whichever relays this machine calls home. Only the relay
+        // half is being overridden here.
+        if let Some(mode) = relay::relay_mode(&cfg.relays) {
+            info!(relays = ?cfg.relays, "adi-mesh using configured relays");
+            builder = builder.relay_mode(mode);
+        }
+        let endpoint = builder.bind().await?;
         let id = endpoint.id();
         info!(%id, "adi-mesh endpoint bound");
 

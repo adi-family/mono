@@ -33,7 +33,8 @@ use std::time::Duration;
 use adi_mesh::fleet::{FleetRegistry, Grant, Scope};
 use adi_mesh::gateway::{IrohDialer, Pool};
 use adi_mesh::protocol::{self, HttpStatus};
-use adi_mesh::{identity, join, ticket, tunnel};
+use adi_mesh::config::MeshConfig;
+use adi_mesh::{identity, join, relay, ticket, tunnel};
 use anyhow::Context as _;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointId};
@@ -187,15 +188,23 @@ impl Viewer {
 
         let endpoint = rt.block_on(async {
             let secret = identity::load_or_create()?;
-            Endpoint::builder(presets::N0)
+            let mut builder = Endpoint::builder(presets::N0)
                 .secret_key(secret)
                 // One ALPN, because a viewer accepts one thing. A phone serves no HTTP and no raw
                 // forward, so answering those ALPNs would be advertising a door with no room
                 // behind it — and `http:` grants a node might hold on us would then be reachable.
-                .alpns(vec![join::ALPN.to_vec()])
-                .bind()
-                .await
-                .context("binding the mesh endpoint")
+                .alpns(vec![join::ALPN.to_vec()]);
+            // Honoured, but never load-bearing: a viewer reaches a node through *that node's* home
+            // relay, which iroh dials whether or not it is in this map (it keeps an actor per relay
+            // it needs, home or not). So a phone talks over the fleet's own relay the moment the
+            // *nodes* are configured — this only decides where the phone itself would be reached,
+            // and nothing dials a phone.
+            let relays = MeshConfig::load().map(|cfg| cfg.relays).unwrap_or_default();
+            if let Some(mode) = relay::relay_mode(&relays) {
+                info!(?relays, "adi-mesh viewer using configured relays");
+                builder = builder.relay_mode(mode);
+            }
+            builder.bind().await.context("binding the mesh endpoint")
         })?;
         let key = endpoint.id();
         info!(%key, "adi-mesh viewer bound");

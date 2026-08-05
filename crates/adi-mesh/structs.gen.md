@@ -50,6 +50,7 @@ The whole `mesh.toml`.
 pub struct MeshConfig {
     pub host: HostConfig,
     pub forwards: Vec<Forward>,
+    pub relays: Vec<String>,
 }
 ```
 

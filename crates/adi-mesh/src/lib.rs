@@ -16,6 +16,7 @@ pub mod identity;
 pub mod join;
 pub mod node;
 pub mod protocol;
+pub mod relay;
 pub mod ticket;
 
 /// Splicing a local TCP connection to an iroh bi-stream. Public because the calling side is not

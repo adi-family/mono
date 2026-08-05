@@ -211,11 +211,40 @@ crossed a relay in Frankfurt or Virginia. That is the number a **self-hosted rel
 functionally nothing changes, but a relay near the users turns a transatlantic round trip into
 tens of milliseconds. Worth knowing before promising interactive latency over the default relays.
 
-`RelayMode` is per node. Default is n0's public relays plus DNS/pkarr discovery
-(`presets::N0`). A self-hosted relay (`iroh-relay`'s `server` feature, `RelayMode::Custom`) is
-supported for independence. On a shared LAN, `RelayMode::Disabled` plus mDNS address lookup
-gives direct QUIC with no internet at all. Off-LAN with no outbound connectivity is impossible
-by construction — the minimum is one outbound UDP/443 session.
+**The relay is a fallback data path, not a discovery service.** iroh's path selector files IPv4 and
+IPv6 as `primary` and the relay as `backup`, switching across tiers immediately — so while a direct
+path exists the relay carries nothing, and while one does not it carries *everything*. Treating it
+as "just signalling" is the mistake that makes a flapping relay look like a mystery outage.
+
+Relays are configured per machine, as a **list**, in `mesh.toml`:
+
+```toml
+relays = ["https://mad.mono-relay.withadi.dev"]
+```
+
+Empty means n0's public relays, which is what every machine ran before the field existed —
+deliberately *not* `RelayMode::Disabled`, because off-LAN that reads as "unreachable" far more often
+than "direct only". A list rather than one URL because iroh probes every relay in the map and each
+machine settles on its own nearest as its home (`net_report`'s `preferred_relay`): a second region
+is a line in this file, never a re-issue of anything. Nothing routes through a relay name a peer was
+once handed — peers are dialled by key and resolved through discovery — so moving a machine between
+relays is a live operation, and pre-sharding names across relays would solve a problem that does not
+exist. Entries that do not parse, or that are not `http(s)`, are skipped with a warning; a config
+that parses to *nothing* falls back to the public relays rather than to an empty map.
+
+**Only the machines that get dialled need configuring.** iroh keeps a relay actor per relay it
+needs, home or not, so a peer is reached through *its* home relay whatever the caller's own map
+says. A viewer that is never dialled — the iOS app — therefore works over the fleet's relay the
+moment the nodes are on it, with no release of its own.
+
+On a shared LAN, `RelayMode::Disabled` plus mDNS address lookup gives direct QUIC with no internet
+at all. Off-LAN with no outbound connectivity is impossible by construction — the minimum is one
+outbound UDP/443 session.
+
+Running one: `iroh-relay` with the `server` feature, `cert_mode = "LetsEncrypt"` (which **requires**
+a `contact` email or it exits at start-up), TCP 443 for the protocol, TCP 80 for ACME, and **UDP
+7842 for QUIC address discovery** — that last one is what lets a direct path form at all, so a relay
+behind anything that drops UDP is worse than no relay. Access defaults to `Everyone`.
 
 ## 10. Moving a dashboard to a node
 
