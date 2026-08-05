@@ -49,6 +49,13 @@
 	     loads http://127.0.0.1:<port>. The transport is not plaintext on the wire — it is QUIC with
 	     TLS 1.3 between authenticated keys; the only plaintext hop is inside this process, between
 	     WKWebView and the app's own socket. This key permits exactly that hop and nothing else. -->
+	<!-- Export compliance, answered here instead of by hand on every upload. The app's only
+	     cryptography is TLS 1.3 inside QUIC (iroh/rustls) and Ed25519 peer identities — standard
+	     algorithms used for authentication and a secure channel, which is the exemption in
+	     Category 5 Part 2 that this key declares. It implements no cryptography of its own.
+	     Revisit it if that ever stops being true; it is a legal declaration, not a build flag. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

@@ -89,5 +89,8 @@ schemes:
         AdiFleet: all
     run:
       config: Debug
+    # Release, because this is the configuration TestFlight ships. Archiving Debug would upload a
+    # build with assertions live and optimisation off — it would install and run, which is exactly
+    # what makes the mistake survive review.
     archive:
-      config: Debug
+      config: Release
