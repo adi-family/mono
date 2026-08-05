@@ -60,21 +60,6 @@ export ADI_VERSION="$VERSION"
 # adi-app embeds the webapp at compile time and happily embeds nothing — see the script.
 "$ROOT/scripts/require-webapp-dist.sh"
 
-# ── pick a builder ──────────────────────────────────────────────────────────────────────────
-# Plain cargo by default now that nothing in the tree needs a C crypto library: it is a native
-# compile with a cross-linker, so it is minutes faster than spinning a container, and it works on
-# any host that has the musl toolchain. `cross` stays available for hosts that don't.
-BUILDER="${BUILDER:-auto}"
-if [ "$BUILDER" = "auto" ]; then
-    if have_musl_cc; then
-        BUILDER="cargo"
-    elif command -v cross >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-        BUILDER="cross"
-    else
-        BUILDER="cargo"   # fails in preflight with the exact thing to install
-    fi
-fi
-
 have_target() {
     rustup target list --installed 2>/dev/null | grep -qx "$TARGET"
 }
@@ -87,6 +72,26 @@ have_musl_cc() {
     done
     return 1
 }
+
+# ── pick a builder ──────────────────────────────────────────────────────────────────────────
+# Plain cargo by default now that nothing in the tree needs a C crypto library: it is a native
+# compile with a cross-linker, so it is minutes faster than spinning a container, and it works on
+# any host that has the musl toolchain. `cross` stays available for hosts that don't.
+#
+# These two probes are defined *above* this block on purpose: sh resolves a function only once it
+# has been read, so with the definitions below it `have_musl_cc` was an unknown command here, the
+# `if` took its non-zero exit as "no toolchain", and auto-detection could never choose `cargo` —
+# every build silently fell through to the container route, on hosts that had the linker installed.
+BUILDER="${BUILDER:-auto}"
+if [ "$BUILDER" = "auto" ]; then
+    if have_musl_cc; then
+        BUILDER="cargo"
+    elif command -v cross >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        BUILDER="cross"
+    else
+        BUILDER="cargo"   # fails in preflight with the exact thing to install
+    fi
+fi
 
 # Fail *before* spending minutes compiling, and name the exact thing that is missing — a build
 # host is usually missing one of three specific pieces, and "linker not found" three minutes in
