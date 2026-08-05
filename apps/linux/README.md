@@ -44,18 +44,33 @@ temporarily — because pairing is a dial-out: the node contacts the relay, neve
 and then `adi-mono mesh join <token>`. Pass `--prefix DIR` to install elsewhere, or `--no-pair`
 to bring the services up now and pair later.
 
-### bun — only if you want dashboards
+### bun — fetched, not bundled
 
-A dashboard is a pair of [bun](https://bun.sh) servers, and bun is not bundled here: it is a
-separate runtime with its own releases and licence, and every other part of a node — the control
-panel, the mesh, project services — runs without it. Install it if the node should serve
-dashboards:
+A dashboard is a pair of [bun](https://bun.sh) servers. `install.sh` downloads bun into
+`$PREFIX/bin` for you, pinned to a known version and **verified against a pinned SHA-256** before
+it is made executable. Pass `--no-bun` to skip it.
 
-    curl -fsSL https://bun.sh/install | bash
+It is fetched at install time rather than shipped inside this tarball on purpose. bun itself is
+MIT, but it statically links JavaScriptCore (LGPL-2) and tinycc (LGPL-2.1); redistributing the
+binary in our package would carry their relink obligation with it. Downloading from oven-sh means
+the operator gets it upstream and unmodified — exactly as bun's own installer would — while we
+still pin the version a node runs.
 
-Without it the dashboards supervisor still starts and simply has nothing to run: a dashboard
-created on this node will be listed and have a hostname, and answer nothing. `install.sh` says
-so at the end rather than leaving that to be discovered.
+Two details that matter on a real node:
+
+* It lands in `$PREFIX/bin`, **not** `~/.bun/bin` where bun's own installer puts it. A
+  `systemd --user` unit inherits the manager's bare PATH, so a bun in `~/.bun/bin` is invisible to
+  the dashboards supervisor. The units adi-core writes carry a PATH covering both.
+* The x64 build needs AVX2; the installer reads `/proc/cpuinfo` and takes the `-baseline` build on
+  a CPU without it, because the wrong one dies with "Illegal instruction" at first run rather than
+  failing visibly at install.
+* bun ships only as a `.zip`, and a minimal cloud image often has no `unzip` — which is exactly
+  where bun's own installer stops. The installer falls back to `python3`'s stdlib zip reader.
+
+If bun cannot be fetched (no outbound access to GitHub, say), the install still succeeds and the
+node is still a working node: only dashboards need it. The dashboards supervisor then starts and
+has nothing to run — a dashboard would be listed, have a hostname, and answer nothing — so
+`install.sh` says so at the end rather than leaving that to be discovered.
 
 
 How supervision works
