@@ -20,6 +20,25 @@
 	<string>1</string>
 	<key>UILaunchScreen</key>
 	<dict/>
+	<!-- How a Home Screen shortcut reaches one dashboard. iOS gives an app no way to place an icon
+	     itself — only Safari and Shortcuts may — so the supported route is a Shortcut that opens a
+	     URL, and this is the URL it opens: adifleet://open?node=<petname>&service=<label>.
+	     A private scheme rather than a universal link on purpose: a universal link needs a domain
+	     serving an apple-app-site-association file, and a viewer that reaches its machines by key
+	     over the mesh should not need a website to open one of them. -->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>family.adi.fleet.link</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>adifleet</string>
+			</array>
+		</dict>
+	</array>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

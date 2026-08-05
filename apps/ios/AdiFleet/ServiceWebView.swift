@@ -30,7 +30,6 @@ struct ServiceView: View {
                     node: node.petname,
                     challenge: challenge
                 )
-                .ignoresSafeArea(edges: .bottom)
             } else if let failure {
                 ContentUnavailableView {
                     Label("Cannot open \(service)", systemImage: "exclamationmark.triangle")
@@ -48,6 +47,15 @@ struct ServiceView: View {
                 }
             }
         }
+        // The same black behind every state, and behind the safe areas the page is allowed to run
+        // under. Without it the screen is black only where the page has painted, and the strip
+        // under the home indicator stays the system background — which reads as a rendering bug.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.black)
+        .ignoresSafeArea(edges: .bottom)
+        // A dark page under a light status bar is unreadable, and the page is what fills the
+        // screen now — so the bar is told which it is sitting on.
+        .colorScheme(.dark)
         .navigationTitle("\(service) · \(node.petname)")
         .navigationBarTitleDisplayMode(.inline)
         // The bar goes away for the page itself, and only for the page. A dashboard is one origin
@@ -148,6 +156,14 @@ private struct WebView: UIViewRepresentable {
         // non-persistent store would throw that away on every launch.
         let view = WKWebView(frame: .zero, configuration: WKWebViewConfiguration())
         view.navigationDelegate = context.coordinator
+        // Black under the page, in three places because a white flash can come from any of them:
+        // the view itself before the first paint, the scroll view when a page is rubber-banded past
+        // its own end, and the default opaque white a WKWebView starts with. A dashboard's own CSS
+        // declares `color-scheme: light dark`, so on a dark phone it paints near-black — and the
+        // one frame of white before it does is exactly what is being removed here.
+        view.isOpaque = false
+        view.backgroundColor = .black
+        view.scrollView.backgroundColor = .black
         // Off, and that is what makes hiding the navigation bar safe. Both this and the stack's
         // interactive pop want the same left-edge swipe, and with no bar on screen the pop is the
         // only way out — so the two cannot both have it. In-page history is the smaller loss: a

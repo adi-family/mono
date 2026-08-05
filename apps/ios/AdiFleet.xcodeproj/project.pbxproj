@@ -10,6 +10,7 @@
 		060FC297C72073A05484A82A /* SystemConfiguration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 74AB47C0B6791E8F7657B6C8 /* SystemConfiguration.framework */; };
 		258DE79A1FE477BEF77454AE /* PairView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C479E979A7B9FBAE75B67D4E /* PairView.swift */; };
 		29957511B7645E68FFC80926 /* Mesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9022E6221D9CC1870992A9F6 /* Mesh.swift */; };
+		4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */; };
 		4FF44BF699BB2558112D36D2 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 135E1D5460ED7431969EB180 /* Security.framework */; };
 		75E28B5E6570CEF41BC0A80A /* AdiFleetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE5E4124908EE0786E73BA6 /* AdiFleetApp.swift */; };
 		A43BB4C535DC5ED9898C2BBA /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC93220237C7671FE362AFB6 /* Keychain.swift */; };
@@ -23,6 +24,7 @@
 		11F0C3FB658F3828AAC70CA1 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		135E1D5460ED7431969EB180 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		1749117E8649A1A160365B69 /* AdiFleet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AdiFleet.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreenLink.swift; sourceTree = "<group>"; };
 		44262FFE6FE69FE791F924BD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		74AB47C0B6791E8F7657B6C8 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceWebView.swift; sourceTree = "<group>"; };
@@ -70,6 +72,7 @@
 				11F0C3FB658F3828AAC70CA1 /* Bridging-Header.h */,
 				D074423A31FA51BC8156B3CF /* ContentView.swift */,
 				9B455AF868E08BF351E128AE /* FleetModel.swift */,
+				1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */,
 				44262FFE6FE69FE791F924BD /* Info.plist */,
 				AC93220237C7671FE362AFB6 /* Keychain.swift */,
 				9022E6221D9CC1870992A9F6 /* Mesh.swift */,
@@ -151,6 +154,7 @@
 				75E28B5E6570CEF41BC0A80A /* AdiFleetApp.swift in Sources */,
 				FB7AB119801270FDC547ED7E /* ContentView.swift in Sources */,
 				C811A4995BB1ABDCE2AA4A82 /* FleetModel.swift in Sources */,
+				4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */,
 				A43BB4C535DC5ED9898C2BBA /* Keychain.swift in Sources */,
 				29957511B7645E68FFC80926 /* Mesh.swift in Sources */,
 				258DE79A1FE477BEF77454AE /* PairView.swift in Sources */,

@@ -4,9 +4,16 @@ import SwiftUI
 struct ContentView: View {
     @State private var model = FleetModel()
     @State private var pairing = false
+    /// The pushed screens, owned here so a Home Screen shortcut can push one.
+    @State private var path: [Route] = []
+    /// A link that arrived before the fleet was loaded. A shortcut tapped from a cold start beats
+    /// `model.start()` to it every time, and dropping it then would make the icon work only when
+    /// the app happened to be warm — the one case its owner will never be testing.
+    @State private var pending: (node: String, service: String)?
+    @State private var sharing: ShareTarget?
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if model.nodes.isEmpty {
                     empty
@@ -30,6 +37,9 @@ struct ContentView: View {
             }
             .refreshable { await model.refresh() }
             .sheet(isPresented: $pairing) { PairView(model: model) }
+            .sheet(item: $sharing) { target in
+                HomeScreenLinkSheet(node: target.node, service: target.service, title: target.title)
+            }
             .alert(
                 "Something went wrong",
                 isPresented: .init(get: { model.failure != nil }, set: { if !$0 { model.failure = nil } })
@@ -40,6 +50,34 @@ struct ContentView: View {
             }
         }
         .task { await model.start() }
+        .onOpenURL { url in
+            guard let link = HomeScreenLink.parse(url) else { return }
+            pending = link
+            open(link)
+        }
+        // The fleet arriving is the other half of a cold start: the link was filed above because
+        // there was no node to match it to, and this is the moment there is one.
+        .onChange(of: model.nodes) { _, _ in
+            if let link = pending { open(link) }
+        }
+    }
+
+    /// Push the screen a link names, once the node it names is known here. A link to a node this
+    /// phone is not paired with is simply left pending: the fleet is refreshed on foreground, and a
+    /// shortcut kept from an unpaired machine starting to work again after re-pairing is kinder
+    /// than an alert about a name the person did not type.
+    private func open(_ link: (node: String, service: String)) {
+        guard let node = model.nodes.first(where: { $0.petname == link.node }) else { return }
+        pending = nil
+        path = [Route(node: node, service: link.service, share: !granted(link.service, on: node))]
+    }
+
+    /// Whether the node has already shared this label with us — the same question the row asks, so
+    /// a shortcut to a dashboard that was never granted still asks for it instead of 502ing.
+    private func granted(_ service: String, on node: Node) -> Bool {
+        if node.any_service || node.services.contains(service) { return true }
+        return (model.dashboards[node.petname] ?? [])
+            .contains { $0.service == service && $0.allowed }
     }
 
     private var empty: some View {
@@ -59,7 +97,7 @@ struct ContentView: View {
             ForEach(model.nodes) { node in
                 Section {
                     ForEach(model.dashboards[node.petname] ?? []) { dashboard in
-                        DashboardRow(node: node, dashboard: dashboard)
+                        DashboardRow(node: node, dashboard: dashboard) { sharing = $0 }
                     }
                     if model.listing.contains(node.petname) && model.dashboards[node.petname] == nil {
                         HStack(spacing: 8) {
@@ -74,6 +112,14 @@ struct ContentView: View {
                     ForEach(services(of: node), id: \.self) { service in
                         NavigationLink(value: Route(node: node, service: service)) {
                             Label(service, systemImage: icon(for: service))
+                        }
+                        .contextMenu {
+                            Button {
+                                sharing = ShareTarget(
+                                    node: node.petname, service: service, title: service)
+                            } label: {
+                                Label("Add to Home Screen…", systemImage: "square.and.arrow.up")
+                            }
                         }
                     }
                     if node.any_service {
@@ -178,11 +224,20 @@ struct ContentView: View {
 private struct DashboardRow: View {
     let node: Node
     let dashboard: NodeDashboard
+    let onShare: (ShareTarget) -> Void
 
     var body: some View {
         if let service = dashboard.service {
             NavigationLink(value: Route(node: node, service: service, share: !dashboard.allowed)) {
                 label
+            }
+            .contextMenu {
+                Button {
+                    onShare(ShareTarget(
+                        node: node.petname, service: service, title: dashboard.name))
+                } label: {
+                    Label("Add to Home Screen…", systemImage: "square.and.arrow.up")
+                }
             }
         } else {
             // Nothing to route to: a dashboard with no `<label>.adi` host of its own is reachable
@@ -231,6 +286,17 @@ private struct Route: Hashable {
     let node: Node
     let service: String?
     var share = false
+}
+
+/// What a "Add to Home Screen…" tap is about. `Identifiable` so one `.sheet(item:)` serves every
+/// row — the alternative is a bool plus three more `@State`s that can disagree with each other.
+struct ShareTarget: Identifiable {
+    let node: String
+    let service: String
+    /// What the icon should be called: a dashboard's name, or the bare label for a plain service.
+    let title: String
+
+    var id: String { "\(node)/\(service)" }
 }
 
 /// For a node that granted `http:*`: ask which service, since nothing on the wire can list them.
