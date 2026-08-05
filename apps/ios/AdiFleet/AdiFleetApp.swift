@@ -8,6 +8,8 @@ import SwiftUI
 @main
 struct AdiFleetApp: App {
     @Environment(\.scenePhase) private var scenePhase
+    /// Watches for the phone changing network while the app is open — see [`NetworkChangeWatcher`].
+    @State private var network = NetworkChangeWatcher()
 
     var body: some Scene {
         WindowGroup {
@@ -21,6 +23,10 @@ struct AdiFleetApp: App {
                         Task { await Mesh.shared.resume() }
                     }
                 }
+                // The other half of the same problem, and the one a phone actually meets: walking
+                // out of the door with the app open, so the connection moves from Wi-Fi to
+                // cellular without the app ever leaving the foreground.
+                .task { network.start() }
         }
     }
 }

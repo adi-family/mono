@@ -13,6 +13,7 @@
 		2AE770396A73DBCBC45811BC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F738BDAB8A92EFA4D13E943E /* Assets.xcassets */; };
 		4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */; };
 		4FF44BF699BB2558112D36D2 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 135E1D5460ED7431969EB180 /* Security.framework */; };
+		74CF7D5423A371C27830B798 /* NetworkChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */; };
 		75E28B5E6570CEF41BC0A80A /* AdiFleetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE5E4124908EE0786E73BA6 /* AdiFleetApp.swift */; };
 		A43BB4C535DC5ED9898C2BBA /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC93220237C7671FE362AFB6 /* Keychain.swift */; };
 		C811A4995BB1ABDCE2AA4A82 /* FleetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B455AF868E08BF351E128AE /* FleetModel.swift */; };
@@ -31,6 +32,7 @@
 		77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceWebView.swift; sourceTree = "<group>"; };
 		9022E6221D9CC1870992A9F6 /* Mesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mesh.swift; sourceTree = "<group>"; };
 		9B455AF868E08BF351E128AE /* FleetModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FleetModel.swift; sourceTree = "<group>"; };
+		AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkChange.swift; sourceTree = "<group>"; };
 		AC93220237C7671FE362AFB6 /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		C479E979A7B9FBAE75B67D4E /* PairView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PairView.swift; sourceTree = "<group>"; };
 		D074423A31FA51BC8156B3CF /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -79,6 +81,7 @@
 				44262FFE6FE69FE791F924BD /* Info.plist */,
 				AC93220237C7671FE362AFB6 /* Keychain.swift */,
 				9022E6221D9CC1870992A9F6 /* Mesh.swift */,
+				AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */,
 				C479E979A7B9FBAE75B67D4E /* PairView.swift */,
 				77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */,
 			);
@@ -172,6 +175,7 @@
 				4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */,
 				A43BB4C535DC5ED9898C2BBA /* Keychain.swift in Sources */,
 				29957511B7645E68FFC80926 /* Mesh.swift in Sources */,
+				74CF7D5423A371C27830B798 /* NetworkChange.swift in Sources */,
 				258DE79A1FE477BEF77454AE /* PairView.swift in Sources */,
 				F6A40E278675D3FC64C67299 /* ServiceWebView.swift in Sources */,
 			);
