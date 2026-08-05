@@ -817,7 +817,14 @@ mod tests {
         spec.system_prompt = Some("You are an operator.".to_string());
 
         let argv = runner.argv(&spec, &session, "hi", "").expect("argv");
-        assert_eq!(argv.first().map(String::as_str), Some("adi-mono"));
+        // Resolved beside the running executable when it is there, else the bare name — either
+        // way it names `adi-mono` (see `adi_loop::adi_mono_program`).
+        assert_eq!(
+            std::path::Path::new(&argv[0])
+                .file_name()
+                .and_then(|n| n.to_str()),
+            Some("adi-mono")
+        );
         assert!(argv.iter().any(|arg| arg == "harness-turn"));
         assert!(argv.iter().any(|arg| arg == "solver"), "{argv:?}");
         assert!(argv.iter().any(|arg| arg == "conv-1"), "{argv:?}");

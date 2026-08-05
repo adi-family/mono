@@ -383,9 +383,54 @@ mod unit {
             .map(|a| quote(a))
             .collect::<Vec<_>>()
             .join(" ");
+        // A `systemd --user` unit inherits none of the login shell's PATH — it gets the manager's
+        // bare default (`/usr/local/bin:/usr/bin:/bin:…`). Two things a node runs are spelled as
+        // bare names and so resolve through it:
+        //
+        //   * `bun`, which every dashboard's runner invokes as `bun run …`;
+        //   * `adi-mono`, which every generated tool shim in `tools/.bin/` `exec`s.
+        //
+        // Neither the package's own bin directory nor bun's default install location is on that
+        // default, so on a node both failed with "not found" while the units themselves looked
+        // healthy. The package dir is derived from the binary being supervised rather than
+        // configured, since that binary already lives in it.
+        let mut path_dirs: Vec<String> = Vec::new();
+        if let Some(bin_dir) = program
+            .first()
+            .map(std::path::Path::new)
+            .and_then(std::path::Path::parent)
+            .filter(|d| !d.as_os_str().is_empty())
+        {
+            path_dirs.push(bin_dir.to_string_lossy().into_owned());
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            path_dirs.push(
+                std::path::Path::new(&home)
+                    .join(".bun")
+                    .join("bin")
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
+        path_dirs.extend(
+            ["/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"]
+                .map(str::to_owned),
+        );
+        // The derived directory is often one of the standard ones (a package installed into
+        // /usr/local/bin, say); keep first occurrence so the package's own dir still wins.
+        let mut seen = std::collections::HashSet::new();
+        path_dirs.retain(|d| seen.insert(d.clone()));
+
+        // An explicit PATH from the caller wins: it is a deliberate override, and silently
+        // prepending to it would make that override mean something other than what it says.
+        let caller_sets_path = env.iter().any(|(k, _)| k == "PATH");
         let env_lines = env
             .iter()
             .map(|(k, v)| quote(&format!("{k}={v}")))
+            .chain(
+                (!caller_sets_path)
+                    .then(|| quote(&format!("PATH={}", path_dirs.join(":")))),
+            )
             .fold(String::new(), |mut lines, pair| {
                 let _ = writeln!(lines, "Environment={pair}");
                 lines
@@ -1036,9 +1081,61 @@ mod tests {
     }
 
     #[test]
-    fn service_unit_omits_environment_lines_when_there_is_no_env() {
+    fn service_unit_omits_caller_environment_lines_when_there_is_no_env() {
         let u = unit::service_unit("l", &argv(&["/bin/x"]), "/tmp/log", &[]);
-        assert!(!u.contains("Environment="), "got: {u}");
+        // One line remains no matter what: the PATH every unit carries. Nothing from the caller.
+        assert_eq!(u.matches("Environment=").count(), 1, "got: {u}");
+        assert!(u.contains("Environment=\"PATH="), "got: {u}");
+        assert!(!u.contains("RUST_LOG"), "got: {u}");
+    }
+
+    /// A `systemd --user` unit inherits the manager's bare PATH, and a node runs two things by
+    /// bare name through it: `bun` (every dashboard runner) and `adi-mono` (every `tools/.bin`
+    /// shim). Both live outside the default, so the unit has to carry them or a node supervises
+    /// services that cannot find the programs they are made of.
+    #[test]
+    fn service_unit_path_covers_the_package_dir_and_bun() {
+        let u = unit::service_unit(
+            "family.adi.app.dashboards",
+            &argv(&["/home/adi/.local/adi/bin/adi-hive", "/home/adi/.adi/mono/x.yaml"]),
+            "/tmp/log",
+            &[],
+        );
+        let path = u
+            .lines()
+            .find(|l| l.starts_with("Environment=\"PATH="))
+            .unwrap_or_else(|| panic!("no PATH line: {u}"));
+        // The package's own bin dir, derived from the supervised binary, and ahead of the rest.
+        assert!(
+            path.starts_with("Environment=\"PATH=/home/adi/.local/adi/bin:"),
+            "got: {path}"
+        );
+        assert!(path.contains("/.bun/bin:"), "got: {path}");
+        assert!(path.contains("/usr/bin"), "got: {path}");
+        // Deduped: the standard list must not repeat a directory already contributed above.
+        let dirs: Vec<&str> = path
+            .trim_start_matches("Environment=\"PATH=")
+            .trim_end_matches('"')
+            .split(':')
+            .collect();
+        let mut unique = dirs.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), dirs.len(), "duplicate dirs in {path}");
+    }
+
+    /// An explicit PATH is an override, not a suggestion — prepending to it silently would make
+    /// it mean something other than what the caller wrote.
+    #[test]
+    fn an_explicit_path_from_the_caller_is_left_alone() {
+        let u = unit::service_unit(
+            "l",
+            &argv(&["/opt/adi/adi-dns"]),
+            "/tmp/log",
+            &[("PATH".to_string(), "/only/this".to_string())],
+        );
+        assert!(u.contains("Environment=\"PATH=/only/this\"\n"), "got: {u}");
+        assert_eq!(u.matches("Environment=").count(), 1, "got: {u}");
     }
 
     #[test]

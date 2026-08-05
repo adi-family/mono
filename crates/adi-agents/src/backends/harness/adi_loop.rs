@@ -47,11 +47,28 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(600);
 /// a bounded amount of money and time. An agent's `max_turns` overrides it.
 const MAX_ROUNDS: u64 = 16;
 
+/// Where `adi-mono` actually is, for spawning: **beside the running executable**, falling back to
+/// the bare name for a PATH lookup.
+///
+/// The spawner is usually `adi-app`, not `adi-mono`, so `current_exe` is the wrong binary — but it
+/// is in the right *directory*, and every packaging puts the two side by side (a node's
+/// `~/.local/adi/bin`, the macOS bundle's `Contents/Resources`). The bare name alone was not
+/// enough: a `systemd --user` unit inherits the manager's bare PATH, which contains no adi
+/// directory, so on a Linux node every agent turn died with "couldn't spawn adi-mono: No such file
+/// or directory" while the panel that spawned it was running from exactly that directory.
+fn adi_mono_program() -> String {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("adi-mono")))
+        .filter(|candidate| candidate.is_file())
+        .map_or_else(|| "adi-mono".to_string(), |p| p.to_string_lossy().into_owned())
+}
+
 /// The command a conversation turn spawns for an `adi` agent: re-enter this binary's hidden
 /// `harness-turn` subcommand, which reads the transcript and calls the provider.
 pub(crate) fn argv(agent_name: &str, conv_id: &str) -> Vec<String> {
     vec![
-        "adi-mono".to_string(),
+        adi_mono_program(),
         "harness-turn".to_string(),
         "--agent".to_string(),
         agent_name.to_string(),
@@ -1150,16 +1167,43 @@ mod tests {
 
     #[test]
     fn argv_reenters_this_binary_for_the_turn() {
+        let argv = argv("planner", "0000000000001-0000");
+        // The program may be an absolute path beside the running executable or the bare name,
+        // depending on what is installed next to the test binary — both name the same tool.
+        let program = std::path::Path::new(&argv[0]);
+        assert_eq!(program.file_name().and_then(|n| n.to_str()), Some("adi-mono"));
         assert_eq!(
-            argv("planner", "0000000000001-0000"),
-            [
-                "adi-mono",
-                "harness-turn",
-                "--agent",
-                "planner",
-                "--conv",
-                "0000000000001-0000",
-            ]
+            &argv[1..],
+            ["harness-turn", "--agent", "planner", "--conv", "0000000000001-0000"]
         );
+    }
+
+    /// Never a bare name when a sibling exists: a `systemd --user` unit's PATH has no adi
+    /// directory, and resolving through it is what made every agent turn on a node fail to spawn.
+    #[test]
+    fn the_program_is_absolute_when_adi_mono_sits_beside_this_binary() {
+        let dir = std::env::current_exe()
+            .expect("current exe")
+            .parent()
+            .expect("a parent")
+            .to_path_buf();
+        let sibling = dir.join("adi-mono");
+        let planted = if sibling.is_file() {
+            false
+        } else {
+            std::fs::write(&sibling, b"#!/bin/sh\n").is_ok()
+        };
+
+        let program = adi_mono_program();
+        if sibling.is_file() {
+            assert_eq!(program, sibling.to_string_lossy());
+        } else {
+            // Could not plant one (read-only dir); the fallback is the documented behaviour.
+            assert_eq!(program, "adi-mono");
+        }
+
+        if planted {
+            let _ = std::fs::remove_file(&sibling);
+        }
     }
 }
