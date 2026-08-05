@@ -679,6 +679,12 @@ pub(crate) struct DashboardsForm {
     pub(crate) description: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) show_archived: RwSignal<bool>,
+    pub(crate) transfer_id: RwSignal<String>,
+    pub(crate) transfer_node: RwSignal<String>,
+    pub(crate) transfer_move: RwSignal<bool>,
+    pub(crate) transfer_delete: RwSignal<bool>,
+    pub(crate) transfer_password: RwSignal<String>,
+    pub(crate) transfer_busy: RwSignal<bool>,
 }
 ```
 

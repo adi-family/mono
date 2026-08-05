@@ -1837,6 +1837,14 @@ pub struct Dashboard {
     /// row behind the Archived disclosure — without deleting any of the dashboard's files.
     #[serde(default)]
     pub archived_at: Option<u64>,
+    /// The node this dashboard was **moved** to (its petname here), set by
+    /// `POST /api/dashboards/transfer` in `move` mode. Purely a label on the local remains: the
+    /// row is archived, so nothing runs here any more, and this says where it went instead of
+    /// leaving an operator to guess why a dashboard they were using stopped.
+    ///
+    /// `None` after a `copy` — both machines run it then, and neither is the one that moved.
+    #[serde(default)]
+    pub moved_to: Option<String>,
 }
 
 impl Dashboard {
@@ -1879,6 +1887,109 @@ pub struct SetDashboardProject {
     pub id: String,
     #[serde(default)]
     pub project: Option<String>,
+}
+
+// MARK: moving a dashboard to another machine (`docs/fleet.md` §10)
+
+/// One file of a [`DashboardBundle`].
+///
+/// The bytes are base64 rather than text because a dashboard is a directory a human fills: an
+/// icon, a font, a fixture `.db` are all ordinary things to find in one, and a transfer that
+/// silently dropped whatever was not UTF-8 would be a transfer you cannot trust.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleFile {
+    /// Path relative to the dashboard's own directory, always `/`-separated. Never absolute and
+    /// never containing `..` — the receiving side re-checks both before it writes anything.
+    pub path: String,
+    /// The file's bytes, base64 (standard alphabet, padded).
+    pub contents: String,
+}
+
+/// A dashboard packed up for another machine — the body of `POST /api/dashboards/import`.
+///
+/// What is **not** in here is the point. The manifest and `.adi/hive.yaml` are omitted and rebuilt
+/// on the far side, because both name things that are true only where they were written: the hive
+/// file carries an absolute `working_dir`, and its `proxy.host` may already belong to a different
+/// dashboard over there. Everything a person or an agent authored travels verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardBundle {
+    /// The dashboard's id, carried across so a second transfer **updates** the copy on the node
+    /// instead of leaving a duplicate behind. Ids are UUIDs, so this can never collide with an
+    /// unrelated dashboard that was already there.
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The project it is filed under here. Honoured on the far side only if a project with that
+    /// id exists there too; otherwise the copy arrives unfiled, which is what an id that means
+    /// nothing on that machine should do.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// The hostname it answers on where it came from — a *preference*, not an instruction. The
+    /// receiving machine keeps the label when it is free there and derives a fresh one when it is
+    /// not, because two dashboards on one hostname is a routing coin-flip.
+    #[serde(default)]
+    pub host: Option<String>,
+    pub files: Vec<BundleFile>,
+}
+
+/// What a transfer does with the copy it leaves behind — `POST /api/dashboards/transfer`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferMode {
+    /// Both machines run it afterwards; nothing here changes.
+    Copy,
+    /// The local dashboard is archived once the node confirms it has the files, so only one copy
+    /// is live. Reversible — Restore brings it back — unless
+    /// [`delete_local`](TransferDashboard::delete_local) was also asked for.
+    Move,
+}
+
+/// `POST /api/dashboards/transfer` — send a dashboard to a paired node and, in
+/// [`TransferMode::Move`], stand the local copy down.
+///
+/// The credential is the node's own Basic-auth pair (`docs/fleet.md` §5). It is supplied per
+/// transfer and **stored nowhere**: this machine holds only a verifier for the node's password,
+/// never the password, and a transfer is not a reason to start keeping one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransferDashboard {
+    pub id: String,
+    /// The destination node's petname, as this machine files it.
+    pub node: String,
+    pub mode: TransferMode,
+    /// With [`TransferMode::Move`], also delete the local directory once the node has confirmed
+    /// the import. Ignored for a copy.
+    #[serde(default)]
+    pub delete_local: bool,
+    /// The Basic-auth user. Defaults to the one pairing mints (`adi`) when absent.
+    #[serde(default)]
+    pub username: Option<String>,
+    pub password: String,
+}
+
+/// What a completed transfer reports back.
+///
+/// It carries the *whole* local listing as well as the remote row, so the page updates in one
+/// round-trip exactly like every other dashboards mutation — a move changes what is archived here,
+/// and re-fetching to discover that would leave the row stale in between.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardTransferred {
+    /// The node it landed on, by petname.
+    pub node: String,
+    /// The dashboard as the node now reports it — its id, its host *there*, its ports once the
+    /// node's supervisor has leased them.
+    pub dashboard: Dashboard,
+    /// Where to open it from here: `http://<label>.<node>.n.adi/`, or `None` when the node gave
+    /// the copy no routable name.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Whether the node was also asked to let this machine reach the new dashboard
+    /// (`http:<label>`), and said yes. `false` means the transfer worked but the link above will
+    /// answer *not authorized* until somebody grants it on the node.
+    #[serde(default)]
+    pub granted: bool,
+    /// The local listing after the transfer — archived here after a move, unchanged after a copy.
+    pub dashboards: DashboardsState,
 }
 
 // MARK: secrets — encrypted global / per-project key-values (~/.adi/mono/secrets)

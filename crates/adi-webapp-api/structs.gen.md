@@ -4,16 +4,16 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-152 structs · 5 enums across 6 files.
+156 structs · 6 enums · 1 type alias across 6 files.
 
 ## Index
 
 - [`src/handlers/agents.rs`](#srchandlersagentsrs) — `RunCaps`
-- [`src/handlers/dashboards.rs`](#srchandlersdashboardsrs) — `Manifest`, `HiveFile`, `HiveService`, `HiveProxy`
+- [`src/handlers/dashboards.rs`](#srchandlersdashboardsrs) — `Manifest`, `HiveFile`, `HiveService`, `HiveProxy`, `DecodedFiles`
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
 - [`src/handlers/response.rs`](#srchandlersresponsers) — `Response`
 - [`src/handlers/services.rs`](#srchandlersservicesrs) — `HiveDoc`, `YamlService`, `HiveProxy`, `HiveRollout`, `HiveRecreate`, `HiveRunner`, `HiveScript`, `HiveDocker`
-- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `AgentKeys`, `AgentPeek`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `AgentForm`, `AgentFormInput`, `AgentFormChoice`, `AgentFormInputKind`, `AgentFormAction`, `ApiError`
+- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `AgentKeys`, `AgentPeek`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `BundleFile`, `DashboardBundle`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `AgentForm`, `AgentFormInput`, `AgentFormChoice`, `AgentFormInputKind`, `AgentFormAction`, `ApiError`
 
 ---
 
@@ -49,6 +49,8 @@ struct Manifest {
     project: Option<String>,
     #[serde(default)]
     archived_at: Option<u64>,
+    #[serde(default)]
+    moved_to: Option<String>,
 }
 ```
 
@@ -83,6 +85,14 @@ struct HiveProxy {
     #[serde(default)]
     path: Option<String>,
 }
+```
+
+### type `DecodedFiles`
+
+A bundle's files, decoded and resolved to absolute paths under the dashboard directory.
+
+```rust
+type DecodedFiles = Vec<(PathBuf, Vec<u8>)>;
 ```
 
 ---
@@ -2078,6 +2088,8 @@ pub struct Dashboard {
     pub routes: Vec<String>,
     #[serde(default)]
     pub archived_at: Option<u64>,
+    #[serde(default)]
+    pub moved_to: Option<String>,
 }
 ```
 
@@ -2128,6 +2140,85 @@ pub struct SetDashboardProject {
     pub id: String,
     #[serde(default)]
     pub project: Option<String>,
+}
+```
+
+### struct `BundleFile`
+
+One file of a `DashboardBundle`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleFile {
+    pub path: String,
+    pub contents: String,
+}
+```
+
+### struct `DashboardBundle`
+
+A dashboard packed up for another machine — the body of `POST /api/dashboards/import`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardBundle {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub host: Option<String>,
+    pub files: Vec<BundleFile>,
+}
+```
+
+### enum `TransferMode`
+
+What a transfer does with the copy it leaves behind — `POST /api/dashboards/transfer`.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferMode {
+    Copy,
+    Move,
+}
+```
+
+### struct `TransferDashboard`
+
+`POST /api/dashboards/transfer` — send a dashboard to a paired node and, in `TransferMode::Move`, stand the local copy down.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransferDashboard {
+    pub id: String,
+    pub node: String,
+    pub mode: TransferMode,
+    #[serde(default)]
+    pub delete_local: bool,
+    #[serde(default)]
+    pub username: Option<String>,
+    pub password: String,
+}
+```
+
+### struct `DashboardTransferred`
+
+What a completed transfer reports back.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DashboardTransferred {
+    pub node: String,
+    pub dashboard: Dashboard,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub granted: bool,
+    pub dashboards: DashboardsState,
 }
 ```
 

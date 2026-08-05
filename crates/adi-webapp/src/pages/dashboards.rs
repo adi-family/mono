@@ -8,16 +8,23 @@
 //! Every link out of this page goes to a dashboard's **host**, not to a port — see [`open_url`].
 //! A dashboard is one origin (`docs/fleet.md` §4), and only its host routes the `/api` prefix its
 //! page calls.
+//!
+//! It is also where a dashboard leaves this machine: [`transfer_panel`] sends one to a paired node
+//! and, in move mode, stands the local copy down. That the destinations are a `<select>` of the
+//! fleet rather than anything typed is the point — "run this in the cloud" should be picking a
+//! name off a list, not learning a deployment.
 
-use adi_webapp_api::types::{Dashboard, DashboardsState, NewDashboard};
+use adi_webapp_api::types::{
+    Dashboard, DashboardsState, NewDashboard, TransferDashboard, TransferMode,
+};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{DashboardsForm, Flash, State, load};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, body_row, configurable_table, confirm, flash_view,
-    menu_item, placeholder_row, row_actions, sort_rows, updated_text,
+    Key, TableState, TextField, apply_mutation, body_row, configurable_table, confirm, field_hint,
+    flash_view, menu_item, placeholder_row, row_actions, segmented, sort_rows, updated_text,
 };
 
 /// The columns shared by the live table and the archived disclosure — both render one dashboard
@@ -51,8 +58,11 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(dashboards, secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.dashboards, COLS, move || rows_view(state, false))}
+            {configurable_table(state.tables.dashboards, COLS,
+                move || rows_view(state, form, false))}
         </section>
+
+        {transfer_panel(state, form)}
 
         <section class="adi-panel">
             <div class="adi-panel__head">
@@ -104,15 +114,264 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
 
         </section>
 
-        {archived_section(state, form.show_archived)}
+        {archived_section(state, form)}
     }
     .into_any()
+}
+
+// MARK: transferring a dashboard to a node (`docs/fleet.md` §10)
+
+/// The transfer panel: pick a node, say copy or move, type the node's password, send.
+///
+/// It appears only once a row's **Transfer** has named a dashboard, and it names that dashboard in
+/// its own title. A panel rather than a chain of prompts because a transfer has three answers to
+/// give at once, and two of them — move-or-copy, and whether to delete afterwards — are the kind a
+/// person wants to see beside each other before committing.
+///
+/// The password field is deliberately empty every time. This machine keeps a *verifier* for each
+/// node's credential and not the credential (`docs/fleet.md` §8); nothing here is stored, so
+/// nothing here can be pre-filled.
+fn transfer_panel(state: State, form: DashboardsForm) -> AnyView {
+    view! {
+        {move || {
+            // Only `transfer_id` is read out here, so the panel is built when it opens and torn
+            // down when it closes — and never in between. The listing polls every few seconds; a
+            // panel rebuilt on that tick would drop whatever was half-typed into the password
+            // field, which is the one input on this page that cannot be recovered from anywhere.
+            if form.transfer_id.get().is_empty() {
+                return ().into_any();
+            }
+            view! {
+                <section class="adi-panel">
+                    <div class="adi-panel__head">
+                        <h2 class="adi-panel__title">{move || transfer_title(state, form)}</h2>
+                        <button class="adi-btn adi-btn--link" type="button"
+                            on:click=move |_| close_transfer(form)>"Cancel"</button>
+                    </div>
+                    <form class="adi-form" on:submit=move |ev| {
+                        ev.prevent_default();
+                        submit_transfer(state, form);
+                    }>
+                        {transfer_node_picker(state, form)}
+                        <div class="adi-field">
+                            <label class="adi-field__label" for="dash-transfer-mode">"Mode"</label>
+                            <div id="dash-transfer-mode">
+                                {segmented("Transfer mode", form.transfer_move, "Copy", "Move")}
+                            </div>
+                            {field_hint(move || if form.transfer_move.get() {
+                                "the local one is archived once the node has it"
+                            } else {
+                                "both machines run it afterwards"
+                            })}
+                        </div>
+                        {transfer_password_field(form)}
+                        {move || form.transfer_move.get().then(|| view! {
+                            <label class="adi-field adi-field--check">
+                                <input type="checkbox"
+                                    prop:checked=move || form.transfer_delete.get()
+                                    on:change=move |ev| form.transfer_delete
+                                        .set(event_target_checked(&ev)) />
+                                <span class="adi-field__label">"Delete the local copy"</span>
+                            </label>
+                        })}
+                        <button class="adi-btn adi-btn--primary" type="submit"
+                            prop:disabled=move || form.transfer_busy.get()>
+                            {move || if form.transfer_busy.get() { "Transferring\u{2026}" }
+                                else { "Transfer" }}
+                        </button>
+                    </form>
+                    {transfer_warning(form)}
+                </section>
+            }
+            .into_any()
+        }}
+    }
+    .into_any()
+}
+
+/// The panel's title, in its own reactive scope so the listing's poll can rename the heading
+/// without rebuilding the form under it.
+///
+/// The row may have been archived, deleted or renamed since Transfer was clicked, so the listing
+/// is the truth; the short id is the fallback when it no longer names anything.
+fn transfer_title(state: State, form: DashboardsForm) -> String {
+    let id = form.transfer_id.get();
+    let name = state
+        .dashboards
+        .get()
+        .and_then(|d| d.dashboards.into_iter().find(|d| d.id == id).map(|d| d.name))
+        .unwrap_or_else(|| short_id(&id));
+    format!("Transfer \u{201c}{name}\u{201d}")
+}
+
+/// Which node the dashboard is going to. A `<select>` of the fleet, because every valid answer is
+/// already known here and a typed petname would only ever be a 404 to decode.
+///
+/// With nothing paired there is nothing to pick, so the picker says how a node joins instead —
+/// that is the missing step, not a missing selection.
+fn transfer_node_picker(state: State, form: DashboardsForm) -> AnyView {
+    view! {
+        <div class="adi-field">
+            <label class="adi-field__label" for="dash-transfer-node">"Node"</label>
+            <select class="adi-input" id="dash-transfer-node"
+                on:change=move |ev| form.transfer_node.set(event_target_value(&ev))>
+                <option value="" selected=move || form.transfer_node.get().is_empty()>
+                    "\u{2014} pick a node \u{2014}"
+                </option>
+                {move || {
+                    let current = form.transfer_node.get();
+                    state.fleet.get().map(|f| f.nodes.into_iter().map(|n| {
+                        let (petname, selected) = (n.petname.clone(), n.petname == current);
+                        view! { <option value=petname selected=selected>{n.petname}</option> }
+                    }).collect::<Vec<_>>())
+                }}
+            </select>
+            {move || state.fleet.get()
+                .is_some_and(|f| f.nodes.is_empty())
+                .then(|| field_hint("no nodes paired yet \u{2014} run `adi-mono mesh invite` here, \
+                                     then `mesh join` on the machine you want to deploy to"))}
+        </div>
+    }
+    .into_any()
+}
+
+/// The node's Basic-auth password. Hand-written rather than a [`TextField`] because it is the one
+/// input on this page that must not be a readable `type="text"`, and it must never be offered back
+/// by the browser's autofill — it is not this machine's secret to remember.
+fn transfer_password_field(form: DashboardsForm) -> AnyView {
+    view! {
+        <div class="adi-field">
+            <label class="adi-field__label" for="dash-transfer-pw">"Node password"</label>
+            <input class="adi-input" id="dash-transfer-pw" type="password"
+                autocomplete="new-password" placeholder="printed once, on the node"
+                prop:value=move || form.transfer_password.get()
+                on:input=move |ev| form.transfer_password.set(event_target_value(&ev)) />
+            {field_hint("used for this transfer only \u{2014} it is stored nowhere")}
+        </div>
+    }
+    .into_any()
+}
+
+/// The one consequence worth spelling out before the button is pressed: deleting the local copy
+/// leaves the node's as the only one. Shown only when both boxes that make it true are set.
+fn transfer_warning(form: DashboardsForm) -> AnyView {
+    view! {
+        {move || (form.transfer_move.get() && form.transfer_delete.get()).then(|| view! {
+            <p class="adi-muted">
+                "The local directory is removed once the node confirms it has the files. \
+                 The node's copy is then the only one."
+            </p>
+        })}
+    }
+    .into_any()
+}
+
+/// Open the transfer panel for one dashboard, starting from a clean form: the previous transfer's
+/// node and password must never carry over into this one.
+fn start_transfer(form: DashboardsForm, id: &str) {
+    form.transfer_id.set(id.to_string());
+    form.transfer_node.set(String::new());
+    form.transfer_move.set(false);
+    form.transfer_delete.set(false);
+    form.transfer_password.set(String::new());
+}
+
+/// Close the panel and drop what was typed into it — in particular the password, which has no
+/// reason to outlive the form it was typed into.
+fn close_transfer(form: DashboardsForm) {
+    form.transfer_id.set(String::new());
+    form.transfer_password.set(String::new());
+}
+
+/// Validate the form, post the transfer, and report where the dashboard ended up.
+///
+/// Success folds the returned local listing into the page — a move archives the row, so the table
+/// has to change with it — and flashes the mesh URL the copy now answers on. A transfer that
+/// worked but could not grant this machine access says so rather than handing over a link that
+/// will refuse.
+fn submit_transfer(state: State, form: DashboardsForm) {
+    let (id, node) = (form.transfer_id.get(), form.transfer_node.get());
+    if id.is_empty() {
+        return;
+    }
+    if node.is_empty() {
+        state.flash.set(Some(Flash::err("Pick a node to transfer to.".to_string())));
+        return;
+    }
+    let password = form.transfer_password.get();
+    if password.is_empty() {
+        state.flash.set(Some(Flash::err(format!(
+            "{node} needs its password before it will accept a dashboard."
+        ))));
+        return;
+    }
+    let moving = form.transfer_move.get();
+    let delete_local = moving && form.transfer_delete.get();
+    if delete_local
+        && !confirm(&format!(
+            "Move this dashboard to “{node}” and delete the local copy? Once {node} has it, the \
+             local directory and all of its files are removed."
+        ))
+    {
+        return;
+    }
+
+    let body = TransferDashboard {
+        id,
+        node: node.clone(),
+        mode: if moving { TransferMode::Move } else { TransferMode::Copy },
+        delete_local,
+        // The user pairing mints; the server fills it in when absent.
+        username: None,
+        password,
+    };
+    form.transfer_busy.set(true);
+    spawn_local(async move {
+        match fetch::transfer_dashboard(body).await {
+            Ok(done) => {
+                let message = transferred_message(&done, moving);
+                state.dashboards.set(Some(done.dashboards));
+                close_transfer(form);
+                state.flash.set(Some(Flash::ok(message)));
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        form.transfer_busy.set(false);
+    });
+}
+
+/// What to say once a transfer has landed: where it went, where to open it, and — when the node
+/// would not grant this machine access — why that link does not work yet.
+fn transferred_message(done: &adi_webapp_api::types::DashboardTransferred, moving: bool) -> String {
+    let verb = if moving { "Moved" } else { "Copied" };
+    let node = &done.node;
+    let Some(url) = done.url.as_deref() else {
+        return format!(
+            "{verb} \u{201c}{}\u{201d} to {node}. It has no routable name there yet.",
+            done.dashboard.name,
+        );
+    };
+    if done.granted {
+        format!(
+            "{verb} \u{201c}{}\u{201d} to {node} \u{2014} it is at {url} (starting; give the \
+             node's supervisor a few seconds).",
+            done.dashboard.name,
+        )
+    } else {
+        format!(
+            "{verb} \u{201c}{}\u{201d} to {node}. {url} will refuse until {node} grants this \
+             machine http:{} \u{2014} add it from {node}'s own Fleet page.",
+            done.dashboard.name,
+            done.dashboard.host.as_deref().unwrap_or("<label>").split('.').next().unwrap_or(""),
+        )
+    }
 }
 
 /// The archive: its own collapsed panel at the foot of the page, with a caret header and a count.
 /// Expanding reveals archived dashboards so they can be restored. Renders nothing at all when
 /// nothing is archived. Mirrors the Projects page's archive.
-fn archived_section(state: State, show: RwSignal<bool>) -> AnyView {
+fn archived_section(state: State, form: DashboardsForm) -> AnyView {
+    let show = form.show_archived;
     view! {
         {move || {
             let n = state.dashboards.get().map_or(0,
@@ -130,7 +389,7 @@ fn archived_section(state: State, show: RwSignal<bool>) -> AnyView {
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
                         {open.then(|| configurable_table(state.tables.dashboards_archived, COLS,
-                            move || rows_view(state, true)))}
+                            move || rows_view(state, form, true)))}
                     </section>
                 }
                 .into_any()
@@ -142,7 +401,7 @@ fn archived_section(state: State, show: RwSignal<bool>) -> AnyView {
 
 /// Render a table body — the live dashboards (`archived = false`) or the archived ones — as a
 /// loading/empty placeholder or one row per matching dashboard.
-fn rows_view(state: State, archived: bool) -> AnyView {
+fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
     let table: TableState = if archived {
         state.tables.dashboards_archived
     } else {
@@ -194,7 +453,7 @@ fn rows_view(state: State, archived: bool) -> AnyView {
     let shown = layout.shown();
     rows.into_iter()
         .map(|d| {
-            let action = row_action(state, &d.id, d.is_archived());
+            let action = row_action(state, form, &d.id, d.is_archived());
             body_row(&shown, |col| cell(col, &d, state), Some(action))
         })
         .collect::<Vec<_>>()
@@ -236,6 +495,7 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
                 <td>
                     <div>{name}</div>
                     <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
+                    {moved_marker(d)}
                     {no_host_hint(d)}
                 </td>
             }
@@ -264,6 +524,38 @@ pub(crate) fn open_url(d: &Dashboard) -> Option<String> {
 /// `host:` with nothing after it, and `http:///` is worse than no link at all.
 fn routable_host(d: &Dashboard) -> Option<&str> {
     d.host.as_deref().map(str::trim).filter(|h| !h.is_empty())
+}
+
+/// The note under a dashboard that was moved to a node: where it went, and a link straight to it
+/// there. Without this the row is simply an archived dashboard, and "why did this stop?" is a
+/// question the page can answer but doesn't.
+///
+/// The link is the same `<label>.<node>.n.adi` name the transfer reported. It only resolves while
+/// the node is reachable and has granted this machine the dashboard — the transfer asks for that
+/// grant, and says so when it could not get it.
+fn moved_marker(d: &Dashboard) -> AnyView {
+    let Some(node) = d.moved_to.clone() else {
+        return ().into_any();
+    };
+    let there = routable_host(d)
+        .and_then(|host| host.split('.').next())
+        .filter(|label| !label.is_empty())
+        .map(|label| format!("http://{label}.{node}.n.adi/"));
+    view! {
+        <div class="adi-muted">
+            "moved to "
+            {match there {
+                Some(href) => view! {
+                    <a href=href.clone() target="_blank" rel="noreferrer" title=href>
+                        {node.clone()}
+                    </a>
+                }
+                .into_any(),
+                None => view! { <span class="adi-mono">{node.clone()}</span> }.into_any(),
+            }}
+        </div>
+    }
+    .into_any()
 }
 
 /// The note under a dashboard that declares no `proxy.host`: it is reachable only on loopback, so
@@ -315,14 +607,21 @@ fn project_cell(state: State, d: &Dashboard) -> AnyView {
     .into_any()
 }
 
-/// The trailing action for a dashboard row: Archive while live (stops both services and hides it, a
-/// single inline action — no kebab), or **Restore** inline with Delete in the kebab while archived
-/// (Restore brings it back under supervision; Delete removes its directory for good, behind a
-/// confirm). Each posts and folds the fresh [`DashboardsState`] back into the page.
-fn row_action(state: State, id: &str, archived: bool) -> AnyView {
+/// The trailing actions for a dashboard row.
+///
+/// While live: **Transfer** and **Archive**, both inline. Transfer is one click from the row it
+/// acts on — the whole point of the feature is that running a dashboard somewhere else is a
+/// choice you make in passing, not a procedure — and it only opens the panel below, so nothing
+/// leaves this machine until a node and a password have been given.
+///
+/// While archived: **Restore** inline, with Transfer and Delete in the kebab. An archived
+/// dashboard still has all its files, so sending it to a node is a real thing to want — it is how
+/// one that was moved away comes back up on a *different* node.
+fn row_action(state: State, form: DashboardsForm, id: &str, archived: bool) -> AnyView {
     let id = id.to_string();
     let short = short_id(&id);
     let key = format!("dashboard:{id}");
+    let transfer_id = id.clone();
     if archived {
         let del_id = id.clone();
         let del_short = short.clone();
@@ -332,6 +631,9 @@ fn row_action(state: State, id: &str, archived: bool) -> AnyView {
                     fetch::unarchive_dashboard(id.clone()));
             }>"Restore"</button>
         };
+        let transfer = menu_item(state, "Transfer to a node\u{2026}", false, move || {
+            start_transfer(form, &transfer_id);
+        });
         let delete = menu_item(state, "Delete", true, move || {
             if !confirm(&format!(
                 "Permanently delete dashboard {del_short}? This removes all of its files \
@@ -341,15 +643,18 @@ fn row_action(state: State, id: &str, archived: bool) -> AnyView {
             apply_dashboards(state, format!("Deleted {del_short}."),
                 fetch::delete_dashboard(del_id.clone()));
         });
-        row_actions(state, key, restore, vec![delete])
+        row_actions(state, key, restore, vec![transfer, delete])
     } else {
-        let archive = view! {
+        let inline = view! {
+            <button class="adi-btn adi-btn--link" type="button"
+                title="Run this dashboard on a paired node \u{2014} a copy, or a move"
+                on:click=move |_| start_transfer(form, &transfer_id)>"Transfer"</button>
             <button class="adi-btn adi-btn--link" on:click=move |_| {
                 apply_dashboards(state, format!("Archived {short}."),
                     fetch::archive_dashboard(id.clone()));
             }>"Archive"</button>
         };
-        row_actions(state, key, archive, Vec::new())
+        row_actions(state, key, inline, Vec::new())
     }
 }
 

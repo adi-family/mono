@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-11 structs · 1 enum · 1 type alias across 6 files.
+12 structs · 1 enum · 1 type alias across 7 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
+- [`src/transfer.rs`](#srctransferrs) — `CallError`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
 
 ---
@@ -180,6 +181,22 @@ A single snapshot of the machine's processes, with a parent→children index so 
 struct ProcessTable {
     procs: BTreeMap<u32, Proc>,
     children: BTreeMap<u32, Vec<u32>>,
+}
+```
+
+---
+
+## `src/transfer.rs`
+
+### struct `CallError`
+
+A failed call to a node, already phrased for the operator and carrying the status to answer with.
+
+```rust
+#[derive(Debug)]
+struct CallError {
+    status: u16,
+    message: String,
 }
 ```
 

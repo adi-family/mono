@@ -10,8 +10,13 @@ use tokio::net::TcpStream;
 /// Cap the request head so a client that never sends the blank line can't grow memory.
 const MAX_HEAD: usize = 32 * 1024;
 
-/// Cap the request body we'll buffer (API payloads are tiny).
-const MAX_BODY: usize = 1 << 20; // 1 MiB
+/// Cap the request body we'll buffer.
+///
+/// Nearly every API payload is a few hundred bytes; the one that is not is a dashboard arriving
+/// from another machine (`POST /api/dashboards/import`), which carries the directory's files as
+/// base64. The sending side refuses to pack more than 4 MiB of them, so this leaves room for that
+/// plus base64's third and the JSON around it.
+const MAX_BODY: usize = 8 << 20; // 8 MiB
 
 /// So a silent client can't tie up a connection forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -86,8 +91,13 @@ pub async fn read_request(stream: &mut TcpStream) -> anyhow::Result<Option<Reque
     let content_length = headers
         .get("content-length")
         .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(0)
-        .min(MAX_BODY);
+        .unwrap_or(0);
+    // Refused, not truncated. Clamping used to leave the excess unread in the socket, so an
+    // oversized body surfaced as a JSON parse error about a document that was simply cut in half.
+    anyhow::ensure!(
+        content_length <= MAX_BODY,
+        "request body of {content_length} bytes is over the {MAX_BODY}-byte limit"
+    );
     let body_start = head_end + 4; // past the "\r\n\r\n"
     let mut body = buf.get(body_start..).unwrap_or(&[]).to_vec();
     while body.len() < content_length {

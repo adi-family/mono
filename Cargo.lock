@@ -342,6 +342,7 @@ dependencies = [
  "adi-tasks",
  "adi-tools",
  "adi-triggers",
+ "base64",
  "serde",
  "serde_json",
  "serde_yaml_ng",

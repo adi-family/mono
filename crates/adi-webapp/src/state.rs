@@ -459,12 +459,31 @@ pub(crate) struct TasksForm {
 /// The Dashboards page's create form, plus whether the collapsed archive below the main table is
 /// open. Archived dashboards are hidden by default; expanding is the only way to see and restore
 /// them.
+///
+/// The `transfer_*` half is the "run this on a node" panel (`docs/fleet.md` §10). It is a *page*
+/// form rather than per-row state because only one transfer is ever being set up at a time:
+/// `transfer_id` naming the dashboard is what opens the panel, and clearing it is what closes it.
 #[derive(Clone, Copy)]
 pub(crate) struct DashboardsForm {
     pub(crate) name: RwSignal<String>,
     pub(crate) description: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
     pub(crate) show_archived: RwSignal<bool>,
+    /// The dashboard being transferred (its id), or empty when the panel is closed.
+    pub(crate) transfer_id: RwSignal<String>,
+    /// The destination node's petname.
+    pub(crate) transfer_node: RwSignal<String>,
+    /// Whether the local copy is stood down once the node has it — `false` is a plain copy.
+    pub(crate) transfer_move: RwSignal<bool>,
+    /// With a move, also delete the local directory. Off by default: the node's copy would then be
+    /// the only one in existence.
+    pub(crate) transfer_delete: RwSignal<bool>,
+    /// The node's own Basic-auth password, typed per transfer. Never persisted — not here, and not
+    /// on the server (`docs/fleet.md` §8).
+    pub(crate) transfer_password: RwSignal<String>,
+    /// Set while the upload is in flight; a transfer crosses a relay and carries files, so it is
+    /// the one action on this page that is visibly slow.
+    pub(crate) transfer_busy: RwSignal<bool>,
 }
 
 /// The Tools page's create/link form. `linking` flips the form between creating a new owned
@@ -1237,6 +1256,11 @@ pub(crate) fn subscriptions(
     if route == Route::Dashboards {
         subs.push(Sub::get("/api/dashboards", move |d: DashboardsState| {
             set_if_changed(s.dashboards, d);
+        }));
+        // The transfer panel's node picker. Every destination a dashboard can be sent to is a
+        // paired node, so the page needs the fleet to offer any of them.
+        subs.push(Sub::get("/api/fleet", move |f: FleetState| {
+            set_if_changed(s.fleet, f);
         }));
     }
     if route == Route::PortsManager {

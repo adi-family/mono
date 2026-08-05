@@ -21,10 +21,13 @@ use std::path::{Path, PathBuf};
 
 use adi_config::Config;
 use adi_ports_manager::Ports;
+use adi_projects::Projects;
+use base64::Engine as _;
 use serde::Deserialize;
 
 use crate::types::{
-    Dashboard, DashboardRef, DashboardsState, NewDashboard, SetDashboardProject, UsedPort,
+    BundleFile, Dashboard, DashboardBundle, DashboardRef, DashboardsState, NewDashboard,
+    SetDashboardProject, UsedPort,
 };
 
 use super::response::{Response, error, ok_json};
@@ -43,6 +46,11 @@ struct Manifest {
     /// When the dashboard was archived (Unix seconds), or `None` while it is live.
     #[serde(default)]
     archived_at: Option<u64>,
+    /// The node this dashboard was moved to, when it was ([`complete_move`]). Written beside
+    /// `archived_at` rather than instead of it: the local remains are archived like any other
+    /// archived dashboard, and this only says *why*.
+    #[serde(default)]
+    moved_to: Option<String>,
 }
 
 /// The scaffold a new dashboard starts from — the two fixed entry points plus one worked
@@ -153,6 +161,11 @@ fn set_archived(
 
     let mut manifest = read_manifest(&dir);
     manifest.archived_at = archived.then(now_secs);
+    // Restoring makes this machine the one that runs it again, so the "moved to <node>" note has
+    // to go with it — leaving it would label a live dashboard as living somewhere else.
+    if !archived {
+        manifest.moved_to = None;
+    }
     if let Err(e) = write_manifest(&dir, &manifest) {
         return error(500, &format!("could not update dashboard manifest: {e}"));
     }
@@ -271,6 +284,7 @@ fn scaffold(
             description: Some(description.to_string()),
             project: project.map(str::to_string),
             archived_at: None,
+            moved_to: None,
         },
     )?;
     let host = dashboard_host(dir, name);
@@ -310,6 +324,9 @@ fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
     }
     if let Some(ts) = manifest.archived_at {
         out.push_str(&format!("archived_at = {ts}\n"));
+    }
+    if let Some(node) = &manifest.moved_to {
+        out.push_str(&format!("moved_to = {}\n", toml_string(node)));
     }
     std::fs::write(dir.join("config.toml"), out)
 }
@@ -624,6 +641,424 @@ fn path_claim(raw: Option<&str>) -> Option<String> {
     })
 }
 
+// MARK: moving a dashboard to another machine
+
+/// The most a bundle may carry, in raw bytes. Generous for what a dashboard is — a handful of
+/// `.ts` files and whatever assets go with them — and small enough that the whole thing fits in
+/// one JSON body on both ends after base64 has added its third.
+///
+/// A cap rather than a stream because the alternative is worse: a transfer that half-arrives
+/// leaves a dashboard on the node with some of its modules, which looks like it worked.
+const MAX_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
+
+/// The most files a bundle may carry. A dashboard someone pointed at a data directory is the
+/// case this exists for — it fails with a sentence rather than a five-minute walk.
+const MAX_BUNDLE_FILES: usize = 2000;
+
+/// Directory names never packed, wherever they appear in the tree.
+///
+/// `.adi` because the hive file inside it is rebuilt on the far side (its `working_dir` is an
+/// absolute local path, and its host may be taken over there); the other two because they are
+/// caches of things already in the bundle, and shipping them is how a 20 KB dashboard becomes a
+/// 200 MB one.
+const NEVER_BUNDLED_DIRS: &[&str] = &[".adi", "node_modules", ".git"];
+
+/// Files never packed from the dashboard's root: the manifest travels as the bundle's own fields,
+/// so shipping it too would be two sources of truth for one name.
+const NEVER_BUNDLED_ROOT_FILES: &[&str] = &["config.toml"];
+
+/// What lives through an import that overwrites an existing dashboard.
+///
+/// `.adi` holds the hive file the receiving machine wrote for *its* paths — rewritten right
+/// after, but never through a window in which the supervisor could read a missing one. Anything
+/// installed under `node_modules` is a cache the bundle deliberately did not carry, and deleting
+/// it would make every re-transfer an install.
+const KEPT_ON_IMPORT: &[&str] = &[".adi", "node_modules"];
+
+/// Pack a dashboard's authored files into a [`DashboardBundle`] ready to POST at another machine.
+///
+/// Everything a person or an agent wrote travels; everything a machine generated does not (see
+/// [`NEVER_BUNDLED_DIRS`]). Symlinks are skipped rather than followed — a link pointing out of the
+/// dashboard would otherwise quietly put whatever it names on the wire.
+///
+/// # Errors
+/// The [`Response`] to answer with: 404 for an unknown id, 413 when the directory is past
+/// [`MAX_BUNDLE_BYTES`] / [`MAX_BUNDLE_FILES`], 500 on a read failure.
+pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response> {
+    let Some(dir) = dashboard_dir(cfg, id) else {
+        return Err(error(404, &format!("no such dashboard: {id}")));
+    };
+    let manifest = read_manifest(&dir);
+    let name = manifest.name.clone().unwrap_or_else(|| id.to_string());
+
+    let mut files = Vec::new();
+    let mut total = 0_u64;
+    collect_files(&dir, &mut PathBuf::new(), &mut files, &mut total)?;
+
+    Ok(DashboardBundle {
+        id: id.to_string(),
+        name,
+        description: manifest.description,
+        project: manifest.project,
+        host: declared_host(&dir),
+        files,
+    })
+}
+
+/// Walk one directory of a dashboard, appending its files to `files`. `rel` is the path so far,
+/// relative to the dashboard root, which is what the bundle records.
+///
+/// Recursive rather than iterative because the depth is a dashboard's own source tree; the two
+/// caps are what bound the work, not the shape of the walk.
+fn collect_files(
+    dir: &Path,
+    rel: &mut PathBuf,
+    files: &mut Vec<BundleFile>,
+    total: &mut u64,
+) -> Result<(), Response> {
+    let here = dir.join(&*rel);
+    let entries = match std::fs::read_dir(&here) {
+        Ok(entries) => entries,
+        Err(e) => return Err(error(500, &format!("reading {}: {e}", here.display()))),
+    };
+    // Sorted, so a bundle of an unchanged dashboard is byte-identical between runs and a diff of
+    // two transfers is about the dashboard rather than about directory order.
+    let mut names: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .collect();
+    names.sort();
+
+    for name in names {
+        if NEVER_BUNDLED_DIRS.contains(&name.as_str())
+            || (rel.as_os_str().is_empty() && NEVER_BUNDLED_ROOT_FILES.contains(&name.as_str()))
+        {
+            continue;
+        }
+        let path = here.join(&name);
+        // Not `metadata`: that follows the link, and a link out of the dashboard would then be
+        // read and shipped as though it lived here.
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            continue;
+        }
+        rel.push(&name);
+        let walked = if meta.is_dir() {
+            collect_files(dir, rel, files, total)
+        } else {
+            pack_file(&path, rel, meta.len(), files, total)
+        };
+        rel.pop();
+        walked?;
+    }
+    Ok(())
+}
+
+/// Add one file to the bundle, refusing once either cap is past.
+fn pack_file(
+    path: &Path,
+    rel: &Path,
+    size: u64,
+    files: &mut Vec<BundleFile>,
+    total: &mut u64,
+) -> Result<(), Response> {
+    *total += size;
+    if *total > MAX_BUNDLE_BYTES || files.len() >= MAX_BUNDLE_FILES {
+        return Err(error(
+            413,
+            &format!(
+                "this dashboard is too large to transfer ({} files, {} bytes so far; the limits \
+                 are {MAX_BUNDLE_FILES} files and {MAX_BUNDLE_BYTES} bytes) — move the bulk of it \
+                 out of the dashboard directory, or copy it across by hand",
+                files.len() + 1,
+                *total,
+            ),
+        ));
+    }
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(e) => return Err(error(500, &format!("reading {}: {e}", path.display()))),
+    };
+    files.push(BundleFile {
+        path: slash_path(rel),
+        contents: base64::engine::general_purpose::STANDARD.encode(bytes),
+    });
+    Ok(())
+}
+
+/// A relative path as the bundle spells it: `/`-separated on every platform, so a dashboard
+/// packed on Windows unpacks on Linux and the reverse.
+fn slash_path(rel: &Path) -> String {
+    rel.components()
+        .filter_map(|c| match c {
+            std::path::Component::Normal(segment) => Some(segment.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// `POST /api/dashboards/import` — receive a dashboard packed by another machine and make it
+/// this machine's own.
+///
+/// Nothing is started from here: writing `<id>/.adi/hive.yaml` is the whole job, because the
+/// per-user supervisor re-reads its import glob every few seconds and leases the ports itself —
+/// the same contract [`create_dashboard`] relies on.
+///
+/// **The same id imported twice updates, it does not duplicate.** That is what makes "transfer"
+/// double as "redeploy": edit the dashboard here, send it again, and the copy over there becomes
+/// what you have — leased ports, hostname and all — instead of a second row beside it. A mirror
+/// and not a merge: files the bundle no longer carries are removed, or a module you deleted would
+/// go on being served.
+#[must_use]
+pub fn import_dashboard(
+    projects: &Projects,
+    ports: &Ports,
+    live: &[UsedPort],
+    body: &[u8],
+) -> Response {
+    let bundle: DashboardBundle = match serde_json::from_slice(body) {
+        Ok(bundle) => bundle,
+        Err(e) => return error(400, &format!("invalid dashboard bundle: {e}")),
+    };
+    let name = bundle.name.trim();
+    if name.is_empty() {
+        return error(400, "the bundle names no dashboard");
+    }
+    let Some(id) = valid_id(&bundle.id) else {
+        return error(400, "the bundle carries no usable dashboard id");
+    };
+    if bundle.files.len() > MAX_BUNDLE_FILES {
+        return error(413, "the bundle carries too many files");
+    }
+    // An import is a mirror, so an empty one would *empty* a dashboard already running here. A
+    // dashboard with no files is not a thing anybody means to send.
+    if bundle.files.is_empty() {
+        return error(400, "the bundle carries no files");
+    }
+
+    let cfg = projects.config();
+    let dir = cfg.module("dashboards").dir().join(&id);
+    // Decode and path-check *everything* before a single byte is written: a bundle rejected
+    // halfway would leave a live dashboard holding a mix of two versions.
+    let decoded = match decode_bundle(&dir, &bundle.files) {
+        Ok(decoded) => decoded,
+        Err(response) => return response,
+    };
+
+    if let Err(e) = write_import(&dir, &decoded) {
+        return error(500, &format!("writing the dashboard: {e}"));
+    }
+
+    // A project id means nothing on this machine unless a project by that id is actually here.
+    let project = bundle
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .filter(|p| matches!(projects.get(p), Ok(Some(_))))
+        .map(str::to_string);
+    if let Err(e) = write_manifest(
+        &dir,
+        &Manifest {
+            name: Some(name.to_string()),
+            description: bundle.description.as_deref().map(str::trim).map(str::to_string),
+            project,
+            // An import is a live dashboard by definition — including one landing on top of a row
+            // that had been archived here, which is precisely how you un-retire one.
+            archived_at: None,
+            moved_to: None,
+        },
+    ) {
+        return error(500, &format!("writing the dashboard manifest: {e}"));
+    }
+
+    let host = preferred_host(&dir, name, bundle.host.as_deref());
+    if let Err(e) = std::fs::write(dir.join(".adi").join(HIVE_LIVE), hive_yaml(&dir, &host)) {
+        return error(500, &format!("writing the dashboard hive file: {e}"));
+    }
+    // An update may have landed on a dashboard that was archived here, whose hive file is still
+    // parked outside the supervisor's glob. Two files would then describe one dashboard.
+    let _ = std::fs::remove_file(dir.join(".adi").join(HIVE_ARCHIVED));
+
+    ok_json(&read_dashboard(&dir, ports, live))
+}
+
+/// A bundle's files, decoded and resolved to absolute paths under the dashboard directory.
+type DecodedFiles = Vec<(PathBuf, Vec<u8>)>;
+
+/// Decode every file's bytes and resolve its path, refusing the whole bundle on the first thing
+/// that does not belong.
+///
+/// The path check is [`adi_fs::Jail`]'s, not one written here: it is the same lexical rule the
+/// store browser is confined by, and a second implementation is a second chance to get `..` wrong.
+/// On top of it, the generated directories are refused outright — a bundle claiming to carry
+/// `.adi/hive.yaml` is a bundle trying to choose this machine's routing.
+fn decode_bundle(dir: &Path, files: &[BundleFile]) -> Result<DecodedFiles, Response> {
+    let jail = adi_fs::Jail::new(dir);
+    let mut decoded = Vec::with_capacity(files.len());
+    let mut total = 0_u64;
+    for file in files {
+        let path = file.path.trim();
+        if path.is_empty() {
+            return Err(error(400, "the bundle carries a file with no path"));
+        }
+        if path
+            .split(['/', '\\'])
+            .any(|segment| NEVER_BUNDLED_DIRS.contains(&segment))
+        {
+            return Err(error(
+                400,
+                &format!("a bundle may not carry {path:?} — that directory is generated here"),
+            ));
+        }
+        let resolved = jail
+            .resolve(path)
+            .map_err(|e| error(400, &format!("refusing {path:?}: {e}")))?;
+        if resolved == dir {
+            return Err(error(400, &format!("{path:?} names the dashboard itself")));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(file.contents.as_bytes())
+            .map_err(|e| error(400, &format!("{path:?} is not valid base64: {e}")))?;
+        total += bytes.len() as u64;
+        if total > MAX_BUNDLE_BYTES {
+            return Err(error(413, "the bundle is too large"));
+        }
+        decoded.push((resolved, bytes));
+    }
+    Ok(decoded)
+}
+
+/// Mirror `decoded` into the dashboard directory: drop what an earlier version left behind, then
+/// write what this one carries.
+fn write_import(dir: &Path, decoded: &DecodedFiles) -> std::io::Result<()> {
+    clear_imported(dir)?;
+    std::fs::create_dir_all(dir.join(".adi"))?;
+    for (path, bytes) in decoded {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, bytes)?;
+    }
+    Ok(())
+}
+
+/// Empty a dashboard directory of everything an import replaces, keeping [`KEPT_ON_IMPORT`]. A
+/// directory that does not exist yet is simply nothing to clear.
+fn clear_imported(dir: &Path) -> std::io::Result<()> {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e),
+    };
+    for entry in entries.flatten() {
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if KEPT_ON_IMPORT.contains(&name.as_str()) {
+            continue;
+        }
+        let path = entry.path();
+        // `symlink_metadata`, so a symlinked directory is unlinked rather than walked into.
+        let meta = std::fs::symlink_metadata(&path)?;
+        if meta.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// An id from a bundle, accepted only as one ordinary path segment — it becomes a directory name
+/// under the dashboards root, and the far side chose it.
+fn valid_id(raw: &str) -> Option<String> {
+    let id = raw.trim();
+    let usable = !id.is_empty()
+        && id.len() <= 128
+        && id != "."
+        && id != ".."
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    usable.then(|| id.to_string())
+}
+
+/// The hostname an imported dashboard takes: the one it answered on where it came from, when that
+/// label is free here, and a freshly derived one when it is not.
+///
+/// Keeping the label is what makes a transfer feel like a move rather than a copy — the same
+/// dashboard is `nosh.adi` locally and `nosh.<node>.n.adi` through the mesh. But it is only ever a
+/// preference: a label another dashboard on this machine already claims would make routing a
+/// coin-flip, and a reserved one would shadow infrastructure.
+fn preferred_host(dir: &Path, name: &str, offered: Option<&str>) -> String {
+    let taken = claimed_labels(dir);
+    let offered = offered
+        .map(label_of)
+        .filter(|label| slugify(label).as_deref() == Some(label.as_str()))
+        .filter(|label| !is_reserved(label) && !taken.contains(label));
+    match offered {
+        Some(label) => format!("{label}.{HOST_ZONE}"),
+        None => dashboard_host(dir, name),
+    }
+}
+
+/// Stand the local copy down once a node has confirmed it holds the dashboard — the second half
+/// of a transfer in `move` mode.
+///
+/// Archiving rather than deleting is the default because the node's copy is now the only other
+/// one: the hive file is parked (so both bun servers stop within a few seconds), the manifest
+/// records where it went, and Restore is still there if the move turns out to have been a
+/// mistake. `delete` is the operator saying they meant it.
+///
+/// Called only after a `200` from the node, never speculatively.
+#[must_use]
+pub fn complete_move(
+    cfg: &Config,
+    ports: &Ports,
+    live: &[UsedPort],
+    id: &str,
+    node: &str,
+    delete: bool,
+) -> Response {
+    let Some(dir) = dashboard_dir(cfg, id) else {
+        return error(404, &format!("no such dashboard: {id}"));
+    };
+    if delete {
+        return match std::fs::remove_dir_all(&dir) {
+            Ok(()) => dashboards(cfg, ports, live),
+            Err(e) => error(
+                500,
+                &format!("{node} has the dashboard, but the local copy could not be deleted: {e}"),
+            ),
+        };
+    }
+
+    let mut manifest = read_manifest(&dir);
+    manifest.archived_at = Some(now_secs());
+    manifest.moved_to = Some(node.to_string());
+    if let Err(e) = write_manifest(&dir, &manifest) {
+        return error(
+            500,
+            &format!("{node} has the dashboard, but the local manifest could not be updated: {e}"),
+        );
+    }
+    // Out of the supervisor's `**/hive.yaml` glob, which is what actually stops the two servers.
+    let supervised = dir.join(".adi").join(HIVE_LIVE);
+    if supervised.exists()
+        && let Err(e) = std::fs::rename(&supervised, dir.join(".adi").join(HIVE_ARCHIVED))
+    {
+        return error(
+            500,
+            &format!("{node} has the dashboard, but the local one could not be stopped: {e}"),
+        );
+    }
+    dashboards(cfg, ports, live)
+}
+
 /// Quote a value as a TOML basic string, escaping what that grammar requires.
 fn toml_string(value: &str) -> String {
     let escaped = value
@@ -689,6 +1124,7 @@ fn read_dashboard(dir: &Path, ports: &Ports, live: &[UsedPort]) -> Dashboard {
         modules: ts_stems(&dir.join("frontend").join("modules")),
         routes: ts_stems(&dir.join("backend").join("routes")),
         archived_at: manifest.archived_at,
+        moved_to: manifest.moved_to,
         dir: dir.display().to_string(),
         id,
     }
@@ -1187,6 +1623,355 @@ mod tests {
             "backend_running":false,"modules":[],"routes":[]}"#;
         let parsed: Dashboard = serde_json::from_str(older).expect("older payload");
         assert_eq!(parsed.host, None);
+    }
+
+    // MARK: transferring a dashboard to another machine
+
+    /// A whole machine of its own: a store, a ports registry, and the [`Projects`] handle the
+    /// import side takes. Two of these in one test is a transfer.
+    fn machine(tag: &str) -> (Projects, Ports) {
+        let (cfg, ports) = store(tag);
+        std::fs::create_dir_all(cfg.module("dashboards").dir()).expect("dashboards root");
+        (Projects::with_config(cfg), ports)
+    }
+
+    /// The dashboards root of a machine.
+    fn root_of(projects: &Projects) -> PathBuf {
+        projects.config().module("dashboards").dir().to_path_buf()
+    }
+
+    /// One bundled file's bytes, by path — `None` when the bundle does not carry it.
+    fn bundled(bundle: &DashboardBundle, path: &str) -> Option<Vec<u8>> {
+        bundle
+            .files
+            .iter()
+            .find(|f| f.path == path)
+            .map(|f| base64::engine::general_purpose::STANDARD.decode(&f.contents).expect("base64"))
+    }
+
+    /// Import `bundle` into `projects`, asserting the node accepted it, and answer with the row it
+    /// reported.
+    fn import(projects: &Projects, ports: &Ports, bundle: &DashboardBundle) -> Dashboard {
+        let body = serde_json::to_vec(bundle).expect("a bundle serializes");
+        let res = import_dashboard(projects, ports, &[], &body);
+        assert_eq!(res.status, 200, "{}", res.body);
+        serde_json::from_str(&res.body).expect("the imported dashboard")
+    }
+
+    /// A scaffolded dashboard with one authored panel and one non-UTF-8 asset — the two things a
+    /// transfer has to carry that the templates do not.
+    fn authored(projects: &Projects, id: &str, name: &str) -> PathBuf {
+        let dir = root_of(projects).join(id);
+        scaffold(&dir, name, "what it is for", None).expect("scaffold");
+        std::fs::write(
+            dir.join("frontend").join("modules").join("mine.ts"),
+            "export default () => 42;\n",
+        )
+        .expect("panel");
+        std::fs::write(dir.join("frontend").join("logo.png"), [0x89, b'P', 0x00, 0xff])
+            .expect("asset");
+        dir
+    }
+
+    #[test]
+    fn a_bundle_carries_what_was_authored_and_nothing_that_was_generated() {
+        let (projects, _ports) = machine("bundle");
+        let dir = authored(&projects, "d1", "Nosh");
+        // Caches nobody should ship, and a symlink that would otherwise put a file from outside
+        // the dashboard on the wire.
+        std::fs::create_dir_all(dir.join("node_modules").join("left-pad")).expect("cache");
+        std::fs::write(dir.join("node_modules").join("left-pad").join("i.js"), "x").expect("dep");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/etc/hosts", dir.join("hosts.link")).expect("symlink");
+
+        let bundle = export_bundle(projects.config(), "d1").expect("a bundle");
+
+        assert_eq!(bundle.id, "d1", "the id rides along so a re-transfer updates");
+        assert_eq!(bundle.name, "Nosh");
+        assert_eq!(bundle.description.as_deref(), Some("what it is for"));
+        assert_eq!(bundle.host.as_deref(), Some("nosh.adi"), "offered as a preference");
+
+        assert_eq!(
+            bundled(&bundle, "frontend/modules/mine.ts").as_deref(),
+            Some(b"export default () => 42;\n".as_slice()),
+        );
+        // Base64 and not text, so the bytes that are not UTF-8 survive the trip intact.
+        assert_eq!(
+            bundled(&bundle, "frontend/logo.png").as_deref(),
+            Some([0x89, b'P', 0x00, 0xff].as_slice()),
+        );
+
+        let paths: Vec<&str> = bundle.files.iter().map(|f| f.path.as_str()).collect();
+        for generated in [".adi/hive.yaml", "config.toml"] {
+            assert!(!paths.contains(&generated), "{generated} must be rebuilt, not shipped: {paths:?}");
+        }
+        assert!(
+            !paths.iter().any(|p| p.starts_with("node_modules/")),
+            "a cache is not part of the dashboard: {paths:?}"
+        );
+        assert!(
+            !paths.contains(&"hosts.link"),
+            "a symlink out of the dashboard must never be followed onto the wire: {paths:?}"
+        );
+        assert_eq!(export_bundle(projects.config(), "nope").err().map(|e| e.status), Some(404));
+    }
+
+    #[test]
+    fn a_transfer_arrives_as_a_working_dashboard_on_the_other_machine() {
+        let (here, _) = machine("transfer-from");
+        let (there, there_ports) = machine("transfer-to");
+        authored(&here, "d2", "Nosh");
+
+        let bundle = export_bundle(here.config(), "d2").expect("a bundle");
+        let landed = import(&there, &there_ports, &bundle);
+
+        // Same dashboard, this machine's paths.
+        assert_eq!(landed.id, "d2");
+        assert_eq!(landed.name, "Nosh");
+        assert_eq!(landed.host.as_deref(), Some("nosh.adi"), "the label was free here");
+        let dir = root_of(&there).join("d2");
+        assert_eq!(landed.dir, dir.display().to_string());
+        assert_eq!(landed.modules, ["mine", "status"], "the panels came across");
+        assert_eq!(landed.routes, ["status"]);
+        assert!(landed.archived_at.is_none(), "an import is live by definition");
+
+        // The hive file is this machine's own — one origin, and a working_dir under *its* store.
+        let hive = hive_of(&dir);
+        assert!(is_one_origin(&hive));
+        let raw = std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive");
+        assert!(raw.contains(&format!("working_dir: {}", dir.display())), "{raw}");
+        assert!(!raw.contains("transfer-from"), "no path from the sending machine: {raw}");
+
+        // Every authored byte, including the one that is not text.
+        assert_eq!(
+            std::fs::read(dir.join("frontend").join("logo.png")).expect("asset"),
+            [0x89, b'P', 0x00, 0xff],
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("frontend").join("modules").join("mine.ts"))
+                .expect("panel"),
+            "export default () => 42;\n",
+        );
+    }
+
+    #[test]
+    fn transferring_the_same_dashboard_again_updates_the_copy() {
+        let (here, _) = machine("redeploy-from");
+        let (there, there_ports) = machine("redeploy-to");
+        let from = authored(&here, "d3", "Nosh");
+        let to = root_of(&there).join("d3");
+
+        import(&there, &there_ports, &export_bundle(here.config(), "d3").expect("bundle"));
+        // Something the node installed for itself, and a stale panel the next transfer drops.
+        std::fs::create_dir_all(to.join("node_modules")).expect("cache dir");
+        std::fs::write(to.join("node_modules").join("dep.js"), "cached").expect("cache");
+
+        // Edit here: one panel changes, another is deleted.
+        std::fs::write(from.join("frontend").join("modules").join("mine.ts"), "// v2\n")
+            .expect("edit");
+        std::fs::remove_file(from.join("frontend").join("modules").join("status.ts"))
+            .expect("delete a panel");
+
+        let again = import(&there, &there_ports, &export_bundle(here.config(), "d3").expect("bundle"));
+
+        // One dashboard, not two — this is what makes "transfer" double as "redeploy".
+        let listed = listed(there.config(), &there_ports);
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(again.host.as_deref(), Some("nosh.adi"), "the address did not move");
+        assert_eq!(
+            std::fs::read_to_string(to.join("frontend").join("modules").join("mine.ts"))
+                .expect("panel"),
+            "// v2\n",
+        );
+        assert!(
+            !to.join("frontend").join("modules").join("status.ts").exists(),
+            "a mirror, not a merge: a panel deleted here stops being served there"
+        );
+        assert_eq!(
+            std::fs::read_to_string(to.join("node_modules").join("dep.js")).expect("cache"),
+            "cached",
+            "the node's install survives, or every re-transfer would be an install"
+        );
+    }
+
+    #[test]
+    fn an_import_over_an_archived_dashboard_brings_it_back_live() {
+        let (here, _) = machine("revive-from");
+        let (there, there_ports) = machine("revive-to");
+        authored(&here, "d4", "Nosh");
+        let bundle = export_bundle(here.config(), "d4").expect("bundle");
+        import(&there, &there_ports, &bundle);
+
+        // Archived over there — its hive file parked outside the supervisor's glob.
+        let res = archive_dashboard(there.config(), &there_ports, &[], br#"{"id":"d4"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+        let to = root_of(&there).join("d4");
+        assert!(to.join(".adi").join(HIVE_ARCHIVED).exists());
+
+        let landed = import(&there, &there_ports, &bundle);
+
+        assert!(landed.archived_at.is_none(), "sending it again is how you un-retire it");
+        assert!(to.join(".adi").join(HIVE_LIVE).exists(), "supervised again");
+        assert!(
+            !to.join(".adi").join(HIVE_ARCHIVED).exists(),
+            "two hive files would describe one dashboard, and the glob would pick the wrong one"
+        );
+    }
+
+    #[test]
+    fn an_import_refuses_a_path_that_does_not_belong_to_the_dashboard() {
+        let (there, there_ports) = machine("escape");
+        let root = root_of(&there);
+
+        for path in [
+            "../../../../etc/passwd",
+            "/etc/passwd",
+            "frontend/../../escaped.ts",
+            ".adi/hive.yaml",
+            "node_modules/dep.js",
+            "",
+        ] {
+            let bundle = DashboardBundle {
+                id: "d5".to_string(),
+                name: "Nosh".to_string(),
+                description: None,
+                project: None,
+                host: None,
+                files: vec![BundleFile {
+                    path: path.to_string(),
+                    contents: base64::engine::general_purpose::STANDARD.encode("pwned"),
+                }],
+            };
+            let body = serde_json::to_vec(&bundle).expect("serialize");
+            let res = import_dashboard(&there, &there_ports, &[], &body);
+            assert_eq!(res.status, 400, "{path:?} was accepted: {}", res.body);
+        }
+
+        // Refused before anything is written: not a byte of the rejected bundle landed, and no
+        // dashboard directory was created for it either.
+        assert!(!root.join("d5").exists(), "a refused import left a directory behind");
+        assert!(!root.parent().is_some_and(|p| p.join("escaped.ts").exists()));
+
+        // And an id that is not one path segment is refused just as flatly. (The empty file list
+        // here is beside the point — an unusable id is refused before it is looked at.)
+        for id in ["../elsewhere", "a/b", "", "."] {
+            let bundle = DashboardBundle {
+                id: id.to_string(),
+                name: "Nosh".to_string(),
+                description: None,
+                project: None,
+                host: None,
+                files: Vec::new(),
+            };
+            let body = serde_json::to_vec(&bundle).expect("serialize");
+            let res = import_dashboard(&there, &there_ports, &[], &body);
+            assert_eq!(res.status, 400, "id {id:?} was accepted: {}", res.body);
+        }
+    }
+
+    #[test]
+    fn an_empty_bundle_never_empties_a_dashboard_that_is_running_here() {
+        let (here, _) = machine("empty-from");
+        let (there, there_ports) = machine("empty-to");
+        authored(&here, "da", "Nosh");
+        let mut bundle = export_bundle(here.config(), "da").expect("bundle");
+        import(&there, &there_ports, &bundle);
+
+        // An import is a mirror; an empty one would mirror nothing over a live dashboard.
+        bundle.files.clear();
+        let body = serde_json::to_vec(&bundle).expect("serialize");
+        let res = import_dashboard(&there, &there_ports, &[], &body);
+
+        assert_eq!(res.status, 400, "{}", res.body);
+        let to = root_of(&there).join("da");
+        assert!(to.join("frontend").join("index.ts").exists(), "the copy over there is intact");
+        assert!(to.join("frontend").join("modules").join("mine.ts").exists());
+    }
+
+    #[test]
+    fn an_offered_host_gives_way_to_one_this_machine_already_uses() {
+        let (here, _) = machine("host-clash-from");
+        let (there, there_ports) = machine("host-clash-to");
+        authored(&here, "d6", "Nosh");
+        // A different dashboard is already `nosh.adi` on the receiving machine.
+        scaffold(&root_of(&there).join("resident"), "Nosh", "", None).expect("neighbour");
+
+        let landed = import(
+            &there,
+            &there_ports,
+            &export_bundle(here.config(), "d6").expect("bundle"),
+        );
+
+        assert_eq!(
+            landed.host.as_deref(),
+            Some("d6.adi"),
+            "the offered label was taken, so it falls back to the id — a working hostname beats \
+             a pretty one, and two dashboards on one host is a coin-flip",
+        );
+        // The resident keeps what it had; nothing was quietly re-pointed underneath it.
+        assert_eq!(declared_host(&root_of(&there).join("resident")).as_deref(), Some("nosh.adi"));
+    }
+
+    #[test]
+    fn a_project_id_that_means_nothing_here_leaves_the_copy_unfiled() {
+        let (here, _) = machine("project-from");
+        let (there, there_ports) = machine("project-to");
+        let dir = authored(&here, "d7", "Nosh");
+        let mut manifest = read_manifest(&dir);
+        manifest.project = Some("a-project-only-over-there".to_string());
+        write_manifest(&dir, &manifest).expect("file it");
+
+        let landed = import(
+            &there,
+            &there_ports,
+            &export_bundle(here.config(), "d7").expect("bundle"),
+        );
+
+        assert_eq!(landed.project, None, "an id nothing here answers to is not a filing");
+    }
+
+    #[test]
+    fn a_move_archives_the_local_copy_and_says_where_it_went() {
+        let (here, ports) = machine("moved");
+        let dir = authored(&here, "d8", "Nosh");
+
+        let res = complete_move(here.config(), &ports, &[], "d8", "laptop-b", false);
+        assert_eq!(res.status, 200, "{}", res.body);
+
+        let row = &serde_json::from_str::<DashboardsState>(&res.body).expect("state").dashboards[0];
+        assert!(row.is_archived(), "the local one stops running");
+        assert_eq!(row.moved_to.as_deref(), Some("laptop-b"));
+        // Parked out of the supervisor's glob — which is what actually stops the two bun servers.
+        assert!(dir.join(".adi").join(HIVE_ARCHIVED).exists());
+        assert!(!dir.join(".adi").join(HIVE_LIVE).exists());
+        // Nothing was deleted: Restore is still the way back.
+        assert!(dir.join("frontend").join("modules").join("mine.ts").exists());
+
+        // …and restoring drops the note, because this machine runs it again.
+        let res = unarchive_dashboard(here.config(), &ports, &[], br#"{"id":"d8"}"#);
+        assert_eq!(res.status, 200, "{}", res.body);
+        let row = &serde_json::from_str::<DashboardsState>(&res.body).expect("state").dashboards[0];
+        assert!(!row.is_archived());
+        assert_eq!(row.moved_to, None, "a live dashboard does not live somewhere else");
+    }
+
+    #[test]
+    fn a_move_that_asked_for_it_deletes_the_local_directory() {
+        let (here, ports) = machine("moved-deleted");
+        let dir = authored(&here, "d9", "Nosh");
+
+        let res = complete_move(here.config(), &ports, &[], "d9", "laptop-b", true);
+        assert_eq!(res.status, 200, "{}", res.body);
+
+        assert!(!dir.exists(), "the operator asked for the local copy to go");
+        assert!(
+            serde_json::from_str::<DashboardsState>(&res.body).expect("state").dashboards.is_empty()
+        );
+        // A second attempt has nothing to stand down, and says so rather than reporting success.
+        assert_eq!(
+            complete_move(here.config(), &ports, &[], "d9", "laptop-b", true).status,
+            404
+        );
     }
 
     #[test]

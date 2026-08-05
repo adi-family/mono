@@ -24,7 +24,12 @@ pub fn error(status: u16, message: &str) -> Response {
 }
 
 /// Serialize a success payload; a serialization failure degrades to a 500 error body.
-pub(crate) fn ok_json<T: serde::Serialize>(value: &T) -> Response {
+///
+/// Public because a handler is not always in this crate: `POST /api/dashboards/transfer` lives in
+/// adi-app (it is the one endpoint that calls *out* to another machine) and must answer with the
+/// same shape everything else does.
+#[must_use]
+pub fn ok_json<T: serde::Serialize>(value: &T) -> Response {
     match serde_json::to_string(value) {
         Ok(json) => Response {
             status: 200,

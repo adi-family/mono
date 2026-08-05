@@ -217,6 +217,44 @@ supported for independence. On a shared LAN, `RelayMode::Disabled` plus mDNS add
 gives direct QUIC with no internet at all. Off-LAN with no outbound connectivity is impossible
 by construction — the minimum is one outbound UDP/443 session.
 
+## 10. Moving a dashboard to a node
+
+A dashboard is a directory, and every machine in the fleet already knows how to turn one into a
+running pair of bun servers. So "run this in the cloud" needs no deployment machinery: pack the
+directory, hand it to the node's own control panel, let the node's supervisor do there exactly what
+ours does here. Two clicks — **Transfer**, then a node — plus the node's password.
+
+```
+POST /api/dashboards/transfer   (here)  → packs, calls out, then stands the local copy down
+POST /api/dashboards/import     (there) → writes the directory, rebuilds the hive file
+```
+
+- **The call goes through the local gateway, not through DNS.** The request is addressed to
+  `127.0.0.1:<gateway port>` with `Host: app.<node>.n.adi` — byte for byte what the front door
+  would forward for the same URL typed into a browser here. Resolving the name instead would put
+  the system resolver and the root front door on the path, both of which can be down while the mesh
+  is fine.
+- **The password is asked for per transfer and stored nowhere.** This machine holds a verifier, not
+  a credential (§8), and a deploy button is not a reason to start keeping one.
+- **What travels is what was authored.** The manifest and `.adi/hive.yaml` are omitted and rebuilt
+  on the far side: the hive file carries an absolute `working_dir`, and its `proxy.host` may
+  already belong to a different dashboard over there. `node_modules` and `.git` never travel.
+  Files ride as base64, so an icon or a fixture arrives intact. Symlinks are skipped, never
+  followed — one pointing out of the dashboard would otherwise put whatever it names on the wire.
+- **The hostname is a preference, not an instruction.** The node keeps the label when it is free
+  there (so the same dashboard is `nosh.adi` locally and `nosh.<node>.n.adi` through the mesh) and
+  derives a fresh one when it is not. Two dashboards on one hostname is a routing coin-flip.
+- **The same id imported twice updates, it does not duplicate** — which is what makes transfer
+  double as redeploy. It is a mirror and not a merge: a module deleted here stops being served
+  there. `node_modules` on the node survives, so a re-transfer is not a re-install.
+- **The transfer asks the node for `http:<label>` on this machine's behalf**, since pairing grants
+  only `http:app` (§8) and the new dashboard would otherwise be *not authorized* from here. Reading
+  the node's fleet for our own key is how we learn what it calls us — the petname is the node's to
+  choose. Best-effort: a grant it would not give is a link that refuses, not a transfer that failed.
+- **The local copy is stood down last, and only on a `200`.** A move archives it and records
+  `moved_to`; Restore is still the way back, and deleting the directory is a separate opt-in. A
+  transfer whose upload failed leaves this machine exactly as it was.
+
 ---
 
 ## Checklist
@@ -284,3 +322,13 @@ Each item ships with unit tests in the same file.
 - [x] E2 `apps/linux/build.sh` — static musl package with the five binaries.
 - [x] E3 Pull-only bootstrap: one-time pairing token, node dials out, no inbound ssh needed.
 - [x] E4 Fleet page in the control panel: nodes, status, grants, audit.
+
+### G — moving a dashboard to a node (§10)
+
+- [x] G1 `export_bundle` / `POST /api/dashboards/import`: pack the authored files, rebuild the
+      manifest and hive file on the far side, keep the hostname when it is free there.
+- [x] G2 `POST /api/dashboards/transfer`: the outbound call through the local gateway, the
+      per-transfer credential, and `complete_move` for the copy left behind.
+- [x] G3 The node grants this machine `http:<label>` for what it just took, so the link works on
+      the first click.
+- [x] G4 Transfer on every dashboard row, and a panel that asks for node, mode and password.

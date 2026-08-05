@@ -12,6 +12,7 @@ mod awaits;
 mod http;
 mod live;
 mod scan;
+mod transfer;
 mod ws;
 
 use std::collections::HashMap;
@@ -377,6 +378,11 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async
         // because it makes an outbound call, so it can't be a plain sync handler.
         ("POST", "/api/secrets/refresh") => refresh_secret(&app.secrets, &req.body).await,
+        // Send a dashboard to a paired node. Async for the same reason: it is an outbound call —
+        // through this machine's mesh gateway, at the node's own control panel (see [`transfer`]).
+        ("POST", "/api/dashboards/transfer") => {
+            transfer::transfer_dashboard(&app.projects, &app.ports, &req.body).await
+        }
         ("GET", "/api/mesh") => handlers::mesh(app.mesh.running().await),
         ("POST", "/api/mesh/start") => mesh_start(&app.mesh).await,
         ("POST", "/api/mesh/stop") => mesh_stop(&app.mesh).await,
@@ -653,6 +659,13 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/dashboards/delete") => {
             let live = scan::listening_ports();
             handlers::delete_dashboard(projects.config(), ports, &live, &req.body)
+        }
+        // The receiving half of a transfer: another machine handing us a dashboard it packed.
+        // Reached over the mesh, so it is gated by this node's own password before it ever gets
+        // here (`docs/fleet.md` §5) — the same gate every other route on this panel sits behind.
+        ("POST", "/api/dashboards/import") => {
+            let live = scan::listening_ports();
+            handlers::import_dashboard(projects, ports, &live, &req.body)
         }
         // Starting or stopping a service changes what is listening, and the page asks that next —
         // so drop the port-scan memo rather than answering it from a scan taken before the change.

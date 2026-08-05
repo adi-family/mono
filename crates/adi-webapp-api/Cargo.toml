@@ -35,6 +35,9 @@ server = [
     "dep:adi-events",
     "dep:adi-fs",
     "dep:adi-hooks",
+    # A dashboard travels between machines as base64 file bytes (`DashboardBundle`), so that a
+    # transfer carries an icon or a fixture as faithfully as it carries a `.ts` file.
+    "dep:base64",
     "dep:serde_yaml_ng",
     "dep:toml",
     "dep:uuid",
@@ -57,6 +60,7 @@ adi-events = { workspace = true, optional = true }
 adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { version = "0.10", optional = true }
 toml = { workspace = true, optional = true }

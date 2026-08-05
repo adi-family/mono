@@ -2,7 +2,8 @@
 
 use adi_webapp_api::types::{
     AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
-    AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardsState, DbExecResult,
+    AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardTransferred,
+    DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
     FilesRef, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing,
     FsRef, FsWrite, Health, HideRun, HiveState, LeaseRef,
@@ -12,7 +13,8 @@ use adi_webapp_api::types::{
     ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
     SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
-    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TriggerFireResult, TriggerLog,
+    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
+    TriggerFireResult, TriggerLog,
     TriggerRef, TriggersState, UnqueueFromRun, UsedPorts, WorkspaceCreateResult, WorkspaceRef,
     WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
@@ -481,6 +483,16 @@ pub async fn unarchive_dashboard(id: String) -> Result<DashboardsState, String> 
 /// refuses unless the dashboard is archived first.
 pub async fn delete_dashboard(id: String) -> Result<DashboardsState, String> {
     post("/api/dashboards/delete", &DashboardRef { id }).await
+}
+
+/// Send a dashboard to a paired node and run it there — a copy, or a move that archives the local
+/// one (`docs/fleet.md` §10). The password is the node's own; it is used for this one request and
+/// stored nowhere, here or on the server.
+///
+/// Slower than every other call on this page: it uploads the dashboard's files over the mesh, so
+/// the caller should show the form as busy rather than assume a round-trip.
+pub async fn transfer_dashboard(body: TransferDashboard) -> Result<DashboardTransferred, String> {
+    post("/api/dashboards/transfer", &body).await
 }
 
 /// File a dashboard under a project (or unfile it with `None`). A manifest-only edit — the

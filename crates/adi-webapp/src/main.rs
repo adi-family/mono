@@ -867,6 +867,12 @@ fn App() -> impl IntoView {
         description: RwSignal::new(String::new()),
         busy: RwSignal::new(false),
         show_archived: RwSignal::new(false),
+        transfer_id: RwSignal::new(String::new()),
+        transfer_node: RwSignal::new(String::new()),
+        transfer_move: RwSignal::new(false),
+        transfer_delete: RwSignal::new(false),
+        transfer_password: RwSignal::new(String::new()),
+        transfer_busy: RwSignal::new(false),
     };
 
     let tasks_form = TasksForm {

@@ -452,6 +452,7 @@ mod tests {
             modules: Vec::new(),
             routes: Vec::new(),
             archived_at: None,
+            moved_to: None,
         };
         let mut svc = svc("frontend", None, None);
         svc.dashboard = Some(board.id.clone());
