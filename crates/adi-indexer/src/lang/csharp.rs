@@ -2,8 +2,11 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::{
+    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -14,36 +17,11 @@ pub fn language() -> tree_sitter::Language {
 #[derive(Debug)]
 pub struct CSharpAnalyzer;
 
-impl LanguageAnalyzer for CSharpAnalyzer {
-    fn extract_symbols(&self, source: &str, tree: &Tree) -> Vec<ParsedSymbol> {
-        let mut symbols = Vec::new();
-        extract_csharp_symbols(tree.root_node(), source, &mut symbols);
-        symbols
-    }
-
-    fn extract_references(&self, source: &str, tree: &Tree) -> Vec<ParsedReference> {
-        let mut refs = Vec::new();
-        collect_csharp_references(tree.root_node(), source, &mut refs);
-        refs
-    }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> String {
-    source[node.byte_range()].to_string()
-}
-
-fn node_location(node: Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location::new(
-        start.row as u32,
-        start.column as u32,
-        end.row as u32,
-        end.column as u32,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    )
-}
+tree_walking_analyzer!(
+    CSharpAnalyzer,
+    symbols: extract_csharp_symbols,
+    references: collect_csharp_references,
+);
 
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     let mut prev = node.prev_sibling();
@@ -101,52 +79,25 @@ fn extract_method_signature(node: Node, source: &str) -> String {
 }
 
 fn extract_csharp_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
-    match node.kind() {
-        "class_declaration" => {
-            if let Some(symbol) = parse_csharp_class(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "struct_declaration" => {
-            if let Some(symbol) = parse_csharp_struct(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "interface_declaration" => {
-            if let Some(symbol) = parse_csharp_interface(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "enum_declaration" => {
-            if let Some(symbol) = parse_csharp_enum(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "method_declaration" => {
-            if let Some(symbol) = parse_csharp_method(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "constructor_declaration" => {
-            if let Some(symbol) = parse_csharp_constructor(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "property_declaration" => {
-            if let Some(symbol) = parse_csharp_property(node, source) {
-                symbols.push(symbol);
-            }
+    let parsed = match node.kind() {
+        "class_declaration" => parse_csharp_declaration(node, source, SymbolKind::Class),
+        "struct_declaration" => parse_csharp_declaration(node, source, SymbolKind::Struct),
+        "interface_declaration" => parse_csharp_declaration(node, source, SymbolKind::Interface),
+        "enum_declaration" => parse_csharp_declaration(node, source, SymbolKind::Enum),
+        "property_declaration" => parse_csharp_declaration(node, source, SymbolKind::Property),
+        "method_declaration" => parse_csharp_callable(node, source, SymbolKind::Method),
+        "constructor_declaration" => parse_csharp_callable(node, source, SymbolKind::Constructor),
+        // A namespace carries neither a doc comment of its own nor a visibility keyword.
+        "namespace_declaration" => {
+            declaration(node, source, SymbolKind::Namespace, None, None, None)
         }
         "field_declaration" => {
             parse_csharp_fields(node, source, symbols);
+            None
         }
-        "namespace_declaration" => {
-            if let Some(symbol) = parse_csharp_namespace(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        _ => {}
-    }
+        _ => None,
+    };
+    symbols.extend(parsed);
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
@@ -155,98 +106,28 @@ fn extract_csharp_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymb
     }
 }
 
-fn parse_csharp_class(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Class, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
+/// A C# type or property: named by its `name` field, preceded by a `///` block and a visibility
+/// keyword.
+fn parse_csharp_declaration(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(extract_visibility(node, source)),
+        None,
     )
 }
 
-fn parse_csharp_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Struct, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_csharp_interface(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Interface, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_csharp_enum(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Enum, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_csharp_method(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-    let signature = extract_method_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Method, node_location(node))
-            .with_signature(signature)
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_csharp_constructor(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-    let signature = extract_method_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Constructor, node_location(node))
-            .with_signature(signature)
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_csharp_property(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Property, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
+/// A C# method or constructor — the same, plus the signature its body is stripped down to.
+fn parse_csharp_callable(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(extract_visibility(node, source)),
+        Some(extract_method_signature(node, source)),
     )
 }
 
@@ -274,17 +155,6 @@ fn parse_csharp_fields(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
                 }
             }
     }
-}
-
-fn parse_csharp_namespace(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-
-    Some(ParsedSymbol::new(
-        name_text,
-        SymbolKind::Namespace,
-        node_location(node),
-    ))
 }
 
 fn collect_csharp_references(node: Node, source: &str, refs: &mut Vec<ParsedReference>) {
@@ -424,15 +294,3 @@ fn is_common_method(name: &str) -> bool {
     )
 }
 
-trait WithDocCommentOpt {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self;
-}
-
-impl WithDocCommentOpt for ParsedSymbol {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self {
-        match doc {
-            Some(d) => self.with_doc_comment(d),
-            None => self,
-        }
-    }
-}

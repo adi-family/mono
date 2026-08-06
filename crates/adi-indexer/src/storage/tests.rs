@@ -7,6 +7,7 @@
 mod tests {
     use crate::storage::sqlite::SqliteStorage;
     use crate::storage::Storage;
+    use crate::structure::Structure;
     use crate::types::*;
     use std::path::PathBuf;
     use tempfile::tempdir;
@@ -50,6 +51,7 @@ mod tests {
             doc_comment: None,
             visibility: Visibility::Public,
             is_entry_point: false,
+            structure: None,
         }
     }
 
@@ -310,6 +312,7 @@ mod tests {
             embedding_model: "test-model".to_string(),
             last_indexed: Some("2024-01-01".to_string()),
             storage_size_bytes: 1024,
+            pipeline_version: crate::indexer::PIPELINE_VERSION,
         };
 
         storage.update_status(&status).unwrap();
@@ -317,6 +320,79 @@ mod tests {
         let retrieved = storage.get_status().unwrap();
         assert_eq!(retrieved.embedding_model, "test-model");
         assert_eq!(retrieved.embedding_dimensions, 768);
+        assert_eq!(
+            retrieved.pipeline_version,
+            crate::indexer::PIPELINE_VERSION,
+            "the pipeline version has to survive a round trip, or every run rebuilds"
+        );
+    }
+
+    /// A fresh database reports pipeline 0, which is what makes an index written before the
+    /// version existed rebuild itself instead of being trusted.
+    #[test]
+    fn an_unstamped_index_reports_pipeline_zero() {
+        let (storage, _dir) = create_test_storage();
+        assert_eq!(storage.get_status().unwrap().pipeline_version, 0);
+    }
+
+    /// The structural columns have to survive storage, and `structures` has to filter by size.
+    ///
+    /// This is the round trip that the positional column reads make fragile: a symbol row is
+    /// read by index, so a fingerprint written into the wrong column comes back as a plausible
+    /// value rather than an error.
+    #[test]
+    fn structural_fingerprints_round_trip_and_filter_by_size() {
+        let (storage, _dir) = create_test_storage();
+        let file_id = storage.insert_file(&create_test_file()).unwrap();
+
+        let mut big = create_test_symbol(file_id, "collect", SymbolKind::Function);
+        big.structure = Some(Structure {
+            hash: "cafebabe".to_string(),
+            // Round-trips through SQLite's signed INTEGER — the top bit is the case that a
+            // numeric conversion would lose.
+            simhash: u64::MAX,
+            node_count: 120,
+        });
+        let mut twin = create_test_symbol(file_id, "tally", SymbolKind::Function);
+        twin.structure = big.structure.clone();
+        let mut small = create_test_symbol(file_id, "get", SymbolKind::Function);
+        small.structure = Some(Structure {
+            hash: "d00dfeed".to_string(),
+            simhash: 1,
+            node_count: 3,
+        });
+
+        let big_id = storage.insert_symbol(&big).unwrap();
+        storage.insert_symbol(&twin).unwrap();
+        storage.insert_symbol(&small).unwrap();
+
+        let stored = storage.get_symbol(big_id).unwrap();
+        let structure = stored.structure.expect("fingerprint survived storage");
+        assert_eq!(structure.hash, "cafebabe");
+        assert_eq!(structure.simhash, u64::MAX);
+        assert_eq!(structure.node_count, 120);
+
+        let rows = storage.structures(100).unwrap();
+        assert_eq!(rows.len(), 2, "the 3-node symbol is below the floor");
+
+        let groups = crate::clones::exact(rows);
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].members.len(), 2);
+    }
+
+    /// A symbol with no fingerprint is absent from `structures` rather than present with a
+    /// zeroed one — a zero would match every other zero and invent a clone group.
+    #[test]
+    fn symbols_without_a_fingerprint_are_left_out() {
+        let (storage, _dir) = create_test_storage();
+        let file_id = storage.insert_file(&create_test_file()).unwrap();
+
+        let plain = create_test_symbol(file_id, "unfingerprinted", SymbolKind::Function);
+        assert!(plain.structure.is_none());
+        let id = storage.insert_symbol(&plain).unwrap();
+
+        assert!(storage.get_symbol(id).unwrap().structure.is_none());
+        assert!(storage.structures(0).unwrap().is_empty());
     }
 
     #[test]

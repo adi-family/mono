@@ -11,8 +11,35 @@ mod mmap_tests;
 mod tests;
 
 use crate::error::Result;
-use crate::types::{File, FileId, FileInfo, Symbol, SymbolId, Reference, SymbolUsage, Tree, Status};
-use std::path::Path;
+use crate::structure::Structure;
+use crate::types::{File, FileId, FileInfo, Symbol, SymbolId, SymbolKind, Reference, SymbolUsage, Tree, Status};
+use std::path::{Path, PathBuf};
+
+/// One symbol's structural fingerprint, with just enough alongside it to name the symbol in a
+/// report.
+///
+/// Clone detection compares every fingerprint against every other, so it wants the whole set in
+/// memory at once and nothing more per row than it will print — loading full [`Symbol`]s (with
+/// their signatures and doc comments) would multiply the working set for fields no comparison
+/// reads.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StructureRow {
+    pub id: SymbolId,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub file_path: PathBuf,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub structure: Structure,
+}
+
+impl StructureRow {
+    /// Source lines the symbol spans, as a clone report ranks by.
+    #[must_use]
+    pub fn line_count(&self) -> u32 {
+        self.end_line.saturating_sub(self.start_line) + 1
+    }
+}
 
 pub trait Storage: std::fmt::Debug + Send + Sync {
     // File operations
@@ -57,6 +84,12 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     // Search operations
     fn search_symbols_fts(&self, query: &str, limit: usize) -> Result<Vec<Symbol>>;
     fn search_files_fts(&self, query: &str, limit: usize) -> Result<Vec<File>>;
+
+    /// Every fingerprinted symbol of at least `min_nodes` named nodes.
+    ///
+    /// Symbols indexed before migration v3 have no fingerprint and are absent, as are symbols
+    /// too small to say anything — see [`crate::structure`] on why the floor matters.
+    fn structures(&self, min_nodes: u32) -> Result<Vec<StructureRow>>;
 
     // Tree operations
     fn get_tree(&self) -> Result<Tree>;

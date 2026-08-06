@@ -2,6 +2,7 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::node_text;
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{
     Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility,
@@ -107,6 +108,7 @@ fn convert_symbol(sym: InternalSymbol) -> ParsedSymbol {
         doc_comment: None,
         children: sym.children.into_iter().map(convert_symbol).collect(),
         visibility: Visibility::Unknown,
+        structure: None,
     }
 }
 
@@ -141,10 +143,8 @@ fn convert_reference_kind(kind: InternalReferenceKind) -> ReferenceKind {
     }
 }
 
-fn node_text(node: Node, source: &str) -> String {
-    source[node.byte_range()].to_string()
-}
-
+/// This module's walkers build [`InternalLocation`], not the shared [`Location`] — so unlike its
+/// siblings it keeps its own, and converts on the way out in [`convert_location`].
 fn node_location(node: Node) -> InternalLocation {
     let start = node.start_position();
     let end = node.end_position();

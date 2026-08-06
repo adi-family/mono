@@ -5,7 +5,7 @@ use crate::types::{
     OAuthInfoDto, RevealedSecret, SecretDto, SecretRef, SecretsState, SetOAuthSecret, SetSecret,
 };
 
-use super::response::{Response, clean, error, ok_json};
+use super::response::{Response, clean, error, ok_json, parse_body};
 
 /// `GET /api/secrets` — every secret across all scopes, metadata only (never values). Each
 /// mutation endpoint below returns a fresh [`SecretsState`], so the client refreshes from one
@@ -130,8 +130,7 @@ impl From<&SecretStoreError> for Response {
 }
 
 fn parse_set(body: &[u8]) -> Option<SetSecret> {
-    let req: SetSecret = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty()).then_some(req)
+    parse_body::<SetSecret>(body).filter(|req| !req.name.trim().is_empty())
 }
 
 fn bad_set() -> Response {
@@ -142,9 +141,11 @@ fn bad_set() -> Response {
 }
 
 fn parse_set_oauth(body: &[u8]) -> Option<SetOAuthSecret> {
-    let req: SetOAuthSecret = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && !req.provider.trim().is_empty() && !req.access_token.is_empty())
-        .then_some(req)
+    parse_body::<SetOAuthSecret>(body).filter(|req| {
+            !req.name.trim().is_empty()
+                && !req.provider.trim().is_empty()
+                && !req.access_token.is_empty()
+    })
 }
 
 fn bad_set_oauth() -> Response {
@@ -155,8 +156,7 @@ fn bad_set_oauth() -> Response {
 }
 
 fn parse_ref(body: &[u8]) -> Option<SecretRef> {
-    let req: SecretRef = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty()).then_some(req)
+    parse_body::<SecretRef>(body).filter(|req| !req.name.trim().is_empty())
 }
 
 fn bad_ref() -> Response {

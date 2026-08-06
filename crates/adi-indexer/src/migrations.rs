@@ -10,7 +10,7 @@ pub use runner::{run, SqlMigration};
 
 /// Every migration, in order. The runner refuses a set whose versions are not 1..=n.
 pub fn migrations() -> Vec<SqlMigration> {
-    vec![migration_v1(), migration_v2()]
+    vec![migration_v1(), migration_v2(), migration_v3()]
 }
 
 /// V1: Initial schema - files, symbols, `symbol_refs`, status, FTS
@@ -146,6 +146,28 @@ fn migration_v2() -> SqlMigration {
             is_reachable INTEGER NOT NULL,
             last_analyzed INTEGER NOT NULL
         );
+        ",
+    )
+}
+
+/// V3: The structural fingerprint of each symbol — see `crate::structure`.
+///
+/// The three columns stay NULL for symbols already indexed when this runs; they fill in as
+/// files are reindexed. `structure_simhash` is a `u64` stored in SQLite's signed INTEGER, so
+/// it round-trips through a bit cast rather than a numeric conversion, and is never compared
+/// with `<`/`>` in SQL — only read back out and Hamming-compared in Rust.
+fn migration_v3() -> SqlMigration {
+    SqlMigration::new(
+        3,
+        "add_structural_fingerprints",
+        r"
+        ALTER TABLE symbols ADD COLUMN structure_hash TEXT;
+        ALTER TABLE symbols ADD COLUMN structure_simhash INTEGER;
+        ALTER TABLE symbols ADD COLUMN structure_size INTEGER;
+
+        -- Exact-clone grouping is a GROUP BY over this column, filtered by size.
+        CREATE INDEX IF NOT EXISTS idx_symbols_structure_hash
+            ON symbols(structure_hash, structure_size);
         ",
     )
 }

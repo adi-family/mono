@@ -4,7 +4,7 @@
 
 //! adi-indexer — the code index behind `adi-mono indexer`.
 //!
-//! Opening an [`Indexer`] on a project directory gives you three views of its code, all built
+//! Opening an [`Indexer`] on a project directory gives you four views of its code, all built
 //! from one tree-sitter parse per file:
 //!
 //! * **symbols** — functions, types, methods and their locations, in SQLite with an FTS5 index
@@ -12,7 +12,16 @@
 //! * **the call graph** — who calls whom, which [`graph`] turns into callers, callees, cycles,
 //!   entry points, and (with [`analyzer`]) unreachable code;
 //! * **meaning** — a 768-dimension embedding per symbol in a usearch index, so [`Indexer::search`]
-//!   answers "where do we retry failed uploads" and not just "where does the word retry appear".
+//!   answers "where do we retry failed uploads" and not just "where does the word retry appear",
+//!   and [`Indexer::similar`] answers "what else does something like this";
+//! * **shape** — a fingerprint of each symbol's syntax with the names taken out (see
+//!   [`structure`]), so [`Indexer::clones`] recognises copy-paste as copy-paste however
+//!   thoroughly it was renamed.
+//!
+//! The last two answer questions that sound alike and are not: one asks what code *means*, the
+//! other what it *looks like*. A pair of functions written differently to the same end is the
+//! first and not the second; a pair copied and renamed past recognition is the second and, once
+//! the names diverge enough, no longer reliably the first.
 //!
 //! Everything a project needs lives under its own `.adi/tree`. What is shared machine-wide is
 //! the parse/embedding cache, keyed by content hash — the same file in ten worktrees is parsed
@@ -55,6 +64,7 @@
 
 pub mod analyzer;
 pub mod cache;
+pub mod clones;
 pub mod config;
 pub mod embed;
 pub mod error;
@@ -66,6 +76,7 @@ pub mod parser;
 pub mod paths;
 pub mod search;
 pub mod storage;
+pub mod structure;
 pub mod types;
 pub mod watcher;
 
@@ -79,6 +90,7 @@ pub use analyzer::{
     EntryPointDetector, ReachabilityAnalyzer, ReportFormat,
 };
 pub use cache::GlobalCache;
+pub use clones::CloneGroup;
 pub use config::Config;
 pub use embed::Embedder;
 pub use error::{Error, Result};
@@ -87,6 +99,7 @@ pub use graph::{
     get_transitive_callees, get_transitive_callers, get_usage_stats, SymbolMetrics,
 };
 pub use storage::sqlite::SqliteStorage;
+pub use structure::{hamming, Structure};
 pub use types::*;
 pub use watcher::Watcher;
 
@@ -95,7 +108,7 @@ pub use embed::CandleEmbedder;
 
 use crate::parser::Parser;
 use crate::search::VectorIndex;
-use crate::storage::Storage;
+use crate::storage::{Storage, StructureRow};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -222,6 +235,108 @@ impl Indexer {
 
     pub async fn search_symbols(&self, query: &str, limit: usize) -> Result<Vec<Symbol>> {
         search::search_symbols(query, limit, self.storage.clone()).await
+    }
+
+    /// Symbols whose code means something like `id`'s, nearest first.
+    ///
+    /// The symbol's own stored vector goes back in as the query, so this costs one index
+    /// lookup and no embedding. `id` itself is dropped from its own results.
+    ///
+    /// Returns an empty vector — not an error — when the symbol has no embedding, which is the
+    /// case for every symbol if this build lacks the `candle` feature.
+    pub fn similar(&self, id: SymbolId, limit: usize) -> Result<Vec<SearchResult>> {
+        let Some(vector) = self.index.get_vector(id.0)? else {
+            return Ok(vec![]);
+        };
+
+        // One extra, because the nearest neighbour of any symbol is itself.
+        let neighbours = self.index.search(&vector, limit + 1)?;
+
+        Ok(neighbours
+            .into_iter()
+            .filter(|(found, _)| *found != id.0)
+            .take(limit)
+            .filter_map(|(found, score)| {
+                self.storage
+                    .get_symbol(SymbolId(found))
+                    .ok()
+                    .map(|symbol| SearchResult {
+                        symbol,
+                        score,
+                        context: None,
+                    })
+            })
+            .collect())
+    }
+
+    /// Symbols that are exactly the same shape as each other — copy-paste with the names
+    /// changed. See [`clones`] and [`structure`].
+    ///
+    /// `min_nodes` is the floor on symbol size, and is not optional in practice: every codebase
+    /// has thousands of three-node accessors that share a shape and mean nothing by it.
+    ///
+    /// Only the kinds [`clones::is_reportable`] admits take part; `all_kinds` widens it to
+    /// every fingerprinted symbol, containers included.
+    pub fn clones(&self, min_nodes: u32, all_kinds: bool) -> Result<Vec<CloneGroup>> {
+        Ok(clones::exact(self.reportable(min_nodes, all_kinds)?))
+    }
+
+    /// Symbols that are nearly the same shape — a copy that has since drifted.
+    ///
+    /// `max_distance` is in bits of a 64-bit simhash: 0 is identical, and unrelated code sits
+    /// near 32. Single digits are the useful range.
+    pub fn near_clones(
+        &self,
+        min_nodes: u32,
+        max_distance: u32,
+        all_kinds: bool,
+    ) -> Result<Vec<CloneGroup>> {
+        Ok(clones::near(
+            self.reportable(min_nodes, all_kinds)?,
+            max_distance,
+        ))
+    }
+
+    /// The fingerprinted symbols a duplication report should consider.
+    fn reportable(&self, min_nodes: u32, all_kinds: bool) -> Result<Vec<StructureRow>> {
+        let mut rows = self.storage.structures(min_nodes)?;
+        if !all_kinds {
+            rows.retain(|row| clones::is_reportable(row.kind));
+        }
+        Ok(rows)
+    }
+
+    /// Symbols shaped like `id`, nearest first, paired with their distance in bits.
+    ///
+    /// The structural counterpart to [`Indexer::similar`]: that one asks what code *means*
+    /// something like this, this one asks what code *looks* like this.
+    pub fn similar_structure(
+        &self,
+        id: SymbolId,
+        max_distance: u32,
+        limit: usize,
+    ) -> Result<Vec<(StructureRow, u32)>> {
+        let rows = self.storage.structures(0)?;
+        let Some(target) = rows.iter().find(|row| row.id == id) else {
+            return Ok(vec![]);
+        };
+        let target_simhash = target.structure.simhash;
+
+        let mut scored: Vec<(StructureRow, u32)> = rows
+            .iter()
+            .filter(|row| row.id != id)
+            .map(|row| (row.clone(), hamming(target_simhash, row.structure.simhash)))
+            .filter(|(_, distance)| *distance <= max_distance)
+            .collect();
+
+        scored.sort_by(|(a, a_distance), (b, b_distance)| {
+            a_distance
+                .cmp(b_distance)
+                .then_with(|| b.structure.node_count.cmp(&a.structure.node_count))
+                .then_with(|| a.file_path.cmp(&b.file_path))
+        });
+        scored.truncate(limit);
+        Ok(scored)
     }
 
     pub async fn search_files(&self, query: &str, limit: usize) -> Result<Vec<File>> {

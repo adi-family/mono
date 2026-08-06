@@ -16,7 +16,7 @@ use crate::types::{
     UnqueueFromRun,
 };
 
-use super::response::{Response, clean, error, ok_json};
+use super::response::{Response, clean, error, ok_json, parse_body};
 
 /// `GET /api/agents` — every registered agent definition. Each mutation endpoint below returns a
 /// fresh [`AgentsState`], so the client refreshes from one round-trip.
@@ -1367,8 +1367,8 @@ impl From<&AgentStoreError> for Response {
 }
 
 fn parse_save_agent(body: &[u8]) -> Option<SaveAgent> {
-    let req: SaveAgent = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && !req.backend.trim().is_empty()).then_some(req)
+    parse_body::<SaveAgent>(body)
+        .filter(|req| !req.name.trim().is_empty() && !req.backend.trim().is_empty())
 }
 
 fn bad_save_agent() -> Response {
@@ -1379,18 +1379,16 @@ fn bad_save_agent() -> Response {
 }
 
 fn parse_agent_ref(body: &[u8]) -> Option<AgentRef> {
-    let req: AgentRef = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty()).then_some(req)
+    parse_body::<AgentRef>(body).filter(|req| !req.name.trim().is_empty())
 }
 
 fn parse_run_agent(body: &[u8]) -> Option<RunAgent> {
-    let req: RunAgent = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty()).then_some(req)
+    parse_body::<RunAgent>(body).filter(|req| !req.name.trim().is_empty())
 }
 
 fn parse_run_ref(body: &[u8]) -> Option<RunRef> {
-    let req: RunRef = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty()).then_some(req)
+    parse_body::<RunRef>(body)
+        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
 }
 
 fn bad_run_ref() -> Response {
@@ -1401,8 +1399,8 @@ fn bad_run_ref() -> Response {
 }
 
 fn parse_hide_run(body: &[u8]) -> Option<HideRun> {
-    let req: HideRun = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty()).then_some(req)
+    parse_body::<HideRun>(body)
+        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
 }
 
 fn bad_hide_run() -> Response {
@@ -1413,9 +1411,11 @@ fn bad_hide_run() -> Response {
 }
 
 fn parse_reply_to_run(body: &[u8]) -> Option<ReplyToRun> {
-    let req: ReplyToRun = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty() && !req.message.trim().is_empty())
-        .then_some(req)
+    parse_body::<ReplyToRun>(body).filter(|req| {
+            !req.name.trim().is_empty()
+                && !req.run_id.trim().is_empty()
+                && !req.message.trim().is_empty()
+    })
 }
 
 fn bad_reply_to_run() -> Response {
@@ -1426,8 +1426,8 @@ fn bad_reply_to_run() -> Response {
 }
 
 fn parse_unqueue_from_run(body: &[u8]) -> Option<UnqueueFromRun> {
-    let req: UnqueueFromRun = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && !req.run_id.trim().is_empty()).then_some(req)
+    parse_body::<UnqueueFromRun>(body)
+        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
 }
 
 fn bad_unqueue_from_run() -> Response {
@@ -1442,8 +1442,9 @@ fn bad_agent_ref() -> Response {
 }
 
 fn parse_agent_keys(body: &[u8]) -> Option<AgentKeys> {
-    let req: AgentKeys = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && (!req.text.is_empty() || !req.key.is_empty())).then_some(req)
+    parse_body::<AgentKeys>(body).filter(|req| {
+            !req.name.trim().is_empty() && (!req.text.is_empty() || !req.key.is_empty())
+    })
 }
 
 fn bad_agent_keys() -> Response {

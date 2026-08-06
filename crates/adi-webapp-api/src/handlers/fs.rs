@@ -12,7 +12,7 @@ use adi_projects::Projects;
 use crate::types::{FsContent, FsCreate, FsListing, FsRef, FsWrite};
 
 use super::files::{MAX_TEXT_BYTES, normalize_rel, parent_rel};
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// `POST /api/fs/list` — list a directory inside the ADI store. `path` is relative to the store
 /// root (`""` is the root).
@@ -164,11 +164,9 @@ fn bad_ref() -> Response {
 }
 
 fn parse_write(body: &[u8]) -> Option<FsWrite> {
-    let req: FsWrite = serde_json::from_slice(body).ok()?;
-    (!req.path.trim().is_empty()).then_some(req)
+    parse_body::<FsWrite>(body).filter(|req| !req.path.trim().is_empty())
 }
 
 fn parse_create(body: &[u8]) -> Option<FsCreate> {
-    let req: FsCreate = serde_json::from_slice(body).ok()?;
-    (!req.path.trim().is_empty()).then_some(req)
+    parse_body::<FsCreate>(body).filter(|req| !req.path.trim().is_empty())
 }

@@ -14,7 +14,7 @@ use crate::types::{
     WriteToolScript,
 };
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// The largest script we'll accept on a write — the same bound the project file editor uses.
 /// Comfortably under the server's 1 MiB request-body cap; a larger script is refused, not truncated.
@@ -257,9 +257,8 @@ impl From<&ToolStoreError> for Response {
 }
 
 fn parse_tool_ref(body: &[u8]) -> Option<String> {
-    let req: ToolRef = serde_json::from_slice(body).ok()?;
-    let id = req.id.trim().to_string();
-    (!id.is_empty()).then_some(id)
+    parse_body::<ToolRef>(body).filter(|req| !req.id.trim().is_empty())
+        .map(|req| req.id.trim().to_string())
 }
 
 fn bad_tool_ref() -> Response {

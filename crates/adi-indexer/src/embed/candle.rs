@@ -18,6 +18,14 @@ use tokenizers::Tokenizer;
 const MODEL_ID: &str = "jinaai/jina-embeddings-v2-base-code";
 const DIMENSIONS: u32 = 768;
 
+/// Tokens per symbol, past which the text is truncated.
+///
+/// The model reads 8192, but a batch pads to its longest member and attention costs the square
+/// of that — so the price of allowing one long symbol is paid, squared, by every symbol batched
+/// with it. 512 covers a whole function in the large majority of cases and keeps the worst
+/// batch to something a GPU returns from promptly.
+const MAX_TOKENS: usize = 512;
+
 // --- Custom JinaBert model with QK-norm ---
 
 struct BertEmbeddings {
@@ -311,8 +319,19 @@ impl CandleEmbedder {
         )
         .map_err(|e| EmbedError::Embedding(format!("Parse config: {e}")))?;
 
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
+        let mut tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| EmbedError::Embedding(format!("Load tokenizer: {e}")))?;
+
+        // Without this a long symbol is a hard error, not a long embedding: the ALiBi bias is
+        // precomputed at `max_position_embeddings` and sliced to the batch's sequence length,
+        // so a sequence past that limit fails the slice and takes the whole file's embeddings
+        // down with it. `MAX_TOKENS` sits well under the limit — see its own note on why.
+        tokenizer
+            .with_truncation(Some(tokenizers::TruncationParams {
+                max_length: MAX_TOKENS,
+                ..Default::default()
+            }))
+            .map_err(|e| EmbedError::Embedding(format!("Set truncation: {e}")))?;
 
         // Load weights — tensor names match our model struct directly, no renames needed
         let tensors = candle_core::safetensors::load(&weights_path, &device)

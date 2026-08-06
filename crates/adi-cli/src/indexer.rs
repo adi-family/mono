@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-use adi_indexer::{Indexer, SymbolNode};
+use adi_indexer::{Indexer, Symbol, SymbolNode};
 use clap::Subcommand;
 
 use crate::format::print_json;
@@ -48,6 +48,49 @@ pub(crate) enum IndexerCommand {
     /// Search indexed file paths.
     Files {
         query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Find symbols like a given one — by what the code means, or with `--structural`, by what
+    /// its syntax looks like once the names are stripped out.
+    Similar {
+        /// Name of the symbol to match against. If several symbols share it, the largest is
+        /// used and the choice is reported.
+        symbol: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        /// Match on syntax shape rather than meaning.
+        #[arg(long)]
+        structural: bool,
+        /// With `--structural`: how many bits of the 64-bit shape fingerprint may differ.
+        /// Unrelated code sits near 32.
+        #[arg(long, default_value_t = 6)]
+        distance: u32,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report duplicated code: groups of symbols with the same syntax shape, names and literal
+    /// values ignored.
+    Clones {
+        /// Smallest symbol to consider, in parse-tree nodes. Below roughly 40 every codebase
+        /// has thousands of accessors that share a shape and mean nothing by it.
+        #[arg(long, default_value_t = 40)]
+        min_nodes: u32,
+        /// Also group symbols that are merely *close* in shape, within this many bits — the
+        /// copies that have since drifted. 0 keeps the report to exact matches only.
+        #[arg(long, default_value_t = 0)]
+        distance: u32,
+        /// Include containers — modules, classes, traits. Off by default: a container's shape
+        /// is its children's concatenated, so it repeats what they already said and, being the
+        /// largest symbol around, says it first.
+        #[arg(long)]
+        all_kinds: bool,
         #[arg(long, default_value_t = 20)]
         limit: usize,
         #[arg(long)]
@@ -106,6 +149,22 @@ pub(crate) fn run_indexer(command: IndexerCommand) -> Result<(), String> {
             path,
             json,
         } => files(&query, limit, path.as_deref(), json),
+        IndexerCommand::Similar {
+            symbol,
+            limit,
+            structural,
+            distance,
+            path,
+            json,
+        } => similar(&symbol, limit, structural, distance, path.as_deref(), json),
+        IndexerCommand::Clones {
+            min_nodes,
+            distance,
+            all_kinds,
+            limit,
+            path,
+            json,
+        } => clones(min_nodes, distance, all_kinds, limit, path.as_deref(), json),
         IndexerCommand::Status { path, json } => status(path.as_deref(), json),
         IndexerCommand::Tree { path, json } => tree(path.as_deref(), json),
     }
@@ -228,6 +287,181 @@ fn files(query: &str, limit: usize, path: Option<&Path>, json: bool) -> Result<(
         println!("  {} [{}]", f.path.display(), f.language.as_str());
     }
     Ok(())
+}
+
+fn similar(
+    symbol: &str,
+    limit: usize,
+    structural: bool,
+    distance: u32,
+    path: Option<&Path>,
+    json: bool,
+) -> Result<(), String> {
+    let indexer = open(path)?;
+    let target = resolve_symbol(&indexer, symbol)?;
+
+    if structural {
+        let matches = indexer
+            .similar_structure(target.id, distance, limit)
+            .map_err(|e| format!("structural search failed: {e}"))?;
+
+        if json {
+            print_json(&matches);
+            return Ok(());
+        }
+        if matches.is_empty() {
+            println!("Nothing within {distance} bits of {symbol}.");
+            return Ok(());
+        }
+
+        println!("{} match(es) by shape:", matches.len());
+        for (row, bits) in &matches {
+            println!(
+                "  {bits:>2} bits  {} {} ({}:{})",
+                row.kind.as_str(),
+                row.name,
+                row.file_path.display(),
+                row.start_line
+            );
+        }
+        return Ok(());
+    }
+
+    let results = indexer
+        .similar(target.id, limit)
+        .map_err(|e| format!("similarity search failed: {e}"))?;
+
+    if json {
+        print_json(&results);
+        return Ok(());
+    }
+    if results.is_empty() {
+        println!(
+            "No neighbours for {symbol} — it has no embedding (a build without the candle \
+             feature stores none)."
+        );
+        return Ok(());
+    }
+
+    println!("{} match(es) by meaning:", results.len());
+    for r in &results {
+        let s = &r.symbol;
+        println!(
+            "  {:.3}  {} {} ({}:{})",
+            r.score,
+            s.kind.as_str(),
+            s.name,
+            s.file_path.display(),
+            s.location.start_line
+        );
+    }
+    Ok(())
+}
+
+fn clones(
+    min_nodes: u32,
+    distance: u32,
+    all_kinds: bool,
+    limit: usize,
+    path: Option<&Path>,
+    json: bool,
+) -> Result<(), String> {
+    let indexer = open(path)?;
+
+    let groups = if distance == 0 {
+        indexer.clones(min_nodes, all_kinds)
+    } else {
+        indexer.near_clones(min_nodes, distance, all_kinds)
+    }
+    .map_err(|e| format!("clone detection failed: {e}"))?;
+
+    let total = groups.len();
+    let shown: Vec<_> = groups.into_iter().take(limit).collect();
+
+    if json {
+        print_json(&shown);
+        return Ok(());
+    }
+    if shown.is_empty() {
+        println!("No duplicated symbols of at least {min_nodes} nodes.");
+        return Ok(());
+    }
+
+    let duplicated: usize = shown.iter().map(|g| g.members.len()).sum();
+    println!(
+        "{total} group(s), {duplicated} symbols{}:",
+        if total > shown.len() {
+            format!(" (showing {})", shown.len())
+        } else {
+            String::new()
+        }
+    );
+    for group in &shown {
+        let head = &group.members[0];
+        let drift = if group.distance == 0 {
+            String::new()
+        } else {
+            format!(", up to {} bits apart", group.distance)
+        };
+        println!(
+            "\n  {} copies, ~{} lines, {} nodes{drift}:",
+            group.members.len(),
+            head.line_count(),
+            head.structure.node_count
+        );
+        for member in &group.members {
+            println!(
+                "    {} {} ({}:{})",
+                member.kind.as_str(),
+                member.name,
+                member.file_path.display(),
+                member.start_line
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The symbol a name refers to.
+///
+/// A name can be held by several symbols — an overload, a trait method implemented twice, a
+/// helper repeated per module. The largest wins, because that is the one a question about
+/// duplication or similarity is nearly always about, and the choice is printed so it can be
+/// seen and overridden.
+fn resolve_symbol(indexer: &Indexer, name: &str) -> Result<Symbol, String> {
+    let mut matches = indexer
+        .find_symbols_by_name(name)
+        .map_err(|e| format!("symbol lookup failed: {e}"))?;
+
+    // Analyzers qualify a method with its type — `row_to_symbol` is stored as
+    // `SqliteStorage::row_to_symbol` — but nobody types it that way. Fall back to matching the
+    // last component, which is what the name on the screen looks like.
+    if matches.is_empty() {
+        let suffix = format!("::{name}");
+        matches = block_on(indexer.search_symbols(name, 200))
+            .map_err(|e| format!("symbol lookup failed: {e}"))?
+            .into_iter()
+            .filter(|s| s.name.ends_with(&suffix))
+            .collect();
+    }
+
+    if matches.is_empty() {
+        return Err(format!("no indexed symbol named {name}"));
+    }
+
+    matches.sort_by_key(|s| {
+        std::cmp::Reverse(s.location.end_line.saturating_sub(s.location.start_line))
+    });
+    if matches.len() > 1 {
+        let chosen = &matches[0];
+        println!(
+            "{} symbols named {name}; using {}:{}",
+            matches.len(),
+            chosen.file_path.display(),
+            chosen.location.start_line
+        );
+    }
+    Ok(matches.remove(0))
 }
 
 fn status(path: Option<&Path>, json: bool) -> Result<(), String> {

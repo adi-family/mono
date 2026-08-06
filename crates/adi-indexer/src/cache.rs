@@ -9,12 +9,37 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+/// What the cache stores, as a number to compare against.
+///
+/// The key is a hash of the file's *content*, so nothing about a change to this crate reaches
+/// it: same file, same key, and an entry written by an older build is handed back as though it
+/// were current. That is fine while the entry means the same thing, and silently wrong the
+/// moment it does not — a `ParsedSymbol` that gained a field parses back without it, and an
+/// embedding built from a different text is a plausible vector for the wrong thing, with no
+/// symptom beyond worse answers.
+///
+/// So: bump this whenever either half changes shape or meaning — and note that "meaning"
+/// includes any edit to `indexer::build_embed_text`, because the cache key cannot see it.
+/// Skipping the bump does not fail; it returns in seconds with the old vectors and identical
+/// scores, which looks exactly like a change that did not help. Reparsing a file costs
+/// milliseconds.
+///
+/// * 1 — symbols carry a structural fingerprint, and embeddings are built from a text that
+///   includes the symbol's body.
+/// * 2 — the declaration is repeated after the body, so it keeps a meaningful share of the
+///   pooled vector.
+pub const SCHEMA_VERSION: u32 = 2;
+
 /// Cached parsing + embedding results for a single file content hash.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CachedFileData {
     pub parsed: ParsedFile,
     pub embeddings: Vec<Vec<f32>>,
     pub embed_model: String,
+    /// See [`SCHEMA_VERSION`]. Entries written before this field existed deserialize to 0,
+    /// which is not a valid version and so reads as stale.
+    #[serde(default)]
+    pub schema_version: u32,
 }
 
 #[derive(Debug)]
@@ -50,6 +75,17 @@ impl GlobalCache {
         let data = std::fs::read_to_string(&path).ok()?;
         let cached: CachedFileData = serde_json::from_str(&data).ok()?;
 
+        // An entry from an older layout is not partly usable: whatever changed may have changed
+        // the parse as easily as the embeddings. Treat it as absent — `put` overwrites it in
+        // place, so the stale copy does not linger.
+        if cached.schema_version != SCHEMA_VERSION {
+            debug!(
+                "cache miss (schema {} != {SCHEMA_VERSION}): {hash}",
+                cached.schema_version
+            );
+            return None;
+        }
+
         if cached.embed_model == embed_model {
             debug!("cache hit (full): {hash}");
             Some(cached)
@@ -60,6 +96,7 @@ impl GlobalCache {
                 parsed: cached.parsed,
                 embeddings: Vec::new(),
                 embed_model: String::new(),
+                schema_version: SCHEMA_VERSION,
             })
         }
     }

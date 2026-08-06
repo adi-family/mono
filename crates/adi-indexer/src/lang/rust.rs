@@ -2,8 +2,11 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::{
+    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -14,36 +17,11 @@ pub fn language() -> tree_sitter::Language {
 #[derive(Debug)]
 pub struct RustAnalyzer;
 
-impl LanguageAnalyzer for RustAnalyzer {
-    fn extract_symbols(&self, source: &str, tree: &Tree) -> Vec<ParsedSymbol> {
-        let mut symbols = Vec::new();
-        extract_rust_symbols(tree.root_node(), source, &mut symbols);
-        symbols
-    }
-
-    fn extract_references(&self, source: &str, tree: &Tree) -> Vec<ParsedReference> {
-        let mut refs = Vec::new();
-        collect_rust_references(tree.root_node(), source, &mut refs);
-        refs
-    }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> String {
-    source[node.byte_range()].to_string()
-}
-
-fn node_location(node: Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location::new(
-        start.row as u32,
-        start.column as u32,
-        end.row as u32,
-        end.column as u32,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    )
-}
+tree_walking_analyzer!(
+    RustAnalyzer,
+    symbols: extract_rust_symbols,
+    references: collect_rust_references,
+);
 
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     let mut prev = node.prev_sibling();
@@ -91,79 +69,61 @@ fn extract_function_signature(node: Node, source: &str) -> String {
 }
 
 fn extract_rust_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
-    match node.kind() {
-        "function_item" => {
-            if let Some(symbol) = parse_rust_function(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "struct_item" => {
-            if let Some(symbol) = parse_rust_struct(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "enum_item" => {
-            if let Some(symbol) = parse_rust_enum(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "trait_item" => {
-            if let Some(symbol) = parse_rust_trait(node, source) {
-                symbols.push(symbol);
-            }
-        }
+    let parsed = match node.kind() {
+        "function_item" => parse_rust_callable(node, source, SymbolKind::Function),
+        "struct_item" => parse_rust_struct(node, source),
+        "trait_item" => parse_rust_trait(node, source),
+        "enum_item" => parse_rust_declaration(node, source, SymbolKind::Enum),
+        "mod_item" => parse_rust_declaration(node, source, SymbolKind::Module),
+        "const_item" | "static_item" => parse_rust_declaration(node, source, SymbolKind::Constant),
+        "type_item" => parse_rust_declaration(node, source, SymbolKind::Type),
+        "macro_definition" => parse_rust_declaration(node, source, SymbolKind::Macro),
         "impl_item" => {
             parse_rust_impl(node, source, symbols);
+            None
         }
-        "mod_item" => {
-            if let Some(symbol) = parse_rust_mod(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "const_item" | "static_item" => {
-            if let Some(symbol) = parse_rust_const(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "type_item" => {
-            if let Some(symbol) = parse_rust_type_alias(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "macro_definition" => {
-            if let Some(symbol) = parse_rust_macro(node, source) {
-                symbols.push(symbol);
-            }
-        }
+        // Unlike the other analyzers here, only a node that names nothing is descended into: an
+        // item's own body is read by the parser that matched it, not walked again from here.
         _ => {
             for i in 0..node.child_count() {
                 if let Some(child) = node.child(i) {
                     extract_rust_symbols(child, source, symbols);
                 }
             }
+            None
         }
-    }
+    };
+    symbols.extend(parsed);
 }
 
-fn parse_rust_function(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let signature = extract_function_signature(node, source);
+/// A Rust item named by its `name` field, preceded by its `///` block.
+///
+/// Visibility stays [`Visibility::Unknown`]: `pub` here is relative to a module path this walker
+/// doesn't track, so recording `pub` as "public" would claim more than the tree says.
+fn parse_rust_declaration(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(Visibility::Unknown),
+        None,
+    )
+}
 
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-            .with_signature(signature)
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment),
+/// A Rust function — the same, plus the signature its body is stripped down to.
+fn parse_rust_callable(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(Visibility::Unknown),
+        Some(extract_function_signature(node, source)),
     )
 }
 
 fn parse_rust_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
     let mut children = Vec::new();
     if let Some(body) = node.child_by_field_name("body") {
         for i in 0..body.child_count() {
@@ -182,31 +142,10 @@ fn parse_rust_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
         }
     }
 
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Struct, node_location(node))
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment)
-            .with_children(children),
-    )
-}
-
-fn parse_rust_enum(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Enum, node_location(node))
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment),
-    )
+    Some(parse_rust_declaration(node, source, SymbolKind::Struct)?.with_children(children))
 }
 
 fn parse_rust_trait(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
     let mut children = Vec::new();
     if let Some(body) = node.child_by_field_name("body") {
         for i in 0..body.child_count() {
@@ -226,12 +165,7 @@ fn parse_rust_trait(node: Node, source: &str) -> Option<ParsedSymbol> {
         }
     }
 
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Trait, node_location(node))
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment)
-            .with_children(children),
-    )
+    Some(parse_rust_declaration(node, source, SymbolKind::Trait)?.with_children(children))
 }
 
 fn parse_rust_impl(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
@@ -268,54 +202,6 @@ fn parse_rust_impl(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
                     }
         }
     }
-}
-
-fn parse_rust_mod(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Module, node_location(node))
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_rust_const(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Constant, node_location(node))
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_rust_type_alias(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Type, node_location(node))
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_rust_macro(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Macro, node_location(node))
-            .with_visibility(Visibility::Unknown)
-            .with_doc_comment_opt(doc_comment),
-    )
 }
 
 fn collect_rust_references(node: Node, source: &str, refs: &mut Vec<ParsedReference>) {
@@ -547,15 +433,3 @@ fn is_primitive_type(name: &str) -> bool {
 }
 
 // Helper trait to add optional doc comment
-trait WithDocCommentOpt {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self;
-}
-
-impl WithDocCommentOpt for ParsedSymbol {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self {
-        match doc {
-            Some(d) => self.with_doc_comment(d),
-            None => self,
-        }
-    }
-}

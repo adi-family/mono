@@ -4,7 +4,7 @@ use adi_tasks::Tasks;
 
 use crate::types::{NewTask, TaskRef, TaskRow, TasksState};
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// `GET /api/tasks` — the whole task tree as a flat list, ordered by task number so a parent
 /// precedes the children created after it. The client nests them into a tree by `parent`.
@@ -117,8 +117,7 @@ impl From<&TaskStoreError> for Response {
 }
 
 fn parse_new_task(body: &[u8]) -> Option<NewTask> {
-    let req: NewTask = serde_json::from_slice(body).ok()?;
-    (!req.title.trim().is_empty()).then_some(req)
+    parse_body::<NewTask>(body).filter(|req| !req.title.trim().is_empty())
 }
 
 fn bad_new_task() -> Response {
@@ -129,8 +128,7 @@ fn bad_new_task() -> Response {
 }
 
 fn parse_task_ref(body: &[u8]) -> Option<TaskRef> {
-    let req: TaskRef = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty()).then_some(req)
+    parse_body::<TaskRef>(body).filter(|req| !req.id.trim().is_empty())
 }
 
 fn bad_task_ref() -> Response {

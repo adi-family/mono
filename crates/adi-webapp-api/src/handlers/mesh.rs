@@ -7,7 +7,7 @@ use crate::types::{
     MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
 };
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// `GET /api/mesh` — this machine's mesh identity, published ticket, and config. `running`
 /// is the host's authoritative view of whether the in-process daemon is up (the host owns
@@ -146,8 +146,7 @@ fn mesh_edit(running: bool, mutate: impl FnOnce(&mut MeshConfig)) -> Response {
 }
 
 fn parse_port_ref(body: &[u8]) -> Option<MeshPortRef> {
-    let req: MeshPortRef = serde_json::from_slice(body).ok()?;
-    (req.port != 0).then_some(req)
+    parse_body::<MeshPortRef>(body).filter(|req| req.port != 0)
 }
 
 fn bad_port_ref() -> Response {
@@ -155,8 +154,7 @@ fn bad_port_ref() -> Response {
 }
 
 fn parse_peer_ref(body: &[u8]) -> Option<MeshPeerRef> {
-    let req: MeshPeerRef = serde_json::from_slice(body).ok()?;
-    (!req.peer.trim().is_empty()).then_some(req)
+    parse_body::<MeshPeerRef>(body).filter(|req| !req.peer.trim().is_empty())
 }
 
 fn bad_peer_ref() -> Response {
@@ -164,13 +162,12 @@ fn bad_peer_ref() -> Response {
 }
 
 fn parse_forward_ref(body: &[u8]) -> Option<MeshForwardRef> {
-    let req: MeshForwardRef = serde_json::from_slice(body).ok()?;
-    (req.listen != 0 && req.port != 0 && !req.peer.trim().is_empty()).then_some(req)
+    parse_body::<MeshForwardRef>(body)
+        .filter(|req| req.listen != 0 && req.port != 0 && !req.peer.trim().is_empty())
 }
 
 fn parse_listen_ref(body: &[u8]) -> Option<MeshListenRef> {
-    let req: MeshListenRef = serde_json::from_slice(body).ok()?;
-    (req.listen != 0).then_some(req)
+    parse_body::<MeshListenRef>(body).filter(|req| req.listen != 0)
 }
 
 /// A short forward label: the peer id's prefix and the remote port.

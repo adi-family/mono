@@ -14,7 +14,7 @@ use crate::types::{
     WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// `POST /api/projects/workspaces` — a project's workspaces and hooks in one snapshot. Every
 /// mutation in this family returns a fresh [`WorkspacesState`] for one-round-trip refreshes.
@@ -309,13 +309,13 @@ fn resolve_workspace(
 }
 
 fn parse_workspace_term_ref(body: &[u8]) -> Option<WorkspaceTermRef> {
-    let req: WorkspaceTermRef = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+    parse_body::<WorkspaceTermRef>(body)
+        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
 }
 
 fn parse_workspace_term_keys(body: &[u8]) -> Option<WorkspaceTermKeys> {
-    let req: WorkspaceTermKeys = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+    parse_body::<WorkspaceTermKeys>(body)
+        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
 }
 
 /// The full [`WorkspacesState`] for a registered project: entries decorated with live status,
@@ -416,28 +416,27 @@ impl From<&HookStoreError> for Response {
 }
 
 fn parse_workspaces_ref(body: &[u8]) -> Option<WorkspacesRef> {
-    let req: WorkspacesRef = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty()).then_some(req)
+    parse_body::<WorkspacesRef>(body).filter(|req| !req.id.trim().is_empty())
 }
 
 fn parse_new_workspace(body: &[u8]) -> Option<NewWorkspace> {
-    let req: NewWorkspace = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+    parse_body::<NewWorkspace>(body)
+        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
 }
 
 fn parse_workspace_ref(body: &[u8]) -> Option<WorkspaceRef> {
-    let req: WorkspaceRef = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+    parse_body::<WorkspaceRef>(body)
+        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
 }
 
 fn parse_project_hook_ref(body: &[u8]) -> Option<ProjectHookRef> {
-    let req: ProjectHookRef = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+    parse_body::<ProjectHookRef>(body)
+        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
 }
 
 fn parse_new_project_hook(body: &[u8]) -> Option<NewProjectHook> {
-    let req: NewProjectHook = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty() && !req.name.trim().is_empty()).then_some(req)
+    parse_body::<NewProjectHook>(body)
+        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
 }
 
 fn bad_project_hook_ref() -> Response {

@@ -12,7 +12,7 @@ use crate::types::{
     DbTableDto, DbTablesState,
 };
 
-use super::response::{Response, clean, error, ok_json};
+use super::response::{Response, clean, error, ok_json, parse_body};
 
 /// `GET /api/db` — every database in the store, global first, then each project's.
 #[must_use]
@@ -152,8 +152,7 @@ fn bad_scope() -> Response {
 }
 
 fn parse_query(body: &[u8]) -> Option<DbQuery> {
-    let req: DbQuery = serde_json::from_slice(body).ok()?;
-    (!req.sql.trim().is_empty()).then_some(req)
+    parse_body::<DbQuery>(body).filter(|req| !req.sql.trim().is_empty())
 }
 
 fn bad_query() -> Response {

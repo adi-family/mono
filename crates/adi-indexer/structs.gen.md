@@ -4,7 +4,7 @@
 
 > The code indexer: tree-sitter parsing into a per-project SQLite index of files, symbols, and the call graph, searchable by name (FTS5), by path, or by meaning (jina code embeddings over a usearch vector index). Pure library — `adi-mono indexer` is its CLI.
 
-69 structs · 10 enums · 2 type aliases across 35 files.
+72 structs · 10 enums · 2 type aliases across 38 files.
 
 ## Index
 
@@ -14,6 +14,7 @@
 - [`src/analyzer/reachability.rs`](#srcanalyzerreachabilityrs) — `ReachabilityAnalyzer`
 - [`src/analyzer/report.rs`](#srcanalyzerreportrs) — `ReportFormat`, `DeadCodeReport`, `ReportSummary`
 - [`src/cache.rs`](#srccachers) — `CachedFileData`, `GlobalCache`
+- [`src/clones.rs`](#srcclonesrs) — `CloneGroup`
 - [`src/config.rs`](#srcconfigrs) — `Config`, `ParserConfig`, `StorageConfig`, `IndexConfig`, `IgnoreConfig`
 - [`src/embed/candle.rs`](#srcembedcandlers) — `BertEmbeddings`, `BertSelfAttention`, `BertSelfOutput`, `BertAttention`, `BertGLUMLP`, `BertLayer`, `JinaBertModel`, `CandleEmbedder`
 - [`src/embed/config.rs`](#srcembedconfigrs) — `EmbeddingConfig`, `ConfigWrapper`
@@ -40,7 +41,9 @@
 - [`src/parser/treesitter/mod.rs`](#srcparsertreesittermodrs) — `TreeSitterParser`
 - [`src/search/usearch.rs`](#srcsearchusearchrs) — `UsearchIndex`
 - [`src/storage/mmap.rs`](#srcstoragemmaprs) — `Header`, `EmbeddingStore`, `EmbeddingIterator`
+- [`src/storage/mod.rs`](#srcstoragemodrs) — `StructureRow`
 - [`src/storage/sqlite.rs`](#srcstoragesqliters) — `SqliteStorage`
+- [`src/structure.rs`](#srcstructurers) — `Structure`
 - [`src/types.rs`](#srctypesrs) — `SymbolId`, `FileId`, `Visibility`, `SymbolKind`, `Location`, `Symbol`, `File`, `FileInfo`, `SearchResult`, `Tree`, `FileNode`, `SymbolNode`, `Status`, `IndexProgress`, `Language`, `ReferenceKind`, `ParsedReference`, `Reference`, `SymbolUsage`, `ParsedSymbol`, `ParsedFile`
 - [`src/watcher.rs`](#srcwatcherrs) — `Watcher`
 
@@ -174,6 +177,8 @@ pub struct CachedFileData {
     pub parsed: ParsedFile,
     pub embeddings: Vec<Vec<f32>>,
     pub embed_model: String,
+    #[serde(default)]
+    pub schema_version: u32,
 }
 ```
 
@@ -183,6 +188,22 @@ pub struct CachedFileData {
 #[derive(Debug)]
 pub struct GlobalCache {
     base_dir: PathBuf,
+}
+```
+
+---
+
+## `src/clones.rs`
+
+### struct `CloneGroup`
+
+Symbols found to share a shape.
+
+```rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CloneGroup {
+    pub members: Vec<StructureRow>,
+    pub distance: u32,
 }
 ```
 
@@ -828,6 +849,27 @@ pub struct EmbeddingIterator {
 
 ---
 
+## `src/storage/mod.rs`
+
+### struct `StructureRow`
+
+One symbol's structural fingerprint, with just enough alongside it to name the symbol in a report.
+
+```rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct StructureRow {
+    pub id: SymbolId,
+    pub name: String,
+    pub kind: SymbolKind,
+    pub file_path: PathBuf,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub structure: Structure,
+}
+```
+
+---
+
 ## `src/storage/sqlite.rs`
 
 ### struct `SqliteStorage`
@@ -836,6 +878,23 @@ pub struct EmbeddingIterator {
 #[derive(Debug)]
 pub struct SqliteStorage {
     conn: Mutex<Connection>,
+}
+```
+
+---
+
+## `src/structure.rs`
+
+### struct `Structure`
+
+The fingerprint of one symbol's syntax.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Structure {
+    pub hash: String,
+    pub simhash: u64,
+    pub node_count: u32,
 }
 ```
 
@@ -935,6 +994,7 @@ pub struct Symbol {
     pub doc_comment: Option<String>,
     pub visibility: Visibility,
     pub is_entry_point: bool,
+    pub structure: Option<Structure>,
 }
 ```
 
@@ -1016,6 +1076,7 @@ pub struct Status {
     pub embedding_model: String,
     pub last_indexed: Option<String>,
     pub storage_size_bytes: u64,
+    pub pipeline_version: u32,
 }
 ```
 
@@ -1143,6 +1204,8 @@ pub struct ParsedSymbol {
     pub doc_comment: Option<String>,
     pub children: Vec<ParsedSymbol>,
     pub visibility: Visibility,
+    #[serde(default)]
+    pub structure: Option<Structure>,
 }
 ```
 

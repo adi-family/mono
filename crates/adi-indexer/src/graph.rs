@@ -9,11 +9,16 @@ use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 /// Graph traversal utilities for symbol references
-/// Get all transitive callers (symbols that directly or indirectly call the target)
-pub fn get_transitive_callers(
+/// Breadth-first walk of the call graph from `id`, tagging every symbol reached with the depth
+/// it was first seen at.
+///
+/// `step` is what makes it a caller or a callee walk — the only thing that differs between the
+/// two directions.
+fn transitive(
     id: SymbolId,
     storage: &Arc<dyn Storage>,
     max_depth: Option<usize>,
+    step: fn(&Arc<dyn Storage>, SymbolId) -> Result<Vec<Symbol>>,
 ) -> Result<Vec<(Symbol, usize)>> {
     let mut visited: HashSet<i64> = HashSet::new();
     let mut result: Vec<(Symbol, usize)> = Vec::new();
@@ -28,18 +33,25 @@ pub fn get_transitive_callers(
                 continue;
             }
 
-        let callers = storage.get_callers(current_id)?;
-
-        for caller in callers {
-            if !visited.contains(&caller.id.0) {
-                visited.insert(caller.id.0);
-                result.push((caller.clone(), depth + 1));
-                queue.push_back((caller.id, depth + 1));
+        for next in step(storage, current_id)? {
+            if !visited.contains(&next.id.0) {
+                visited.insert(next.id.0);
+                result.push((next.clone(), depth + 1));
+                queue.push_back((next.id, depth + 1));
             }
         }
     }
 
     Ok(result)
+}
+
+/// Get all transitive callers (symbols that directly or indirectly call the target)
+pub fn get_transitive_callers(
+    id: SymbolId,
+    storage: &Arc<dyn Storage>,
+    max_depth: Option<usize>,
+) -> Result<Vec<(Symbol, usize)>> {
+    transitive(id, storage, max_depth, |s, current| s.get_callers(current))
 }
 
 /// Get all transitive callees (symbols that are directly or indirectly called by the target)
@@ -48,31 +60,7 @@ pub fn get_transitive_callees(
     storage: &Arc<dyn Storage>,
     max_depth: Option<usize>,
 ) -> Result<Vec<(Symbol, usize)>> {
-    let mut visited: HashSet<i64> = HashSet::new();
-    let mut result: Vec<(Symbol, usize)> = Vec::new();
-    let mut queue: VecDeque<(SymbolId, usize)> = VecDeque::new();
-
-    queue.push_back((id, 0));
-    visited.insert(id.0);
-
-    while let Some((current_id, depth)) = queue.pop_front() {
-        if let Some(max) = max_depth
-            && depth >= max {
-                continue;
-            }
-
-        let callees = storage.get_callees(current_id)?;
-
-        for callee in callees {
-            if !visited.contains(&callee.id.0) {
-                visited.insert(callee.id.0);
-                result.push((callee.clone(), depth + 1));
-                queue.push_back((callee.id, depth + 1));
-            }
-        }
-    }
-
-    Ok(result)
+    transitive(id, storage, max_depth, |s, current| s.get_callees(current))
 }
 
 /// Detect cycles in the call graph starting from a symbol

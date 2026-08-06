@@ -98,6 +98,7 @@ impl GenericAnalyzer {
                     doc_comment,
                     visibility: Visibility::Unknown,
                     children,
+                    structure: None,
                 });
                 return;
             }

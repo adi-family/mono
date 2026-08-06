@@ -4,7 +4,7 @@ use crate::types::{
     Lease, LeaseRef, PortsState, Range, ReleaseResponse, ReserveResponse, UsedPort, UsedPorts,
 };
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// `GET /api/ports` — the allocator's configuration and current static leases.
 #[must_use]
@@ -92,9 +92,7 @@ fn bad_lease_ref() -> Response {
 }
 
 fn parse_lease_ref(body: &[u8]) -> Option<LeaseRef> {
-    let req: LeaseRef = serde_json::from_slice(body).ok()?;
-    if req.service.trim().is_empty() || req.key.trim().is_empty() {
-        return None;
-    }
-    Some(req)
+    parse_body::<LeaseRef>(body).filter(|req| {
+            !req.service.trim().is_empty() && !req.key.trim().is_empty()
+    })
 }

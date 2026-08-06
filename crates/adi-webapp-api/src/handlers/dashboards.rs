@@ -30,7 +30,7 @@ use crate::types::{
     SetDashboardProject, UsedPort,
 };
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 use super::services::is_listening;
 
 /// The metadata file each dashboard directory carries.
@@ -234,9 +234,8 @@ fn dashboard_dir(cfg: &Config, id: &str) -> Option<PathBuf> {
 
 /// Parse a [`DashboardRef`] body into its trimmed, non-empty id.
 fn parse_dashboard_ref(body: &[u8]) -> Option<String> {
-    let req: DashboardRef = serde_json::from_slice(body).ok()?;
-    let id = req.id.trim().to_string();
-    (!id.is_empty()).then_some(id)
+    parse_body::<DashboardRef>(body).filter(|req| !req.id.trim().is_empty())
+        .map(|req| req.id.trim().to_string())
 }
 
 /// The current Unix time in whole seconds (0 before the epoch, which never happens in practice).

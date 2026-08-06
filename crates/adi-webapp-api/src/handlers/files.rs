@@ -6,7 +6,7 @@ use adi_projects::Projects;
 
 use crate::types::{DirListing, FileContent, FileEntry, FilesRef, WriteFile};
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 
 /// The largest text file we'll read into the editor or accept on a write. Keeps a single
 /// response/request bounded (project files here are configs — small); a larger file is
@@ -178,8 +178,7 @@ pub(crate) fn parent_rel(norm: &str) -> Option<String> {
 }
 
 fn parse_files_ref(body: &[u8]) -> Option<FilesRef> {
-    let req: FilesRef = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty()).then_some(req)
+    parse_body::<FilesRef>(body).filter(|req| !req.id.trim().is_empty())
 }
 
 fn bad_files_ref() -> Response {
@@ -190,8 +189,8 @@ fn bad_files_ref() -> Response {
 }
 
 fn parse_write_file(body: &[u8]) -> Option<WriteFile> {
-    let req: WriteFile = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty() && !req.path.trim().is_empty()).then_some(req)
+    parse_body::<WriteFile>(body)
+        .filter(|req| !req.id.trim().is_empty() && !req.path.trim().is_empty())
 }
 
 // MARK: workspaces & project hooks — working copies created by the script files under

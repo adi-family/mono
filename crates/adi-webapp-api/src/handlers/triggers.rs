@@ -12,7 +12,7 @@ use crate::types::{
     TriggerRuntimeOption, TriggersState,
 };
 
-use super::response::{Response, clean, error, ok_json};
+use super::response::{Response, clean, error, ok_json, parse_body};
 
 /// Trim dynamic backend parameters and drop empty or unsafe keys. Which keys are *meaningful*
 /// is the code block's business (its preset declares them, and each reaches it as `ADI_<KEY>`),
@@ -383,8 +383,8 @@ impl From<&TriggerStoreError> for Response {
 }
 
 fn parse_save_trigger(body: &[u8]) -> Option<SaveTrigger> {
-    let req: SaveTrigger = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty() && !req.kind.trim().is_empty()).then_some(req)
+    parse_body::<SaveTrigger>(body)
+        .filter(|req| !req.name.trim().is_empty() && !req.kind.trim().is_empty())
 }
 
 fn bad_save_trigger() -> Response {
@@ -395,8 +395,7 @@ fn bad_save_trigger() -> Response {
 }
 
 fn parse_trigger_ref(body: &[u8]) -> Option<TriggerRef> {
-    let req: TriggerRef = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty()).then_some(req)
+    parse_body::<TriggerRef>(body).filter(|req| !req.name.trim().is_empty())
 }
 
 fn bad_trigger_ref() -> Response {

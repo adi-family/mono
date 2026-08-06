@@ -8,7 +8,7 @@ use crate::error::Result;
 use crate::parser::Parser;
 use crate::search::VectorIndex;
 use crate::storage::Storage;
-use crate::types::{SymbolId, ParsedReference, IndexProgress, Status, Reference, Language, File, FileId, ParsedSymbol, Symbol, SymbolKind};
+use crate::types::{SymbolId, ParsedReference, IndexProgress, Location, Status, Reference, Language, File, FileId, ParsedSymbol, Symbol, SymbolKind};
 use ignore::WalkBuilder;
 use crate::embed::Embedder;
 use sha2::{Digest, Sha256};
@@ -26,6 +26,19 @@ struct FileProcessResult {
     references: Vec<ParsedReference>,
 }
 
+/// What the indexing pipeline stores, as a number the index carries so it can tell whether it
+/// is current.
+///
+/// A run skips any file whose content hash it already has, which is what makes reindexing
+/// cheap — and what makes a change to this crate invisible: the files did not change, so
+/// nothing is reprocessed and the index keeps whatever the old pipeline put there. Bumping this
+/// forces one full pass, after which incremental runs resume.
+///
+/// * 1 — symbols carry a structural fingerprint, and embeddings are built from a text that
+///   includes the symbol's body.
+/// * 2 — the declaration is repeated after the body (see [`build_embed_text`]).
+pub const PIPELINE_VERSION: u32 = 2;
+
 pub async fn index_project(
     project_path: &Path,
     config: &Config,
@@ -36,6 +49,15 @@ pub async fn index_project(
     cache: Arc<GlobalCache>,
 ) -> Result<IndexProgress> {
     info!("Starting project indexing: {}", project_path.display());
+
+    let stored_version = storage.get_status().map_or(0, |s| s.pipeline_version);
+    let rebuild = stored_version != PIPELINE_VERSION;
+    if rebuild {
+        info!(
+            "Index was built by pipeline {stored_version}, this is {PIPELINE_VERSION} — \
+             reindexing every file once"
+        );
+    }
 
     let files = collect_files(project_path, config)?;
     let total = files.len() as u64;
@@ -65,6 +87,7 @@ pub async fn index_project(
             &parser,
             &index,
             &cache,
+            rebuild,
         )
         .await
         {
@@ -121,6 +144,7 @@ pub async fn index_project(
         embedding_model: embedder.model_name().to_string(),
         last_indexed: Some(chrono_now()),
         storage_size_bytes: 0,
+        pipeline_version: PIPELINE_VERSION,
     };
     storage.update_status(&status)?;
 
@@ -253,6 +277,9 @@ pub async fn reindex_paths(
                 &parser,
                 &index,
                 &cache,
+                // The caller named these paths explicitly (the watcher saw them change), and
+                // the rows were just deleted above — there is nothing left to skip against.
+                true,
             )
             .await;
         }
@@ -339,6 +366,7 @@ async fn process_file(
     parser: &Arc<dyn Parser>,
     index: &Arc<dyn VectorIndex>,
     cache: &Arc<GlobalCache>,
+    rebuild: bool,
 ) -> Result<FileProcessResult> {
     let relative_path = file_path.strip_prefix(project_path).unwrap_or(file_path);
     debug!("Processing: {}", relative_path.display());
@@ -347,8 +375,10 @@ async fn process_file(
     let content = std::fs::read_to_string(file_path)?;
     let hash = compute_hash(&content);
 
-    // Check if file has changed in per-project storage
-    if let Ok(Some(existing_hash)) = storage.get_file_hash(relative_path)
+    // Check if file has changed in per-project storage. An unchanged file still has to be
+    // reprocessed when the pipeline itself moved on — see `PIPELINE_VERSION`.
+    if !rebuild
+        && let Ok(Some(existing_hash)) = storage.get_file_hash(relative_path)
         && existing_hash == hash {
             debug!("File unchanged, skipping: {}", relative_path.display());
             return Ok(FileProcessResult {
@@ -429,6 +459,7 @@ async fn process_file(
         symbols: &[ParsedSymbol],
         file_id: FileId,
         file_path: PathBuf,
+        source: &str,
         parent_id: Option<SymbolId>,
         storage: &Arc<dyn Storage>,
         texts_to_embed: &mut Vec<(SymbolId, String)>,
@@ -450,6 +481,7 @@ async fn process_file(
                 doc_comment: parsed.doc_comment.clone(),
                 visibility: parsed.visibility,
                 is_entry_point: false,
+                structure: parsed.structure.clone(),
             };
 
             let symbol_id = storage.insert_symbol(&symbol)?;
@@ -467,6 +499,7 @@ async fn process_file(
                 parsed.kind,
                 &parsed.signature,
                 &parsed.doc_comment,
+                symbol_body(source, &parsed.location),
             );
             texts_to_embed.push((symbol_id, embed_text));
 
@@ -474,6 +507,7 @@ async fn process_file(
                 &parsed.children,
                 file_id,
                 file_path.clone(),
+                source,
                 Some(symbol_id),
                 storage,
                 texts_to_embed,
@@ -489,6 +523,7 @@ async fn process_file(
         &parsed.symbols,
         file_id,
         relative_path.to_path_buf(),
+        &content,
         None,
         storage,
         &mut texts_to_embed,
@@ -519,12 +554,19 @@ async fn process_file(
                     parsed: parsed.clone(),
                     embeddings: embeddings.clone(),
                     embed_model: embedder.model_name().to_string(),
+                    schema_version: crate::cache::SCHEMA_VERSION,
                 },
             );
         }
 
         // Add embeddings to per-project vector index
         for ((symbol_id, _), embedding) in texts_to_embed.iter().zip(&embeddings) {
+            // A batch that failed to embed left empty vectors behind; adding one is a
+            // guaranteed dimension error, and warning about it says nothing the batch's own
+            // warning did not already say.
+            if embedding.is_empty() {
+                continue;
+            }
             if let Err(e) = index.add(symbol_id.0, embedding) {
                 let error_msg = format!("{e}");
                 if error_msg.to_lowercase().contains("duplicate") {
@@ -569,39 +611,124 @@ async fn process_file(
     })
 }
 
+/// The padded size of one embedding call, in characters.
+///
+/// [`Embedder::embed`] pads every text in a batch out to the longest of them, and attention then
+/// costs the *square* of that padded length per sequence. So what has to be bounded is the
+/// batch's padded area — length × width — not its length alone.
+///
+/// Bounding length alone is not a smaller version of this, it is a different thing entirely:
+/// 32 symbols at the token limit is a padded area 40× a batch of 32 short ones, and puts a
+/// multi-gigabyte command buffer on the GPU that then sits there. Short symbols still batch
+/// wide under this rule — a hundred 150-character texts fit in one call — and only long ones
+/// pack thin.
+const MAX_BATCH_PADDED_CHARS: usize = 16_000;
+
+/// A ceiling on batch length for when every text is tiny and the area rule never binds.
+const MAX_BATCH: usize = 64;
+
 fn compute_embeddings(
     embedder: &Arc<dyn Embedder>,
     texts_to_embed: &[(SymbolId, String)],
 ) -> Result<Vec<Vec<f32>>> {
-    let texts: Vec<&str> = texts_to_embed.iter().map(|(_, t)| t.as_str()).collect();
-    match embedder.embed(&texts) {
-        Ok(embeddings) => Ok(embeddings),
+    let mut embeddings = Vec::with_capacity(texts_to_embed.len());
+    let mut batch: Vec<&str> = Vec::new();
+    let mut widest = 0usize;
+
+    for (_, text) in texts_to_embed {
+        // What this text would cost if it joined: every member padded to the new widest.
+        let padded_area = widest.max(text.len()) * (batch.len() + 1);
+        if !batch.is_empty() && (batch.len() >= MAX_BATCH || padded_area > MAX_BATCH_PADDED_CHARS)
+        {
+            embeddings.extend(embed_batch(embedder, &batch));
+            batch.clear();
+            widest = 0;
+        }
+        widest = widest.max(text.len());
+        batch.push(text.as_str());
+    }
+    if !batch.is_empty() {
+        embeddings.extend(embed_batch(embedder, &batch));
+    }
+
+    Ok(embeddings)
+}
+
+/// One `embed` call, yielding an empty vector per text if it fails.
+///
+/// A failed batch costs those symbols their searchability, not their place in the index — they
+/// are already stored, and the caller skips empty vectors when populating the vector index.
+fn embed_batch(embedder: &Arc<dyn Embedder>, batch: &[&str]) -> Vec<Vec<f32>> {
+    match embedder.embed(batch) {
+        Ok(embeddings) => embeddings,
         Err(e) => {
             warn!("Failed to generate embeddings: {}", e);
-            Ok(vec![vec![]; texts_to_embed.len()])
+            vec![vec![]; batch.len()]
         }
     }
 }
 
+/// How much of a symbol's source goes into its embedding, in bytes.
+///
+/// The model reads 8192 tokens, but spending them is the wrong trade: attention costs the
+/// square of the sequence length, so doubling what a long symbol contributes quadruples what
+/// its batch costs. At roughly 3–4 bytes per code token this covers a function of about
+/// twenty-five lines whole, and leaves the declaration — repeated by `build_embed_text` — a
+/// share of the pooled vector big enough to still steer a query about what a symbol is called.
+const MAX_BODY_BYTES: usize = 1200;
+
+/// The source a symbol spans, capped at [`MAX_BODY_BYTES`].
+///
+/// Returns `None` rather than a partial read when the range does not land on character
+/// boundaries — `content` is UTF-8 and the offsets come from tree-sitter's byte view of it,
+/// which agree in practice, but a disagreement should drop the body, not panic the index.
+fn symbol_body<'src>(source: &'src str, location: &Location) -> Option<&'src str> {
+    let body = source.get(location.start_byte as usize..location.end_byte as usize)?;
+
+    if body.len() <= MAX_BODY_BYTES {
+        return Some(body);
+    }
+    // Cut on a character boundary at or below the cap.
+    let mut cut = MAX_BODY_BYTES;
+    while cut > 0 && !body.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    Some(&body[..cut])
+}
+
+/// The text that stands in for a symbol when it is embedded.
+///
+/// The declaration comes first and the body after it: truncation bites at the end, so what a
+/// symbol *is* survives it and only the tail of what it does is lost.
+///
+/// The declaration is then repeated once at the end, which is not decoration. The embedding is
+/// a mean over token vectors, so a part's influence is its share of the tokens — and a 60
+/// character signature inside 2000 characters of body is three percent of the answer. Embedding
+/// bodies without this traded one failure for another: "restart a launchd service" had ranked
+/// `restart_onto` first, and with the body alone diluting it, the function dropped out of the
+/// top fifteen entirely while generic service-handling code took its place. Repeating the
+/// declaration buys back roughly double its share for a few dozen tokens, and the copy at the
+/// front means truncation can only ever cost the second one.
 fn build_embed_text(
     name: &str,
     kind: SymbolKind,
     signature: &Option<String>,
     doc_comment: &Option<String>,
+    body: Option<&str>,
 ) -> String {
-    let mut parts = Vec::new();
-
-    parts.push(format!("{} {}", kind.as_str(), name));
-
+    let mut declaration = vec![format!("{} {}", kind.as_str(), name)];
     if let Some(sig) = signature {
-        parts.push(sig.clone());
+        declaration.push(sig.clone());
     }
-
     if let Some(doc) = doc_comment {
-        parts.push(doc.clone());
+        declaration.push(doc.clone());
     }
+    let declaration = declaration.join(" | ");
 
-    parts.join(" | ")
+    match body {
+        Some(body) => format!("{declaration} | {body} | {declaration}"),
+        None => declaration,
+    }
 }
 
 fn compute_hash(content: &str) -> String {
@@ -617,4 +744,181 @@ fn chrono_now() -> String {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
     format!("{}", duration.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::embed::EmbedError;
+    use std::sync::Mutex;
+
+    /// Records the shape of every batch it is handed.
+    #[derive(Debug, Default)]
+    struct RecordingEmbedder {
+        batches: Mutex<Vec<Vec<usize>>>,
+    }
+
+    impl Embedder for RecordingEmbedder {
+        fn embed(&self, texts: &[&str]) -> std::result::Result<Vec<Vec<f32>>, EmbedError> {
+            self.batches
+                .lock()
+                .unwrap()
+                .push(texts.iter().map(|t| t.len()).collect());
+            Ok(texts.iter().map(|_| vec![0.0; 8]).collect())
+        }
+        fn dimensions(&self) -> u32 {
+            8
+        }
+        fn model_name(&self) -> &'static str {
+            "recording"
+        }
+    }
+
+    fn batches_for(lengths: &[usize]) -> Vec<Vec<usize>> {
+        let embedder = Arc::new(RecordingEmbedder::default());
+        let texts: Vec<(SymbolId, String)> = lengths
+            .iter()
+            .enumerate()
+            .map(|(i, len)| (SymbolId(i as i64), "x".repeat(*len)))
+            .collect();
+
+        let dynamic: Arc<dyn Embedder> = embedder.clone();
+        let embeddings = compute_embeddings(&dynamic, &texts).unwrap();
+        assert_eq!(
+            embeddings.len(),
+            texts.len(),
+            "every symbol must come back with a vector, batching or not"
+        );
+
+        embedder.batches.lock().unwrap().clone()
+    }
+
+    /// The padded area of a batch is what the GPU pays for — length alone bounded, a run of
+    /// long symbols allocated multiple gigabytes and stalled.
+    #[test]
+    fn no_batch_exceeds_the_padded_area_budget() {
+        for lengths in [
+            vec![2100; 40],
+            vec![150; 400],
+            vec![2100, 100, 2100, 100, 2100, 100],
+        ] {
+            for batch in batches_for(&lengths) {
+                let area = batch.iter().copied().max().unwrap_or(0) * batch.len();
+                assert!(
+                    area <= MAX_BATCH_PADDED_CHARS || batch.len() == 1,
+                    "a batch of {} texts padded to {} is area {area}",
+                    batch.len(),
+                    batch.iter().copied().max().unwrap_or(0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn short_symbols_still_batch_wide() {
+        // The area rule must not collapse into one-at-a-time for ordinary short symbols.
+        let batches = batches_for(&vec![120; 200]);
+        assert!(
+            batches.iter().any(|b| b.len() >= 32),
+            "shortest batches were {:?}",
+            batches.iter().map(Vec::len).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn a_single_oversized_symbol_is_still_embedded() {
+        // On its own rather than never: dropping it would silently cost that symbol its
+        // searchability.
+        let batches = batches_for(&[MAX_BATCH_PADDED_CHARS * 3]);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 1);
+    }
+
+    #[test]
+    fn a_symbol_body_is_capped_on_a_character_boundary() {
+        // A multi-byte character straddling the cap must not panic or split.
+        let source = "fn f() { let s = \"".to_string() + &"é".repeat(MAX_BODY_BYTES) + "\"; }";
+        let location = Location {
+            start_line: 0,
+            start_col: 0,
+            end_line: 0,
+            end_col: 0,
+            start_byte: 0,
+            end_byte: source.len() as u32,
+        };
+
+        let body = symbol_body(&source, &location).expect("a body came back");
+        assert!(body.len() <= MAX_BODY_BYTES);
+        assert!(source.starts_with(body));
+    }
+
+    #[test]
+    fn a_range_outside_the_source_yields_no_body() {
+        let location = Location {
+            start_line: 0,
+            start_col: 0,
+            end_line: 0,
+            end_col: 0,
+            start_byte: 0,
+            end_byte: 9_999,
+        };
+        assert!(symbol_body("fn f() {}", &location).is_none());
+    }
+
+    #[test]
+    fn the_embed_text_puts_the_declaration_before_the_body() {
+        // Truncation bites at the end, so what a symbol *is* has to survive it.
+        let text = build_embed_text(
+            "restart_onto",
+            SymbolKind::Function,
+            &Some("fn restart_onto(app: &Path)".to_string()),
+            &Some("Restart the service".to_string()),
+            Some("{ do_the_thing(); }"),
+        );
+
+        let signature = text.find("fn restart_onto").expect("signature present");
+        let body = text.find("do_the_thing").expect("body present");
+        assert!(signature < body, "body came before the signature in {text:?}");
+        assert!(text.starts_with("function restart_onto"));
+    }
+
+    #[test]
+    fn the_declaration_is_repeated_after_the_body() {
+        // Its share of the tokens is its share of the pooled vector; see `build_embed_text`.
+        let text = build_embed_text(
+            "restart_onto",
+            SymbolKind::Function,
+            &Some("fn restart_onto(app: &Path)".to_string()),
+            &None,
+            Some("{ do_the_thing(); }"),
+        );
+
+        assert_eq!(
+            text.matches("fn restart_onto(app: &Path)").count(),
+            2,
+            "declaration not repeated in {text:?}"
+        );
+        let body = text.find("do_the_thing").expect("body present");
+        let last = text.rfind("fn restart_onto").expect("trailing declaration");
+        assert!(body < last, "the repeat has to come after the body");
+    }
+
+    #[test]
+    fn a_symbol_with_no_body_is_not_repeated() {
+        // Nothing to dilute, so nothing to compensate for.
+        let text = build_embed_text(
+            "Config",
+            SymbolKind::Type,
+            &Some("struct Config".to_string()),
+            &None,
+            None,
+        );
+        assert_eq!(text.matches("struct Config").count(), 1);
+    }
+
+    #[test]
+    fn a_symbol_with_no_body_still_embeds_its_declaration() {
+        let text = build_embed_text("Config", SymbolKind::Type, &None, &None, None);
+        assert_eq!(text, "type Config");
+    }
 }

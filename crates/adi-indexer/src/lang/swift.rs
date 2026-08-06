@@ -2,8 +2,11 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::{
+    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -14,36 +17,11 @@ pub fn language() -> tree_sitter::Language {
 #[derive(Debug)]
 pub struct SwiftAnalyzer;
 
-impl LanguageAnalyzer for SwiftAnalyzer {
-    fn extract_symbols(&self, source: &str, tree: &Tree) -> Vec<ParsedSymbol> {
-        let mut symbols = Vec::new();
-        extract_swift_symbols(tree.root_node(), source, &mut symbols);
-        symbols
-    }
-
-    fn extract_references(&self, source: &str, tree: &Tree) -> Vec<ParsedReference> {
-        let mut refs = Vec::new();
-        collect_swift_references(tree.root_node(), source, &mut refs);
-        refs
-    }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> String {
-    source[node.byte_range()].to_string()
-}
-
-fn node_location(node: Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location::new(
-        start.row as u32,
-        start.column as u32,
-        end.row as u32,
-        end.column as u32,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    )
-}
+tree_walking_analyzer!(
+    SwiftAnalyzer,
+    symbols: extract_swift_symbols,
+    references: collect_swift_references,
+);
 
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     let mut prev = node.prev_sibling();
@@ -114,57 +92,20 @@ fn extract_function_signature(node: Node, source: &str) -> String {
 }
 
 fn extract_swift_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
-    match node.kind() {
-        "class_declaration" => {
-            if let Some(symbol) = parse_swift_class(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "struct_declaration" => {
-            if let Some(symbol) = parse_swift_struct(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "protocol_declaration" => {
-            if let Some(symbol) = parse_swift_protocol(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "enum_declaration" => {
-            if let Some(symbol) = parse_swift_enum(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "function_declaration" => {
-            if let Some(symbol) = parse_swift_function(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "property_declaration" => {
-            if let Some(symbol) = parse_swift_property(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "init_declaration" => {
-            if let Some(symbol) = parse_swift_init(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "deinit_declaration" => {
-            symbols.push(parse_swift_deinit(node));
-        }
-        "typealias_declaration" => {
-            if let Some(symbol) = parse_swift_typealias(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "extension_declaration" => {
-            if let Some(symbol) = parse_swift_extension(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        _ => {}
-    }
+    let parsed = match node.kind() {
+        "class_declaration" => parse_swift_declaration(node, source, SymbolKind::Class),
+        "struct_declaration" => parse_swift_declaration(node, source, SymbolKind::Struct),
+        "protocol_declaration" => parse_swift_declaration(node, source, SymbolKind::Interface),
+        "enum_declaration" => parse_swift_declaration(node, source, SymbolKind::Enum),
+        "typealias_declaration" => parse_swift_declaration(node, source, SymbolKind::Type),
+        "function_declaration" => parse_swift_callable(node, source, SymbolKind::Function),
+        "property_declaration" => parse_swift_property(node, source),
+        "init_declaration" => Some(parse_swift_init(node, source)),
+        "deinit_declaration" => Some(parse_swift_deinit(node)),
+        "extension_declaration" => parse_swift_extension(node, source),
+        _ => None,
+    };
+    symbols.extend(parsed);
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
@@ -173,70 +114,28 @@ fn extract_swift_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbo
     }
 }
 
-fn parse_swift_class(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Class, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
+/// A Swift type or typealias: named by its `name` field, preceded by a `///` block and a
+/// visibility keyword.
+fn parse_swift_declaration(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(extract_visibility(node, source)),
+        None,
     )
 }
 
-fn parse_swift_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Struct, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_swift_protocol(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Interface, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_swift_enum(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Enum, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_swift_function(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-    let signature = extract_function_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-            .with_signature(signature)
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
+/// A Swift function — the same, plus the signature its body is stripped down to.
+fn parse_swift_callable(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(extract_visibility(node, source)),
+        Some(extract_function_signature(node, source)),
     )
 }
 
@@ -258,21 +157,17 @@ fn parse_swift_property(node: Node, source: &str) -> Option<ParsedSymbol> {
     None
 }
 
-fn parse_swift_init(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-    let signature = extract_function_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(
-            "init".to_string(),
-            SymbolKind::Constructor,
-            node_location(node),
-        )
-        .with_signature(signature)
-        .with_visibility(visibility)
-        .with_doc_comment_opt(doc_comment),
+/// `init` and `deinit` name themselves, so neither goes through
+/// [`declaration`] — there is no `name` field to read.
+fn parse_swift_init(node: Node, source: &str) -> ParsedSymbol {
+    ParsedSymbol::new(
+        "init".to_string(),
+        SymbolKind::Constructor,
+        node_location(node),
     )
+    .with_signature(extract_function_signature(node, source))
+    .with_visibility(extract_visibility(node, source))
+    .with_doc_comment_opt(extract_doc_comment(node, source))
 }
 
 fn parse_swift_deinit(node: Node) -> ParsedSymbol {
@@ -282,19 +177,6 @@ fn parse_swift_deinit(node: Node) -> ParsedSymbol {
         node_location(node),
     )
     .with_visibility(Visibility::Internal)
-}
-
-fn parse_swift_typealias(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Type, node_location(node))
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
 }
 
 fn parse_swift_extension(node: Node, source: &str) -> Option<ParsedSymbol> {
@@ -437,15 +319,3 @@ fn is_common_function(name: &str) -> bool {
     )
 }
 
-trait WithDocCommentOpt {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self;
-}
-
-impl WithDocCommentOpt for ParsedSymbol {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self {
-        match doc {
-            Some(d) => self.with_doc_comment(d),
-            None => self,
-        }
-    }
-}

@@ -9,6 +9,8 @@
 //! [`GenericAnalyzer`](crate::parser::treesitter::analyzers::generic::GenericAnalyzer), which
 //! reads node kinds it recognizes across languages.
 
+mod common;
+
 #[cfg(feature = "lang-cpp")]
 pub mod cpp;
 #[cfg(feature = "lang-csharp")]

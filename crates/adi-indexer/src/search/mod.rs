@@ -17,6 +17,11 @@ pub trait VectorIndex: std::fmt::Debug + Send + Sync {
     fn add(&self, id: i64, vector: &[f32]) -> Result<()>;
     fn remove(&self, id: i64) -> Result<()>;
     fn search(&self, query: &[f32], limit: usize) -> Result<Vec<(i64, f32)>>;
+    /// The stored vector for `id`, or `None` if it holds none.
+    ///
+    /// What makes "find symbols like this one" possible without re-embedding anything: the
+    /// symbol's own vector goes back in as the query.
+    fn get_vector(&self, id: i64) -> Result<Option<Vec<f32>>>;
     fn save(&self) -> Result<()>;
     fn count(&self) -> usize;
 }

@@ -2,8 +2,9 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::{node_location, node_text, tree_walking_analyzer};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -14,36 +15,11 @@ pub fn language() -> tree_sitter::Language {
 #[derive(Debug)]
 pub struct TypeScriptAnalyzer;
 
-impl LanguageAnalyzer for TypeScriptAnalyzer {
-    fn extract_symbols(&self, source: &str, tree: &Tree) -> Vec<ParsedSymbol> {
-        let mut symbols = Vec::new();
-        extract_ts_symbols(tree.root_node(), source, &mut symbols);
-        symbols
-    }
-
-    fn extract_references(&self, source: &str, tree: &Tree) -> Vec<ParsedReference> {
-        let mut refs = Vec::new();
-        collect_ts_references(tree.root_node(), source, &mut refs);
-        refs
-    }
-}
-
-fn node_text(node: Node, source: &str) -> String {
-    source[node.byte_range()].to_string()
-}
-
-fn node_location(node: Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location::new(
-        start.row as u32,
-        start.column as u32,
-        end.row as u32,
-        end.column as u32,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    )
-}
+tree_walking_analyzer!(
+    TypeScriptAnalyzer,
+    symbols: extract_ts_symbols,
+    references: collect_ts_references,
+);
 
 fn extract_ts_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
     match node.kind() {

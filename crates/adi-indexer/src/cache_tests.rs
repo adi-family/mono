@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::cache::{CachedFileData, GlobalCache};
+    use crate::cache::{CachedFileData, GlobalCache, SCHEMA_VERSION};
     use crate::types::*;
     use tempfile::tempdir;
 
@@ -22,6 +22,7 @@ mod tests {
                 doc_comment: None,
                 children: vec![],
                 visibility: Visibility::Public,
+                structure: None,
             }],
             references: vec![],
         }
@@ -40,6 +41,7 @@ mod tests {
             parsed: sample_parsed_file(),
             embeddings: sample_embeddings(),
             embed_model: "test-model".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
 
         cache
@@ -84,6 +86,7 @@ mod tests {
             parsed: sample_parsed_file(),
             embeddings: sample_embeddings(),
             embed_model: "model-v1".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data).unwrap();
 
@@ -94,6 +97,57 @@ mod tests {
         let cached = result.unwrap();
         assert_eq!(cached.parsed.symbols.len(), 1);
         assert!(cached.embeddings.is_empty());
+    }
+
+    /// An entry from an older schema must not be served, however well it deserializes.
+    ///
+    /// This is the one the content-addressed key cannot catch: the file is unchanged, so the
+    /// key matches and the entry looks current. When `build_embed_text` changed without a
+    /// `SCHEMA_VERSION` bump, a full reindex of a real tree returned in 13 seconds instead of
+    /// two minutes with byte-identical scores — indistinguishable from a change that did not
+    /// work.
+    #[test]
+    fn an_entry_from_an_older_schema_is_not_served() {
+        let dir = tempdir().unwrap();
+        let cache = GlobalCache::open_at(dir.path()).unwrap();
+
+        let hash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
+        cache
+            .put(
+                hash,
+                &CachedFileData {
+                    parsed: sample_parsed_file(),
+                    embeddings: sample_embeddings(),
+                    embed_model: "model-v1".to_string(),
+                    schema_version: SCHEMA_VERSION - 1,
+                },
+            )
+            .unwrap();
+
+        assert!(
+            cache.get(hash, "model-v1").is_none(),
+            "a stale-schema entry was served as current"
+        );
+    }
+
+    /// Entries predating the field at all deserialize to version 0 and read as stale.
+    #[test]
+    fn an_entry_without_a_schema_version_is_not_served() {
+        let dir = tempdir().unwrap();
+        let cache = GlobalCache::open_at(dir.path()).unwrap();
+
+        let hash = "1111111111111111111111111111111111111111111111111111111111111111";
+        // Written by hand in the shape the old code wrote, with no `schema_version` at all.
+        let legacy = serde_json::json!({
+            "parsed": sample_parsed_file(),
+            "embeddings": sample_embeddings(),
+            "embed_model": "model-v1",
+        });
+        let path = dir.path().join(&hash[..2]);
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join(format!("{hash}.json")), legacy.to_string()).unwrap();
+
+        assert!(cache.get(hash, "model-v1").is_none());
     }
 
     #[test]
@@ -108,6 +162,7 @@ mod tests {
             parsed: sample_parsed_file(),
             embeddings: vec![],
             embed_model: "m".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data).unwrap();
         assert!(cache.contains(hash));
@@ -124,6 +179,7 @@ mod tests {
             parsed: sample_parsed_file(),
             embeddings: vec![vec![1.0]],
             embed_model: "m1".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data1).unwrap();
 
@@ -131,6 +187,7 @@ mod tests {
             parsed: sample_parsed_file(),
             embeddings: vec![vec![2.0, 3.0]],
             embed_model: "m2".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data2).unwrap();
 
@@ -166,6 +223,7 @@ mod tests {
             parsed,
             embeddings: vec![],
             embed_model: "x".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data).unwrap();
 
@@ -235,6 +293,7 @@ mod tests {
                 signature: None,
                 doc_comment: Some("A struct".to_string()),
                 visibility: Visibility::Public,
+                structure: None,
                 children: vec![
                     ParsedSymbol {
                         name: "new".to_string(),
@@ -243,6 +302,7 @@ mod tests {
                         signature: Some("fn new() -> Self".to_string()),
                         doc_comment: None,
                         visibility: Visibility::Public,
+                        structure: None,
                         children: vec![],
                     },
                     ParsedSymbol {
@@ -252,6 +312,7 @@ mod tests {
                         signature: Some("fn process(&self)".to_string()),
                         doc_comment: None,
                         visibility: Visibility::Private,
+                        structure: None,
                         children: vec![],
                     },
                 ],
@@ -263,6 +324,7 @@ mod tests {
             parsed,
             embeddings: vec![vec![1.0]; 3], // 3 symbols (struct + 2 methods)
             embed_model: "m".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data).unwrap();
 
@@ -301,6 +363,7 @@ mod tests {
                 doc_comment: None,
                 children: vec![],
                 visibility: Visibility::Public,
+                structure: None,
             })
             .collect();
 
@@ -316,6 +379,7 @@ mod tests {
             },
             embeddings: embeddings.clone(),
             embed_model: "jina-v2".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data).unwrap();
 
@@ -371,6 +435,7 @@ mod tests {
             doc_comment: Some("Handles incoming HTTP requests".to_string()),
             visibility: Visibility::Public,
             is_entry_point: false,
+            structure: None,
         };
         storage.insert_symbol(&symbol).unwrap();
 
@@ -416,6 +481,7 @@ mod tests {
                     doc_comment: None,
                     children: vec![],
                     visibility: Visibility::Public,
+                    structure: None,
                 },
                 ParsedSymbol {
                     name: "bar".to_string(),
@@ -432,6 +498,7 @@ mod tests {
                     doc_comment: None,
                     children: vec![],
                     visibility: Visibility::Private,
+                    structure: None,
                 },
             ],
             references: vec![ParsedReference {
@@ -455,6 +522,7 @@ mod tests {
             parsed: parsed.clone(),
             embeddings: embeddings.clone(),
             embed_model: "test".to_string(),
+            schema_version: SCHEMA_VERSION,
         };
         cache.put(hash, &data).unwrap();
 

@@ -156,6 +156,18 @@ impl VectorIndex for UsearchIndex {
             .collect())
     }
 
+    fn get_vector(&self, id: i64) -> Result<Option<Vec<f32>>> {
+        let index = self.index.lock().map_err(|e| Error::Index(e.to_string()))?;
+
+        let mut vector = vec![0f32; self.dimensions];
+        let found = index
+            .get(id as u64, &mut vector[..])
+            .map_err(|e| Error::Index(format!("Failed to read vector: {e}")))?;
+
+        // `get` reports how many vectors it filled in; zero means the key is not in the index.
+        Ok((found > 0).then_some(vector))
+    }
+
     fn save(&self) -> Result<()> {
         let index = self.index.lock().map_err(|e| Error::Index(e.to_string()))?;
 

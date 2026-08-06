@@ -266,6 +266,33 @@ pub(crate) enum IndexerCommand {
         #[arg(long)]
         json: bool,
     },
+    Similar {
+        symbol: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        #[arg(long)]
+        structural: bool,
+        #[arg(long, default_value_t = 6)]
+        distance: u32,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Clones {
+        #[arg(long, default_value_t = 40)]
+        min_nodes: u32,
+        #[arg(long, default_value_t = 0)]
+        distance: u32,
+        #[arg(long)]
+        all_kinds: bool,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     Status {
         #[arg(long)]
         path: Option<PathBuf>,

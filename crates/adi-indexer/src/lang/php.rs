@@ -2,8 +2,11 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::{
+    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -14,36 +17,11 @@ pub fn language() -> tree_sitter::Language {
 #[derive(Debug)]
 pub struct PhpAnalyzer;
 
-impl LanguageAnalyzer for PhpAnalyzer {
-    fn extract_symbols(&self, source: &str, tree: &Tree) -> Vec<ParsedSymbol> {
-        let mut symbols = Vec::new();
-        extract_php_symbols(tree.root_node(), source, &mut symbols);
-        symbols
-    }
-
-    fn extract_references(&self, source: &str, tree: &Tree) -> Vec<ParsedReference> {
-        let mut refs = Vec::new();
-        collect_php_references(tree.root_node(), source, &mut refs);
-        refs
-    }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> String {
-    source[node.byte_range()].to_string()
-}
-
-fn node_location(node: Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location::new(
-        start.row as u32,
-        start.column as u32,
-        end.row as u32,
-        end.column as u32,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    )
-}
+tree_walking_analyzer!(
+    PhpAnalyzer,
+    symbols: extract_php_symbols,
+    references: collect_php_references,
+);
 
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     let mut prev = node.prev_sibling();
@@ -97,50 +75,39 @@ fn extract_function_signature(node: Node, source: &str) -> String {
 }
 
 fn extract_php_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
-    match node.kind() {
-        "class_declaration" => {
-            if let Some(symbol) = parse_php_class(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "interface_declaration" => {
-            if let Some(symbol) = parse_php_interface(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "trait_declaration" => {
-            if let Some(symbol) = parse_php_trait(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "enum_declaration" => {
-            if let Some(symbol) = parse_php_enum(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "function_definition" => {
-            if let Some(symbol) = parse_php_function(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "method_declaration" => {
-            if let Some(symbol) = parse_php_method(node, source) {
-                symbols.push(symbol);
-            }
-        }
+    let parsed = match node.kind() {
+        "class_declaration" => parse_php_declaration(node, source, SymbolKind::Class),
+        "interface_declaration" => parse_php_declaration(node, source, SymbolKind::Interface),
+        "trait_declaration" => parse_php_declaration(node, source, SymbolKind::Trait),
+        "enum_declaration" => parse_php_declaration(node, source, SymbolKind::Enum),
+        // A top-level function is always public; only a method carries a visibility keyword.
+        "function_definition" => parse_php_callable(
+            node,
+            source,
+            SymbolKind::Function,
+            Visibility::Public,
+        ),
+        "method_declaration" => parse_php_callable(
+            node,
+            source,
+            SymbolKind::Method,
+            extract_visibility(node, source),
+        ),
         "property_declaration" => {
-            parse_php_properties(node, source, symbols);
+            parse_php_elements(node, source, symbols, "property_element", SymbolKind::Property);
+            None
         }
         "const_declaration" => {
-            parse_php_constants(node, source, symbols);
+            parse_php_elements(node, source, symbols, "const_element", SymbolKind::Constant);
+            None
         }
+        // A namespace carries neither a docblock of its own nor a visibility keyword.
         "namespace_definition" => {
-            if let Some(symbol) = parse_php_namespace(node, source) {
-                symbols.push(symbol);
-            }
+            declaration(node, source, SymbolKind::Namespace, None, None, None)
         }
-        _ => {}
-    }
+        _ => None,
+    };
+    symbols.extend(parsed);
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
@@ -149,128 +116,60 @@ fn extract_php_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
     }
 }
 
-fn parse_php_class(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Class, node_location(node))
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
+/// A PHP type: named by its `name` field, preceded by a docblock. None of the four can be
+/// anything but public.
+fn parse_php_declaration(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(Visibility::Public),
+        None,
     )
 }
 
-fn parse_php_interface(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Interface, node_location(node))
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
+/// A PHP function or method — the same, plus the signature its body is stripped down to.
+fn parse_php_callable(
+    node: Node,
+    source: &str,
+    kind: SymbolKind,
+    visibility: Visibility,
+) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(visibility),
+        Some(extract_function_signature(node, source)),
     )
 }
 
-fn parse_php_trait(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Trait, node_location(node))
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_php_enum(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Enum, node_location(node))
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_php_function(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let signature = extract_function_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-            .with_signature(signature)
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_php_method(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let visibility = extract_visibility(node, source);
-    let signature = extract_function_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Method, node_location(node))
-            .with_signature(signature)
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_php_properties(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
+/// The elements of a `property_declaration` or a `const_declaration` — one statement can name
+/// several, and they share the visibility and docblock written once in front.
+fn parse_php_elements(
+    node: Node,
+    source: &str,
+    symbols: &mut Vec<ParsedSymbol>,
+    element: &str,
+    kind: SymbolKind,
+) {
     let visibility = extract_visibility(node, source);
     let doc_comment = extract_doc_comment(node, source);
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i)
-            && child.kind() == "property_element"
+            && child.kind() == element
                 && let Some(name) = child.child_by_field_name("name") {
                     let name_text = node_text(name, source);
                     symbols.push(
-                        ParsedSymbol::new(name_text, SymbolKind::Property, node_location(child))
+                        ParsedSymbol::new(name_text, kind, node_location(child))
                             .with_visibility(visibility)
                             .with_doc_comment_opt(doc_comment.clone()),
                     );
                 }
     }
-}
-
-fn parse_php_constants(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
-    let visibility = extract_visibility(node, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i)
-            && child.kind() == "const_element"
-                && let Some(name) = child.child_by_field_name("name") {
-                    let name_text = node_text(name, source);
-                    symbols.push(
-                        ParsedSymbol::new(name_text, SymbolKind::Constant, node_location(child))
-                            .with_visibility(visibility)
-                            .with_doc_comment_opt(doc_comment.clone()),
-                    );
-                }
-    }
-}
-
-fn parse_php_namespace(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-
-    Some(ParsedSymbol::new(
-        name_text,
-        SymbolKind::Namespace,
-        node_location(node),
-    ))
 }
 
 fn collect_php_references(node: Node, source: &str, refs: &mut Vec<ParsedReference>) {
@@ -415,15 +314,3 @@ fn is_builtin_function(name: &str) -> bool {
     )
 }
 
-trait WithDocCommentOpt {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self;
-}
-
-impl WithDocCommentOpt for ParsedSymbol {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self {
-        match doc {
-            Some(d) => self.with_doc_comment(d),
-            None => self,
-        }
-    }
-}

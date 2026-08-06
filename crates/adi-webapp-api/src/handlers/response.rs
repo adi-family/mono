@@ -1,4 +1,16 @@
+use serde::de::DeserializeOwned;
+
 use crate::types::ApiError;
+
+/// Read a `POST` body into its request type — `None` when it isn't the JSON the endpoint asked
+/// for.
+///
+/// Chain [`Option::filter`] to also turn away a body that parses but names nothing: a blank id,
+/// an empty title, a port of zero. Either way the handler answers with the `bad_*` message that
+/// spells out what it wanted, so the two failures need no telling apart here.
+pub(crate) fn parse_body<T: DeserializeOwned>(body: &[u8]) -> Option<T> {
+    serde_json::from_slice(body).ok()
+}
 
 /// Trim a string, dropping it entirely when blank (so an empty optional field clears).
 pub(crate) fn clean(value: Option<String>) -> Option<String> {

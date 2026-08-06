@@ -9,7 +9,8 @@ use tree_sitter::Parser as TsParser;
 use crate::error::{Error, Result};
 use crate::lang;
 use crate::parser::Parser;
-use crate::types::{Language, ParsedFile};
+use crate::structure;
+use crate::types::{Language, ParsedFile, ParsedSymbol};
 use analyzers::{generic::GenericAnalyzer, LanguageAnalyzer};
 
 /// Tree-sitter parser over the grammars this build links in (see [`crate::lang`]).
@@ -57,8 +58,13 @@ impl Parser for TreeSitterParser {
             .ok_or_else(|| Error::Parser("Failed to parse source".to_string()))?;
 
         let analyzer = Self::analyzer_for(language);
-        let symbols = analyzer.extract_symbols(source, &tree);
+        let mut symbols = analyzer.extract_symbols(source, &tree);
         let references = analyzer.extract_references(source, &tree);
+
+        // The analyzer says which spans are symbols; the fingerprint says what shape each one
+        // has. Kept apart so every language gets structural search from the one walk here,
+        // rather than thirteen analyzers each having to remember to do it.
+        attach_structure(&mut symbols, tree.root_node());
 
         Ok(ParsedFile {
             language,
@@ -69,6 +75,20 @@ impl Parser for TreeSitterParser {
 
     fn supports(&self, language: Language) -> bool {
         lang::grammar(language).is_some()
+    }
+}
+
+/// Fingerprint every symbol in the tree the analyzer just produced, children included.
+fn attach_structure(symbols: &mut [ParsedSymbol], root: tree_sitter::Node) {
+    for symbol in symbols {
+        symbol.structure = structure::node_for_range(
+            root,
+            symbol.location.start_byte,
+            symbol.location.end_byte,
+        )
+        .map(structure::fingerprint);
+
+        attach_structure(&mut symbol.children, root);
     }
 }
 

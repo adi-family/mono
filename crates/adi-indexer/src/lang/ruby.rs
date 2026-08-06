@@ -2,8 +2,9 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::{declaration, node_location, node_text, WithDocCommentOpt};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -27,23 +28,6 @@ impl LanguageAnalyzer for RubyAnalyzer {
         collect_ruby_references(tree.root_node(), source, &mut refs);
         refs
     }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> String {
-    source[node.byte_range()].to_string()
-}
-
-fn node_location(node: Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location::new(
-        start.row as u32,
-        start.column as u32,
-        end.row as u32,
-        end.column as u32,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    )
 }
 
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
@@ -83,57 +67,41 @@ fn extract_ruby_symbols(
     symbols: &mut Vec<ParsedSymbol>,
     current_visibility: &mut Visibility,
 ) {
-    match node.kind() {
-        "class" => {
-            if let Some(symbol) = parse_ruby_class(node, source) {
-                symbols.push(symbol);
-            }
-            let mut class_visibility = Visibility::Public;
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
-                    extract_ruby_symbols(child, source, symbols, &mut class_visibility);
-                }
-            }
-            return;
-        }
-        "module" => {
-            if let Some(symbol) = parse_ruby_module(node, source) {
-                symbols.push(symbol);
-            }
-            let mut mod_visibility = Visibility::Public;
-            for i in 0..node.child_count() {
-                if let Some(child) = node.child(i) {
-                    extract_ruby_symbols(child, source, symbols, &mut mod_visibility);
-                }
-            }
-            return;
-        }
-        "method" => {
-            if let Some(symbol) = parse_ruby_method(node, source, *current_visibility) {
-                symbols.push(symbol);
+    // A `class` or `module` body opens a fresh visibility scope: a bare `private` inside it does
+    // not leak back out, so its children are walked against their own state and not the caller's.
+    let kind = match node.kind() {
+        "class" => Some(SymbolKind::Class),
+        "module" => Some(SymbolKind::Module),
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        symbols.extend(parse_ruby_declaration(node, source, kind));
+
+        let mut body_visibility = Visibility::Public;
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                extract_ruby_symbols(child, source, symbols, &mut body_visibility);
             }
         }
-        "singleton_method" => {
-            if let Some(symbol) = parse_ruby_singleton_method(node, source) {
-                symbols.push(symbol);
-            }
-        }
+        return;
+    }
+
+    let parsed = match node.kind() {
+        "method" => parse_ruby_method(node, source, *current_visibility),
+        "singleton_method" => parse_ruby_singleton_method(node, source),
+        "assignment" => parse_ruby_constant(node, source),
         "identifier" => {
-            let text = node_text(node, source);
-            match text.as_str() {
+            match node_text(node, source).as_str() {
                 "private" => *current_visibility = Visibility::Private,
                 "protected" => *current_visibility = Visibility::Protected,
                 "public" => *current_visibility = Visibility::Public,
                 _ => {}
             }
+            None
         }
-        "assignment" => {
-            if let Some(symbol) = parse_ruby_constant(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        _ => {}
-    }
+        _ => None,
+    };
+    symbols.extend(parsed);
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
@@ -142,41 +110,27 @@ fn extract_ruby_symbols(
     }
 }
 
-fn parse_ruby_class(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Class, node_location(node))
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_ruby_module(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Module, node_location(node))
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
+/// A Ruby `class` or `module`. Neither takes a visibility keyword — `private` applies to the
+/// methods inside, not to the container.
+fn parse_ruby_declaration(node: Node, source: &str, kind: SymbolKind) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        kind,
+        extract_doc_comment(node, source),
+        Some(Visibility::Public),
+        None,
     )
 }
 
 fn parse_ruby_method(node: Node, source: &str, visibility: Visibility) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let signature = extract_method_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Method, node_location(node))
-            .with_signature(signature)
-            .with_visibility(visibility)
-            .with_doc_comment_opt(doc_comment),
+    declaration(
+        node,
+        source,
+        SymbolKind::Method,
+        extract_doc_comment(node, source),
+        Some(visibility),
+        Some(extract_method_signature(node, source)),
     )
 }
 
@@ -301,15 +255,3 @@ fn is_common_method(name: &str) -> bool {
     )
 }
 
-trait WithDocCommentOpt {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self;
-}
-
-impl WithDocCommentOpt for ParsedSymbol {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self {
-        match doc {
-            Some(d) => self.with_doc_comment(d),
-            None => self,
-        }
-    }
-}

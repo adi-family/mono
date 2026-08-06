@@ -2,8 +2,11 @@
 
 use tree_sitter::{Node, Tree};
 
+use super::common::{
+    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
-use crate::types::{Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
+use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
 /// The grammar this module analyses.
 #[must_use]
@@ -14,36 +17,11 @@ pub fn language() -> tree_sitter::Language {
 #[derive(Debug)]
 pub struct LuaAnalyzer;
 
-impl LanguageAnalyzer for LuaAnalyzer {
-    fn extract_symbols(&self, source: &str, tree: &Tree) -> Vec<ParsedSymbol> {
-        let mut symbols = Vec::new();
-        extract_lua_symbols(tree.root_node(), source, &mut symbols);
-        symbols
-    }
-
-    fn extract_references(&self, source: &str, tree: &Tree) -> Vec<ParsedReference> {
-        let mut refs = Vec::new();
-        collect_lua_references(tree.root_node(), source, &mut refs);
-        refs
-    }
-}
-
-fn node_text<'a>(node: Node<'a>, source: &'a str) -> String {
-    source[node.byte_range()].to_string()
-}
-
-fn node_location(node: Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location::new(
-        start.row as u32,
-        start.column as u32,
-        end.row as u32,
-        end.column as u32,
-        node.start_byte() as u32,
-        node.end_byte() as u32,
-    )
-}
+tree_walking_analyzer!(
+    LuaAnalyzer,
+    symbols: extract_lua_symbols,
+    references: collect_lua_references,
+);
 
 fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
     let mut prev = node.prev_sibling();
@@ -89,25 +67,21 @@ fn extract_function_signature(node: Node, source: &str) -> String {
 }
 
 fn extract_lua_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
-    match node.kind() {
-        "function_declaration" => {
-            if let Some(symbol) = parse_lua_function(node, source) {
-                symbols.push(symbol);
-            }
-        }
-        "local_function_declaration" => {
-            if let Some(symbol) = parse_lua_local_function(node, source) {
-                symbols.push(symbol);
-            }
-        }
+    let parsed = match node.kind() {
+        // `local function` is the only thing Lua scopes; everything else is a global.
+        "function_declaration" => parse_lua_function(node, source, Visibility::Public),
+        "local_function_declaration" => parse_lua_function(node, source, Visibility::Private),
         "variable_declaration" | "local_variable_declaration" => {
             parse_lua_variables(node, source, symbols);
+            None
         }
         "assignment_statement" => {
             parse_lua_assignment(node, source, symbols);
+            None
         }
-        _ => {}
-    }
+        _ => None,
+    };
+    symbols.extend(parsed);
 
     for i in 0..node.child_count() {
         if let Some(child) = node.child(i) {
@@ -116,31 +90,18 @@ fn extract_lua_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
     }
 }
 
-fn parse_lua_function(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let signature = extract_function_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-            .with_signature(signature)
-            .with_visibility(Visibility::Public)
-            .with_doc_comment_opt(doc_comment),
-    )
-}
-
-fn parse_lua_local_function(node: Node, source: &str) -> Option<ParsedSymbol> {
-    let name = node.child_by_field_name("name")?;
-    let name_text = node_text(name, source);
-    let doc_comment = extract_doc_comment(node, source);
-    let signature = extract_function_signature(node, source);
-
-    Some(
-        ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-            .with_signature(signature)
-            .with_visibility(Visibility::Private)
-            .with_doc_comment_opt(doc_comment),
+fn parse_lua_function(
+    node: Node,
+    source: &str,
+    visibility: Visibility,
+) -> Option<ParsedSymbol> {
+    declaration(
+        node,
+        source,
+        SymbolKind::Function,
+        extract_doc_comment(node, source),
+        Some(visibility),
+        Some(extract_function_signature(node, source)),
     )
 }
 
@@ -358,15 +319,3 @@ fn is_keyword(name: &str) -> bool {
     )
 }
 
-trait WithDocCommentOpt {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self;
-}
-
-impl WithDocCommentOpt for ParsedSymbol {
-    fn with_doc_comment_opt(self, doc: Option<String>) -> Self {
-        match doc {
-            Some(d) => self.with_doc_comment(d),
-            None => self,
-        }
-    }
-}

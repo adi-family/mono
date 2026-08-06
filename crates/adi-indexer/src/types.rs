@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // See LICENSE file for details
 
+use crate::structure::Structure;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -188,6 +189,10 @@ pub struct Symbol {
     pub doc_comment: Option<String>,
     pub visibility: Visibility,
     pub is_entry_point: bool,
+    /// The shape of this symbol's syntax — what [`crate::Indexer::clones`] groups on. `None`
+    /// for symbols indexed before the structural columns existed, and for the handful whose
+    /// byte range does not resolve back to a parse node.
+    pub structure: Option<Structure>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -241,6 +246,9 @@ pub struct Status {
     pub embedding_model: String,
     pub last_indexed: Option<String>,
     pub storage_size_bytes: u64,
+    /// Which version of the indexing pipeline wrote what is stored — see
+    /// [`crate::indexer::PIPELINE_VERSION`]. 0 for an index written before this was recorded.
+    pub pipeline_version: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -504,6 +512,11 @@ pub struct ParsedSymbol {
     pub doc_comment: Option<String>,
     pub children: Vec<ParsedSymbol>,
     pub visibility: Visibility,
+    /// The shape of this symbol's syntax, filled in by the parser after the analyzer has
+    /// named the symbol — see [`crate::structure`]. `None` when the symbol's byte range does
+    /// not resolve back to a node, which an analyzer synthesising a symbol can produce.
+    #[serde(default)]
+    pub structure: Option<Structure>,
 }
 
 /// The builders the language analyzers are written against: upstream they came with the plugin
@@ -518,6 +531,7 @@ impl ParsedSymbol {
             doc_comment: None,
             children: vec![],
             visibility: Visibility::Unknown,
+            structure: None,
         }
     }
 

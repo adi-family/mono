@@ -80,3 +80,55 @@ repoint). Use a pattern that includes the trailing arg — the old
 
 **The one exception is ADI DNS (`adi.hive`)** — never restart it (see the hard rule
 above). Everything here is about the `app` / front-door services.
+
+## Finding duplicated code: `adi-mono indexer clones`
+
+This repo carries its own code index (`crates/adi-indexer`, full docs in `docs/indexer.md`).
+Besides symbol/full-text/semantic search it fingerprints the **shape** of every symbol — the
+parse tree with identifiers and literal values stripped out — so copy-paste is findable however
+thoroughly it was renamed, and across languages.
+
+**Reach for this before hand-rolling a duplication hunt with grep.** Index once, then queries are
+instant.
+
+```bash
+adi-mono indexer index                                # build/refresh; rebuilds itself if stale
+adi-mono indexer clones --min-nodes 40                # groups with identical shape
+adi-mono indexer clones --min-nodes 60 --distance 8   # + copies that have since drifted
+adi-mono indexer similar <symbol>                     # what *means* something like this
+adi-mono indexer similar <symbol> --structural        # what *looks* like this
+```
+
+Every subcommand takes `--json` and `--path`. As of this writing the tree has **70 exact groups
+(169 symbols)** at `--min-nodes 40`, and 237 groups (792 symbols) at `--min-nodes 60
+--distance 8`.
+
+Reading the output:
+
+- `--min-nodes` is a floor on symbol size in parse-tree nodes, and it is load-bearing: below ~40
+  every codebase has thousands of accessors that share a shape and mean nothing by it. Raise it
+  to cut noise.
+- `--distance` is bits of a 64-bit simhash — 0 is identical, unrelated code sits near 32, so only
+  single digits are useful. Distance is meaningless on small symbols; pair it with a higher
+  `--min-nodes`.
+- Containers (modules, classes, traits) are excluded by default — a container's shape is just its
+  children's concatenated. `--all-kinds` if you really want them.
+- A bare method name works (`row_to_symbol` finds `SqliteStorage::row_to_symbol`).
+
+**A confirmed clone is not automatically a refactor — read the pair before touching it.** The
+~37 Leptos `*_view` functions that cluster together share a shape only because that is what
+`view!` expands to, and merging them would be actively wrong. Nor does the per-language
+`is_primitive_type` / `is_builtin` family in `adi-indexer/src/lang/*` mean anything by its shared
+shape: each is a `matches!` over a different language's keywords. The tool finds candidates;
+judgment is still yours.
+
+**And a merged clone often still groups, smaller.** `get_transitive_callers` /
+`get_transitive_callees` in `graph.rs` were identical 31-line BFS twins; they now share one
+`transitive` walker and are three-line wrappers around it — still a group, at 47 nodes instead of
+189. Two named entry points into one implementation is the floor, not a finding. Read the node
+count, not just the group.
+
+If you change *what* gets indexed or *how* the embedded text is built, bump
+`cache::SCHEMA_VERSION` **and** `indexer::PIPELINE_VERSION`. Both incremental layers key on file
+content, so a change to the crate is invisible to them: skip the bump and a full reindex returns
+in seconds with the old data and no error at all.

@@ -3,7 +3,7 @@ use adi_projects::Projects;
 
 use crate::types::{NewProject, Project, ProjectDetail, ProjectRef, ProjectsState, UsedPort};
 
-use super::response::{Response, error, ok_json};
+use super::response::{Response, error, ok_json, parse_body};
 use super::services::read_hive_services;
 
 /// `GET /api/projects` — every registered project. Each mutation endpoint below returns a
@@ -127,8 +127,7 @@ impl From<&ProjectStoreError> for Response {
 }
 
 fn parse_new_project(body: &[u8]) -> Option<NewProject> {
-    let req: NewProject = serde_json::from_slice(body).ok()?;
-    (!req.name.trim().is_empty()).then_some(req)
+    parse_body::<NewProject>(body).filter(|req| !req.name.trim().is_empty())
 }
 
 fn bad_new_project() -> Response {
@@ -139,8 +138,7 @@ fn bad_new_project() -> Response {
 }
 
 fn parse_project_ref(body: &[u8]) -> Option<ProjectRef> {
-    let req: ProjectRef = serde_json::from_slice(body).ok()?;
-    (!req.id.trim().is_empty()).then_some(req)
+    parse_body::<ProjectRef>(body).filter(|req| !req.id.trim().is_empty())
 }
 
 fn bad_project_ref() -> Response {
