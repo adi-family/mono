@@ -1527,9 +1527,9 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                 </button>
                 <span class="adi-spacer"></span>
                 <button class="adi-chome__drawer-btn" type="button"
-                    aria-label="Show dashboards"
-                    on:click=move |_| toggle_drawer(state, ChatDrawer::Dashboards)>
-                    <span>"Dashboards"</span>
+                    aria-label=move || format!("Show {}", right_rail_title(watch).to_lowercase())
+                    on:click=move |_| toggle_drawer(state, ChatDrawer::Right)>
+                    <span>{move || right_rail_title(watch)}</span>
                 </button>
             </div>
 
@@ -1562,17 +1562,25 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
             </main>
 
             <aside class="adi-chome__side adi-chome__side--right"
-                class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Dashboards)>
+                class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Right)>
                 <div class="adi-chome__side-head">
-                    <span class="adi-chome__side-title">"Dashboards"</span>
+                    <span class="adi-chome__side-title">{move || right_rail_title(watch)}</span>
                     <span class="adi-spacer"></span>
-                    {move || chat_fleet_refresh(state)}
-                    <a class="adi-chome__side-link" href="/extended/dashboards">"Manage"</a>
+                    // The dashboards head controls belong to the dashboards rail, and only to it:
+                    // there is nothing to refresh or manage about a conversation's counts.
+                    {move || (!showing_analytics(watch)).then(|| view! {
+                        {chat_fleet_refresh(state)}
+                        <a class="adi-chome__side-link" href="/extended/dashboards">"Manage"</a>
+                    })}
                     <button class="adi-chome__drawer-close" type="button" aria-label="Close"
                         on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
                 </div>
                 <div class="adi-chome__side-body">
-                    {move || chat_dashboards(state)}
+                    {move || if showing_analytics(watch) {
+                        chat_analytics(watch)
+                    } else {
+                        chat_dashboards(state)
+                    }}
                 </div>
             </aside>
 
@@ -1580,6 +1588,104 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
             // open, and it is `position: fixed` at the pointer, so where it sits in the tree is
             // immaterial — outside the scrolling rail keeps it from being clipped by it.
             {move || chat_session_menu(state, watch)}
+        </div>
+    }
+    .into_any()
+}
+
+/// Whether the right rail is currently the open conversation's analytics rather than the dashboards.
+///
+/// A conversation, not the chat screen, is what the counts are *of* — so the rail only becomes
+/// analytics once one is open. The compose screen and a terminal agent (which has a live pane, not a
+/// transcript) keep the dashboards, which is the thing worth having in front of you there.
+fn showing_analytics(watch: AgentsWatch) -> bool {
+    !watch.interactive.get() && watch.run_id.get().is_some()
+}
+
+/// What the right rail is called right now — its head, and the narrow-viewport button that summons
+/// it. One function so the two can never disagree about which rail is behind them.
+fn right_rail_title(watch: AgentsWatch) -> &'static str {
+    if showing_analytics(watch) {
+        "Chat Analytics"
+    } else {
+        "Dashboards"
+    }
+}
+
+/// The analytics rail: what the open conversation has added up to so far — how much was said, and
+/// how much work the agent did to say it.
+///
+/// Counted from the transcript the centre pane is already rendering ([`AgentPeek::turns`]), so it
+/// re-counts on the same one-second poll and needs no endpoint of its own. Queued messages are held
+/// apart from the totals: they have been typed, not asked, and folding them in would report a
+/// conversation longer than the one the agent has actually had.
+fn chat_analytics(watch: AgentsWatch) -> AnyView {
+    let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
+    if turns.is_empty() {
+        return view! {
+            <div class="adi-chome__empty">
+                {if watch.peek.get().is_some() { "Nothing said yet." } else { "Loading\u{2026}" }}
+            </div>
+        }
+        .into_any();
+    }
+
+    let (mut you, mut agent, mut queued) = (0usize, 0usize, 0usize);
+    let (mut tools, mut failed, mut running) = (0usize, 0usize, 0usize);
+    for turn in &turns {
+        if turn.queued {
+            queued += 1;
+        } else if turn.role == "user" {
+            you += 1;
+        } else {
+            agent += 1;
+        }
+        for step in &turn.steps {
+            if let AgentStep::Tool { status, .. } = step {
+                tools += 1;
+                match status {
+                    AgentToolStatus::Error => failed += 1,
+                    AgentToolStatus::Running => running += 1,
+                    AgentToolStatus::Ok => {}
+                }
+            }
+        }
+    }
+
+    let mut msg_sub = format!("{you} you \u{b7} {agent} agent");
+    if queued > 0 {
+        msg_sub.push_str(&format!(" \u{b7} {queued} queued"));
+    }
+    // Only the exceptions are named: a run of tool calls that all worked has nothing to add here,
+    // and saying "0 failed" every time would make the line that does matter easy to read past.
+    let mut tool_sub = String::new();
+    if running > 0 {
+        tool_sub.push_str(&format!("{running} running"));
+    }
+    if failed > 0 {
+        if !tool_sub.is_empty() {
+            tool_sub.push_str(" \u{b7} ");
+        }
+        tool_sub.push_str(&format!("{failed} failed"));
+    }
+
+    view! {
+        {stat_tile("Messages", you + agent, msg_sub)}
+        {stat_tile("Tool calls", tools, tool_sub)}
+    }
+    .into_any()
+}
+
+/// One count in the analytics rail: the number, what it counts, and a quiet breakdown under it when
+/// there is one worth reading (an empty `sub` renders nothing, not an empty line).
+fn stat_tile(label: &'static str, value: usize, sub: String) -> AnyView {
+    view! {
+        <div class="adi-chome__stat">
+            <span class="adi-chome__stat-label">{label}</span>
+            <span class="adi-chome__stat-val">{value}</span>
+            {(!sub.is_empty()).then(|| view! {
+                <span class="adi-chome__stat-sub">{sub}</span>
+            })}
         </div>
     }
     .into_any()

@@ -273,8 +273,8 @@ impl State {
 pub(crate) enum ChatDrawer {
     /// The left rail: the agent picker and its sessions.
     Sessions,
-    /// The right rail: the live dashboards.
-    Dashboards,
+    /// The right rail: the open conversation's analytics, or the live dashboards when none is open.
+    Right,
 }
 
 /// The right rail's store browser: a lazily-expanded tree over `~/.adi/mono` (served through

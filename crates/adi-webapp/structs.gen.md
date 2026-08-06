@@ -542,7 +542,7 @@ A side rail of the chat home, when it is showing as a drawer over the conversati
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ChatDrawer {
     Sessions,
-    Dashboards,
+    Right,
 }
 ```
 
