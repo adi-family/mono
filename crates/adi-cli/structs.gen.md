@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-3 structs · 14 enums across 12 files.
+3 structs · 15 enums across 13 files.
 
 ## Index
 
@@ -12,6 +12,7 @@
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
+- [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/mesh.rs`](#srcmeshrs) — `MeshCommand`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectsCommand`, `WorkspaceCommand`, `HookCommand`, `WorkspaceRow`, `HookRow`
@@ -225,6 +226,67 @@ pub(crate) enum EventsCommand {
 
 ---
 
+## `src/indexer.rs`
+
+### enum `IndexerCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum IndexerCommand {
+    Index {
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Symbols {
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Files {
+        query: String,
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Tree {
+        #[arg(long)]
+        path: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    Languages {
+        #[arg(long)]
+        json: bool,
+    },
+}
+```
+
+---
+
 ## `src/main.rs`
 
 ### struct `Cli`
@@ -281,6 +343,10 @@ enum Command {
     Triggers {
         #[command(subcommand)]
         command: TriggersCommand,
+    },
+    Indexer {
+        #[command(subcommand)]
+        command: IndexerCommand,
     },
     Mesh {
         #[command(subcommand)]

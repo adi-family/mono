@@ -24,6 +24,12 @@ adi-core = { workspace = true }
 # CLI, which would only move the same code behind a name nobody has on the node.
 adi-mesh = { workspace = true }
 
+# The `indexer` command group. This is what pulls tree-sitter and the candle embedding stack into
+# `adi-mono` — a deliberate trade, the same one `mesh` makes: the index is what an agent reaches
+# for to find code, and an agent has this binary and nothing else. To shed the weight, build
+# adi-indexer with `--no-default-features` (see its Cargo.toml) rather than splitting the CLI.
+adi-indexer = { workspace = true }
+
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

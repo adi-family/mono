@@ -1,0 +1,120 @@
+[package]
+name = "adi-indexer"
+description = "The code indexer: tree-sitter parsing into a per-project SQLite index of files, symbols, and the call graph, searchable by name (FTS5), by path, or by meaning (jina code embeddings over a usearch vector index). Pure library — `adi-mono indexer` is its CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# Semantic search: the jina-embeddings-v2-base-code model on candle, plus the usearch vector
+# index it feeds. On by default — `indexer search` is a semantic search, and a build without it
+# answers from FTS alone. Turn it off (`--no-default-features`) when the ~200MB of candle +
+# tokenizers + hf-hub in the binary costs more than meaning-ranked results are worth.
+candle = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers", "dep:hf-hub"]
+
+# One feature per language, so a lean build can carry only the grammars it will actually meet.
+# Each pulls a tree-sitter grammar (C code, compiled by `cc`) plus its analyzer module.
+lang-cpp = ["dep:tree-sitter-cpp", "dep:tree-sitter-c"]
+lang-csharp = ["dep:tree-sitter-c-sharp"]
+lang-go = ["dep:tree-sitter-go"]
+lang-java = ["dep:tree-sitter-java"]
+lang-lua = ["dep:tree-sitter-lua"]
+lang-php = ["dep:tree-sitter-php"]
+lang-python = ["dep:tree-sitter-python"]
+lang-ruby = ["dep:tree-sitter-ruby"]
+lang-rust = ["dep:tree-sitter-rust"]
+lang-swift = ["dep:tree-sitter-swift"]
+lang-typescript = ["dep:tree-sitter-typescript", "dep:tree-sitter-javascript"]
+
+all-languages = [
+    "lang-cpp",
+    "lang-csharp",
+    "lang-go",
+    "lang-java",
+    "lang-lua",
+    "lang-php",
+    "lang-python",
+    "lang-ruby",
+    "lang-rust",
+    "lang-swift",
+    "lang-typescript",
+]
+
+default = ["all-languages", "candle"]
+
+[dependencies]
+# Where the global parse/embedding cache lives: the `indexer` module of the mono store, so it
+# follows $ADI_DIR like every other subsystem instead of re-deriving ~/.adi itself.
+adi-config = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+rusqlite = { workspace = true }
+
+thiserror = "2"
+tracing = "0.1"
+
+# Indexing is IO-bound over many files; the walk hands each file to a blocking task.
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "fs"] }
+
+# The parse layer. Grammars are linked in (see the lang-* features) rather than loaded as
+# dylibs, so a released binary parses every language it claims to without a plugin directory.
+tree-sitter = "0.25"
+
+# Vector index for semantic search: an on-disk HNSW next to the SQLite file.
+usearch = { version = "2.23" }
+# f32 vectors are memory-mapped as raw bytes (storage/mmap.rs); bytemuck does the safe cast.
+bytemuck = { version = "1.24", features = ["derive"] }
+
+# The file walk: `ignore` honours .gitignore/.ignore, `walkdir` covers the plain recursive case.
+ignore = "0.4"
+walkdir = "2.5"
+# `indexer watch` — reindex the files an editor just wrote.
+notify = { version = "6.1", features = ["serde"] }
+# One indexing run at a time per project: an advisory lock on the index file.
+fs2 = "0.4"
+# Content addressing for the global cache: same bytes, parsed and embedded once.
+sha2 = "0.10"
+hex = "0.4"
+
+# --- semantic search (feature `candle`) ---
+# A custom JinaBert with QK-norm (embed/candle.rs) — candle-transformers' jina_bert lacks it,
+# and jina-embeddings-v2-base-code produces wrong attention scores without it.
+candle-core = { version = "0.10", optional = true }
+candle-nn = { version = "0.10", optional = true }
+candle-transformers = { version = "0.10", optional = true }
+tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
+hf-hub = { version = "0.5", optional = true, default-features = false, features = ["native-tls", "ureq"] }
+
+# --- tree-sitter grammars (feature lang-*) ---
+tree-sitter-c = { version = "0.24", optional = true }
+tree-sitter-c-sharp = { version = "0.23", optional = true }
+tree-sitter-cpp = { version = "0.23", optional = true }
+tree-sitter-go = { version = "0.25", optional = true }
+tree-sitter-java = { version = "0.23", optional = true }
+tree-sitter-javascript = { version = "0.25", optional = true }
+tree-sitter-lua = { version = "0.2", optional = true }
+tree-sitter-php = { version = "0.24", optional = true }
+tree-sitter-python = { version = "0.25", optional = true }
+tree-sitter-ruby = { version = "0.23", optional = true }
+tree-sitter-rust = { version = "0.24", optional = true }
+tree-sitter-swift = { version = "0.7", optional = true }
+tree-sitter-typescript = { version = "0.23", optional = true }
+
+# Metal is the only GPU this workspace ships to, and asking for it on any other target fails to
+# build — so the feature is attached per-target rather than through a cargo feature nobody on
+# Linux could turn on. Without it `Device::new_metal` errors at runtime and the embedder runs
+# on the CPU.
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { version = "0.10", optional = true, features = ["metal"] }
+candle-nn = { version = "0.10", optional = true, features = ["metal"] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

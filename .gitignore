@@ -12,6 +12,10 @@ apps/*/.build-device/
 *.xcodeproj/xcuserdata/
 *.xcworkspace/xcuserdata/
 
+# The code index a project carries: SQLite plus a usearch vector index, rebuilt from source by
+# `adi-mono indexer index` and tens of megabytes on a tree this size.
+.adi/
+
 # Backtraces
 rustc-ice-*.txt
 

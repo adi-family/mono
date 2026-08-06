@@ -6,6 +6,7 @@ mod agents;
 mod db;
 mod dns;
 mod format;
+mod indexer;
 mod mesh;
 mod projects;
 mod secrets;
@@ -22,6 +23,7 @@ use crate::agents::{AgentsCommand, run_agents};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
+use crate::indexer::{IndexerCommand, run_indexer};
 use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::secrets::{SecretsCommand, run_secrets};
@@ -94,6 +96,11 @@ enum Command {
     Triggers {
         #[command(subcommand)]
         command: TriggersCommand,
+    },
+    /// Code index commands: index a project's source and search it by meaning, name, or path.
+    Indexer {
+        #[command(subcommand)]
+        command: IndexerCommand,
     },
     /// Fleet commands: pair remote adi machines over the mesh, and say what they may reach.
     Mesh {
@@ -180,6 +187,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // Like `mesh`, no `adi` facade: an index is state under the project, not the platform.
+        Command::Indexer { command } => {
+            if let Err(e) = run_indexer(command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         // The one group that does not take the `adi` facade: its state is the mesh module's own.
         Command::Mesh { command } => {
             if let Err(e) = run_mesh(command) {
@@ -225,6 +239,19 @@ mod tests {
     #[test]
     fn the_command_tree_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn the_indexer_group_is_reachable_from_the_top_level() {
+        // Its own argv surface is tested in `indexer.rs`; this pins the wiring.
+        let cli = Cli::try_parse_from(["adi-mono", "indexer", "status", "--json"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Indexer {
+                command: IndexerCommand::Status { json: true, .. }
+            }
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "indexer"]).is_err());
     }
 
     #[test]
