@@ -7,8 +7,9 @@
 //! composer — never a shared, overwritten slot.
 
 use adi_webapp_api::types::{
-    AgentDto, AgentRunInfo, AgentStep, AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState,
-    Dashboard, FleetDashboards, NodeDashboard, NodeDashboards,
+    AgentDto, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo, AgentStep, AgentTokenSource,
+    AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, Dashboard,
+    FleetDashboards, NodeDashboard, NodeDashboards,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -866,9 +867,9 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
                         idx.to_string()
                     }
                 }
-                children=move |(_, queued, turn)| match queued {
+                children=move |(idx, queued, turn)| match queued {
                     Some(place) => queued_bubble(state, watch, turn, place),
-                    None => chat_bubble(state, turn, answerable),
+                    None => chat_bubble(state, idx, turn, answerable),
                 }
             />
             {move || chat_placeholder(watch)}
@@ -942,7 +943,11 @@ fn steps_fingerprint(steps: &[AgentStep]) -> String {
 /// thing at the top and every mid-turn message left where it was written rather than merged into the
 /// answer. Nothing is hidden behind a disclosure. The still-streaming answer is tagged and, while it
 /// has no body yet, shows a typing ellipsis.
-fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
+///
+/// `idx` is the turn's place in the transcript, and it is load-bearing beyond layout: it names the
+/// bubble and each of its steps in the DOM, which is how the analytics rail points at one. The index
+/// is the one the [`For`] enumerates — the same one the rail counts from — so the two cannot drift.
+fn chat_bubble(state: State, idx: usize, turn: AgentTurn, answerable: bool) -> AnyView {
     let is_user = turn.role == "user";
     // Only an assistant turn on a conversation backend may carry an `adi-form` block to render.
     let forms = answerable && !is_user;
@@ -966,7 +971,7 @@ fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
     // The turn's final message comes first (on top); the text renders as Markdown, and the metrics
     // footer rides with it.
     let message = view! {
-        <div class=turn_class data-error=errored.then_some("1")>
+        <div class=turn_class id=turn_anchor(idx) data-error=errored.then_some("1")>
             <div class="adi-chat__role">
                 {who}
                 {pending.then(|| view! { <span class="adi-chat__typing">" · answering…"</span> })}
@@ -983,25 +988,39 @@ fn chat_bubble(state: State, turn: AgentTurn, answerable: bool) -> AnyView {
 
     view! {
         {message}
-        {timeline_views(state, steps)}
+        {timeline_views(state, idx, steps)}
     }
     .into_any()
+}
+
+/// What a turn is called in the DOM, so the analytics rail can scroll to one.
+fn turn_anchor(turn: usize) -> String {
+    format!("adi-turn-{turn}")
+}
+
+/// What one step of a turn is called in the DOM. Keyed by the step's place in `turn.steps` — its
+/// original order, not the reversed order it is drawn in — because that is the index the rail carries
+/// and the one the transcript on the server agrees to.
+fn step_anchor(turn: usize, step: usize) -> String {
+    format!("adi-step-{turn}-{step}")
 }
 
 /// The turn's timeline below its final message, in reverse (newest first). A run of tool/thinking
 /// steps becomes one stack of rows; a message the agent wrote mid-turn breaks that stack and renders
 /// as its own bubble — which is what makes the feed alternate `message → toolcall ×N → message`
 /// instead of showing one merged wall of text above an undifferentiated pile of tool calls.
-fn timeline_views(state: State, steps: Vec<AgentStep>) -> Vec<AnyView> {
+fn timeline_views(state: State, turn: usize, steps: Vec<AgentStep>) -> Vec<AnyView> {
     let mut out: Vec<AnyView> = Vec::new();
     let mut run: Vec<AnyView> = Vec::new();
-    for step in steps.into_iter().rev() {
+    // Numbered before the reversal, so a step's anchor is its place in the turn rather than its place
+    // on the screen — the rail and the server both count the former.
+    for (i, step) in steps.into_iter().enumerate().rev() {
         match step {
             AgentStep::Message { text } => {
                 flush_steps(&mut run, &mut out);
                 out.push(mid_turn_message(state, &text));
             }
-            other => run.push(step_bubble(other)),
+            other => run.push(step_bubble(turn, i, other)),
         }
     }
     flush_steps(&mut run, &mut out);
@@ -1031,10 +1050,10 @@ fn mid_turn_message(state: State, text: &str) -> AnyView {
 }
 
 /// One activity step as its own row beneath the message — a tool call or a thinking block.
-fn step_bubble(step: AgentStep) -> AnyView {
+fn step_bubble(turn: usize, step_idx: usize, step: AgentStep) -> AnyView {
     view! {
         <div class="adi-chat__turn adi-chat__turn--agent adi-chat__turn--step">
-            {step_row(step)}
+            {step_row(step_anchor(turn, step_idx), step)}
         </div>
     }
     .into_any()
@@ -1043,11 +1062,11 @@ fn step_bubble(step: AgentStep) -> AnyView {
 /// One activity row. A `<details>` so its arguments/output (or reasoning) expand in place — no JS.
 /// A [`AgentStep::Message`] never reaches here — [`timeline_views`] renders it as its own bubble —
 /// but it is handled rather than dropped so a message can never silently vanish from the feed.
-fn step_row(step: AgentStep) -> AnyView {
+fn step_row(anchor: String, step: AgentStep) -> AnyView {
     match step {
         AgentStep::Message { text } => crate::markdown::render(&text),
         AgentStep::Thinking { text } => view! {
-            <details class="adi-step adi-step--thinking">
+            <details class="adi-step adi-step--thinking" id=anchor>
                 <summary class="adi-step__head">
                     <span class="adi-step__icon">"💭"</span>
                     <span class="adi-step__name">"thinking"</span>
@@ -1075,7 +1094,7 @@ fn step_row(step: AgentStep) -> AnyView {
                 (false, false) => format!("{input}\n\u{2500}\u{2500}\u{2500}\n{output}"),
             };
             view! {
-                <details class="adi-step adi-step--tool" data-status=status_attr>
+                <details class="adi-step adi-step--tool" id=anchor data-status=status_attr>
                     <summary class="adi-step__head">
                         <span class="adi-step__icon">"🔧"</span>
                         <span class="adi-step__name adi-mono">{name}</span>
@@ -1577,7 +1596,7 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                 </div>
                 <div class="adi-chome__side-body">
                     {move || if showing_analytics(watch) {
-                        chat_analytics(watch)
+                        chat_analytics(state, watch)
                     } else {
                         chat_dashboards(state)
                     }}
@@ -1612,14 +1631,142 @@ fn right_rail_title(watch: AgentsWatch) -> &'static str {
     }
 }
 
-/// The analytics rail: what the open conversation has added up to so far — how much was said, and
-/// how much work the agent did to say it.
+/// One tool call the rail has something to say about, and where in the feed it is.
+#[derive(Clone)]
+struct StepRef {
+    anchor: String,
+    tool: String,
+    /// The call's arguments, cut to a line — what distinguishes this failure from the next one.
+    arg: String,
+}
+
+/// What a conversation adds up to, counted once per render from the transcript the centre pane is
+/// already showing.
+#[derive(Default)]
+struct ChatStats {
+    you: usize,
+    agent: usize,
+    queued: usize,
+    tools: usize,
+    thinking: usize,
+    /// The tool calls that failed, and the ones still going — kept as references rather than counts,
+    /// because a count of failures is a number and a list of them is somewhere to go.
+    failed: Vec<StepRef>,
+    running: Vec<StepRef>,
+    /// Turns the engine reported as failed outright, as anchors into the feed.
+    errored: Vec<String>,
+    /// Tools blocked by permission, worst first.
+    blocked: Vec<(String, usize)>,
+    /// Every tool used: name, calls, and how many of those failed. Most-used first.
+    by_tool: Vec<(String, usize, usize)>,
+    tokens: u64,
+    cost_micro: u64,
+    /// Time the agent spent answering, summed over turns that reported it.
+    work_ms: u64,
+    /// When the conversation's first and last settled turns landed.
+    first_at: u64,
+    last_at: u64,
+}
+
+/// Add up a transcript.
 ///
-/// Counted from the transcript the centre pane is already rendering ([`AgentPeek::turns`]), so it
-/// re-counts on the same one-second poll and needs no endpoint of its own. Queued messages are held
-/// apart from the totals: they have been typed, not asked, and folding them in would report a
-/// conversation longer than the one the agent has actually had.
-fn chat_analytics(watch: AgentsWatch) -> AnyView {
+/// Turn indices are the enumeration order of `turns` — exactly what [`feed_view`]'s `For` uses to
+/// name each bubble — so every anchor built here addresses the element that is actually on screen.
+/// Queued messages are counted apart from the totals: they have been typed, not asked, and folding
+/// them in would report a conversation longer than the one the agent has actually had.
+fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
+    let mut s = ChatStats::default();
+    let mut tools: Vec<(String, usize, usize)> = Vec::new();
+    let mut blocked: Vec<(String, usize)> = Vec::new();
+    let bump = |list: &mut Vec<(String, usize)>, name: &str| match list
+        .iter_mut()
+        .find(|(n, _)| n == name)
+    {
+        Some((_, n)) => *n += 1,
+        None => list.push((name.to_string(), 1)),
+    };
+
+    for (t, turn) in turns.iter().enumerate() {
+        if turn.queued {
+            s.queued += 1;
+            continue;
+        }
+        if turn.role == "user" {
+            s.you += 1;
+        } else {
+            s.agent += 1;
+        }
+        if turn.at > 0 {
+            if s.first_at == 0 {
+                s.first_at = turn.at;
+            }
+            s.last_at = turn.at;
+        }
+        if let Some(m) = &turn.metrics {
+            s.tokens += m.input_tokens.unwrap_or(0) + m.output_tokens.unwrap_or(0);
+            s.cost_micro += m.cost_micro_usd.unwrap_or(0);
+            s.work_ms += m.duration_ms.unwrap_or(0);
+            if m.is_error {
+                s.errored.push(turn_anchor(t));
+            }
+            for name in &m.permission_denials {
+                bump(&mut blocked, name);
+            }
+        }
+        for (i, step) in turn.steps.iter().enumerate() {
+            match step {
+                AgentStep::Thinking { .. } => s.thinking += 1,
+                AgentStep::Tool {
+                    name,
+                    input,
+                    status,
+                    ..
+                } => {
+                    s.tools += 1;
+                    match tools.iter_mut().find(|(n, _, _)| n == name) {
+                        Some((_, calls, _)) => *calls += 1,
+                        None => tools.push((name.clone(), 1, 0)),
+                    }
+                    if *status == AgentToolStatus::Error
+                        && let Some((_, _, bad)) = tools.iter_mut().find(|(n, _, _)| n == name)
+                    {
+                        *bad += 1;
+                    }
+                    let step_ref = || StepRef {
+                        anchor: step_anchor(t, i),
+                        tool: name.clone(),
+                        arg: truncate_task(input),
+                    };
+                    match status {
+                        AgentToolStatus::Error => s.failed.push(step_ref()),
+                        AgentToolStatus::Running => s.running.push(step_ref()),
+                        AgentToolStatus::Ok => {}
+                    }
+                }
+                AgentStep::Message { .. } => {}
+            }
+        }
+    }
+
+    tools.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    blocked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    s.by_tool = tools;
+    s.blocked = blocked;
+    s
+}
+
+/// The analytics rail: what the open conversation has added up to so far — how much was said, how
+/// much work the agent did to say it, and what went wrong on the way.
+///
+/// The counts come off [`AgentPeek::turns`], the transcript the centre pane already polls each
+/// second, so the panel is live without an endpoint or a poll of its own. What it costs to *itemize*
+/// the context — the repeated-text section at the bottom — is the one thing here that is fetched, and
+/// only when asked for.
+///
+/// Every exception it names is a link. A failed tool call forty bubbles down a newest-first feed is,
+/// in practice, invisible; a rail that could only say "2 failed" would be reporting a problem while
+/// withholding its location.
+fn chat_analytics(state: State, watch: AgentsWatch) -> AnyView {
     let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
     if turns.is_empty() {
         return view! {
@@ -1629,49 +1776,58 @@ fn chat_analytics(watch: AgentsWatch) -> AnyView {
         }
         .into_any();
     }
+    let s = collect_stats(&turns);
 
-    let (mut you, mut agent, mut queued) = (0usize, 0usize, 0usize);
-    let (mut tools, mut failed, mut running) = (0usize, 0usize, 0usize);
-    for turn in &turns {
-        if turn.queued {
-            queued += 1;
-        } else if turn.role == "user" {
-            you += 1;
-        } else {
-            agent += 1;
-        }
-        for step in &turn.steps {
-            if let AgentStep::Tool { status, .. } = step {
-                tools += 1;
-                match status {
-                    AgentToolStatus::Error => failed += 1,
-                    AgentToolStatus::Running => running += 1,
-                    AgentToolStatus::Ok => {}
-                }
-            }
-        }
-    }
-
-    let mut msg_sub = format!("{you} you \u{b7} {agent} agent");
-    if queued > 0 {
-        msg_sub.push_str(&format!(" \u{b7} {queued} queued"));
+    let mut msg_sub = format!("{} you \u{b7} {} agent", s.you, s.agent);
+    if s.queued > 0 {
+        msg_sub.push_str(&format!(" \u{b7} {} queued", s.queued));
     }
     // Only the exceptions are named: a run of tool calls that all worked has nothing to add here,
     // and saying "0 failed" every time would make the line that does matter easy to read past.
-    let mut tool_sub = String::new();
-    if running > 0 {
-        tool_sub.push_str(&format!("{running} running"));
+    let mut tool_sub: Vec<String> = Vec::new();
+    if !s.running.is_empty() {
+        tool_sub.push(format!("{} running", s.running.len()));
     }
-    if failed > 0 {
-        if !tool_sub.is_empty() {
-            tool_sub.push_str(" \u{b7} ");
-        }
-        tool_sub.push_str(&format!("{failed} failed"));
+    if !s.failed.is_empty() {
+        tool_sub.push(format!("{} failed", s.failed.len()));
+    }
+    if s.thinking > 0 {
+        tool_sub.push(format!("{} thinking", s.thinking));
     }
 
+    // The spend tile appears only for a backend that reports telemetry. A conversation on an engine
+    // that reports none would otherwise show a confident `$0`, which is a claim, not a blank.
+    let spend = (s.cost_micro > 0 || s.tokens > 0 || s.work_ms > 0).then(|| {
+        let value = if s.cost_micro > 0 {
+            fmt_cost(s.cost_micro)
+        } else {
+            format!("{} tok", fmt_count(s.tokens))
+        };
+        let mut sub: Vec<String> = Vec::new();
+        if s.cost_micro > 0 && s.tokens > 0 {
+            sub.push(format!("{} tok", fmt_count(s.tokens)));
+        }
+        if s.work_ms > 0 {
+            sub.push(format!("{} working", fmt_duration(s.work_ms)));
+        }
+        // Wall clock beside working time is the comparison worth drawing: it separates a slow
+        // conversation from one that is merely old.
+        if s.last_at > s.first_at {
+            sub.push(format!("over {}", fmt_duration(s.last_at - s.first_at)));
+        }
+        text_tile("Spend", value, sub.join(" \u{b7} "))
+    });
+
     view! {
-        {stat_tile("Messages", you + agent, msg_sub)}
-        {stat_tile("Tool calls", tools, tool_sub)}
+        {stat_tile("Messages", s.you + s.agent, msg_sub)}
+        {stat_tile("Tool calls", s.tools, tool_sub.join(" \u{b7} "))}
+        {spend}
+        {(!s.failed.is_empty()).then(|| jump_list("Failed", "\u{2717}", "error", s.failed.clone()))}
+        {(!s.running.is_empty()).then(|| jump_list("Running", "\u{27F3}", "running", s.running.clone()))}
+        {(!s.errored.is_empty()).then(|| errored_list(s.errored.clone()))}
+        {(!s.blocked.is_empty()).then(|| blocked_list(&s.blocked))}
+        {(!s.by_tool.is_empty()).then(|| tool_breakdown(&s.by_tool))}
+        {chat_token_report(state, watch)}
     }
     .into_any()
 }
@@ -1679,6 +1835,11 @@ fn chat_analytics(watch: AgentsWatch) -> AnyView {
 /// One count in the analytics rail: the number, what it counts, and a quiet breakdown under it when
 /// there is one worth reading (an empty `sub` renders nothing, not an empty line).
 fn stat_tile(label: &'static str, value: usize, sub: String) -> AnyView {
+    text_tile(label, value.to_string(), sub)
+}
+
+/// The same tile for a value that is not a plain count — money, a duration, a token total.
+fn text_tile(label: &'static str, value: String, sub: String) -> AnyView {
     view! {
         <div class="adi-chome__stat">
             <span class="adi-chome__stat-label">{label}</span>
@@ -1689,6 +1850,300 @@ fn stat_tile(label: &'static str, value: usize, sub: String) -> AnyView {
         </div>
     }
     .into_any()
+}
+
+/// A section of the rail whose rows go somewhere: the failed calls, the running ones. The count is in
+/// the heading because the rows below it are the same information spelled out, and a reader who only
+/// wants the number should not have to count.
+fn jump_list(label: &'static str, badge: &'static str, status: &'static str, steps: Vec<StepRef>) -> AnyView {
+    let n = steps.len();
+    view! {
+        <div class="adi-chome__group" data-status=status>
+            <div class="adi-chome__group-head">{format!("{label} ({n})")}</div>
+            {steps.into_iter().map(|s| {
+                let anchor = s.anchor.clone();
+                let title = format!("show this call in the transcript: {}", s.arg);
+                view! {
+                    <button class="adi-chome__jump" type="button" title=title
+                        on:click=move |_| jump_to(&anchor)>
+                        <span class="adi-chome__jump-badge">{badge}</span>
+                        <span class="adi-chome__jump-name adi-mono">{s.tool}</span>
+                        <span class="adi-chome__jump-arg adi-mono">{s.arg}</span>
+                    </button>
+                }
+            }).collect_view()}
+        </div>
+    }
+    .into_any()
+}
+
+/// Turns the engine gave up on. Distinct from a failed tool call, and worth its own line: a tool that
+/// failed is something the agent saw and could work around, a turn that errored is one it never
+/// finished.
+fn errored_list(anchors: Vec<String>) -> AnyView {
+    let n = anchors.len();
+    view! {
+        <div class="adi-chome__group" data-status="error">
+            <div class="adi-chome__group-head">{format!("Failed turns ({n})")}</div>
+            {anchors.into_iter().enumerate().map(|(i, anchor)| view! {
+                <button class="adi-chome__jump" type="button"
+                    title="show this turn in the transcript"
+                    on:click=move |_| jump_to(&anchor)>
+                    <span class="adi-chome__jump-badge">"\u{26A0}"</span>
+                    <span class="adi-chome__jump-name">{format!("turn {}", i + 1)}</span>
+                </button>
+            }).collect_view()}
+        </div>
+    }
+    .into_any()
+}
+
+/// Tools the agent tried to use and was not allowed to.
+///
+/// The engine reports these as names on a turn's metrics, not as steps, so there is no call in the
+/// feed to point at — the rail names them and stops there. Worth surfacing anyway, and often the
+/// answer to "why is the result wrong": an agent that was refused a write did not decide against it.
+fn blocked_list(blocked: &[(String, usize)]) -> AnyView {
+    let total: usize = blocked.iter().map(|(_, n)| n).sum();
+    let names = blocked
+        .iter()
+        .map(|(name, n)| {
+            if *n > 1 {
+                format!("{name} \u{d7}{n}")
+            } else {
+                name.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+    view! {
+        <div class="adi-chome__group" data-status="blocked">
+            <div class="adi-chome__group-head">{format!("Blocked ({total})")}</div>
+            <div class="adi-chome__group-note adi-mono">{names}</div>
+        </div>
+    }
+    .into_any()
+}
+
+/// Which tools did the work, most-used first — the shape of the run in a few lines. Whether a
+/// conversation was a search, a refactor, or a build loop is legible here without reading any of it.
+fn tool_breakdown(by_tool: &[(String, usize, usize)]) -> AnyView {
+    view! {
+        <div class="adi-chome__group">
+            <div class="adi-chome__group-head">"Tools"</div>
+            {by_tool.iter().map(|(name, calls, bad)| view! {
+                <div class="adi-chome__toolrow" data-bad=(*bad > 0).then_some("1")>
+                    <span class="adi-chome__toolrow-name adi-mono">{name.clone()}</span>
+                    <span class="adi-spacer"></span>
+                    {(*bad > 0).then(|| view! {
+                        <span class="adi-chome__toolrow-bad">{format!("{bad} \u{2717}")}</span>
+                    })}
+                    <span class="adi-chome__toolrow-n adi-mono">{*calls}</span>
+                </div>
+            }).collect_view()}
+        </div>
+    }
+    .into_any()
+}
+
+/// The context itemization at the foot of the rail: what this conversation's tokens went on, and
+/// which runs of text it sent more than once.
+///
+/// Behind a button rather than loaded with the rest. Every other number here is arithmetic over a
+/// transcript the page already holds; this one is a tokenizer pass over the whole conversation on the
+/// server, and hanging that off a one-second poll would spend a core per open chat to answer a
+/// question nobody asked each second.
+fn chat_token_report(state: State, watch: AgentsWatch) -> AnyView {
+    let run_id = watch.run_id.get();
+    // A report belongs to the conversation it was taken from. Switching chats must show the button
+    // again rather than the previous chat's numbers under a new heading.
+    let ready = watch
+        .tokens
+        .get()
+        .filter(|_| watch.tokens_of.get() == run_id && run_id.is_some());
+    let busy = watch.tokens_busy.get();
+    let error = watch.tokens_error.get();
+
+    let body = match ready {
+        None => view! {
+            <button class="adi-chome__analyze" type="button" disabled=busy
+                on:click=move |_| load_token_report(state, watch)>
+                {if busy { "Reading the transcript\u{2026}" } else { "Itemize the context" }}
+            </button>
+            {(!error.is_empty()).then(|| view! {
+                <div class="adi-chome__group-note">{error}</div>
+            })}
+        }
+        .into_any(),
+        Some(t) => token_report_view(state, watch, &t),
+    };
+
+    view! {
+        <div class="adi-chome__group">
+            <div class="adi-chome__group-head">"Context"</div>
+            {body}
+        </div>
+    }
+    .into_any()
+}
+
+/// A landed report: the total, where it went, and what was paid for twice.
+fn token_report_view(state: State, watch: AgentsWatch, t: &AgentTokens) -> AnyView {
+    let total = t.total;
+    let split = t
+        .by_source
+        .iter()
+        .filter(|s| total > 0 && s.tokens * 100 / total >= 1)
+        .map(|s| format!("{} {}%", source_label(s.source), s.tokens * 100 / total))
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ");
+    // The share is the number that makes this actionable — "26k wasted" means nothing without the
+    // total it is a fraction of.
+    let share = if total > 0 { t.wasted * 100 / total } else { 0 };
+    let repeats: Vec<AgentRepeat> = t.repeats.clone();
+    let near: Vec<AgentNearDup> = t.near_duplicates.clone();
+
+    view! {
+        <div class="adi-chome__ctx">
+            <span class="adi-chome__ctx-total adi-mono">{format!("\u{2248}{} tok", fmt_count(total as u64))}</span>
+            // An OpenAI BPE counting a conversation that may have been had with any provider: close,
+            // and honest about being an estimate rather than the provider's own accounting.
+            <span class="adi-chome__ctx-enc adi-mono" title="estimated with a real BPE; not the provider's own count">
+                {t.encoding.clone()}
+            </span>
+        </div>
+        {(!split.is_empty()).then(|| view! {
+            <div class="adi-chome__group-note">{split}</div>
+        })}
+        {t.truncated.then(|| view! {
+            <div class="adi-chome__group-note">"long conversation \u{2014} only the recent end was read"</div>
+        })}
+        {(!repeats.is_empty()).then(|| view! {
+            <div class="adi-chome__group-head">
+                {format!("Sent twice \u{2014} {} tok ({share}%)", fmt_count(t.wasted as u64))}
+            </div>
+            {repeats.into_iter().map(repeat_row).collect_view()}
+        })}
+        {(!near.is_empty()).then(|| view! {
+            <div class="adi-chome__group-head">{format!("Nearly the same ({})", near.len())}</div>
+            {near.into_iter().map(near_dup_row).collect_view()}
+        })}
+        {(repeats_and_near_empty(t)).then(|| view! {
+            <div class="adi-chome__group-note">"nothing was sent twice."</div>
+        })}
+        <button class="adi-chome__analyze" type="button" disabled=move || watch.tokens_busy.get()
+            on:click=move |_| load_token_report(state, watch)>"Recount"</button>
+    }
+    .into_any()
+}
+
+/// Whether a report found nothing at all — which is a result, and has to be said, or an empty section
+/// reads as one that failed to load.
+fn repeats_and_near_empty(t: &AgentTokens) -> bool {
+    t.repeats.is_empty() && t.near_duplicates.is_empty()
+}
+
+/// One repeated run: what it cost, how often it was sent, what it was, and what to do about it.
+fn repeat_row(r: AgentRepeat) -> AnyView {
+    let full = r.preview.clone();
+    view! {
+        <div class="adi-chome__rep" data-shape=shape_attr(r.shape)>
+            <div class="adi-chome__rep-head">
+                <span class="adi-chome__rep-cost adi-mono">{format!("{} tok", fmt_count(r.wasted as u64))}</span>
+                <span class="adi-chome__rep-count adi-mono">{format!("{}\u{d7}", r.count)}</span>
+                <span class="adi-spacer"></span>
+                <span class="adi-chome__rep-shape">{shape_attr(r.shape)}</span>
+            </div>
+            <div class="adi-chome__rep-text adi-mono" title=full>{r.preview}</div>
+            {(!r.hint.is_empty()).then(|| view! {
+                <div class="adi-chome__rep-hint">{r.hint}</div>
+            })}
+        </div>
+    }
+    .into_any()
+}
+
+/// One group of near-identical sends — the same file read again after an edit, most often.
+fn near_dup_row(g: AgentNearDup) -> AnyView {
+    let full = g.preview.clone();
+    view! {
+        <div class="adi-chome__rep" data-shape="near">
+            <div class="adi-chome__rep-head">
+                <span class="adi-chome__rep-cost adi-mono">{format!("{} tok", fmt_count(g.wasted as u64))}</span>
+                <span class="adi-chome__rep-count adi-mono">{format!("{}\u{d7}", g.count)}</span>
+                <span class="adi-spacer"></span>
+                <span class="adi-chome__rep-shape">{format!("\u{2248}{} tok each", fmt_count(g.tokens as u64))}</span>
+            </div>
+            <div class="adi-chome__rep-text adi-mono" title=full>{g.preview}</div>
+        </div>
+    }
+    .into_any()
+}
+
+/// The word for a repeat's shape, used both as the label and as the styling hook.
+fn shape_attr(s: AgentRepeatShape) -> &'static str {
+    match s {
+        AgentRepeatShape::Path => "path",
+        AgentRepeatShape::Url => "url",
+        AgentRepeatShape::Literal => "literal",
+        AgentRepeatShape::Block => "block",
+        AgentRepeatShape::Phrase => "text",
+    }
+}
+
+/// The word for where a token came from.
+fn source_label(s: AgentTokenSource) -> &'static str {
+    match s {
+        AgentTokenSource::User => "you",
+        AgentTokenSource::Agent => "agent",
+        AgentTokenSource::Thinking => "thinking",
+        AgentTokenSource::ToolInput => "tool input",
+        AgentTokenSource::ToolOutput => "tool output",
+    }
+}
+
+/// Ask the server to itemize the open conversation's context.
+fn load_token_report(state: State, watch: AgentsWatch) {
+    let (Some(name), Some(run_id)) = (watch.name.get(), watch.run_id.get()) else {
+        return;
+    };
+    if watch.tokens_busy.get() {
+        return;
+    }
+    watch.tokens_busy.set(true);
+    watch.tokens_error.set(String::new());
+    spawn_local(async move {
+        let result = fetch::run_tokens(name, run_id.clone()).await;
+        watch.tokens_busy.set(false);
+        match result {
+            Ok(report) => {
+                // Stamped with the run it describes, so a reply that lands after the reader has moved
+                // to another conversation is shown against that one's title, not this one's.
+                watch.tokens_of.set(Some(run_id));
+                watch.tokens.set(Some(report));
+            }
+            Err(e) => {
+                watch.tokens_error.set(e.clone());
+                state.flash.set(Some(Flash::err(e)));
+            }
+        }
+    });
+}
+
+/// Scroll the transcript to the element the rail is pointing at.
+///
+/// A step is a `<details>`, so it is opened on the way: arriving at a collapsed summary would make
+/// the link a gesture that appears to do nothing. Silent when the element is gone — a run that has
+/// moved on between render and click is a race, not an error to report.
+fn jump_to(anchor: &str) {
+    let Some(el) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.get_element_by_id(anchor))
+    else {
+        return;
+    };
+    let _ = el.set_attribute("open", "");
+    el.scroll_into_view();
 }
 
 /// Open `which` as a drawer, or close it if it is the one already open.

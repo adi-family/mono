@@ -28,6 +28,7 @@
 //! ```
 
 mod agent;
+pub mod analytics;
 pub mod arguments;
 pub mod awaits;
 mod backend;

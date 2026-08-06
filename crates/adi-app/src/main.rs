@@ -612,6 +612,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(agents),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
         ("POST", "/api/agents/run/reply") => handlers::reply_run(agents, &req.body),
+        // What a conversation spent its context on. Its own endpoint, not part of the peek: it
+        // re-tokenizes the whole transcript, and the peek is polled once a second.
+        ("POST", "/api/agents/run/tokens") => handlers::run_tokens(agents, &req.body),
         ("POST", "/api/agents/run/unqueue") => handlers::unqueue_run(agents, &req.body),
         ("POST", "/api/agents/run/stop") => handlers::stop_run(agents, &req.body),
         ("POST", "/api/agents/run/delete") => handlers::delete_run(agents, &req.body),

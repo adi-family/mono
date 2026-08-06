@@ -10,10 +10,11 @@ use adi_agents::contains_json_null;
 
 use crate::types::{
     AgentBackendOption, AgentCapabilities, AgentDto, AgentFormField, AgentFormFieldKind,
-    AgentFormOption, AgentFormSpec, AgentKeys, AgentPeek, AgentRef, AgentRunInfo, AgentRunResult,
-    AgentRuns, AgentStep, AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns,
-    HideRun, ProjectRunLimit, ReplyToRun, RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit,
-    UnqueueFromRun,
+    AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek, AgentRef, AgentRepeat,
+    AgentRepeatShape, AgentRunInfo, AgentRunResult, AgentRuns, AgentStep, AgentTokenSite,
+    AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
+    AgentsState, AllAgentRuns, HideRun, ProjectRunLimit, ReplyToRun, RunAgent, RunRef, SaveAgent,
+    SecretRef, SetRunLimit, UnqueueFromRun,
 };
 
 use super::response::{Response, clean, error, ok_json, parse_body};
@@ -230,6 +231,104 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
         caps,
         turns,
     })
+}
+
+/// `POST /api/agents/run/tokens` — what one conversation spent its context on, and what it spent
+/// twice. Takes a [`RunRef`], answers an [`AgentTokens`].
+///
+/// Deliberately **not** folded into [`peek_run`]: this re-tokenizes the whole transcript, which costs
+/// a hundred-odd milliseconds on a long conversation, and the peek runs once a second. A reader asks
+/// for this when they open the panel; nothing asks for it on their behalf.
+///
+/// A run with no transcript is not an error — an empty itemization is the honest answer for a
+/// conversation that has not said anything yet, and 404 here would make the panel look broken on a
+/// chat that is merely new.
+#[must_use]
+pub fn run_tokens(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_run_ref(body) else {
+        return bad_run_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    let turns = store.transcript(&agent, run_id);
+    let report = adi_agents::analytics::analyze(&turns, adi_agents::analytics::Options::default());
+    ok_json(&AgentTokens {
+        name: agent.name.clone(),
+        run_id: run_id.to_string(),
+        encoding: report.encoding,
+        total: report.total,
+        by_source: report
+            .by_source
+            .into_iter()
+            .map(|(source, tokens)| AgentTokenSplit {
+                source: token_source(source),
+                tokens,
+            })
+            .collect(),
+        truncated: report.truncated,
+        wasted: report.wasted,
+        repeats: report
+            .repeats
+            .into_iter()
+            .map(|r| AgentRepeat {
+                preview: r.preview,
+                tokens: r.tokens,
+                count: r.count,
+                wasted: r.wasted,
+                shape: repeat_shape(r.shape),
+                hint: r.shape.hint().unwrap_or_default().to_string(),
+                sites: r.sites.into_iter().map(token_site).collect(),
+            })
+            .collect(),
+        near_duplicates: report
+            .near_duplicates
+            .into_iter()
+            .map(|g| AgentNearDup {
+                preview: g.preview,
+                count: g.count,
+                tokens: g.tokens,
+                wasted: g.wasted,
+                sites: g.sites.into_iter().map(token_site).collect(),
+            })
+            .collect(),
+    })
+}
+
+/// Map an analytics [`adi_agents::analytics::Site`] onto its wire [`AgentTokenSite`].
+fn token_site(s: adi_agents::analytics::Site) -> AgentTokenSite {
+    AgentTokenSite {
+        turn: s.turn,
+        step: s.step,
+        source: token_source(s.source),
+        tool: s.tool,
+    }
+}
+
+/// Map an analytics [`adi_agents::analytics::Source`] onto its wire [`AgentTokenSource`].
+fn token_source(s: adi_agents::analytics::Source) -> AgentTokenSource {
+    use adi_agents::analytics::Source;
+    match s {
+        Source::User => AgentTokenSource::User,
+        Source::Agent => AgentTokenSource::Agent,
+        Source::Thinking => AgentTokenSource::Thinking,
+        Source::ToolInput => AgentTokenSource::ToolInput,
+        Source::ToolOutput => AgentTokenSource::ToolOutput,
+    }
+}
+
+/// Map an analytics [`adi_agents::analytics::Shape`] onto its wire [`AgentRepeatShape`].
+fn repeat_shape(s: adi_agents::analytics::Shape) -> AgentRepeatShape {
+    use adi_agents::analytics::Shape;
+    match s {
+        Shape::Path => AgentRepeatShape::Path,
+        Shape::Url => AgentRepeatShape::Url,
+        Shape::Literal => AgentRepeatShape::Literal,
+        Shape::Block => AgentRepeatShape::Block,
+        Shape::Phrase => AgentRepeatShape::Phrase,
+    }
 }
 
 /// `POST /api/agents/run/reply` — say something into one of a harness agent's conversations and

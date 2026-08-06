@@ -1166,6 +1166,108 @@ pub struct AgentPeek {
     pub turns: Vec<AgentTurn>,
 }
 
+// ---- conversation token analytics --------------------------------------------------
+// A turn's metrics say what it cost. These say what it was spent *on* — and, mostly, what was paid
+// for twice. Computed by re-reading the transcript through a tokenizer, so it is a request the
+// reader makes rather than something folded into the one-second poll.
+
+/// Where a piece of a conversation came from. Mirrors `adi_agents::analytics::Source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentTokenSource {
+    User,
+    Agent,
+    Thinking,
+    ToolInput,
+    ToolOutput,
+}
+
+/// What a repeated run looks like — which is what decides whether there is a fix to suggest.
+/// Mirrors `adi_agents::analytics::Shape`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRepeatShape {
+    Path,
+    Url,
+    Literal,
+    Block,
+    Phrase,
+}
+
+/// One place a repeat was sent, addressed the way the transcript view already addresses things: a
+/// turn, and a step within it. That is what lets a finding in the rail scroll the feed to the exact
+/// tool call that carried it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTokenSite {
+    pub turn: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<usize>,
+    pub source: AgentTokenSource,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool: String,
+}
+
+/// How many tokens one source accounted for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTokenSplit {
+    pub source: AgentTokenSource,
+    pub tokens: usize,
+}
+
+/// A run of text the conversation sent more than once.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRepeat {
+    /// The repeated text, collapsed onto one line and cut for display.
+    pub preview: String,
+    pub tokens: usize,
+    pub count: usize,
+    /// Tokens spent on every occurrence after the first.
+    pub wasted: usize,
+    pub shape: AgentRepeatShape,
+    /// What to do about it, when the shape implies something. Empty when it does not — a hint that
+    /// fires on every row is one nobody reads, so the server sends none rather than a filler.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub hint: String,
+    pub sites: Vec<AgentTokenSite>,
+}
+
+/// A group of segments that are nearly, but not exactly, the same — the case an exact-repeat search
+/// cannot see, and usually the largest single thing a long run spends its context on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentNearDup {
+    pub preview: String,
+    pub count: usize,
+    /// Tokens in the group's largest member: roughly what one copy costs.
+    pub tokens: usize,
+    /// Tokens in every member after the first.
+    pub wasted: usize,
+    pub sites: Vec<AgentTokenSite>,
+}
+
+/// `POST /api/agents/run/tokens` — the itemization of one conversation's context. Takes a [`RunRef`].
+///
+/// Not part of [`AgentPeek`]: the peek is polled every second and this costs a tokenizer pass over
+/// the whole transcript, so it is fetched once, when a reader opens the panel that shows it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentTokens {
+    pub name: String,
+    pub run_id: String,
+    /// The encoding the counts are in. Reported because it is a real BPE but not necessarily the
+    /// *provider's* — the number is an estimate, and the client says so.
+    pub encoding: String,
+    pub total: usize,
+    pub by_source: Vec<AgentTokenSplit>,
+    /// True when only the conversation's recent end was analyzed.
+    #[serde(default)]
+    pub truncated: bool,
+    pub repeats: Vec<AgentRepeat>,
+    /// Tokens attributable to exact repetition.
+    pub wasted: usize,
+    /// Near-identical groups. Counted apart from `wasted`: their overlap with the exact repeats is
+    /// real, and summing the two would claim a conversation wasted more than it sent.
+    pub near_duplicates: Vec<AgentNearDup>,
+}
+
 // ---- meta (the default ADI agent — a single well-known global agent) ----------------
 
 /// `GET /api/meta` — the state of the Meta page, which manages one well-known global agent named

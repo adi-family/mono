@@ -87,6 +87,10 @@ vt100 = "0.16"
 rusqlite = { version = "0.37", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# OpenAI's BPE, ranks compiled in — no model load, no network. Used by adi-agents' transcript
+# analytics to count what a conversation spent its context on in tokens rather than characters,
+# which is the only unit in which "this was sent six times" is a cost.
+tiktoken-rs = "0.12"
 # Reflects `#[derive(JsonSchema)]` types into JSON Schema — the source of truth for the payload
 # shape of every platform event (see adi-tasks / adi-agents event catalogs).
 schemars = "1"

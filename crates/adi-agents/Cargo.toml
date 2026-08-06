@@ -39,6 +39,8 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], def
 # `adi.agents.*` payloads derive their JSON Schema; this crate also assembles the full event
 # catalog (task events + agent events), the lowest crate that can see every producer's type.
 schemars = { workspace = true }
+# Transcript analytics counts context in tokens, not characters — see `analytics`.
+tiktoken-rs = { workspace = true }
 
 [lints]
 workspace = true

@@ -4,11 +4,13 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-53 structs · 14 enums · 5 type aliases across 25 files.
+60 structs · 16 enums · 5 type aliases across 27 files.
 
 ## Index
 
 - [`src/agent.rs`](#srcagentrs) — `RawAgentArguments`, `StoredAgentManifest`, `StoredAgent`, `SecretAttachment`, `AgentManifest`, `Agent`
+- [`src/analytics/mod.rs`](#srcanalyticsmodrs) — `Source`, `Shape`, `Site`, `Repeat`, `NearDuplicates`, `TokenReport`, `Options`, `Segment`
+- [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
 - [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
 - [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
@@ -105,6 +107,147 @@ A manifest paired with its filename-derived name.
 pub struct Agent<Args> {
     pub name: String,
     pub manifest: AgentManifest<Args>,
+}
+```
+
+---
+
+## `src/analytics/mod.rs`
+
+### enum `Source`
+
+Where a piece of the conversation came from — which is what turns "8k tokens repeated" into something actionable, because the fix differs completely by source. Repetition in tool *output* is the agent re-reading something; in tool *input* it is a literal that wanted to be a variable; in the user's own text it is a prompt preamble that wanted to be a system prompt.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Source {
+    User,
+    Agent,
+    Thinking,
+    ToolInput,
+    ToolOutput,
+}
+```
+
+### enum `Shape`
+
+What a repeated run looks like, which is the whole basis for suggesting what to do about it.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Shape {
+    Path,
+    Url,
+    Literal,
+    Block,
+    Phrase,
+}
+```
+
+### struct `Site`
+
+One place a repeat was found.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Site {
+    pub turn: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<usize>,
+    pub source: Source,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool: String,
+}
+```
+
+### struct `Repeat`
+
+A run of tokens that was sent more than once.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Repeat {
+    pub preview: String,
+    pub tokens: usize,
+    pub count: usize,
+    pub wasted: usize,
+    pub shape: Shape,
+    pub sites: Vec<Site>,
+}
+```
+
+### struct `NearDuplicates`
+
+A group of segments that are nearly, but not exactly, the same thing.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NearDuplicates {
+    pub preview: String,
+    pub count: usize,
+    pub tokens: usize,
+    pub wasted: usize,
+    pub sites: Vec<Site>,
+}
+```
+
+### struct `TokenReport`
+
+The itemization of one conversation's context.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TokenReport {
+    pub encoding: String,
+    pub total: usize,
+    pub by_source: Vec<(Source, usize)>,
+    pub truncated: bool,
+    pub repeats: Vec<Repeat>,
+    pub wasted: usize,
+    pub near_duplicates: Vec<NearDuplicates>,
+}
+```
+
+### struct `Options`
+
+Knobs, so the endpoint can widen the net without a rebuild.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    pub min_repeat_tokens: usize,
+    pub max_repeats: usize,
+}
+```
+
+### struct `Segment`
+
+One piece of text that was sent, and what it was.
+
+```rust
+struct Segment {
+    site: Site,
+    tokens: Vec<u32>,
+    text: String,
+}
+```
+
+---
+
+## `src/analytics/suffix.rs`
+
+### struct `RawRepeat`
+
+One repeated run, as the suffix machinery sees it: a length, how often it occurs, and where. Token offsets, not text — `super` owns the mapping back to what a human reads.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct RawRepeat {
+    pub len: usize,
+    pub count: usize,
+    pub starts: Vec<usize>,
 }
 ```
 

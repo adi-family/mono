@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-49 structs · 11 enums · 1 type alias across 19 files.
+51 structs · 11 enums · 1 type alias across 19 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `RuntimeGuide`, `Nav`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Align`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `SessionRow`, `SessionRef`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
 - [`src/pages/agents/emitted_form.rs`](#srcpagesagentsemitted_formrs) — `FormStatus`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
@@ -186,6 +186,44 @@ enum Align {
 ---
 
 ## `src/pages/agents/actions.rs`
+
+### struct `StepRef`
+
+One tool call the rail has something to say about, and where in the feed it is.
+
+```rust
+#[derive(Clone)]
+struct StepRef {
+    anchor: String,
+    tool: String,
+    arg: String,
+}
+```
+
+### struct `ChatStats`
+
+What a conversation adds up to, counted once per render from the transcript the centre pane is already showing.
+
+```rust
+#[derive(Default)]
+struct ChatStats {
+    you: usize,
+    agent: usize,
+    queued: usize,
+    tools: usize,
+    thinking: usize,
+    failed: Vec<StepRef>,
+    running: Vec<StepRef>,
+    errored: Vec<String>,
+    blocked: Vec<(String, usize)>,
+    by_tool: Vec<(String, usize, usize)>,
+    tokens: u64,
+    cost_micro: u64,
+    work_ms: u64,
+    first_at: u64,
+    last_at: u64,
+}
+```
 
 ### struct `SessionRow`
 
@@ -916,6 +954,10 @@ pub(crate) struct AgentsWatch {
     pub(crate) reply: RwSignal<String>,
     pub(crate) context_prefix: RwSignal<String>,
     pub(crate) run_dir: RwSignal<String>,
+    pub(crate) tokens: RwSignal<Option<AgentTokens>>,
+    pub(crate) tokens_of: RwSignal<Option<String>>,
+    pub(crate) tokens_busy: RwSignal<bool>,
+    pub(crate) tokens_error: RwSignal<String>,
 }
 ```
 

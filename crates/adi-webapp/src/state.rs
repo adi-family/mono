@@ -5,7 +5,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_webapp_api::types::{
-    AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentsState, AllAgentRuns, DashboardsState,
+    AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentTokens, AgentsState, AllAgentRuns,
+    DashboardsState,
     DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards,
     FleetState, Health,
     HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
@@ -1000,6 +1001,18 @@ pub(crate) struct AgentsWatch {
     /// normal case; it applies to the launch only, and the conversation then keeps that directory
     /// for its replies.
     pub(crate) run_dir: RwSignal<String>,
+    /// The open conversation's token itemization: what its context went on, and what it sent twice.
+    ///
+    /// The one thing in this struct the poll never touches. Everything else here is refreshed each
+    /// second because it is free once the peek has landed; this costs a tokenizer pass over the whole
+    /// transcript, so it is fetched when a reader asks for it and then left alone.
+    pub(crate) tokens: RwSignal<Option<AgentTokens>>,
+    /// Which run the report in `tokens` is *of*. Opening another conversation must not leave the
+    /// previous one's numbers on screen under a new title, and a report carries no such claim itself.
+    pub(crate) tokens_of: RwSignal<Option<String>>,
+    /// Whether a report is in flight, and what the last attempt failed with (empty when it didn't).
+    pub(crate) tokens_busy: RwSignal<bool>,
+    pub(crate) tokens_error: RwSignal<String>,
 }
 
 impl AgentsWatch {
@@ -1016,6 +1029,10 @@ impl AgentsWatch {
             reply: RwSignal::new(String::new()),
             context_prefix: RwSignal::new(String::new()),
             run_dir: RwSignal::new(String::new()),
+            tokens: RwSignal::new(None),
+            tokens_of: RwSignal::new(None),
+            tokens_busy: RwSignal::new(false),
+            tokens_error: RwSignal::new(String::new()),
         }
     }
 
@@ -1031,6 +1048,10 @@ impl AgentsWatch {
         self.input.set(String::new());
         self.reply.set(String::new());
         self.context_prefix.set(String::new());
+        self.tokens.set(None);
+        self.tokens_of.set(None);
+        self.tokens_busy.set(false);
+        self.tokens_error.set(String::new());
     }
 }
 

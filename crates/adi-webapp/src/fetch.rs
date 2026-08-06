@@ -1,7 +1,7 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns,
+    AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns, AgentTokens,
     AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardTransferred,
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
@@ -401,6 +401,13 @@ pub async fn all_agent_runs() -> Result<AllAgentRuns, String> {
 /// A snapshot of one specific run's log (plus the conversation transcript, for harness runs).
 pub async fn peek_run(name: String, run_id: String) -> Result<AgentPeek, String> {
     post("/api/agents/run/peek", &RunRef { name, run_id }).await
+}
+
+/// The itemization of one conversation's context: how its tokens split by source, and which runs of
+/// text were sent more than once. Asked for once, when the reader opens the panel — it re-tokenizes
+/// the transcript and has no business on the one-second poll.
+pub async fn run_tokens(name: String, run_id: String) -> Result<AgentTokens, String> {
+    post("/api/agents/run/tokens", &RunRef { name, run_id }).await
 }
 
 /// Say something into one of a harness agent's conversations: it starts the next turn, or queues
