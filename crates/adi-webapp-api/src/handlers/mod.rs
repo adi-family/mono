@@ -576,11 +576,27 @@ mod tests {
         assert_eq!(stop_agent(&store, br#"{"name":"ghost"}"#).status, 404);
     }
 
+    /// A headless backend gets one `--print` turn, so launching it with nothing to do would just
+    /// have it act on a placeholder. The handler refuses before the store is ever asked — which is
+    /// why the test below has to send a message to reach the store's own verdict.
+    #[test]
+    fn run_of_a_headless_backend_with_no_task_is_400() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
+        let Response { status, body } = run_agent(&store, br#"{"name":"looper"}"#);
+        assert_eq!(status, 400);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("needs an initial task"));
+    }
+
+    /// `harness:adi` implements every provider it can name, so the one thing left to refuse is an
+    /// agent that has picked none — as a scratch store's has. Unconfigured, not broken, and the
+    /// launch is a 400 that says so.
     #[test]
     fn run_of_an_unrunnable_backend_is_400() {
         let store = temp_agents();
         let _ = save_agent(&store, br#"{"name":"looper","backend":"harness:adi"}"#);
-        let Response { status, body } = run_agent(&store, br#"{"name":"looper"}"#);
+        let Response { status, body } = run_agent(&store, br#"{"name":"looper","message":"go"}"#);
         assert_eq!(status, 400);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert!(v["error"].as_str().unwrap().contains("can't be run yet"));
