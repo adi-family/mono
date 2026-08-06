@@ -284,6 +284,45 @@ POST /api/dashboards/import     (there) → writes the directory, rebuilds the h
   `moved_to`; Restore is still the way back, and deleting the directory is a separate opt-in. A
   transfer whose upload failed leaves this machine exactly as it was.
 
+## 11. Seeing the whole fleet's dashboards
+
+The control panel's dashboards rail lists what *this* machine runs and then what every paired node
+runs, in one list. Where a dashboard happens to execute is a property of the row, not a reason to go
+looking somewhere else for it.
+
+```
+GET  /api/fleet/dashboards          → one entry per paired node: locked, errored, or its dashboards
+POST /api/fleet/dashboards/unlock   → check a node's password against it, then keep it
+POST /api/fleet/dashboards/forget   → drop it again
+POST /api/fleet/dashboards/allow    → ask a node for `http:<label>` on this machine's behalf
+```
+
+This is `apps/ios` on a desktop, and the reasoning is the phone's
+(`adi-mesh-ffi/src/viewer/catalog.rs`) unchanged:
+
+- **The list comes from the node's control panel, not from the protocol.** `adi/mesh/http/1`
+  deliberately cannot answer "what do you serve?" — §5's default-deny refuses an unauthorized peer
+  *before* the route table is consulted, precisely so nobody can enumerate a machine's services by
+  watching `ServiceUnknown` and `NotAuthorized` differ. `app` is a service like any other, it is
+  what pairing grants (§8), it is behind the node's Basic-auth gate, and it already publishes
+  `GET /api/dashboards`. Asking it needs no new wire format, no new grant kind, no version bump.
+- **Listing may also grant.** Pairing hands out `http:app` and nothing else, so a bare list would be
+  a list of rows that all refuse to open. A row that is not yet granted asks for `http:<label>`
+  rather than offering a link that would answer *not authorized*, and that escalates nothing —
+  `http:app` plus the password *is* the control panel. The grant adds reach, not authority.
+- **This machine keeps the node's password, and that is the one departure from §8.** A transfer asks
+  per transfer and stores nothing, which is right for a button pressed once; a rail refreshes, so
+  re-prompting would make it unusable. The credential goes into `adi-secrets` (XChaCha20-Poly1305
+  under a `0600` master key) in a reserved **scope**, never as a global secret: `Secrets::resolve`
+  injects every global secret into every agent run's environment, and a node's password has no
+  business in a subprocess's env. It is checked against the node before it is stored — a credential
+  that does not work is worse than none, because the rail would then report a fault where the answer
+  is a password. Nothing puts it back on the wire: the DTO says only whether a node is locked.
+- **Every state is a row.** A node that is down, locked or refusing still appears, with what it said.
+  A fleet that appeared to shrink whenever a machine slept would be worse than one that says so. The
+  order is answered, then refused, then locked — which is also where a *viewer* lands, since a phone
+  is a peer in this registry and serves nothing at all.
+
 ---
 
 ## Checklist
@@ -361,3 +400,16 @@ Each item ships with unit tests in the same file.
 - [x] G3 The node grants this machine `http:<label>` for what it just took, so the link works on
       the first click.
 - [x] G4 Transfer on every dashboard row, and a panel that asks for node, mode and password.
+
+### H — seeing the whole fleet's dashboards (§11)
+
+- [x] H1 `adi-app/src/node.rs`: the one call to a node's control panel through the local gateway,
+      shared by the transfer and the viewer instead of written twice.
+- [x] H2 `adi-app/src/viewer.rs`: `GET /api/fleet/dashboards` — every paired node asked
+      concurrently, each answering with its dashboards, a refusal, or a lock.
+- [x] H3 The credential store: one encrypted secret in a reserved scope, so a node password is
+      never a global secret and so never reaches a run's environment.
+- [x] H4 `unlock` / `forget` / `allow`, each answering with the fresh listing so the rail updates
+      in one round-trip.
+- [x] H5 The chat home's dashboards rail: the local groups, then one group per node, with an
+      inline password field for a locked one and an "Allow" on a row the node has not granted.

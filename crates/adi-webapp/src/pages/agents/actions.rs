@@ -8,14 +8,16 @@
 
 use adi_webapp_api::types::{
     AgentDto, AgentRunInfo, AgentStep, AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState,
-    Dashboard,
+    Dashboard, FleetDashboards, NodeDashboard, NodeDashboards,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
-use crate::state::{AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SessionMenu, State};
+use crate::state::{
+    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SessionMenu, State, refresh_fleet_dashboards,
+};
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, body_row, configurable_table, placeholder_row, sort_rows,
 };
@@ -1564,6 +1566,7 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                 <div class="adi-chome__side-head">
                     <span class="adi-chome__side-title">"Dashboards"</span>
                     <span class="adi-spacer"></span>
+                    {move || chat_fleet_refresh(state)}
                     <a class="adi-chome__side-link" href="/extended/dashboards">"Manage"</a>
                     <button class="adi-chome__drawer-close" type="button" aria-label="Close"
                         on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
@@ -2239,20 +2242,50 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
     .into_any()
 }
 
-/// The dashboards rail: every live dashboard, **grouped by the project it's filed under** (a
-/// header per project that has at least one, then an "Ungrouped" bucket), each a link to open it
-/// when its frontend is up. Project names come from `state.projects`; an unknown/archived project
-/// id folds into Ungrouped.
+/// The dashboards rail: **what this machine runs, then what its fleet does.**
+///
+/// The local half is grouped by the project a dashboard is filed under; the fleet half is grouped
+/// by node ([`chat_fleet_groups`]). One rail rather than two because "which dashboards can I open?"
+/// is one question — where a dashboard happens to run is a property of the row, not a reason to go
+/// looking somewhere else for it.
+///
+/// The empty note is shown only when *both* halves are empty, so a machine that runs nothing itself
+/// but has a node full of dashboards does not claim there are none.
 fn chat_dashboards(state: State) -> AnyView {
+    let loading = state.dashboards.get().is_none();
+    let mut out = chat_local_groups(state);
+    let fleet = chat_fleet_groups(state);
+    let empty = out.is_empty() && fleet.is_empty();
+    out.extend(fleet);
+    if empty {
+        return view! {
+            <div class="adi-chome__empty">
+                {if loading {
+                    "Loading…"
+                } else {
+                    "No dashboards yet — ask your agent to build one."
+                }}
+            </div>
+        }
+        .into_any();
+    }
+    out.into_any()
+}
+
+/// The rail's local half: every live dashboard on *this* machine, grouped by the project it's filed
+/// under (a header per project that has at least one, then an "Ungrouped" bucket), each a link to
+/// open it when its frontend is up. Project names come from `state.projects`; an unknown/archived
+/// project id folds into Ungrouped.
+///
+/// Empty while the listing is still loading, and empty when there is nothing to list — the caller
+/// is what tells those two apart, because it also knows what the fleet said.
+fn chat_local_groups(state: State) -> Vec<AnyView> {
     let Some(ds) = state.dashboards.get() else {
-        return view! { <div class="adi-chome__empty">"Loading…"</div> }.into_any();
+        return Vec::new();
     };
     let live: Vec<Dashboard> = ds.dashboards.into_iter().filter(|d| !d.is_archived()).collect();
     if live.is_empty() {
-        return view! {
-            <div class="adi-chome__empty">"No dashboards yet — ask your agent to build one."</div>
-        }
-        .into_any();
+        return Vec::new();
     }
     let projects = state.projects.get().map(|p| p.projects).unwrap_or_default();
 
@@ -2284,7 +2317,7 @@ fn chat_dashboards(state: State) -> AnyView {
             out.push(chat_dash_item(d));
         }
     }
-    out.into_any()
+    out
 }
 
 /// A header row inside a rail: the project a group of dashboards is filed under, or the agent a
@@ -2319,4 +2352,244 @@ fn chat_dash_item(d: &Dashboard) -> AnyView {
         }
         .into_any(),
     }
+}
+
+// ---- the fleet's half of the rail ---------------------------------------------------------
+// What the *other* machines run, asked of each node's own control panel over the mesh
+// (`docs/fleet.md` §5, and `adi-app/src/viewer.rs` for why it is the panel that is asked). Three
+// things can be true of a node and each wants something different from the reader: it is locked
+// (this machine has no password for it), it refused (a sentence saying why), or it answered.
+
+/// One group per paired node, under a rule that says the rest of the rail is somewhere else.
+///
+/// That rule is load-bearing rather than decorative: a node's header and a project's are the same
+/// band, so without it `TEREMEC` and `BUGBOUNTY` read as two projects, and the one thing this half
+/// of the rail exists to say — these run on another machine — would be the one thing it does not.
+///
+/// Empty until the first listing arrives, and empty forever on a machine paired with nobody, which
+/// is what keeps the whole half invisible for anyone not running a fleet.
+fn chat_fleet_groups(state: State) -> Vec<AnyView> {
+    let Some(fleet) = state.fleet_dashboards.get() else {
+        return Vec::new();
+    };
+    if fleet.nodes.is_empty() {
+        return Vec::new();
+    }
+    let mut out = vec![view! { <div class="adi-chome__divider">"Fleet"</div> }.into_any()];
+    out.extend(fleet.nodes.iter().map(|n| chat_node_group(state, n)));
+    out
+}
+
+/// One node: its header, then whatever it had to say — a password prompt, a refusal, or its
+/// dashboards.
+fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
+    let name = node.node.clone();
+    let unlock = state.fleet_unlock;
+    let (locked, opening) = (node.locked, unlock.node.get() == node.node);
+    let open_on = node.node.clone();
+    let forget = node.node.clone();
+
+    // The header's trailing control is the one thing that can be done to the node from here:
+    // hand it a password, or take one back.
+    let action = if locked {
+        let label = if opening { "Cancel" } else { "Unlock" };
+        view! {
+            <button class="adi-chome__group-act" type="button"
+                title="This machine has no password for this node, so it cannot ask what it runs."
+                on:click=move |_| if unlock.node.get_untracked() == open_on {
+                    unlock.close();
+                } else {
+                    unlock.open(&open_on);
+                }>
+                {label}
+            </button>
+        }
+        .into_any()
+    } else {
+        view! {
+            <button class="adi-chome__group-act" type="button"
+                title="Forget this node's password here. Nothing on the node changes — this \
+                       machine just stops being able to ask it anything."
+                on:click=move |_| apply_fleet_dashboards(state, fetch::forget_node(forget.clone()))>
+                "Lock"
+            </button>
+        }
+        .into_any()
+    };
+
+    let body = if locked && opening {
+        chat_unlock_form(state)
+    } else if let Some(error) = node.error.clone() {
+        view! { <div class="adi-chome__nodeerr">{error}</div> }.into_any()
+    } else if locked {
+        ().into_any()
+    } else if node.dashboards.is_empty() {
+        view! { <div class="adi-chome__nodeerr">"No dashboards on this node."</div> }.into_any()
+    } else {
+        node.dashboards
+            .iter()
+            .map(|d| chat_node_dash_item(state, &node.node, d))
+            .collect::<Vec<_>>()
+            .into_any()
+    };
+
+    view! {
+        <div class="adi-chome__group adi-chome__group--node">
+            <span>{name}</span>
+            {action}
+        </div>
+        {body}
+    }
+    .into_any()
+}
+
+/// The inline "give this machine the node's password" form.
+///
+/// A field and not a `prompt()`, for the reason the transfer panel gives: this is the one input on
+/// the page that must not be readable `type="text"`, and the browser must never offer it back from
+/// autofill — it is not this machine's secret to remember, only to hold.
+fn chat_unlock_form(state: State) -> AnyView {
+    let unlock = state.fleet_unlock;
+    view! {
+        <form class="adi-chome__unlock" on:submit=move |ev| {
+            ev.prevent_default();
+            submit_unlock(state);
+        }>
+            <input class="adi-input adi-chome__unlock-field" type="password"
+                autocomplete="new-password" placeholder="node password"
+                prop:value=move || unlock.password.get()
+                on:input=move |ev| unlock.password.set(event_target_value(&ev)) />
+            <button class="adi-btn adi-btn--primary adi-chome__unlock-go" type="submit"
+                prop:disabled=move || unlock.busy.get()>
+                {move || if unlock.busy.get() { "Asking\u{2026}" } else { "Unlock" }}
+            </button>
+        </form>
+        {move || unlock.error.get().map(|e| view! {
+            <div class="adi-chome__nodeerr">{e}</div>
+        })}
+        <div class="adi-chome__nodehint">
+            "Printed once, on the node, when it joined this fleet. Kept here encrypted so the rail
+             can ask again without asking you."
+        </div>
+    }
+    .into_any()
+}
+
+/// Check the password against the node and, if it takes, keep it — the listing that comes back is
+/// the node's dashboards, so the form closes onto the rows it just unlocked.
+fn submit_unlock(state: State) {
+    let unlock = state.fleet_unlock;
+    let (node, password) = (unlock.node.get(), unlock.password.get());
+    if node.is_empty() || password.is_empty() {
+        return;
+    }
+    unlock.busy.set(true);
+    unlock.error.set(None);
+    spawn_local(async move {
+        match fetch::unlock_node(node, password).await {
+            Ok(f) => {
+                state.fleet_dashboards.set(Some(f));
+                unlock.close();
+            }
+            Err(e) => unlock.error.set(Some(e)),
+        }
+        unlock.busy.set(false);
+    });
+}
+
+/// One of a node's dashboards.
+///
+/// Three shapes, because there are three genuinely different situations and only one of them is a
+/// link. **Allowed and up** opens on its own origin at `<service>.<node>.n.adi` — the same address
+/// a transfer reports, and the only one under which the page's `/api` calls route (§4). **Up but
+/// not granted** is the ordinary state of a dashboard this machine did not put there: pairing hands
+/// out `http:app` and nothing else (§8), so the row asks the node for the grant rather than
+/// offering a link that would answer *not authorized*. **Down** is dimmed and says so — the failure
+/// is the node's to fix, not a row that should vanish.
+fn chat_node_dash_item(state: State, node: &str, d: &NodeDashboard) -> AnyView {
+    let name = d.name.clone();
+    let title = d.description.clone().unwrap_or_else(|| d.name.clone());
+    if !d.running {
+        return view! {
+            <div class="adi-chome__dash is-off" title="not running on this node">
+                <span class="adi-chome__dot"></span>
+                <span class="adi-chome__dash-name">{name}</span>
+            </div>
+        }
+        .into_any();
+    }
+    match (d.allowed, d.url.clone(), d.service.clone()) {
+        (true, Some(href), _) => view! {
+            <a class="adi-chome__dash" href=href
+                target="_blank" rel="noreferrer" title=title>
+                <span class="adi-chome__dot adi-chome__dot--on"></span>
+                <span class="adi-chome__dash-name">{name}</span>
+                <span class="adi-chome__dash-open">"\u{2197}"</span>
+            </a>
+        }
+        .into_any(),
+        (false, _, Some(service)) => {
+            let (node, service) = (node.to_string(), service);
+            view! {
+                <button class="adi-chome__dash adi-chome__dash--btn" type="button"
+                    title=format!(
+                        "This node has not granted this machine http:{service} yet. Ask it to.",
+                    )
+                    on:click=move |_| apply_fleet_dashboards(state,
+                        fetch::allow_node_service(node.clone(), service.clone()))>
+                    <span class="adi-chome__dot adi-chome__dot--on"></span>
+                    <span class="adi-chome__dash-name">{name}</span>
+                    <span class="adi-chome__dash-ask">"Allow"</span>
+                </button>
+            }
+            .into_any()
+        }
+        // Running, but the node gave it no routable name — there is nothing here that could open
+        // it, and §4 is why: a dashboard is one origin, and it has none.
+        _ => view! {
+            <div class="adi-chome__dash is-off"
+                title="no host on the node — it has no address the mesh could route to">
+                <span class="adi-chome__dot adi-chome__dot--on"></span>
+                <span class="adi-chome__dash-name">{name}</span>
+            </div>
+        }
+        .into_any(),
+    }
+}
+
+/// The rail's refresh: ask every node again. Shown only once a fleet is known to exist, so a
+/// machine paired with nobody sees exactly the rail it saw before any of this.
+fn chat_fleet_refresh(state: State) -> AnyView {
+    if state
+        .fleet_dashboards
+        .get()
+        .is_none_or(|f| f.nodes.is_empty())
+    {
+        return ().into_any();
+    }
+    let busy = state.fleet_dashboards_busy;
+    view! {
+        <button class="adi-chome__group-act" type="button"
+            title="Ask every paired node what it is running"
+            prop:disabled=move || busy.get()
+            on:click=move |_| refresh_fleet_dashboards(state)>
+            {move || if busy.get() { "Asking\u{2026}" } else { "Refresh" }}
+        </button>
+    }
+    .into_any()
+}
+
+/// Run one of the fleet-rail mutations: fold the fresh listing in, or flash what went wrong. The
+/// endpoints all answer with the whole listing, so a grant or a lock updates the rail in one
+/// round-trip rather than leaving it to the next refresh.
+fn apply_fleet_dashboards<F>(state: State, fut: F)
+where
+    F: std::future::Future<Output = Result<FleetDashboards, String>> + 'static,
+{
+    spawn_local(async move {
+        match fut.await {
+            Ok(f) => state.fleet_dashboards.set(Some(f)),
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
 }

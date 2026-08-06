@@ -53,6 +53,7 @@ use state::{
     Flash, Form, HookLogView,
     MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, State, Status, TasksForm, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
+    refresh_fleet_dashboards,
 };
 use highlight::Lang;
 use ui::{apply_saved_theme, code_editor, fmt_uptime, toggle_theme};
@@ -237,6 +238,18 @@ fn Home() -> impl IntoView {
             }
         });
     };
+
+    // The rail's fleet half, asked once when the chat comes up. Not part of `refresh` and not a
+    // subscription: each read is an authenticated call to every paired node over the mesh, so it
+    // happens on load and when the rail's Refresh asks again — never on the four-second tick that
+    // the local lists ride.
+    let asked_fleet = RwSignal::new(false);
+    Effect::new(move |_| {
+        if meta.get().is_some_and(|m| m.agent.is_some()) && !asked_fleet.get_untracked() {
+            asked_fleet.set(true);
+            refresh_fleet_dashboards(state);
+        }
+    });
 
     // Wire up the chat as soon as the agent exists — on load, or right after the setup form creates it.
     Effect::new(move |_| {
@@ -838,6 +851,11 @@ fn App() -> impl IntoView {
         triggers,
         hive,
         dashboards,
+        // The workbench shell has no dashboards rail, so nothing here ever asks the fleet what it
+        // runs — the signals exist because `State` is one shape, not because this page fills them.
+        fleet_dashboards: RwSignal::new(None),
+        fleet_dashboards_busy: RwSignal::new(false),
+        fleet_unlock: state::FleetUnlock::new(),
         workspaces,
         files,
         store,

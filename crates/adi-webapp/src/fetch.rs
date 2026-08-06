@@ -5,17 +5,19 @@ use adi_webapp_api::types::{
     AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardTransferred,
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
-    FilesRef, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing,
-    FsRef, FsWrite, Health, HideRun, HiveState, LeaseRef,
+    FilesRef, FleetDashboards, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent,
+    FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState, LeaseRef,
     LinkTool, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState,
     NewDashboard, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
+    NodeServiceRef,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
     ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
     SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
     TriggerFireResult, TriggerLog,
-    TriggerRef, TriggersState, UnqueueFromRun, UsedPorts, WorkspaceCreateResult, WorkspaceRef,
+    TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UsedPorts, WorkspaceCreateResult,
+    WorkspaceRef,
     WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
 };
@@ -120,6 +122,45 @@ pub async fn fleet_accept_nickname(petname: String) -> Result<FleetState, String
 
 pub async fn fleet_dismiss_nickname(petname: String) -> Result<FleetState, String> {
     post("/api/fleet/nickname/dismiss", &FleetRef { petname }).await
+}
+
+// The fleet's dashboards: what each paired node runs, asked of that node's own control panel over
+// the mesh. Every one of these leaves the machine, so they are slower than the calls above — the
+// caller should show the rail as loading rather than assume a local round-trip. Each answers with
+// the whole fresh listing, the same one-round-trip contract the rest of `/api/fleet` keeps.
+
+pub async fn fleet_dashboards() -> Result<FleetDashboards, String> {
+    get("/api/fleet/dashboards").await
+}
+
+/// Give this machine a node's password, so that node's dashboards can be listed. Checked against
+/// the node before it is stored, so a rejected password comes back as an error here rather than as
+/// a broken row later.
+pub async fn unlock_node(node: String, password: String) -> Result<FleetDashboards, String> {
+    post(
+        "/api/fleet/dashboards/unlock",
+        &UnlockNode {
+            node,
+            username: None,
+            password,
+        },
+    )
+    .await
+}
+
+/// Drop a node's stored password. Nothing on the node changes; this machine just stops asking.
+pub async fn forget_node(petname: String) -> Result<FleetDashboards, String> {
+    post("/api/fleet/dashboards/forget", &FleetRef { petname }).await
+}
+
+/// Ask a node to let this machine reach one of its services (`http:<service>`), so a listed
+/// dashboard becomes a link that opens rather than one that refuses.
+pub async fn allow_node_service(node: String, service: String) -> Result<FleetDashboards, String> {
+    post(
+        "/api/fleet/dashboards/allow",
+        &NodeServiceRef { node, service },
+    )
+    .await
 }
 
 // Projects: every endpoint returns the fresh ProjectsState so the page updates in one round-trip.

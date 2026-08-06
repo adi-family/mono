@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-48 structs · 11 enums · 1 type alias across 19 files.
+49 structs · 11 enums · 1 type alias across 19 files.
 
 ## Index
 
@@ -24,7 +24,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `Status`, `Flash`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Flash`
 - [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
 - [`src/ui.rs`](#srcuirs) — `Sort`, `Column`, `Layout`, `TableState`, `Key`
 
@@ -476,6 +476,9 @@ pub(crate) struct State {
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
+    pub(crate) fleet_dashboards: RwSignal<Option<FleetDashboards>>,
+    pub(crate) fleet_dashboards_busy: RwSignal<bool>,
+    pub(crate) fleet_unlock: FleetUnlock,
     pub(crate) workspaces: RwSignal<Option<WorkspacesState>>,
     pub(crate) files: FilesState,
     pub(crate) store: StoreBrowser,
@@ -958,6 +961,20 @@ pub(crate) struct FleetForm {
     pub(crate) grant_node: RwSignal<String>,
     pub(crate) grant: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+}
+```
+
+### struct `FleetUnlock`
+
+The dashboards rail's unlock form: the one node whose password is being typed, and what has been typed into it.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct FleetUnlock {
+    pub(crate) node: RwSignal<String>,
+    pub(crate) password: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+    pub(crate) error: RwSignal<Option<String>>,
 }
 ```
 

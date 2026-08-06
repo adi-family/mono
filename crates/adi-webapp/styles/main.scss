@@ -731,6 +731,55 @@
     color: var(--muted);
 
     &:first-child { padding-top: 2px; }
+
+    // A paired node's header, in the fleet half of the rail. Same band as a project's, plus the
+    // one control there is for a node: hand this machine its password, or take it back.
+    &--node {
+      display: flex;
+      align-items: baseline;
+      gap: var(--space-2);
+    }
+  }
+  // That control. Inherits the header's type so it reads as part of the band rather than as a
+  // button dropped into it.
+  &__group-act {
+    margin-left: auto;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    cursor: pointer;
+    transition: color var(--transition);
+
+    &:hover:not(:disabled) { color: var(--accent); }
+    &:disabled { cursor: default; opacity: .6; }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  }
+  // Why a node could not be listed, and the note under the unlock field. A sentence, so it wraps —
+  // these say what to do about a node, and a clipped instruction is not one.
+  &__nodeerr,
+  &__nodehint {
+    padding: 2px 10px 6px;
+    color: var(--muted);
+    font-size: var(--text-xs);
+    line-height: 1.45;
+  }
+  &__unlock {
+    display: flex;
+    gap: 6px;
+    padding: 2px 10px 4px;
+  }
+  &__unlock-field {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    font-size: var(--text-sm);
+  }
+  &__unlock-go {
+    flex: none;
+    padding: 5px 10px;
+    font-size: var(--text-sm);
   }
 
   // --- a dashboard row (right) ----------------------------------------------------
@@ -747,6 +796,23 @@
 
     &:hover { background: var(--surface-2); border-color: var(--border); }
     &.is-off { color: var(--muted); cursor: default; }
+
+    // A row that is a control rather than a link — a dashboard on a node this machine has not
+    // been granted, where the click asks for the grant instead of opening the page. Resets only
+    // what a <button> would otherwise impose; the strip above is still what it looks like.
+    &--btn {
+      width: 100%;
+      background: none;
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+    }
+  }
+  // What such a row says on its right, where a row that opens shows the arrow.
+  &__dash-ask {
+    flex: none;
+    color: var(--accent);
+    font-size: var(--text-xs);
   }
   &__dash-name {
     flex: 1;

@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-12 structs · 1 enum · 1 type alias across 7 files.
+13 structs · 1 enum · 2 type aliases across 8 files.
 
 ## Index
 
@@ -12,8 +12,9 @@
 - [`src/http.rs`](#srchttprs) — `Request`
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
+- [`src/node.rs`](#srcnoders) — `CallError`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
-- [`src/transfer.rs`](#srctransferrs) — `CallError`
+- [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
 
 ---
@@ -156,6 +157,22 @@ struct Reads {
 
 ---
 
+## `src/node.rs`
+
+### struct `CallError`
+
+A failed call to a node, already phrased for the operator and carrying the status to answer with.
+
+```rust
+#[derive(Debug)]
+pub(crate) struct CallError {
+    pub(crate) status: u16,
+    pub(crate) message: String,
+}
+```
+
+---
+
 ## `src/scan.rs`
 
 ### struct `Proc`
@@ -186,18 +203,27 @@ struct ProcessTable {
 
 ---
 
-## `src/transfer.rs`
+## `src/viewer.rs`
 
-### struct `CallError`
+### struct `Credential`
 
-A failed call to a node, already phrased for the operator and carrying the status to answer with.
+One node's Basic-auth credential, as this machine keeps it for asking that node questions.
 
 ```rust
-#[derive(Debug)]
-struct CallError {
-    status: u16,
-    message: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Credential {
+    #[serde(default)]
+    user: Option<String>,
+    password: String,
 }
+```
+
+### type `Credentials`
+
+Every node credential this machine holds, by petname.
+
+```rust
+type Credentials = BTreeMap<String, Credential>;
 ```
 
 ---

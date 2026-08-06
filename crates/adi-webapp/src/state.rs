@@ -6,7 +6,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_webapp_api::types::{
     AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentsState, AllAgentRuns, DashboardsState,
-    DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetState, Health,
+    DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards,
+    FleetState, Health,
     HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectsState,
     RunRef, SecretsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState, UsedPorts,
@@ -67,6 +68,18 @@ pub(crate) struct State {
     pub(crate) hive: RwSignal<Option<HiveState>>,
     /// The dashboards listing (`/dashboards`).
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
+    /// What the *fleet* is running (`/api/fleet/dashboards`) — one entry per paired node, asked of
+    /// that node's own control panel over the mesh. Not part of the poll: every read of it leaves
+    /// the machine, so it is fetched on load and when [`fleet_dashboards_busy`] says the rail asked
+    /// for it again.
+    ///
+    /// [`fleet_dashboards_busy`]: Self::fleet_dashboards_busy
+    pub(crate) fleet_dashboards: RwSignal<Option<FleetDashboards>>,
+    /// Whether a fleet listing is in flight, so the rail can say it is asking rather than sit
+    /// looking finished for the second or two a mesh round trip takes.
+    pub(crate) fleet_dashboards_busy: RwSignal<bool>,
+    /// The rail's inline "give this machine the node's password" form. See [`FleetUnlock`].
+    pub(crate) fleet_unlock: FleetUnlock,
     /// The open project's workspaces + hooks snapshot (`/api/projects/workspaces`), shown in
     /// the detail page's Workspaces panel. Refreshed by the 4s poll, so a `creating`
     /// workspace flips to `ready` on its own once the hook finishes.
@@ -236,6 +249,9 @@ impl State {
             triggers: RwSignal::new(None),
             hive: RwSignal::new(None),
             dashboards: RwSignal::new(None),
+            fleet_dashboards: RwSignal::new(None),
+            fleet_dashboards_busy: RwSignal::new(false),
+            fleet_unlock: FleetUnlock::new(),
             workspaces: RwSignal::new(None),
             files: FilesState::new(),
             store: StoreBrowser::new(),
@@ -1065,6 +1081,50 @@ impl FleetForm {
     }
 }
 
+/// The dashboards rail's unlock form: the one node whose password is being typed, and what has
+/// been typed into it.
+///
+/// One form and not one per node, deliberately — only one can be open at a time, so a password
+/// typed for `laptop-b` can never be submitted against `studio` because the rail re-rendered under
+/// it. Clearing [`node`](Self::node) is what closes the form, and it takes the password with it:
+/// nothing typed here outlives the row it was typed into.
+#[derive(Clone, Copy)]
+pub(crate) struct FleetUnlock {
+    /// The petname whose form is open, or empty when none is.
+    pub(crate) node: RwSignal<String>,
+    pub(crate) password: RwSignal<String>,
+    pub(crate) busy: RwSignal<bool>,
+    /// What the node said when it refused, shown under the form. `None` until it has.
+    pub(crate) error: RwSignal<Option<String>>,
+}
+
+impl FleetUnlock {
+    pub(crate) fn new() -> Self {
+        Self {
+            node: RwSignal::new(String::new()),
+            password: RwSignal::new(String::new()),
+            busy: RwSignal::new(false),
+            error: RwSignal::new(None),
+        }
+    }
+
+    /// Open the form on `node`, from a clean slate: the previous node's password and refusal must
+    /// never carry over into this one.
+    pub(crate) fn open(self, node: &str) {
+        self.node.set(node.to_string());
+        self.password.set(String::new());
+        self.error.set(None);
+    }
+
+    /// Close it, dropping what was typed — in particular the password, which has no reason to
+    /// outlive the form.
+    pub(crate) fn close(self) {
+        self.node.set(String::new());
+        self.password.set(String::new());
+        self.error.set(None);
+    }
+}
+
 /// Backend liveness as shown by the status pill.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Status {
@@ -1119,6 +1179,29 @@ fn set_if_changed<T: PartialEq + Send + Sync + 'static>(sig: RwSignal<Option<T>>
     if sig.with_untracked(|current| current.as_ref() != Some(&value)) {
         sig.set(Some(value));
     }
+}
+
+/// Ask every paired node what it is running, and fold the answer into the dashboards rail.
+///
+/// **Deliberately not a subscription.** Every other list on the page is local state a poll can read
+/// for free; this one is an authenticated HTTP call to each node over the mesh, which is a third of
+/// a second before any payload (`docs/fleet.md` §9) and wakes a relay to get there. So it is asked
+/// when the page loads and when a person asks again — never on a four-second timer.
+///
+/// A refusal is a flash and nothing else: the rail keeps whatever it last knew, because a fleet
+/// that was there a moment ago is better information than an empty list.
+pub(crate) fn refresh_fleet_dashboards(s: State) {
+    if s.fleet_dashboards_busy.get_untracked() {
+        return;
+    }
+    s.fleet_dashboards_busy.set(true);
+    wasm_bindgen_futures::spawn_local(async move {
+        match fetch::fleet_dashboards().await {
+            Ok(f) => set_if_changed(s.fleet_dashboards, f),
+            Err(e) => s.flash.set(Some(Flash::err(e))),
+        }
+        s.fleet_dashboards_busy.set(false);
+    });
 }
 
 /// What the live channel should be watching for the page that is open, and where each answer

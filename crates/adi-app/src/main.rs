@@ -11,8 +11,10 @@
 mod awaits;
 mod http;
 mod live;
+mod node;
 mod scan;
 mod transfer;
+mod viewer;
 mod ws;
 
 use std::collections::HashMap;
@@ -383,6 +385,13 @@ async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
         ("POST", "/api/dashboards/transfer") => {
             transfer::transfer_dashboard(&app.projects, &app.ports, &req.body).await
         }
+        // What the *fleet* is running: one authenticated call to each paired node's own control
+        // panel, over the same gateway (see [`viewer`]). Async for the same reason as a transfer —
+        // every one of these leaves the machine.
+        ("GET", "/api/fleet/dashboards") => viewer::fleet_dashboards(&app.secrets).await,
+        ("POST", "/api/fleet/dashboards/unlock") => viewer::unlock(&app.secrets, &req.body).await,
+        ("POST", "/api/fleet/dashboards/forget") => viewer::forget(&app.secrets, &req.body).await,
+        ("POST", "/api/fleet/dashboards/allow") => viewer::allow(&app.secrets, &req.body).await,
         ("GET", "/api/mesh") => handlers::mesh(app.mesh.running().await),
         ("POST", "/api/mesh/start") => mesh_start(&app.mesh).await,
         ("POST", "/api/mesh/stop") => mesh_stop(&app.mesh).await,

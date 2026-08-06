@@ -4,7 +4,7 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-156 structs · 6 enums · 1 type alias across 6 files.
+161 structs · 6 enums · 1 type alias across 6 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
 - [`src/handlers/response.rs`](#srchandlersresponsers) — `Response`
 - [`src/handlers/services.rs`](#srchandlersservicesrs) — `HiveDoc`, `YamlService`, `HiveProxy`, `HiveRollout`, `HiveRecreate`, `HiveRunner`, `HiveScript`, `HiveDocker`
-- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `AgentKeys`, `AgentPeek`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `BundleFile`, `DashboardBundle`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `AgentForm`, `AgentFormInput`, `AgentFormChoice`, `AgentFormInputKind`, `AgentFormAction`, `ApiError`
+- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `AgentKeys`, `AgentPeek`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `BundleFile`, `DashboardBundle`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `AgentForm`, `AgentFormInput`, `AgentFormChoice`, `AgentFormInputKind`, `AgentFormAction`, `ApiError`
 
 ---
 
@@ -2219,6 +2219,80 @@ pub struct DashboardTransferred {
     #[serde(default)]
     pub granted: bool,
     pub dashboards: DashboardsState,
+}
+```
+
+### struct `FleetDashboards`
+
+`GET /api/fleet/dashboards` — what every paired node is running, asked node by node.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetDashboards {
+    pub nodes: Vec<NodeDashboards>,
+}
+```
+
+### struct `NodeDashboards`
+
+One node's dashboards as this machine may see them — or why it cannot see them.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeDashboards {
+    pub node: String,
+    pub locked: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    pub me: Option<String>,
+    pub dashboards: Vec<NodeDashboard>,
+}
+```
+
+### struct `NodeDashboard`
+
+One dashboard running on a node.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeDashboard {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub service: Option<String>,
+    pub running: bool,
+    pub allowed: bool,
+    #[serde(default)]
+    pub url: Option<String>,
+}
+```
+
+### struct `UnlockNode`
+
+`POST /api/fleet/dashboards/unlock` — hand this machine a node's password so it can ask that node what it runs.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnlockNode {
+    pub node: String,
+    #[serde(default)]
+    pub username: Option<String>,
+    pub password: String,
+}
+```
+
+### struct `NodeServiceRef`
+
+`POST /api/fleet/dashboards/allow` — ask a node to let this machine reach one of its services.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeServiceRef {
+    pub node: String,
+    pub service: String,
 }
 ```
 

@@ -47,6 +47,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal
 # Server-side OAuth-secret refresh: adi-app calls the OAuth router's /refresh/<provider> so
 # the refresh token never reaches the browser. rustls to avoid a system OpenSSL dependency.
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 # The websocket handshake's `Sec-WebSocket-Accept` (see src/ws.rs).

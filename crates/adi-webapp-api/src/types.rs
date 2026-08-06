@@ -1992,6 +1992,91 @@ pub struct DashboardTransferred {
     pub dashboards: DashboardsState,
 }
 
+// MARK: viewing a fleet's dashboards (`docs/fleet.md` §11)
+
+/// `GET /api/fleet/dashboards` — what every paired node is running, asked node by node.
+///
+/// One entry per paired node, in the same petname order `/api/fleet` uses, whether or not that
+/// node could be reached: a node that is locked, down or refusing is a state to show, not a row
+/// to drop. A machine paired with nobody answers an empty list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetDashboards {
+    pub nodes: Vec<NodeDashboards>,
+}
+
+/// One node's dashboards as this machine may see them — or why it cannot see them.
+///
+/// The three states are mutually exclusive and each wants a different thing from the operator:
+/// `locked` needs the node's password, `error` needs whatever it says, and neither set means the
+/// list is real.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeDashboards {
+    /// The node's petname, as this machine files it.
+    pub node: String,
+    /// No credential is stored here for this node, so it was never asked. The password is the
+    /// human-scoped half of `docs/fleet.md` §5 and is enforced *on the node*; without it there is
+    /// nothing to ask with.
+    pub locked: bool,
+    /// Why the node could not be listed — already phrased for an operator. `None` when it was.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// What the node calls *this* machine in its own registry, matched by key (§2). `None` when
+    /// its fleet page could not be read, which is also why a grant would fail.
+    #[serde(default)]
+    pub me: Option<String>,
+    /// Its live dashboards, in the order the node's own panel listed them.
+    pub dashboards: Vec<NodeDashboard>,
+}
+
+/// One dashboard running on a node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeDashboard {
+    /// The dashboard's id on the node — stable, and what its panel keys it by.
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The service label to open, from the single host the dashboard declares (§4): `nosh.adi` →
+    /// `nosh`. `None` when it declares none, so there is nothing the mesh could route to.
+    #[serde(default)]
+    pub service: Option<String>,
+    /// Whether the node's supervisor has the page's own server up. A dashboard that is down is
+    /// still listed — the failure is then the node's to fix, not a row that vanished.
+    pub running: bool,
+    /// Whether this machine's grants *on the node* already cover it. `false` means opening it has
+    /// to ask for `http:<service>` first (`POST /api/fleet/dashboards/allow`), because pairing
+    /// hands out only `http:app` (§8).
+    pub allowed: bool,
+    /// Where to open it from here: `http://<service>.<node>.n.adi/`. Present whenever there is a
+    /// name to route to, even while [`allowed`](Self::allowed) is false — the page decides whether
+    /// to offer it as a link or as an ask.
+    #[serde(default)]
+    pub url: Option<String>,
+}
+
+/// `POST /api/fleet/dashboards/unlock` — hand this machine a node's password so it can ask that
+/// node what it runs.
+///
+/// Unlike a transfer (which asks per transfer and keeps nothing), this one is **stored**: it goes
+/// into the encrypted secrets store, because a rail that re-prompted on every refresh would not be
+/// a rail. It is the same bargain `apps/ios` makes with the Keychain.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnlockNode {
+    pub node: String,
+    /// The Basic-auth user. Defaults to the one pairing mints (`adi`) when absent.
+    #[serde(default)]
+    pub username: Option<String>,
+    pub password: String,
+}
+
+/// `POST /api/fleet/dashboards/allow` — ask a node to let this machine reach one of its services.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NodeServiceRef {
+    pub node: String,
+    /// The service label to be granted `http:<service>` on — a dashboard's own label.
+    pub service: String,
+}
+
 // MARK: secrets — encrypted global / per-project key-values (~/.adi/mono/secrets)
 
 /// One secret's **metadata** — `GET /api/secrets` returns a list of these across every scope.
