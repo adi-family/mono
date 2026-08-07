@@ -31,6 +31,10 @@ impl Module {
     /// # Errors
     /// [`Error::Io`](crate::Error::Io) if the directory cannot be created.
     pub fn ensure_dir(&self) -> Result<&Path> {
+        // Before the first directory exists: mark the whole store never-index. Doing it
+        // here rather than at an install step means it also covers a store that predates
+        // the marker, and one an `ADI_DIR` override put somewhere new.
+        crate::layout::ensure_root_not_indexed();
         std::fs::create_dir_all(&self.dir)?;
         Ok(&self.dir)
     }

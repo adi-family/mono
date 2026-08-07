@@ -7,6 +7,10 @@ use std::path::Path;
 /// then rename it into place so a reader never observes a half-written file.
 pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     if let Some(parent) = path.parent() {
+        // The other path that brings store directories into existence, so it carries the
+        // same guarantee as `Module::ensure_dir`: a write can be the very first thing that
+        // creates the store, and it should not leave it indexable.
+        crate::layout::ensure_root_not_indexed();
         std::fs::create_dir_all(parent)?;
     }
 

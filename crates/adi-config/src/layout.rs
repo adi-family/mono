@@ -58,6 +58,65 @@ pub fn dir() -> PathBuf {
     home().join(dir_name()).join(MONO_DIR)
 }
 
+/// The `ADI_DIR` root itself: `$HOME/<ADI_DIR>` — the parent of [`dir`]. Callers want
+/// [`dir`]; this exists for the few things that belong to the whole store rather than to
+/// the settings inside it, like the indexer opt-out below.
+#[must_use]
+pub fn root() -> PathBuf {
+    home().join(dir_name())
+}
+
+/// The marker that tells macOS Spotlight to skip a directory and everything under it.
+#[cfg(target_os = "macos")]
+const NEVER_INDEX: &str = ".metadata_never_index";
+
+/// Keep the store out of the platform's search index.
+///
+/// The store lives under `$HOME`, so Spotlight indexes it by default — and it grows to
+/// tens of gigabytes of sessions, transcripts, caches and vendored dependencies that
+/// nobody has ever searched for from Spotlight. The cost is not theoretical: `mds` and its
+/// workers saturate the disk, and every other process on the machine queues behind them.
+/// An empty `.metadata_never_index` at the root opts out the entire tree.
+///
+/// Called on the path that creates store directories, so a fresh install is excluded from
+/// its first write rather than after someone notices the machine crawling. It runs its
+/// work once per process and **never reports failure**: an unwritable marker is a
+/// performance problem, not a correctness one, and no caller should fail a config write
+/// over it.
+///
+/// A no-op off macOS, which is the only platform with this convention.
+pub fn ensure_root_not_indexed() {
+    #[cfg(target_os = "macos")]
+    {
+        use std::sync::Once;
+        // The filesystem state is process-wide, so checking it once is enough; this keeps
+        // the two hot creation paths from paying a `stat` on every write.
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| mark_never_indexed(&root()));
+    }
+}
+
+/// Put the marker in `root`, creating the directory if it is not there yet.
+///
+/// Split out from [`ensure_root_not_indexed`] so it is reachable from a test — the `Once`
+/// wrapper can only ever fire for one directory per process.
+#[cfg(target_os = "macos")]
+fn mark_never_indexed(root: &std::path::Path) {
+    if std::fs::create_dir_all(root).is_err() {
+        return;
+    }
+    let marker = root.join(NEVER_INDEX);
+    if marker.exists() {
+        return;
+    }
+    // `create_new` so two processes racing here cannot truncate each other's file; the
+    // loser just finds it already present.
+    let _ = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -80,5 +139,34 @@ mod tests {
         let dir = dir();
         assert!(dir.ends_with(MONO_DIR), "got {}", dir.display());
         assert!(dir.starts_with(home()));
+    }
+
+    #[test]
+    fn store_root_is_the_parent_of_the_mono_dir() {
+        assert_eq!(dir().parent(), Some(root().as_path()));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn marks_the_store_root_never_indexed() {
+        let root = std::env::temp_dir().join(format!(
+            "adi-config-layout-noindex-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+
+        // Creates the directory it is given, so a first-ever run is covered.
+        mark_never_indexed(&root);
+        let marker = root.join(NEVER_INDEX);
+        assert!(marker.is_file(), "marker missing at {}", marker.display());
+
+        // Idempotent, and it must not clobber a marker that is already there — a second
+        // run is the normal case, not the exception.
+        std::fs::write(&marker, b"existing").expect("seed");
+        mark_never_indexed(&root);
+        assert_eq!(std::fs::read(&marker).expect("read"), b"existing");
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
