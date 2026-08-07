@@ -845,9 +845,13 @@ impl Agents {
         }
         let store = self.sessions();
         let runs = Self::list_runs(&store, agent, runner.as_ref());
+        // Which sessions have anything waiting, in one question rather than one per run. Nothing is
+        // waiting in nearly every poll, and asking each run separately made the *empty* answer the
+        // expensive one.
+        let waiting = store.sessions_with_queue(&agent.name);
         let idle: Vec<String> = runs
             .iter()
-            .filter(|r| !r.running)
+            .filter(|r| !r.running && waiting.contains(&r.run_id))
             .map(|r| r.run_id.clone())
             .collect();
         let advanced = idle.iter().fold(false, |any, conv_id| {
@@ -868,7 +872,9 @@ impl Agents {
             .list(&agent.name)
             .into_iter()
             .map(|record| RunInfo {
-                running: runner.is_alive(&store.session(&agent.name, &record.id)),
+                // From the record just listed: liveness reads the runner's state slot, which is a
+                // column that row already carried.
+                running: runner.is_alive(&store.session_as_listed(&record)),
                 run_id: record.id,
                 started_at: record.started_at,
                 last_activity: record.last_activity,

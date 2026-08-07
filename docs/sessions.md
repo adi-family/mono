@@ -154,8 +154,11 @@ Handlers: `crates/adi-webapp-api/src/handlers/agents.rs`. Routing: `crates/adi-a
 | `POST /api/agents/run/stop` | `stop_run` :400 | stops, replies with fresh history |
 | `POST /api/agents/run/reply` | `reply_run` :340 | sends/queues a message, replies with a snapshot |
 
-Every one of those goes through `runs_response` (`agents.rs:468`), which is where the
-per-backend capability profile is attached (`agent_caps` :491 → `adi_agents::capabilities`).
+Every one of those goes through `runs_response` (`agents.rs:468`), which is where the per-backend
+capability profile is attached (`agent_caps` → `adi_agents::capabilities`) and where each run's
+`message` is cut to a 300-character title (`title_of`). The whole message is never lost — it is the
+conversation's first turn — and sending all of it made this answer 1.4 MB to fill a rail that shows
+72 characters of each.
 `interactive` and `answerable` on the wire are what decide **chat vs. log** in the client.
 
 DTOs live in `crates/adi-webapp-api/src/types.rs:1049` (`AgentRunInfo`), `:1073` (`AgentRuns`),
@@ -284,11 +287,9 @@ Work down this list when one is missing:
 
 Things that are duplicated, inconsistent, or load-bearing in a non-obvious way:
 
-- **`advance_queue` probes every idle run.** The cheap gate is now a `COUNT` per session rather
-  than a file probe, but it is still ~400 queries per `/api/agents/runs/all`; one grouped query
-  would answer the whole listing at once.
-- **`is_alive` re-reads the row it was handed.** `runner_state()` queries `sessions` again for a
-  column `list()` already returned. Cheap now, but still a second read per session.
+- **`Agents::list` is now the biggest single cost in the listing** — it reads all 61 agent
+  *manifests* off disk, per request. Those are authored TOML and stay files by design, so the answer
+  here is caching by mtime rather than another table.
 - **Two lists of sessions in client state** (`all_chats` vs `watch.runs`) with a merge rule in
   `chat_all_sessions`. It exists for mutation latency, not by accident — any unification must keep
   "a deleted row leaves now, not in 3 seconds".
@@ -302,9 +303,6 @@ Things that are duplicated, inconsistent, or load-bearing in a non-obvious way:
   agree today only because all detached backends share `DetachedRunner`.
 - `/api/agents/runs/all` is a full walk of every agent's session directory, at 3s, per connected
   client (deduplicated by the shared-read map, but still).
-- The response is **1.4 MB** for 398 sessions, because `message` carries each run's whole opening
-  task. The rail truncates it anyway (`truncate_task`, `actions.rs:1497`); truncating server-side
-  would cut the payload by an order of magnitude.
 - `SessionState::Waiting` / `Error` exist in `adi-ui` and are never produced by this path — the
   wire carries no such state.
 

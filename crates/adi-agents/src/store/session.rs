@@ -33,6 +33,18 @@ pub struct SessionRef<'a> {
     /// spawned child needs a real file descriptor to redirect into — and a borrow has to point at
     /// something that outlives the call.
     log: PathBuf,
+    /// Where [`Session::state`] is answered from.
+    state: StateSource,
+}
+
+/// Whether this view asks for the runner's state slot, or already has the copy a listing read.
+#[derive(Debug, Clone)]
+enum StateSource {
+    /// Ask, every time. The default, and the only thing a writer may use.
+    Fresh,
+    /// The value the record was listed with — see
+    /// [`session_as_listed`](SessionStore::session_as_listed).
+    Listed(Option<serde_json::Value>),
 }
 
 impl<'a> SessionRef<'a> {
@@ -42,6 +54,20 @@ impl<'a> SessionRef<'a> {
             agent: agent.to_string(),
             id: id.to_string(),
             log: store.log_path(agent, id),
+            state: StateSource::Fresh,
+        }
+    }
+
+    /// A read-only view whose state slot is already in hand.
+    pub(super) fn as_listed(
+        store: &'a SessionStore,
+        agent: &str,
+        id: &str,
+        state: Option<serde_json::Value>,
+    ) -> Self {
+        Self {
+            state: StateSource::Listed(state),
+            ..Self::new(store, agent, id)
         }
     }
 
@@ -78,8 +104,12 @@ impl Session for SessionRef<'_> {
         self.log.exists()
     }
 
+    /// Fresh unless this view was built from a listed record, which already carried it.
     fn state(&self) -> Option<serde_json::Value> {
-        self.store.runner_state(&self.agent, &self.id)
+        match &self.state {
+            StateSource::Fresh => self.store.runner_state(&self.agent, &self.id),
+            StateSource::Listed(state) => state.clone(),
+        }
     }
 
     fn set_state(&self, value: serde_json::Value) -> Result<()> {
@@ -111,6 +141,8 @@ struct StoredState {
 }
 
 impl StateWriter for StoredState {
+    /// Always fresh. This is the *writing* half: a runner that decides what to write from a
+    /// snapshot decides it from a value another process may already have moved past.
     fn state(&self) -> Option<serde_json::Value> {
         self.store.runner_state(&self.agent, &self.id)
     }

@@ -114,9 +114,28 @@ impl SessionStore {
     }
 
     /// A borrowed [`Session`](crate::runner::Session) view of one session, for handing to a runner.
+    ///
+    /// Every question it answers is a fresh read — which is what a runner about to *write* needs,
+    /// and why this is the default. For the read-only sweep a listing performs, see
+    /// [`session_as_listed`](Self::session_as_listed).
     #[must_use]
     pub fn session(&self, agent: &str, id: &str) -> SessionRef<'_> {
         SessionRef::new(self, agent, id)
+    }
+
+    /// The same view, answering [`Session::state`](crate::runner::Session::state) from the record it
+    /// was listed with instead of asking again.
+    ///
+    /// A listing reads every session's row and then asks its runner whether it is alive, which reads
+    /// the runner's state slot — a column the row already carried. Re-querying it made the sweep two
+    /// reads per session for one instant's answer, and a listing *is* one instant: the fresher value
+    /// would only be a different snapshot of the same race.
+    ///
+    /// **For reads only.** A runner that goes on to write must take [`session`](Self::session), or
+    /// it will decide what to write from a copy another process has already moved past.
+    #[must_use]
+    pub fn session_as_listed<'a>(&'a self, record: &SessionRecord) -> SessionRef<'a> {
+        SessionRef::as_listed(self, &record.agent, &record.id, record.runner_state.clone())
     }
 
     // ---- records -------------------------------------------------------------------
@@ -361,6 +380,30 @@ impl SessionStore {
             .map_or(0, |conn| queue::len(&conn, agent, id))
     }
 
+    /// Which of `agent`'s sessions have anything waiting at all.
+    ///
+    /// One query for the whole agent, because the caller is a listing: advancing a queue is decided
+    /// per session, but *whether there is one to advance* was being asked per session too, and
+    /// nothing is waiting in nearly every case. That made the common answer — "no queues anywhere" —
+    /// cost a round trip per session on every poll.
+    ///
+    /// A pre-filter and nothing more. Whoever acts on it re-checks under the turn gate, so a set
+    /// that went stale between the two is not a correctness problem.
+    #[must_use]
+    pub fn sessions_with_queue(&self, agent: &str) -> std::collections::HashSet<String> {
+        let Ok(conn) = self.conn() else {
+            return std::collections::HashSet::new();
+        };
+        let Ok(mut stmt) =
+            conn.prepare_cached("SELECT DISTINCT session FROM queue WHERE agent = ?1")
+        else {
+            return std::collections::HashSet::new();
+        };
+        stmt.query_map([agent], |row| row.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
     /// The messages waiting, oldest first — the order they will be asked in.
     #[must_use]
     pub fn queued(&self, agent: &str, id: &str) -> Vec<String> {
@@ -472,6 +515,7 @@ fn remove_session_files(dir: &Path, id: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::runner::Session;
 
     fn scratch(tag: &str) -> SessionStore {
         let dir = std::env::temp_dir().join(format!(
@@ -905,6 +949,67 @@ mod tests {
             "a deleted session is not resurrected by a late turn",
         );
         assert!(store.turns("chat", id).is_empty());
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The listing's two shortcuts, and the line they must not cross.
+    ///
+    /// `sessions_with_queue` answers for a whole agent at once, because the per-session version of
+    /// the question was being asked a few hundred times per poll to hear "nothing" every time. And a
+    /// view built from a listed record answers `state()` from the copy that record carried, which is
+    /// what a listing wants and what a *writer* must never take.
+    #[test]
+    fn a_listing_asks_once_for_the_queues_and_reuses_the_state_it_read() {
+        let store = scratch("listing");
+        let quiet = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "nothing waiting")
+            .expect("create");
+        let busy = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "two waiting")
+            .expect("create");
+
+        assert!(
+            store.sessions_with_queue("chat").is_empty(),
+            "no queues anywhere is the common answer, and it costs one query",
+        );
+        store.enqueue("chat", &busy.id, "one").expect("enqueue");
+        store.enqueue("chat", &busy.id, "two").expect("enqueue");
+        assert_eq!(
+            store.sessions_with_queue("chat"),
+            std::collections::HashSet::from([busy.id.clone()]),
+            "only the session that has something waiting, once however much is in it",
+        );
+        assert!(store.sessions_with_queue("elsewhere").is_empty());
+
+        // Emptying it takes it back out of the set.
+        store.clear_queue("chat", &busy.id).expect("clear");
+        assert!(store.sessions_with_queue("chat").is_empty());
+
+        // A listed view answers from the record it was listed with...
+        store
+            .set_runner_state("chat", &quiet.id, serde_json::json!({ "pid": 4711 }))
+            .expect("park state");
+        let record = store.get("chat", &quiet.id).expect("listed");
+        let listed = store.session_as_listed(&record);
+        let fresh = store.session("chat", &quiet.id);
+        assert_eq!(listed.state(), Some(serde_json::json!({ "pid": 4711 })));
+
+        // ...and goes on answering that after another writer has moved on, which is exactly why it
+        // is for reads. The plain view is the one that sees the change.
+        store
+            .set_runner_state("chat", &quiet.id, serde_json::json!({ "pid": 9999 }))
+            .expect("another writer");
+        assert_eq!(
+            listed.state(),
+            Some(serde_json::json!({ "pid": 4711 })),
+            "a snapshot is a snapshot",
+        );
+        assert_eq!(
+            fresh.state(),
+            Some(serde_json::json!({ "pid": 9999 })),
+            "and the default view re-reads",
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

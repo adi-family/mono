@@ -479,12 +479,30 @@ fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
                 run_id: r.run_id,
                 started_at: r.started_at,
                 last_activity: r.last_activity,
-                message: r.message,
+                message: title_of(&r.message),
                 running: r.running,
                 hidden: r.hidden,
             })
             .collect(),
     }
+}
+
+/// How much of a run's opening task travels with a *listing*.
+///
+/// Long enough to read as a first paragraph in a tooltip, short enough that four hundred of them
+/// are not the answer. An agent's task is routinely a page of instructions, and at 398 sessions
+/// that made the cross-agent index 1.4 MB of prompt — re-sent to every connected panel whenever
+/// anything in it changed — to fill a rail that truncates each one to 72 characters anyway. The
+/// whole message is never lost: it is the conversation's first turn, and the transcript carries it.
+const TITLE_MAX: usize = 300;
+
+/// A run's task, cut to [`TITLE_MAX`] characters on a character boundary.
+fn title_of(message: &str) -> String {
+    if message.chars().count() <= TITLE_MAX {
+        return message.to_string();
+    }
+    let head: String = message.chars().take(TITLE_MAX).collect();
+    format!("{head}…")
 }
 
 /// The backend's capability profile as a wire [`AgentCapabilities`].

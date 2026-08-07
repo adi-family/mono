@@ -1056,7 +1056,9 @@ pub struct AgentRunInfo {
     /// when an older server omits it, and a client should then read it as `started_at`.
     #[serde(default)]
     pub last_activity: u64,
-    /// The task the run was launched with.
+    /// The task the run was launched with, **cut to a title** (300 characters) — a listing carries
+    /// four hundred of these and a rail shows 72 characters of one. The whole message is the
+    /// conversation's first turn, so a reader that wants it opens the chat.
     #[serde(default)]
     pub message: String,
     pub running: bool,
