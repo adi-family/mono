@@ -35,7 +35,12 @@
 </script>
 
 <link data-trunk rel="rust" />
+<!-- adi-ui first, adi-css second: where the two name the same token, the second wins, and
+     nothing already on this page should change colour. See styles/tailwind.css. -->
+<link data-trunk rel="tailwind-css" href="styles/tailwind.css" />
 <link data-trunk rel="scss" href="styles/main.scss" />
+<!-- adi-ui's @font-face rules resolve against the dist root, so the files have to land there. -->
+<link data-trunk rel="copy-dir" href="../adi-ui/fonts" />
 <!-- Copied verbatim (no content hash) so the manifest, the worker and the icons keep the
      stable URLs the browser and the manifest above expect. -->
 <link data-trunk rel="copy-file" href="manifest.webmanifest" />

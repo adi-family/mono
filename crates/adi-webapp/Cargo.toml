@@ -13,6 +13,10 @@ repository.workspace = true
 # adi-ports-manager, no filesystem I/O reaches this crate.
 adi-webapp-api = { workspace = true }
 
+# The component library. It brings its own tokens and its own utilities; see
+# `styles/tailwind.css` for how the two design systems share one page.
+adi-ui = { workspace = true }
+
 leptos = { version = "0.8", features = ["csr"] }
 
 # Browser plumbing: fetch (gloo-net), interval timers (gloo-timers), panics routed to the

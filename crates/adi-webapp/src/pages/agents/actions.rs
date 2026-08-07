@@ -826,56 +826,126 @@ fn run_detail_row(
 /// the very top: what you have already said is nearest the box you said it in.
 fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
     view! {
+        // The composer sits above the transcript, because the transcript reads newest-first:
+        // what you type appears at the top, next to the box you typed it in.
         {answerable.then(|| reply_bar(state, watch))}
-        <div class="adi-chat">
-            <For
-                each=move || {
-                    let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
-                    // Number the queued messages as they go past: a queued turn's place in the queue
-                    // is exactly what unqueueing it sends back.
-                    let mut place = 0usize;
-                    let mut indexed: Vec<(usize, Option<usize>, AgentTurn)> = turns
-                        .into_iter()
-                        .enumerate()
-                        .map(|(idx, turn)| {
-                            let queued = turn.queued.then(|| {
-                                let at = place;
-                                place += 1;
-                                at
-                            });
-                            (idx, queued, turn)
-                        })
-                        .collect();
-                    // Enumerated first (stable keys), then reversed so the newest renders at the top.
-                    indexed.reverse();
-                    indexed
-                }
-                key=|(idx, queued, turn): &(usize, Option<usize>, AgentTurn)| {
-                    // A settled turn is keyed by its stable index, so its bubble is never rebuilt. The
-                    // live turn folds its growth into the key, so it — and only it — re-renders as it
-                    // streams. A queued one folds in its place, so a bubble that moves up the queue —
-                    // or leaves it for the transcript proper — is rebuilt rather than left stale.
-                    if let Some(place) = queued {
-                        format!("{idx}:queued:{place}:{}", turn.text.len())
-                    } else if turn.pending {
-                        format!(
-                            "{idx}:live:{}:{}",
-                            turn.text.len(),
-                            steps_fingerprint(&turn.steps)
-                        )
-                    } else {
-                        idx.to_string()
-                    }
-                }
-                children=move |(idx, queued, turn)| match queued {
-                    Some(place) => queued_bubble(state, watch, turn, place),
-                    None => chat_bubble(state, idx, turn, answerable),
-                }
-            />
-            {move || chat_placeholder(watch)}
-        </div>
+
+        // Queued messages are said but not yet asked, so they belong above everything that
+        // has happened — and they keep the old bubble, which carries the × that takes one
+        // back before the agent ever sees it.
+        {move || {
+            let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
+            let mut queued: Vec<AnyView> = turns
+                .iter()
+                .filter(|t| t.queued)
+                .enumerate()
+                .map(|(place, t)| queued_bubble(state, watch, t.clone(), place))
+                .collect();
+            // Newest first, like everything below them.
+            queued.reverse();
+            queued
+        }}
+
+        <adi_ui::Chat
+            class="adi-ui-type min-h-0 flex-1 p-3"
+            turns=Signal::derive(move || {
+                let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
+                turns.iter().filter(|t| !t.queued).flat_map(feed_turn).collect::<Vec<_>>()
+            })
+        />
+        {move || chat_placeholder(watch)}
     }
     .into_any()
+}
+
+/// A tool call's arguments, one per parameter — **the way the model wrote them**.
+///
+/// The wire hands the whole input over as one string, because that is what the engine
+/// captured. Almost always it is a JSON object, and showing it as one is the difference
+/// between reading a call and decoding it: `<parameter name="file_path">…` is what the model
+/// emitted, while `<parameter name="input">{"file_path":…}` is a transport's idea of it,
+/// wrapped in quotes and escapes the model never saw.
+///
+/// A string value is unwrapped, so a newline in an edit is a newline on screen rather than
+/// `\n`. Anything that is not an object — a bare string, a number, something that does not
+/// parse — stays one `input`, because inventing a shape for it would be a lie.
+fn tool_params(input: &str) -> Vec<(String, String)> {
+    let one = || vec![("input".to_string(), input.to_string())];
+    let Ok(serde_json::Value::Object(map)) = serde_json::from_str::<serde_json::Value>(input)
+    else {
+        return one();
+    };
+    if map.is_empty() {
+        return one();
+    }
+    map.into_iter()
+        .map(|(k, v)| {
+            let text = match v {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            (k, text)
+        })
+        .collect()
+}
+
+/// One wire turn, as the transcript's own turns.
+///
+/// A user turn is one thing said. An assistant turn is a *sequence*: what it did, what it
+/// said in the middle, what it did next — and its final message, which the wire keeps apart
+/// from the steps. Text is the divider, so every run of tool calls between two things it
+/// said becomes one foldable run.
+fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
+    use adi_ui::{Role, ToolCall, ToolState, Turn as T};
+
+    if turn.role == "user" {
+        return vec![T::Said { role: Role::User, body: turn.text.clone() }];
+    }
+
+    let mut out: Vec<T> = Vec::new();
+    let mut run: Vec<ToolCall> = Vec::new();
+    for step in &turn.steps {
+        match step {
+            // Something said mid-turn closes the run before it: that is what makes text the
+            // divider rather than one more thing in the list.
+            AgentStep::Message { text } => {
+                if !run.is_empty() {
+                    out.push(T::Did(std::mem::take(&mut run)));
+                }
+                if !text.trim().is_empty() {
+                    out.push(T::Said { role: Role::Agent, body: text.clone() });
+                }
+            }
+            // Thinking is the agent's private work, which is exactly what folds. It joins the
+            // run rather than interrupting it, so it never breaks a sequence in two.
+            AgentStep::Thinking { text } => {
+                run.push(ToolCall::new("thinking").param("text", text.clone()));
+            }
+            AgentStep::Tool { name, input, status, output } => {
+                let mut call = ToolCall::new(name.clone())
+                    .state(match status {
+                        AgentToolStatus::Running => ToolState::Running,
+                        AgentToolStatus::Ok => ToolState::Ok,
+                        AgentToolStatus::Error => ToolState::Failed,
+                    });
+                for (key, value) in tool_params(input) {
+                    call = call.param(key, value);
+                }
+                if !output.is_empty() {
+                    call = call.result(output.clone());
+                }
+                run.push(call);
+            }
+        }
+    }
+    if !run.is_empty() {
+        out.push(T::Did(run));
+    }
+    // The turn's final message is not a step; it is what the turn came back with.
+    if !turn.text.trim().is_empty() {
+        out.push(T::Said { role: Role::Agent, body: turn.text.clone() });
+    }
+    out
 }
 
 /// A message still waiting its turn: your own bubble, dashed and dimmed — said, but not yet asked —
@@ -1234,49 +1304,24 @@ fn clear_composer(area: NodeRef<leptos::html::Textarea>) {
 /// a Stop that cuts the turn short and drops anything lined up behind it.
 fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let answering = move || watch.peek.get().is_some_and(|p| p.running);
-    let area: NodeRef<leptos::html::Textarea> = NodeRef::new();
-    let send = move || {
-        let message = watch.reply.get_untracked();
-        if message.trim().is_empty() {
-            return;
-        }
-        watch.reply.set(String::new());
-        clear_composer(area);
-        send_reply(state, watch, with_context(watch, message));
-    };
     view! {
-        <form class="adi-form adi-chat__replybar"
-            on:submit=move |ev| {
-                ev.prevent_default();
-                send();
-            }>
-            <textarea class="adi-input adi-input--wide adi-input--composer adi-mono"
-                node_ref=area rows="1" autocomplete="off" title=COMPOSER_HINT
-                placeholder=move || if answering() { "queue the next message…" } else { "reply…" }
-                prop:value=move || watch.reply.get()
-                on:keydown=move |ev| if sends(&ev) { ev.prevent_default(); send(); }
-                on:input=move |ev| {
-                    let el = event_target::<web_sys::HtmlTextAreaElement>(&ev);
-                    watch.reply.set(el.value());
-                    autosize(&el);
-                } />
-            <button class="adi-btn adi-btn--primary" type="submit"
-                title=move || if answering() {
-                    "send this once the current answer lands"
-                } else {
-                    "send this now"
-                }
-                prop:disabled=move || watch.reply.get().trim().is_empty()>
-                {move || if answering() { "Queue" } else { "Send" }}
-            </button>
-            {move || answering().then(|| view! {
-                <button class="adi-btn adi-chat__stop" type="button"
-                    title="stop this answer, and drop anything queued behind it"
-                    on:click=move |_| stop_one_run(
-                        state, watch, watch.run_id.get_untracked().unwrap_or_default(),
-                    )>"\u{25A0} Stop"</button>
-            })}
-        </form>
+        <div class="adi-ui-type p-3 pb-0">
+            <adi_ui::Composer
+                value=watch.reply
+                // Answering is not busy: a message typed while the agent works is *queued*,
+                // which is a thing you are allowed to do and the placeholder says so.
+                busy=false
+                placeholder=""
+                attr:title=COMPOSER_HINT
+                on_send=Callback::new(move |message: String| {
+                    watch.reply.set(String::new());
+                    send_reply(state, watch, with_context(watch, message));
+                })
+            />
+            <div class="mt-1 px-1 text-mini text-meta">
+                {move || if answering() { "queued — the agent is answering" } else { "" }}
+            </div>
+        </div>
     }
 }
 
@@ -1561,46 +1606,64 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                 })
             }}
 
-            <aside class="adi-chome__side adi-chome__side--left"
+            // The wrapper keeps the drawer behaviour (`is-open` is what slides it in on a
+            // narrow viewport); the rail inside it is `adi-ui`'s, so it draws its own island,
+            // its own title and its own scrolling body.
+            <aside class="adi-chome__side adi-chome__side--left adi-chome__side--flush adi-ui-type"
                 class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Sessions)>
-                <div class="adi-chome__side-head">
-                    <span class="adi-chome__side-title">"Sessions"</span>
-                    <span class="adi-spacer"></span>
-                    {move || chat_starred_button(state)}
-                    {move || chat_new_button(state, watch)}
-                    <button class="adi-chome__drawer-close" type="button" aria-label="Close"
-                        on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
-                </div>
-                <div class="adi-chome__side-body">
+                <adi_ui::Rail
+                    title="Sessions"
+                    actions=move || {
+                        view! {
+                            {move || chat_starred_button(state)}
+                            {move || chat_new_button(state, watch)}
+                            <button class="adi-chome__drawer-close" type="button"
+                                aria-label="Close"
+                                on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
+                        }
+                        .into_any()
+                    }
+                >
                     {move || chat_rail(state, watch)}
-                </div>
+                </adi_ui::Rail>
             </aside>
 
             <main class="adi-chome__chat">
                 {move || chat_center(state, watch)}
             </main>
 
-            <aside class="adi-chome__side adi-chome__side--right"
+            <aside class="adi-chome__side adi-chome__side--right adi-chome__side--flush adi-ui-type"
                 class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Right)>
-                <div class="adi-chome__side-head">
-                    <span class="adi-chome__side-title">{move || right_rail_title(watch)}</span>
-                    <span class="adi-spacer"></span>
-                    // The dashboards head controls belong to the dashboards rail, and only to it:
-                    // there is nothing to refresh or manage about a conversation's counts.
-                    {move || (!showing_analytics(watch)).then(|| view! {
-                        {chat_fleet_refresh(state)}
-                        <a class="adi-chome__side-link" href="/extended/dashboards">"Manage"</a>
-                    })}
-                    <button class="adi-chome__drawer-close" type="button" aria-label="Close"
-                        on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
-                </div>
-                <div class="adi-chome__side-body">
+                // Rebuilt when the title changes, which is the same moment the body does:
+                // this rail is either the dashboards or the open conversation's counts, and
+                // it swaps both at once.
+                {move || view! {
+                <adi_ui::Rail
+                    title=right_rail_title(watch).to_string()
+                    actions=move || {
+                        view! {
+                            // The dashboards head controls belong to the dashboards rail, and
+                            // only to it: there is nothing to refresh or manage about a
+                            // conversation's counts.
+                            {move || (!showing_analytics(watch)).then(|| view! {
+                                {chat_fleet_refresh(state)}
+                                <a class="adi-chome__side-link"
+                                    href="/extended/dashboards">"Manage"</a>
+                            })}
+                            <button class="adi-chome__drawer-close" type="button"
+                                aria-label="Close"
+                                on:click=move |_| state.chat_drawer.set(None)>"\u{2715}"</button>
+                        }
+                        .into_any()
+                    }
+                >
                     {move || if showing_analytics(watch) {
                         chat_analytics(state, watch)
                     } else {
                         chat_dashboards(state)
                     }}
-                </div>
+                </adi_ui::Rail>
+                }}
             </aside>
 
             // The rail's right-click menu, drawn once here rather than per row: only one is ever
@@ -1627,7 +1690,7 @@ fn right_rail_title(watch: AgentsWatch) -> &'static str {
     if showing_analytics(watch) {
         "Chat Analytics"
     } else {
-        "Dashboards"
+        "Apps"
     }
 }
 
@@ -2313,6 +2376,9 @@ fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
 
 /// One row of the rail. The list spans every agent, so a row has to carry which agent it belongs to
 /// — there is no group heading above it to say so.
+///
+/// `Clone` because the rail lists rows through a keyed `For`, which owns its items.
+#[derive(Clone)]
 struct SessionRow {
     agent: String,
     /// The conversation, or `None` for an interactive agent's live pty session — which has no run
@@ -2417,9 +2483,47 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     // Most recently updated first. A stable sort, so sessions that last moved at the same instant —
     // the live pty rows, all stamped "now" — keep the order the index listed them in.
     rows.sort_by(|a, b| b.when.cmp(&a.when));
-    rows.into_iter()
-        .map(|row| chat_session_row(state, watch, row))
-        .collect::<Vec<_>>()
+    // Two bands, as in the playground: what is working right now, then everything else.
+    // The counts are what the band heading is for — "how many are going" is the question the
+    // rail is scanned for.
+    let (running, rest): (Vec<SessionRow>, Vec<SessionRow>) =
+        rows.into_iter().partition(|r| r.running);
+    // Keyed, and that is not tidiness: a row's click handler is bound when the row is
+    // *built*, so a plain list that is rebuilt with a different shape — which is exactly what
+    // the ★ does — leaves handlers patched onto rows they no longer belong to, and a click
+    // opens the session that used to be in that slot. `For` keys by identity, so a row and
+    // its handler move together or not at all.
+    //
+    // Both bands are always emitted for the same reason: a band that comes and goes shifts
+    // every slot after it.
+    let band = move |label: &'static str, rows: Vec<SessionRow>| {
+        let n = rows.len();
+        let any = n > 0;
+        let rows = StoredValue::new(rows);
+        view! {
+            <Show when=move || any>
+                <adi_ui::RailGroup label=label count=n>
+                    <For
+                        // Stored, so the closure can hand out a fresh copy on every read
+                        // instead of moving the one it has.
+                        each=move || rows.get_value()
+                        key=|row: &SessionRow| {
+                            format!(
+                                "{}:{}",
+                                row.agent,
+                                row.run.as_ref().map_or("", |r| r.run_id.as_str()),
+                            )
+                        }
+                        let:row
+                    >
+                        {chat_session_row(state, watch, row)}
+                    </For>
+                </adi_ui::RailGroup>
+            </Show>
+        }
+        .into_any()
+    };
+    vec![band("Running now", running), band("Recent", rest)]
         .into_any()
 }
 
@@ -2430,7 +2534,6 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 /// rides the row's right edge.
 fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
     let SessionRow { agent, run, when, running } = item;
-    let dot = if running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
     let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
     let (title, sub, run_id) = match run {
         Some(r) => {
@@ -2448,7 +2551,6 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     let is_sel = on_this_agent
         && (run_id.is_empty() && watch.interactive.get()
             || !run_id.is_empty() && watch.run_id.get().as_deref() == Some(run_id.as_str()));
-    let cls = if is_sel { "adi-chome__session is-active" } else { "adi-chome__session" };
     let hint = format!("open this session with {agent}");
     let menu = SessionRef::of(&agent, &run_id, &title, false);
     // Only a conversation can be deleted: a pty agent's live session is started and stopped from the
@@ -2463,28 +2565,44 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
                 )>"\u{2715}"</button>
         }
     });
+    // The row itself is `adi-ui`; the delete control is laid over it rather than inside,
+    // because the row is one hit target and a button inside a button is not a thing a
+    // browser will do. It appears on hover, where it cannot be hit by accident.
+    let state_of = if running {
+        adi_ui::SessionState::Working
+    } else {
+        adi_ui::SessionState::Done
+    };
+    let sub = sub.clone();
     view! {
-        <div class="adi-chome__sessionrow">
-            <button class=cls type="button" title=hint
+        // Right-click still offers the row's menu, and it is on the wrapper so it covers
+        // the whole row including the delete control's corner.
+        <div
+            class="group relative"
+            on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)
+        >
+            <adi_ui::SessionItem
+                title=title.clone()
+                state=state_of
+                agent=sub
+                selected=is_sel
+                attr:title=hint
                 on:click=move |_| {
                     if run_id.is_empty() {
                         point_watch(watch, agent.clone(), true);
                     } else {
                         open_session(watch, &agent, &run_id);
                     }
-                    // Picking a session is the drawer's whole purpose, so it gets out of the way —
-                    // otherwise the chat you just chose opens behind the list you chose it from.
-                    // Inert on a wide viewport, where nothing is ever open.
+                    // Picking a session is the drawer's whole purpose, so it gets out of the
+                    // way — otherwise the chat you just chose opens behind the list you chose
+                    // it from. Inert on a wide viewport, where nothing is ever open.
                     state.chat_drawer.set(None);
                 }
-                on:contextmenu=move |ev: web_sys::MouseEvent| menu.open(state, &ev)>
-                <span class=dot></span>
-                <span class="adi-chome__session-main">
-                    <span class="adi-chome__session-title">{title}</span>
-                    <span class="adi-chome__session-when">{sub}</span>
-                </span>
-            </button>
-            {del}
+            />
+            <div class="absolute top-1 right-1 opacity-0 transition-opacity \
+                        group-hover:opacity-100 focus-within:opacity-100">
+                {del}
+            </div>
         </div>
     }
     .into_any()
@@ -2861,22 +2979,30 @@ fn chat_local_groups(state: State) -> Vec<AnyView> {
         if items.is_empty() {
             continue;
         }
-        out.push(chat_group(&p.name));
-        for d in items {
-            placed.insert(d.id.clone());
-            out.push(chat_dash_item(d));
-        }
+        let n = items.len();
+        let rows: Vec<AnyView> = items
+            .into_iter()
+            .map(|d| {
+                placed.insert(d.id.clone());
+                chat_dash_item(d)
+            })
+            .collect();
+        out.push(
+            view! { <adi_ui::RailGroup label=p.name.clone() count=n>{rows}</adi_ui::RailGroup> }
+                .into_any(),
+        );
     }
     // Whatever's left — unfiled, or filed under a project that no longer exists — trails as one
     // Ungrouped bucket. Only labelled when it sits alongside real groups.
     let rest: Vec<&Dashboard> = live.iter().filter(|d| !placed.contains(&d.id)).collect();
     if !rest.is_empty() {
-        if !out.is_empty() {
-            out.push(chat_group("Ungrouped"));
-        }
-        for d in rest {
-            out.push(chat_dash_item(d));
-        }
+        let n = rest.len();
+        let rows: Vec<AnyView> = rest.into_iter().map(chat_dash_item).collect();
+        // Only labelled when it sits alongside real groups; on its own it is just the list.
+        let label = if out.is_empty() { "" } else { "Ungrouped" };
+        out.push(
+            view! { <adi_ui::RailGroup label=label count=n>{rows}</adi_ui::RailGroup> }.into_any(),
+        );
     }
     out
 }
@@ -2884,7 +3010,13 @@ fn chat_local_groups(state: State) -> Vec<AnyView> {
 /// A header row inside a rail: the project a group of dashboards is filed under, or the agent a
 /// group of sessions belongs to.
 fn chat_group(name: &str) -> AnyView {
-    view! { <div class="adi-chome__group">{name.to_string()}</div> }.into_any()
+    view! {
+        <h3 class="caps m-0 flex items-baseline justify-between gap-2 px-2.5 pt-4 pb-1.5 \
+                   text-faint">
+            <span class="truncate">{name.to_string()}</span>
+        </h3>
+    }
+    .into_any()
 }
 
 /// One dashboard row in the rail: a link to its running frontend, or a dimmed row when it's down.
@@ -2894,25 +3026,25 @@ fn chat_group(name: &str) -> AnyView {
 /// A dashboard is one origin now, so a `127.0.0.1:<port>` link bypasses the front door and the
 /// page's `/api` calls stop routing — it renders, and only then falls over.
 fn chat_dash_item(d: &Dashboard) -> AnyView {
-    let name = d.name.clone();
-    match crate::pages::dashboards::open_url(d) {
-        Some(href) => view! {
-            <a class="adi-chome__dash" href=href
-                target="_blank" rel="noreferrer" title=d.name.clone()>
-                <span class="adi-chome__dot adi-chome__dot--on"></span>
-                <span class="adi-chome__dash-name">{name}</span>
-                <span class="adi-chome__dash-open">"\u{2197}"</span>
-            </a>
-        }
-        .into_any(),
-        None => view! {
-            <div class="adi-chome__dash is-off" title="not running">
-                <span class="adi-chome__dot"></span>
-                <span class="adi-chome__dash-name">{name}</span>
-            </div>
-        }
-        .into_any(),
+    // An address is the whole of "is this up?": `open_url` returns one only for a dashboard
+    // whose frontend is running. With one, the row is a link and opens in its own tab —
+    // a dashboard is its own origin. Without one, it is a dead row with a red dot and
+    // nothing to click.
+    let (state, href) = match crate::pages::dashboards::open_url(d) {
+        Some(href) => (adi_ui::AppState::Live, href),
+        None => (adi_ui::AppState::Offline, String::new()),
+    };
+    view! {
+        <adi_ui::AppItem
+            title=d.name.clone()
+            state=state
+            href=href
+            blank=true
+            // Empty machine: a local dashboard runs right here, and the row says so itself.
+            machine=""
+        />
     }
+    .into_any()
 }
 
 // ---- the fleet's half of the rail ---------------------------------------------------------
@@ -2936,7 +3068,9 @@ fn chat_fleet_groups(state: State) -> Vec<AnyView> {
     if fleet.nodes.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![view! { <div class="adi-chome__divider">"Fleet"</div> }.into_any()];
+    let mut out = vec![
+        view! { <div class="mt-4 border-t border-divider pt-1"></div> }.into_any(),
+    ];
     out.extend(fleet.nodes.iter().map(|n| chat_node_group(state, n)));
     out
 }
@@ -2994,12 +3128,14 @@ fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
             .into_any()
     };
 
+    // A node is a band like a project is, so it is the same heading — with the node's one
+    // control riding its right edge where a count would otherwise sit.
+    let n = node.dashboards.len();
     view! {
-        <div class="adi-chome__group adi-chome__group--node">
-            <span>{name}</span>
-            {action}
+        <div class="relative">
+            <adi_ui::RailGroup label=name count=n>{body}</adi_ui::RailGroup>
+            <div class="absolute top-3 right-2.5">{action}</div>
         </div>
-        {body}
     }
     .into_any()
 }
@@ -3069,50 +3205,77 @@ fn submit_unlock(state: State) {
 /// is the node's to fix, not a row that should vanish.
 fn chat_node_dash_item(state: State, node: &str, d: &NodeDashboard) -> AnyView {
     let name = d.name.clone();
-    let title = d.description.clone().unwrap_or_else(|| d.name.clone());
+    let machine = node.to_string();
+
+    // Down on its node: the failure is the node's to fix, so the row stays and says so with
+    // its dot rather than vanishing.
     if !d.running {
         return view! {
-            <div class="adi-chome__dash is-off" title="not running on this node">
-                <span class="adi-chome__dot"></span>
-                <span class="adi-chome__dash-name">{name}</span>
-            </div>
+            <adi_ui::AppItem
+                title=name
+                state=adi_ui::AppState::Offline
+                machine=machine
+                attr:title="not running on this node"
+            />
         }
         .into_any();
     }
+
     match (d.allowed, d.url.clone(), d.service.clone()) {
+        // Allowed and up: a link, on its own origin at `<service>.<node>.n.adi` — the only
+        // address under which the page's own `/api` calls route.
         (true, Some(href), _) => view! {
-            <a class="adi-chome__dash" href=href
-                target="_blank" rel="noreferrer" title=title>
-                <span class="adi-chome__dot adi-chome__dot--on"></span>
-                <span class="adi-chome__dash-name">{name}</span>
-                <span class="adi-chome__dash-open">"\u{2197}"</span>
-            </a>
+            <adi_ui::AppItem
+                title=name
+                state=adi_ui::AppState::Live
+                machine=machine
+                href=href
+                blank=true
+                attr:title=d.description.clone().unwrap_or_else(|| d.name.clone())
+            />
         }
         .into_any(),
+        // Up, but this machine was never granted it — pairing hands out `http:app` and
+        // nothing else. Offering a link would answer *not authorized*, so the row asks the
+        // node instead, behind the dot: it is a guest's view until the grant lands.
         (false, _, Some(service)) => {
-            let (node, service) = (node.to_string(), service);
+            let (ask_node, ask_service) = (node.to_string(), service.clone());
             view! {
-                <button class="adi-chome__dash adi-chome__dash--btn" type="button"
-                    title=format!(
+                <adi_ui::AppItem
+                    title=name
+                    state=adi_ui::AppState::ViewOnly
+                    machine=machine
+                    attr:title=format!(
                         "This node has not granted this machine http:{service} yet. Ask it to.",
                     )
-                    on:click=move |_| apply_fleet_dashboards(state,
-                        fetch::allow_node_service(node.clone(), service.clone()))>
-                    <span class="adi-chome__dot adi-chome__dot--on"></span>
-                    <span class="adi-chome__dash-name">{name}</span>
-                    <span class="adi-chome__dash-ask">"Allow"</span>
-                </button>
+                    action=move || {
+                        let (n, sv) = (ask_node.clone(), ask_service.clone());
+                        view! {
+                            <adi_ui::Button
+                                size=adi_ui::ButtonSize::Small
+                                on:click=move |_| apply_fleet_dashboards(
+                                    state,
+                                    fetch::allow_node_service(n.clone(), sv.clone()),
+                                )
+                            >
+                                "Ask for access"
+                            </adi_ui::Button>
+                        }
+                        .into_any()
+                    }
+                />
             }
             .into_any()
         }
-        // Running, but the node gave it no routable name — there is nothing here that could open
-        // it, and §4 is why: a dashboard is one origin, and it has none.
+        // Running, but the node gave it no routable name — a dashboard is one origin, and
+        // this one has none, so there is nothing here that could open it.
         _ => view! {
-            <div class="adi-chome__dash is-off"
-                title="no host on the node — it has no address the mesh could route to">
-                <span class="adi-chome__dot adi-chome__dot--on"></span>
-                <span class="adi-chome__dash-name">{name}</span>
-            </div>
+            <adi_ui::AppItem
+                title=name
+                state=adi_ui::AppState::ViewOnly
+                machine=machine
+                attr:title="no host on the node — it has no address the mesh could route to"
+            />
         }
         .into_any(),
     }

@@ -1,0 +1,17 @@
+/* adi-ui's stylesheet, for the screens that have moved to it.
+ *
+ * This page loads **two** design systems: adi-css (the `adi-*` BEM layer every existing
+ * screen is written against) and adi-ui (Tailwind utilities over its own tokens). They can
+ * share a page as long as the order is right, and the order is deliberate — see
+ * `index.html`: this file is linked *before* `main.scss`, so where the two name the same
+ * token (`--ink`, `--accent`, `--on-accent`, `--shadow`) adi-css wins and nothing that
+ * already exists changes colour. Everything adi-ui alone names (`--card`, `--bar`,
+ * `--edge`, …) comes from its own tokens, which is what its components are built on.
+ *
+ * The reset that comes with it is in `@layer base`, and adi-css is unlayered, so adi-css
+ * outranks it everywhere the two overlap. That is the property that makes this safe.
+ */
+@import "../../adi-ui/styles/ui.css";
+
+/* This crate's own components, so a `<TopBar>` here gets its classes generated. */
+@source "../src";

@@ -29,6 +29,13 @@ pub(crate) enum Icon {
     Wrench,
     Key,
     Database,
+    /// An arrow into a tray — "install this as an app".
+    Download,
+    /// A question mark in a ring — the way to the FAQ.
+    Question,
+    /// A disc filled on one side — the theme toggle. It says "two of these" without
+    /// naming either, which is what a toggle between light and dark is.
+    Contrast,
 }
 
 impl Icon {
@@ -119,6 +126,19 @@ impl Icon {
             Icon::Key => {
                 r#"<circle cx="5.25" cy="10.75" r="3"/><path d="M7.4 8.6l5.35-5.35"/>
                    <path d="M10.5 5.5l1.5 1.5M12.75 3.25l1.5 1.5"/>"#
+            }
+            Icon::Download => {
+                r#"<path d="M8 2.25v7"/><path d="M5 6.5l3 3 3-3"/>
+                   <path d="M2.75 11.25v2.5h10.5v-2.5"/>"#
+            }
+            Icon::Question => {
+                r#"<circle cx="8" cy="8" r="6.25"/>
+                   <path d="M6.15 6.05a1.9 1.9 0 1 1 2.6 1.75c-.5.2-.75.6-.75 1.1v.35"/>
+                   <path d="M8 11.75h.01"/>"#
+            }
+            Icon::Contrast => {
+                r#"<circle cx="8" cy="8" r="6.25"/>
+                   <path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor" stroke="none"/>"#
             }
             Icon::Database => {
                 r#"<ellipse cx="8" cy="3.75" rx="5.25" ry="2"/>

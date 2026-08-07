@@ -12,6 +12,11 @@ ignore = ["dist"]
 # `trunk serve` is only for standalone UI iteration. It proxies /api to the adi-app that
 # `scripts/dev.sh` starts on :8090 against the isolated ADI_DIR=.adi-dev registry — NOT the
 # live control panel on :8000, which runs the installed binary and whatever state is real.
+[tools]
+# Pin Tailwind v4 — Trunk's default is 3.3.5, which cannot parse a v4 stylesheet. Same pin
+# as crates/adi-ui/Trunk.toml, for the same reason.
+tailwindcss = "4.2.1"
+
 [serve]
 addresses = ["127.0.0.1"]
 port = 9080

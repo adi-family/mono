@@ -398,6 +398,20 @@
   }
   &__side--left  { border-right: 1px solid var(--border); }
   &__side--right { border-left: 1px solid var(--border); }
+
+  // A pane whose contents draw themselves: the `adi-ui` rail is an island with its own
+  // surface, edge and header, so the pane around it hands back the fill and the border it
+  // would otherwise draw underneath. It keeps only the column and the drawer behaviour.
+  //
+  // This modifier is how the two design systems meet on one screen: the old chrome steps
+  // back a piece at a time, rather than the new components fighting a stylesheet that wins
+  // on load order.
+  &__side--flush {
+    background: none;
+    padding: var(--space-3);
+  }
+  &__side--flush#{&}__side--left  { border-right: none; }
+  &__side--flush#{&}__side--right { border-left: none; }
   &__side-head {
     flex: none;
     display: flex;
@@ -1341,4 +1355,28 @@
       font-weight: 550;
     }
   }
+}
+
+
+// ---- the adi-ui subtree --------------------------------------------------------------
+// Everything on this page built from `adi-ui` wears this.
+//
+// The two systems share four token names, and adi-css wins all four by load order — which
+// is what keeps existing screens from changing colour (see adi-webapp/styles/tailwind.css).
+// Two of the four are the type: `--font-sans` and `--font-mono`. Winning those means an
+// adi-ui component here renders in the system stack while the same component in the
+// playground renders in IBM Plex and JetBrains Mono — same markup, different face, and the
+// card stops looking like the thing it was designed as.
+//
+// So the type is handed back inside the subtree, where nothing of adi-css's is drawn. The
+// other two shared names (`--ink`, `--accent`) stay adi-css's on purpose: a rail should
+// take the accent of the app it is in.
+.adi-ui-type {
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  font-family: var(--font-sans);
+  letter-spacing: normal; // adi-css tightens body text; this scale is drawn without it
 }

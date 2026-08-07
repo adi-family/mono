@@ -25,6 +25,10 @@ mod store_browser;
 mod tree;
 mod ui;
 
+// The component library. The titlebar is the first thing on this page built from it; the
+// rest of the screen is still the `adi-*` layer, and the two share a page by load order
+// (see `styles/tailwind.css`).
+use adi_ui::{Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Faq, Modal, Qna, TopBar};
 use adi_webapp_api::types::{
     AgentBackendOption, AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
     MeshState, MetaState,
@@ -174,6 +178,9 @@ fn Home() -> impl IntoView {
     let show_prompt = RwSignal::new(false);
     // True once the browser will let us offer "install as an app" (see [`pwa`]).
     let can_install = pwa::installable();
+    // The FAQ dialog. It lives here rather than in the bar so both shapes of this page —
+    // the chat and the wizard — open the same one.
+    let faq_open = RwSignal::new(false);
 
     // Load the meta state once, seeding the form from the server's default prompt and first
     // backend when the agent hasn't been created yet.
@@ -343,17 +350,30 @@ fn Home() -> impl IntoView {
         if m.agent.is_some() && !reconfiguring.get() {
             view! {
                 <div class="adi-chome-root">
-                    <header class="adi-onb__bar">
-                        <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
-                        <span class="adi-spacer"></span>
-                        {install_pill(can_install)}
-                        <button class="adi-onb__ext" type="button"
-                            on:click=move |_| start_reconfigure()>"reconfigure agent"</button>
-                        <a class="adi-onb__ext" href="/extended">
-                            <span>"extended"</span>
-                            <span class="adi-onb__ext-arrow">"\u{2192}"</span>
-                        </a>
-                    </header>
+                    // No `home` on the mark: this page *is* home, and a link to where you
+                    // already are is a control that does nothing.
+                    <TopBar
+                        class="adi-ui-type"
+                        logo="adi"
+                        actions=move || {
+                            view! {
+                                {install_pill(can_install)}
+                                <Button
+                                    size=ButtonSize::Small
+                                    variant=ButtonVariant::Ghost
+                                    on:click=move |_| start_reconfigure()
+                                >
+                                    "reconfigure agent"
+                                </Button>
+                                {faq_button(faq_open)}
+                                {extended_link()}
+                            }
+                            .into_any()
+                        }
+                    />
+                    <Modal open=faq_open title="Questions" width="max-w-3xl">
+                        <Faq items=faq()/>
+                    </Modal>
                     {chat_home_view(state, watch)}
                 </div>
             }
@@ -361,15 +381,21 @@ fn Home() -> impl IntoView {
         } else {
             view! {
                 <div class="adi-onb">
-                    <header class="adi-onb__bar">
-                        <span class="adi-onb__brand">"adi"<span class="adi-onb__dot">"."</span></span>
-                        <span class="adi-spacer"></span>
-                        {install_pill(can_install)}
-                        <a class="adi-onb__ext" href="/extended">
-                            <span>"extended"</span>
-                            <span class="adi-onb__ext-arrow">"\u{2192}"</span>
-                        </a>
-                    </header>
+                    <TopBar
+                        class="adi-ui-type"
+                        logo="adi"
+                        actions=move || {
+                            view! {
+                                {install_pill(can_install)}
+                                {faq_button(faq_open)}
+                                {extended_link()}
+                            }
+                            .into_any()
+                        }
+                    />
+                    <Modal open=faq_open title="Questions" width="max-w-3xl">
+                        <Faq items=faq()/>
+                    </Modal>
                     <main class="adi-onb__body">
                         <div class="adi-onb__panel">
                             {onb_intro(m.agent.is_none())}
@@ -385,6 +411,81 @@ fn Home() -> impl IntoView {
             .into_any()
         }
     }
+}
+
+/// The way into the FAQ, to the left of the way out to the control panel: the two things
+/// this bar offers are "explain this" and "show me more of it", in that order.
+fn faq_button(open: RwSignal<bool>) -> impl IntoView {
+    view! {
+        <Button
+            size=ButtonSize::Small
+            variant=ButtonVariant::Ghost
+            icon=icons::Icon::Question.path()
+            on:click=move |_| open.set(true)
+        >
+            "FAQ"
+        </Button>
+    }
+}
+
+/// The way through to the control panel. A plain link, not a route: `/extended` is a
+/// different document, and the wasm bundle decides which of the two it is at boot.
+fn extended_link() -> impl IntoView {
+    view! {
+        <a
+            class="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-mini font-medium \
+                   text-meta no-underline hover:bg-card hover:text-ink hover:no-underline"
+            href="/extended"
+        >
+            <span>"extended"</span>
+            <span aria-hidden="true">"\u{2192}"</span>
+        </a>
+    }
+}
+
+/// What people ask before they have used this for an hour. Answers are Markdown, so a path
+/// or a command can be one — see [`adi_ui::Qna`].
+///
+/// A few for now; this list is meant to grow, and it costs one entry per question.
+fn faq() -> Vec<Qna> {
+    vec![
+        Qna::new(
+            "What is adi?",
+            "A place to run agents on your own machine. It keeps their sessions, their tools \
+             and their credentials in one store, and gives every one of them a front door on \
+             your network — so an agent is something you can come back to rather than a tab \
+             you left open.",
+        ),
+        Qna::new(
+            "What is the difference between this page and *extended*?",
+            "This page is the chat: one agent, one conversation, the things it produced. \
+             **Extended** is the control panel behind it — projects, tasks, tools, secrets, \
+             the database, the mesh. Same stack, more surface.",
+        ),
+        Qna::new(
+            "Where does my data live?",
+            "On this machine, under `~/.adi`. Sessions, transcripts and caches all sit in \
+             that one directory, and nothing leaves it except the calls an agent's own \
+             provider needs.",
+        ),
+        Qna::new(
+            "Can I install it as an app?",
+            "Yes — the **Install** button appears in this bar when your browser has an \
+             install to offer. It runs in its own window, keeps its own icon, and works \
+             offline for everything that does not need the backend.",
+        ),
+        Qna::new(
+            "How do I add another agent?",
+            "In **extended → agents**. Every agent gets a runtime (a CLI in a live terminal, \
+             or a headless SDK loop), a prompt, and whatever tools you give it.",
+        ),
+        Qna::new(
+            "Something is stuck. What do I look at first?",
+            "The run's own log — every agent run keeps one, and it is the first place a \
+             failure says what it was. After that, **extended → hive** shows what is \
+             actually running on this machine and on what port.",
+        ),
+    ]
 }
 
 /// The root bar's "install app" pill, styled like its `extended →` neighbour. Rendered only
@@ -1196,41 +1297,66 @@ fn App() -> impl IntoView {
 
     view! {
         <div class="adi-workbench">
-        // The frame's lid: identity on the left, where you are on the right.
-        <header class="adi-titlebar">
-            <span class="adi-logo">"adi"<span class="adi-logo__dot">"."</span></span>
-            // Where you are, read left to right from the brand — the natural reading order,
-            // and it keeps the bar from being two islands with a void between them.
-            <nav class="adi-crumbs" aria-label="Breadcrumb">
-                <span class="adi-crumbs__sep">"/"</span>
-                <span class="adi-crumbs__here">{move || route.get().title()}</span>
-                {move || {
-                    let id = state.current_project.get();
-                    (matches!(route.get(), Route::ProjectDetail) && !id.is_empty()).then(|| view! {
-                        <span class="adi-crumbs__sep">"/"</span>
-                        <span class="adi-crumbs__here">{id}</span>
-                    })
-                }}
-            </nav>
-            <span class="adi-spacer"></span>
-            // The way back out of the control panel. The root bar offers "extended →" in the
-            // other direction, so the trip is round rather than one-way; a plain link, since
-            // `/` is a different document than the workbench and not an SPA route.
-            <a class="adi-simple" href="/" title="Back to the simple chat view">
-                <span class="adi-simple__arrow" aria-hidden="true">"\u{2190}"</span>
-                <span>"simple"</span>
-            </a>
-            {move || can_install.get().then(|| view! {
-                <button class="adi-install" type="button"
-                    title="Install adi as an app in its own window"
-                    on:click=move |_| pwa::install()>
-                    <span aria-hidden="true">"\u{2913}"</span>
-                    <span>"Install"</span>
-                </button>
-            })}
-            <button class="adi-btn adi-btn--icon-sm" title="Toggle theme" aria-label="Toggle theme"
-                on:click=move |_| toggle_theme()>"◐"</button>
-        </header>
+        // The frame's lid — the first thing on this page built from `adi-ui` rather than
+        // from the `adi-*` layer around it. Identity on the left, where you are next to it,
+        // and the ways out on the right.
+        <TopBar
+            logo="adi"
+            // The mark is the way home: `/` is the chat, and the control panel is the
+            // room you stepped into from it.
+            home="/"
+            actions=move || {
+                view! {
+                    // The way back out of the control panel. The root bar offers
+                    // "extended →" in the other direction, so the trip is round rather than
+                    // one-way; a plain link, since `/` is a different document than the
+                    // workbench and not an SPA route.
+                    <a
+                        class="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-mini \
+                               font-medium text-meta no-underline hover:bg-card hover:text-ink \
+                               hover:no-underline"
+                        href="/"
+                        title="Back to the simple chat view"
+                    >
+                        <span aria-hidden="true">"\u{2190}"</span>
+                        <span>"simple"</span>
+                    </a>
+                    {move || can_install.get().then(|| view! {
+                        <Button
+                            size=ButtonSize::Small
+                            variant=ButtonVariant::Ghost
+                            icon=icons::Icon::Download.path()
+                            attr:title="Install adi as an app in its own window"
+                            on:click=move |_| pwa::install()
+                        >
+                            "Install"
+                        </Button>
+                    })}
+                    // Icon only, so it says what it is to a screen reader rather than
+                    // nothing at all.
+                    <Button
+                        size=ButtonSize::Small
+                        variant=ButtonVariant::Ghost
+                        icon=icons::Icon::Contrast.path()
+                        attr:title="Toggle theme"
+                        attr:aria-label="Toggle theme"
+                        on:click=move |_| toggle_theme()
+                    />
+                }
+                .into_any()
+            }
+        >
+            // Where you are, read left to right from the mark — the natural reading order,
+            // and it keeps the bar from being two clumps with a void between them.
+            <Crumbs items=Signal::derive(move || {
+                let mut items = vec![Crumb::new(route.get().title())];
+                let id = state.current_project.get();
+                if matches!(route.get(), Route::ProjectDetail) && !id.is_empty() {
+                    items.push(Crumb::new(id));
+                }
+                items
+            })/>
+        </TopBar>
 
         <div class="adi-shell">
 
