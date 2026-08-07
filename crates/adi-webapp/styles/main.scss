@@ -713,7 +713,14 @@
     gap: var(--space-4);
     padding: clamp(20px, 6vh, 64px);
 
-    .adi-form { width: min(100%, 620px); }
+    // Centred and reading width, with none of the panel strip: nothing sits above it here, so a
+    // rule across the pane would be drawn under a heading rather than between two things.
+    .adi-runbar {
+      width: min(100%, 620px);
+      padding: 0;
+      border-top: none;
+      background: none;
+    }
   }
   &__compose-intro { text-align: center; }
   // The title ends in the agent chooser, so it wraps as a line of text and a control rather than as
@@ -1379,4 +1386,22 @@
 
   font-family: var(--font-sans);
   letter-spacing: normal; // adi-css tightens body text; this scale is drawn without it
+}
+
+// The new-run composer, wherever it is used: the chat home's empty centre and the agents page's
+// runs panel. It is the `adi-ui` composer with the launch's own extras stacked under it — the
+// working directory, and the note that the agent is at its run cap — so the box you type a first
+// message into is the same box you reply in, and everything a *launch* additionally needs is
+// clearly a second thing rather than a crowd around the first.
+//
+// The strip it sits in is the panel's, not the composer's: `.adi-panel` puts this between the head
+// and the run history, where a band with a rule above it is what says "this is where you act".
+// The chat home undoes that below — there the composer is the whole screen.
+.adi-runbar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
 }

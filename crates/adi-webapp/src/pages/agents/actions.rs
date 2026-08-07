@@ -1240,63 +1240,17 @@ fn fmt_duration(ms: u64) -> String {
 // ---- the chat composers -------------------------------------------------------------------
 // A message to an agent is prose, and usually Markdown: a list, a fenced block, a paragraph that
 // wants a blank line after it. Typed into a single-line field those all collapse onto one line and
-// arrive as something the agent reads differently from what was meant. So both composers — the
-// new-run task and the reply — are textareas that grow with what is written.
+// arrive as something the agent reads differently from what was meant.
+//
+// So both composers — the one that starts a conversation and the one that answers in it — are the
+// same control: `adi_ui::Composer`, which grows with what is written, sends on Enter, and shows
+// whether it can send. They are the same box because they are the same act; the screen you are on
+// when you say something to an agent is not a reason for the saying to look different.
 
 /// What the composers say about themselves on hover. Enter sending (rather than breaking the line)
 /// is the convention every chat box uses, and the one the muscle memory here already had; the
 /// modifier is how you earn a newline instead.
 const COMPOSER_HINT: &str = "Enter sends · Shift-Enter for a new line";
-
-/// Whether this keydown means *send*. A bare Enter does; every modified Enter writes a newline, so
-/// a multi-line message can be composed without ever submitting half of it.
-///
-/// `is_composing` is the one that isn't cosmetic: while an IME is open, Enter accepts the candidate
-/// word being typed and must not be read as "send" — the same keystroke means two different things
-/// depending on state the keyboard event alone doesn't show.
-fn sends(ev: &leptos::ev::KeyboardEvent) -> bool {
-    ev.key() == "Enter"
-        && !ev.shift_key()
-        && !ev.ctrl_key()
-        && !ev.meta_key()
-        && !ev.alt_key()
-        && !ev.is_composing()
-}
-
-/// Grow (or shrink) the composer to exactly the height of what it holds.
-///
-/// Measured rather than counted: a row per `\n` would leave a long pasted line — a prompt, a URL —
-/// standing one row tall and scrolling inside itself, since wrapping makes lines the box's own
-/// width decides. `scrollHeight` is that answer already computed by the browser. It only reports a
-/// *smaller* height once the box stops holding itself open, hence the collapse to `auto` first. The
-/// cap lives in CSS (`max-height`), so an inline height past it is simply ignored and the composer
-/// scrolls instead of swallowing the transcript.
-fn autosize(area: &web_sys::HtmlTextAreaElement) {
-    // Spelled out through `HtmlElement`: Leptos has a `style` of its own in scope for element
-    // types, and plain `area.style()` would resolve to that one.
-    let style = web_sys::HtmlElement::style(area.as_ref());
-    // An empty box is measured by its `rows`, never by `scrollHeight` — for an empty textarea the
-    // browser reports the height of the *placeholder*, and these placeholders are a sentence long,
-    // so a sent-and-cleared composer would settle one row taller than an untouched one.
-    if area.value().is_empty() {
-        let _ = style.remove_property("height");
-        return;
-    }
-    let _ = style.set_property("height", "auto");
-    let _ = style.set_property("height", &format!("{}px", area.scroll_height()));
-}
-
-/// Empty the composer after a message goes, and let it fall back to one row.
-///
-/// The DOM value is cleared here rather than left to the signal: the height has to be re-measured
-/// from an *already empty* box, and the framework writes the emptied signal back on its own clock —
-/// so measuring before that lands would just re-measure the message that was already sent.
-fn clear_composer(area: NodeRef<leptos::html::Textarea>) {
-    if let Some(el) = area.get_untracked() {
-        el.set_value("");
-        autosize(&el);
-    }
-}
 
 /// The reply box: says the next thing into the selected conversation. It never locks you out while
 /// the agent is working — one turn runs at a time, so a message sent mid-answer is *queued* and
@@ -1458,79 +1412,63 @@ fn run_row(
     .into_any()
 }
 
-/// The composer that starts a new run/conversation: a message input, an optional directory to run
-/// it in, and a Start/Run button. A message is required — the button stays disabled (and submit
-/// no-ops) until one is typed. Submitting launches it and opens its detail: a streaming log for a
-/// one-shot run, or the chat for an answerable conversation you then reply to.
+/// The composer that starts a new run/conversation: the same box the reply bar is, plus an
+/// optional directory to run it in. A message is required — the send button is out until one is
+/// typed. Sending launches it and opens its detail: a streaming log for a one-shot run, or the
+/// chat for an answerable conversation you then reply to.
 ///
 /// The directory box is the answer to "this agent, but against *that* target". Left blank — the
 /// normal case — the run starts where the agent is defined to. It applies to the launch only; a
-/// conversation then keeps the directory it started in for every reply.
+/// conversation then keeps the directory it started in for every reply. It sits *under* the
+/// composer, in the mono the design system sets a path in: it is a value, and a rarely-used one,
+/// so it takes a second line rather than a third of the first.
 fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
-    let area: NodeRef<leptos::html::Textarea> = NodeRef::new();
-    let placeholder = move || {
+    let placeholder = Signal::derive(move || {
         if watch.answerable.get() {
-            "start a conversation — your first message (required)"
+            "start a conversation — your first message".to_string()
         } else {
-            "task for a new run (required) — e.g. review the latest commit and summarize it"
+            "task for a new run — e.g. review the latest commit and summarize it".to_string()
         }
-    };
-    let send = move || {
-        let Some(name) = watch.name.get_untracked() else {
-            return;
-        };
-        let message = watch.input.get_untracked();
-        if message.trim().is_empty() {
-            return;
-        }
-        let dir = watch.run_dir.get_untracked();
-        let dir = dir.trim();
-        let working_dir = (!dir.is_empty()).then(|| dir.to_string());
-        // A launch typed here is a human asking, so a full cap is an override to offer rather than
-        // a refusal to hand back — the button says so before it is pressed.
-        let force = at_run_limit(state.agents.get_untracked().as_ref(), &name);
-        watch.input.set(String::new());
-        clear_composer(area);
-        launch_agent(state, watch, name, with_context(watch, message), working_dir, force);
-    };
-    let label = move || match (
-        watch.answerable.get(),
+    });
+    // A launch typed here is a human asking, so a full cap is an override to offer rather than a
+    // refusal to hand back. The send button is the reply box's arrow now and cannot say "anyway",
+    // so the line under the composer is what says it — before Enter is ever pressed.
+    let at_limit = move || {
         watch
             .name
             .get()
-            .is_some_and(|name| at_run_limit(state.agents.get().as_ref(), &name)),
-    ) {
-        (true, false) => "▶ Start",
-        (true, true) => "▶ Start anyway",
-        (false, false) => "▶ Run",
-        (false, true) => "▶ Run anyway",
+            .is_some_and(|name| at_run_limit(state.agents.get().as_ref(), &name))
+    };
+    let start = move |message: String| {
+        let Some(name) = watch.name.get_untracked() else {
+            return;
+        };
+        let dir = watch.run_dir.get_untracked();
+        let dir = dir.trim();
+        let working_dir = (!dir.is_empty()).then(|| dir.to_string());
+        let force = at_run_limit(state.agents.get_untracked().as_ref(), &name);
+        watch.input.set(String::new());
+        launch_agent(state, watch, name, with_context(watch, message), working_dir, force);
     };
     view! {
-        <form class="adi-form"
-            on:submit=move |ev| {
-                ev.prevent_default();
-                send();
-            }>
-            <textarea class="adi-input adi-input--wide adi-input--composer adi-mono"
-                node_ref=area rows="1" autocomplete="off" title=COMPOSER_HINT
+        <div class="adi-runbar adi-ui-type">
+            <adi_ui::Composer
+                value=watch.input
+                busy=false
                 placeholder=placeholder
-                prop:value=move || watch.input.get()
-                on:keydown=move |ev| if sends(&ev) { ev.prevent_default(); send(); }
-                on:input=move |ev| {
-                    let el = event_target::<web_sys::HtmlTextAreaElement>(&ev);
-                    watch.input.set(el.value());
-                    autosize(&el);
-                } />
-            <input class="adi-input adi-mono" autocomplete="off"
-                title="Run this launch in a directory other than the agent's own. Blank = as defined."
+                attr:title=COMPOSER_HINT
+                on_send=Callback::new(start)
+            />
+            <adi_ui::Input
+                value=watch.run_dir
+                width=adi_ui::InputWidth::Wide
                 placeholder="run here (optional) — /path/to/target"
-                prop:value=move || watch.run_dir.get()
-                on:input=move |ev| watch.run_dir.set(event_target_value(&ev)) />
-            <button class="adi-btn adi-btn--primary" type="submit"
-                prop:disabled=move || watch.input.get().trim().is_empty()>
-                {label}
-            </button>
-        </form>
+                attr:title="Run this launch in a directory other than the agent's own. Blank = as defined."
+            />
+            <div class="px-1 text-mini text-meta">
+                {move || if at_limit() { "the agent is at its run cap — this starts it anyway" } else { "" }}
+            </div>
+        </div>
     }
 }
 

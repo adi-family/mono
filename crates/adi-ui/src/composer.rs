@@ -36,7 +36,11 @@ pub fn Composer(
     /// A send is in flight. The box stays readable and stops accepting.
     #[prop(optional, into)]
     busy: Signal<bool>,
-    #[prop(default = "Message the agent…")] placeholder: &'static str,
+    /// Reactive, because what a composer asks for can change under it: the same box starts a
+    /// conversation or takes a one-shot task depending on what the backend turns out to be,
+    /// and that answer arrives after the box is already on screen.
+    #[prop(default = "Message the agent…".into(), into)]
+    placeholder: Signal<String>,
     /// The tallest it grows before it starts scrolling, in `rem`-free pixels — a number
     /// because the ceiling is about the screen, not about the type.
     #[prop(default = 200)]
@@ -51,6 +55,13 @@ pub fn Composer(
     let fit = move || {
         if let Some(el) = area.get_untracked() {
             el.style(("height", "auto"));
+            // An empty box is then left at its `rows`, never measured: for an empty textarea
+            // the browser reports the height of the *placeholder* in `scrollHeight`, and a
+            // placeholder can be a sentence long — so a sent-and-cleared composer would settle
+            // a row taller than an untouched one.
+            if el.value().is_empty() {
+                return;
+            }
             let wanted = el.scroll_height().max(0).unsigned_abs().min(max_height);
             el.style(("height", format!("{wanted}px")));
         }
@@ -62,7 +73,15 @@ pub fn Composer(
             return;
         }
         on_send.run(text);
-        // Not cleared here — see the component docs.
+        // Clearing is the caller's — see the component docs — but *emptying the element* is
+        // not, because `fit` measures the element and the framework writes an emptied signal
+        // back on its own clock. Measuring before that write lands would re-measure the
+        // message that has already gone, leaving the box standing at its old height.
+        if value.get_untracked().is_empty()
+            && let Some(el) = area.get_untracked()
+        {
+            el.set_value("");
+        }
         fit();
     };
 
@@ -80,7 +99,7 @@ pub fn Composer(
                        px-1 py-1 text-msg text-body outline-none \
                        placeholder:text-placeholder max-[620px]:text-[16px]"
                 rows="1"
-                placeholder=placeholder
+                placeholder=move || placeholder.get()
                 node_ref=area
                 disabled=move || busy.get()
                 prop:value=move || value.get()
@@ -91,8 +110,13 @@ pub fn Composer(
                 on:keydown=move |ev: ev::KeyboardEvent| {
                     // Shift+Enter is a newline; every other modifier is somebody else's
                     // shortcut and none of our business.
+                    //
+                    // `is_composing` is the one that is not cosmetic: while an IME is open,
+                    // Enter accepts the candidate word being typed and must not be read as
+                    // send — the same keystroke means two things, and the event alone does
+                    // not show which.
                     if ev.key() == "Enter" && !ev.shift_key() && !ev.alt_key() && !ev.ctrl_key()
-                        && !ev.meta_key()
+                        && !ev.meta_key() && !ev.is_composing()
                     {
                         ev.prevent_default();
                         send();
