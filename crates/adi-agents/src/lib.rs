@@ -294,29 +294,16 @@ impl Agents {
 
     /// This store's sessions: the record, the queue, the transcript, and the log of every run.
     ///
-    /// Cheap to build — a path and no cached state — so it is taken per call rather than held.
-    /// Opening it also brings anything still filed the old way
-    /// (`<sessions>/<process|harness>/<agent>/`) into the flat layout. That runs on **every** open
-    /// rather than once per process, because a store is opened by the app, the CLI, and every
-    /// trigger's child: no one of them can be the one that does it. It is idempotent and, with
-    /// nothing old to find, costs two failed directory reads.
-    ///
-    /// Best-effort, deliberately. A store that could not be moved forward is one whose old history
-    /// reads as missing, which is bad — but a run refused because a migration failed is worse.
+    /// A path and no cached state, so it is taken per call rather than held — which is only
+    /// affordable because opening one does nothing but keep the path. It used to also sweep the
+    /// pre-flat layout (`<sessions>/<process|harness>/<agent>/`) forward on every open, since no one
+    /// of the app, the CLI, and a trigger's child can be the one that does it once. That sweep is
+    /// gone: it is called from the listing path, once per agent and again per idle run, so a single
+    /// `/api/agents/runs/all` paid for it four hundred times over — and it could never finish
+    /// anyway, because a legacy directory holding a session the new layout already has is left
+    /// standing on purpose, and so is rescanned for ever.
     fn sessions(&self) -> SessionStore {
-        let store = SessionStore::new(self.config.module(SESSIONS_MODULE).dir());
-        let _ = store.migrate_legacy(|agent| self.backend_of(agent));
-        store
-    }
-
-    /// Which engine an agent runs, for a session whose own record cannot say: the old layout named
-    /// the *executor*, and `process:claude` and `process:codex` shared a directory.
-    fn backend_of(&self, agent: &str) -> Backend {
-        self.get(agent)
-            .ok()
-            .flatten()
-            .map(|a| a.manifest.backend)
-            .unwrap_or_default()
+        SessionStore::new(self.config.module(SESSIONS_MODULE).dir())
     }
 
     /// The runner for this agent's backend, or the honest refusal.
@@ -1893,27 +1880,6 @@ mod tests {
             .id
     }
 
-    /// Write a conversation the *old* way — `<sessions>/harness/<agent>/<id>.json` — for the tests
-    /// that check what opening the store makes of it. `working_dir` is absent for a conversation
-    /// from before the field existed.
-    fn seed_legacy_conversation(store: &Agents, agent: &str, working_dir: Option<&str>) -> String {
-        let dir = store
-            .config
-            .module(SESSIONS_MODULE)
-            .dir()
-            .join("harness")
-            .join(agent);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        let conv_id = "1700000000000-0000";
-        let mut meta = serde_json::json!({ "started_at": 1_700_000_000_000u64, "message": "go" });
-        if let Some(d) = working_dir {
-            meta["working_dir"] = serde_json::Value::String(d.to_string());
-        }
-        std::fs::write(dir.join(format!("{conv_id}.json")), meta.to_string()).expect("write meta");
-        std::fs::write(dir.join(format!("{conv_id}.log")), "what it said").expect("write log");
-        conv_id.to_string()
-    }
-
     /// Seed a live run of `agent`: a session whose runner state names *this* process, which is
     /// exactly what a running run looks like to the counter. Returns its id.
     ///
@@ -2455,46 +2421,6 @@ mod tests {
             workspace::resolve(&store.config, &agent.manifest, None),
             record.cwd
         );
-    }
-
-    /// A conversation from the old layout comes forward when the store is opened, keeping the
-    /// directory it ran in. One that predates the recorded directory entirely ran in the store root,
-    /// and has to keep answering from there: a fresh resolve would now hand this project agent its
-    /// project directory, and the Claude session it resumes is keyed by the cwd it was established
-    /// under.
-    #[test]
-    fn a_legacy_conversation_is_brought_forward_with_the_directory_it_ran_in() {
-        let store = scratch("conv-legacy");
-        let mut manifest = spec("harness:claude-sdk");
-        manifest.project = Some("bugbounty".into());
-        store.save("legacy", manifest).expect("save");
-        let agent = store.get("legacy").expect("read back").expect("the agent");
-        // The project exists, so an unpinned resolve *would* move this agent's runs into it.
-        let project = store.config.root().join("projects").join("bugbounty");
-        std::fs::create_dir_all(&project).expect("mkdir");
-        assert_eq!(
-            workspace::resolve(&store.config, &agent.manifest, None),
-            project
-        );
-
-        let conv = seed_legacy_conversation(&store, "legacy", None);
-        // Opening the store is what moves it; the backend comes from the agent's manifest, because
-        // the old path only ever named the executor.
-        let record = store.sessions().get("legacy", &conv).expect("brought forward");
-        assert_eq!(record.cwd, store.config.root());
-        assert_eq!(record.backend, Backend::HarnessClaudeSdk);
-        assert_eq!(record.message, "go");
-        assert!(store.runs(&agent).iter().any(|r| r.run_id == conv));
-    }
-
-    /// The same move, for a conversation that *did* record where it ran.
-    #[test]
-    fn a_legacy_conversation_keeps_its_recorded_directory() {
-        let store = scratch("conv-legacy-dir");
-        let agent = agent_with_tools(&store, "passive", "harness:claude-sdk", Vec::new());
-        let conv = seed_legacy_conversation(&store, "passive", Some("/targets/crescendo-ai"));
-        let record = store.sessions().get(&agent.name, &conv).expect("brought forward");
-        assert_eq!(record.cwd, std::path::Path::new("/targets/crescendo-ai"));
     }
 
     /// Codex takes its `system_prompt` as the opening user turn, so tool help or a location block

@@ -25,7 +25,6 @@
 //! A session owns the whole `<id>.*` namespace of its agent directory — including sidecars a runner
 //! invents and this module has never heard of — which is why deleting and pruning sweep by prefix.
 
-mod migrate;
 mod queue;
 mod record;
 mod session;
@@ -363,25 +362,6 @@ impl SessionStore {
         transcript::view(&dir, id, live, running, self.queued(agent, id))
     }
 
-    // ---- the old layout ------------------------------------------------------------
-
-    /// Move any sessions still filed the old way — `<sessions>/<process|harness>/<agent>/<id>.*` —
-    /// into this store's flat layout, and return how many were moved.
-    ///
-    /// Idempotent, so it is safe to call on every open: a second run finds nothing and reports `0`.
-    /// A session the new layout already has is never overwritten — see [`migrate`] for why its
-    /// legacy copy is left standing rather than merged.
-    ///
-    /// `backend_of` answers which engine an agent runs, because the old path could not: it named
-    /// the *executor*, and `process:claude` and `process:codex` shared a directory. The caller reads
-    /// that off the agent's manifest; the store has no business opening one.
-    ///
-    /// # Errors
-    /// Returns directory-creation, move, and record-write errors. Sessions already moved stay moved,
-    /// and a later run picks up the rest.
-    pub fn migrate_legacy(&self, backend_of: impl Fn(&str) -> Backend) -> Result<usize> {
-        migrate::legacy(self, &backend_of)
-    }
 }
 
 // ---- internals ---------------------------------------------------------------------
