@@ -20,6 +20,8 @@ palette**, so the two do not mix on one page.
 | `Field` | label + a `?` that explains the control without costing the row any height |
 | `Input` / `Textarea` / `Select` | one shared frame; optional two-way binding to an `RwSignal<String>` |
 | `Flash` / `Empty` | inline or card feedback in 3 kinds; the quiet line an empty list shows |
+| `TopBar` | the window's lid: the wordmark (a link home when given one), a middle slot for where you are, actions right. Wall to wall and `sticky` — the one component that is not an island |
+| `Crumbs` / `Crumb` | the path to what is open, for the bar's middle slot. The last segment is never a link |
 | `Tree` / `TreeNode` / `TreeState` | an IDE tree from one flat, depth-annotated list: indent rails, a turning chevron, selection, keyboard activation. Knows nothing about files |
 | `CodeEditor` | a painted `<pre>` under a transparent `<textarea>` — the browser keeps the caret, undo, IME and paste. `Lang::from_path` picks the scanner: Rust, TOML, JSON, YAML, TS, shell, SQL, Markdown |
 | `CodeFrame` | the card a file is read in: the name on the left, `actions` on the right, whatever is showing the file underneath. Not part of `CodeEditor`, so a preview wears the same chrome |
@@ -47,6 +49,41 @@ it done.
 
 **When you add a component, add a row to the playground showing every arm of every enum it
 takes.** A variant nothing renders is a variant nobody notices is broken.
+
+## The style: islands
+
+**A screen is a few distinct objects floating on the canvas, not one edge-to-edge plane cut
+into regions by hairlines.** The rail is an island, the panel is an island, the editor is an
+island; between them is canvas, and the gap is what says they are separate things. Nothing
+here is full-bleed and nothing is divided by a bare border down the middle of the window.
+
+The shape is a utility, so it is written once:
+
+```css
+@utility island {
+  border-radius: var(--radius-md);   /* 8px */
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow);         /* a hairline — depth is a line, not a lift */
+}
+```
+
+Two things it deliberately leaves alone:
+
+- **No fill.** The surface is still yours: `island bg-panel` for a rail, `island bg-card`
+  for a panel. That is what lets a rail sit a shade behind the panel next to it.
+- **No `overflow`.** A [`Field`](./src/field.rs)'s hint bubble has to be able to leave the
+  panel it is anchored in. An island whose children must be clipped to its corners — a
+  header strip's fill, a scrolling body — adds `overflow-hidden` itself, as
+  [`CodeFrame`](./src/code.rs) and [`SessionList`](./src/session.rs) do.
+
+**The one exception is [`TopBar`](./src/topbar.rs).** It goes wall to wall on `bg-bar` with a
+hairline under it, because it is the screen's own edge rather than an object on the screen —
+an edge that floats reads as a card stuck to the ceiling. Everything below it is islands.
+
+**A component that is a thing draws its own island.** `SessionList` does not wait for a
+caller to put a border around it; a rail is an object on the screen, not a region of one, and
+the wrapper that used to draw it was the same four utilities at every call site. A component
+that is *part* of a thing — a row, a group, a form strip — draws nothing.
 
 ## The one rule
 

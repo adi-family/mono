@@ -167,6 +167,25 @@
   text-transform: uppercase;
 }
 
+/* An island — the shape every surface in this system takes.
+ *
+ * A screen here is a few distinct objects floating on the canvas with gaps between them,
+ * not one edge-to-edge plane cut into regions by hairlines. That is the whole style rule:
+ * if something is a *thing* — a rail, a panel, an editor, a tree — it gets a radius and an
+ * edge and sits apart. If it is part of one, it does not.
+ *
+ * It sets **no fill**, so the surface is still the caller's choice: `island bg-panel` for a
+ * rail, `island bg-card` for a panel. And it sets **no overflow** — a hint bubble has to be
+ * able to leave the panel it is anchored in. An island whose children have to be clipped to
+ * its corners (a header strip, a scrolling body) adds `overflow-hidden` itself.
+ *
+ * Depth is a line, not a lift: the shadow is a hairline and stays one. */
+@utility island {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--edge);
+  box-shadow: var(--shadow);
+}
+
 /* A surface that wants noticing: an amber wash laid over whatever it already is, breathing
  * on a slow cycle.
  *

@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-2 structs · 10 enums across 9 files.
+3 structs · 10 enums across 10 files.
 
 ## Index
 
@@ -16,6 +16,7 @@
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
+- [`src/topbar.rs`](#srctopbarrs) — `Crumb`
 - [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
 
 ---
@@ -204,6 +205,22 @@ pub enum SessionState {
     Waiting,
     Error,
     Working,
+}
+```
+
+---
+
+## `src/topbar.rs`
+
+### struct `Crumb`
+
+One segment of the path in the bar.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Crumb {
+    pub label: String,
+    pub href: Option<String>,
 }
 ```
 

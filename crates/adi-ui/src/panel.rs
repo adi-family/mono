@@ -34,10 +34,7 @@ pub fn Panel(
     let body = if flush { "" } else { "p-4" };
 
     view! {
-        <section class=merge(
-            "rounded-md border border-edge bg-card text-body shadow-[var(--shadow)]",
-            class,
-        )>
+        <section class=merge("island bg-card text-body", class)>
             {has_head.then(|| view! {
                 <header class="flex min-h-9 items-center justify-between gap-2 \
                                border-b border-divider px-4 py-2">

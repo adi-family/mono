@@ -69,8 +69,10 @@ pub fn CodeFrame(
 
     view! {
         <div class=merge(
+            // `overflow-hidden` because this island clips two children to its corners: the
+            // header strip's fill, and whatever scrolls underneath it.
             &format!(
-                "flex flex-col overflow-hidden rounded-md border border-edge bg-card {}",
+                "island flex flex-col overflow-hidden bg-card {}",
                 height.classes(),
             ),
             class,

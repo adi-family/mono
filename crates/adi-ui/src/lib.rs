@@ -44,6 +44,7 @@ mod input;
 mod markdown;
 mod panel;
 mod session;
+mod topbar;
 mod tree;
 
 pub use badge::{Badge, BadgeTone};
@@ -57,6 +58,7 @@ pub use input::{Input, InputWidth, Select, Textarea};
 pub use markdown::Markdown;
 pub use panel::Panel;
 pub use session::{SessionCard, SessionGroup, SessionItem, SessionList, SessionState};
+pub use topbar::{Crumb, Crumbs, TopBar};
 pub use tree::{Tree, TreeNode, TreeState};
 
 /// Join a component's own classes with whatever the call site passed in `class`.

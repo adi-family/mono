@@ -255,8 +255,10 @@ pub fn SessionGroup(
 /// rows, leaving the one control you reach for while scrolling pinned over them. Which is
 /// why it carries the panel's own fill — rows pass underneath it.
 ///
-/// It fills the height it is given, so give it a parent with a height — `h-full` against an
-/// auto-height parent collapses to nothing.
+/// It is an island: it carries its own radius and edge rather than waiting for a wrapper to
+/// draw them, because a rail is a thing on the screen and not a region of one. It fills the
+/// height it is given, so give it a parent with a height — `h-full` against an auto-height
+/// parent collapses to nothing.
 ///
 /// Filtering is the caller's: the box binds to a signal and nothing else happens, because
 /// only the caller knows whether a query should match a title, an agent, or the transcript.
@@ -287,7 +289,10 @@ pub fn SessionList(
     let has_head = !title.is_empty() || actions.is_some();
 
     view! {
-        <aside class=merge("flex h-full min-h-0 flex-col bg-panel", class)>
+        <aside class=merge(
+            "island flex h-full min-h-0 flex-col overflow-hidden bg-panel",
+            class,
+        )>
             <div class="min-h-0 flex-1 overflow-y-auto">
                 {has_head.then(|| view! {
                     <header class="flex items-center justify-between gap-2 px-3.5 pt-3">

@@ -17,10 +17,10 @@
 #![allow(non_snake_case)]
 
 use adi_ui::{
-    Badge, BadgeTone, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame, CodeHeight, Empty,
-    Field, Flash, FlashKind, Form, Hint, Input, InputWidth, Lang, Markdown, Panel, Select,
-    SessionCard, SessionGroup, SessionItem, SessionList, SessionState, Textarea, Tree, TreeNode,
-    TreeState,
+    Badge, BadgeTone, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame, CodeHeight, Crumb,
+    Crumbs, Empty, Field, Flash, FlashKind, Form, Hint, Input, InputWidth, Lang, Markdown, Panel,
+    Select, SessionCard, SessionGroup, SessionItem, SessionList, SessionState, Textarea, TopBar,
+    Tree, TreeNode, TreeState,
 };
 use leptos::prelude::*;
 
@@ -105,6 +105,7 @@ const FILE: &str = "<path d='M4 2h4.5L12 5.5V14H4z'/><path d='M8.5 2v3.5H12'/>";
 const EYE: &str = "<path d='M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z'/><circle cx='8' cy='8' r='2'/>";
 const CODE: &str = "<path d='M6 4 2.5 8 6 12'/><path d='M10 4l3.5 4-3.5 4'/>";
 const SAVE: &str = "<path d='M8 2.5v6'/><path d='M5 6l3 3 3-3'/><path d='M2.5 11v2.5h11V11'/>";
+const SPARK: &str = "<path d='M6.5 2.5 8 6l3.5 1.5L8 9l-1.5 3.5L5 9l-3.5-1.5L5 6z'/><path d='M12 2v2.5'/><path d='M13.25 3.25h-2.5'/>";
 
 /// What a file holds, for the demo. One per format the scanner knows, so clicking down the
 /// tree walks the whole palette.
@@ -271,7 +272,7 @@ fn FilesDemo() -> impl IntoView {
 
     view! {
         <div class="grid gap-4 min-[900px]:grid-cols-[240px_minmax(0,1fr)]">
-            <div class="h-100 overflow-auto rounded-md border border-edge bg-panel">
+            <div class="island h-100 overflow-auto bg-panel">
                 <Tree nodes=nodes state=tree selected=path empty="No files."/>
             </div>
             <CodeFrame
@@ -466,44 +467,70 @@ fn Playground() -> impl IntoView {
     let notes = RwSignal::new(String::from("--rm\n--network=host"));
 
     view! {
-        <main class="mx-auto flex max-w-4xl flex-col gap-4 p-6">
-            <header class="flex flex-wrap items-center justify-between gap-3">
-                // The logo is mono, per the type spec.
-                <h1 class="m-0 font-mono text-title font-medium text-ink">
-                    "adi" <span class="text-accent">"·"</span> "ui"
-                </h1>
-                // Re-rendered as a block on every theme change so the active button can
-                // switch `variant` — cheaper than a reactive variant prop for a dev toggle.
-                <div class="flex items-center gap-1">
-                    {move || [("OS", None), ("Light", Some("light")), ("Dark", Some("dark"))]
-                        .map(|(label, value)| {
-                            let variant = if theme.get() == value {
-                                ButtonVariant::Primary
-                            } else {
-                                ButtonVariant::Default
-                            };
-                            view! {
-                                <Button
-                                    size=ButtonSize::Small
-                                    variant=variant
-                                    on:click=move |_| theme.set(value)
-                                >
-                                    {label}
-                                </Button>
-                            }
-                        })
-                        .into_iter()
-                        .collect::<Vec<_>>()}
-                </div>
-            </header>
+        // The page's own lid, and the component under test: wall to wall, hairline at the
+        // bottom, and it stays there while everything below it scrolls.
+        //
+        // What is *in* it is the point. The mark goes home, the middle says what is open,
+        // and the right holds the way out to the other version of the app — the two or
+        // three things a screen owes you at all times. A theme toggle is not one of them;
+        // it lives with the palette it changes, further down the page.
+        <TopBar
+            logo="adi"
+            home="/"
+            actions=|| {
+                view! {
+                    <Button size=ButtonSize::Small variant=ButtonVariant::Ghost icon=SPARK>
+                        "Extended"
+                    </Button>
+                }
+                .into_any()
+            }
+        >
+            <Crumbs items=vec![
+                Crumb::new("adi-ui").href("/"),
+                Crumb::new("playground"),
+            ]/>
+        </TopBar>
 
+        <main class="mx-auto flex max-w-4xl flex-col gap-4 p-6">
             <Panel title="Type" flush=true>
                 <div class="px-4">
                     <TypeSpecimen/>
                 </div>
             </Panel>
 
-            <Panel title="Palette" flush=true>
+            <Panel
+                title="Palette"
+                flush=true
+                actions=move || {
+                    // Re-rendered as a block on every theme change so the active button can
+                    // switch `variant` — cheaper than a reactive variant prop for a dev
+                    // toggle. It sits here rather than in the bar: this is the panel it
+                    // changes, and a screen's header owes you navigation, not preferences.
+                    view! {
+                        {move || [("OS", None), ("Light", Some("light")), ("Dark", Some("dark"))]
+                            .map(|(label, value)| {
+                                let variant = if theme.get() == value {
+                                    ButtonVariant::Primary
+                                } else {
+                                    ButtonVariant::Default
+                                };
+                                view! {
+                                    <Button
+                                        size=ButtonSize::Small
+                                        variant=variant
+                                        on:click=move |_| theme.set(value)
+                                    >
+                                        {label}
+                                    </Button>
+                                }
+                            })
+                            .into_iter()
+                            .collect::<Vec<_>>()}
+                    }
+                    .into_any()
+                }
+            >
                 <div class="px-4">
                     <Swatches
                         label="surfaces"
@@ -566,6 +593,48 @@ fn Playground() -> impl IntoView {
                             ("attention", "bg-attention"),
                         ]
                     />
+                </div>
+            </Panel>
+
+            <Panel title="TopBar" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "The page's own header is this component — scroll and it stays. Here it \
+                     is again inside a window, which is where it lives: wall to wall with a \
+                     hairline under it, and islands below. It is the one thing in the crate \
+                     that is not an island itself, because it is the screen's edge rather \
+                     than an object on the screen."
+                </div>
+                <div class="p-4">
+                    // A window, in miniature: the bar's corners are clipped by the island
+                    // around it, which is why that island owns the `overflow-hidden`.
+                    <div class="island overflow-hidden bg-canvas">
+                        <TopBar
+                            logo="adi"
+                            actions=|| {
+                                view! {
+                                    <Button
+                                        size=ButtonSize::Small
+                                        variant=ButtonVariant::Ghost
+                                        icon=SAVE
+                                    >
+                                        "Install"
+                                    </Button>
+                                    <Button size=ButtonSize::Small variant=ButtonVariant::Primary>
+                                        "+ New"
+                                    </Button>
+                                }
+                                .into_any()
+                            }
+                        >
+                            <span class="font-mono text-mini text-meta">
+                                "/ " <span class="text-secondary">"projects"</span>
+                            </span>
+                        </TopBar>
+                        <div class="flex gap-3 p-3">
+                            <div class="island h-20 w-32 shrink-0 bg-panel"></div>
+                            <div class="island h-20 flex-1 bg-card"></div>
+                        </div>
+                    </div>
                 </div>
             </Panel>
 
@@ -720,7 +789,7 @@ fn Playground() -> impl IntoView {
                 </div>
                 <div class="p-4">
                     // A rail fills the height it is given, so the demo has to give it one.
-                    <div class="h-140 w-80 max-w-full overflow-hidden rounded-md border border-edge">
+                    <div class="h-140 w-80 max-w-full">
                         <SessionsDemo/>
                     </div>
                 </div>
@@ -733,7 +802,7 @@ fn Playground() -> impl IntoView {
                      5s cycle whether it is open or not."
                 </div>
                 <div class="p-4">
-                    <div class="rounded-md border border-edge bg-panel px-1.5 pb-3">
+                    <div class="island bg-panel px-1.5 pb-3">
                         // Every state, twice: as it sits in the list and as the open one.
                         // Only the fill and the hairline change between the two.
                         <SessionGroup label="done">
