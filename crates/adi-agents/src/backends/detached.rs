@@ -18,13 +18,37 @@ use std::process::{Command, Stdio};
 
 use crate::error::{Error, Result};
 
+/// A spawned child, named the only way a process can be named durably.
+///
+/// The pid alone is a slot, not an identity: the kernel reissues it after the child exits, so a
+/// number written down here and read back tomorrow may by then belong to a stranger. `started` is
+/// what pins it to one incarnation — see [`adi_osext::process_start_millis`].
+///
+/// `started` is `None` only when the child was gone before it could be asked, or on a platform that
+/// cannot say. Callers must read that as "unverifiable", never as "not running".
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Spawned {
+    pub(crate) pid: u32,
+    pub(crate) started: Option<u64>,
+}
+
 /// Spawn one detached child of a run: `argv` writing its combined stdout+stderr to `log` (created
 /// fresh, so a re-used slot's previous output is replaced), its PID recorded at `<run_id>.pid`, and
-/// a reaper thread that drops the PID file once the child exits. Returns the child PID.
+/// a reaper thread that drops the PID file once the child exits. Returns the child's identity.
+///
+/// `on_exit` runs on that same reaper thread once the child is gone. It is how a caller marks the
+/// run finished in its own records without having to poll for the ending — and it is the caller's,
+/// not this module's, because what "finished" means is a matter for the layer that owns the run.
+/// It is handed the identity it was spawned with so it can check that what it is about to clear is
+/// still *this* child, rather than a turn that has started since.
 ///
 /// Shared by the one-shot [`launch`] and the harness conversation turns, which spawn a fresh child
 /// into the *same* `run_id` slot for each answer — so this is the single place the detached-child
 /// wiring (secrets, `PATH`, working dir, process group, reaping) lives.
+// Eight, and every one of them is a distinct decision the caller has already made — where to file
+// it, where to run it, what to run, what to run it with, and who to tell when it ends. Bundling
+// them into a struct would move the same list one line up and give the caller a type to fill in.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_child(
     dir: &Path,
     run_id: &str,
@@ -33,7 +57,8 @@ pub(crate) fn spawn_child(
     run_path: &str,
     argv: &[String],
     run_env: &[(String, String)],
-) -> Result<u32> {
+    on_exit: impl FnOnce(Spawned) + Send + 'static,
+) -> Result<Spawned> {
     let log_file = File::create(log)?;
     let errlog = log_file.try_clone()?;
     let (program, command_args) = argv
@@ -62,23 +87,33 @@ pub(crate) fn spawn_child(
         .spawn()
         .map_err(|e| Error::Launch(format!("couldn't spawn {program}: {e}")))?;
     let pid = child.id();
+    // Asked immediately, and of the child rather than the clock: this is the number that makes the
+    // pid mean one process instead of one slot, and reading it here is the only moment it is
+    // certainly still the right one. A child that has already exited has none, which is honest —
+    // there is nothing running to record.
+    let spawned = Spawned {
+        pid,
+        started: adi_osext::process_start_millis(pid),
+    };
     let pid_file = pid_path_in(dir, run_id);
     if let Err(e) = std::fs::write(&pid_file, format!("{pid}\n")) {
         let _ = child.kill();
         return Err(Error::Io(e));
     }
 
-    // Long-lived app servers must reap completed children. On exit only the PID file is dropped
-    // (marking the run/turn finished); the log and metadata stay as history.
+    // Long-lived app servers must reap completed children, so this thread exists whether or not
+    // anybody wants the ending. The PID file goes, and `on_exit` lets the layer that owns the run
+    // strike its own record of the child at the same moment; the log and metadata stay as history.
     let reaper_pid_file = pid_file.clone();
     std::thread::spawn(move || {
         let _ = child.wait();
         if read_pid(&reaper_pid_file) == Some(pid) {
             let _ = std::fs::remove_file(reaper_pid_file);
         }
+        on_exit(spawned);
     });
 
-    Ok(pid)
+    Ok(spawned)
 }
 
 /// The tail of a log at a known path — the same read as [`tail_log`], for a caller that already
@@ -119,6 +154,25 @@ pub(crate) fn read_pid(path: &Path) -> Option<u32> {
 /// what let a couple of open chats starve the app server's threads.
 pub(crate) fn pid_alive(pid: u32) -> bool {
     adi_osext::pid_alive(pid)
+}
+
+/// Whether a run's recorded pid still names the *same* process it named when it was written down —
+/// [`adi_osext::pid_alive_as`], the reuse-proof form of the probe above.
+///
+/// Prefer this everywhere a pid has been through a file. A run's pid outlives its child by design
+/// (nothing rewrites the record when a turn ends, and an app that was killed never got the chance),
+/// so by the time anyone reads it the number may have been handed to something else entirely — and
+/// [`pid_alive`] will say yes about a browser tab.
+pub(crate) fn pid_alive_as(pid: u32, started: u64) -> bool {
+    adi_osext::pid_alive_as(pid, started)
+}
+
+/// When the process now holding `pid` started, in unix milliseconds.
+///
+/// For deciding whether a pid recorded before start times were kept can still plausibly be the
+/// child it claims to be — a process that started long after the run last wrote anything never was.
+pub(crate) fn process_start_millis(pid: u32) -> Option<u64> {
+    adi_osext::process_start_millis(pid)
 }
 
 /// Signal a run's whole process tree. Unix: `kill -<sig> -<pid>` (negative pid = the group the
@@ -196,7 +250,7 @@ mod tests {
         let base = scratch_dir("basedir-cwd");
 
         // The child writes its own cwd, so the assertion is on where it actually ran.
-        let pid = spawn_child(
+        let child = spawn_child(
             &dir,
             "run-1",
             &dir.join("run-1.log"),
@@ -204,9 +258,10 @@ mod tests {
             "",
             &write_cwd_argv("cwd.txt"),
             &[],
+            |_| {},
         )
         .expect("spawn");
-        assert!(pid > 0);
+        assert!(child.pid > 0);
 
         let probe = base.join("cwd.txt");
         for _ in 0..100 {
@@ -232,7 +287,17 @@ mod tests {
     fn a_pid_is_recorded_and_dropped_when_the_child_exits() {
         let dir = scratch_dir("pidfile");
         let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "exit 0".to_string()];
-        let pid = spawn_child(&dir, "run-1", &dir.join("run-1.log"), &dir, "", &argv, &[]).expect("spawn");
+        let child = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &argv,
+            &[],
+            |_| {},
+        )
+        .expect("spawn");
 
         let pid_file = pid_path_in(&dir, "run-1");
         for _ in 0..200 {
@@ -242,7 +307,70 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(!pid_file.exists(), "the reaper drops the pid of an exited child");
-        assert!(!pid_alive(pid), "the child is gone");
+        assert!(!pid_alive(child.pid), "the child is gone");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A spawn is named by more than its pid: the start time of the process that got the number.
+    /// That pair is what a later reader compares against, and without it there is nothing to tell a
+    /// live child from a stranger the kernel handed the same slot to.
+    #[test]
+    fn a_spawn_records_which_process_got_the_pid() {
+        let dir = scratch_dir("spawn-identity");
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 2".to_string()];
+        let child = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &argv,
+            &[],
+            |_| {},
+        )
+        .expect("spawn");
+
+        let started = child.started.expect("a live child has a start time");
+        assert!(pid_alive_as(child.pid, started), "the child is itself");
+        assert!(
+            !pid_alive_as(child.pid, started - 3_600_000),
+            "an hour-old recording of the same number is not this child"
+        );
+
+        let _ = signal_group(child.pid, "KILL");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The ending, delivered to the caller that owns the run rather than polled for. This is what
+    /// lets a finished turn stop reading as running the moment it finishes, instead of the next
+    /// time somebody happens to ask.
+    #[test]
+    fn the_caller_is_told_when_the_child_exits() {
+        use std::sync::mpsc;
+
+        let dir = scratch_dir("on-exit");
+        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "exit 0".to_string()];
+        let (tx, rx) = mpsc::channel();
+        let child = spawn_child(
+            &dir,
+            "run-1",
+            &dir.join("run-1.log"),
+            &dir,
+            "",
+            &argv,
+            &[],
+            move |finished| {
+                let _ = tx.send(finished);
+            },
+        )
+        .expect("spawn");
+
+        let finished = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the reaper reports the ending");
+        assert_eq!(finished.pid, child.pid, "and reports which child ended");
+        assert_eq!(finished.started, child.started);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

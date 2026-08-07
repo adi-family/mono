@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-61 structs · 16 enums · 5 type aliases across 28 files.
+63 structs · 16 enums · 5 type aliases across 29 files.
 
 ## Index
 
@@ -15,6 +15,7 @@
 - [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
+- [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Wire`, `OpenAiDialect`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`
@@ -34,7 +35,7 @@
 - [`src/store/migrate.rs`](#srcstoremigraters) — `LegacyMeta`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`
-- [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`
+- [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StoredState`
 - [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`, `At`
 
 ---
@@ -653,6 +654,22 @@ pub(crate) type Sink<'a> = &'a mut dyn Write;
 
 ---
 
+## `src/backends/detached.rs`
+
+### struct `Spawned`
+
+A spawned child, named the only way a process can be named durably.
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Spawned {
+    pub(crate) pid: u32,
+    pub(crate) started: Option<u64>,
+}
+```
+
+---
+
 ## `src/backends/harness/adi_loop.rs`
 
 ### struct `ToolCall`
@@ -1196,6 +1213,8 @@ struct State {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    started: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
 }
 ```
@@ -1418,6 +1437,19 @@ pub struct SessionRef<'a> {
     agent: String,
     id: String,
     log: PathBuf,
+}
+```
+
+### struct `StoredState`
+
+`SessionRef`'s owned counterpart: the same session, reached without borrowing the store.
+
+```rust
+#[derive(Debug)]
+struct StoredState {
+    store: SessionStore,
+    agent: String,
+    id: String,
 }
 ```
 

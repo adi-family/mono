@@ -39,10 +39,41 @@ pub trait Session {
     /// Returns store write errors.
     fn set_state(&self, value: serde_json::Value) -> Result<()>;
 
+    /// An owned handle onto the same scratch space, for a runner that has to write into it after
+    /// this view is gone.
+    ///
+    /// A detached runner reaps its child on a thread, and the moment that child exits is the moment
+    /// the pid in the slot stops meaning anything — a number the kernel is now free to hand to
+    /// somebody else. The view itself cannot go with the thread: it is a borrow, deliberately (see
+    /// the module docs). This is the `Send` half of it.
+    ///
+    /// `None` from a session with nowhere durable to write — a pane, a test double — which is why
+    /// this defaults rather than being another method every implementor has to answer.
+    fn state_writer(&self) -> Option<Box<dyn StateWriter>> {
+        None
+    }
+
     /// Where this session's raw output goes.
     ///
     /// A real path, not a sink object: a spawned child needs a file descriptor to redirect stdout
     /// and stderr into, and no amount of storage abstraction changes that. A store that keeps its
     /// records elsewhere still has to spool through a local file here.
     fn log_path(&self) -> &Path;
+}
+
+/// The state slot on its own, owned and sendable — [`Session::state_writer`]'s return.
+///
+/// Read-and-write rather than write-only: everything that reaches for this is correcting a slot
+/// after the fact, and a blind overwrite from a thread that has been asleep since the child was
+/// spawned would clobber whatever a newer turn has since put there. Read, check it is still yours,
+/// then write.
+pub trait StateWriter: Send {
+    /// The slot's contents right now, read fresh.
+    fn state(&self) -> Option<serde_json::Value>;
+
+    /// Replace the slot.
+    ///
+    /// # Errors
+    /// Returns store write errors, including the session having been deleted meanwhile.
+    fn set_state(&self, value: serde_json::Value) -> Result<()>;
 }

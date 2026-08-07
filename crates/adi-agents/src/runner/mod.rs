@@ -25,7 +25,7 @@ use crate::error::Result;
 
 pub use event::{EventBatch, EventKinds, RunEvent};
 pub use registry::runner_for;
-pub use session::Session;
+pub use session::{Session, StateWriter};
 pub use spec::RunSpec;
 
 /// Which runner this is — for labels, telemetry, and the session record.

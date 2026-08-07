@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::error::Result;
-use crate::runner::Session;
+use crate::runner::{Session, StateWriter};
 
 use super::{SessionRecord, SessionStore};
 
@@ -86,8 +86,37 @@ impl Session for SessionRef<'_> {
         self.store.set_runner_state(&self.agent, &self.id, value)
     }
 
+    /// The store is a path and nothing else, so the owned half of this view is the same three
+    /// fields with the borrow turned into a clone — no cached state travels with it, and it reads
+    /// through to the same files.
+    fn state_writer(&self) -> Option<Box<dyn StateWriter>> {
+        Some(Box::new(StoredState {
+            store: self.store.clone(),
+            agent: self.agent.clone(),
+            id: self.id.clone(),
+        }))
+    }
+
     fn log_path(&self) -> &Path {
         &self.log
+    }
+}
+
+/// [`SessionRef`]'s owned counterpart: the same session, reached without borrowing the store.
+#[derive(Debug)]
+struct StoredState {
+    store: SessionStore,
+    agent: String,
+    id: String,
+}
+
+impl StateWriter for StoredState {
+    fn state(&self) -> Option<serde_json::Value> {
+        self.store.runner_state(&self.agent, &self.id)
+    }
+
+    fn set_state(&self, value: serde_json::Value) -> Result<()> {
+        self.store.set_runner_state(&self.agent, &self.id, value)
     }
 }
 

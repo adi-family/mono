@@ -86,6 +86,23 @@ mod tests {
         Agents::with_config(adi_config::Config::with_root(root))
     }
 
+    /// Seed a run in the *old* on-disk layout that reads as still going: a pid file naming this
+    /// process, and the log that pid has supposedly been writing into.
+    ///
+    /// The log is not decoration. A pid recorded before start times were kept cannot be confirmed
+    /// by the number alone — the kernel reissues it — so what is left to check is whether the
+    /// process holding it now could plausibly be the child that owns this run's log. A pid file
+    /// with no log at all describes a run that never spawned anything, and is counted as such.
+    fn seed_legacy_live_run(dir: &std::path::Path, run_id: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{run_id}.pid")),
+            format!("{}\n", std::process::id()),
+        )
+        .unwrap();
+        std::fs::write(dir.join(format!("{run_id}.log")), "still going").unwrap();
+    }
+
     #[test]
     fn create_service_writes_the_hive_yaml_and_reports_it() {
         let store = temp_projects();
@@ -628,12 +645,7 @@ mod tests {
             .dir()
             .join("process")
             .join("other");
-        std::fs::create_dir_all(&runs).unwrap();
-        std::fs::write(
-            runs.join("0000000000001-0000.pid"),
-            format!("{}\n", std::process::id()),
-        )
-        .unwrap();
+        seed_legacy_live_run(&runs, "0000000000001-0000");
 
         let Response { status, body } = run_agent(&store, br#"{"name":"looper","message":"go"}"#);
         assert_eq!(status, 429, "a launch past the cap is refused");
@@ -676,12 +688,7 @@ mod tests {
             .dir()
             .join("harness")
             .join("solver");
-        std::fs::create_dir_all(&runs).unwrap();
-        std::fs::write(
-            runs.join("0000000000001-0000.pid"),
-            format!("{}\n", std::process::id()),
-        )
-        .unwrap();
+        seed_legacy_live_run(&runs, "0000000000001-0000");
 
         let Response { status, body } = run_agent(&store, br#"{"name":"solver","message":"go"}"#);
         assert_eq!(status, 429);

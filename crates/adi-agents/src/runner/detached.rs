@@ -26,12 +26,13 @@ use crate::arguments::{
     HarnessAdiArguments, HarnessClaudeSdkArguments, ProcessClaudeArguments, ProcessCodexArguments,
 };
 use crate::backend::Backend;
+use crate::backends::detached::Spawned;
 use crate::backends::harness::claude_sdk::Continuation;
 use crate::backends::{adi_events, claude_stream, detached, harness, process};
 use crate::error::{Error, Result};
 use crate::progress::{self, MAX_PARSE_BYTES, TurnContent};
 use crate::runner::{
-    EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, Stopped,
+    EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, StateWriter, Stopped,
 };
 use crate::tool_help;
 
@@ -206,7 +207,10 @@ impl Runner for DetachedRunner {
             .file_stem()
             .and_then(|stem| stem.to_str())
             .ok_or_else(|| Error::Launch(format!("unusable log path {}", log.display())))?;
-        let pid = detached::spawn_child(
+        // The reaper's half of the state slot, taken before the spawn so the thread has somewhere to
+        // write the ending to the moment there is one.
+        let writer = session.state_writer();
+        let child = detached::spawn_child(
             dir,
             slot,
             log,
@@ -214,15 +218,46 @@ impl Runner for DetachedRunner {
             &spec.path,
             &argv,
             &self.run_env(spec),
+            move |child| {
+                if let Some(writer) = writer {
+                    forget_child(writer.as_ref(), child);
+                }
+            },
         )?;
 
-        state.pid = Some(pid);
+        state.pid = Some(child.pid);
+        state.started = child.started;
         state.session_id = (!session_id.is_empty()).then_some(session_id);
         session.set_state(state.into_value())
     }
 
+    /// Whether this session's child is still running — asked of the pid **and** of the process's
+    /// start time, never of the pid alone.
+    ///
+    /// A pid is a slot, not a name. Nothing rewrites the state slot when a turn ends (a one-shot
+    /// run leaves it as it was; an app that was killed never got the chance), so a recorded pid
+    /// routinely outlives its child by days — and the kernel reissues the number in the meantime.
+    /// Asking `kill(pid, 0)` about it, which is all this used to do, then reports somebody else's
+    /// process as this run: two finished runs sat "running" for three days on the strength of a
+    /// browser tab and an audio helper that had inherited their numbers. A run stuck that way holds
+    /// a concurrency slot nothing can free and swallows every reply into a queue no turn will ever
+    /// drain, because the turn it is waiting behind finished last week.
+    ///
+    /// Records written before start times were kept have only the pid, and cannot be verified that
+    /// way. They are held to the one thing that is still checkable: a process that started *after*
+    /// the run's log was last written cannot be the child that holds that log open, since the log
+    /// is created immediately before the child that writes into it. Both of the runs above are
+    /// caught by it, and a genuine child — whose log was created microseconds before it started —
+    /// is not.
     fn is_alive(&self, session: &dyn Session) -> bool {
-        State::read(session).pid.is_some_and(detached::pid_alive)
+        let state = State::read(session);
+        let Some(pid) = state.pid else {
+            return false;
+        };
+        match state.started {
+            Some(started) => detached::pid_alive_as(pid, started),
+            None => detached::pid_alive(pid) && started_before_the_log_stopped(pid, session),
+        }
     }
 
     /// TERM, then KILL once `grace` is spent.
@@ -234,11 +269,17 @@ impl Runner for DetachedRunner {
     ///
     /// On Windows there is no cooperative signal for a headless child (it has no window to close),
     /// so the first signal is already a forced tree kill; the grace period simply never runs down.
+    ///
+    /// What it will not do is signal a pid it cannot confirm. The number in the slot outlives the
+    /// child that owned it and the kernel reissues it, so "stop this finished run" was one recycled
+    /// pid away from `kill -TERM` on somebody's whole process group — the browser, the audio
+    /// daemon, whatever had been handed the number since. [`Self::is_alive`] is the same check the
+    /// listing uses, so nothing can be stopped that was not shown as running either.
     fn stop(&self, session: &dyn Session, grace: Duration) -> Result<Stopped> {
         let Some(pid) = State::read(session).pid else {
             return Ok(Stopped::default());
         };
-        if !detached::pid_alive(pid) {
+        if !self.is_alive(session) {
             return Ok(Stopped::default());
         }
 
@@ -348,6 +389,18 @@ impl Runner for DetachedRunner {
 struct State {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pid: Option<u32>,
+    /// When the process at [`pid`](Self::pid) started, in unix milliseconds.
+    ///
+    /// The pid's other half. On its own a pid identifies a *slot* the kernel reissues once the
+    /// child exits, and nothing rewrites this record at that moment — a one-shot run's slot is
+    /// simply left as it was, and an app that was killed never got to write anything — so by the
+    /// time a listing reads it the number may name a stranger. It did: two finished runs showed as
+    /// running for days because their pids had been handed to a browser tab and an audio helper.
+    ///
+    /// Absent on a record written before this was kept, and on a platform that cannot report it.
+    /// See [`DetachedRunner::is_alive`] for what is made of that.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    started: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
 }
@@ -362,9 +415,67 @@ impl State {
             .unwrap_or_default()
     }
 
+    /// The same read through an owned handle, for the reaper thread — which outlives every borrowed
+    /// view by construction.
+    fn read_owned(writer: &dyn StateWriter) -> Self {
+        writer
+            .state()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
+    }
+
     fn into_value(self) -> Value {
         serde_json::to_value(self).unwrap_or(Value::Null)
     }
+}
+
+/// Strike an exited child from the state slot, if it is still the child the slot is describing.
+///
+/// Called from the reaper thread the moment a child is gone, so a finished run reads as finished
+/// without waiting for anybody to ask. The engine session id stays: it is what a later turn resumes
+/// the same conversation with, and it did not die with the process.
+///
+/// The guard is the whole subtlety. A harness conversation spawns a fresh child per turn into the
+/// same slot, so by the time this thread wakes up, turn N+1 may already have written its own pid
+/// there — and clearing it would leave a live child that nothing lists and nothing can stop. So the
+/// slot is re-read and only cleared if it still names *this* child.
+fn forget_child(writer: &dyn StateWriter, child: Spawned) {
+    let mut state = State::read_owned(writer);
+    if state.pid != Some(child.pid) || state.started != child.started {
+        return;
+    }
+    state.pid = None;
+    state.started = None;
+    let _ = writer.set_state(state.into_value());
+}
+
+/// How long after a run's log was last written a process may have started and still be believed to
+/// be the child that holds it open.
+///
+/// A real child's log is created by its parent immediately before the spawn, so its start time is
+/// *behind* the log's mtime by microseconds and this only has to absorb clock granularity. A
+/// recycled pid is hours or days ahead of it.
+const LOG_MTIME_SLACK_MILLIS: u64 = 60_000;
+
+/// Whether the process now holding `pid` could be the child that has been writing this session's
+/// log — the only check left for a record written before start times were kept.
+///
+/// The log is created immediately before the child that writes into it, and stays open for as long
+/// as that child lives, so its mtime can never be *older* than the start of the process that owns
+/// it. A pid inherited long after the log went quiet fails on that alone, which is exactly what a
+/// recycled one looks like. Unreadable either way reads as not ours: unverifiable must never be the
+/// answer that keeps a run alive.
+fn started_before_the_log_stopped(pid: u32, session: &dyn Session) -> bool {
+    let Some(started) = detached::process_start_millis(pid) else {
+        return false;
+    };
+    let Ok(written) = std::fs::metadata(session.log_path()).and_then(|meta| meta.modified()) else {
+        return false;
+    };
+    let Ok(written) = written.duration_since(std::time::UNIX_EPOCH) else {
+        return false;
+    };
+    started <= written.as_millis().try_into().unwrap_or(u64::MAX) + LOG_MTIME_SLACK_MILLIS
 }
 
 /// How far into the log a reader has got, and whether it has already been told the run ended.
@@ -550,7 +661,7 @@ fn wait_for_exit(pid: u32, budget: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     use adi_tools::ToolHelp;
     use serde_json::json;
@@ -566,7 +677,7 @@ mod tests {
         id: String,
         agent: String,
         started: bool,
-        state: Mutex<Option<Value>>,
+        state: Arc<Mutex<Option<Value>>>,
         log: PathBuf,
     }
 
@@ -583,7 +694,7 @@ mod tests {
                 id: "conv-1".to_string(),
                 agent: "solver".to_string(),
                 started: false,
-                state: Mutex::new(None),
+                state: Arc::new(Mutex::new(None)),
                 log: dir.join("conv-1.log"),
             }
         }
@@ -628,8 +739,24 @@ mod tests {
             *self.state.lock().unwrap() = Some(value);
             Ok(())
         }
+        fn state_writer(&self) -> Option<Box<dyn StateWriter>> {
+            Some(Box::new(SharedState(Arc::clone(&self.state))))
+        }
         fn log_path(&self) -> &Path {
             &self.log
+        }
+    }
+
+    /// The owned half of a [`FakeSession`]'s slot, as the store's own view hands out.
+    struct SharedState(Arc<Mutex<Option<Value>>>);
+
+    impl StateWriter for SharedState {
+        fn state(&self) -> Option<Value> {
+            self.0.lock().unwrap().clone()
+        }
+        fn set_state(&self, value: Value) -> Result<()> {
+            *self.0.lock().unwrap() = Some(value);
+            Ok(())
         }
     }
 
@@ -1122,13 +1249,154 @@ mod tests {
         assert_eq!(runner.stop(&now, Duration::ZERO).expect("stop"), Stopped::default());
     }
 
+    /// The bug this whole pairing exists for. A pid is a slot the kernel reissues, so a run that
+    /// finished last week can be holding a number that now belongs to a browser tab — and the tab
+    /// is genuinely alive, so asking only `kill(pid, 0)` reports the run as still going. Two runs
+    /// sat "running" for three days on exactly that.
+    ///
+    /// Same live pid throughout; only the recorded start time differs. That is the whole test: the
+    /// number cannot tell these apart and the pair can.
+    #[test]
+    fn a_pid_that_was_handed_to_somebody_else_is_not_this_run() {
+        let pid = std::process::id();
+        let started = adi_osext::process_start_millis(pid).expect("this platform can say");
+        let runner = DetachedRunner::new(Backend::HarnessAdi);
+
+        let ours = FakeSession::new("reuse-ours")
+            .with_state(json!({ "pid": pid, "started": started }));
+        assert!(runner.is_alive(&ours), "our own child, correctly named");
+
+        // The same pid, recorded when a different process held it. Alive, and not ours.
+        let theirs = FakeSession::new("reuse-theirs")
+            .with_state(json!({ "pid": pid, "started": started - 86_400_000 }));
+        assert!(
+            !runner.is_alive(&theirs),
+            "a live pid recorded against another process is not this run"
+        );
+    }
+
+    /// A run recorded before start times were kept has only a pid, and it is the same pid the
+    /// kernel may since have reissued. What is still checkable is the log: a child holds it open
+    /// for as long as it lives, and the log is created immediately *before* the child that writes
+    /// into it — so a process that started well after the log fell silent was never that child.
+    #[test]
+    fn a_record_from_before_start_times_is_judged_by_its_log() {
+        let pid = std::process::id();
+        let runner = DetachedRunner::new(Backend::HarnessAdi);
+
+        // A log this process could plausibly be writing: it was touched after we started.
+        let live = FakeSession::new("legacy-live").with_state(json!({ "pid": pid }));
+        live.write_log("still going");
+        assert!(runner.is_alive(&live), "a pid whose log is still being written");
+
+        // The same pid against a log that went quiet days before this process existed — which is
+        // what both of the stuck runs looked like.
+        let stale = FakeSession::new("legacy-stale").with_state(json!({ "pid": pid }));
+        stale.write_log("what it said, days ago");
+        let long_ago = std::time::SystemTime::now() - Duration::from_secs(3 * 86_400);
+        std::fs::File::options()
+            .write(true)
+            .open(stale.log_path())
+            .expect("open the log")
+            .set_times(std::fs::FileTimes::new().set_modified(long_ago))
+            .expect("age the log");
+        assert!(
+            !runner.is_alive(&stale),
+            "a process that started after the log went quiet never wrote it"
+        );
+
+        // And a pid with no log at all cannot be confirmed as anything.
+        let bare = FakeSession::new("legacy-bare").with_state(json!({ "pid": pid }));
+        assert!(!runner.is_alive(&bare));
+    }
+
+    /// Stopping is where a recycled pid stops being a display bug and becomes a loaded gun: the
+    /// signal goes to a whole process *group*. A run that cannot be confirmed is not signalled at
+    /// all — here the innocent bystander is a real child of this test, and it has to survive.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_that_cannot_be_confirmed_is_never_signalled() {
+        let bystander = FakeSession::new("no-signal");
+        spawn_probe(&bystander, "sleep 30");
+        let pid = State::read(&bystander).pid.expect("the probe recorded a pid");
+
+        // Rewrite the slot as a record from another incarnation of that pid — alive, wrong process.
+        let started = State::read(&bystander).started.expect("a start time");
+        bystander
+            .set_state(json!({ "pid": pid, "started": started - 86_400_000 }))
+            .expect("recycle the record");
+
+        let runner = DetachedRunner::new(Backend::HarnessAdi);
+        assert!(!runner.is_alive(&bystander));
+        assert_eq!(
+            runner.stop(&bystander, Duration::ZERO).expect("stop"),
+            Stopped::default(),
+            "an unconfirmable run reports nothing was running",
+        );
+        assert!(
+            detached::pid_alive(pid),
+            "and above all does not kill the process that now holds the number",
+        );
+
+        let _ = detached::signal_group(pid, "KILL");
+    }
+
+    /// The ending, written down at the moment it happens rather than inferred later. The engine
+    /// session id survives it: the process died, the conversation did not, and the next turn
+    /// resumes the same thread with it.
+    #[test]
+    fn an_ending_clears_the_child_and_keeps_the_thread() {
+        let session = FakeSession::new("forget").with_state(json!({
+            "pid": 4321,
+            "started": 111,
+            "session_id": "engine-thread",
+        }));
+        let writer = session.state_writer().expect("an owned slot");
+
+        forget_child(writer.as_ref(), Spawned { pid: 4321, started: Some(111) });
+
+        let state = State::read(&session);
+        assert_eq!(state.pid, None, "the child is struck from the record");
+        assert_eq!(state.started, None);
+        assert_eq!(
+            state.session_id.as_deref(),
+            Some("engine-thread"),
+            "the conversation outlives the process that was answering it",
+        );
+    }
+
+    /// A harness conversation spawns a fresh child per turn into the same slot, so a reaper thread
+    /// can wake up to find turn N+1 already recorded. Clearing it then would leave a live child
+    /// that nothing lists and nothing can stop — the same class of orphan this all set out to fix,
+    /// only inverted.
+    #[test]
+    fn an_ending_that_arrives_after_the_next_turn_started_is_ignored() {
+        let session = FakeSession::new("forget-late").with_state(json!({
+            "pid": 999,
+            "started": 222,
+            "session_id": "engine-thread",
+        }));
+        let writer = session.state_writer().expect("an owned slot");
+
+        // Turn N's reaper, arriving after turn N+1 wrote its own child into the slot.
+        forget_child(writer.as_ref(), Spawned { pid: 4321, started: Some(111) });
+
+        let state = State::read(&session);
+        assert_eq!(state.pid, Some(999), "the turn in flight is left alone");
+        assert_eq!(state.started, Some(222));
+
+        // A pid that matches but an incarnation that does not is still somebody else's ending.
+        forget_child(writer.as_ref(), Spawned { pid: 999, started: Some(111) });
+        assert_eq!(State::read(&session).pid, Some(999));
+    }
+
     /// Put a real child of `script` behind `session`, as `send` would — the engines' own argv would
     /// need the vendor CLIs installed, and what is under test is the signalling, not the command.
     #[cfg(unix)]
     fn spawn_probe(session: &FakeSession, script: &str) {
         let log = session.log_path();
         let dir = log.parent().expect("a log dir");
-        let pid = detached::spawn_child(
+        let child = detached::spawn_child(
             dir,
             "conv-1",
             log,
@@ -1136,15 +1404,16 @@ mod tests {
             "/usr/bin:/bin",
             &["/bin/sh".to_string(), "-c".to_string(), script.to_string()],
             &[],
+            |_| {},
         )
         .expect("spawn");
         session
-            .set_state(json!({ "pid": pid }))
-            .expect("record the pid");
+            .set_state(json!({ "pid": child.pid, "started": child.started }))
+            .expect("record the child");
         // `trap` is only installed once the shell has started; signalling before that would test
         // nothing.
         for _ in 0..100 {
-            if detached::pid_alive(pid) {
+            if detached::pid_alive(child.pid) {
                 break;
             }
             std::thread::sleep(POLL);

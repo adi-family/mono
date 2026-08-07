@@ -1916,6 +1916,9 @@ mod tests {
 
     /// Seed a live run of `agent`: a session whose runner state names *this* process, which is
     /// exactly what a running run looks like to the counter. Returns its id.
+    ///
+    /// Both halves of the identity, as a real spawn records them — a bare pid no longer reads as
+    /// running, and should not: that is the whole point of [`live_state`].
     fn seed_live_run(store: &Agents, backend: &str, agent: &str) -> String {
         let sessions = store.sessions();
         let record = sessions
@@ -1923,9 +1926,20 @@ mod tests {
             .expect("create");
         sessions
             .session(agent, &record.id)
-            .set_state(serde_json::json!({ "pid": std::process::id() }))
+            .set_state(live_state())
             .expect("record a live pid");
         record.id
+    }
+
+    /// What a running child's state slot holds: this process, named by pid *and* by when it
+    /// started. A test that wrote only the pid would be seeding the very ambiguity the runner now
+    /// refuses to guess at.
+    fn live_state() -> serde_json::Value {
+        let pid = std::process::id();
+        serde_json::json!({
+            "pid": pid,
+            "started": adi_osext::process_start_millis(pid).expect("this platform can say"),
+        })
     }
 
     /// Live runs are counted across agents and across backends — one number, whoever started them,
@@ -2301,7 +2315,7 @@ mod tests {
         // child into the same slot.
         sessions
             .session("chatty", &conv)
-            .set_state(serde_json::json!({ "pid": std::process::id() }))
+            .set_state(live_state())
             .expect("a live turn");
         assert_eq!(
             store.reply("chatty", &conv, "and restart it").expect("reply"),
