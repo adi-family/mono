@@ -33,6 +33,7 @@ overlap. Migrate a screen by rewriting it, not by hoping the palettes meet in th
 | `Modal` | a dialog over a scrim, with three ways out: the close button, the scrim, `Escape` |
 | `Faq` / `Qna` | questions folded up under themselves, on native `<details>`. Answers are Markdown |
 | `Crumbs` / `Crumb` | the path to what is open, for the bar's middle slot. The last segment is never a link |
+| `PathPicker` / `DirEntry` / `PathRoot` | a directory, typed **or** browsed to — one value, so pasting a path lands you in it and clicking a folder grows the text. Filters as you type, completes on `Tab`, walks on `↓↑`. Lists nothing itself: it names the one directory it wants read, the caller reads it |
 | `Tree` / `TreeNode` / `TreeState` | an IDE tree from one flat, depth-annotated list: indent rails, a turning chevron, selection, keyboard activation. Knows nothing about files |
 | `CodeEditor` | a painted `<pre>` under a transparent `<textarea>` — the browser keeps the caret, undo, IME and paste. `Lang::from_path` picks the scanner: Rust, TOML, JSON, YAML, TS, shell, SQL, Markdown |
 | `CodeFrame` | the card a file is read in: the name on the left, `actions` on the right, whatever is showing the file underneath. Not part of `CodeEditor`, so a preview wears the same chrome |

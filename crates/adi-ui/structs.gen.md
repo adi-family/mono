@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-5 structs · 14 enums across 13 files.
+7 structs · 14 enums across 14 files.
 
 ## Index
 
@@ -18,6 +18,7 @@
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`
+- [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
 - [`src/topbar.rs`](#srctopbarrs) — `Crumb`
 - [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
@@ -283,6 +284,34 @@ enum Block {
     Quote(String),
     Rule,
     Para(String),
+}
+```
+
+---
+
+## `src/path.rs`
+
+### struct `DirEntry`
+
+One thing inside the directory being listed.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirEntry {
+    pub name: String,
+    pub dir: bool,
+}
+```
+
+### struct `PathRoot`
+
+A named place worth one click — home, the repo, the last project.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathRoot {
+    pub label: String,
+    pub path: String,
 }
 ```
 

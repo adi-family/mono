@@ -16,11 +16,14 @@
 
 #![allow(non_snake_case)]
 
+use std::time::Duration;
+
 use adi_ui::{
     AppItem, AppState, Badge, BadgeTone, Chat, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame,
-    CodeHeight, Composer, Crumb, Crumbs, Empty, Faq, Field, Flash, FlashKind,
-    Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, Qna, Rail, RailCard, RailGroup, Role,
-    Select, SessionItem, SessionState, Textarea, ToolCall, ToolState, TopBar, Tree, TreeNode, TreeState, Turn,
+    CodeHeight, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
+    Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna, Rail,
+    RailCard, RailGroup, Role, Select, SessionItem, SessionState, Textarea, ToolCall, ToolState,
+    TopBar, Tree, TreeNode, TreeState, Turn, dir_of,
 };
 use leptos::prelude::*;
 
@@ -200,6 +203,151 @@ impl TreeNode<'static> {
             "Nothing here knows this extension, so it paints as one plain run.\n\
              Highlighting is an enhancement, never a gate.\n"
         }
+    }
+}
+
+
+/// A machine, for [`PathPicker`] to browse. Every path the fake `read_dir` below knows
+/// about: a trailing slash makes it a directory, and the directories in between are implied
+/// rather than listed, exactly as they would be on a real disk.
+const DISK: &[&str] = &[
+    "/Users/you/adi-family/crates/adi-ui/src/",
+    "/Users/you/adi-family/crates/adi-ui/styles/",
+    "/Users/you/adi-family/crates/adi-ui/fonts/",
+    "/Users/you/adi-family/crates/adi-ui/Cargo.toml",
+    "/Users/you/adi-family/crates/adi-ui/README.md",
+    "/Users/you/adi-family/crates/adi-app/src/",
+    "/Users/you/adi-family/crates/adi-agents/src/",
+    "/Users/you/adi-family/crates/adi-indexer/src/",
+    "/Users/you/adi-family/crates/adi-css/styles/",
+    "/Users/you/adi-family/crates/adi-webapp/src/",
+    "/Users/you/adi-family/apps/windows/",
+    "/Users/you/adi-family/docs/indexer.md",
+    "/Users/you/adi-family/scripts/build-app.sh",
+    "/Users/you/adi-family/Cargo.toml",
+    "/Users/you/adi-family/CLAUDE.md",
+    "/Users/you/adi-family/README.md",
+    "/Users/you/Documents/",
+    "/Users/you/Downloads/",
+    "/Users/you/.ssh/",
+    "/Users/you/.zshrc",
+    "/Users/guest/",
+    "/etc/hosts",
+    "/tmp/",
+];
+
+/// One directory's children, from [`DISK`]: the next segment of every path under it, once
+/// each. Directories sort first and then alphabetically — an order the picker keeps, since
+/// what a listing should be sorted by is the lister's business.
+fn read_dir(dir: &str) -> Vec<DirEntry> {
+    let prefix = if dir.ends_with('/') {
+        dir.to_string()
+    } else {
+        format!("{dir}/")
+    };
+    let mut found: Vec<(String, bool)> = Vec::new();
+    for path in DISK {
+        let Some(rest) = path.strip_prefix(&prefix) else {
+            continue;
+        };
+        if rest.is_empty() {
+            continue;
+        }
+        let (head, is_dir) = match rest.find('/') {
+            Some(i) => (&rest[..i], true),
+            None => (rest, false),
+        };
+        if !found.iter().any(|(name, _)| name == head) {
+            found.push((head.to_string(), is_dir));
+        }
+    }
+    found.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    found
+        .into_iter()
+        .map(|(name, is_dir)| {
+            if is_dir {
+                DirEntry::dir(name)
+            } else {
+                DirEntry::file(name)
+            }
+        })
+        .collect()
+}
+
+/// The picker, wired to [`read_dir`] the way a real screen wires it to an API: it says which
+/// directory it wants ([`dir_of`] of what is typed), and this answers — after a beat, so the
+/// reading state is a state you can actually see, and with a refusal for `~/.ssh`, because a
+/// path you are not allowed to read is the normal way to meet the error line.
+#[component]
+fn PathDemo(#[prop(optional)] inline: bool) -> impl IntoView {
+    let path = RwSignal::new(String::from("/Users/you/adi-family/crates/"));
+    let entries = RwSignal::new(read_dir("/Users/you/adi-family/crates"));
+    let reading = RwSignal::new(false);
+    let refused = RwSignal::new(None::<String>);
+    let picked = RwSignal::new(String::new());
+
+    // The one directory the picker ever needs read. Crossing a separator is what changes it,
+    // so typing inside a folder filters without costing a read.
+    let dir = Signal::derive(move || dir_of(&path.get()).to_string());
+    Effect::new(move |_| {
+        let want = dir.get();
+        reading.set(true);
+        refused.set(None);
+        set_timeout(
+            move || {
+                if want.ends_with("/.ssh") {
+                    entries.set(Vec::new());
+                    refused.set(Some(format!("{want}: permission denied")));
+                } else {
+                    entries.set(read_dir(&want));
+                }
+                reading.set(false);
+            },
+            Duration::from_millis(260),
+        );
+    });
+
+    let picker = move || {
+        view! {
+            <PathPicker
+                value=path
+                entries=entries
+                loading=reading
+                error=refused
+                inline=inline
+                roots=vec![
+                    PathRoot::new("Home", "/Users/you"),
+                    PathRoot::new("Repo", "/Users/you/adi-family"),
+                    PathRoot::new("Root", "/"),
+                ]
+                on_pick=Callback::new(move |dir: String| picked.set(dir))
+            />
+        }
+    };
+
+    view! {
+        <div class="flex flex-col gap-2">
+            {if inline {
+                view! { <div class="max-w-100">{picker()}</div> }.into_any()
+            } else {
+                view! {
+                    <Field label="Working directory" hint="Where the agent runs its commands.">
+                        <div class="max-w-100">{picker()}</div>
+                    </Field>
+                }
+                    .into_any()
+            }}
+            <Flash kind=FlashKind::Ok class="bg-transparent px-0">
+                {move || {
+                    let chosen = picked.get();
+                    if chosen.is_empty() {
+                        String::from("Nothing picked yet.")
+                    } else {
+                        format!("on_pick → {chosen}")
+                    }
+                }}
+            </Flash>
+        </div>
     }
 }
 
@@ -1010,6 +1158,39 @@ fn Playground() -> impl IntoView {
                 </div>
                 <div class="p-4">
                     <FilesDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="PathPicker" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "A directory, typed or browsed to \u{2014} and both at once, because the two \
+                     halves are one value. Paste a path and the list is already inside it; \
+                     click a folder and the text grows a segment. Typing filters where you \
+                     are without moving you, and typing a "
+                    <span class="font-mono">"/"</span>
+                    " steps in. The keyboard does the whole set: "
+                    <span class="font-mono">"\u{2193}\u{2191}"</span>
+                    " walk the folders and skip the files, "
+                    <span class="font-mono">"Enter"</span>
+                    " steps into the highlighted one or picks where you are, "
+                    <span class="font-mono">"Tab"</span>
+                    " completes as far as the names agree, "
+                    <span class="font-mono">"Esc"</span>
+                    " puts the list away. Try "
+                    <span class="font-mono">"~/.ssh"</span>
+                    " for the refusal, and "
+                    <span class="font-mono">"Documents"</span>
+                    " for a folder with nothing in it."
+                </div>
+                <div class="grid gap-6 p-4 min-[880px]:grid-cols-2">
+                    <div>
+                        <div class="caps mb-2 text-faint">"in a form row"</div>
+                        <PathDemo/>
+                    </div>
+                    <div>
+                        <div class="caps mb-2 text-faint">"inline"</div>
+                        <PathDemo inline=true/>
+                    </div>
                 </div>
             </Panel>
 
