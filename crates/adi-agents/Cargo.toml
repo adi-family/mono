@@ -28,6 +28,10 @@ adi-tasks = { workspace = true }
 adi-secrets = { workspace = true }
 # The `harness:adi` tool loop's Grep runs a real regular expression, and its Glob/Grep walk a tree.
 regex = "1"
+# Sessions, turns, and queued messages live in `<sessions>/sessions.db` rather than in a file per
+# session: the listing walked directories, and a profile of it under load put 5255 samples in
+# `stat` against 112 in JSON parsing. Bundled, so no system SQLite is required.
+rusqlite = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 # A harness conversation mints a fresh session id (v4 UUID) for the Claude CLI to establish on the

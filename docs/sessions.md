@@ -1,4 +1,4 @@
-# Sessions — how a chat gets from a file on disk into the rail
+# Sessions — how a chat gets from storage into the rail
 
 A map of every layer a session passes through on its way to a list, with the file and line
 that owns each step. Written to be read before refactoring anything in that path: the point
@@ -25,10 +25,10 @@ synthesized as a row only in the client.
 ## The pipeline, end to end
 
 ```
-~/.adi/mono/sessions/<agent>/<id>.*          files on disk
-        │  session_ids() + record::read() + last_activity()
+~/.adi/mono/sessions/sessions.db            one row per session
+        │  one indexed range scan per agent
         ▼
-SessionStore::list(agent) -> Vec<SessionRecord>          store/mod.rs:157
+SessionStore::list(agent) -> Vec<SessionRecord>          store/mod.rs:186
         │  + runner.is_alive() per record, + advance_queue() side effect
         ▼
 Agents::runs(agent) -> Vec<RunInfo>                      lib.rs:851
@@ -51,55 +51,67 @@ POST /api/agents/runs   (one agent)  GET /api/agents/runs/all  (every agent)
 
 ---
 
-## Layer 0 — the files
+## Layer 0 — where it is kept
 
 Root: `~/.adi/mono/sessions/` (`Config::open()` → `adi-config/src/lib.rs:112`; the module name
 is `SESSIONS_MODULE = "sessions"`, `adi-agents/src/lib.rs:79`). Override the root with `$ADI_DIR`.
 
 ```
-<sessions_dir>/settings.toml                        the run cap (RunLimits)
-<sessions_dir>/<agent>/<id>.meta.json               the record
-<sessions_dir>/<agent>/<id>.log                     raw engine output a runner spools into
-<sessions_dir>/<agent>/<id>.queue.json              messages waiting behind the live answer
-<sessions_dir>/<agent>/<id>.transcript.jsonl        what was said, one turn per line
-<sessions_dir>/<agent>/<id>.<anything>              runner-private sidecars
+<sessions_dir>/sessions.db              sessions, turns, queue
+<sessions_dir>/settings.toml            the run cap (RunLimits)
+<sessions_dir>/<agent>/<id>.log         the raw output a runner spools into
+<sessions_dir>/<agent>/<id>.<whatever>  sidecars a runner invents
 ```
 
-The id is `{unix_millis:013}-{seq:04}` (`store/record.rs:91`), so **the file name alone sorts by
-start time and carries the start time** — a session whose sidecar is lost is still listed with a
-real date (`store/record.rs:104`).
+**The log is a file and has to be**: a spawned child needs a real file descriptor to redirect
+stdout and stderr into, which is not a thing a row can be. Everything else is a row, because
+everything else is *listed* — see [db.rs](../crates/adi-agents/src/store/db.rs) for the profile
+that settled it.
 
-Note what is *not* a directory level: the backend. It used to be
-(`sessions/<process|harness>/<agent>/…`), and changing an agent's backend made its whole history
-vanish. Nothing sweeps the old paths forward any more — a store found in that shape needs a one-off
-script, not a check on the read path.
+Three tables, all keyed `(agent, id)`; `turns` and `queue` cascade off `sessions`:
 
-**There is no database.** Every listing is a `read_dir` plus one `stat`/tail read per session.
-
-## Layer 1 — `SessionStore`: files → records
-
-`crates/adi-agents/src/store/`, entry point `SessionStore::list` (`store/mod.rs:157`).
-
-| Step | Where | What it does |
+| table | holds | ordered by |
 |---|---|---|
-| enumerate | `store/mod.rs:398` `session_ids` | one `read_dir`; an id counts if `<id>.meta.json` **or** `<id>.log` is present (either can exist alone) |
-| read | `store/record.rs:123` `read` | parse the sidecar; a missing/corrupt/older one reads as **defaults**, never as an error |
-| identity | `store/record.rs:38-45` | `id` and `agent` are `#[serde(skip_deserializing)]` — they come from the path, not the file |
-| activity | `store/mod.rs:427` `last_activity` | max(last turn's `at`, `started_at`) |
-| sort | `store/mod.rs:170` | **newest `started_at` first**, id as tiebreak |
+| `sessions` | the record: backend, cwd, message, `started_at`, `last_activity`, `hidden`, `runner_state` | index `sessions_newest (agent, started_at DESC, id DESC)` |
+| `turns` | one row per turn; the whole `Turn` as JSON plus `at` and `role` | `seq` |
+| `queue` | what is waiting to be said next | `seq` |
 
-Two subtleties that matter for any refactor:
+The id is `{unix_millis:013}-{seq:04}` (`store/record.rs`), so it carries its own start time and
+sorts by it.
 
-- **`last_activity` is derived on every read and never written** (`store/record.rs:65`,
-  `#[serde(skip)]`). It reads the *last line of the transcript* (`store/transcript.rs:181`), not
-  file mtimes. That is deliberate: mtimes made a chat jump to the top of the rail merely because
-  it was opened, spooled into, or had a finished answer committed. Only a message moves it.
-- Reading the tail is cheap by construction: `last_line` seeks backwards in doubling windows
-  (`store/transcript.rs:196`) and the result is memoized by path+mtime+len in a 64-entry LRU
-  (`memo.rs:191`). A session that said nothing since the last poll costs one `stat`.
+WAL, `busy_timeout = 5000`, `synchronous = NORMAL` — the CLI, the app, and every trigger's child
+open this independently, and the pragma order is load-bearing (`busy_timeout` first, or switching
+journal mode fails against a store another process is mid-write on).
 
-The store answers **the full history, including hidden sessions**. Hiding is a flag
-(`store/mod.rs:187` `set_hidden`), never a filter — filtering is the view's job.
+**Connections are thread-local** (`store/db.rs`). Not an optimization: `Agents::sessions()` builds a
+store once per agent *and* again per idle run, so one listing constructs it several hundred times.
+
+## Layer 1 — `SessionStore`: rows → records
+
+`crates/adi-agents/src/store/`, entry point `SessionStore::list` (`store/mod.rs:186`).
+
+One statement:
+
+```sql
+SELECT ... FROM sessions WHERE agent = ?1 ORDER BY started_at DESC, id DESC
+```
+
+By start, not by activity: the rail's own ordering is a view's business, and a listing that
+reshuffled itself as answers landed would be a different thing to page through. That pair is the
+index, so it is a range scan rather than a sort.
+
+Two invariants worth knowing before touching this:
+
+- **`last_activity` is a column, written only by `append_turn`** (`store/transcript.rs`), in the
+  same transaction as the turn. That is the whole of its meaning: a listing sorted by when a
+  conversation last *spoke* must not move because the chat was read, spooled into, or hidden. It was
+  once derived per read from file mtimes, and every one of those things moved it.
+- **The row is what says a session exists.** A stray `<id>.log` with no row is not a session. The
+  file store answered otherwise because it wrote sidecar and log separately and a crash between them
+  orphaned real output; here the row is committed before a runner is ever handed the log path.
+
+The store answers **the full history, including hidden sessions**. Hiding is a column, never a
+filter — filtering is the view's job.
 
 ## Layer 2 — `Agents`: records → runs, plus liveness
 
@@ -226,10 +238,10 @@ a sortable table. It differs from the rail in three ways worth knowing before un
 ## A single session, traced
 
 1. `Agents::launch_run` (`lib.rs:462`) resolves the agent, checks the run cap, builds the
-   `RunSpec`, then `store.create(...)` (`store/mod.rs:115`) mints
-   `<millis>-<seq>` and writes `<id>.meta.json`. `cwd` is pinned here, forever.
-2. The opening message is appended as a user turn (`lib.rs:497`) → `<id>.transcript.jsonl`
-   exists, so `last_activity` is now a real moment.
+   `RunSpec`, then `store.create(...)` mints `<millis>-<seq>` and inserts the row. `cwd` is pinned
+   here, forever.
+2. The opening message is appended as a user turn (`lib.rs:497`), which is also what sets
+   `last_activity` to a real moment.
 3. `runner.send(...)` spawns the child; the runner creates `<id>.log` and parks its pid in
    `runner_state`. The log existing is what `has_started()` means (`store/session.rs:78`).
 4. `store.prune_old(...)` (`lib.rs:504`) — *after* the new files exist, so the new run is never
@@ -247,7 +259,7 @@ a sortable table. It differs from the rail in three ways worth knowing before un
 
 | Where | Key | Note |
 |---|---|---|
-| `store/mod.rs:170` | `started_at` desc | the store's contract; deliberately *not* activity |
+| `sessions_newest` index | `started_at` desc | the store's contract; deliberately *not* activity |
 | `lib.rs:879` | — | preserved, not re-sorted |
 | `actions.rs:2423` (rail) | `last_touch` desc, stable | pty rows stamped `now` sort first |
 | `actions.rs:570` (table) | `started_at` desc, user-sortable | disagrees with the rail on purpose |
@@ -263,15 +275,20 @@ Work down this list when one is missing:
 4. **★ is on** and its agent is not starred (`actions.rs:2279`) — on by default.
 5. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs:252`).
    A live session is never swept.
-6. Neither `<id>.meta.json` nor `<id>.log` exists (`store/mod.rs:390`).
+6. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
 7. Its agent's definition was deleted — sessions are listed per *agent from the manifest list*
-   (`all_agent_runs` iterates `store.list()`), so orphaned session directories are invisible to
-   the UI even though `run_load` still counts them (`lib.rs:350`).
+   (`all_agent_runs` iterates `store.list()`), so an agent with rows but no manifest is invisible to
+   the UI even though `run_load` still counts it (`SessionStore::agents()`).
 
 ## Hot spots for a refactor
 
 Things that are duplicated, inconsistent, or load-bearing in a non-obvious way:
 
+- **`advance_queue` probes every idle run.** The cheap gate is now a `COUNT` per session rather
+  than a file probe, but it is still ~400 queries per `/api/agents/runs/all`; one grouped query
+  would answer the whole listing at once.
+- **`is_alive` re-reads the row it was handed.** `runner_state()` queries `sessions` again for a
+  column `list()` already returned. Cheap now, but still a second read per session.
 - **Two lists of sessions in client state** (`all_chats` vs `watch.runs`) with a merge rule in
   `chat_all_sessions`. It exists for mutation latency, not by accident — any unification must keep
   "a deleted row leaves now, not in 3 seconds".
@@ -295,16 +312,16 @@ Things that are duplicated, inconsistent, or load-bearing in a non-obvious way:
 
 | File | Owns |
 |---|---|
+| `crates/adi-agents/src/store/db.rs` | connection (thread-local), pragmas, schema |
 | `crates/adi-agents/src/store/mod.rs` | `SessionStore`: list, get, create, delete, prune, queue, transcript |
-| `crates/adi-agents/src/store/record.rs` | `SessionRecord`, id minting, the `.meta.json` sidecar |
-| `crates/adi-agents/src/store/transcript.rs` | `Turn`, the `.transcript.jsonl`, `last_at` |
-| `crates/adi-agents/src/store/queue.rs` | the `.queue.json` |
+| `crates/adi-agents/src/store/record.rs` | `SessionRecord`, id minting, `from_row` |
+| `crates/adi-agents/src/store/transcript.rs` | `Turn`, the `turns` table, `last_activity` |
+| `crates/adi-agents/src/store/queue.rs` | the `queue` table |
 | `crates/adi-agents/src/store/session.rs` | `SessionRef` — the borrowed `Session` view a runner gets |
 | `crates/adi-agents/src/lib.rs` | `Agents`: `runs`, `list_runs`, launch, reply, hide, delete, `settle` |
 | `crates/adi-agents/src/run.rs` | `RunInfo`, `Peek`, `Launch`, `Sent` — the vocabulary |
 | `crates/adi-agents/src/runner/registry.rs` | `Backend` → `Runner`, the only dispatch |
 | `crates/adi-agents/src/runner/detached.rs` | `is_alive` (pid + start time), stop, event parsing |
-| `crates/adi-agents/src/memo.rs` | the LRU behind transcript reads |
 | `crates/adi-webapp-api/src/handlers/agents.rs` | every `/api/agents/*` handler, `runs_response` |
 | `crates/adi-webapp-api/src/types.rs` | `AgentRunInfo`, `AgentRuns`, `AllAgentRuns` |
 | `crates/adi-app/src/main.rs` | route table, shared-read dedup |

@@ -337,7 +337,7 @@ impl Agents {
     pub fn run_load(&self) -> RunLoad {
         let store = self.sessions();
         let mut by_agent: BTreeMap<String, usize> = BTreeMap::new();
-        for agent in agent_dirs(&store) {
+        for agent in store.agents() {
             let live = store
                 .list(&agent)
                 .iter()
@@ -1183,19 +1183,6 @@ fn state_str(session: &SessionRef<'_>, key: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
         .map(ToString::to_string)
         .or_else(|| field.as_u64().map(|n| n.to_string()))
-}
-
-/// Every agent with sessions filed under this store, from the one directory level between its root
-/// and a session id.
-fn agent_dirs(store: &SessionStore) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(store.dir()) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .collect()
 }
 
 /// The snapshot of a backend nothing here runs: nothing to show, nothing to attach to.

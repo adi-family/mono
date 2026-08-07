@@ -4,33 +4,38 @@
 //! log, and the runner's own opaque state slot all live here — see `docs/agent-runner.md` for the
 //! layering this is one third of.
 //!
-//! # Flat, and backend-agnostic
+//! # A database, and one file per session
 //!
 //! ```text
-//! <sessions_dir>/<agent>/<session_id>.meta.json         the record
-//! <sessions_dir>/<agent>/<session_id>.log               the raw output a runner spools into
-//! <sessions_dir>/<agent>/<session_id>.queue.json        what is waiting to be said next
-//! <sessions_dir>/<agent>/<session_id>.transcript.jsonl  what was said, one turn per line
+//! <sessions_dir>/sessions.db              every session, every turn, every queued message
+//! <sessions_dir>/<agent>/<id>.log         the raw output a runner spools into
+//! <sessions_dir>/<agent>/<id>.<whatever>  sidecars a runner invents
 //! ```
 //!
-//! Note what is *not* in that path: the executor. It used to be a directory level
-//! (`<sessions>/<process|harness>/<agent>/…`), which quietly made a stored field decide where
-//! history was read from — change an agent's `backend` and every run it had ever done vanished,
-//! because the listing looked under the new executor's directory while the files sat under the old
-//! one's. They could not be listed, peeked at, stopped, or deleted again. Keeping the backend inside
-//! the record instead means a session is found by the two things that never change, who it belongs
-//! to and what it is called, and re-pointing an agent at another engine leaves its history exactly
-//! where it was.
+//! The log stays a file because it has to: a spawned child needs a real file descriptor to redirect
+//! stdout and stderr into, and that is not a thing a row can be. Everything else — the record, the
+//! transcript, the queue — is a row, because everything else is *listed*, and listing them as files
+//! meant a `read_dir` per agent plus an open and a `stat` per session on every poll. See
+//! [`db`](self::db) for the profile that settled it.
 //!
-//! A session owns the whole `<id>.*` namespace of its agent directory — including sidecars a runner
-//! invents and this module has never heard of — which is why deleting and pruning sweep by prefix.
+//! A session still owns the whole `<id>.*` namespace of its agent directory, which is why deleting
+//! sweeps by prefix: the store cannot know what a runner parked beside the log.
+//!
+//! # Backend-agnostic, which is a property of the *key*
+//!
+//! A session is found by the two things that never change — who it belongs to, and what it is
+//! called — and its backend is a column. It used to be a directory level
+//! (`<sessions>/<process|harness>/<agent>/…`), so a stored field decided where history was read
+//! from: change an agent's `backend` and every run it had ever done vanished, unlistable and
+//! undeletable, because the listing looked under the new executor's directory while the files sat
+//! under the old one's. As a column it is a label on a row that stays exactly where it was filed.
 
+mod db;
 mod queue;
 mod record;
 mod session;
 mod transcript;
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::Backend;
@@ -49,10 +54,19 @@ pub(crate) use transcript::ROLE_USER;
 /// oldest finished ones.
 pub const MAX_SESSIONS: usize = 50;
 
-/// The sessions on disk, under one root.
+/// The database's name inside the store's root.
+const DB_FILE: &str = "sessions.db";
+
+/// The columns of a record, in the order [`record::from_row`] reads them.
+const RECORD_COLUMNS: &str =
+    "agent, id, backend, cwd, message, started_at, last_activity, hidden, runner_state";
+
+/// The sessions under one root.
 ///
-/// Cheap to clone and safe to hold: it owns a path and no cached state, so two of them over the same
-/// root are the same store and cannot disagree.
+/// Cheap to clone and safe to hold: it owns a path and no cached state, so two of them over the
+/// same root are the same store and cannot disagree. That is not tidiness — the CLI, the app, and
+/// every trigger's child open this independently, so anything cached here would be a second truth
+/// one of the others has already invalidated.
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     dir: PathBuf,
@@ -72,11 +86,21 @@ impl SessionStore {
         &self.dir
     }
 
-    /// Where one agent's sessions are filed — the only path segment between the root and a session
-    /// id, on purpose (see the module docs).
+    /// Where one agent's files are — the log, and whatever a runner leaves beside it.
     #[must_use]
     pub fn agent_dir(&self, agent: &str) -> PathBuf {
         self.dir.join(agent)
+    }
+
+    /// Where the database lives.
+    #[must_use]
+    pub fn db_path(&self) -> PathBuf {
+        self.dir.join(DB_FILE)
+    }
+
+    /// This thread's connection, opened on first use.
+    fn conn(&self) -> Result<std::rc::Rc<rusqlite::Connection>> {
+        db::conn(&self.db_path())
     }
 
     /// Where a session's raw output goes.
@@ -110,7 +134,7 @@ impl SessionStore {
     /// [`prune_old`](Self::prune_old) is its own call rather than a side effect of this one.
     ///
     /// # Errors
-    /// Returns directory-creation and write errors.
+    /// Returns directory-creation and database errors.
     pub fn create(
         &self,
         agent: &str,
@@ -118,12 +142,14 @@ impl SessionStore {
         cwd: impl Into<PathBuf>,
         message: &str,
     ) -> Result<SessionRecord> {
-        let dir = self.agent_dir(agent);
-        std::fs::create_dir_all(&dir)?;
+        // The agent's directory is made here rather than at first spawn: a runner is handed
+        // `log_path` and expects to be able to open it.
+        std::fs::create_dir_all(self.agent_dir(agent))?;
         let id = record::new_id();
+        let started = record::started_at(&id);
         let session = SessionRecord {
-            started_at: record::started_at(&id),
-            last_activity: record::started_at(&id),
+            started_at: started,
+            last_activity: started,
             id,
             agent: agent.to_string(),
             backend,
@@ -132,72 +158,109 @@ impl SessionStore {
             hidden: false,
             runner_state: None,
         };
-        record::write(&dir, &session)?;
+        self.conn()?
+            .execute(
+                "INSERT INTO sessions
+                   (agent, id, backend, cwd, message, started_at, last_activity, hidden)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+                rusqlite::params![
+                    session.agent,
+                    session.id,
+                    session.backend.to_string(),
+                    session.cwd.to_string_lossy(),
+                    session.message,
+                    session.started_at,
+                    session.last_activity,
+                ],
+            )
+            .map_err(|e| db::sql_err("open a session in", e))?;
         Ok(session)
     }
 
     /// One session's record, or `None` when there is nothing filed under that id.
-    ///
-    /// A session counts as present when *either* its record or its log is there: a sidecar lost to a
-    /// crash must not make a session with real output unreachable.
     #[must_use]
     pub fn get(&self, agent: &str, id: &str) -> Option<SessionRecord> {
-        let dir = self.agent_dir(agent);
-        if !exists_in(&dir, id) {
-            return None;
-        }
-        let mut session = record::read(&dir, agent, id);
-        session.last_activity = last_activity(&dir, id, session.started_at);
-        Some(session)
+        let conn = self.conn().ok()?;
+        conn.query_row(
+            &format!("SELECT {RECORD_COLUMNS} FROM sessions WHERE agent = ?1 AND id = ?2"),
+            [agent, id],
+            record::from_row,
+        )
+        .ok()
     }
 
     /// Every session of `agent`, newest first.
+    ///
+    /// By start, not by activity: the rail's own ordering is a view's business, and a listing that
+    /// reshuffled itself as answers landed would be a different thing to page through. The id is the
+    /// tiebreak that keeps a same-millisecond pair stable, and the pair is an index, so this is a
+    /// range scan rather than a sort.
     #[must_use]
     pub fn list(&self, agent: &str) -> Vec<SessionRecord> {
-        let dir = self.agent_dir(agent);
-        let mut sessions: Vec<SessionRecord> = session_ids(&dir)
-            .into_iter()
-            .map(|id| {
-                let mut session = record::read(&dir, agent, &id);
-                session.last_activity = last_activity(&dir, &id, session.started_at);
-                session
-            })
-            .collect();
-        // By start, not by activity: the rail's own ordering is a view's business, and a listing
-        // that reshuffled itself as answers landed would be a different thing to page through.
-        // Ids are zero-padded, so the id is the tiebreak that keeps a same-millisecond pair stable.
-        sessions.sort_unstable_by(|a, b| {
-            b.started_at.cmp(&a.started_at).then_with(|| b.id.cmp(&a.id))
-        });
-        sessions
+        let Ok(conn) = self.conn() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare_cached(&format!(
+            "SELECT {RECORD_COLUMNS} FROM sessions
+             WHERE agent = ?1 ORDER BY started_at DESC, id DESC"
+        )) else {
+            return Vec::new();
+        };
+        stmt.query_map([agent], record::from_row)
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
     }
 
-    /// Hide (or unhide) a session: a flag in its record, so the choice outlives the tab that made
-    /// it. Nothing else changes — it keeps running, keeps its log, and is still listed by everything
+    /// Every agent that has a session filed here.
+    ///
+    /// What bounds the machine is the sessions that exist, not the manifests that explain them, so
+    /// this deliberately includes agents whose definition has since been deleted.
+    #[must_use]
+    pub fn agents(&self) -> Vec<String> {
+        let Ok(conn) = self.conn() else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) = conn.prepare_cached("SELECT DISTINCT agent FROM sessions") else {
+            return Vec::new();
+        };
+        stmt.query_map([], |row| row.get::<_, String>(0))
+            .map(|rows| rows.flatten().collect())
+            .unwrap_or_default()
+    }
+
+    /// Hide (or unhide) a session: a flag on its row, so the choice outlives the tab that made it.
+    /// Nothing else changes — it keeps running, keeps its log, and is still listed by everything
     /// that asks for the full history.
     ///
     /// Returns whether there was a session there to flag; an unknown id is `false`, so a stale click
-    /// is idempotent rather than an error. Writing the record is deliberately *not* activity — a
-    /// hidden session brought back must not have jumped to the top of the rail in the meantime —
-    /// and it cannot be, now that [`last_activity`] reads the transcript rather than the files.
+    /// is idempotent rather than an error. Hiding is deliberately *not* activity — a session brought
+    /// back must not have jumped to the top of the rail in the meantime.
     ///
     /// # Errors
-    /// Returns write errors.
+    /// Returns database errors.
     pub fn set_hidden(&self, agent: &str, id: &str, hidden: bool) -> Result<bool> {
-        let dir = self.agent_dir(agent);
-        if !exists_in(&dir, id) {
-            return Ok(false);
-        }
-        let mut session = record::read(&dir, agent, id);
-        session.hidden = hidden;
-        record::write(&dir, &session)?;
-        Ok(true)
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET hidden = ?3 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id, i64::from(hidden)],
+            )
+            .map_err(|e| db::sql_err("hide a session in", e))?;
+        Ok(changed > 0)
     }
 
-    /// The runner's scratch space for this session, as it is on disk.
+    /// The runner's scratch space for this session, as it is on disk right now.
     #[must_use]
     pub fn runner_state(&self, agent: &str, id: &str) -> Option<serde_json::Value> {
-        self.get(agent, id).and_then(|s| s.runner_state)
+        let conn = self.conn().ok()?;
+        let text: Option<String> = conn
+            .query_row(
+                "SELECT runner_state FROM sessions WHERE agent = ?1 AND id = ?2",
+                [agent, id],
+                |row| row.get(0),
+            )
+            .ok()?;
+        text.and_then(|t| serde_json::from_str(&t).ok())
     }
 
     /// Replace the runner's scratch space. Opaque here: the store never looks inside it, and never
@@ -205,23 +268,22 @@ impl SessionStore {
     ///
     /// # Errors
     /// Returns [`Error::NotFound`] when the session is gone (a runner writing into a deleted session
-    /// should hear about it rather than resurrect a record with nothing in it), and write errors.
-    pub fn set_runner_state(
-        &self,
-        agent: &str,
-        id: &str,
-        value: serde_json::Value,
-    ) -> Result<()> {
-        let dir = self.agent_dir(agent);
-        if !exists_in(&dir, id) {
+    /// should hear about it rather than resurrect a record with nothing in it), and database errors.
+    pub fn set_runner_state(&self, agent: &str, id: &str, value: serde_json::Value) -> Result<()> {
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET runner_state = ?3 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id, value.to_string()],
+            )
+            .map_err(|e| db::sql_err("write runner state to", e))?;
+        if changed == 0 {
             return Err(Error::NotFound(format!("{agent}: no session {id}")));
         }
-        let mut session = record::read(&dir, agent, id);
-        session.runner_state = Some(value);
-        record::write(&dir, &session)
+        Ok(())
     }
 
-    /// Delete a session outright: every file it owns, and only its own.
+    /// Delete a session outright: its row, its messages, and every file it owns.
     ///
     /// Returns whether there was a session there to delete, so a double-click on Delete is
     /// idempotent rather than an error.
@@ -231,17 +293,21 @@ impl SessionStore {
     /// caller's to get right.
     ///
     /// # Errors
-    /// Reserved for future storage backends; the local sweep is best-effort per file.
+    /// Returns database errors. The file sweep is best-effort per file.
     pub fn delete(&self, agent: &str, id: &str) -> Result<bool> {
-        let dir = self.agent_dir(agent);
-        if !exists_in(&dir, id) {
-            return Ok(false);
-        }
-        remove_session_files(&dir, id);
-        Ok(true)
+        // The turns and the queue go with it: they cascade off this row.
+        let gone = self
+            .conn()?
+            .execute(
+                "DELETE FROM sessions WHERE agent = ?1 AND id = ?2",
+                [agent, id],
+            )
+            .map_err(|e| db::sql_err("delete a session from", e))?;
+        remove_session_files(&self.agent_dir(agent), id);
+        Ok(gone > 0)
     }
 
-    /// Keep only the newest [`MAX_SESSIONS`] sessions of `agent`, deleting older ones' files.
+    /// Keep only the newest [`MAX_SESSIONS`] sessions of `agent`, deleting older ones.
     /// Returns how many were removed.
     ///
     /// `is_live` is the caller's liveness verdict, taken as an argument rather than asked: whether
@@ -253,15 +319,15 @@ impl SessionStore {
         if sessions.len() <= MAX_SESSIONS {
             return 0;
         }
-        let dir = self.agent_dir(agent);
         let mut removed = 0;
         // `list` is newest first, so everything past the cap is what ages out.
         for session in sessions.into_iter().skip(MAX_SESSIONS) {
             if is_live(&session) {
                 continue;
             }
-            remove_session_files(&dir, &session.id);
-            removed += 1;
+            if self.delete(agent, &session.id).unwrap_or(false) {
+                removed += 1;
+            }
         }
         removed
     }
@@ -271,51 +337,65 @@ impl SessionStore {
     /// Put a message at the back of this session's queue, returning its 1-based place in line.
     ///
     /// # Errors
-    /// Returns write errors — a message that was not written down was not queued.
+    /// Returns database errors — a message that was not written down was not queued.
     pub fn enqueue(&self, agent: &str, id: &str, message: &str) -> Result<usize> {
-        queue::enqueue(&self.agent_dir(agent), id, message)
+        let conn = self.conn()?;
+        queue::enqueue(&conn, agent, id, message)
     }
 
-    /// Take the head of the queue, or `None` when nothing is waiting. The removal is persisted
+    /// Take the head of the queue, or `None` when nothing is waiting. The removal is committed
     /// before the message is handed back, so a message that fails to launch is not retried for ever.
     ///
     /// # Errors
-    /// Returns write errors, with the queue left as it was.
+    /// Returns database errors, with the queue left as it was.
     pub fn dequeue(&self, agent: &str, id: &str) -> Result<Option<String>> {
-        queue::dequeue(&self.agent_dir(agent), id)
+        let conn = self.conn()?;
+        queue::dequeue(&conn, agent, id)
     }
 
     /// How many messages are waiting.
     #[must_use]
     pub fn queue_len(&self, agent: &str, id: &str) -> usize {
-        queue::load(&self.agent_dir(agent), id).len()
+        self.conn()
+            .ok()
+            .map_or(0, |conn| queue::len(&conn, agent, id))
     }
 
     /// The messages waiting, oldest first — the order they will be asked in.
     #[must_use]
     pub fn queued(&self, agent: &str, id: &str) -> Vec<String> {
-        queue::load(&self.agent_dir(agent), id)
+        self.conn()
+            .ok()
+            .map(|conn| queue::load(&conn, agent, id))
+            .unwrap_or_default()
     }
 
     /// Drop the queued message at `index`. Returns whether there was one there to drop.
     ///
     /// # Errors
-    /// Returns write errors.
+    /// Returns database errors.
     pub fn unqueue(&self, agent: &str, id: &str, index: usize) -> Result<bool> {
-        queue::unqueue(&self.agent_dir(agent), id, index)
+        let conn = self.conn()?;
+        queue::unqueue(&conn, agent, id, index)
     }
 
     /// Forget everything waiting behind this session — what stopping its current answer does.
     ///
     /// # Errors
-    /// Returns write errors.
+    /// Returns database errors.
     pub fn clear_queue(&self, agent: &str, id: &str) -> Result<()> {
-        queue::clear(&self.agent_dir(agent), id)
+        let conn = self.conn()?;
+        queue::clear(&conn, agent, id)
     }
 
     // ---- the transcript ------------------------------------------------------------
 
-    /// Record a turn: append it to this session's transcript, where it stays.
+    /// Record a turn, where it stays.
+    ///
+    /// This is also the only thing that moves a session's `last_activity`, which is the point of
+    /// keeping it here rather than deriving it: a listing sorted by when a conversation last *spoke*
+    /// must not move because the conversation was read, spooled into, or had a finished answer
+    /// committed by the act of opening it. Only a message counts, and only a message passes here.
     ///
     /// The two view-only flags ([`pending`](Turn::pending), [`queued`](Turn::queued)) are cleared on
     /// the way in and the moment is filled in if unset — see [`transcript::append`] for why. Build
@@ -323,27 +403,27 @@ impl SessionStore {
     ///
     /// # Errors
     /// Returns [`Error::NotFound`] when the session is gone — a runner that finished answering a
-    /// conversation somebody deleted mid-turn should hear about it, not leave an orphan transcript
-    /// behind for a session nothing lists — and write errors.
+    /// conversation somebody deleted mid-turn should hear about it, not leave orphaned turns behind
+    /// for a session nothing lists — and database errors.
     pub fn append_turn(&self, agent: &str, id: &str, turn: Turn) -> Result<()> {
-        let dir = self.agent_dir(agent);
-        if !exists_in(&dir, id) {
-            return Err(Error::NotFound(format!("{agent}: no session {id}")));
-        }
-        transcript::append(&dir, id, turn)
+        let conn = self.conn()?;
+        transcript::append(&conn, agent, id, turn)
     }
 
-    /// The turns on disk, oldest first — what was actually said, with nothing synthesized.
+    /// The recorded turns, oldest first — what was actually said, with nothing synthesized.
     ///
     /// This is what an engine that reconstructs its own history replays, and it is deliberately the
     /// plain read: called from inside a running turn, the fuller [`transcript`](Self::transcript)
     /// would splice in that very turn's own empty answer.
     #[must_use]
     pub fn turns(&self, agent: &str, id: &str) -> Vec<Turn> {
-        (*transcript::load(&self.agent_dir(agent), id)).clone()
+        self.conn()
+            .ok()
+            .map(|conn| transcript::load(&conn, agent, id))
+            .unwrap_or_default()
     }
 
-    /// The whole conversation as a reader sees it: the persisted turns, the answer being written
+    /// The whole conversation as a reader sees it: the recorded turns, the answer being written
     /// right now, and the questions still waiting behind it.
     ///
     /// `live` is the in-flight answer, **already parsed** by the runner whose engine produced it —
@@ -358,61 +438,22 @@ impl SessionStore {
         live: Option<TurnContent>,
         running: bool,
     ) -> Vec<Turn> {
-        let dir = self.agent_dir(agent);
-        transcript::view(&dir, id, live, running, self.queued(agent, id))
+        transcript::view(
+            self.turns(agent, id),
+            live,
+            running,
+            self.queued(agent, id),
+        )
     }
-
 }
 
 // ---- internals ---------------------------------------------------------------------
 
-/// Whether anything is filed under this id: its record, or the log a crash left without one.
-fn exists_in(dir: &Path, id: &str) -> bool {
-    record::meta_path(dir, id).exists() || record::log_path(dir, id).exists()
-}
-
-/// Every session id present in an agent's directory.
-///
-/// Taken from the record *and* the log, because either can be there alone: a session created but not
-/// yet sent to has no log, and one whose sidecar was lost still has output worth listing.
-fn session_ids(dir: &Path) -> BTreeSet<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return BTreeSet::new();
-    };
-    entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
-            // Session ids hold no dots (`{millis}-{seq}`), so everything before the first one is
-            // the id and everything after it says which of the session's files this is.
-            let (id, rest) = name.split_once('.')?;
-            (rest == record::META_SUFFIX || rest == record::LOG_SUFFIX).then(|| id.to_string())
-        })
-        .collect()
-}
-
-/// When this session last did anything, as unix millis: the moment on the last turn of its
-/// transcript, never earlier than its start.
-///
-/// **A message, and nothing else.** This used to be the newest mtime across every file the session
-/// owns, which read as "the last moment it moved" — and moving is not speaking. A run spooling into
-/// its log, a runner parking a sidecar, and above all a finished answer being *committed by the act
-/// of opening the chat* (see `settle` in the agent layer) all touched a file, and each one sent a
-/// conversation whose last word was said days ago back to the top of a rail sorted by this. The
-/// transcript's last turn is the one thing that only changes when something is actually said.
-///
-/// A session with no transcript to read — one created but never sent to, or a run migrated from a
-/// layout that kept none — falls back to its start, so this is always a moment the session existed
-/// rather than the epoch.
-fn last_activity(dir: &Path, id: &str, started_at: u64) -> u64 {
-    transcript::last_at(dir, id).unwrap_or(0).max(started_at)
-}
-
 /// Remove every file a session owns.
 ///
 /// By prefix rather than a list of extensions: a runner is free to keep its own sidecars beside the
-/// ones named here, and a delete that swept a fixed list would leave the newest of them behind
-/// every time somebody invented one.
+/// log, and a delete that swept a fixed list would leave the newest of them behind every time
+/// somebody invented one.
 fn remove_session_files(dir: &Path, id: &str) {
     let prefix = format!("{id}.");
     let Ok(entries) = std::fs::read_dir(dir) else {
@@ -430,9 +471,6 @@ fn remove_session_files(dir: &Path, id: &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-    use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
     use super::*;
 
     fn scratch(tag: &str) -> SessionStore {
@@ -441,14 +479,17 @@ mod tests {
             std::process::id(),
             std::thread::current().id(),
         ));
+        // A previous case on this thread may have left a connection open on a database at this very
+        // path, which has since been deleted; reusing it would read the ghost.
+        db::forget_connections();
         let _ = std::fs::remove_dir_all(&dir);
         SessionStore::new(dir)
     }
 
     fn now_ms() -> u64 {
         u64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
                 .expect("after the epoch")
                 .as_millis(),
         )
@@ -457,23 +498,17 @@ mod tests {
 
     /// Lay down a session at a chosen id, so a test can control when it "started" without waiting.
     fn seed(store: &SessionStore, agent: &str, id: &str, message: &str) {
-        let dir = store.agent_dir(agent);
-        std::fs::create_dir_all(&dir).unwrap();
-        record::write(
-            &dir,
-            &SessionRecord {
-                id: id.to_string(),
-                agent: agent.to_string(),
-                backend: Backend::HarnessAdi,
-                cwd: PathBuf::from("/tmp"),
-                message: message.to_string(),
-                started_at: record::started_at(id),
-                last_activity: 0,
-                hidden: false,
-                runner_state: None,
-            },
-        )
-        .unwrap();
+        std::fs::create_dir_all(store.agent_dir(agent)).unwrap();
+        let started = record::started_at(id);
+        db::conn(&store.db_path())
+            .unwrap()
+            .execute(
+                "INSERT INTO sessions
+                   (agent, id, backend, cwd, message, started_at, last_activity, hidden)
+                 VALUES (?1, ?2, 'harness:adi', '/tmp', ?3, ?4, ?4, 0)",
+                rusqlite::params![agent, id, message, started],
+            )
+            .unwrap();
     }
 
     #[test]
@@ -509,13 +544,14 @@ mod tests {
         // Sessions of another agent are another agent's.
         assert!(store.list("other").is_empty());
         assert!(store.get("other", &first.id).is_none());
+        assert_eq!(store.agents(), ["solver"]);
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// The bug the flat layout exists to fix: two sessions of one agent run by *different* engines
-    /// sit side by side, and nothing about the backend decides where they are found. Re-pointing the
-    /// agent at another engine cannot make either disappear, because the path never mentioned one.
+    /// The bug the backend-as-a-column exists to fix: two sessions of one agent run by *different*
+    /// engines sit side by side, and nothing about the backend decides where they are found.
+    /// Re-pointing the agent at another engine cannot make either disappear.
     #[test]
     fn changing_the_backend_cannot_lose_a_session() {
         let store = scratch("backends");
@@ -537,56 +573,46 @@ mod tests {
             Some(Backend::ProcessCodex),
         );
 
-        // And the layout itself: one directory per agent, no executor segment anywhere in it.
-        let dir = store.dir().join("solver");
-        assert!(record::meta_path(&dir, &harness.id).is_file());
+        // And the layout: one database, one directory per agent for the logs, no executor segment.
+        assert!(store.db_path().is_file());
         assert!(!store.dir().join("harness").exists());
         assert!(!store.dir().join("process").exists());
         assert_eq!(
             store.log_path("solver", &harness.id),
-            dir.join(format!("{}.log", harness.id)),
+            store.dir().join("solver").join(format!("{}.log", harness.id)),
         );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Hiding is a flag and nothing else: the session stays in the history with its task intact, the
-    /// flag survives a re-read (which is what makes it survive a reload), and writing it never reads
-    /// as the session having just moved.
+    /// Hiding is a flag and nothing else: the session stays in the history with its task intact, and
+    /// flagging it never reads as the session having just moved.
     #[test]
     fn hiding_a_session_only_flags_it() {
         let store = scratch("hidden");
         let now = now_ms();
         let id = format!("{:013}-0001", now - 3_600_000);
         seed(&store, "talker", &id, "some task");
-        let dir = store.agent_dir("talker");
-        std::fs::write(record::log_path(&dir, &id), "hello").unwrap();
-        // Its files were written just now, so back-date them to when it was actually talking.
-        let hour_ago = SystemTime::now() - Duration::from_secs(3_600);
-        for entry in std::fs::read_dir(&dir).unwrap().flatten() {
-            File::options()
-                .write(true)
-                .open(entry.path())
-                .unwrap()
-                .set_modified(hour_ago)
-                .unwrap();
-        }
+        let spoke = now - 1_800_000;
+        store
+            .append_turn("talker", &id, Turn { at: spoke, ..user_turn("said then") })
+            .expect("append");
 
         let before = store.get("talker", &id).expect("listed");
         assert!(!before.hidden, "a session nobody hid is not hidden");
-        assert!(before.last_activity < now - 60_000, "the files really are old");
+        assert_eq!(before.last_activity, spoke);
 
         assert!(
             store.set_hidden("talker", &id, true).expect("hide"),
             "an existing session is there to flag",
         );
         let hidden = store.get("talker", &id).expect("still listed");
-        assert!(hidden.hidden, "the flag round-trips through the record");
+        assert!(hidden.hidden, "the flag round-trips");
         assert_eq!(hidden.message, before.message, "the task is not lost");
         assert_eq!(hidden.started_at, before.started_at);
         assert_eq!(
             hidden.last_activity, before.last_activity,
-            "hiding is not activity — the record's mtime is left out of it",
+            "hiding is not activity",
         );
         assert_eq!(store.list("talker").len(), 1, "and it is still listed");
 
@@ -637,7 +663,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// The regression this derivation exists for: everything a session *writes* while it works — its
+    /// The regression this column exists for: everything a session *writes* while it works — its
     /// log, its queue, whatever sidecar a runner spools — leaves the rail's ordering alone. Only a
     /// turn moves it, so a chat cannot jump to the top for having been read, spooled into, or hidden.
     #[test]
@@ -676,8 +702,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// Deleting takes *everything* a session owns — including a sidecar this module has never heard
-    /// of, which is the whole reason the sweep goes by prefix — and nothing of its neighbour's.
+    /// Deleting takes *everything* a session owns — its row, its messages, and its files, including
+    /// a sidecar this module has never heard of, which is the whole reason the file sweep goes by
+    /// prefix — and nothing of its neighbour's.
     #[test]
     fn deleting_a_session_leaves_none_of_its_files_and_all_of_its_neighbours() {
         let store = scratch("delete");
@@ -691,26 +718,30 @@ mod tests {
         for id in [&doomed.id, &keeper.id] {
             std::fs::write(record::log_path(&dir, id), "output").unwrap();
             // A sidecar invented by some runner: swept by prefix, unknown to this module.
-            std::fs::write(dir.join(format!("{id}.transcript.jsonl")), "{}\n").unwrap();
+            std::fs::write(dir.join(format!("{id}.invented-later")), "{}\n").unwrap();
+            store.append_turn("chat", id, user_turn("said")).expect("append");
         }
         store.enqueue("chat", &doomed.id, "waiting").expect("enqueue");
 
         assert!(store.delete("chat", &doomed.id).expect("delete"));
         for path in [
-            record::meta_path(&dir, &doomed.id),
             record::log_path(&dir, &doomed.id),
-            queue::path(&dir, &doomed.id),
-            dir.join(format!("{}.transcript.jsonl", doomed.id)),
+            dir.join(format!("{}.invented-later", doomed.id)),
         ] {
             assert!(!path.exists(), "{} survived the delete", path.display());
         }
         assert!(store.get("chat", &doomed.id).is_none());
+        assert!(
+            store.turns("chat", &doomed.id).is_empty() && store.queued("chat", &doomed.id).is_empty(),
+            "its messages cascade off the row",
+        );
 
         // …and only its own.
         let left = store.list("chat");
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].id, keeper.id);
-        assert!(dir.join(format!("{}.transcript.jsonl", keeper.id)).exists());
+        assert!(dir.join(format!("{}.invented-later", keeper.id)).exists());
+        assert_eq!(store.turns("chat", &keeper.id).len(), 1);
 
         // Deleting what is already gone is quiet, so a second click is not an error.
         assert!(!store.delete("chat", &doomed.id).expect("delete again"));
@@ -815,7 +846,7 @@ mod tests {
 
     /// The store owns a session's turns, so a reader asks it — not a runner — for the conversation:
     /// what was recorded, what is being said now, and what is still waiting. Only the first of those
-    /// is on disk.
+    /// is durable.
     #[test]
     fn the_transcript_is_what_was_recorded_plus_what_is_still_happening() {
         let store = scratch("transcript");
@@ -848,7 +879,7 @@ mod tests {
             ["and restart it", "then tell me"],
         );
         assert!(view[2..].iter().all(|t| t.queued));
-        assert_eq!(store.turns("chat", id).len(), 1, "none of that is on disk");
+        assert_eq!(store.turns("chat", id).len(), 1, "none of that is recorded");
 
         // The turn lands: committing it is what makes it durable, and the same live content handed
         // in afterwards is no longer spliced on top of it.
@@ -858,7 +889,10 @@ mod tests {
         let settled = store.transcript("chat", id, Some(live), false);
         assert_eq!(settled.len(), 4, "the answer, once, then the queue");
         assert!(!settled[1].pending);
-        assert_eq!(store.turns("chat", id).len(), 2);
+        let turns = store.turns("chat", id);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].role, ROLE_USER, "oldest first");
+        assert_eq!(turns[1].steps.len(), 1, "the timeline round-trips");
 
         // One session's transcript is not another's, and a session that is gone cannot be written to.
         let other = store
@@ -871,35 +905,33 @@ mod tests {
             "a deleted session is not resurrected by a late turn",
         );
         assert!(store.turns("chat", id).is_empty());
-        assert!(
-            !transcript::path(&store.agent_dir("chat"), id).exists(),
-            "and the transcript went with the delete",
-        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
 
-    /// A session whose record was lost is still reachable — it has output, and output is the part
-    /// nobody can regenerate. Its start comes back from its id and everything else reads as unset.
+    /// The row is what says a session exists — a stray log is not one.
+    ///
+    /// The file store answered otherwise, and had to: it wrote the sidecar and the log separately, so
+    /// a crash between them left output that nothing could list. Here the row is committed before a
+    /// runner is ever handed the log path, so a log without a row is not a lost session, it is
+    /// somebody else's file in the directory. It is swept if its session is later deleted, and
+    /// otherwise left alone.
     #[test]
-    fn a_session_with_only_a_log_is_still_listed() {
+    fn a_stray_log_is_not_a_session() {
         let store = scratch("orphan");
         let dir = store.agent_dir("solver");
         std::fs::create_dir_all(&dir).unwrap();
         let id = "0000000054321-0000";
         std::fs::write(record::log_path(&dir, id), "output nobody recorded").unwrap();
 
-        let listed = store.list("solver");
-        assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].id, id);
-        assert_eq!(listed[0].started_at, 54_321, "recovered from the id");
-        assert_eq!(listed[0].message, "");
-        assert!(store.get("solver", id).is_some());
-        // And it can still be hidden and deleted, which mints the record it never had.
-        assert!(store.set_hidden("solver", id, true).expect("hide"));
-        assert!(store.get("solver", id).expect("listed").hidden);
-        assert!(store.delete("solver", id).expect("delete"));
         assert!(store.list("solver").is_empty());
+        assert!(store.get("solver", id).is_none());
+        assert!(!store.set_hidden("solver", id, true).expect("hide"));
+        assert!(!store.delete("solver", id).expect("delete"));
+        assert!(
+            store.set_runner_state("solver", id, serde_json::json!({})).is_err(),
+            "and a runner writing into it is told, not quietly given a row",
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

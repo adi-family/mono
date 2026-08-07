@@ -24,17 +24,11 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard, PoisonError};
 use std::time::SystemTime;
 
 use crate::progress::TurnContent;
-use crate::run::Turn;
 
 /// How many parsed files are kept. Generous next to the handful of conversations a person watches
 /// at once, and small enough that the whole cache is a rounding error beside one parsed log.
 const CAPACITY: usize = 64;
 
-/// How many *moments* are kept — see [`last_turn_at`], whose entries are one number rather than a
-/// parse. Sized for every session a listing walks rather than the few being read: the rail asks this
-/// of each session an agent has on every poll, and a cache that evicted between polls would re-read
-/// them all every time, which is the entire cost it exists to avoid.
-const MOMENTS: usize = 1024;
 
 /// A file's identity: two cheap `stat` fields that together change whenever its bytes do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,15 +81,6 @@ impl<T> Memo<T> {
         // A previous panic while holding this lock says nothing about the files on disk, so a
         // poisoned cache is taken anyway rather than propagating into every later read.
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The parsed form of `path`, reading and re-parsing it only when its stamp has moved.
-    ///
-    /// `parse` is deliberately run **outside** the lock: it is the slow part, and holding the cache
-    /// across it would make every other conversation's poll wait on this one. Two callers racing on
-    /// the same cold file both parse it, which is merely the work they would each have done anyway.
-    fn get_or_insert(&self, path: &Path, parse: impl FnOnce() -> T) -> Arc<T> {
-        self.get_or_insert_as(path.to_path_buf(), path, parse)
     }
 
     /// The same, filed under `key` rather than under the file it was read from.
@@ -151,12 +136,7 @@ fn evict<T>(entries: &mut HashMap<PathBuf, Entry<T>>, capacity: usize) {
 /// one: two parsers keyed on the same path would each serve the other's answer.
 static EVENTS: LazyLock<Memo<TurnContent>> = LazyLock::new(|| Memo::new(CAPACITY));
 
-/// Parsed conversation transcripts — the committed turns of a `<conv_id>.jsonl`.
-static TRANSCRIPTS: LazyLock<Memo<Vec<Turn>>> = LazyLock::new(|| Memo::new(CAPACITY));
 
-/// When each transcript's last turn was recorded — the listing's question, kept apart from the
-/// parses because it is asked of *every* session rather than of the one being read.
-static LAST_TURNS: LazyLock<Memo<Option<u64>>> = LazyLock::new(|| Memo::new(MOMENTS));
 
 /// A turn's events, folded into content by the caller — memoized on the log they were read from.
 ///
@@ -181,31 +161,6 @@ pub(crate) fn folded_events(
     EVENTS.get_or_insert_as(key, path, fold)
 }
 
-/// When the last turn on a transcript was recorded, as the caller's `read` works it out — memoized
-/// on the file, so the answer is re-read only after a turn has been appended.
-///
-/// A listing asks this of every session an agent has, on every poll, where [`transcript`] is asked
-/// only of the chat on screen. That is the whole reason it is its own map with its own capacity: one
-/// number per session is nothing to keep, and keeping them is what makes a rail of a hundred
-/// conversations cost a `stat` each rather than a re-read each.
-pub(crate) fn last_turn_at(path: &Path, read: impl FnOnce() -> Option<u64>) -> Option<u64> {
-    *LAST_TURNS.get_or_insert(path, read)
-}
-
-/// One conversation's committed turns, oldest first. Same deal: the transcript is re-read only
-/// after a turn has been appended to it.
-pub(crate) fn transcript(path: &Path) -> Arc<Vec<Turn>> {
-    TRANSCRIPTS.get_or_insert(path, || {
-        let Ok(text) = std::fs::read_to_string(path) else {
-            return Vec::new();
-        };
-        text.lines()
-            .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str::<Turn>(l).ok())
-            .collect()
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,7 +182,7 @@ mod tests {
         let memo: Memo<String> = Memo::new(CAPACITY);
         let parses = std::cell::Cell::new(0);
         let read = || {
-            memo.get_or_insert(&path, || {
+            memo.get_or_insert_as(path.clone(), &path, || {
                 parses.set(parses.get() + 1);
                 std::fs::read_to_string(&path).unwrap_or_default()
             })
@@ -253,7 +208,7 @@ mod tests {
         let missing = std::env::temp_dir().join("adi-memo-nothing-here");
         let _ = std::fs::remove_file(&missing);
 
-        assert_eq!(*memo.get_or_insert(&missing, String::new), "");
+        assert_eq!(*memo.get_or_insert_as(missing.clone(), &missing, String::new), "");
         assert!(memo.lock().is_empty(), "nothing was remembered");
     }
 
@@ -266,7 +221,7 @@ mod tests {
         for i in 0..=CAPACITY {
             let path = dir.join(format!("f{i}"));
             std::fs::write(&path, format!("{i}")).unwrap();
-            memo.get_or_insert(&path, || format!("{i}"));
+            memo.get_or_insert_as(path.clone(), &path, || format!("{i}"));
             paths.push(path);
         }
 
