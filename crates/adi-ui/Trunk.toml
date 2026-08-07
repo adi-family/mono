@@ -1,0 +1,23 @@
+# Trunk settings for the adi-ui playground. This builds a dev gallery, never a shipped
+# artifact — a consumer of this crate compiles the components itself and imports
+# `styles/ui.css` into its own Tailwind entry.
+
+[build]
+target = "index.html"
+dist = "dist"
+
+[watch]
+watch = ["."]
+ignore = ["dist"]
+
+[tools]
+# Pin Tailwind v4. Trunk's default is 3.3.5, which cannot parse a v4 stylesheet — it dies
+# inside postcss-import on the first `@import "tailwindcss/…"`. Pinned, Trunk downloads and
+# caches the right binary itself, so this needs no Node, no npm, and nothing preinstalled.
+tailwindcss = "4.2.1"
+
+[serve]
+addresses = ["127.0.0.1"]
+# Deliberately not 9080 — that is the adi-webapp dev server, and the two should be able to
+# run at once. Nowhere near the 15353 range the adi daemon uses.
+port = 9081

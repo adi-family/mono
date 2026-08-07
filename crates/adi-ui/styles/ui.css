@@ -1,0 +1,224 @@
+/* adi-ui — the crate's stylesheet, and the only one a consumer imports.
+ *
+ * Tailwind v4, with the design tokens in ./tokens.css mapped onto its theme. Two
+ * deliberate departures from a stock setup:
+ *
+ *   1. **Preflight is replaced, not kept.** The `base` layer at the bottom of this file is
+ *      the reset — small, and written against these tokens.
+ *   2. **Utilities are unlayered.** Unlayered CSS beats layered CSS whatever the
+ *      specificity, so `@layer utilities` would lose every argument with a stray
+ *      unlayered rule from a host page. Unlayered, the two compete on source order, and
+ *      this stylesheet is linked last.
+ */
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css";
+
+@import "./tokens.css";
+
+/* ---- fonts, self-hosted --------------------------------------------------------------
+ * Served from this crate's own `fonts/` (see its README for how they were built), so the
+ * page makes no third-party request and the PWA keeps its typography offline.
+ *
+ * Both are **variable** fonts: one file per family covers every weight, which is why each
+ * declares a `font-weight` *range* rather than a single value. Give a browser a range and
+ * it interpolates 500 out of the same file it used for 400 — no second request, and no
+ * synthetic bolding.
+ *
+ * The URLs are absolute because this stylesheet is imported from other crates, where a
+ * relative path would resolve against *their* directory. Consumers copy this `fonts/` dir
+ * to their dist root; see the crate README.
+ */
+@font-face {
+  font-family: "IBM Plex Sans";
+  src: url("/fonts/ibm-plex-sans-var.woff2") format("woff2");
+  font-weight: 400 600;
+  font-style: normal;
+  /* Show the fallback immediately and swap when the file lands: a control panel that
+     renders nothing for 200ms is worse than one that reflows once. */
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono-var.woff2") format("woff2");
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Scan this crate's components. Resolved relative to *this file*, so it keeps working when
+ * a consumer imports this stylesheet from elsewhere in the tree — that is what makes
+ * adi-ui usable as a library rather than as a copy-paste. */
+@source "../src";
+
+@theme {
+  /* ---- colour -------------------------------------------------------------------------
+   * Tailwind's 22-family default palette is wiped and the tokens take its place, so the
+   * design system cannot be worked around by accident. Each is a `var()` onto a
+   * `light-dark()` token, which is why no component in this crate contains a `dark:`
+   * variant: `bg-card` is already both themes. */
+  --color-*: initial;
+
+  --color-canvas: var(--canvas);
+  --color-stage: var(--stage);
+  --color-panel: var(--panel);
+  --color-panel-alt: var(--panel-alt);
+  --color-bar: var(--bar);
+  --color-card: var(--card);
+  --color-bubble: var(--bubble);
+  --color-selected: var(--selected);
+
+  --color-divider: var(--divider);
+  --color-frame: var(--frame);
+  --color-edge: var(--edge);
+  --color-edge-2: var(--edge-2);
+  --color-dim: var(--dim);
+
+  --color-ink: var(--ink);
+  --color-body: var(--body);
+  --color-secondary: var(--secondary);
+  --color-meta: var(--meta);
+  --color-placeholder: var(--placeholder);
+  --color-faint: var(--faint);
+  --color-fainter: var(--fainter);
+
+  --color-accent: var(--accent);
+  --color-accent-fill: var(--accent-fill);
+  --color-on-accent: var(--on-accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-edge: var(--accent-soft-edge);
+  --color-tip: var(--tip);
+  --color-tip-edge: var(--tip-edge);
+
+  --color-err: var(--err);
+  --color-err-btn: var(--err-btn);
+  --color-err-bg: var(--err-bg);
+  --color-err-bg-2: var(--err-bg-2);
+  --color-err-edge: var(--err-edge);
+  --color-err-edge-2: var(--err-edge-2);
+
+  --color-queue: var(--queue);
+  --color-queue-ink: var(--queue-ink);
+  --color-queue-bg: var(--queue-bg);
+  --color-queue-edge: var(--queue-edge);
+
+  --color-attention: var(--attention);
+
+  /* Not palette entries, and `--color-*: initial` takes them with it —
+   * `border-transparent` and `text-current` have to keep working. */
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-inherit: inherit;
+
+  /* ---- type ---------------------------------------------------------------------------
+   * Named by role rather than by size, because the roles are the spec: there is no
+   * "text-lg" here to reach for when what you meant was a metric. */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
+    "Liberation Mono", monospace;
+
+  --text-*: initial;
+  --text-caps: 10.5px;                 /* small caps labels */
+  --text-caps--line-height: 1;
+  --text-mini: 12px;                   /* meta and secondary */
+  --text-mini--line-height: 1.4;
+  --text-row: 13.5px;                  /* list rows and buttons */
+  --text-row--line-height: 1.45;
+  --text-msg: 14.5px;                  /* chat body */
+  --text-msg--line-height: 1.55;
+  --text-sub: 17px;                    /* an answer's subheading */
+  --text-sub--line-height: 1.35;
+  --text-title: 20px;                  /* screen titles */
+  --text-title--line-height: 1.25;
+  --text-metric: 23px;                 /* metric numbers */
+  --text-metric--line-height: 1.1;
+
+  /* ---- spacing and radii ---------------------------------------------------------------
+   * Tailwind derives its whole spacing scale by multiplying one number; at 4px, `p-1/2/3/4`
+   * are the 4/8/12/16 rhythm and everything between stays available. */
+  --spacing: 4px;
+
+  --radius-*: initial;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+}
+
+/* A small caps label: mono, tracked out, uppercase. It sets no colour, so it composes with
+ * whichever of `text-faint` / `text-meta` the context calls for. */
+@utility caps {
+  font-family: var(--font-mono);
+  font-size: var(--text-caps);
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+/* A metric's number. Tabular figures so a counter ticking upward never shifts the layout
+ * under it. */
+@utility metric {
+  font-family: var(--font-mono);
+  font-size: var(--text-metric);
+  font-weight: 500;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The reset, in place of Tailwind's preflight. Layered, so any utility outranks it. */
+@layer base {
+  *,
+  *::before,
+  *::after {
+    box-sizing: border-box;
+  }
+
+  html,
+  body {
+    margin: 0;
+  }
+
+  body {
+    background: var(--canvas);
+    color: var(--body);
+    font-family: var(--font-sans);
+    font-size: var(--text-row);
+    line-height: 1.45;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Links carry their meaning through colour; a dense UI full of underlined text reads as
+   * unstyled. The underline returns on hover, where it confirms the target. */
+  a {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  a:hover {
+    text-decoration: underline;
+  }
+
+  /* Controls do not inherit type by default, and every one of ours should.
+   *
+   * They also arrive wearing the platform's own border and fill, which no utility can
+   * fully undo: `border-l-2` sets one width and leaves the other three sides drawn by the
+   * UA in `outset`, and a button with no `bg-*` keeps ButtonFace. Every surface and every
+   * line in this system is drawn by a utility, so both are zeroed here — the same thing
+   * Tailwind's preflight does, and the reason a component may set a *partial* border. */
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+    border: 0 solid;
+    background-color: transparent;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+}

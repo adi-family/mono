@@ -1,0 +1,27 @@
+[package]
+name = "adi-ui"
+description = "The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# The component gallery (`trunk serve` in this directory). It is a dev surface, not a
+# shipped artifact — nothing embeds it and no other crate depends on it. Keeping it in this
+# crate rather than in one of its own means a component and the page you look at it on are
+# edited side by side, and share one `cargo` unit of compilation.
+[[bin]]
+name = "adi-ui-playground"
+path = "playground/main.rs"
+
+[dependencies]
+leptos = { version = "0.8", features = ["csr"] }
+
+# Playground-only: routes a wasm panic to the browser console instead of an opaque
+# `unreachable`. Cheap enough that the library carries it rather than gating it on a feature.
+console_error_panic_hook = "0.1"
+
+[lints]
+workspace = true

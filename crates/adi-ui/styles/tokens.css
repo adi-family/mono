@@ -1,0 +1,83 @@
+/* adi-ui design tokens.
+ *
+ * Every token is one `light-dark()` declaration rather than the usual four blocks (OS
+ * light, OS dark, and an explicit override each way). `color-scheme` decides which half is
+ * used, so the explicit theme toggle only has to flip that one property — the palette
+ * itself is never repeated, and a token cannot drift between its four copies because it
+ * only has one.
+ *
+ * The dark half is the specified palette. **The light half is derived from it** — role by
+ * role, keeping the same green-tinted neutrals and the mint accent, darkened where a value
+ * has to carry text on white. Those are proposals, not spec: correct any of them here and
+ * every component follows.
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ---- backgrounds, lightest surface last ------------------------------------------
+   * The stack inverts between themes: in dark, `canvas` is the deepest black and a card
+   * sits above it; in light, `canvas` is the greyest and a card is plain white. */
+  --canvas:    light-dark(#e9eeeb, #070908);   /* outside the window */
+  --stage:     light-dark(#f4f7f5, #0b0e0d);   /* the main chat canvas */
+  --panel:     light-dark(#eff3f1, #0a0d0c);   /* side panels */
+  --panel-alt: light-dark(#ebf0ed, #080b0a);   /* the right panel, variant C */
+  --bar:       light-dark(#ffffff, #0d1110);   /* top bar and composer */
+  --card:      light-dark(#ffffff, #0f1312);   /* cards, inputs, table heads */
+  --bubble:    light-dark(#e9efeb, #151a19);   /* the user's message */
+  --selected:  light-dark(#e3eee8, #131917);   /* the selected session */
+
+  /* ---- lines, subtlest first --------------------------------------------------------
+   * Ordered by how much they show, which is why the light values descend while the dark
+   * ones climb: visibility is distance from the surface, in opposite directions. */
+  --divider: light-dark(#e7ece9, #161b1a);     /* between panels */
+  --frame:   light-dark(#dde4e0, #1b211f);     /* the window frame */
+  --edge:    light-dark(#d9e1dd, #1c2220);     /* card borders */
+  --edge-2:  light-dark(#e0e6e3, #1a201e);     /* the quieter card border */
+  --dim:     light-dark(#d3dbd7, #1e2523);     /* dashes and inactive chips */
+
+  /* ---- text, strongest first --------------------------------------------------------- */
+  --ink:         light-dark(#0b100e, #eef3f0); /* headings, emphasis */
+  --body:        light-dark(#1b2320, #dbe4e0); /* running text */
+  --secondary:   light-dark(#39443f, #c6d0cb);
+  --meta:        light-dark(#64716c, #8e9a95);
+  --placeholder: light-dark(#8b968f, #5d6a65);
+  --faint:       light-dark(#9aa49e, #4e5a55); /* caps labels, arrows */
+  --fainter:     light-dark(#adb6b0, #3f4a46);
+
+  /* ---- accent (mint) ------------------------------------------------------------------
+   * The mint reads as "running" on black but is far too light to carry text on white, so
+   * the light half drops to a deep mint. The button fill is one value for both themes —
+   * it is a filled surface, not ink, and it works either way. */
+  --accent:       light-dark(#0e8a63, #3ddc9c);
+  --accent-fill:  #1f7a5c;                     /* the primary button */
+  --on-accent:    #eafff7;                     /* …and its text */
+  --accent-soft:      light-dark(#e4f4ec, #152420);
+  --accent-soft-edge: light-dark(#bfe3d2, #204036);
+  --tip:      light-dark(#eff8f4, #0d1512);    /* a recommendation block */
+  --tip-edge: light-dark(#cfe8dc, #1d3830);
+
+  /* ---- states ------------------------------------------------------------------------- */
+  --err:        light-dark(#c0322b, #f0645c);
+  --err-btn:    light-dark(#d9564e, #f0918a);
+  --err-bg:     light-dark(#fdf3f2, #120d0d);
+  --err-bg-2:   light-dark(#fbe7e5, #2a1210);
+  --err-edge:   light-dark(#f2cdc9, #3a1a17);
+  --err-edge-2: light-dark(#e5a9a3, #5e2420);
+
+  --queue:      light-dark(#8a6414, #c79a4e);  /* amber: waiting its turn */
+  --queue-ink:  light-dark(#4a4436, #c9bfa8);
+  --queue-bg:   light-dark(#fdf8ee, #12100c);
+  --queue-edge: light-dark(#ecdfc4, #33291a);
+
+  --attention:  light-dark(#b56a1f, #f0a35c);
+
+  /* Depth is a line, not a lift — this stays a hairline. */
+  --shadow: 0 1px 2px light-dark(rgba(9, 11, 15, .05), rgba(0, 0, 0, .35));
+}
+
+/* The explicit override, both directions. Flipping `color-scheme` re-resolves every
+ * `light-dark()` above at once, and takes the platform's own chrome — select menus,
+ * checkboxes, scrollbars — along with it. */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }

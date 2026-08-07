@@ -344,6 +344,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-ui"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "leptos",
+]
+
+[[package]]
 name = "adi-update"
 version = "0.1.0"
 dependencies = [

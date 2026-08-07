@@ -1,9 +1,10 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-# adi-webapp targets wasm32 and is built by Trunk, never by a native `cargo build`. Keep
-# it out of the default set so `cargo build`/`cargo test` (no `--workspace`) skip it; it
-# stays a member so it still inherits workspace metadata/lints and builds with `-p`.
+# adi-webapp and adi-ui target wasm32 and are built by Trunk, never by a native
+# `cargo build`. Keep them out of the default set so `cargo build`/`cargo test` (no
+# `--workspace`) skip them; they stay members so they still inherit workspace
+# metadata/lints and build with `-p … --target wasm32-unknown-unknown`.
 default-members = [
     "crates/adi-agents",
     "crates/adi-app",
@@ -65,6 +66,7 @@ adi-secrets = { path = "crates/adi-secrets" }
 adi-tasks = { path = "crates/adi-tasks" }
 adi-tools = { path = "crates/adi-tools" }
 adi-triggers = { path = "crates/adi-triggers" }
+adi-ui = { path = "crates/adi-ui" }
 adi-update = { path = "crates/adi-update" }
 adi-webapp-api = { path = "crates/adi-webapp-api" }
 
