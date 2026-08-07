@@ -6,8 +6,17 @@ The **adi component library** — [Leptos](https://leptos.dev) components styled
 It is self-contained: tokens, reset, type scale and utilities all come from
 [`styles/ui.css`](./styles/ui.css), and nothing here depends on
 [`adi-css`](../adi-css). That crate still owns the `adi-*` BEM layer every existing screen
-is written against and is untouched by anything in here — but adi-ui has a **different
-palette**, so the two do not mix on one page.
+is written against and is untouched by anything in here.
+
+**The two do share a page**, and `adi-webapp` is where: its title bars are built from this
+crate while everything under them is still `adi-*`. That works because of load order and
+one property of the reset — see
+[`adi-webapp/styles/tailwind.css`](../adi-webapp/styles/tailwind.css). In short: this
+stylesheet is linked *first*, so where the two name the same token (`--ink`, `--accent`,
+`--on-accent`, `--shadow`) adi-css wins and nothing that already exists changes colour;
+everything only this crate names (`--card`, `--bar`, `--edge`, …) comes from here. The
+reset lives in `@layer base` and adi-css is unlayered, so adi-css outranks it wherever they
+overlap. Migrate a screen by rewriting it, not by hoping the palettes meet in the middle.
 
 ## What's in it
 
@@ -21,13 +30,16 @@ palette**, so the two do not mix on one page.
 | `Input` / `Textarea` / `Select` | one shared frame; optional two-way binding to an `RwSignal<String>` |
 | `Flash` / `Empty` | inline or card feedback in 3 kinds; the quiet line an empty list shows |
 | `TopBar` | the window's lid: the wordmark (a link home when given one), a middle slot for where you are, actions right. Wall to wall and `sticky` — the one component that is not an island |
+| `Modal` | a dialog over a scrim, with three ways out: the close button, the scrim, `Escape` |
+| `Faq` / `Qna` | questions folded up under themselves, on native `<details>`. Answers are Markdown |
 | `Crumbs` / `Crumb` | the path to what is open, for the bar's middle slot. The last segment is never a link |
 | `Tree` / `TreeNode` / `TreeState` | an IDE tree from one flat, depth-annotated list: indent rails, a turning chevron, selection, keyboard activation. Knows nothing about files |
 | `CodeEditor` | a painted `<pre>` under a transparent `<textarea>` — the browser keeps the caret, undo, IME and paste. `Lang::from_path` picks the scanner: Rust, TOML, JSON, YAML, TS, shell, SQL, Markdown |
 | `CodeFrame` | the card a file is read in: the name on the left, `actions` on the right, whatever is showing the file underneath. Not part of `CodeEditor`, so a preview wears the same chrome |
 | `Markdown` | the rendered half of a `.md` — and of anything an agent says. Renders through views, never `inner_html`, and allow-lists link schemes |
-| `SessionCard` | the box every row in the rail is: one hit target, one radius, one inset focus ring. `fill` is reactive, `class` is not |
-| `SessionList` / `SessionGroup` / `SessionItem` | the sessions rail: labelled bands of rows under a filter box that sticks while the title scrolls away. 3 states × selected |
+| `Rail` / `RailGroup` / `RailCard` | the column down either side of a chat: a title, an optional filter box that sticks while the title scrolls away, labelled bands, and the card every row is. Knows nothing about what a row holds |
+| `SessionItem` / `SessionState` | a conversation, as a row in the left rail: done, waiting, error, working |
+| `AppItem` / `AppState` / `RowMenu` | a **living app**, as a row in the right rail: its favicon leads, the band is its project, the name under its title is the fleet node it runs on. Live, offline, view-only — and the state says its own words, so no row can put an age there |
 
 ## Develop here
 
@@ -74,13 +86,13 @@ Two things it deliberately leaves alone:
 - **No `overflow`.** A [`Field`](./src/field.rs)'s hint bubble has to be able to leave the
   panel it is anchored in. An island whose children must be clipped to its corners — a
   header strip's fill, a scrolling body — adds `overflow-hidden` itself, as
-  [`CodeFrame`](./src/code.rs) and [`SessionList`](./src/session.rs) do.
+  [`CodeFrame`](./src/code.rs) and [`Rail`](./src/rail.rs) do.
 
 **The one exception is [`TopBar`](./src/topbar.rs).** It goes wall to wall on `bg-bar` with a
 hairline under it, because it is the screen's own edge rather than an object on the screen —
 an edge that floats reads as a card stuck to the ceiling. Everything below it is islands.
 
-**A component that is a thing draws its own island.** `SessionList` does not wait for a
+**A component that is a thing draws its own island.** `Rail` does not wait for a
 caller to put a border around it; a rail is an object on the screen, not a region of one, and
 the wrapper that used to draw it was the same four utilities at every call site. A component
 that is *part* of a thing — a row, a group, a form strip — draws nothing.

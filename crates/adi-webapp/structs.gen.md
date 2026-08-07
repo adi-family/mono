@@ -97,6 +97,9 @@ pub(crate) enum Icon {
     Wrench,
     Key,
     Database,
+    Download,
+    Question,
+    Contrast,
 }
 ```
 
@@ -230,6 +233,7 @@ struct ChatStats {
 One row of the rail. The list spans every agent, so a row has to carry which agent it belongs to — there is no group heading above it to say so.
 
 ```rust
+#[derive(Clone)]
 struct SessionRow {
     agent: String,
     run: Option<AgentRunInfo>,

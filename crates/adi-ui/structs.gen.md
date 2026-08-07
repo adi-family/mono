@@ -4,13 +4,16 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-3 structs · 10 enums across 10 files.
+5 structs · 14 enums across 13 files.
 
 ## Index
 
+- [`src/app.rs`](#srcapprs) — `AppState`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
+- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Turn`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
+- [`src/faq.rs`](#srcfaqrs) — `Qna`
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
@@ -18,6 +21,24 @@
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
 - [`src/topbar.rs`](#srctopbarrs) — `Crumb`
 - [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
+
+---
+
+## `src/app.rs`
+
+### enum `AppState`
+
+Whether an app is showing you anything right now.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AppState {
+    #[default]
+    Live,
+    Offline,
+    ViewOnly,
+}
+```
 
 ---
 
@@ -74,6 +95,66 @@ pub enum ButtonSize {
 
 ---
 
+## `src/chat.rs`
+
+### enum `Role`
+
+Who said it.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Role {
+    User,
+    #[default]
+    Agent,
+}
+```
+
+### enum `ToolState`
+
+How a tool call ended, or that it has not.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolState {
+    Running,
+    #[default]
+    Ok,
+    Failed,
+}
+```
+
+### struct `ToolCall`
+
+One tool call, as the model wrote it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCall {
+    pub name: String,
+    pub params: Vec<(String, String)>,
+    pub state: ToolState,
+    pub result: Option<String>,
+}
+```
+
+### enum `Turn`
+
+One entry in a transcript.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Turn {
+    Said {
+        role: Role,
+        body: String,
+    },
+    Did(Vec<ToolCall>),
+}
+```
+
+---
+
 ## `src/code.rs`
 
 ### enum `CodeHeight`
@@ -86,6 +167,22 @@ pub enum CodeHeight {
     #[default]
     Fill,
     Form,
+}
+```
+
+---
+
+## `src/faq.rs`
+
+### struct `Qna`
+
+One question and its answer.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Qna {
+    pub question: String,
+    pub answer: String,
 }
 ```
 

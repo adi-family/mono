@@ -17,10 +17,10 @@
 #![allow(non_snake_case)]
 
 use adi_ui::{
-    Badge, BadgeTone, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame, CodeHeight, Crumb,
-    Crumbs, Empty, Field, Flash, FlashKind, Form, Hint, Input, InputWidth, Lang, Markdown, Panel,
-    Select, SessionCard, SessionGroup, SessionItem, SessionList, SessionState, Textarea, TopBar,
-    Tree, TreeNode, TreeState,
+    AppItem, AppState, Badge, BadgeTone, Chat, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame,
+    CodeHeight, Composer, Crumb, Crumbs, Empty, Faq, Field, Flash, FlashKind,
+    Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, Qna, Rail, RailCard, RailGroup, Role,
+    Select, SessionItem, SessionState, Textarea, ToolCall, ToolState, TopBar, Tree, TreeNode, TreeState, Turn,
 };
 use leptos::prelude::*;
 
@@ -105,6 +105,7 @@ const FILE: &str = "<path d='M4 2h4.5L12 5.5V14H4z'/><path d='M8.5 2v3.5H12'/>";
 const EYE: &str = "<path d='M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z'/><circle cx='8' cy='8' r='2'/>";
 const CODE: &str = "<path d='M6 4 2.5 8 6 12'/><path d='M10 4l3.5 4-3.5 4'/>";
 const SAVE: &str = "<path d='M8 2.5v6'/><path d='M5 6l3 3 3-3'/><path d='M2.5 11v2.5h11V11'/>";
+const QUESTION: &str = "<circle cx='8' cy='8' r='6.25'/><path d='M6.15 6.05a1.9 1.9 0 1 1 2.6 1.75c-.5.2-.75.6-.75 1.1v.35'/><path d='M8 11.75h.01'/>";
 const SPARK: &str = "<path d='M6.5 2.5 8 6l3.5 1.5L8 9l-1.5 3.5L5 9l-3.5-1.5L5 6z'/><path d='M12 2v2.5'/><path d='M13.25 3.25h-2.5'/>";
 
 /// What a file holds, for the demo. One per format the scanner knows, so clicking down the
@@ -321,6 +322,199 @@ fn FilesDemo() -> impl IntoView {
     }
 }
 
+/// A stand-in favicon: a rounded square with a letter in it, as a `data:` URI so the
+/// playground stays a single page with no requests. A real app serves its own.
+fn favicon(letter: char, fill: &str) -> String {
+    let svg = format!(
+        "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>\
+         <rect width='16' height='16' rx='3' fill='{fill}'/>\
+         <text x='8' y='11.5' font-family='monospace' font-size='9' font-weight='700' \
+         text-anchor='middle' fill='white'>{letter}</text></svg>"
+    );
+    format!(
+        "data:image/svg+xml,{}",
+        svg.replace('#', "%23").replace('<', "%3C").replace('>', "%3E").replace('"', "%22")
+    )
+}
+
+/// One app in the demo's data: what it is called, its mark, the node it runs on, and how
+/// alive it is.
+type Row = (&'static str, char, &'static str, &'static str, AppState);
+
+/// The right rail: every living app on this stack, banded by the project it belongs to and
+/// tagged with the fleet node it runs on.
+#[component]
+fn AppsDemo() -> impl IntoView {
+    // (project, [(title, node, status, state)]) — the two things a dashboard belongs to are
+    // the band it is in and the name under its title.
+    // (project, [(title, mark, colour, node, state)]). No ages anywhere: a number that
+    // only says something changed is not worth a column.
+    let bands: Vec<(&str, Vec<Row>)> = vec![
+        (
+            "nakityok",
+            vec![
+                ("NakitYok Status", 'N', "#1f7a5c", "zomro-de1", AppState::Live),
+                ("IVR Call Funnel", 'I', "#2f5fa8", "zomro-de1", AppState::Live),
+                ("IIKO Sync Errors", 'K', "#8a6414", "teremec", AppState::Live),
+            ],
+        ),
+        (
+            "bugbounty",
+            vec![
+                ("Bugbounty Targets", 'B', "#6b3fa0", "teremec", AppState::Live),
+                ("Payout Queue", 'P', "#a03f3f", "8626e4721660", AppState::Offline),
+            ],
+        ),
+        (
+            "infrastructure",
+            vec![// Empty machine: it runs right here, and the row says so itself.
+                ("Fleet Load", 'F', "#3f6b6b", "", AppState::ViewOnly)],
+        ),
+    ];
+
+    let open = RwSignal::new("IVR Call Funnel");
+
+    view! {
+        <Rail
+            title="Apps"
+            actions=|| {
+                view! {
+                    <Button size=ButtonSize::Small variant=ButtonVariant::Ghost>"Refresh"</Button>
+                    <Button size=ButtonSize::Small variant=ButtonVariant::Ghost>"Manage"</Button>
+                }
+                .into_any()
+            }
+        >
+            {bands
+                .into_iter()
+                .map(|(project, rows)| {
+                    let count = rows.len();
+                    view! {
+                        <RailGroup label=project count=count>
+                            {rows
+                                .into_iter()
+                                .map(|(title, mark, fill, node, state)| {
+                                    let is_open = Signal::derive(move || open.get() == title);
+                                    // Only a broken row has anything to offer — and even
+                                    // then it stays hidden until its dot is asked. A row
+                                    // with no action leaves its dot a plain mark.
+                                    if state == AppState::Offline {
+                                        view! {
+                                            <AppItem
+                                                title=title
+                                                state=state
+                                                favicon=favicon(mark, fill)
+                                                machine=node
+                                                selected=is_open
+                                                action=|| {
+                                                    view! {
+                                                        <Button size=ButtonSize::Small>
+                                                            "Connect machine"
+                                                        </Button>
+                                                    }
+                                                    .into_any()
+                                                }
+                                                on:click=move |_| open.set(title)
+                                            />
+                                        }
+                                        .into_any()
+                                    } else {
+                                        view! {
+                                            <AppItem
+                                                title=title
+                                                state=state
+                                                favicon=favicon(mark, fill)
+                                                machine=node
+                                                selected=is_open
+                                                on:click=move |_| open.set(title)
+                                            />
+                                        }
+                                        .into_any()
+                                    }
+                                })
+                                .collect::<Vec<_>>()}
+                        </RailGroup>
+                    }
+                })
+                .collect::<Vec<_>>()}
+        </Rail>
+    }
+}
+
+/// A transcript, newest first: what the agent said, what it did between saying things, and
+/// one run still going.
+#[component]
+fn ChatDemo() -> impl IntoView {
+    let turns: Vec<Turn> = vec![
+        Turn::Said {
+            role: Role::User,
+            body: "Walk the linear board and tell me what is actually blocked.".into(),
+        },
+        Turn::Did(vec![
+            ToolCall::new("Bash")
+                .param("command", "adi-mono linear issues --state started --json")
+                .param("description", "List started issues")
+                .result("14 issues · 3 without an assignee"),
+            ToolCall::new("Read")
+                .param("file_path", "/Users/ihor/adi-family/docs/fleet.md")
+                .result("…1.2 kB…"),
+        ]),
+        Turn::Said {
+            role: Role::Agent,
+            body: "Three of the fourteen started issues have **no assignee**, and all three                    are on the fleet:
+
+- `ADI-214` — node pairing retries
+- `ADI-221` —                    relay fallback
+- `ADI-233` — `adi up` on a cold store
+
+The first two                    are the same bug. I will read the pairing path before saying more."
+                .into(),
+        },
+        Turn::Did(vec![
+            ToolCall::new("Grep")
+                .param("pattern", "fn pair(")
+                .param("path", "crates/adi-mesh/src")
+                .result("crates/adi-mesh/src/pair.rs:88"),
+            ToolCall::new("Read")
+                .param("file_path", "crates/adi-mesh/src/pair.rs")
+                .param("offset", "60")
+                .param("limit", "80")
+                .result("…retry loop, 3 attempts, no backoff…"),
+            ToolCall::new("Bash")
+                .param(
+                    "command",
+                    "cargo test -p adi-mesh pair -- --nocapture --test-threads 1",
+                )
+                .param("description", "Run the pairing tests")
+                .state(ToolState::Running),
+        ]),
+    ];
+
+    let draft = RwSignal::new(String::new());
+    let sent = RwSignal::new(String::new());
+
+    view! {
+        <div class="flex flex-col gap-3">
+            // The composer sits above the transcript, not below it: newest is at the top, so
+            // the box you type into belongs next to where your message will appear.
+            <Composer
+                value=draft
+                busy=false
+                on_send=Callback::new(move |text: String| {
+                    sent.set(text);
+                    draft.set(String::new());
+                })
+            />
+            <Show when=move || !sent.get().is_empty()>
+                <Flash kind=FlashKind::Ok>
+                    {move || format!("sent: {}", sent.get())}
+                </Flash>
+            </Show>
+            <Chat turns=turns.clone() class="max-h-140 p-1"/>
+        </div>
+    }
+}
+
 /// The sessions rail, assembled: a live selection across three bands, and the filter box
 /// wired to the one band long enough to need it.
 #[component]
@@ -393,7 +587,7 @@ fn SessionsDemo() -> impl IntoView {
     };
 
     view! {
-        <SessionList
+        <Rail
             title="Sessions"
             search=query
             actions=|| {
@@ -406,7 +600,7 @@ fn SessionsDemo() -> impl IntoView {
             // One band for everything live. A session that stopped to ask you something is
             // still the same conversation you left running, and a band of its own put a
             // heading between it and the row above for one row's worth of news.
-            <SessionGroup label="Running now" count=3>
+            <RailGroup label="Running now" count=3>
                 <SessionItem
                     title="Walk the linear board"
                     state=SessionState::Working
@@ -429,15 +623,15 @@ fn SessionsDemo() -> impl IntoView {
                     age="2m"
                     on:click=move |_| open.set("deep")
                 />
-            </SessionGroup>
+            </RailGroup>
 
-            <SessionGroup label="Done">
+            <RailGroup label="Done">
                 {done}
                 <Show when=move || matching().is_empty()>
                     <Empty>"Nothing matches."</Empty>
                 </Show>
-            </SessionGroup>
-        </SessionList>
+            </RailGroup>
+        </Rail>
     }
 }
 
@@ -460,6 +654,32 @@ fn Playground() -> impl IntoView {
         }
     });
 
+    // The FAQ the bar opens. Closed by default, and it closes itself three ways.
+    let faq_open = RwSignal::new(false);
+    let questions = vec![
+        Qna::new(
+            "What is this page?",
+            "Every component in `adi-ui`, in one place, in **both themes**. It is a dev \
+             surface: nothing embeds it and nothing depends on it.",
+        ),
+        Qna::new(
+            "Why is there no `dark:` anywhere?",
+            "Because a token is already both themes. `bg-card` compiles to `var(--card)`, and \
+             that is one `light-dark()` declaration — `color-scheme` picks the half.",
+        ),
+        Qna::new(
+            "Why did my class do nothing?",
+            "Tailwind finds classes by *reading* the source, never by running it. \
+             `format!(\"bg-{tone}\")` generates no CSS at all. Write the whole literal per \
+             branch:\n\n```rust\nSelf::Primary => \"bg-accent-fill text-on-accent\",\n```",
+        ),
+        Qna::new(
+            "How do I run it?",
+            "```sh\ncd crates/adi-ui && trunk serve --open\n```\n\nPort 9081, deliberately \
+             not 9080 — that one is the webapp dev server.",
+        ),
+    ];
+
     let disabled = RwSignal::new(false);
     let name = RwSignal::new(String::from("ports"));
     let port = RwSignal::new(String::from("8000"));
@@ -477,8 +697,17 @@ fn Playground() -> impl IntoView {
         <TopBar
             logo="adi"
             home="/"
-            actions=|| {
+            actions=move || {
                 view! {
+                    // Left of the way out: the way to have this explained.
+                    <Button
+                        size=ButtonSize::Small
+                        variant=ButtonVariant::Ghost
+                        icon=QUESTION
+                        on:click=move |_| faq_open.set(true)
+                    >
+                        "FAQ"
+                    </Button>
                     <Button size=ButtonSize::Small variant=ButtonVariant::Ghost icon=SPARK>
                         "Extended"
                     </Button>
@@ -491,6 +720,10 @@ fn Playground() -> impl IntoView {
                 Crumb::new("playground"),
             ]/>
         </TopBar>
+
+        <Modal open=faq_open title="Questions" width="max-w-3xl">
+            <Faq items=questions.clone()/>
+        </Modal>
 
         <main class="mx-auto flex max-w-4xl flex-col gap-4 p-6">
             <Panel title="Type" flush=true>
@@ -780,6 +1013,38 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
+            <Panel title="Chat" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "Newest first — an agent's run is long and mostly tool calls, and you come \
+                     back to it to find out what just happened, not to re-read it. Nothing \
+                     pins to the bottom, so streaming content pushes away from you instead of \
+                     under you. Every entry carries "
+                    <span class="font-mono">"content-visibility: auto"</span>
+                    ", so the browser skips what is off screen without a virtual list taking \
+                     find-in-page away. Tool runs are folded by default and text is the \
+                     divider between them; the one still running shows itself in the closed \
+                     summary."
+                </div>
+                <div class="p-4">
+                    <ChatDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="Apps" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "The right rail: the living apps on this stack. Same container, same bands \
+                     and same card as the sessions on the other side — a different row in \
+                     them. An app belongs to two things and the row says both: the project it \
+                     is part of is the band, the fleet node it runs on is the name under its \
+                     title. The mark is its own favicon, and the state rides its corner."
+                </div>
+                <div class="p-4">
+                    <div class="h-140 w-80 max-w-full">
+                        <AppsDemo/>
+                    </div>
+                </div>
+            </Panel>
+
             <Panel title="Sessions" flush=true>
                 <div class="px-4 pt-3 text-mini text-meta">
                     "The rail is live: click a row. Scroll it and the title goes with the \
@@ -805,7 +1070,7 @@ fn Playground() -> impl IntoView {
                     <div class="island bg-panel px-1.5 pb-3">
                         // Every state, twice: as it sits in the list and as the open one.
                         // Only the fill and the hairline change between the two.
-                        <SessionGroup label="done">
+                        <RailGroup label="done">
                             <SessionItem title="Done" agent="nakityok-lead" age="21h"/>
                             <SessionItem
                                 title="Done · selected"
@@ -813,9 +1078,9 @@ fn Playground() -> impl IntoView {
                                 agent="nakityok-lead"
                                 age="21h"
                             />
-                        </SessionGroup>
+                        </RailGroup>
 
-                        <SessionGroup label="waiting">
+                        <RailGroup label="waiting">
                             <SessionItem
                                 title="Waiting"
                                 state=SessionState::Waiting
@@ -829,9 +1094,9 @@ fn Playground() -> impl IntoView {
                                 alert="agent question"
                                 age="2h"
                             />
-                        </SessionGroup>
+                        </RailGroup>
 
-                        <SessionGroup label="error">
+                        <RailGroup label="error">
                             <SessionItem
                                 title="Error"
                                 state=SessionState::Error
@@ -845,9 +1110,9 @@ fn Playground() -> impl IntoView {
                                 agent="bb-target-ops"
                                 age="4d"
                             />
-                        </SessionGroup>
+                        </RailGroup>
 
-                        <SessionGroup label="working">
+                        <RailGroup label="working">
                             <SessionItem
                                 title="Working"
                                 state=SessionState::Working
@@ -861,9 +1126,9 @@ fn Playground() -> impl IntoView {
                                 agent="adi-agent"
                                 age="14m"
                             />
-                        </SessionGroup>
+                        </RailGroup>
 
-                        <SessionGroup label="the rest" count=2>
+                        <RailGroup label="the rest" count=2>
                             // A title too long for the rail truncates; the line under it
                             // clips rather than wrapping the row to two heights.
                             <SessionItem
@@ -876,22 +1141,22 @@ fn Playground() -> impl IntoView {
                             <SessionItem title="With a child" agent="adi-agent" age="6h">
                                 <Badge tone=BadgeTone::Warn>"draft"</Badge>
                             </SessionItem>
-                        </SessionGroup>
+                        </RailGroup>
 
                         // The box on its own, for a row a session does not describe. `fill`
                         // is where the state goes; everything inside is the caller's.
-                        <SessionGroup label="bare card" count=2>
-                            <SessionCard fill="hover:bg-card">
+                        <RailGroup label="bare card" count=2>
+                            <RailCard fill="hover:bg-card">
                                 <span class="text-row text-body">"Anything, in a row"</span>
-                            </SessionCard>
-                            <SessionCard fill="border-edge bg-selected" current=true>
+                            </RailCard>
+                            <RailCard fill="border-edge bg-selected" current=true>
                                 <span class="text-row text-ink">"…and the same one, open"</span>
-                            </SessionCard>
-                        </SessionGroup>
+                            </RailCard>
+                        </RailGroup>
 
-                        <SessionGroup label="empty">
+                        <RailGroup label="empty">
                             <Empty>"No sessions yet."</Empty>
-                        </SessionGroup>
+                        </RailGroup>
                     </div>
                 </div>
             </Panel>

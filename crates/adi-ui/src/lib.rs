@@ -35,29 +35,41 @@
 
 mod badge;
 mod button;
+mod app;
+mod chat;
 mod code;
+mod composer;
+mod faq;
 mod feedback;
 mod field;
 mod form;
 pub mod highlight;
 mod input;
 mod markdown;
+mod modal;
 mod panel;
+mod rail;
 mod session;
 mod topbar;
 mod tree;
 
 pub use badge::{Badge, BadgeTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
+pub use app::{AppItem, AppState};
+pub use chat::{Chat, Role, ToolCall, ToolState, Turn};
 pub use code::{CodeEditor, CodeFrame, CodeHeight};
+pub use composer::Composer;
+pub use faq::{Faq, Qna};
 pub use feedback::{Empty, Flash, FlashKind};
 pub use field::Field;
 pub use form::{Form, Hint};
 pub use highlight::{Lang, Tok, highlight};
 pub use input::{Input, InputWidth, Select, Textarea};
 pub use markdown::Markdown;
+pub use modal::Modal;
 pub use panel::Panel;
-pub use session::{SessionCard, SessionGroup, SessionItem, SessionList, SessionState};
+pub use rail::{Rail, RailCard, RailGroup};
+pub use session::{SessionItem, SessionState};
 pub use topbar::{Crumb, Crumbs, TopBar};
 pub use tree::{Tree, TreeNode, TreeState};
 
