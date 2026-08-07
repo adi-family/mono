@@ -626,7 +626,7 @@ fn expand_templates(input: &str, ports: &BTreeMap<String, u16>) -> String {
 /// `$ADI_DASHBOARDS_DIR` (the projects / dashboards module dirs, honoring `$ADI_DIR`), and `$HOME`.
 fn expand_vars(pattern: &str) -> String {
     let cfg = adi_config::Config::open();
-    let projects = cfg.module("projects").dir().to_string_lossy().into_owned();
+    let projects = cfg.projects_dir().to_string_lossy().into_owned();
     let dashboards = cfg
         .module("dashboards")
         .dir()

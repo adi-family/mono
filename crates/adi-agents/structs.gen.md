@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-60 structs · 16 enums · 5 type aliases across 27 files.
+61 structs · 16 enums · 5 type aliases across 28 files.
 
 ## Index
 
@@ -18,6 +18,7 @@
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Wire`, `OpenAiDialect`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`
+- [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunDeleted`
 - [`src/lib.rs`](#srclibrs) — `Agents`
@@ -775,9 +776,25 @@ What a tool call knows about the turn making it.
 ```rust
 pub(super) struct Ctx<'a> {
     pub cwd: &'a Path,
+    pub shell: Shell,
     pub agent: &'a str,
     pub conv: &'a str,
     pub awaits: Awaits,
+}
+```
+
+---
+
+## `src/backends/shell.rs`
+
+### struct `Shell`
+
+One conversation's shell state, as the two files holding it.
+
+```rust
+pub(super) struct Shell {
+    cwd: PathBuf,
+    env: PathBuf,
 }
 ```
 

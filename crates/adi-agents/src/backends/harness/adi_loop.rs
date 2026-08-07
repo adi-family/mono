@@ -56,7 +56,7 @@ const MAX_ROUNDS: u64 = 16;
 /// enough: a `systemd --user` unit inherits the manager's bare PATH, which contains no adi
 /// directory, so on a Linux node every agent turn died with "couldn't spawn adi-mono: No such file
 /// or directory" while the panel that spawned it was running from exactly that directory.
-fn adi_mono_program() -> String {
+pub(crate) fn adi_mono_program() -> String {
     std::env::current_exe()
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("adi-mono")))
@@ -117,7 +117,8 @@ pub(crate) fn run_turn(
     // The committed transcript ends with the user turn this reply answers (the agent layer appended
     // it before spawning us). Read straight from the session store: the turn child and the process
     // that launched it are different processes sharing one directory, so the store *is* the channel.
-    let turns = crate::store::SessionStore::new(sessions_dir).turns(&agent.name, conv_id);
+    let store = crate::store::SessionStore::new(sessions_dir);
+    let turns = store.turns(&agent.name, conv_id);
     if turns.iter().all(|t| t.text.trim().is_empty()) {
         return Err(Error::Process(
             "the conversation has no messages to answer".to_string(),
@@ -131,6 +132,9 @@ pub(crate) fn run_turn(
     // same `$ADI_DIR` every other process here does, and holds no `Agents` of its own.
     let ctx = tools::Ctx {
         cwd: &cwd,
+        // The shell is the conversation's, not this turn's: its files sit beside the transcript in
+        // the same session directory, so a path exported in an earlier turn is still exported here.
+        shell: crate::backends::shell::Shell::new(&store.agent_dir(&agent.name), conv_id),
         agent: &agent.name,
         conv: conv_id,
         awaits: crate::awaits::Awaits::open(),

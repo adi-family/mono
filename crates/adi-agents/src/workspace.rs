@@ -21,7 +21,7 @@ use adi_config::Config;
 
 use crate::agent::RawAgentArguments;
 use crate::launch::expand_home;
-use crate::{StoredAgent, StoredAgentManifest};
+use crate::{Backend, StoredAgent, StoredAgentManifest};
 
 /// The key every backend's arguments spell their static working directory under. One name across
 /// `pty:codex`, `process:*`, and `harness:claude-sdk`, which is what lets this read the raw
@@ -35,6 +35,9 @@ const AGENT_ENV: &str = "ADI_AGENT";
 /// The agent's project scope, and that project's directory, when it has one.
 const PROJECT_ENV: &str = "ADI_PROJECT";
 const PROJECT_DIR_ENV: &str = "ADI_PROJECT_DIR";
+/// Where all the projects are — exported for every run, scoped or not, because the run that needs
+/// it is precisely the one no single project owns.
+const PROJECTS_DIR_ENV: &str = "ADI_PROJECTS_DIR";
 
 /// Where a run of this agent starts, most specific answer first:
 ///
@@ -86,6 +89,10 @@ pub(crate) fn env(config: &Config, agent: &StoredAgent, workdir: &Path) -> Vec<(
     let mut vars = vec![
         (WORKDIR_ENV.to_string(), workdir.display().to_string()),
         (AGENT_ENV.to_string(), agent.name.clone()),
+        (
+            PROJECTS_DIR_ENV.to_string(),
+            config.projects_dir().display().to_string(),
+        ),
     ];
     if let Some(project) = agent
         .manifest
@@ -102,6 +109,39 @@ pub(crate) fn env(config: &Config, agent: &StoredAgent, workdir: &Path) -> Vec<(
     vars
 }
 
+/// What an engine's shell carries from one command to the next — the one thing that decides whether
+/// "name it once" is advice or a trap, so it is stated per engine rather than in general.
+///
+/// The three engines that get this block all keep both now, but only one of them ever did on its
+/// own. Measured against the `claude` CLI before the hook existed: across two `Bash` calls in one
+/// headless turn the `cd` held and an `export` did not, and a call under `--resume` — a reply, which
+/// is a new process — started back in the run directory. So the Claude engines are told this on the
+/// strength of [`crate::backends::shell`] bending their `Bash` through the same session shell the
+/// adi loop runs its own in; an engine that has not been wired to it must keep falling through to
+/// the conservative half, which promises only what a plain shell gives.
+fn shell_note(backend: &Backend) -> &'static str {
+    match backend {
+        Backend::HarnessAdi | Backend::HarnessClaudeSdk | Backend::ProcessClaude => {
+            "When you do work somewhere else, move there **once**, in a command of its own — your \
+             shell belongs to this conversation, so `cd <path>` holds for every command after it, \
+             through this turn and the next. What you `export` holds just as long: that is how a \
+             long path is named once and then reused (`export FE=<path>`, then `$FE`), instead of \
+             being written out again on line after line. A bare `FE=<path>` is not exported and \
+             does not carry."
+        }
+        // No session shell: promise only what a command gets on its own. Nothing here is wasted on
+        // an engine that would in fact have kept more — it pays for one extra `cd`, which is the
+        // cheap side of being wrong.
+        _ => {
+            "When you do work somewhere else, move there **once**, in a command of its own, and \
+             expect it to hold no longer than the command that follows it: assume nothing you set \
+             — a directory, a variable, a shell function — survives into your next call, and \
+             re-derive a path from `$ADI_WORKDIR` or `$ADI_PROJECTS_DIR` rather than from state you \
+             hoped was still there."
+        }
+    }
+}
+
 /// The prompt section stating where the run is. Short on purpose: the fix for a run that `cd`s is
 /// not more prose about directories, it is one sentence it can trust plus the variable to read.
 pub(crate) fn block(config: &Config, agent: &StoredAgent, workdir: &Path) -> String {
@@ -113,13 +153,14 @@ pub(crate) fn block(config: &Config, agent: &StoredAgent, workdir: &Path) -> Str
          `cd` you repeat on every command is noise; a `cd` you forget on one command writes that \
          command's output somewhere else. Use relative paths, and reach for an absolute one only \
          to step outside this directory on purpose.\n\n\
-         When you do work somewhere else, move there **once**, in a command of its own — your \
-         shell keeps its working directory between commands, so `cd <path>` holds for every \
-         command after it. Prefixing `cd <path> &&` onto each command re-pays for the same move \
-         every time and buys nothing.\n\n\
+         {} Prefixing `cd <path> &&` onto each command re-pays for the same move every time and \
+         buys nothing.\n\n\
          It is also `${WORKDIR_ENV}` in your environment, and your own name is `${AGENT_ENV}`, so \
-         a script you write can find both without being told.",
+         a script you write can find both without being told. Every project on this machine sits \
+         under `${PROJECTS_DIR_ENV}` — start from that when you need one of them, rather than \
+         writing a long path to it out again on command after command.",
         workdir.display(),
+        shell_note(&agent.manifest.backend),
     );
     if let Some(project) = agent
         .manifest
@@ -280,13 +321,21 @@ mod tests {
         assert_eq!(get(PROJECT_DIR_ENV), Some(project.display().to_string()));
     }
 
+    /// The scope vars are the agent's own; the projects root is every run's, because the run that
+    /// works across projects is exactly the one that belongs to none of them.
     #[test]
-    fn an_unscoped_agent_gets_no_project_vars() {
-        let (config, _root) = store();
+    fn an_unscoped_agent_gets_no_project_vars_but_still_gets_the_projects_root() {
+        let (config, root) = store();
         let agent = agent(manifest(None, None));
         let vars = env(&config, &agent, Path::new("/tmp"));
         assert!(!vars.iter().any(|(k, _)| k == PROJECT_ENV), "{vars:?}");
         assert!(!vars.iter().any(|(k, _)| k == PROJECT_DIR_ENV), "{vars:?}");
+        assert_eq!(
+            vars.iter()
+                .find(|(k, _)| k == PROJECTS_DIR_ENV)
+                .map(|(_, v)| v.clone()),
+            Some(root.join("projects").display().to_string())
+        );
     }
 
     #[test]
@@ -298,8 +347,36 @@ mod tests {
         assert!(block.contains("do not `cd`"), "{block}");
         // Stepping outside is allowed — what is ruled out is paying for the same move on every
         // command, which is the habit that actually burns a run's tokens.
-        assert!(block.contains("keeps its working directory"), "{block}");
+        assert!(block.contains("move there **once**"), "{block}");
         assert!(block.contains(WORKDIR_ENV), "{block}");
-        assert!(!block.contains("project"), "{block}");
+        // The projects root is stated for every run; the *scope* clause belongs only to an agent
+        // that has one.
+        assert!(block.contains(PROJECTS_DIR_ENV), "{block}");
+        assert!(!block.contains("You are scoped to"), "{block}");
+    }
+
+    /// Each engine is told what its own shell actually keeps. The three that run through
+    /// `backends::shell` — the adi loop directly, the Claude engines through the runner's hook —
+    /// are told to name a path once; anything else is promised nothing it hasn't been wired for.
+    #[test]
+    fn the_block_promises_only_what_the_engines_shell_really_keeps() {
+        let (config, _root) = store();
+        let block_for = |backend: &str| {
+            let mut manifest = manifest(None, None);
+            manifest.backend = backend.into();
+            block(&config, &agent(manifest), Path::new("/repo/main"))
+        };
+
+        for engine in ["harness:adi", "harness:claude-sdk", "process:claude"] {
+            let kept = block_for(engine);
+            assert!(kept.contains("belongs to this conversation"), "{kept}");
+            assert!(kept.contains("export FE="), "how to name a path once: {kept}");
+        }
+
+        // A backend with no session shell of its own is told to trust nothing between commands —
+        // never that a `cd` or an `export` will still be there.
+        let bare = block_for("pty:codex");
+        assert!(bare.contains("survives into your next call"), "{bare}");
+        assert!(!bare.contains("export FE="), "{bare}");
     }
 }

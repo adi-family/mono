@@ -5,7 +5,11 @@ use crate::arguments::{
 };
 use crate::backends::push_option;
 
-pub(crate) fn argv(config: &ProcessClaudeArguments, message: &str) -> Vec<String> {
+pub(crate) fn argv(
+    config: &ProcessClaudeArguments,
+    message: &str,
+    settings: Option<&str>,
+) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -63,6 +67,9 @@ pub(crate) fn argv(config: &ProcessClaudeArguments, message: &str) -> Vec<String
     if !prompts.is_empty() {
         argv.extend(["--append-system-prompt".into(), prompts.join("\n\n")]);
     }
+    // Run settings — the shell hook the runner installs. Placed here for the same reason as
+    // everything else: after the `--` below it would be read as part of the prompt, not as a flag.
+    push_option(&mut argv, "--settings", settings);
     // `--allowed-tools` / `--disallowed-tools` are variadic, so end option parsing with `--` before
     // the positional prompt or it could be swallowed as another tool value.
     argv.push("--".to_string());
@@ -100,7 +107,7 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest.arguments, "prepare the release"),
+            argv(&manifest.arguments, "prepare the release", None),
             [
                 "claude",
                 "--print",
@@ -124,7 +131,7 @@ mod tests {
 
     #[test]
     fn argv_defaults_to_stream_json_so_a_run_emits_progress() {
-        let argv = argv(&ProcessClaudeArguments::default(), "go");
+        let argv = argv(&ProcessClaudeArguments::default(), "go", None);
         // No explicit output format → streamed events (with --verbose) rather than the CLI's plain
         // text default, so the run's tool/thinking/metric events are captured.
         let window = argv.windows(3).find(|w| w[0] == "--output-format");

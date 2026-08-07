@@ -729,6 +729,20 @@ impl Agents {
         backends::harness::run_adi_turn(&agent, &sessions_dir, conv_id, sink)
     }
 
+    /// Answer one `PreToolUse` payload from a Claude engine's CLI: the same `Bash` call with its
+    /// command bent through this run's shell, so a `cd` or an `export` survives to the next command
+    /// and into the next turn — which that CLI's own shell does not do for either.
+    ///
+    /// Invoked by the `adi-mono agents shell-hook` child the runner installs as a hook on every
+    /// Claude-engine run (see [`runner::detached`]). It is deliberately infallible: anything it
+    /// cannot rewrite comes back as `{}`, and the command runs exactly as the model wrote it. See
+    /// [`backends::shell::hook_answer`] for what that covers and why.
+    #[must_use]
+    pub fn shell_hook(&self, agent: &str, session: &str, payload: &str) -> String {
+        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
+        backends::shell::hook_answer(&sessions_dir, agent, session, payload)
+    }
+
     /// The spec a *fresh* run starts with. `run_dir` is this launch's own working directory, for a
     /// caller pointing one agent at a different target each run; `None` leaves the manifest and the
     /// agent's project to decide (see [`workspace::resolve`] for the full precedence).

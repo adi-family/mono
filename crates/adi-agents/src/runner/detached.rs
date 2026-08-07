@@ -87,7 +87,11 @@ impl DetachedRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt =
                     with_tool_help(spec, with_workspace(spec, config.append_system_prompt));
-                Ok(process::claude::argv(&config, message))
+                Ok(process::claude::argv(
+                    &config,
+                    message,
+                    Some(&shell_hook_settings(session)),
+                ))
             }
             Backend::ProcessCodex => {
                 let mut config = decode::<ProcessCodexArguments>(&spec.arguments)?;
@@ -107,7 +111,12 @@ impl DetachedRunner {
                 } else {
                     Continuation::First { session_id }
                 };
-                Ok(harness::claude_sdk::argv(&config, message, &cont))
+                Ok(harness::claude_sdk::argv(
+                    &config,
+                    message,
+                    &cont,
+                    Some(&shell_hook_settings(session)),
+                ))
             }
             Backend::HarnessAdi => {
                 let config = decode::<HarnessAdiArguments>(&spec.arguments)?;
@@ -406,10 +415,45 @@ pub(super) fn own_prompt(spec: &RunSpec, stored: Option<String>) -> Option<Strin
         .or(stored)
 }
 
-/// `existing` with the run's tool help behind it, or `existing` unchanged when there are no tools.
+/// The settings that give a Claude engine the conversation's shell: a `PreToolUse` hook on `Bash`
+/// that re-enters this binary, where [`crate::backends::shell::hook_answer`] rewrites the command.
 ///
-/// Appended, never substituted: whatever the agent was told to be survives, with the inventory
-/// after it — instructions are read before equipment.
+/// Passed inline rather than written to a file because they are *this run's* — the hook has to name
+/// the agent and session it belongs to, and a file would be one more thing to place, clean up, and
+/// keep in step with a session it outlives. `--settings` merges with the machine's own, so an agent
+/// that already had hooks keeps them.
+///
+/// Handed to each engine's argv builder rather than appended to what it returns, because both end
+/// their command line with `--`: a flag after that terminator is read as part of the prompt, and
+/// the hook simply never happens — which is how the first version of this failed, silently, with
+/// every test still green.
+///
+/// Nothing here can refuse a launch: the worst case is a CLI that ignores the setting, and a run
+/// whose shell forgets where it was — which is where every Claude run stood before this existed.
+fn shell_hook_settings(session: &dyn Session) -> String {
+    let hook = format!(
+        "{} agents shell-hook --agent {} --session {}",
+        shell_quote(&harness::adi_loop::adi_mono_program()),
+        shell_quote(session.agent()),
+        shell_quote(session.id()),
+    );
+    serde_json::json!({
+        "hooks": {
+            "PreToolUse": [{
+                "matcher": "Bash",
+                "hooks": [{ "type": "command", "command": hook }],
+            }],
+        }
+    })
+    .to_string()
+}
+
+/// One `sh` word, single-quoted. The hook is a command line the CLI hands to a shell, and an agent
+/// name is free text — a space or a quote in one must not become two arguments.
+fn shell_quote(word: &str) -> String {
+    format!("'{}'", word.replace('\'', r"'\''"))
+}
+
 /// `existing` with the run's location behind it, or `existing` unchanged when there is none.
 ///
 /// Applied before [`with_tool_help`] so the order the old decorator established survives: location
@@ -424,6 +468,10 @@ pub(super) fn with_workspace(spec: &RunSpec, existing: Option<String>) -> Option
     }
 }
 
+/// `existing` with the run's tool help behind it, or `existing` unchanged when there are no tools.
+///
+/// Appended, never substituted: whatever the agent was told to be survives, with the inventory
+/// after it — instructions are read before equipment.
 pub(super) fn with_tool_help(spec: &RunSpec, existing: Option<String>) -> Option<String> {
     let Some(block) = tool_help::block(&spec.tools) else {
         return existing;
@@ -763,6 +811,68 @@ mod tests {
         assert!(
             codex.iter().all(|arg| !arg.contains("# Where you are")),
             "codex must not be handed the location block: {codex:?}"
+        );
+    }
+
+    /// Both Claude engines are launched with the hook that gives their `Bash` the conversation's
+    /// shell, addressed to the run it belongs to. Codex is not: it does not read these settings,
+    /// and its shell is not one this can reach.
+    #[test]
+    fn the_claude_engines_are_launched_with_the_shell_hook() {
+        for backend in [Backend::ProcessClaude, Backend::HarnessClaudeSdk] {
+            let argv = argv_of(
+                backend.clone(),
+                &spec(json!({})),
+                &FakeSession::new("hooked"),
+                "go",
+            );
+            let at = argv
+                .iter()
+                .position(|arg| arg == "--settings")
+                .unwrap_or_else(|| panic!("{backend:?} takes settings: {argv:?}"));
+            let settings: Value = serde_json::from_str(&argv[at + 1]).expect("settings are json");
+            let hook = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+                .as_str()
+                .expect("a hook command");
+            assert!(hook.contains("agents shell-hook"), "{hook}");
+            assert!(hook.contains("--agent 'solver'"), "{hook}");
+            assert!(hook.contains("--session 'conv-1'"), "{hook}");
+            assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
+            // The hook says nothing about permissions — see `backends::shell::hook_answer`.
+            assert!(!argv[at + 1].contains("permissionDecision"), "{argv:?}");
+            // And it has to arrive as a *flag*. Both engines end their command line with `--`,
+            // after which the CLI reads everything as the prompt: settings placed there parse
+            // cleanly, launch cleanly, and do nothing at all.
+            let terminator = argv
+                .iter()
+                .position(|arg| arg == "--")
+                .unwrap_or_else(|| panic!("{backend:?} ends option parsing: {argv:?}"));
+            assert!(at < terminator, "settings must precede `--`: {argv:?}");
+        }
+
+        // A reply gets it too, and that is the half that matters most: a resumed turn is a new
+        // process, so without the hook it starts back in the run directory having forgotten
+        // everything the last turn stood in.
+        let reply = argv_of(
+            Backend::HarnessClaudeSdk,
+            &spec(json!({})),
+            &FakeSession::new("hooked-reply").started(),
+            "and now a test",
+        );
+        assert!(
+            reply.windows(2).any(|w| w[0] == "--settings" && w[1].contains("shell-hook")),
+            "{reply:?}"
+        );
+
+        let codex = argv_of(
+            Backend::ProcessCodex,
+            &spec(json!({})),
+            &FakeSession::new("codex-hook"),
+            "go",
+        );
+        assert!(
+            codex.iter().all(|arg| arg != "--settings"),
+            "codex reads no such settings: {codex:?}"
         );
     }
 

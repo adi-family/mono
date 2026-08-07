@@ -22,6 +22,7 @@ pub(crate) fn argv(
     config: &HarnessClaudeSdkArguments,
     message: &str,
     cont: &Continuation<'_>,
+    settings: Option<&str>,
 ) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     // Stream the turn as NDJSON events (tool calls, thinking, result + metrics) so the harness can
@@ -76,6 +77,10 @@ pub(crate) fn argv(
     if let Some(prompt) = append_system_prompt(config) {
         argv.extend(["--append-system-prompt".into(), prompt]);
     }
+    // Run settings — the shell hook the runner installs. It has to precede the `--`: that
+    // terminator ends option parsing, so a flag after it is read as part of the prompt and silently
+    // does nothing, which is exactly how the first version of this failed.
+    push_option(&mut argv, "--settings", settings);
     // `--allowed-tools` / `--disallowed-tools` are variadic (`<tools...>`), so a bare positional
     // prompt right after them would be swallowed as another tool. `--` ends option parsing, so the
     // prompt is always taken as the prompt regardless of which flags precede it.
@@ -142,7 +147,8 @@ mod tests {
             argv(
                 &config,
                 "plan the migration",
-                &Continuation::First { session_id: "sid-1" }
+                &Continuation::First { session_id: "sid-1" },
+                None,
             ),
             [
                 "claude",
@@ -174,6 +180,7 @@ mod tests {
             &HarnessClaudeSdkArguments::default(),
             "and now write a test",
             &Continuation::Resume { session_id: "sid-1" },
+            None,
         );
         assert_eq!(
             argv,
@@ -197,6 +204,7 @@ mod tests {
             &HarnessClaudeSdkArguments::default(),
             "",
             &Continuation::First { session_id: "sid-1" },
+            None,
         );
         assert_eq!(
             argv,

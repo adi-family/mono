@@ -18,6 +18,7 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
+use crate::backends::shell::Shell;
 use crate::awaits::{self, Awaits, Request};
 
 /// A tool as the model sees it: a name, a sentence about when to reach for it, and the JSON Schema
@@ -37,6 +38,9 @@ pub(super) struct ToolSpec {
 pub(super) struct Ctx<'a> {
     /// The directory the run is about; every relative path resolves against it.
     pub cwd: &'a Path,
+    /// The conversation's shell — where its last command left off, and what it exported. Held here
+    /// because it belongs to the conversation rather than to any one call (see [`super::shell`]).
+    pub shell: Shell,
     /// The agent this turn belongs to.
     pub agent: &'a str,
     /// The conversation this turn belongs to — where a wake is delivered.
@@ -45,6 +49,24 @@ pub(super) struct Ctx<'a> {
     /// can point it at a scratch store without touching the environment every other test reads.
     pub awaits: Awaits,
 }
+
+/// What `Bash` is, told in the terms that decide how a command gets written: the shell is the
+/// conversation's, not the call's. Two texts because that is only true where [`super::shell`] can
+/// keep it — a model on Windows told it could name a path once would name it into nothing.
+#[cfg(unix)]
+const BASH: &str = "Run a shell command and return its output (stdout and stderr together, with \
+                    the exit status when it is not zero). It is one shell across the whole \
+                    conversation: `cd` moves it until you move it again, and an **exported** \
+                    variable is still set on your next call. So name a long path once — `export \
+                    FE=/long/path/to/a/checkout` — and use `$FE` from then on, rather than writing \
+                    it out on command after command. A bare `FE=…` is not exported and does not \
+                    carry. Only the shell moves: Read, Write, Edit, Glob and Grep go on resolving \
+                    relative paths against the run's own directory.";
+#[cfg(windows)]
+const BASH: &str = "Run a shell command in the working directory and return its output (stdout \
+                    and stderr together, with the exit status when it is not zero). Each call is \
+                    its own shell, so a `cd` or a variable you set is gone by the next one — use \
+                    full paths.";
 
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
 /// tends to consider them in: look before you write, and shell out only when nothing else fits.
@@ -100,8 +122,7 @@ pub(super) const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "Bash",
-        description: "Run a shell command in the working directory and return its output (stdout \
-                      and stderr together, with the exit status when it is not zero).",
+        description: BASH,
         schema: || {
             json!({
                 "type": "object",
@@ -201,7 +222,7 @@ pub(super) fn run(name: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Resu
         "Read" => read(input, ctx.cwd),
         "Write" => write(input, ctx.cwd),
         "Edit" => edit(input, ctx.cwd),
-        "Bash" => bash(input, ctx.cwd),
+        "Bash" => bash(input, ctx.cwd, &ctx.shell),
         "Glob" => glob(input, ctx.cwd),
         "Grep" => grep(input, ctx.cwd),
         "Await" => await_wake(input, ctx),
@@ -296,24 +317,34 @@ fn edit(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
     ))
 }
 
-fn bash(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
+fn bash(input: &Value, cwd: &Path, shell: &Shell) -> std::result::Result<String, String> {
     let command = arg_str(input, "command")?;
     let timeout = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
+    // Where the conversation's shell was left, which is where this command continues from — the
+    // run's own directory until something moves it. See [`super::shell`].
+    let start = shell.start_dir(cwd);
+    let script = shell.script(command);
 
     // The shell is the platform's own: `sh -c` where there is one, `cmd /C` on Windows, matching
     // what the process backends hand their CLIs.
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
-        c.arg("/C").arg(command);
+        c.arg("/C").arg(&script);
         c
     } else {
         let mut c = Command::new("sh");
-        c.arg("-c").arg(command);
+        c.arg("-c").arg(&script);
         c
     };
-    cmd.current_dir(cwd);
+    cmd.current_dir(&start);
 
     let output = wait_with_timeout(cmd, timeout)?;
+    // A move is reported, and only a move: the shell's directory is now something the next command
+    // inherits, and the file tools still resolve against the run's directory — so a run that walks
+    // somewhere is told, rather than finding out from a path that landed oddly.
+    let moved = shell
+        .moved_from(&start)
+        .map(|ended| format!("\n(the shell is now in {})", ended.display()));
     let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr);
     if !stderr.trim().is_empty() {
@@ -329,13 +360,23 @@ fn bash(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
             .status
             .code()
             .map_or_else(|| "signal".to_string(), |c| c.to_string());
-        return Ok(truncate(&format!("(exit {code})\n{text}")));
+        return Ok(with_note(&truncate(&format!("(exit {code})\n{text}")), moved));
     }
-    Ok(truncate(if text.trim().is_empty() {
+    let body = truncate(if text.trim().is_empty() {
         "(no output)"
     } else {
         &text
-    }))
+    });
+    Ok(with_note(&body, moved))
+}
+
+/// `body` with a note behind it. Appended after truncation, never before it: a note about where the
+/// shell now is is worthless if a long command's output is what cut it off.
+fn with_note(body: &str, note: Option<String>) -> String {
+    match note {
+        Some(note) => format!("{body}{note}"),
+        None => body.to_string(),
+    }
 }
 
 fn glob(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
@@ -656,6 +697,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         Ctx {
             cwd,
+            shell: Shell::new(cwd, "conv-1"),
             agent: "watcher",
             conv: "conv-1",
             awaits: Awaits::with_config(adi_config::Config::with_root(root)),
@@ -711,7 +753,9 @@ mod tests {
     #[test]
     fn a_nonzero_exit_comes_back_as_a_result_not_an_error() {
         let dir = scratch("bash");
-        let out = bash(&json!({"command": "echo out; exit 3"}), &dir).expect("nonzero is a result");
+        let shell = Shell::new(&dir, "conv");
+        let out = bash(&json!({"command": "echo out; exit 3"}), &dir, &shell)
+            .expect("nonzero is a result");
         assert!(out.contains("exit 3"), "{out}");
         assert!(out.contains("out"), "{out}");
     }
@@ -719,9 +763,33 @@ mod tests {
     #[test]
     fn a_command_that_never_finishes_is_killed_and_says_so() {
         let dir = scratch("bash-timeout");
-        let err = bash(&json!({"command": "sleep 5", "timeout_ms": 200}), &dir)
+        let shell = Shell::new(&dir, "conv");
+        let err = bash(&json!({"command": "sleep 5", "timeout_ms": 200}), &dir, &shell)
             .expect_err("a hung command must fail");
         assert!(err.contains("still running"), "{err}");
+    }
+
+    /// What the model is told about a `cd`: the shell moved, the file tools did not. Reported only
+    /// when it happens, so an ordinary command's output stays the whole of the answer.
+    #[test]
+    #[cfg(unix)]
+    fn a_command_that_moves_the_shell_says_where_it_left_it() {
+        let dir = scratch("bash-cd");
+        std::fs::create_dir_all(dir.join("workspaces")).expect("mkdir");
+        let inner = std::fs::canonicalize(dir.join("workspaces")).expect("canonicalize");
+        let inner = inner.to_str().expect("utf8");
+        let shell = Shell::new(&dir, "conv");
+
+        let stayed = bash(&json!({"command": "echo here"}), &dir, &shell).expect("run");
+        assert!(!stayed.contains("the shell is now in"), "{stayed}");
+
+        let moved = bash(&json!({"command": "cd workspaces"}), &dir, &shell).expect("run");
+        assert!(moved.contains(inner), "the move is reported: {moved}");
+        // …and the next command really does continue from there.
+        let after = bash(&json!({"command": "pwd -P"}), &dir, &shell).expect("run");
+        assert!(after.contains(inner), "{after}");
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

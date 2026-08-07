@@ -117,6 +117,19 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Internal: bend one `Bash` call of a Claude-engine run through that conversation's shell.
+    /// Reads the CLI's `PreToolUse` payload on stdin and prints the hook's answer — the same call
+    /// with its command rewritten, or `{}` to leave it alone. Installed by the runner on every
+    /// Claude-engine run; not for direct use.
+    #[command(hide = true)]
+    ShellHook {
+        /// The agent whose run issued the command.
+        #[arg(long)]
+        agent: String,
+        /// The session (run) id whose shell the command belongs to.
+        #[arg(long)]
+        session: String,
+    },
     /// Stop a running agent using its executor's lifecycle.
     Stop { name: String },
     /// Delete an agent definition.
@@ -316,6 +329,15 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     );
                 }
             }
+        }
+        // Never an error, whatever it is handed: this runs in front of every command a Claude agent
+        // issues, and the CLI reads a non-answer as "no opinion" and runs the command as written.
+        // An unreadable payload is therefore printed away as `{}` rather than failing the call.
+        AgentsCommand::ShellHook { agent, session } => {
+            use std::io::Read as _;
+            let mut payload = String::new();
+            let _ = std::io::stdin().read_to_string(&mut payload);
+            println!("{}", store.shell_hook(&agent, &session, &payload));
         }
         AgentsCommand::Stop { name } => {
             if store.stop(&name).map_err(|e| e.to_string())? {

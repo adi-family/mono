@@ -95,6 +95,13 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         json: bool,
     },
+    #[command(hide = true)]
+    ShellHook {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        session: String,
+    },
     Stop {
         name: String,
     },

@@ -160,6 +160,16 @@ impl Config {
         }
     }
 
+    /// Where every project lives — `projects/`, whether or not anything is registered there yet.
+    ///
+    /// The root rather than one project: a run that works across several of them (comparing two
+    /// checkouts, driving a service from the repo that calls it) has one directory to be told about
+    /// instead of a long path per project, and the module name stays spelled in one place.
+    #[must_use]
+    pub fn projects_dir(&self) -> PathBuf {
+        self.module(PROJECTS_MODULE).dir().to_path_buf()
+    }
+
     /// Where a project's directory lives — `projects/<project>`, or `None` when the id is not a
     /// safe path segment or nothing is registered under it.
     ///

@@ -183,6 +183,14 @@ the split `.test`/`.adi` zones and forwards the rest.
   shell keeps its working directory between commands, so everything after it is already in the \
   right place. Prefixing `cd <path> &&` onto command after command pays for the same move every \
   time, and the one command that forgets it writes to the wrong directory.
+- **The shell is the conversation's, so name a long path once.** What you `export` is still set \
+  on your next command and in your next turn, exactly as a `cd` is: `export FE=$ADI_PROJECTS_DIR/\
+  <id>/workspaces/main` once, then `$FE` from there on. A bare `FE=…` is not exported and does \
+  not carry. Retyping the same `/Users/…/workspaces/main` prefix on command after command is the \
+  same waste as the repeated `cd`, and it is where a typo turns into work in the wrong checkout.
+- **Every project on this machine sits under `$ADI_PROJECTS_DIR`.** Build a path from that \
+  rather than writing one out from `/Users/…`, and `ls $ADI_PROJECTS_DIR` when you need to find \
+  which id is which.
 - **The shell is zsh, not bash.** An unquoted glob that matches nothing aborts the *entire* \
   command line with `no matches found`, so everything after it is silently skipped. Quote them: \
   `grep -r --include='*.js' …`, `ls 'svgo.config.'*`.
