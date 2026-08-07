@@ -105,6 +105,17 @@
 
   --color-attention: var(--attention);
 
+  /* The code view's palette. Only `text-syn-*` is ever wanted, but Tailwind generates the
+   * whole family from one entry and the unused ones cost nothing. */
+  --color-syn-plain: var(--syn-plain);
+  --color-syn-comment: var(--syn-comment);
+  --color-syn-str: var(--syn-str);
+  --color-syn-num: var(--syn-num);
+  --color-syn-key: var(--syn-key);
+  --color-syn-kw: var(--syn-kw);
+  --color-syn-func: var(--syn-func);
+  --color-syn-punct: var(--syn-punct);
+
   /* Not palette entries, and `--color-*: initial` takes them with it —
    * `border-transparent` and `text-current` have to keep working. */
   --color-transparent: transparent;
@@ -154,6 +165,48 @@
   letter-spacing: 0.12em;
   line-height: 1;
   text-transform: uppercase;
+}
+
+/* A surface that wants noticing: an amber wash laid over whatever it already is, breathing
+ * on a slow cycle.
+ *
+ * Shallow and slow on purpose. A session waiting on you should catch the eye that passes
+ * over it, not pull that eye back every second — so the wash is 12% at its brightest and
+ * takes five seconds to get there and back. The tint is drawn on a `::before` rather than
+ * as the element's own background, which leaves the element free to carry a fill of its
+ * own (the open row does) and leaves `hover:` free to change it.
+ *
+ * Reduced motion holds the wash still instead of dropping it: the colour is the state, and
+ * only the movement is decoration. */
+@utility attention-pulse {
+  position: relative;
+
+  &::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    /* Follows whatever radius the element was given, so this composes with any card. */
+    border-radius: inherit;
+    background-color: color-mix(in srgb, var(--attention) 12%, transparent);
+    animation: attention-breathe 5s ease-in-out infinite;
+    pointer-events: none;
+  }
+}
+
+@keyframes attention-breathe {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attention-pulse::before {
+    animation: none;
+  }
 }
 
 /* A metric's number. Tabular figures so a counter ticking upward never shifts the layout
@@ -213,7 +266,11 @@
   textarea {
     font: inherit;
     color: inherit;
-    border: 0 solid;
+    /* `transparent`, not Tailwind's `currentColor`: a control that sets a border *width*
+     * without a colour — a card reserving the pixel it will need when it is selected —
+     * would otherwise draw that border in its own text colour. Base-layer, so any
+     * `border-*` utility still wins. */
+    border: 0 solid transparent;
     background-color: transparent;
   }
 

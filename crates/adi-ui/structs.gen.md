@@ -4,15 +4,19 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-6 enums across 5 files.
+2 structs · 10 enums across 9 files.
 
 ## Index
 
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
+- [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
+- [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
+- [`src/markdown.rs`](#srcmarkdownrs) — `Block`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
+- [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
 
 ---
 
@@ -69,6 +73,23 @@ pub enum ButtonSize {
 
 ---
 
+## `src/code.rs`
+
+### enum `CodeHeight`
+
+How much room the editor asks for.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CodeHeight {
+    #[default]
+    Fill,
+    Form,
+}
+```
+
+---
+
 ## `src/feedback.rs`
 
 ### enum `FlashKind`
@@ -82,6 +103,48 @@ pub enum FlashKind {
     Neutral,
     Ok,
     Err,
+}
+```
+
+---
+
+## `src/highlight.rs`
+
+### enum `Tok`
+
+What a run of characters is, which is all the renderer needs to pick a colour.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Tok {
+    Plain,
+    Comment,
+    Str,
+    Num,
+    Key,
+    Kw,
+    Func,
+    Punct,
+}
+```
+
+### enum `Lang`
+
+The language to scan `path` as, from its extension. Unknown extensions get `Lang::None`, which emits the text as one plain run — highlighting is an enhancement, never a gate.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Lang {
+    Toml,
+    Json,
+    Yaml,
+    Ts,
+    Rust,
+    Sh,
+    Sql,
+    Md,
+    #[default]
+    None,
 }
 ```
 
@@ -105,6 +168,28 @@ pub enum InputWidth {
 
 ---
 
+## `src/markdown.rs`
+
+### enum `Block`
+
+One block of a document.
+
+```rust
+enum Block {
+    Heading(usize, String),
+    Code(Lang, String),
+    List {
+        ordered: bool,
+        items: Vec<String>,
+    },
+    Quote(String),
+    Rule,
+    Para(String),
+}
+```
+
+---
+
 ## `src/session.rs`
 
 ### enum `SessionState`
@@ -114,10 +199,47 @@ Where a session stands, which is the only thing that decides how its row looks.
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SessionState {
-    Running,
-    Waiting,
     #[default]
     Done,
+    Waiting,
+    Error,
+    Working,
+}
+```
+
+---
+
+## `src/tree.rs`
+
+### struct `TreeNode`
+
+One row of a tree.
+
+```rust
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TreeNode {
+    pub id: String,
+    pub depth: usize,
+    pub label: String,
+    pub has_children: bool,
+    pub badge: Option<String>,
+    pub title: Option<String>,
+    pub container: bool,
+    pub icon: Option<&'static str>,
+    pub separated: bool,
+    pub emphasis: bool,
+}
+```
+
+### struct `TreeState`
+
+One tree's interaction state: what was last activated, and which branches are open.
+
+```rust
+#[derive(Clone, Copy, Debug)]
+pub struct TreeState {
+    pub selected: RwSignal<Option<String>>,
+    pub expanded: RwSignal<HashSet<String>>,
 }
 ```
 

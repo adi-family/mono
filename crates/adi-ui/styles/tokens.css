@@ -72,6 +72,25 @@
 
   --attention:  light-dark(#b56a1f, #f0a35c);
 
+  /* ---- syntax -------------------------------------------------------------------------
+   * The code view's own small palette. Eight roles, because that is what the scanner in
+   * `src/highlight.rs` can tell apart, and no more: a file with a colour per concept reads
+   * as confetti.
+   *
+   * Mint for the text a program *contains*, amber for its numbers, teal for the words the
+   * language reserves and a cool blue for the names it calls — the one hue that steps
+   * outside the UI palette, because code is the one place five hues have to stay apart at
+   * a glance. Everything structural is grey: brackets and separators are scaffolding, and
+   * they should let the names between them lead. */
+  --syn-plain:   light-dark(#1b2320, #dbe4e0);   /* ordinary code — foreground, not muted */
+  --syn-comment: light-dark(#8b968f, #63706a);
+  --syn-str:     light-dark(#0e8a63, #3ddc9c);
+  --syn-num:     light-dark(#8a6414, #c79a4e);
+  --syn-key:     light-dark(#0b100e, #eef3f0);   /* a key, a section header, a heading */
+  --syn-kw:      light-dark(#146a7a, #63c8d8);
+  --syn-func:    light-dark(#2f5fa8, #8fb4f0);
+  --syn-punct:   light-dark(#9aa49e, #55615c);
+
   /* Depth is a line, not a lift — this stays a hairline. */
   --shadow: 0 1px 2px light-dark(rgba(9, 11, 15, .05), rgba(0, 0, 0, .35));
 }

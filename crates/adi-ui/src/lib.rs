@@ -35,21 +35,29 @@
 
 mod badge;
 mod button;
+mod code;
 mod feedback;
 mod field;
 mod form;
+pub mod highlight;
 mod input;
+mod markdown;
 mod panel;
 mod session;
+mod tree;
 
 pub use badge::{Badge, BadgeTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
+pub use code::{CodeEditor, CodeFrame, CodeHeight};
 pub use feedback::{Empty, Flash, FlashKind};
 pub use field::Field;
 pub use form::{Form, Hint};
+pub use highlight::{Lang, Tok, highlight};
 pub use input::{Input, InputWidth, Select, Textarea};
+pub use markdown::Markdown;
 pub use panel::Panel;
-pub use session::{SessionGroup, SessionItem, SessionList, SessionRollup, SessionState};
+pub use session::{SessionCard, SessionGroup, SessionItem, SessionList, SessionState};
+pub use tree::{Tree, TreeNode, TreeState};
 
 /// Join a component's own classes with whatever the call site passed in `class`.
 ///

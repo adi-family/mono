@@ -72,6 +72,16 @@ impl ButtonSize {
             Self::Medium => "h-7 gap-2 px-3 text-row",
         }
     }
+
+    /// The glyph's box at this step — a shade under the type size, so an icon reads as part
+    /// of the label rather than as a second thing next to it.
+    #[must_use]
+    pub fn icon_classes(self) -> &'static str {
+        match self {
+            Self::Small => "size-3 shrink-0",
+            Self::Medium => "size-3.5 shrink-0",
+        }
+    }
 }
 
 /// Shared by every variant: the box, the type, and the states. Focus uses the same ring the
@@ -103,10 +113,19 @@ pub fn Button(
     #[prop(optional)]
     submit: bool,
     #[prop(optional, into)] disabled: Signal<bool>,
+    /// A glyph before the label, as the inner markup of a 16×16 `<svg>` — the same shape
+    /// [`crate::TreeNode::icon`] takes, so one set of paths serves both.
+    ///
+    /// It is drawn in `currentColor` at a size the button picks, which is what keeps an
+    /// icon button on-theme through every variant and both themes without the call site
+    /// knowing anything. A button with an icon and no children is a square icon button;
+    /// give it an `aria-label` when it has no words.
+    #[prop(optional)]
+    icon: Option<&'static str>,
     /// Extra utilities from the call site: layout, width, margin.
     #[prop(optional, into)]
     class: String,
-    children: Children,
+    #[prop(optional)] children: Option<Children>,
 ) -> impl IntoView {
     let own = format!("{BASE} {} {}", variant.classes(), size.classes());
     view! {
@@ -115,7 +134,20 @@ pub fn Button(
             type=if submit { "submit" } else { "button" }
             disabled=move || disabled.get()
         >
-            {children()}
+            {icon.map(|markup| view! {
+                <svg
+                    class=size.icon_classes()
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                    inner_html=markup
+                ></svg>
+            })}
+            {children.map(|c| c())}
         </button>
     }
 }

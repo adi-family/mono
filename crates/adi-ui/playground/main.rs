@@ -17,9 +17,10 @@
 #![allow(non_snake_case)]
 
 use adi_ui::{
-    Badge, BadgeTone, Button, ButtonSize, ButtonVariant, Empty, Field, Flash, FlashKind, Form,
-    Hint, Input, InputWidth, Panel, Select, SessionGroup, SessionItem, SessionList, SessionRollup,
-    SessionState, Textarea,
+    Badge, BadgeTone, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame, CodeHeight, Empty,
+    Field, Flash, FlashKind, Form, Hint, Input, InputWidth, Lang, Markdown, Panel, Select,
+    SessionCard, SessionGroup, SessionItem, SessionList, SessionState, Textarea, Tree, TreeNode,
+    TreeState,
 };
 use leptos::prelude::*;
 
@@ -95,17 +96,267 @@ fn Swatches(label: &'static str, items: Vec<(&'static str, &'static str)>) -> im
     }
 }
 
+/// The inner markup of a 16×16 `<svg>`, which is what [`TreeNode::icon`] takes. Two are
+/// enough for a file browser; a real screen keeps its own set.
+const FOLDER: &str = "<path d='M2 4.5A1.5 1.5 0 0 1 3.5 3h2.8l1.2 1.6h5A1.5 1.5 0 0 1 14 6.1v5.4A1.5 1.5 0 0 1 12.5 13h-9A1.5 1.5 0 0 1 2 11.5z'/>";
+const FILE: &str = "<path d='M4 2h4.5L12 5.5V14H4z'/><path d='M8.5 2v3.5H12'/>";
+
+/// The same shape again, for [`Button`]'s `icon`.
+const EYE: &str = "<path d='M1.5 8S4 3.5 8 3.5 14.5 8 14.5 8 12 12.5 8 12.5 1.5 8 1.5 8z'/><circle cx='8' cy='8' r='2'/>";
+const CODE: &str = "<path d='M6 4 2.5 8 6 12'/><path d='M10 4l3.5 4-3.5 4'/>";
+const SAVE: &str = "<path d='M8 2.5v6'/><path d='M5 6l3 3 3-3'/><path d='M2.5 11v2.5h11V11'/>";
+
+/// What a file holds, for the demo. One per format the scanner knows, so clicking down the
+/// tree walks the whole palette.
+fn sample(path: &str) -> &'static str {
+    match Lang::from_path(path) {
+        Lang::Yaml => {
+            "# the front door's own service\nproxy:\n  host: app.adi\n  port: 8000\n  \
+             health: \"/api/health\"\n  restart: on-failure\n\nroutes:\n  - match: /api/*\n    \
+             upstream: 127.0.0.1:8000\n"
+        }
+        Lang::Toml => {
+            "[package]\nname = \"adi-ui\"\nedition = \"2024\"\n\n[dependencies]\n\
+             leptos = { version = \"0.8\", features = [\"csr\"] }\n\n\
+             # excluded from default-members: this one targets wasm\n[lints]\nworkspace = true\n"
+        }
+        Lang::Ts => {
+            "export async function routes(app: App) {\n  \
+             app.get(\"/api/health\", async () => ({ ok: true }));\n\n  \
+             app.post(\"/api/run\", async (req) => {\n    \
+             const { agent, prompt } = await req.json();\n    \
+             return start(agent, prompt, { timeout: 30_000 });\n  });\n}\n"
+        }
+        Lang::Sh => {
+            "#!/usr/bin/env bash\nset -euo pipefail\n\nBIN=\"${1:-target/release/adi-app}\"\n\
+             trunk build --release\ncargo build --release -p adi-app\n\n\
+             if [ ! -x \"$BIN\" ]; then\n  echo \"no binary at $BIN\" >&2\n  exit 1\nfi\n"
+        }
+        Lang::Sql => {
+            "CREATE TABLE session (\n  id      TEXT PRIMARY KEY,\n  \
+             agent   TEXT NOT NULL,\n  started INTEGER NOT NULL,\n  \
+             state   TEXT NOT NULL DEFAULT 'working'\n);\n\n\
+             SELECT agent, count(*) FROM session WHERE started > 0 GROUP BY agent;\n"
+        }
+        Lang::Json => {
+            "{\n  \"name\": \"adi-ui\",\n  \"private\": true,\n  \"version\": \"0.1.0\",\n  \
+             \"scripts\": {\n    \"dev\": \"trunk serve --open\",\n    \
+             \"build\": \"trunk build --release\"\n  },\n  \"sideEffects\": false\n}\n"
+        }
+        // The one file with two ways to read it, which is what the button in the frame's
+        // top right is for.
+        Lang::Md => {
+            r"# adi-ui
+
+Leptos components over the adi design tokens. Read this one **rendered** — the
+toggle is up in the frame's top right, beside the file name.
+
+## What's in it
+
+- `Tree` — an IDE tree from one flat, depth-annotated list
+- `CodeEditor` — a painted `<pre>` under a transparent `<textarea>`
+- `Markdown` — *this*, which is a scanner rather than a parser
+
+> A class name has to appear in the source as a whole string literal. Tailwind
+> never runs the code, so a name assembled at runtime is never generated.
+
+```sh
+cd crates/adi-ui && trunk serve --open   # http://127.0.0.1:9081
+```
+
+---
+
+1. Tokens live in `styles/tokens.css`
+2. Utilities come from `styles/ui.css`
+3. Nothing here depends on [adi-css](/crates/adi-css)
+"
+        }
+        Lang::Rust => {
+            r#"//! The tree — an IDE view over one flat, depth-annotated list.
+
+use leptos::prelude::*;
+
+/// One row. `depth` is the nesting level; 0 is a root.
+#[derive(Clone, Debug)]
+pub struct TreeNode<'a> {
+    pub id: String,
+    pub depth: usize,
+    pub icon: Option<&'a str>,
+}
+
+impl TreeNode<'static> {
+    #[must_use]
+    pub fn new(id: impl Into<String>, depth: usize) -> Self {
+        let label = format!("row {depth}");
+        assert!(!label.is_empty(), r"a row is never nameless");
+        Self { id: id.into(), depth, icon: None }
+    }
+}
+"#
+        }
+        Lang::None => {
+            "Nothing here knows this extension, so it paints as one plain run.\n\
+             Highlighting is an enhancement, never a gate.\n"
+        }
+    }
+}
+
+/// A file tree over one project, and the editor the selected file opens in.
+#[component]
+fn FilesDemo() -> impl IntoView {
+    // A flat list in tree order, which is the whole input format: depth says the shape.
+    let nodes = vec![
+        TreeNode::new("adi-ui", 0, "adi-ui")
+            .children(true)
+            .container(true)
+            .icon(FOLDER)
+            .emphasis(true),
+        TreeNode::new("adi-ui/Cargo.toml", 1, "Cargo.toml")
+            .icon(FILE)
+            .title("adi-ui/Cargo.toml"),
+        TreeNode::new("adi-ui/hive.yaml", 1, "hive.yaml").icon(FILE),
+        TreeNode::new("adi-ui/package.json", 1, "package.json").icon(FILE),
+        TreeNode::new("adi-ui/README.md", 1, "README.md").icon(FILE),
+        TreeNode::new("adi-ui/src", 1, "src")
+            .children(true)
+            .container(true)
+            .icon(FOLDER)
+            // The one badge left: a count you might act on, rather than a byte size nobody
+            // reads.
+            .badge("2 changed"),
+        TreeNode::new("adi-ui/src/lib.rs", 2, "lib.rs").icon(FILE),
+        TreeNode::new("adi-ui/api", 1, "api")
+            .children(true)
+            .container(true)
+            .icon(FOLDER),
+        TreeNode::new("adi-ui/api/routes.ts", 2, "routes.ts").icon(FILE),
+        TreeNode::new("adi-ui/db", 1, "db")
+            .children(true)
+            .container(true)
+            .icon(FOLDER),
+        TreeNode::new("adi-ui/db/schema.sql", 2, "schema.sql").icon(FILE),
+        // The rule above this row is what `separated` is for: a boundary between two kinds
+        // of children, drawn without a heading.
+        TreeNode::new("adi-ui/scripts", 1, "scripts")
+            .children(true)
+            .container(true)
+            .icon(FOLDER)
+            .separated(true),
+        TreeNode::new("adi-ui/scripts/deploy.sh", 2, "deploy.sh").icon(FILE),
+    ];
+
+    let tree = TreeState::new();
+    // The tree reports what was clicked; the screen decides what that means. Here it means
+    // "open this file", which is also what the highlight follows.
+    let path = Signal::derive(move || tree.selected.get());
+    let buffer = RwSignal::new(String::from(sample("hive.yaml")));
+    // A real screen fetches here. The demo swaps in the sample, which is enough to show the
+    // language following the path.
+    Effect::new(move |_| {
+        if let Some(p) = path.get() {
+            buffer.set(sample(&p).to_string());
+        }
+    });
+    let lang = Signal::derive(move || match path.get() {
+        Some(p) => Lang::from_path(&p),
+        None => Lang::Yaml,
+    });
+    // Reading rather than editing. Opening another file drops back to the source, because
+    // "rendered" is a way of looking at *this* file, not a mode the pane stays in.
+    let preview = RwSignal::new(false);
+    Effect::new(move |_| {
+        let _ = path.get();
+        preview.set(false);
+    });
+
+    view! {
+        <div class="grid gap-4 min-[900px]:grid-cols-[240px_minmax(0,1fr)]">
+            <div class="h-100 overflow-auto rounded-md border border-edge bg-panel">
+                <Tree nodes=nodes state=tree selected=path empty="No files."/>
+            </div>
+            <CodeFrame
+                title=Signal::derive(move || {
+                    path.get().unwrap_or_else(|| "adi-ui/hive.yaml".to_string())
+                })
+                height=CodeHeight::Form
+                actions=move || {
+                    view! {
+                        // The controls a file earns. A Markdown file can be read as well as
+                        // edited, so it gets the toggle and nothing else does.
+                        <Show when=move || lang.get() == Lang::Md>
+                            // The icon changes with the label: an eye to read it, angle
+                            // brackets to go back to the text.
+                            {move || view! {
+                                <Button
+                                    size=ButtonSize::Small
+                                    variant=ButtonVariant::Ghost
+                                    icon=if preview.get() { CODE } else { EYE }
+                                    on:click=move |_| preview.update(|p| *p = !*p)
+                                >
+                                    {if preview.get() { "Source" } else { "Preview" }}
+                                </Button>
+                            }}
+                        </Show>
+                        <Button size=ButtonSize::Small variant=ButtonVariant::Ghost icon=SAVE>
+                            "Save"
+                        </Button>
+                    }
+                    .into_any()
+                }
+            >
+                <Show
+                    when=move || preview.get() && lang.get() == Lang::Md
+                    fallback=move || view! {
+                        <CodeEditor value=buffer lang=lang height=CodeHeight::Fill/>
+                    }
+                >
+                    <Markdown
+                        source=Signal::derive(move || buffer.get())
+                        class="h-full overflow-auto p-4"
+                    />
+                </Show>
+            </CodeFrame>
+        </div>
+    }
+}
+
 /// The sessions rail, assembled: a live selection across three bands, and the filter box
 /// wired to the one band long enough to need it.
 #[component]
 fn SessionsDemo() -> impl IntoView {
-    // The finished sessions: title, the agent that ran it, how long ago.
-    const DONE: [(&str, &str, &str); 5] = [
-        ("What is on the linear board", "nakityok-lead", "21h"),
-        ("You are coordinating ONE feature", "nakityok-lead", "17h"),
-        ("Walk me through the agents", "adi-agent", "2d"),
-        ("Stop the trigger, please", "bb-target-ops", "4d"),
-        ("Target is Mollie", "bb-target-ops", "4d"),
+    // The sessions nobody is waiting on: title, the agent that ran it, how long ago, and
+    // how it ended — one of them failed, which is a state and not a note under the title.
+    const DONE: [(&str, &str, &str, SessionState); 5] = [
+        (
+            "What is on the linear board",
+            "nakityok-lead",
+            "21h",
+            SessionState::Done,
+        ),
+        (
+            "You are coordinating ONE feature",
+            "nakityok-lead",
+            "17h",
+            SessionState::Done,
+        ),
+        (
+            "Walk me through the agents",
+            "adi-agent",
+            "2d",
+            SessionState::Done,
+        ),
+        (
+            "Stop the trigger, please",
+            "bb-target-ops",
+            "4d",
+            SessionState::Error,
+        ),
+        (
+            "Target is Mollie",
+            "bb-target-ops",
+            "4d",
+            SessionState::Done,
+        ),
     ];
 
     let query = RwSignal::new(String::new());
@@ -117,7 +368,7 @@ fn SessionsDemo() -> impl IntoView {
     let matching = move || {
         let q = query.get().trim().to_lowercase();
         DONE.into_iter()
-            .filter(|(title, agent, _)| {
+            .filter(|(title, agent, _, _)| {
                 q.is_empty() || title.to_lowercase().contains(&q) || agent.contains(&q)
             })
             .collect::<Vec<_>>()
@@ -125,10 +376,11 @@ fn SessionsDemo() -> impl IntoView {
     let done = move || {
         matching()
             .into_iter()
-            .map(|(title, agent, age)| {
+            .map(|(title, agent, age, state)| {
                 view! {
                     <SessionItem
                         title=title
+                        state=state
                         agent=agent
                         age=age
                         selected=is_open(title)
@@ -150,25 +402,17 @@ fn SessionsDemo() -> impl IntoView {
                 .into_any()
             }
         >
-            <SessionGroup label="Running now" count=2>
+            // One band for everything live. A session that stopped to ask you something is
+            // still the same conversation you left running, and a band of its own put a
+            // heading between it and the row above for one row's worth of news.
+            <SessionGroup label="Running now" count=3>
                 <SessionItem
                     title="Walk the linear board"
-                    state=SessionState::Running
+                    state=SessionState::Working
                     selected=is_open("linear")
-                    alert="3 errors"
                     age="14m"
                     on:click=move |_| open.set("linear")
                 />
-                <SessionItem
-                    title="Deep-analysis pass"
-                    state=SessionState::Running
-                    selected=is_open("deep")
-                    age="2m"
-                    on:click=move |_| open.set("deep")
-                />
-            </SessionGroup>
-
-            <SessionGroup label="Waiting for you" count=1>
                 <SessionItem
                     title="Viacheslav Teremets, 5 Aug"
                     state=SessionState::Waiting
@@ -177,18 +421,17 @@ fn SessionsDemo() -> impl IntoView {
                     age="2h"
                     on:click=move |_| open.set("teremets")
                 />
+                <SessionItem
+                    title="Deep-analysis pass"
+                    state=SessionState::Working
+                    selected=is_open("deep")
+                    age="2m"
+                    on:click=move |_| open.set("deep")
+                />
             </SessionGroup>
 
             <SessionGroup label="Done">
                 {done}
-                <Show when=move || query.get().trim().is_empty()>
-                    <SessionRollup
-                        class="mt-1.5"
-                        title="Deep-analysis pass on target"
-                        note="9 repeats"
-                        age="4d"
-                    />
-                </Show>
                 <Show when=move || matching().is_empty()>
                     <Empty>"Nothing matches."</Empty>
                 </Show>
@@ -449,33 +692,61 @@ fn Playground() -> impl IntoView {
                 </div>
             </Panel>
 
+            <Panel title="Tree · CodeEditor" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "A file browser and the editor a file opens in. The tree takes one flat, \
+                     depth-annotated list — depth is what makes it a tree, and a closed row \
+                     hides everything deeper than it. The editor is a painted "
+                    <span class="font-mono">"<pre>"</span>
+                    " under a transparent "
+                    <span class="font-mono">"<textarea>"</span>
+                    ": the browser still owns the caret, undo and IME, and the paint only \
+                     has to keep up. Click a "
+                    <span class="font-mono">".toml"</span> " and a "
+                    <span class="font-mono">".yaml"</span>
+                    " — the language follows the path."
+                </div>
+                <div class="p-4">
+                    <FilesDemo/>
+                </div>
+            </Panel>
+
             <Panel title="Sessions" flush=true>
                 <div class="px-4 pt-3 text-mini text-meta">
-                    "The rail on the left is live: click a row. The filter box binds a signal \
-                     and does nothing else — what a query matches is the caller's to decide, \
-                     and here it is wired to the done band only."
+                    "The rail is live: click a row. Scroll it and the title goes with the \
+                     rows while the filter box stays — that box binds a signal and does \
+                     nothing else, since what a query matches is the caller's to decide, and \
+                     here it is wired to the done band only."
                 </div>
-                <div class="grid gap-4 p-4 min-[900px]:grid-cols-[320px_minmax(0,1fr)]">
+                <div class="p-4">
                     // A rail fills the height it is given, so the demo has to give it one.
-                    <div class="h-140 overflow-hidden rounded-md border border-edge">
+                    <div class="h-140 w-80 max-w-full overflow-hidden rounded-md border border-edge">
                         <SessionsDemo/>
                     </div>
+                </div>
+            </Panel>
 
+            <Panel title="Session card" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "Every state a row can be in, selected and not — the open one is a fill \
+                     and a hairline all the way round, and a waiting one washes amber on a \
+                     5s cycle whether it is open or not."
+                </div>
+                <div class="p-4">
                     <div class="rounded-md border border-edge bg-panel px-1.5 pb-3">
-                        <SessionGroup label="state × selected">
+                        // Every state, twice: as it sits in the list and as the open one.
+                        // Only the fill and the hairline change between the two.
+                        <SessionGroup label="done">
+                            <SessionItem title="Done" agent="nakityok-lead" age="21h"/>
                             <SessionItem
-                                title="Running"
-                                state=SessionState::Running
-                                agent="adi-agent"
-                                age="14m"
-                            />
-                            <SessionItem
-                                title="Running · selected"
-                                state=SessionState::Running
+                                title="Done · selected"
                                 selected=true
-                                alert="3 errors"
-                                age="14m"
+                                agent="nakityok-lead"
+                                age="21h"
                             />
+                        </SessionGroup>
+
+                        <SessionGroup label="waiting">
                             <SessionItem
                                 title="Waiting"
                                 state=SessionState::Waiting
@@ -489,35 +760,64 @@ fn Playground() -> impl IntoView {
                                 alert="agent question"
                                 age="2h"
                             />
-                            <SessionItem title="Done" agent="nakityok-lead" age="21h"/>
+                        </SessionGroup>
+
+                        <SessionGroup label="error">
                             <SessionItem
-                                title="Done · selected"
+                                title="Error"
+                                state=SessionState::Error
+                                agent="bb-target-ops"
+                                age="4d"
+                            />
+                            <SessionItem
+                                title="Error · selected"
+                                state=SessionState::Error
                                 selected=true
                                 agent="bb-target-ops"
                                 age="4d"
                             />
                         </SessionGroup>
 
-                        <SessionGroup label="the rest" count=3>
+                        <SessionGroup label="working">
+                            <SessionItem
+                                title="Working"
+                                state=SessionState::Working
+                                agent="adi-agent"
+                                age="14m"
+                            />
+                            <SessionItem
+                                title="Working · selected"
+                                state=SessionState::Working
+                                selected=true
+                                agent="adi-agent"
+                                age="14m"
+                            />
+                        </SessionGroup>
+
+                        <SessionGroup label="the rest" count=2>
                             // A title too long for the rail truncates; the line under it
                             // clips rather than wrapping the row to two heights.
                             <SessionItem
                                 title="A title far longer than any rail is ever going to be wide"
-                                state=SessionState::Running
+                                state=SessionState::Working
                                 agent="nakityok-lead"
-                                alert="2 errors"
                                 age="3d"
                             />
                             // Children land after the title, for what a prop cannot say.
                             <SessionItem title="With a child" agent="adi-agent" age="6h">
                                 <Badge tone=BadgeTone::Warn>"draft"</Badge>
                             </SessionItem>
-                            <SessionRollup
-                                class="mt-1.5"
-                                title="Deep-analysis pass on target"
-                                note="9 repeats"
-                                age="4d"
-                            />
+                        </SessionGroup>
+
+                        // The box on its own, for a row a session does not describe. `fill`
+                        // is where the state goes; everything inside is the caller's.
+                        <SessionGroup label="bare card" count=2>
+                            <SessionCard fill="hover:bg-card">
+                                <span class="text-row text-body">"Anything, in a row"</span>
+                            </SessionCard>
+                            <SessionCard fill="border-edge bg-selected" current=true>
+                                <span class="text-row text-ink">"…and the same one, open"</span>
+                            </SessionCard>
                         </SessionGroup>
 
                         <SessionGroup label="empty">

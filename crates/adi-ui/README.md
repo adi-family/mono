@@ -13,14 +13,19 @@ palette**, so the two do not mix on one page.
 
 | Component | Notes |
 | --- | --- |
-| `Button` | 5 variants × 2 sizes; `submit`, `disabled`. Handlers attach as `on:click`, not a prop |
+| `Button` | 5 variants × 2 sizes; `submit`, `disabled`, and an `icon` drawn in `currentColor` at the size the button picks. Handlers attach as `on:click`, not a prop |
 | `Badge` | 5 status tones, `mono` for ids/ports/counts |
 | `Panel` | titled surface with optional header `actions`; `flush` for a child that owns its edges |
 | `Form` / `Hint` | the strip that closes a panel; `toolbar` for bare controls. Stacks below 620px |
 | `Field` | label + a `?` that explains the control without costing the row any height |
 | `Input` / `Textarea` / `Select` | one shared frame; optional two-way binding to an `RwSignal<String>` |
 | `Flash` / `Empty` | inline or card feedback in 3 kinds; the quiet line an empty list shows |
-| `SessionList` / `SessionGroup` / `SessionItem` / `SessionRollup` | the sessions rail: a filter box over labelled bands of rows. 3 states × selected, plus the dashed line a run of repeats folds into |
+| `Tree` / `TreeNode` / `TreeState` | an IDE tree from one flat, depth-annotated list: indent rails, a turning chevron, selection, keyboard activation. Knows nothing about files |
+| `CodeEditor` | a painted `<pre>` under a transparent `<textarea>` — the browser keeps the caret, undo, IME and paste. `Lang::from_path` picks the scanner: Rust, TOML, JSON, YAML, TS, shell, SQL, Markdown |
+| `CodeFrame` | the card a file is read in: the name on the left, `actions` on the right, whatever is showing the file underneath. Not part of `CodeEditor`, so a preview wears the same chrome |
+| `Markdown` | the rendered half of a `.md` — and of anything an agent says. Renders through views, never `inner_html`, and allow-lists link schemes |
+| `SessionCard` | the box every row in the rail is: one hit target, one radius, one inset focus ring. `fill` is reactive, `class` is not |
+| `SessionList` / `SessionGroup` / `SessionItem` | the sessions rail: labelled bands of rows under a filter box that sticks while the title scrolls away. 3 states × selected |
 
 ## Develop here
 
@@ -86,6 +91,12 @@ Correct any of them in `tokens.css` and every component follows.
 | text | `ink` `body` `secondary` `meta` `placeholder` `faint` `fainter` |
 | accent | `accent` `accent-fill` `on-accent` `accent-soft` `accent-soft-edge` `tip` `tip-edge` |
 | states | `err` `err-btn` `err-bg` `err-bg-2` `err-edge` `err-edge-2` `queue` `queue-ink` `queue-bg` `queue-edge` `attention` |
+| syntax | `syn-plain` `syn-comment` `syn-str` `syn-num` `syn-key` `syn-kw` `syn-func` `syn-punct` |
+
+The `syn-*` family is the code view's own palette, and the only place a hue steps outside
+the green-tinted system: five colours have to stay apart at a glance inside a file. It is
+what [`Tok::classes`](./src/highlight.rs) returns, so correcting one value in `tokens.css`
+recolours every editor.
 
 Each works everywhere Tailwind takes a colour — `bg-card`, `text-meta`, `border-edge`,
 `bg-accent/12`. Tailwind's own 22-family palette is removed, so these are the only colours
@@ -106,12 +117,17 @@ metric.
 | `text-title` | 20px | screen titles |
 | `text-metric` | 23px | metric numbers |
 
-Two composite utilities bundle what a role always wants together:
+Three composite utilities bundle what a role always wants together:
 
 - **`caps`** — mono, 10.5px, `0.12em` tracking, uppercase. Sets no colour, so it composes
   with `text-faint` / `text-meta`.
 - **`metric`** — mono, 23px, tabular figures, so a counter ticking upward never shifts the
   layout under it.
+- **`attention-pulse`** — a 12% `--attention` wash on a `::before`, breathing between 40%
+  and 100% opacity every 5s. For the one row that is waiting on *you*. It is a wash rather
+  than a background, so the element keeps its own fill and its own `hover:`; it inherits
+  the radius, so it composes with any card; and `prefers-reduced-motion` holds it still
+  rather than dropping it, because the tint is the state and only the motion is decoration.
 
 Spacing is `--spacing: 4px`, so `p-1/2/3/4` is the 4/8/12/16 rhythm with everything between
 still available. Radii are `rounded-sm` (5px) and `rounded-md` (8px).
