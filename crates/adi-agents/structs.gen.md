@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-63 structs · 16 enums · 5 type aliases across 29 files.
+61 structs · 17 enums · 5 type aliases across 28 files.
 
 ## Index
 
@@ -32,11 +32,10 @@
 - [`src/runner/mod.rs`](#srcrunnermodrs) — `RunnerKind`, `Stopped`
 - [`src/runner/pty.rs`](#srcrunnerptyrs) — `PtyRunner`, `State`
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
-- [`src/store/migrate.rs`](#srcstoremigraters) — `LegacyMeta`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`
-- [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StoredState`
-- [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`, `At`
+- [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StateSource`, `StoredState`
+- [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`
 
 ---
 
@@ -1357,31 +1356,11 @@ pub struct RunSpec {
 
 ---
 
-## `src/store/migrate.rs`
-
-### struct `LegacyMeta`
-
-The old metadata sidecar's fields — the ones that still mean something.
-
-```rust
-#[derive(Debug, Default)]
-struct LegacyMeta {
-    started_at: u64,
-    message: String,
-    hidden: bool,
-    session_id: String,
-    working_dir: String,
-    pid: Option<u32>,
-}
-```
-
----
-
 ## `src/store/mod.rs`
 
 ### struct `SessionStore`
 
-The sessions on disk, under one root.
+The sessions under one root.
 
 ```rust
 #[derive(Debug, Clone)]
@@ -1401,23 +1380,14 @@ Everything durable about a session that is not the process running it.
 ```rust
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct SessionRecord {
-    #[serde(skip_deserializing)]
     pub id: String,
-    #[serde(skip_deserializing)]
     pub agent: String,
-    #[serde(default)]
     pub backend: Backend,
-    #[serde(default)]
     pub cwd: PathBuf,
-    #[serde(default)]
     pub message: String,
-    #[serde(default)]
     pub started_at: u64,
-    #[serde(skip)]
     pub last_activity: u64,
-    #[serde(default)]
     pub hidden: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub runner_state: Option<serde_json::Value>,
 }
 ```
@@ -1437,6 +1407,19 @@ pub struct SessionRef<'a> {
     agent: String,
     id: String,
     log: PathBuf,
+    state: StateSource,
+}
+```
+
+### enum `StateSource`
+
+Whether this view asks for the runner's state slot, or already has the copy a listing read.
+
+```rust
+#[derive(Debug, Clone)]
+enum StateSource {
+    Fresh,
+    Listed(Option<serde_json::Value>),
 }
 ```
 
@@ -1476,18 +1459,6 @@ pub struct Turn {
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<TurnMetrics>,
-}
-```
-
-### struct `At`
-
-Just the moment off a turn's line. A listing asks when a conversation last spoke, not what it said, and everything else on the line — a whole answer, and every tool call that produced it — is skipped rather than built.
-
-```rust
-#[derive(Deserialize)]
-struct At {
-    #[serde(default)]
-    at: u64,
 }
 ```
 

@@ -57,6 +57,9 @@ use std::time::Instant;
 
 #[cfg(test)]
 mod tests {
+    use adi_agents::Backend;
+    use adi_agents::runner::Session;
+    use adi_agents::store::SessionStore;
     use adi_ports_manager::Config;
     use serde_json::Value;
 
@@ -86,21 +89,28 @@ mod tests {
         Agents::with_config(adi_config::Config::with_root(root))
     }
 
-    /// Seed a run in the *old* on-disk layout that reads as still going: a pid file naming this
-    /// process, and the log that pid has supposedly been writing into.
+    /// Seed a live run of `agent`: a session in the store whose runner state names *this* process,
+    /// which is exactly what a run in flight looks like to the counter.
     ///
-    /// The log is not decoration. A pid recorded before start times were kept cannot be confirmed
-    /// by the number alone — the kernel reissues it — so what is left to check is whether the
-    /// process holding it now could plausibly be the child that owns this run's log. A pid file
-    /// with no log at all describes a run that never spawned anything, and is counted as such.
-    fn seed_legacy_live_run(dir: &std::path::Path, run_id: &str) {
-        std::fs::create_dir_all(dir).unwrap();
-        std::fs::write(
-            dir.join(format!("{run_id}.pid")),
-            format!("{}\n", std::process::id()),
-        )
-        .unwrap();
-        std::fs::write(dir.join(format!("{run_id}.log")), "still going").unwrap();
+    /// Both halves of the identity, as a real spawn records them. A bare pid does not read as
+    /// running and should not — the kernel reissues the number, so a child is named by when it
+    /// started as well.
+    ///
+    /// The `backend` is the record's own, not the agent's: liveness is asked of whichever runner
+    /// started the session, so it has to be one something runs.
+    fn seed_live_run(store: &Agents, backend: &str, agent: &str) {
+        let sessions = SessionStore::new(store.config().module("sessions").dir());
+        let record = sessions
+            .create(agent, Backend::from(backend), "/tmp", "seeded")
+            .expect("open a session");
+        let pid = std::process::id();
+        sessions
+            .session(agent, &record.id)
+            .set_state(serde_json::json!({
+                "pid": pid,
+                "started": adi_osext::process_start_millis(pid).expect("this platform can say"),
+            }))
+            .expect("record a live pid");
     }
 
     #[test]
@@ -638,14 +648,8 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["max_concurrent_runs"], 1);
 
-        // One live run — a PID file naming this process — fills a cap of one.
-        let runs = store
-            .config()
-            .module("sessions")
-            .dir()
-            .join("process")
-            .join("other");
-        seed_legacy_live_run(&runs, "0000000000001-0000");
+        // One live run — anybody's, under any backend — fills a cap of one.
+        seed_live_run(&store, "process:claude", "other");
 
         let Response { status, body } = run_agent(&store, br#"{"name":"looper","message":"go"}"#);
         assert_eq!(status, 429, "a launch past the cap is refused");
@@ -682,13 +686,7 @@ mod tests {
         assert_eq!(row["running_runs"], 0);
 
         // One live run of the project fills its cap, while the machine as a whole is still idle.
-        let runs = store
-            .config()
-            .module("sessions")
-            .dir()
-            .join("harness")
-            .join("solver");
-        seed_legacy_live_run(&runs, "0000000000001-0000");
+        seed_live_run(&store, "harness:adi", "solver");
 
         let Response { status, body } = run_agent(&store, br#"{"name":"solver","message":"go"}"#);
         assert_eq!(status, 429);
