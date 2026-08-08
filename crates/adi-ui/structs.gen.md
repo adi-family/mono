@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-7 structs · 14 enums across 14 files.
+7 structs · 15 enums across 14 files.
 
 ## Index
 
@@ -17,7 +17,7 @@
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
-- [`src/markdown.rs`](#srcmarkdownrs) — `Block`
+- [`src/markdown.rs`](#srcmarkdownrs) — `Block`, `Align`
 - [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
 - [`src/topbar.rs`](#srctopbarrs) — `Crumb`
@@ -283,7 +283,26 @@ enum Block {
     },
     Quote(String),
     Rule,
+    Table {
+        head: Vec<String>,
+        rows: Vec<Vec<String>>,
+        aligns: Vec<Align>,
+    },
     Para(String),
+}
+```
+
+### enum `Align`
+
+Which way a column leans, as its delimiter row asked.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Align {
+    Default,
+    Left,
+    Center,
+    Right,
 }
 ```
 

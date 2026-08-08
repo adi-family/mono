@@ -1,9 +1,9 @@
 //! [`Markdown`] — the rendered half of a `.md` file, and of anything an agent says.
 //!
 //! A small subset, scanned rather than parsed: headings, fenced code, lists, quotes, rules,
-//! paragraphs, and inline `code` / `**strong**` / `*em*` / `[links](url)`. Like
-//! [`crate::highlight`] it is **total** — no input is invalid, an unterminated fence runs to
-//! the end, and anything it does not recognise stays text.
+//! GitHub-style tables, paragraphs, and inline `code` / `**strong**` / `*em*` /
+//! `[links](url)`. Like [`crate::highlight`] it is **total** — no input is invalid, an
+//! unterminated fence runs to the end, and anything it does not recognise stays text.
 //!
 //! It renders through Leptos views, never `inner_html`, so a document cannot inject markup
 //! however it is written. Link targets are checked separately (see `safe_href`) because a
@@ -41,7 +41,35 @@ enum Block {
     List { ordered: bool, items: Vec<String> },
     Quote(String),
     Rule,
+    /// A header row, the body under it, and one alignment per column.
+    Table {
+        head: Vec<String>,
+        rows: Vec<Vec<String>>,
+        aligns: Vec<Align>,
+    },
     Para(String),
+}
+
+/// Which way a column leans, as its delimiter row asked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Align {
+    /// Nothing declared — which reads left, like the prose around it.
+    Default,
+    Left,
+    Center,
+    Right,
+}
+
+impl Align {
+    /// The utility that does it, written out per arm because Tailwind only finds what it
+    /// can read as a literal.
+    fn class(self) -> &'static str {
+        match self {
+            Align::Default | Align::Left => "text-left",
+            Align::Center => "text-center",
+            Align::Right => "text-right",
+        }
+    }
 }
 
 /// Split a document into blocks. Line-based, single pass, and it never fails: whatever it
@@ -97,14 +125,28 @@ fn blocks(src: &str) -> Vec<Block> {
                 }
             }
             out.push(Block::List { ordered, items });
+        } else if let Some(aligns) = table_at(&lines, i) {
+            // The header and the delimiter row under it are both spoken for; everything
+            // after is a body row for as long as the rows keep coming.
+            let head = split_row(line);
+            i += 2;
+            let mut rows = Vec::new();
+            while i < lines.len() {
+                let l = lines[i].trim();
+                if l.is_empty() || !l.contains('|') {
+                    break;
+                }
+                rows.push(split_row(l));
+                i += 1;
+            }
+            out.push(Block::Table { head, rows, aligns });
         } else {
             let mut text = String::new();
             while i < lines.len() {
-                let l = lines[i].trim();
-                if l.is_empty() || opens_block(l) {
+                if lines[i].trim().is_empty() || opens_block(&lines, i) {
                     break;
                 }
-                push_soft(&mut text, l);
+                push_soft(&mut text, lines[i].trim());
                 i += 1;
             }
             out.push(Block::Para(text));
@@ -121,13 +163,83 @@ fn push_soft(buf: &mut String, line: &str) {
     buf.push_str(line);
 }
 
-/// Whether this line would start a block of its own, and so ends the paragraph above it.
-fn opens_block(line: &str) -> bool {
+/// Whether a block of its own starts at `lines[i]`, and so ends the paragraph above it.
+///
+/// It takes the whole document rather than the one line because a table is the one block
+/// that cannot be recognised from its first line: `a | b` is a sentence until the row of
+/// dashes under it says otherwise.
+fn opens_block(lines: &[&str], i: usize) -> bool {
+    let line = lines[i].trim();
     line.starts_with("```")
         || line.starts_with('>')
         || heading(line).is_some()
         || is_rule(line)
         || list_item(line).is_some()
+        || table_at(lines, i).is_some()
+}
+
+/// The column alignments of a table starting at `lines[i]`, or `None` for anything that is
+/// not one.
+///
+/// Three things have to hold, and each rules out a different false positive: the first line
+/// has cells, the second is a delimiter row, and the two agree on how many columns there
+/// are. That last one is what keeps `a | b` over a `---` — a sentence above a horizontal
+/// rule — from being read as a one-column table.
+fn table_at(lines: &[&str], i: usize) -> Option<Vec<Align>> {
+    if !lines[i].contains('|') {
+        return None;
+    }
+    let aligns = table_delimiter(lines.get(i + 1)?)?;
+    (aligns.len() == split_row(lines[i]).len()).then_some(aligns)
+}
+
+/// `| --- | :--: | ---: |` → one [`Align`] per column. Every cell has to be a run of dashes,
+/// with a colon on whichever side the column leans towards.
+fn table_delimiter(line: &str) -> Option<Vec<Align>> {
+    let cells = split_row(line);
+    if cells.is_empty() {
+        return None;
+    }
+    cells
+        .iter()
+        .map(|cell| {
+            let cell = cell.trim();
+            let rule = cell.trim_matches(':');
+            let dashed = !rule.is_empty() && rule.bytes().all(|b| b == b'-');
+            dashed.then(|| match (cell.starts_with(':'), cell.ends_with(':')) {
+                (true, true) => Align::Center,
+                (true, false) => Align::Left,
+                (false, true) => Align::Right,
+                (false, false) => Align::Default,
+            })
+        })
+        .collect()
+}
+
+/// A row's cells: split on `|`, with `\|` kept as the literal pipe it is escaping, and the
+/// empty cell an optional leading or trailing `|` leaves behind dropped at each end.
+fn split_row(line: &str) -> Vec<String> {
+    let mut cells = Vec::new();
+    let mut cur = String::new();
+    let mut chars = line.trim().chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' if chars.peek() == Some(&'|') => {
+                cur.push('|');
+                chars.next();
+            }
+            '|' => cells.push(std::mem::take(&mut cur)),
+            _ => cur.push(c),
+        }
+    }
+    cells.push(cur);
+    if cells.first().is_some_and(|c| c.trim().is_empty()) {
+        cells.remove(0);
+    }
+    if cells.last().is_some_and(|c| c.trim().is_empty()) {
+        cells.pop();
+    }
+    cells
 }
 
 /// `## Title` → `(2, "Title")`. Requires the space: `#hashtag` is a word.
@@ -216,6 +328,53 @@ fn block(b: Block) -> AnyView {
             </blockquote>
         }
         .into_any(),
+        // A table is a *thing*, so it takes the island shape the rest of the system does —
+        // and `shrink-0` beside `overflow-x-auto` for exactly the reason the code block
+        // above spells out: a scroll container is the one child a flex column can squeeze
+        // to nothing. `w-full` lets a narrow table fill the message; a wide one outgrows it
+        // and scrolls inside its own edges rather than stretching the bubble.
+        Block::Table { head, rows, aligns } => {
+            let align = |col: usize| aligns.get(col).copied().unwrap_or(Align::Default).class();
+            let head = head
+                .iter()
+                .enumerate()
+                .map(|(col, cell)| {
+                    let class = format!(
+                        "border-b border-edge px-3 py-1.5 font-semibold text-ink {}",
+                        align(col),
+                    );
+                    view! { <th class=class>{inline(cell.trim())}</th> }
+                })
+                .collect::<Vec<_>>();
+            let body = rows
+                .iter()
+                .map(|row| {
+                    let cells = row
+                        .iter()
+                        .enumerate()
+                        .map(|(col, cell)| {
+                            let class = format!(
+                                "border-t border-divider px-3 py-1.5 align-top {}",
+                                align(col),
+                            );
+                            view! { <td class=class>{inline(cell.trim())}</td> }
+                        })
+                        .collect::<Vec<_>>();
+                    view! { <tr>{cells}</tr> }
+                })
+                .collect::<Vec<_>>();
+            view! {
+                <div class="island shrink-0 overflow-x-auto">
+                    <table class="w-full border-collapse">
+                        <thead class="bg-card">
+                            <tr>{head}</tr>
+                        </thead>
+                        <tbody>{body}</tbody>
+                    </table>
+                </div>
+            }
+            .into_any()
+        }
         Block::Rule => view! { <hr class="m-0 h-px border-0 bg-divider"/> }.into_any(),
         Block::Para(text) => view! { <p class="m-0">{inline(&text)}</p> }.into_any(),
     }
@@ -323,4 +482,115 @@ fn safe_href(url: &str) -> Option<String> {
         || trimmed.starts_with('#')
         || relative;
     ok.then(|| trimmed.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The block scan, as a shape that is easy to assert on — rendering a [`Block`] needs a
+    /// reactive runtime, and none of what is worth testing here happens on that side.
+    fn shapes(src: &str) -> Vec<String> {
+        blocks(src)
+            .into_iter()
+            .map(|b| match b {
+                Block::Heading(level, text) => format!("h{level}:{text}"),
+                Block::Code(_, text) => format!("code:{}", text.trim_end()),
+                Block::List { ordered, items } => {
+                    format!("{}:{}", if ordered { "ol" } else { "ul" }, items.join(","))
+                }
+                Block::Quote(text) => format!("quote:{text}"),
+                Block::Rule => "rule".to_string(),
+                Block::Table { head, rows, .. } => {
+                    let rows: Vec<String> = rows.iter().map(|r| r.join("|")).collect();
+                    format!("table:[{}]{}", head.join("|"), rows.join("/"))
+                }
+                Block::Para(text) => format!("p:{text}"),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_table_is_a_table() {
+        assert_eq!(
+            shapes("| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |"),
+            ["table:[ a | b ] 1 | 2 / 3 | 4 "],
+        );
+    }
+
+    #[test]
+    fn the_outer_pipes_are_optional() {
+        assert_eq!(shapes("a | b\n--- | ---\n1 | 2"), ["table:[a | b]1 | 2"]);
+    }
+
+    #[test]
+    fn colons_set_the_alignment() {
+        let aligns = table_delimiter("| :-- | :-: | --: | --- |").unwrap();
+        assert_eq!(
+            aligns,
+            [Align::Left, Align::Center, Align::Right, Align::Default],
+        );
+        assert_eq!(
+            aligns.iter().map(|a| a.class()).collect::<Vec<_>>(),
+            ["text-left", "text-center", "text-right", "text-left"],
+        );
+    }
+
+    #[test]
+    fn an_escaped_pipe_stays_in_its_cell() {
+        assert_eq!(split_row(r"| a \| b | c |"), [" a | b ", " c "]);
+    }
+
+    /// The three ways a line with a pipe in it is *not* a table. The last is the one the
+    /// column count is there for: without it, a sentence sitting above a horizontal rule
+    /// reads as a one-column table.
+    #[test]
+    fn a_pipe_alone_is_not_a_table() {
+        assert_eq!(shapes("a | b\nc | d"), ["p:a | b c | d"]);
+        assert_eq!(shapes("a | b\n| -x- | -y- |"), ["p:a | b | -x- | -y- |"]);
+        assert_eq!(shapes("a | b\n---"), ["p:a | b", "rule"]);
+    }
+
+    /// A delimiter row is dashes, and a run of dashes is a rule — so a table that lost its
+    /// header has to come out as the two lines it is, not as a table with no columns.
+    #[test]
+    fn a_headless_delimiter_is_a_rule() {
+        assert_eq!(shapes("| --- |\n| 1 |"), ["p:| --- | | 1 |"]);
+    }
+
+    #[test]
+    fn a_table_ends_the_paragraph_above_it() {
+        assert_eq!(
+            shapes("intro\n\n| a |\n| - |\n| 1 |\n\nafter"),
+            ["p:intro", "table:[ a ] 1 ", "p:after"],
+        );
+        // …and without the blank line, which is where `opens_block` earns its lookahead.
+        assert_eq!(
+            shapes("intro\n| a |\n| - |\n| 1 |"),
+            ["p:intro", "table:[ a ] 1 "],
+        );
+    }
+
+    #[test]
+    fn a_ragged_row_is_kept_as_written() {
+        assert_eq!(
+            shapes("| a | b |\n| - | - |\n| 1 |\n| 1 | 2 | 3 |"),
+            ["table:[ a | b ] 1 / 1 | 2 | 3 "],
+        );
+    }
+
+    /// A list wins the tie, because `- a | b` over `- | -` is two bullets far more often
+    /// than it is a table.
+    #[test]
+    fn a_list_is_not_swallowed_by_a_table() {
+        assert_eq!(shapes("- a | b\n- | -"), ["ul:a | b,| -"]);
+    }
+
+    #[test]
+    fn the_blocks_around_a_table_still_work() {
+        assert_eq!(
+            shapes("# T\n\n- one\n\n> q\n\n```rs\nlet x = 1;\n```"),
+            ["h1:T", "ul:one", "quote:q", "code:let x = 1;"],
+        );
+    }
 }

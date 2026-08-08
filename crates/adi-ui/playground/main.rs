@@ -169,6 +169,12 @@ toggle is up in the frame's top right, beside the file name.
 cd crates/adi-ui && trunk serve --open   # http://127.0.0.1:9081
 ```
 
+| Block   | Written as         | Inline spans |
+| :------ | :----------------: | -----------: |
+| Heading | `## Title`         |          yes |
+| Fence   | three backticks    |           no |
+| Table   | `\| a \| b \|`     |          yes |
+
 ---
 
 1. Tokens live in `styles/tokens.css`
