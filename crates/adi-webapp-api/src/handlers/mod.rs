@@ -629,6 +629,93 @@ mod tests {
         assert!(v["error"].as_str().unwrap().contains("can't be run yet"));
     }
 
+    /// Seed a conversation with one thing said in it, and answer where its dossier would land.
+    fn seed_conversation(store: &Agents, agent: &str) -> (String, std::path::PathBuf) {
+        let sessions = SessionStore::new(store.config().module("sessions").dir());
+        let record = sessions
+            .create(agent, Backend::from("harness:adi"), "/tmp", "fix the test")
+            .expect("open a session");
+        sessions
+            .append_turn(
+                agent,
+                &record.id,
+                adi_agents::Turn {
+                    role: "user".to_string(),
+                    text: "fix the test".to_string(),
+                    at: 1,
+                    pending: false,
+                    queued: false,
+                    steps: Vec::new(),
+                    metrics: None,
+                },
+            )
+            .expect("record a turn");
+        let path = sessions
+            .agent_dir(agent)
+            .join(format!("{}.review.md", record.id));
+        (record.id, path)
+    }
+
+    /// The review goes to the environment's root agent, and a store without one cannot do it. The
+    /// refusal names the gap rather than 404-ing on a name the caller never sent.
+    #[test]
+    fn a_review_with_no_root_agent_says_which_agent_is_missing() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#);
+        let (run_id, dossier) = seed_conversation(&store, "solver");
+
+        let body = format!(r#"{{"name":"solver","run_id":"{run_id}"}}"#);
+        let Response { status, body } = review_run(&store, body.as_bytes());
+        assert_eq!(status, 404);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["error"].as_str().unwrap().contains("adi-agent"), "{body}");
+        assert!(
+            !dossier.exists(),
+            "nothing is written when there is nobody to read it"
+        );
+    }
+
+    /// A conversation that has said nothing has no workflow in it. Refused before a run is spent on
+    /// reviewing an empty transcript.
+    #[test]
+    fn a_review_of_a_silent_conversation_is_refused() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#);
+        let sessions = SessionStore::new(store.config().module("sessions").dir());
+        let record = sessions
+            .create("solver", Backend::from("harness:adi"), "/tmp", "hello")
+            .expect("open a session");
+
+        let body = format!(r#"{{"name":"solver","run_id":"{}"}}"#, record.id);
+        let Response { status, body } = review_run(&store, body.as_bytes());
+        assert_eq!(status, 400);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            v["error"].as_str().unwrap().contains("nothing to review"),
+            "{body}"
+        );
+    }
+
+    /// The dossier is written before the reviewer is launched, so a launch the store refuses — here
+    /// because `harness:adi` has no provider configured in a scratch store — still leaves the
+    /// evidence on disk. Throwing the analysis away with the run that would have read it would make
+    /// a full concurrency limit lose work that was already done.
+    #[test]
+    fn a_refused_launch_still_leaves_the_dossier_on_disk() {
+        let store = temp_agents();
+        let _ = save_agent(&store, br#"{"name":"solver","backend":"harness:adi"}"#);
+        let _ = save_agent(&store, br#"{"name":"adi-agent","backend":"harness:adi"}"#);
+        let (run_id, dossier) = seed_conversation(&store, "solver");
+
+        let body = format!(r#"{{"name":"solver","run_id":"{run_id}"}}"#);
+        let Response { status, .. } = review_run(&store, body.as_bytes());
+        assert_eq!(status, 400, "the scratch store's harness has no provider");
+        let text = std::fs::read_to_string(&dossier).expect("the dossier survives the refusal");
+        assert!(text.contains("fix the test"), "{text}");
+        assert!(text.contains("## 1. The agent as configured"), "{text}");
+    }
+
     /// The run cap over the wire: stated with the agents, settable, and a launch past it is a 429 —
     /// unless the caller says `force`, which lands on the backend's own verdict instead (a 400 here,
     /// since `harness:adi` has no provider configured in a scratch store).

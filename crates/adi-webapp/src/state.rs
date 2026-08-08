@@ -1013,6 +1013,10 @@ pub(crate) struct AgentsWatch {
     /// Whether a report is in flight, and what the last attempt failed with (empty when it didn't).
     pub(crate) tokens_busy: RwSignal<bool>,
     pub(crate) tokens_error: RwSignal<String>,
+    /// Whether a hand-off to the reviewing agent is in flight. Not `_of`-stamped like the token
+    /// report: a review produces no state to leave on screen — the reply is a place to go, and the
+    /// screen has gone there by the time it matters.
+    pub(crate) review_busy: RwSignal<bool>,
 }
 
 impl AgentsWatch {
@@ -1033,6 +1037,7 @@ impl AgentsWatch {
             tokens_of: RwSignal::new(None),
             tokens_busy: RwSignal::new(false),
             tokens_error: RwSignal::new(String::new()),
+            review_busy: RwSignal::new(false),
         }
     }
 
@@ -1052,6 +1057,7 @@ impl AgentsWatch {
         self.tokens_of.set(None);
         self.tokens_busy.set(false);
         self.tokens_error.set(String::new());
+        self.review_busy.set(false);
     }
 }
 

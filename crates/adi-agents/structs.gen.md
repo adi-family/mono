@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-63 structs · 17 enums · 5 type aliases across 29 files.
+68 structs · 17 enums · 5 type aliases across 30 files.
 
 ## Index
 
@@ -27,6 +27,7 @@
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
 - [`src/progress.rs`](#srcprogressrs) — `Step`, `ToolStatus`, `TurnMetrics`, `TurnContent`, `BackendCapabilities`
+- [`src/review.rs`](#srcreviewrs) — `Options`, `Review`, `Evidence`, `History`, `Totals`
 - [`src/run.rs`](#srcrunrs) — `Launch`, `Sent`, `Peek`, `RunInfo`, `Pane`
 - [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `Cursor`
 - [`src/runner/event.rs`](#srcrunnereventrs) — `RunEvent`, `EventKinds`, `EventBatch`
@@ -1137,6 +1138,94 @@ pub struct BackendCapabilities {
     pub tool_steps: bool,
     pub thinking: bool,
     pub metrics: bool,
+}
+```
+
+---
+
+## `src/review.rs`
+
+### struct `Options`
+
+How much of a conversation to describe, and how much of the agent's past to fold in.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    pub history_sessions: usize,
+    pub budget: usize,
+}
+```
+
+### struct `Review`
+
+A written dossier, and the message that points a reviewer at it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Review {
+    pub path: PathBuf,
+    pub brief: String,
+}
+```
+
+### struct `Evidence`
+
+Everything a dossier is written from, gathered by the caller.
+
+```rust
+#[derive(Debug)]
+pub struct Evidence<'a> {
+    pub agent: &'a StoredAgent,
+    pub run_id: &'a str,
+    pub record: &'a SessionRecord,
+    pub turns: &'a [Turn],
+    pub report: &'a TokenReport,
+    pub history: &'a History,
+    pub tools_on: &'a [(String, String)],
+    pub tools_off: &'a [(String, String)],
+}
+```
+
+### struct `History`
+
+What an agent looks like beyond the one conversation: which of its tools actually work, what it is refused, and how often it is asked for anything at all.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct History {
+    pub sessions_seen: usize,
+    pub sessions_total: usize,
+    pub window_days: u64,
+    pub turns: usize,
+    pub errored_turns: usize,
+    pub by_tool: Vec<(String, usize, usize)>,
+    pub blocked: Vec<(String, usize)>,
+    oldest: u64,
+    newest: u64,
+}
+```
+
+### struct `Totals`
+
+What one conversation adds up to. The counts the brief leads with, so the reviewer knows what it is looking at before it has read anything.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Totals {
+    you: usize,
+    agent: usize,
+    queued: usize,
+    tools: usize,
+    failed: usize,
+    thinking: usize,
+    errored: usize,
+    blocked: usize,
+    tokens: u64,
+    cost_micro: u64,
+    work_ms: u64,
+    first_at: u64,
+    last_at: u64,
 }
 ```
 

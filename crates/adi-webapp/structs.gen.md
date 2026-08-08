@@ -962,6 +962,7 @@ pub(crate) struct AgentsWatch {
     pub(crate) tokens_of: RwSignal<Option<String>>,
     pub(crate) tokens_busy: RwSignal<bool>,
     pub(crate) tokens_error: RwSignal<String>,
+    pub(crate) review_busy: RwSignal<bool>,
 }
 ```
 

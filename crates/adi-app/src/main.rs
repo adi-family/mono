@@ -615,6 +615,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         // What a conversation spent its context on. Its own endpoint, not part of the peek: it
         // re-tokenizes the whole transcript, and the peek is polled once a second.
         ("POST", "/api/agents/run/tokens") => handlers::run_tokens(agents, &req.body),
+        // Hand the same conversation to an agent and ask how it should have gone. Writes the
+        // dossier, then launches the reviewer on it — the answer arrives as its own conversation.
+        ("POST", "/api/agents/run/review") => handlers::review_run(agents, &req.body),
         ("POST", "/api/agents/run/unqueue") => handlers::unqueue_run(agents, &req.body),
         ("POST", "/api/agents/run/stop") => handlers::stop_run(agents, &req.body),
         ("POST", "/api/agents/run/delete") => handlers::delete_run(agents, &req.body),

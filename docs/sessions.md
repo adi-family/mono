@@ -60,8 +60,14 @@ is `SESSIONS_MODULE = "sessions"`, `adi-agents/src/lib.rs:79`). Override the roo
 <sessions_dir>/sessions.db              sessions, turns, queue
 <sessions_dir>/settings.toml            the run cap (RunLimits)
 <sessions_dir>/<agent>/<id>.log         the raw output a runner spools into
+<sessions_dir>/<agent>/<id>.review.md   the dossier Analyze writes for a reviewing agent
 <sessions_dir>/<agent>/<id>.<whatever>  sidecars a runner invents
 ```
+
+The review dossier is a file for the same reason the log is: it is written to be **read by another
+agent**, with a `Read` tool, at a path that outlives the request that made it. See
+`adi_agents::review` — and note that it is deleted with the session it describes, because it is a
+description of that session and nothing else.
 
 **The log is a file and has to be**: a spawned child needs a real file descriptor to redirect
 stdout and stderr into, which is not a thing a row can be. Everything else is a row, because

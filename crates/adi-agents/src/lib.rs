@@ -39,6 +39,7 @@ mod launch;
 mod limits;
 mod memo;
 pub mod progress;
+pub mod review;
 mod run;
 pub mod runner;
 pub mod store;
@@ -582,6 +583,106 @@ impl Agents {
             settle(&store, &agent.name, conv_id, &live);
         }
         store.transcript(&agent.name, conv_id, Some(live), running)
+    }
+
+    /// Where one conversation ran — the directory pinned to it at creation and re-used by every turn
+    /// since. `None` for a session that does not exist; the path may since have been deleted, which
+    /// is the caller's to check.
+    #[must_use]
+    pub fn run_cwd(&self, agent: &StoredAgent, conv_id: &str) -> Option<PathBuf> {
+        self.sessions().get(&agent.name, conv_id).map(|r| r.cwd)
+    }
+
+    /// Write the review dossier for one conversation beside its log, and return the brief that
+    /// points a reviewing agent at it.
+    ///
+    /// This gathers and writes; it launches nothing. **Who** reviews is not a question this crate
+    /// can answer — the app's root agent, a reviewer an operator picked, or the same agent looking
+    /// at itself are all reasonable, and each caller knows which it means.
+    ///
+    /// The dossier lands in the session's own `<id>.review.md`, the sidecar namespace beside the log
+    /// (`docs/sessions.md`), so it is deleted with the session it describes and never outlives it.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unknown conversation, [`Error::Unsupported`] for one that has not
+    /// said anything yet (there is nothing to review, and an empty dossier would waste a run), and
+    /// [`Error::Io`] if the file cannot be written.
+    pub fn review(
+        &self,
+        agent: &StoredAgent,
+        conv_id: &str,
+        opts: review::Options,
+    ) -> Result<review::Review> {
+        let store = self.sessions();
+        let Some(record) = store.get(&agent.name, conv_id) else {
+            return Err(Error::NotFound(format!("{}/{conv_id}", agent.name)));
+        };
+        let turns = self.transcript(agent, conv_id);
+        // Queued messages have been typed, not asked. A conversation that is only a queue has cost
+        // nothing and done nothing, so there is no workflow in it to review.
+        if turns.iter().all(|t| t.queued) {
+            return Err(Error::Unsupported(
+                "This conversation hasn't said anything yet — there's nothing to review.".to_string(),
+            ));
+        }
+
+        let report = analytics::analyze(&turns, analytics::Options::default());
+
+        // The agent's recent past, newest first. One conversation cannot tell a run that went badly
+        // from a tool that always does, which is the whole reason this costs a second read.
+        let mut history = review::History::default();
+        let sessions = store.list(&agent.name);
+        history.sessions_total = sessions.len();
+        for record in sessions.iter().take(opts.history_sessions) {
+            history.fold(record, &store.turns(&agent.name, &record.id));
+        }
+        history.settle();
+
+        let (tools_on, tools_off) = self.tool_split(agent);
+
+        let evidence = review::Evidence {
+            agent,
+            run_id: conv_id,
+            record: &record,
+            turns: &turns,
+            report: &report,
+            history: &history,
+            tools_on: &tools_on,
+            tools_off: &tools_off,
+        };
+
+        let dir = store.agent_dir(&agent.name);
+        std::fs::create_dir_all(&dir).map_err(Error::Io)?;
+        let path = dir.join(format!("{conv_id}.review.md"));
+        std::fs::write(&path, review::document(&evidence, opts)).map_err(Error::Io)?;
+
+        let brief = review::brief(&evidence, &path);
+        Ok(review::Review { path, brief })
+    }
+
+    /// The tool store split by what this agent was given: the tools on its PATH, and the ones it was
+    /// not. The second half is what lets a reviewer say "there is already a tool for that".
+    ///
+    /// System tools are on every agent's PATH whether or not they are listed in `bin_tools`
+    /// (`adi_tools::Tools::sync_agent_bin`), so they count as enabled here regardless — reporting one
+    /// as available-but-off would send a reviewer to switch on something already there.
+    fn tool_split(&self, agent: &StoredAgent) -> (Vec<(String, String)>, Vec<(String, String)>) {
+        let tools = adi_tools::Tools::with_config(self.config.clone());
+        let Ok(all) = tools.list() else {
+            return (Vec::new(), Vec::new());
+        };
+        let (mut on, mut off) = (Vec::new(), Vec::new());
+        for tool in all.into_iter().filter(|t| !t.is_archived()) {
+            let enabled = tool.is_system() || agent.manifest.bin_tools.contains(&tool.id);
+            let entry = (
+                tool.manifest.name.clone(),
+                tool.manifest.description.clone().unwrap_or_default(),
+            );
+            if enabled { on.push(entry) } else { off.push(entry) }
+        }
+        on.sort();
+        off.sort();
+        (on, off)
     }
 
     /// Drop one message from a conversation's queue by its position, for something you have thought

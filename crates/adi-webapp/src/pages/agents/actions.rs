@@ -1820,6 +1820,7 @@ fn chat_analytics(state: State, watch: AgentsWatch) -> AnyView {
     });
 
     view! {
+        {review_action(state, watch)}
         {stat_tile("Messages", s.you + s.agent, msg_sub)}
         {stat_tile("Tool calls", s.tools, tool_sub.join(" \u{b7} "))}
         {spend}
@@ -1831,6 +1832,75 @@ fn chat_analytics(state: State, watch: AgentsWatch) -> AnyView {
         {chat_token_report(state, watch)}
     }
     .into_any()
+}
+
+/// The rail's one *action*, at the top of it because everything below is what it reads.
+///
+/// The counts in this rail say what a conversation cost and what went wrong in it; none of them says
+/// what to do about any of it. This hands the whole session — its configuration and system prompt,
+/// the tool-by-tool trace, the failures, the repeats, and how this agent behaves across its other
+/// sessions — to the root agent, and asks that question.
+///
+/// The answer is not rendered here. It arrives as a conversation with `adi-agent`, which the screen
+/// jumps to: a review you can argue with, and tell to go and apply the part you agreed with, beats a
+/// report card in a panel.
+fn review_action(state: State, watch: AgentsWatch) -> AnyView {
+    view! {
+        <div class="adi-chome__group">
+            <button class="adi-chome__analyze adi-chome__analyze--lead" type="button"
+                disabled=move || watch.review_busy.get()
+                title="Hand this conversation to adi-agent and ask how the workflow should have gone"
+                on:click=move |_| start_review(state, watch)>
+                {move || if watch.review_busy.get() {
+                    "Handing it over\u{2026}"
+                } else {
+                    "Analyze this chat"
+                }}
+            </button>
+            <div class="adi-chome__group-note">
+                "adi-agent reads the whole session \u{2014} prompt, tools, failures, repeats \u{2014} \
+                 and answers with what to change: the workflow, what to harden, what wants a tool."
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// Write the dossier and start the reviewer on it, then go and watch.
+///
+/// The screen moves to the review's own conversation on success. Nothing about *this* chat changes —
+/// a review is a second conversation about the first, and leaving the reader where they were would
+/// hide the thing they just asked for behind a rail they would have to go and find.
+fn start_review(state: State, watch: AgentsWatch) {
+    let (Some(name), Some(run_id)) = (watch.name.get(), watch.run_id.get()) else {
+        return;
+    };
+    if watch.review_busy.get() {
+        return;
+    }
+    watch.review_busy.set(true);
+    spawn_local(async move {
+        let result = fetch::review_run(name, run_id).await;
+        watch.review_busy.set(false);
+        match result {
+            Ok(started) => {
+                // The dossier's path is worth saying: it is a file on disk that outlives the flash,
+                // and the one way to read the evidence without reading the review.
+                state.flash.set(Some(Flash::ok(format!(
+                    "\u{201C}{}\u{201D} is reviewing it \u{2014} evidence in {}",
+                    started.reviewer, started.dossier
+                ))));
+                if started.run_id.is_empty() {
+                    // An interactive reviewer keeps no run history, so there is no conversation to
+                    // select — only its live pane to open.
+                    open_watch(watch, started.reviewer, true);
+                } else {
+                    open_session(watch, &started.reviewer, &started.run_id);
+                }
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
 }
 
 /// One count in the analytics rail: the number, what it counts, and a quiet breakdown under it when

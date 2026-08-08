@@ -1,7 +1,7 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentKeys, AgentPeek, AgentRef, AgentRunResult, AgentRuns, AgentTokens,
+    AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns, AgentTokens,
     AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardTransferred,
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
@@ -11,7 +11,8 @@ use adi_webapp_api::types::{
     NewDashboard, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
     NodeServiceRef,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
-    ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, RunAgent, RunRef,
+    ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun,
+    RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
     SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
@@ -408,6 +409,21 @@ pub async fn peek_run(name: String, run_id: String) -> Result<AgentPeek, String>
 /// the transcript and has no business on the one-second poll.
 pub async fn run_tokens(name: String, run_id: String) -> Result<AgentTokens, String> {
     post("/api/agents/run/tokens", &RunRef { name, run_id }).await
+}
+
+/// Hand one conversation to the root agent and ask how the workflow should have gone. Writes the
+/// dossier server-side and launches the reviewer on it; what comes back is where to watch, not the
+/// review itself — the review is a conversation, and it is only starting.
+pub async fn review_run(name: String, run_id: String) -> Result<AgentReviewStarted, String> {
+    post(
+        "/api/agents/run/review",
+        &ReviewRun {
+            name,
+            run_id,
+            reviewer: String::new(),
+        },
+    )
+    .await
 }
 
 /// Say something into one of a harness agent's conversations: it starts the next turn, or queues

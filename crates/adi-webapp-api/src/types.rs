@@ -1119,6 +1119,39 @@ pub struct AgentRunResult {
     pub state: AgentsState,
 }
 
+/// `POST /api/agents/run/review` request — hand one conversation to a reviewing agent.
+///
+/// A [`RunRef`] plus who should read it. `reviewer` is normally left blank, meaning the
+/// environment's root agent (`adi-agent`); it is named only when an operator keeps a reviewer of
+/// their own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReviewRun {
+    pub name: String,
+    pub run_id: String,
+    /// Who reviews. Blank/absent means the root agent.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reviewer: String,
+}
+
+/// `POST /api/agents/run/review` — where the review is being written, and where its evidence went.
+///
+/// The client's whole job with this is to open `reviewer`/`run_id`: the review *is* a conversation,
+/// so there is no report to render here, only somewhere to go and watch one being written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentReviewStarted {
+    /// The agent now doing the reviewing.
+    pub reviewer: String,
+    /// Its new conversation. Empty for an interactive reviewer, which keeps no run history — the
+    /// client then opens the agent rather than a session of it.
+    #[serde(default)]
+    pub run_id: String,
+    /// Where the dossier was written, so a reader can open the evidence themselves.
+    pub dossier: String,
+    /// The conversation that was reviewed, echoed back so a late reply is matched to the chat it
+    /// was asked from rather than whichever one is open when it lands.
+    pub reviewed: RunRef,
+}
+
 /// Request body for `POST /api/agents/send-keys` — type into a running agent's pty session:
 /// `text` is sent literally, then `key` (a key name: `Enter`, `Escape`, `Up`, `C-c`, …)
 /// is pressed. At least one of the two must be non-empty. Replies with a fresh [`AgentPeek`].

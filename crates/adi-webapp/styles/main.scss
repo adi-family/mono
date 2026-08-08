@@ -960,6 +960,20 @@
 
     &:hover:not(:disabled) { background: var(--surface-2); }
     &:disabled { opacity: .6; cursor: default; }
+
+    // The one at the head of the rail sends the whole conversation somewhere, and everything below
+    // it is what it reads — so it takes the width and the accent, and the "recount" and "itemize"
+    // buttons that share this class stay the quiet ones they were.
+    &--lead {
+      align-self: stretch;
+      padding: 7px 10px;
+      border-color: var(--accent);
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 10%, transparent);
+      font-weight: 600;
+
+      &:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+    }
   }
   &__ctx {
     display: flex;

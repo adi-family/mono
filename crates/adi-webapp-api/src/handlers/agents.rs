@@ -11,10 +11,10 @@ use adi_agents::contains_json_null;
 use crate::types::{
     AgentBackendOption, AgentCapabilities, AgentDto, AgentFormField, AgentFormFieldKind,
     AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek, AgentRef, AgentRepeat,
-    AgentRepeatShape, AgentRunInfo, AgentRunResult, AgentRuns, AgentStep, AgentTokenSite,
-    AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
-    AgentsState, AllAgentRuns, HideRun, ProjectRunLimit, ReplyToRun, RunAgent, RunRef, SaveAgent,
-    SecretRef, SetRunLimit, UnqueueFromRun,
+    AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunResult, AgentRuns, AgentStep,
+    AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
+    AgentTurnMetrics, AgentsState, AllAgentRuns, HideRun, ProjectRunLimit, ReplyToRun, ReviewRun,
+    RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit, UnqueueFromRun,
 };
 
 use super::response::{Response, clean, error, ok_json, parse_body};
@@ -329,6 +329,92 @@ fn repeat_shape(s: adi_agents::analytics::Shape) -> AgentRepeatShape {
         Shape::Block => AgentRepeatShape::Block,
         Shape::Phrase => AgentRepeatShape::Phrase,
     }
+}
+
+/// The environment's root agent — the "primary agent" onboarding sets up, and the default reviewer.
+/// Named here rather than taken from the client so a review always goes to the agent that owns this
+/// machine, not to whatever the caller last had open.
+const ROOT_AGENT: &str = "adi-agent";
+
+/// `POST /api/agents/run/review` — hand one conversation to an agent and ask how it should have gone.
+/// Takes a [`ReviewRun`], answers an [`AgentReviewStarted`].
+///
+/// Two steps, in this order for a reason. The dossier is written first (`Agents::review`), then the
+/// reviewer is launched on a brief that points at it — so a launch refused by the concurrency cap
+/// leaves the evidence on disk to be opened by hand, rather than throwing the analysis away with the
+/// run that would have read it.
+///
+/// The reviewer starts in the **reviewed conversation's** directory. A workflow is a workflow
+/// somewhere: the recommendations worth having are the ones that can check whether the tool being
+/// proposed already exists in that tree. It is asked to propose and not to apply — see the brief in
+/// [`adi_agents::review`] — so the directory is somewhere to read, not somewhere to edit.
+#[must_use]
+pub fn review_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_body::<ReviewRun>(body)
+        .filter(|r| !r.name.trim().is_empty() && !r.run_id.trim().is_empty())
+    else {
+        return bad_run_ref();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let reviewer_name = match req.reviewer.trim() {
+        "" => ROOT_AGENT,
+        named => named,
+    };
+    // Checked before anything is written: "no such agent" is a much better answer than a dossier
+    // nobody was ever launched to read.
+    let reviewer = match get_agent(store, reviewer_name) {
+        Ok(reviewer) => reviewer,
+        Err(_) => {
+            return error(
+                404,
+                &format!(
+                    "No agent named “{reviewer_name}” to review with. Set up your primary agent \
+                     first, or name a reviewer that exists."
+                ),
+            );
+        }
+    };
+
+    // The conversation's own directory, looked up before anything else because its absence is also
+    // the answer to "does this session exist" — and the store's own 404 for that says "no such
+    // agent", which is exactly the wrong thing to tell someone whose agent is fine.
+    let run_id = req.run_id.trim();
+    let Some(cwd) = store.run_cwd(&agent, run_id) else {
+        return error(
+            404,
+            &format!("No conversation “{run_id}” on agent “{}”.", agent.name),
+        );
+    };
+    // A session outlives the tree it ran in, and starting the reviewer in a directory that has since
+    // been deleted would fail the launch over something the review does not depend on.
+    let working_dir = cwd.is_dir().then(|| cwd.display().to_string());
+
+    let review = match store.review(&agent, run_id, adi_agents::review::Options::default()) {
+        Ok(review) => review,
+        Err(e) => return Response::from(&e),
+    };
+
+    let launch = match store.run_in(&reviewer.name, &review.brief, working_dir.as_deref()) {
+        Ok(launch) => launch,
+        Err(e) => return Response::from(&e),
+    };
+    let review_run_id = match launch {
+        adi_agents::Launch::Process { run_id, .. } => run_id,
+        adi_agents::Launch::Pty { .. } => String::new(),
+    };
+
+    ok_json(&AgentReviewStarted {
+        reviewer: reviewer.name,
+        run_id: review_run_id,
+        dossier: review.path.display().to_string(),
+        reviewed: RunRef {
+            name: agent.name,
+            run_id: run_id.to_string(),
+        },
+    })
 }
 
 /// `POST /api/agents/run/reply` — say something into one of a harness agent's conversations and
