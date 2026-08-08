@@ -2,6 +2,11 @@ pub(crate) mod adi_events;
 pub(crate) mod claude_stream;
 pub(crate) mod detached;
 pub(crate) mod harness;
+// A `Bash` command that outlives the turn that started it, and the wake that reports it.
+pub(crate) mod jobs;
+// The MCP door into [`harness::tools`], for the Claude engines whose loop — and whose tool set — is
+// their own. A sibling of `harness` rather than a child: it serves that table, it is not part of it.
+pub(crate) mod mcp;
 pub(crate) mod process;
 pub(crate) mod pty;
 // The shell a conversation keeps between commands. Here rather than under one engine because two

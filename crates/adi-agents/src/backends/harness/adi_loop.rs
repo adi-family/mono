@@ -130,14 +130,16 @@ pub(crate) fn run_turn(
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     // `Awaits::open()` here rather than deeper down: this child shares the app's store through the
     // same `$ADI_DIR` every other process here does, and holds no `Agents` of its own.
+    let agent_dir = store.agent_dir(&agent.name);
     let ctx = tools::Ctx {
         cwd: &cwd,
         // The shell is the conversation's, not this turn's: its files sit beside the transcript in
         // the same session directory, so a path exported in an earlier turn is still exported here.
-        shell: crate::backends::shell::Shell::new(&store.agent_dir(&agent.name), conv_id),
+        shell: crate::backends::shell::Shell::new(&agent_dir, conv_id),
         agent: &agent.name,
         conv: conv_id,
         awaits: crate::awaits::Awaits::open(),
+        agent_dir: &agent_dir,
     };
     let wire = Wire::of(&args, model)?;
     tool_loop(&wire, &args, &turns, &ctx, sink)

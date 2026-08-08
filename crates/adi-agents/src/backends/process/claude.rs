@@ -8,7 +8,7 @@ use crate::backends::push_option;
 pub(crate) fn argv(
     config: &ProcessClaudeArguments,
     message: &str,
-    settings: Option<&str>,
+    mcp: Option<&str>,
 ) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
@@ -67,9 +67,14 @@ pub(crate) fn argv(
     if !prompts.is_empty() {
         argv.extend(["--append-system-prompt".into(), prompts.join("\n\n")]);
     }
-    // Run settings — the shell hook the runner installs. Placed here for the same reason as
-    // everything else: after the `--` below it would be read as part of the prompt, not as a flag.
-    push_option(&mut argv, "--settings", settings);
+    // ADI's own tools, over MCP (see `crate::backends::mcp`). `--strict-mcp-config` rides with it so
+    // the run gets *this* server and nothing else: without it the machine's own MCP configuration
+    // also loads, and an agent's tool surface would quietly depend on whatever the person at this
+    // keyboard happens to have installed.
+    if let Some(mcp) = mcp {
+        argv.extend(["--mcp-config".to_string(), mcp.to_string()]);
+        argv.push("--strict-mcp-config".to_string());
+    }
     // `--allowed-tools` / `--disallowed-tools` are variadic, so end option parsing with `--` before
     // the positional prompt or it could be swallowed as another tool value.
     argv.push("--".to_string());

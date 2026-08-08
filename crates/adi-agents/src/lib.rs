@@ -716,19 +716,39 @@ impl Agents {
         backends::harness::run_adi_turn(&agent, &sessions_dir, conv_id, sink)
     }
 
-    /// Answer one `PreToolUse` payload from a Claude engine's CLI: the same `Bash` call with its
-    /// command bent through this run's shell, so a `cd` or an `export` survives to the next command
-    /// and into the next turn — which that CLI's own shell does not do for either.
+    /// Serve this conversation's ADI tools to a Claude engine over MCP, until the engine's CLI
+    /// closes the pipe.
     ///
-    /// Invoked by the `adi-mono agents shell-hook` child the runner installs as a hook on every
-    /// Claude-engine run (see [`runner::detached`]). It is deliberately infallible: anything it
-    /// cannot rewrite comes back as `{}`, and the command runs exactly as the model wrote it. See
-    /// [`backends::shell::hook_answer`] for what that covers and why.
-    #[must_use]
-    pub fn shell_hook(&self, agent: &str, session: &str, payload: &str) -> String {
-        let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
-        backends::shell::hook_answer(&sessions_dir, agent, session, payload)
+    /// Invoked by the `adi-mono mcp` child the runner registers on every Claude-engine run (see
+    /// [`runner::detached`]). `cwd` is the run's own directory: this process is a *grandchild* of
+    /// the runner, so the directory it starts in is the CLI's business rather than a thing to
+    /// resolve an agent's relative paths against.
+    ///
+    /// Reads stdin and writes stdout, which are the transport — so nothing else may print to them
+    /// for the lifetime of the call.
+    ///
+    /// # Errors
+    /// [`Error::Process`] if the transport fails. A tool that fails is not an error: its message
+    /// travels back as the call's result, exactly as it does in the adi loop.
+    pub fn serve_mcp(&self, agent: &str, conv: &str, cwd: &std::path::Path) -> Result<()> {
+        let agent_dir = self.sessions().agent_dir(agent);
+        // The conversation's shell keeps its state in sidecars of this directory, and writes them
+        // from inside the command it runs — so a missing directory is not an error anybody sees, it
+        // is a `Bash` that reports a redirection failure instead of the output the model asked for.
+        // The store creates it on the write paths; this entry point is reached by a *child of the
+        // engine's CLI* and cannot assume any of them ran first.
+        std::fs::create_dir_all(&agent_dir)?;
+        let stdin = std::io::stdin();
+        backends::mcp::serve(
+            agent,
+            conv,
+            cwd,
+            &agent_dir,
+            stdin.lock(),
+            std::io::stdout().lock(),
+        )
     }
+
 
     /// The spec a *fresh* run starts with. `run_dir` is this launch's own working directory, for a
     /// caller pointing one agent at a different target each run; `None` leaves the manifest and the

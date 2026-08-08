@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-61 structs · 17 enums · 5 type aliases across 28 files.
+63 structs · 17 enums · 5 type aliases across 29 files.
 
 ## Index
 
@@ -18,7 +18,8 @@
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Wire`, `OpenAiDialect`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
-- [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`
+- [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `Drain`
+- [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunDeleted`
@@ -778,7 +779,7 @@ pub(crate) enum Continuation<'a> {
 A tool as the model sees it: a name, a sentence about when to reach for it, and the JSON Schema of its arguments. Providers disagree only about where these three go on the wire.
 
 ```rust
-pub(super) struct ToolSpec {
+pub(crate) struct ToolSpec {
     pub name: &'static str,
     pub description: &'static str,
     pub schema: fn() -> Value,
@@ -790,12 +791,42 @@ pub(super) struct ToolSpec {
 What a tool call knows about the turn making it.
 
 ```rust
-pub(super) struct Ctx<'a> {
+pub(crate) struct Ctx<'a> {
     pub cwd: &'a Path,
     pub shell: Shell,
     pub agent: &'a str,
     pub conv: &'a str,
     pub awaits: Awaits,
+    pub agent_dir: &'a Path,
+}
+```
+
+### struct `Drain`
+
+A stream being read on a thread of its own, and the buffer it is filling.
+
+```rust
+struct Drain {
+    kept: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    handle: std::thread::JoinHandle<()>,
+}
+```
+
+---
+
+## `src/backends/jobs.rs`
+
+### struct `Job`
+
+A detached command and the two files that say what became of it.
+
+```rust
+#[derive(Debug, Clone)]
+pub(crate) struct Job {
+    pub id: String,
+    pub log: PathBuf,
+    pub exit: PathBuf,
+    pub pid: u32,
 }
 ```
 
@@ -808,7 +839,7 @@ pub(super) struct Ctx<'a> {
 One conversation's shell state, as the two files holding it.
 
 ```rust
-pub(super) struct Shell {
+pub(crate) struct Shell {
     cwd: PathBuf,
     env: PathBuf,
 }

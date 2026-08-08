@@ -18,12 +18,13 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
+use crate::backends::jobs;
 use crate::backends::shell::Shell;
 use crate::awaits::{self, Awaits, Request};
 
 /// A tool as the model sees it: a name, a sentence about when to reach for it, and the JSON Schema
 /// of its arguments. Providers disagree only about where these three go on the wire.
-pub(super) struct ToolSpec {
+pub(crate) struct ToolSpec {
     pub name: &'static str,
     pub description: &'static str,
     /// The JSON Schema `object` describing this tool's arguments.
@@ -35,7 +36,7 @@ pub(super) struct ToolSpec {
 /// Most tools need only [`cwd`](Self::cwd) — they act on files and processes, and the run's own
 /// directory is the whole of their world. [`Await`](TOOLS) needs the other two: a wake is delivered
 /// by replying into *this* conversation, so registering one means naming it.
-pub(super) struct Ctx<'a> {
+pub(crate) struct Ctx<'a> {
     /// The directory the run is about; every relative path resolves against it.
     pub cwd: &'a Path,
     /// The conversation's shell — where its last command left off, and what it exported. Held here
@@ -48,6 +49,9 @@ pub(super) struct Ctx<'a> {
     /// Where a registered wake is written. Held here rather than opened at the call site so a test
     /// can point it at a scratch store without touching the environment every other test reads.
     pub awaits: Awaits,
+    /// This agent's session directory — where a background job files its log and its status, in the
+    /// session's own `<id>.*` namespace beside the shell's own sidecars.
+    pub agent_dir: &'a Path,
 }
 
 /// What `Bash` is, told in the terms that decide how a command gets written: the shell is the
@@ -61,7 +65,12 @@ const BASH: &str = "Run a shell command and return its output (stdout and stderr
                     FE=/long/path/to/a/checkout` — and use `$FE` from then on, rather than writing \
                     it out on command after command. A bare `FE=…` is not exported and does not \
                     carry. Only the shell moves: Read, Write, Edit, Glob and Grep go on resolving \
-                    relative paths against the run's own directory.";
+                    relative paths against the run's own directory. Set \
+                    `background` for a command that will outlast the turn: it is started and you \
+                    get a job id back straight away, then **end your turn** — you are woken when it \
+                    exits, carrying its exit status and the tail of its output. That is how to run \
+                    a build, a test suite, or another agent without sitting inside the call waiting \
+                    for it. Do not poll a job you started; being woken is the whole point.";
 #[cfg(windows)]
 const BASH: &str = "Run a shell command in the working directory and return its output (stdout \
                     and stderr together, with the exit status when it is not zero). Each call is \
@@ -70,7 +79,7 @@ const BASH: &str = "Run a shell command in the working directory and return its 
 
 /// Everything a turn may call. Order is the order they're advertised, which is the order a model
 /// tends to consider them in: look before you write, and shell out only when nothing else fits.
-pub(super) const TOOLS: &[ToolSpec] = &[
+pub(crate) const TOOLS: &[ToolSpec] = &[
     ToolSpec {
         name: "Read",
         description: "Read a file from the filesystem. Prefer this over `cat` in Bash: it returns \
@@ -128,7 +137,8 @@ pub(super) const TOOLS: &[ToolSpec] = &[
                 "type": "object",
                 "properties": {
                     "command": { "type": "string", "description": "The command line to run." },
-                    "timeout_ms": { "type": "integer", "description": "Give up after this long. Defaults to 120000." },
+                    "timeout_ms": { "type": "integer", "description": "Give up after this long. Defaults to 120000. Ignored when `background` is set — a job has no deadline." },
+                    "background": { "type": "boolean", "description": "Start the command and return immediately with a job id instead of waiting for it. Use it for anything that outlasts a couple of minutes — a build, a test suite, a deploy, another agent. You are woken when it exits, with its status and the tail of its log." },
                 },
                 "required": ["command"],
             })
@@ -217,12 +227,12 @@ const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 /// The error half of the result is not a failure of the loop — it is the tool's *answer*, handed
 /// back to the model as a failed result so it can correct itself and try again, which is why every
 /// message here is written to be read by the model rather than by a log reader.
-pub(super) fn run(name: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+pub(crate) fn run(name: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     match name {
         "Read" => read(input, ctx.cwd),
         "Write" => write(input, ctx.cwd),
         "Edit" => edit(input, ctx.cwd),
-        "Bash" => bash(input, ctx.cwd, &ctx.shell),
+        "Bash" => bash(input, ctx),
         "Glob" => glob(input, ctx.cwd),
         "Grep" => grep(input, ctx.cwd),
         "Await" => await_wake(input, ctx),
@@ -317,8 +327,12 @@ fn edit(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
     ))
 }
 
-fn bash(input: &Value, cwd: &Path, shell: &Shell) -> std::result::Result<String, String> {
+fn bash(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     let command = arg_str(input, "command")?;
+    if input.get("background").and_then(Value::as_bool).unwrap_or(false) {
+        return background(command, ctx);
+    }
+    let (cwd, shell) = (ctx.cwd, &ctx.shell);
     let timeout = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
     // Where the conversation's shell was left, which is where this command continues from — the
     // run's own directory until something moves it. See [`super::shell`].
@@ -368,6 +382,42 @@ fn bash(input: &Value, cwd: &Path, shell: &Shell) -> std::result::Result<String,
         &text
     });
     Ok(with_note(&body, moved))
+}
+
+/// Start a command as a background job and register the wake that will report it.
+///
+/// The order matters and is deliberate. The job is started *first*, then the wake is registered: the
+/// other way round leaves an await watching a job that failed to start. So a wake that cannot be
+/// registered is reported as exactly that — the job is already running, and killing work the model
+/// asked for because a bookkeeping record didn't fit would be the worse of the two failures. The log
+/// path travels either way, which is what makes that recoverable rather than merely honest.
+fn background(command: &str, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    let start = ctx.shell.start_dir(ctx.cwd);
+    let job = jobs::start(ctx.agent_dir, ctx.conv, &ctx.shell, &start, command)
+        .map_err(|e| format!("couldn't start the job: {e}"))?;
+
+    let request = Request {
+        note: format!("You started this in the background:\n\n{command}"),
+        every_seconds: Some(jobs::LOOK_EVERY_SECONDS),
+        check: Some(jobs::done_check(&job)),
+        cwd: start.display().to_string(),
+        ..Request::default()
+    };
+    let log = job.log.display();
+    match awaits::register(&ctx.awaits, ctx.agent, ctx.conv, &request) {
+        Ok(_) => Ok(format!(
+            "Started {} in the background.\n  log: {log}\n\nIt is running now and this call is \
+             done. Finish your turn — you will be woken with its exit status and the tail of that \
+             log when it ends. Don't poll it.",
+            job.id
+        )),
+        // The job is real and running; only the wake is missing. Say which is which.
+        Err(e) => Ok(format!(
+            "Started {} in the background, but nothing will wake you when it ends: {e}\n  log: \
+             {log}\n\nRead that log to find out how it went.",
+            job.id
+        )),
+    }
 }
 
 /// `body` with a note behind it. Appended after truncation, never before it: a note about where the
@@ -632,11 +682,27 @@ fn glob_here(p: &[char], t: &[char]) -> bool {
 ///
 /// Shared with [`crate::awaits`], whose checks are shell commands under a deadline for the same
 /// reason `Bash` is: an unbounded one would hold whoever is waiting on it for ever.
+///
+/// # Both streams are drained while the command runs, not after
+///
+/// This is the whole reason the function is more than a poll loop. A pipe holds about 64 KiB; a
+/// child that fills it blocks in `write` and never exits, so a reader that waits for the exit before
+/// reading is waiting for something that cannot happen. Measured before this drained: `yes | head
+/// -40000` — a tenth of a second of work, a megabyte of output — never finished, and came back as
+/// "still running after 8000ms and was killed". Every chatty build and test suite is that command.
+///
+/// The deadlock also reached further than the caller. An await's check runs on the app's *single*
+/// await worker, one at a time, so a check that printed a megabyte stalled every other pending wake
+/// on the machine until its 20-second deadline expired.
+///
+/// So each stream gets a thread that reads until the pipe closes. They keep only the first
+/// [`MAX_CAPTURE`] bytes and go on draining past that — the cap bounds this process's memory, and
+/// continuing to read is what keeps the child unblocked. Both threads end when the child does,
+/// including when it is killed, so nothing is left behind.
 pub(crate) fn wait_with_timeout(
     mut cmd: Command,
     timeout_ms: u64,
 ) -> std::result::Result<std::process::Output, String> {
-    use std::io::Read as _;
     use std::process::Stdio;
 
     let mut child = cmd
@@ -646,36 +712,111 @@ pub(crate) fn wait_with_timeout(
         .spawn()
         .map_err(|e| format!("couldn't start the shell: {e}"))?;
 
+    // Taken before the wait, so the pipes are being emptied from the first byte the child writes.
+    let stdout = child.stdout.take().map(drain);
+    let stderr = child.stderr.take().map(drain);
+
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
-    loop {
+    let outcome = loop {
         match child.try_wait() {
-            Ok(Some(status)) => {
-                let mut stdout = Vec::new();
-                let mut stderr = Vec::new();
-                if let Some(mut o) = child.stdout.take() {
-                    let _ = o.read_to_end(&mut stdout);
-                }
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = e.read_to_end(&mut stderr);
-                }
-                return Ok(std::process::Output {
-                    status,
-                    stdout,
-                    stderr,
-                });
-            }
+            Ok(Some(status)) => break Ok(status),
             Ok(None) if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!(
-                    "the command was still running after {timeout_ms}ms and was killed — run it in \
-                     the background, or raise timeout_ms"
+                break Err(format!(
+                    "the command was still running after {timeout_ms}ms and was killed — set \
+                     `background` to let it run past this call, or raise timeout_ms"
                 ));
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-            Err(e) => return Err(format!("couldn't wait for the shell: {e}")),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break Err(format!("couldn't wait for the shell: {e}"));
+            }
         }
+    };
+
+    // Collected with a grace period rather than joined, and that distinction is the difference
+    // between a deadline that holds and one that can be walked straight past. A pipe stays open
+    // while *any* writer holds it, and a command is free to leave one behind: `(sleep 45 &)` exits
+    // in milliseconds having handed its stdout to an orphan. Joining there waits for the orphan —
+    // measured at 45 seconds on a call whose timeout was 3. So once the child is gone the readers
+    // get a moment to finish, and whatever they have is taken either way.
+    let (stdout, stderr) = (collect(stdout), collect(stderr));
+
+    outcome.map(|status| std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+/// How much of one stream is kept. Well above [`MAX_OUTPUT`], which is what actually reaches the
+/// model — the gap is there so the truncation the model is told about happens in one place, on text
+/// this has already read in full.
+const MAX_CAPTURE: usize = 1 << 20;
+
+/// How long a reader is given to finish once the child is gone. The pipe closes with the child in
+/// every ordinary case, so this is the time a thread needs to notice — not a wait anybody plans on.
+const DRAIN_GRACE: std::time::Duration = std::time::Duration::from_millis(200);
+
+/// A stream being read on a thread of its own, and the buffer it is filling.
+struct Drain {
+    kept: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+    handle: std::thread::JoinHandle<()>,
+}
+
+/// Read `stream` to its end on a thread of its own, keeping the first [`MAX_CAPTURE`] bytes.
+///
+/// Reading *past* the cap is the point rather than an oversight: stopping early would leave the pipe
+/// to fill and the child blocked in `write`, which is the deadlock this exists to prevent.
+///
+/// What is read lands in a shared buffer as it arrives rather than being returned at the end, so a
+/// reader still blocked on a pipe an orphan is holding can be abandoned without losing the output it
+/// already has.
+fn drain(mut stream: impl std::io::Read + Send + 'static) -> Drain {
+    let kept = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let writing = std::sync::Arc::clone(&kept);
+    let handle = std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match stream.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    // Held only long enough to append: the reader must never wait on whoever is
+                    // reading the buffer, and the buffer's owner must never wait on the pipe.
+                    if let Ok(mut kept) = writing.lock()
+                        && kept.len() < MAX_CAPTURE
+                    {
+                        let room = MAX_CAPTURE - kept.len();
+                        kept.extend_from_slice(&buf[..n.min(room)]);
+                    }
+                }
+            }
+        }
+    });
+    Drain { kept, handle }
+}
+
+/// What a reader has, once it has had [`DRAIN_GRACE`] to finish.
+///
+/// A thread still blocked after that is left to end on its own — it holds a bounded buffer and exits
+/// the moment the last writer closes the pipe. Abandoning it is what keeps a stray orphan from
+/// deciding how long this call takes.
+fn collect(drain: Option<Drain>) -> Vec<u8> {
+    let Some(drain) = drain else {
+        return Vec::new();
+    };
+    let deadline = std::time::Instant::now() + DRAIN_GRACE;
+    while !drain.handle.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(1));
     }
+    drain
+        .kept
+        .lock()
+        .map(|kept| kept.clone())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -701,6 +842,7 @@ mod tests {
             agent: "watcher",
             conv: "conv-1",
             awaits: Awaits::with_config(adi_config::Config::with_root(root)),
+            agent_dir: cwd,
         }
     }
 
@@ -750,11 +892,114 @@ mod tests {
         assert_eq!(windowed, "two");
     }
 
+    /// A background call is two things in one act: the job starts, and the wake that will report it
+    /// is registered. Registering separately was the alternative, and it would mean a model that
+    /// forgot the second call had started work nothing would ever tell it about.
+    #[cfg(unix)]
+    #[test]
+    fn a_background_command_starts_a_job_and_registers_the_wake_in_one_call() {
+        let dir = scratch("bash-bg");
+        let ctx = ctx_in(&dir, "bash-bg");
+
+        let said = bash(
+            &json!({ "command": "echo from-the-job", "background": true }),
+            &ctx,
+        )
+        .expect("a job starts");
+        assert!(said.contains("in the background"), "{said}");
+        assert!(said.contains("job-"), "the model is told the id: {said}");
+        assert!(said.contains(".log"), "and where the output goes: {said}");
+        // The instruction that makes the whole thing work: stop, don't poll.
+        assert!(said.contains("woken"), "{said}");
+
+        let pending = ctx.awaits.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1, "exactly one wake: {pending:?}");
+        let wake = &pending[0];
+        assert!(
+            wake.check.as_deref().is_some_and(|c| c.contains("job-")),
+            "the wake watches this job: {wake:?}"
+        );
+        assert!(
+            wake.note.contains("echo from-the-job"),
+            "and reminds the run what it started: {wake:?}"
+        );
+        // A job has no deadline of its own, so the wake is a poll rather than a one-shot timer.
+        assert_eq!(wake.every, Some(jobs::LOOK_EVERY_SECONDS));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `timeout_ms` is the foreground contract and says nothing about a job — a background call
+    /// returns at once whatever it was given, rather than being killed by a deadline it outlives.
+    #[cfg(unix)]
+    #[test]
+    fn a_background_command_is_not_bound_by_the_foreground_timeout() {
+        let dir = scratch("bash-bg-timeout");
+        let ctx = ctx_in(&dir, "bash-bg-timeout");
+        let said = bash(
+            &json!({ "command": "sleep 30", "background": true, "timeout_ms": 200 }),
+            &ctx,
+        )
+        .expect("a job starts");
+        assert!(said.contains("in the background"), "{said}");
+        assert!(!said.contains("still running"), "not a timeout: {said}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A pipe holds about 64 KiB. A reader that waits for the child to exit before emptying it is
+    /// waiting for a child that is blocked in `write` — so a chatty command used to run its whole
+    /// timeout and come back killed. The timeout here is generous and the assertion is on the clock:
+    /// this passes in well under a second and only fails by taking all ten.
+    #[cfg(unix)]
+    #[test]
+    fn a_command_that_outtalks_the_pipe_buffer_still_finishes() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("yes abcdefghijklmnop | head -60000");
+
+        let began = std::time::Instant::now();
+        let out = wait_with_timeout(cmd, 10_000).expect("a loud command is not a hung one");
+        assert!(out.status.success());
+        assert!(
+            out.stdout.len() > 256 * 1024,
+            "the whole stream is read, not one buffer's worth: {}",
+            out.stdout.len()
+        );
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "it finished on its own rather than on the deadline: {:?}",
+            began.elapsed()
+        );
+    }
+
+    /// The deadline has to survive a command that leaves a writer behind. `(sleep &)` exits at once
+    /// but hands its stdout to an orphan, and a pipe stays open while *any* writer holds it — so
+    /// reading to the end here means reading until the orphan is done, whatever the timeout said.
+    #[cfg(unix)]
+    #[test]
+    fn an_orphan_holding_the_pipe_does_not_decide_how_long_the_call_takes() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("(sleep 30 &) ; echo parent-done");
+
+        let began = std::time::Instant::now();
+        let out = wait_with_timeout(cmd, 60_000).expect("the command itself succeeded");
+        assert!(
+            began.elapsed() < std::time::Duration::from_secs(5),
+            "the call returns with its child, not with the orphan: {:?}",
+            began.elapsed()
+        );
+        // …and abandoning the reader still returns what the command actually said.
+        assert!(
+            String::from_utf8_lossy(&out.stdout).contains("parent-done"),
+            "{:?}",
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
     #[test]
     fn a_nonzero_exit_comes_back_as_a_result_not_an_error() {
         let dir = scratch("bash");
-        let shell = Shell::new(&dir, "conv");
-        let out = bash(&json!({"command": "echo out; exit 3"}), &dir, &shell)
+        let out = bash(&json!({"command": "echo out; exit 3"}), &ctx_in(&dir, "bash"))
             .expect("nonzero is a result");
         assert!(out.contains("exit 3"), "{out}");
         assert!(out.contains("out"), "{out}");
@@ -763,8 +1008,7 @@ mod tests {
     #[test]
     fn a_command_that_never_finishes_is_killed_and_says_so() {
         let dir = scratch("bash-timeout");
-        let shell = Shell::new(&dir, "conv");
-        let err = bash(&json!({"command": "sleep 5", "timeout_ms": 200}), &dir, &shell)
+        let err = bash(&json!({"command": "sleep 5", "timeout_ms": 200}), &ctx_in(&dir, "bash"))
             .expect_err("a hung command must fail");
         assert!(err.contains("still running"), "{err}");
     }
@@ -778,15 +1022,13 @@ mod tests {
         std::fs::create_dir_all(dir.join("workspaces")).expect("mkdir");
         let inner = std::fs::canonicalize(dir.join("workspaces")).expect("canonicalize");
         let inner = inner.to_str().expect("utf8");
-        let shell = Shell::new(&dir, "conv");
-
-        let stayed = bash(&json!({"command": "echo here"}), &dir, &shell).expect("run");
+        let stayed = bash(&json!({"command": "echo here"}), &ctx_in(&dir, "bash")).expect("run");
         assert!(!stayed.contains("the shell is now in"), "{stayed}");
 
-        let moved = bash(&json!({"command": "cd workspaces"}), &dir, &shell).expect("run");
+        let moved = bash(&json!({"command": "cd workspaces"}), &ctx_in(&dir, "bash")).expect("run");
         assert!(moved.contains(inner), "the move is reported: {moved}");
         // …and the next command really does continue from there.
-        let after = bash(&json!({"command": "pwd -P"}), &dir, &shell).expect("run");
+        let after = bash(&json!({"command": "pwd -P"}), &ctx_in(&dir, "bash")).expect("run");
         assert!(after.contains(inner), "{after}");
 
         let _ = std::fs::remove_dir_all(&dir);

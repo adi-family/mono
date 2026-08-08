@@ -87,6 +87,8 @@ pub(crate) enum AgentsCommand {
         dir: Option<String>,
         #[arg(long)]
         force: bool,
+        #[arg(long)]
+        wait: bool,
     },
     Limit {
         max: Option<u32>,
@@ -94,13 +96,6 @@ pub(crate) enum AgentsCommand {
         project: Option<String>,
         #[arg(long)]
         json: bool,
-    },
-    #[command(hide = true)]
-    ShellHook {
-        #[arg(long)]
-        agent: String,
-        #[arg(long)]
-        session: String,
     },
     Stop {
         name: String,
@@ -393,6 +388,15 @@ enum Command {
     Update {
         #[command(subcommand)]
         command: UpdateCommand,
+    },
+    #[command(hide = true)]
+    Mcp {
+        #[arg(long)]
+        agent: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long, value_name = "PATH")]
+        dir: String,
     },
     #[command(hide = true)]
     HarnessTurn {

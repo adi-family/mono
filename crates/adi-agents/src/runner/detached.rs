@@ -88,10 +88,16 @@ impl DetachedRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt =
                     with_tool_help(spec, with_workspace(spec, config.append_system_prompt));
+                let (allowed, disallowed) = crate::backends::mcp::scope_tools(
+                    config.allowed_tools.as_deref(),
+                    config.disallowed_tools.as_deref(),
+                );
+                config.allowed_tools = Some(allowed);
+                config.disallowed_tools = Some(disallowed);
                 Ok(process::claude::argv(
                     &config,
                     message,
-                    Some(&shell_hook_settings(session)),
+                    Some(&crate::backends::mcp::config(spec, session)),
                 ))
             }
             Backend::ProcessCodex => {
@@ -112,11 +118,17 @@ impl DetachedRunner {
                 } else {
                     Continuation::First { session_id }
                 };
+                let (allowed, disallowed) = crate::backends::mcp::scope_tools(
+                    config.allowed_tools.as_deref(),
+                    config.disallowed_tools.as_deref(),
+                );
+                config.allowed_tools = Some(allowed);
+                config.disallowed_tools = Some(disallowed);
                 Ok(harness::claude_sdk::argv(
                     &config,
                     message,
                     &cont,
-                    Some(&shell_hook_settings(session)),
+                    Some(&crate::backends::mcp::config(spec, session)),
                 ))
             }
             Backend::HarnessAdi => {
@@ -526,44 +538,7 @@ pub(super) fn own_prompt(spec: &RunSpec, stored: Option<String>) -> Option<Strin
         .or(stored)
 }
 
-/// The settings that give a Claude engine the conversation's shell: a `PreToolUse` hook on `Bash`
-/// that re-enters this binary, where [`crate::backends::shell::hook_answer`] rewrites the command.
-///
-/// Passed inline rather than written to a file because they are *this run's* — the hook has to name
-/// the agent and session it belongs to, and a file would be one more thing to place, clean up, and
-/// keep in step with a session it outlives. `--settings` merges with the machine's own, so an agent
-/// that already had hooks keeps them.
-///
-/// Handed to each engine's argv builder rather than appended to what it returns, because both end
-/// their command line with `--`: a flag after that terminator is read as part of the prompt, and
-/// the hook simply never happens — which is how the first version of this failed, silently, with
-/// every test still green.
-///
-/// Nothing here can refuse a launch: the worst case is a CLI that ignores the setting, and a run
-/// whose shell forgets where it was — which is where every Claude run stood before this existed.
-fn shell_hook_settings(session: &dyn Session) -> String {
-    let hook = format!(
-        "{} agents shell-hook --agent {} --session {}",
-        shell_quote(&harness::adi_loop::adi_mono_program()),
-        shell_quote(session.agent()),
-        shell_quote(session.id()),
-    );
-    serde_json::json!({
-        "hooks": {
-            "PreToolUse": [{
-                "matcher": "Bash",
-                "hooks": [{ "type": "command", "command": hook }],
-            }],
-        }
-    })
-    .to_string()
-}
 
-/// One `sh` word, single-quoted. The hook is a command line the CLI hands to a shell, and an agent
-/// name is free text — a space or a quote in one must not become two arguments.
-fn shell_quote(word: &str) -> String {
-    format!("'{}'", word.replace('\'', r"'\''"))
-}
 
 /// `existing` with the run's location behind it, or `existing` unchanged when there is none.
 ///
@@ -941,65 +916,125 @@ mod tests {
         );
     }
 
-    /// Both Claude engines are launched with the hook that gives their `Bash` the conversation's
-    /// shell, addressed to the run it belongs to. Codex is not: it does not read these settings,
-    /// and its shell is not one this can reach.
+
+    /// Both Claude engines are pointed at this run's own MCP server, scoped to the conversation it
+    /// belongs to and to the directory the run is about. Codex is not: it reads none of these flags.
     #[test]
-    fn the_claude_engines_are_launched_with_the_shell_hook() {
+    fn the_claude_engines_are_launched_with_this_runs_mcp_server() {
         for backend in [Backend::ProcessClaude, Backend::HarnessClaudeSdk] {
             let argv = argv_of(
                 backend.clone(),
                 &spec(json!({})),
-                &FakeSession::new("hooked"),
+                &FakeSession::new("served"),
                 "go",
             );
             let at = argv
                 .iter()
-                .position(|arg| arg == "--settings")
-                .unwrap_or_else(|| panic!("{backend:?} takes settings: {argv:?}"));
-            let settings: Value = serde_json::from_str(&argv[at + 1]).expect("settings are json");
-            let hook = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
-                .as_str()
-                .expect("a hook command");
-            assert!(hook.contains("agents shell-hook"), "{hook}");
-            assert!(hook.contains("--agent 'solver'"), "{hook}");
-            assert!(hook.contains("--session 'conv-1'"), "{hook}");
-            assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "Bash");
-            // The hook says nothing about permissions — see `backends::shell::hook_answer`.
-            assert!(!argv[at + 1].contains("permissionDecision"), "{argv:?}");
-            // And it has to arrive as a *flag*. Both engines end their command line with `--`,
-            // after which the CLI reads everything as the prompt: settings placed there parse
-            // cleanly, launch cleanly, and do nothing at all.
+                .position(|arg| arg == "--mcp-config")
+                .unwrap_or_else(|| panic!("{backend:?} takes an mcp config: {argv:?}"));
+            let config: Value = serde_json::from_str(&argv[at + 1]).expect("mcp config is json");
+            let server = &config["mcpServers"][crate::backends::mcp::SERVER];
+            let spawn_args: Vec<&str> = server["args"]
+                .as_array()
+                .expect("args")
+                .iter()
+                .map(|a| a.as_str().expect("string"))
+                .collect();
+            assert_eq!(spawn_args[0], "mcp");
+            assert!(spawn_args.contains(&"solver"), "{spawn_args:?}");
+            assert!(spawn_args.contains(&"conv-1"), "{spawn_args:?}");
+            // The run's directory travels explicitly: this server is a grandchild, so the working
+            // directory it inherits is the engine CLI's business and not ours to resolve against.
+            let dir = spawn_args
+                .iter()
+                .position(|a| *a == "--dir")
+                .expect("the run directory is passed");
+            assert_eq!(spawn_args[dir + 1], std::env::temp_dir().to_string_lossy());
+
+            // Ours and *only* ours: without this the machine's own MCP configuration also loads,
+            // and an agent's tool surface would depend on what this keyboard happens to have.
+            assert!(
+                argv.iter().any(|arg| arg == "--strict-mcp-config"),
+                "{argv:?}"
+            );
+            // Same terminator rule the settings flag lives under: after `--` it is prompt text.
             let terminator = argv
                 .iter()
                 .position(|arg| arg == "--")
                 .unwrap_or_else(|| panic!("{backend:?} ends option parsing: {argv:?}"));
-            assert!(at < terminator, "settings must precede `--`: {argv:?}");
+            assert!(at < terminator, "the mcp config must precede `--`: {argv:?}");
         }
-
-        // A reply gets it too, and that is the half that matters most: a resumed turn is a new
-        // process, so without the hook it starts back in the run directory having forgotten
-        // everything the last turn stood in.
-        let reply = argv_of(
-            Backend::HarnessClaudeSdk,
-            &spec(json!({})),
-            &FakeSession::new("hooked-reply").started(),
-            "and now a test",
-        );
-        assert!(
-            reply.windows(2).any(|w| w[0] == "--settings" && w[1].contains("shell-hook")),
-            "{reply:?}"
-        );
 
         let codex = argv_of(
             Backend::ProcessCodex,
             &spec(json!({})),
-            &FakeSession::new("codex-hook"),
+            &FakeSession::new("codex-mcp"),
             "go",
         );
         assert!(
-            codex.iter().all(|arg| arg != "--settings"),
-            "codex reads no such settings: {codex:?}"
+            codex.iter().all(|arg| arg != "--mcp-config"),
+            "codex reads no such flag: {codex:?}"
+        );
+    }
+
+    /// The two halves that make the MCP server usable rather than merely present: the engine's own
+    /// shell is taken away, and ours is granted. Granting is what is easy to forget — an ungranted
+    /// MCP tool is advertised to the model and then refused when it calls it.
+    #[test]
+    fn the_engines_shell_is_replaced_by_ours_without_discarding_the_agents_own_lists() {
+        let flag = |argv: &[String], name: &str| -> String {
+            let at = argv
+                .iter()
+                .position(|arg| arg == name)
+                .unwrap_or_else(|| panic!("{name} is set: {argv:?}"));
+            argv[at + 1].clone()
+        };
+
+        for backend in [Backend::ProcessClaude, Backend::HarnessClaudeSdk] {
+            let argv = argv_of(
+                backend.clone(),
+                &spec(json!({})),
+                &FakeSession::new("scoped"),
+                "go",
+            );
+            let allowed = flag(&argv, "--allowed-tools");
+            let disallowed = flag(&argv, "--disallowed-tools");
+            // The server-level grant covers every tool the server serves, so adding one later needs
+            // no change here.
+            assert!(allowed.split(',').any(|t| t == "mcp__adi"), "{allowed}");
+            for engine_tool in crate::backends::mcp::ENGINE_SHELL_TOOLS {
+                assert!(
+                    disallowed.split(',').any(|t| t == *engine_tool),
+                    "{engine_tool} must be denied: {disallowed}"
+                );
+            }
+        }
+
+        // An agent's own lists are a decision somebody made about that agent: this adds to them
+        // rather than replacing them, and does not duplicate what is already there.
+        let opinionated = spec(json!({
+            "allowed_tools": "Read,mcp__adi",
+            "disallowed_tools": "WebFetch,Bash",
+        }));
+        let argv = argv_of(
+            Backend::ProcessClaude,
+            &opinionated,
+            &FakeSession::new("opinionated"),
+            "go",
+        );
+        let allowed = flag(&argv, "--allowed-tools");
+        let disallowed = flag(&argv, "--disallowed-tools");
+        assert!(allowed.split(',').any(|t| t == "Read"), "{allowed}");
+        assert!(disallowed.split(',').any(|t| t == "WebFetch"), "{disallowed}");
+        assert_eq!(
+            allowed.split(',').filter(|t| *t == "mcp__adi").count(),
+            1,
+            "a grant already present is not repeated: {allowed}"
+        );
+        assert_eq!(
+            disallowed.split(',').filter(|t| *t == "Bash").count(),
+            1,
+            "a denial already present is not repeated: {disallowed}"
         );
     }
 

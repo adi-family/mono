@@ -4,7 +4,8 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, AgentSummaryArguments, AgentsError, Launch, SecretAttachment, StoredAgent,
+    Adi, AgentManifest, Agents, AgentSummaryArguments, AgentsError, Launch, SecretAttachment,
+    StoredAgent,
 };
 use clap::Subcommand;
 
@@ -102,6 +103,14 @@ pub(crate) enum AgentsCommand {
         /// override of the concurrency limit — for a human who wants this one now.
         #[arg(long)]
         force: bool,
+        /// Block until the run finishes, print its answer, and exit with its status.
+        ///
+        /// What turns a launch into something another program can be composed out of: a shell
+        /// script, a CI step, or an agent's own `Bash` — which is how one agent waits for another
+        /// without either of them learning a new verb. Not for interactive backends: a pty run has
+        /// no ending to wait for, only a pane somebody is looking at.
+        #[arg(long)]
+        wait: bool,
     },
     /// Show, or set, how many agent runs may be live at once — overall, or (with `--project`) for
     /// one project's agents. The caps bind every launch the platform makes on its own (a trigger
@@ -116,19 +125,6 @@ pub(crate) enum AgentsCommand {
         project: Option<String>,
         #[arg(long)]
         json: bool,
-    },
-    /// Internal: bend one `Bash` call of a Claude-engine run through that conversation's shell.
-    /// Reads the CLI's `PreToolUse` payload on stdin and prints the hook's answer — the same call
-    /// with its command rewritten, or `{}` to leave it alone. Installed by the runner on every
-    /// Claude-engine run; not for direct use.
-    #[command(hide = true)]
-    ShellHook {
-        /// The agent whose run issued the command.
-        #[arg(long)]
-        agent: String,
-        /// The session (run) id whose shell the command belongs to.
-        #[arg(long)]
-        session: String,
     },
     /// Stop a running agent using its executor's lifecycle.
     Stop { name: String },
@@ -253,6 +249,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             message,
             dir,
             force,
+            wait,
         } => {
             let launch = if force {
                 store.force_run_in(&name, &message, dir.as_deref())
@@ -268,6 +265,12 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             })?;
             match launch {
                 Launch::Pty { command, session } => {
+                    if wait {
+                        return Err(
+                            "--wait needs a run that ends; a pty agent opens a pane instead"
+                                .to_string(),
+                        );
+                    }
                     println!("Started agent {name} in session {session}.");
                     println!("  command: {command}");
                     println!("  view:    in the control panel's live view (no external attach)");
@@ -278,6 +281,9 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     log,
                     run_id,
                 } => {
+                    if wait {
+                        return await_run(&store, &name, &run_id);
+                    }
                     println!("Started agent {name} as background process {pid}.");
                     println!("  run:     {run_id}");
                     println!("  command: {command}");
@@ -329,15 +335,6 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     );
                 }
             }
-        }
-        // Never an error, whatever it is handed: this runs in front of every command a Claude agent
-        // issues, and the CLI reads a non-answer as "no opinion" and runs the command as written.
-        // An unreadable payload is therefore printed away as `{}` rather than failing the call.
-        AgentsCommand::ShellHook { agent, session } => {
-            use std::io::Read as _;
-            let mut payload = String::new();
-            let _ = std::io::stdin().read_to_string(&mut payload);
-            println!("{}", store.shell_hook(&agent, &session, &payload));
         }
         AgentsCommand::Stop { name } => {
             if store.stop(&name).map_err(|e| e.to_string())? {
@@ -454,5 +451,53 @@ fn print_agent(agent: &StoredAgent) {
     }
     if agent.manifest.starred {
         println!("  starred");
+    }
+}
+
+/// Block until `run_id` finishes, print what the agent answered, and exit with the run's own
+/// status — the whole of `--wait`.
+///
+/// The wait is a poll rather than a subscription because a run's ending is a property of a process
+/// this one did not spawn: the launch is detached, so there is no child here to wait on, and the
+/// store's liveness answer is the same one every other reader uses.
+///
+/// The exit status is the *agent's*, not this command's: a turn the engine reported as failed exits
+/// non-zero, so `adi-mono agents run … --wait && deploy` means what it looks like. A run that
+/// answered nothing is a failure too — there is no result to have composed anything out of.
+fn await_run(store: &Agents, name: &str, run_id: &str) -> Result<(), String> {
+    /// Long enough that a multi-minute run costs a handful of store reads, short enough that a
+    /// quick one is not held up by the polling itself.
+    const LOOK_EVERY: std::time::Duration = std::time::Duration::from_millis(500);
+
+    let agent = store
+        .get(name)
+        .map_err(|e: AgentsError| e.to_string())?
+        .ok_or_else(|| format!("no agent named {name}"))?;
+
+    while store.peek_run(&agent, run_id).running {
+        std::thread::sleep(LOOK_EVERY);
+    }
+
+    // The answer is the last thing the agent said, which is what a caller composing on this wants —
+    // not the log, which carries the engine's own event stream around it.
+    let answer = store
+        .transcript(&agent, run_id)
+        .into_iter()
+        .rfind(|turn| turn.role == "assistant");
+
+    match answer {
+        Some(turn) => {
+            let text = turn.text.trim();
+            if !text.is_empty() {
+                println!("{text}");
+            }
+            // `is_error` is the engine's own verdict on the turn, so a run that failed says so in
+            // the only way a shell reads.
+            if turn.metrics.as_ref().is_some_and(|m| m.is_error) || text.is_empty() {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        None => Err(format!("run {run_id} finished without answering")),
     }
 }

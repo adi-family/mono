@@ -22,7 +22,7 @@ pub(crate) fn argv(
     config: &HarnessClaudeSdkArguments,
     message: &str,
     cont: &Continuation<'_>,
-    settings: Option<&str>,
+    mcp: Option<&str>,
 ) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     // Stream the turn as NDJSON events (tool calls, thinking, result + metrics) so the harness can
@@ -77,10 +77,14 @@ pub(crate) fn argv(
     if let Some(prompt) = append_system_prompt(config) {
         argv.extend(["--append-system-prompt".into(), prompt]);
     }
-    // Run settings — the shell hook the runner installs. It has to precede the `--`: that
-    // terminator ends option parsing, so a flag after it is read as part of the prompt and silently
-    // does nothing, which is exactly how the first version of this failed.
-    push_option(&mut argv, "--settings", settings);
+    // ADI's own tools, over MCP (see `crate::backends::mcp`). `--strict-mcp-config` rides with it so
+    // the run gets *this* server and nothing else: without it the machine's own MCP configuration
+    // also loads, and an agent's tool surface would quietly depend on whatever the person at this
+    // keyboard happens to have installed.
+    if let Some(mcp) = mcp {
+        argv.extend(["--mcp-config".to_string(), mcp.to_string()]);
+        argv.push("--strict-mcp-config".to_string());
+    }
     // `--allowed-tools` / `--disallowed-tools` are variadic (`<tools...>`), so a bare positional
     // prompt right after them would be swallowed as another tool. `--` ends option parsing, so the
     // prompt is always taken as the prompt regardless of which flags precede it.

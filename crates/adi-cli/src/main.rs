@@ -117,6 +117,20 @@ enum Command {
         #[command(subcommand)]
         command: UpdateCommand,
     },
+    /// Internal: serve one conversation's ADI tools to a Claude engine over MCP on stdio. Spawned
+    /// by that engine's CLI, which the runner points at this command; not for direct use.
+    #[command(hide = true)]
+    Mcp {
+        /// The agent whose conversation these tools belong to.
+        #[arg(long)]
+        agent: String,
+        /// The session (run) id whose shell and awaits these tools act on.
+        #[arg(long)]
+        session: String,
+        /// The run's own directory — what relative paths resolve against.
+        #[arg(long, value_name = "PATH")]
+        dir: String,
+    },
     /// Internal: run one turn of a `harness:adi` conversation — read its transcript, call the
     /// provider, and print the answer. Spawned by the app for each `adi` turn; not for direct use.
     #[command(hide = true)]
@@ -208,6 +222,21 @@ fn main() {
             }
         }
         Command::Update { command } => run_update(adi, command),
+        // stdout is the MCP transport, so a failure cannot be reported there — only on stderr,
+        // which the engine's CLI surfaces as the server's own log.
+        Command::Mcp {
+            agent,
+            session,
+            dir,
+        } => {
+            if let Err(e) = adi
+                .agents()
+                .serve_mcp(&agent, &session, std::path::Path::new(&dir))
+            {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         // The answer (or a readable error) is this process's stdout, which the spawning conversation
         // captures as the turn's output and folds into the transcript. Flush explicitly: a
         // `process::exit` skips the normal stdout flush.

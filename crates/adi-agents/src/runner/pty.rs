@@ -48,14 +48,23 @@ impl PtyRunner {
 
     /// The engine's command line. No message on it: a terminal engine is handed its prompt, not its
     /// task — what the run is asked to do is typed in afterwards.
-    fn argv(&self, spec: &RunSpec) -> Result<Vec<String>> {
+    fn argv(&self, spec: &RunSpec, session: &dyn Session) -> Result<Vec<String>> {
         match &self.backend {
             Backend::PtyClaude => {
                 let mut config = decode::<PtyClaudeArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt =
                     with_tool_help(spec, with_workspace(spec, config.append_system_prompt));
-                Ok(pty::claude::argv(&config))
+                let (allowed, disallowed) = crate::backends::mcp::scope_tools(
+                    config.allowed_tools.as_deref(),
+                    config.disallowed_tools.as_deref(),
+                );
+                config.allowed_tools = Some(allowed);
+                config.disallowed_tools = Some(disallowed);
+                Ok(pty::claude::argv(
+                    &config,
+                    Some(&crate::backends::mcp::config(spec, session)),
+                ))
             }
             Backend::PtyCodex => {
                 // Neither tool help nor the location block: Codex's `system_prompt` is pushed as its
@@ -106,7 +115,7 @@ impl Runner for PtyRunner {
             return self.send_keys(session, message, SUBMIT);
         }
 
-        let argv = self.argv(spec)?;
+        let argv = self.argv(spec, session)?;
         // Secrets and the agent's declared vars first, under their literal names; `PATH` last, so
         // nothing injected can shadow the agent's own `.bin` and tool directories.
         let mut env = spec.env.clone();
@@ -367,7 +376,9 @@ mod tests {
             help: Some("Usage: adi-db query <SQL>".to_string()),
         }];
 
-        let claude = PtyRunner::new(Backend::PtyClaude).argv(&spec).expect("argv");
+        let claude = PtyRunner::new(Backend::PtyClaude)
+            .argv(&spec, &FakeSession::new("solver"))
+            .expect("argv");
         let at = claude
             .iter()
             .position(|arg| arg == "--append-system-prompt")
@@ -375,12 +386,55 @@ mod tests {
         assert!(claude[at + 1].starts_with("You are a solver."));
         assert!(claude[at + 1].contains("Usage: adi-db query <SQL>"));
 
-        let codex = PtyRunner::new(Backend::PtyCodex).argv(&spec).expect("argv");
+        let codex = PtyRunner::new(Backend::PtyCodex)
+            .argv(&spec, &FakeSession::new("solver"))
+            .expect("argv");
         assert!(codex.iter().all(|arg| !arg.contains("adi-db")), "{codex:?}");
         assert_eq!(codex.last().map(String::as_str), Some("You are a solver."));
         // Codex is told the run's directory, because it is what scopes its sandbox.
         let cd = codex.iter().position(|arg| arg == "--cd").expect("--cd");
         assert_eq!(codex[cd + 1], spec.cwd.display().to_string());
+    }
+
+    /// A pane gets the same tool surface a headless run does: ADI's shell in, the engine's own out.
+    /// Codex is untouched — it reads none of these flags.
+    #[test]
+    fn a_claude_pane_is_launched_with_our_tools_and_without_the_engines_shell() {
+        let spec = spec(json!({}));
+        let claude = PtyRunner::new(Backend::PtyClaude)
+            .argv(&spec, &FakeSession::new("paned"))
+            .expect("argv");
+        let at = claude
+            .iter()
+            .position(|arg| arg == "--mcp-config")
+            .unwrap_or_else(|| panic!("a pane takes an mcp config: {claude:?}"));
+        let config: Value = serde_json::from_str(&claude[at + 1]).expect("mcp config is json");
+        assert_eq!(
+            config["mcpServers"][crate::backends::mcp::SERVER]["args"][0],
+            "mcp"
+        );
+        assert!(
+            claude.iter().any(|arg| arg == "--strict-mcp-config"),
+            "{claude:?}"
+        );
+
+        let flag = |name: &str| -> String {
+            let at = claude
+                .iter()
+                .position(|arg| arg == name)
+                .unwrap_or_else(|| panic!("{name} is set: {claude:?}"));
+            claude[at + 1].clone()
+        };
+        assert!(flag("--allowed-tools").split(',').any(|t| t == "mcp__adi"));
+        assert!(flag("--disallowed-tools").split(',').any(|t| t == "Bash"));
+
+        let codex = PtyRunner::new(Backend::PtyCodex)
+            .argv(&spec, &FakeSession::new("paned"))
+            .expect("argv");
+        assert!(
+            codex.iter().all(|arg| arg != "--mcp-config"),
+            "codex reads no such flag: {codex:?}"
+        );
     }
 
     /// The state slot is the truth about which pane this run drives; the agent's name is only the

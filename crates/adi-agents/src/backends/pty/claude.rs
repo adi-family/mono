@@ -4,7 +4,7 @@ use crate::arguments::{ClaudeEffort, ClaudePermissionMode, PtyClaudeArguments};
 use crate::backends::push_option;
 
 /// Build the Claude CLI command run by the shared pty executor.
-pub(crate) fn argv(config: &PtyClaudeArguments) -> Vec<String> {
+pub(crate) fn argv(config: &PtyClaudeArguments, mcp: Option<&str>) -> Vec<String> {
     let mut argv = vec!["claude".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -28,6 +28,12 @@ pub(crate) fn argv(config: &PtyClaudeArguments) -> Vec<String> {
         config.disallowed_tools.as_deref(),
     );
     push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
+    // ADI's own tools, over MCP (see `crate::backends::mcp`). `--strict-mcp-config` rides with it so
+    // the run gets *this* server and nothing else.
+    if let Some(mcp) = mcp {
+        argv.extend(["--mcp-config".to_string(), mcp.to_string()]);
+        argv.push("--strict-mcp-config".to_string());
+    }
 
     let prompt = [
         config.system_prompt.as_deref(),
@@ -68,7 +74,7 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest.arguments),
+            argv(&manifest.arguments, None),
             [
                 "claude",
                 "--model",

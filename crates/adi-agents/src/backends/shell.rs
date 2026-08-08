@@ -12,17 +12,18 @@
 //! namespace, which is what makes them disappear when the session is deleted without this module
 //! being told.
 //!
-//! # Two ways in, one shell
+//! # One shell, however the run is answered
 //!
-//! * The **adi loop** owns its `Bash`, so [`Shell::script`] is simply what it runs.
-//! * The **Claude engines** do not — the CLI's own `Bash` is theirs. The runner installs a
-//!   `PreToolUse` hook (see [`crate::runner::detached`]) and [`hook_answer`] rewrites the command
-//!   into the same script on its way to that tool. Measured against the CLI: without it a `cd`
-//!   survives to the next call but dies at the turn boundary, and an `export` does not survive even
-//!   one call; with it both last the conversation, exactly as they do for the adi loop.
+//! [`Shell::script`] is what a `Bash` call actually runs, and there is one caller shape:
+//! [`crate::backends::harness::tools`]. The adi loop calls those tools directly; every Claude
+//! engine reaches the same ones over MCP (see [`crate::backends::mcp`]), because the runner
+//! disallows that CLI's own `Bash` and serves ours in its place.
 //!
-//! The hook cannot set the tool's working directory, only its command — which is why the script
-//! walks to the recorded directory itself rather than leaving that to the caller.
+//! This replaced a `PreToolUse` hook that rewrote the CLI's `Bash` command in flight. The hook
+//! worked, but it could only bend a *command* — never the tool's working directory, and never a
+//! background call, whose recording would have landed after later commands had already made theirs
+//! and left the conversation in the directory of a job that finished minutes ago. Owning the tool
+//! outright has neither problem.
 //!
 //! # What carries, and what deliberately does not
 //!
@@ -43,7 +44,7 @@
 use std::path::{Path, PathBuf};
 
 /// One conversation's shell state, as the two files holding it.
-pub(super) struct Shell {
+pub(crate) struct Shell {
     /// The directory the last command ended in.
     cwd: PathBuf,
     /// The variables this conversation exported, as sourceable `export` lines.
@@ -103,6 +104,57 @@ impl Shell {
         (resolve(&ended) != resolve(start)).then_some(ended)
     }
 
+    /// `command` with the conversation's state loaded in front of it and **nothing recorded
+    /// behind** — what a background job runs under.
+    ///
+    /// A job inherits where the conversation stands, which is what makes `cd /checkout` and then
+    /// `Bash(background) make` mean what it reads like. It must not record, and that asymmetry is
+    /// the whole point: a job outlives the call that started it, so its recording would land after
+    /// however many later commands had already made theirs, and the conversation would silently
+    /// inherit the directory of a job that finished minutes ago.
+    #[cfg(unix)]
+    pub(crate) fn inherit(&self, command: &str) -> String {
+        format!("{}\n{command}", self.prologue(false))
+    }
+
+    /// Windows has no session shell — see the module docs.
+    #[cfg(windows)]
+    pub(crate) fn inherit(&self, command: &str) -> String {
+        command.to_string()
+    }
+
+    /// Load the carried variables and walk to the recorded directory — the half both callers share.
+    ///
+    /// `baseline` dumps the launch environment to a scratch file so the recording at the end can
+    /// keep the *difference*. Only [`Self::script`] wants it: it is the one that records, and it is
+    /// the one whose trap deletes the file again. A job asking for it would leave one behind on
+    /// every call, since nothing it runs ever cleans up — which is exactly what it did until this
+    /// was a parameter.
+    #[cfg(unix)]
+    fn prologue(&self, baseline: bool) -> String {
+        let env = quote(&self.env);
+        let cwd = quote(&self.cwd);
+        // Dumped *before* the carried state is loaded, so the difference kept at the end is
+        // everything this conversation has ever exported, not just this call's.
+        let base = if baseline {
+            "__adi_base=\"$__adi_env.$$.base\"\n\
+             __adi_next=\"$__adi_env.$$.next\"\n\
+             export -p > \"$__adi_base\" 2>/dev/null\n"
+        } else {
+            ""
+        };
+        format!(
+            // `sh -n` first: a sourced file with a syntax error takes the whole shell down with it,
+            // and this one is written from whatever the model exported.
+            "__adi_env={env}\n\
+             __adi_cwd={cwd}\n\
+             {base}\
+             if [ -f \"$__adi_env\" ] && sh -n \"$__adi_env\" 2>/dev/null; then . \"$__adi_env\"; fi\n\
+             if [ -f \"$__adi_cwd\" ]; then __adi_to=$(cat \"$__adi_cwd\"); \
+             if [ -d \"$__adi_to\" ]; then cd \"$__adi_to\" || true; fi; fi"
+        )
+    }
+
     /// `command` with the state around it: the carried variables loaded in front, the directory and
     /// the new variables recorded behind.
     ///
@@ -112,24 +164,11 @@ impl Shell {
     /// was not going to finish, and half of a shell's state is worse than none.
     ///
     /// The walk to the recorded directory is part of the script rather than the caller's business,
-    /// because one of the two callers is a hook that has no say in where the tool runs.
+    /// because the tool that runs it has no say in where its own child starts.
     #[cfg(unix)]
     pub(crate) fn script(&self, command: &str) -> String {
-        let env = quote(&self.env);
-        let cwd = quote(&self.cwd);
         format!(
-            // The baseline is dumped *before* the carried state is loaded, so the difference kept
-            // at the end is everything this conversation has ever exported, not just this call's.
-            // `sh -n` first: a sourced file with a syntax error takes the whole shell down with it,
-            // and this one is written from whatever the model exported.
-            "__adi_env={env}\n\
-             __adi_cwd={cwd}\n\
-             __adi_base=\"$__adi_env.$$.base\"\n\
-             __adi_next=\"$__adi_env.$$.next\"\n\
-             export -p > \"$__adi_base\" 2>/dev/null\n\
-             if [ -f \"$__adi_env\" ] && sh -n \"$__adi_env\" 2>/dev/null; then . \"$__adi_env\"; fi\n\
-             if [ -f \"$__adi_cwd\" ]; then __adi_to=$(cat \"$__adi_cwd\"); \
-             if [ -d \"$__adi_to\" ]; then cd \"$__adi_to\" || true; fi; fi\n\
+            "{}\n\
              __adi_keep() {{\n\
              __adi_status=$?\n\
              pwd -P > \"$__adi_cwd\" 2>/dev/null\n\
@@ -142,7 +181,8 @@ impl Shell {
              return $__adi_status\n\
              }}\n\
              trap __adi_keep EXIT\n\
-             {command}"
+             {command}",
+            self.prologue(true)
         )
     }
 
@@ -158,71 +198,6 @@ impl Shell {
 #[cfg(unix)]
 fn quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', r"'\''"))
-}
-
-/// What the `PreToolUse` hook prints for one payload: the same call with its command bent through
-/// this conversation's shell, or `{}` — which the CLI reads as "nothing to say", running the command
-/// exactly as the model wrote it.
-///
-/// **It fails open, always.** Every path that isn't a plain foreground `Bash` command it can rewrite
-/// returns `{}`: another tool, an unparseable payload, a blank command, a platform with no session
-/// shell. This runs in front of every command a Claude agent issues, so the one behaviour it must
-/// never have is turning a bad payload into a failed call — a shell that forgets its directory
-/// costs a retyped path, and a hook that swallows commands costs the whole run.
-///
-/// `run_in_background` is left alone for a subtler reason: that command outlives the call, so its
-/// recording would land after however many later commands had already made theirs, and the
-/// conversation would silently inherit the directory of a job that finished minutes ago.
-///
-/// No `permissionDecision` is returned, only the rewritten input — the call goes on being permitted
-/// or refused by whatever rules the run already had. Answering "allow" here would rewrite the
-/// agent's permission posture as a side effect of tidying its paths.
-pub(crate) fn hook_answer(sessions_dir: &Path, agent: &str, session: &str, payload: &str) -> String {
-    const PASS: &str = "{}";
-    if cfg!(not(unix)) {
-        return PASS.to_string();
-    }
-    let Ok(event) = serde_json::from_str::<serde_json::Value>(payload) else {
-        return PASS.to_string();
-    };
-    if event.get("tool_name").and_then(serde_json::Value::as_str) != Some("Bash") {
-        return PASS.to_string();
-    }
-    let Some(input) = event.get("tool_input").and_then(serde_json::Value::as_object) else {
-        return PASS.to_string();
-    };
-    if input
-        .get("run_in_background")
-        .and_then(serde_json::Value::as_bool)
-        == Some(true)
-    {
-        return PASS.to_string();
-    }
-    let Some(command) = input
-        .get("command")
-        .and_then(serde_json::Value::as_str)
-        .map(str::trim)
-        .filter(|command| !command.is_empty())
-    else {
-        return PASS.to_string();
-    };
-
-    let store = crate::store::SessionStore::new(sessions_dir);
-    let shell = Shell::new(&store.agent_dir(agent), session);
-    // The call is handed back whole, with only `command` replaced: the CLI takes `updatedInput` as
-    // the tool's arguments, so a field dropped here is a field the tool never sees.
-    let mut updated = input.clone();
-    updated.insert(
-        "command".to_string(),
-        serde_json::Value::String(shell.script(command)),
-    );
-    serde_json::json!({
-        "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "updatedInput": updated,
-        }
-    })
-    .to_string()
 }
 
 #[cfg(test)]
@@ -341,58 +316,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-    /// The hook rewrites a plain `Bash` call — command replaced, every other argument intact — and
-    /// says nothing at all about permissions.
-    #[test]
-    #[cfg(unix)]
-    fn the_hook_bends_a_bash_call_through_the_conversations_shell() {
-        let home = scratch("hook");
-        let payload = serde_json::json!({
-            "tool_name": "Bash",
-            "session_id": "the-engines-own-id",
-            "tool_input": { "command": "echo hi", "description": "Say hi" },
-        })
-        .to_string();
 
-        let answer = hook_answer(&home, "watcher", "1786000000000-0000", &payload);
-        let parsed: serde_json::Value = serde_json::from_str(&answer).expect("json");
-        let input = &parsed["hookSpecificOutput"]["updatedInput"];
-        let command = input["command"].as_str().expect("a command");
-        assert!(command.ends_with("echo hi"), "{command}");
-        assert!(command.contains("1786000000000-0000.shell-env"), "{command}");
-        assert_eq!(input["description"], "Say hi", "other arguments survive");
-        assert!(
-            parsed["hookSpecificOutput"].get("permissionDecision").is_none(),
-            "the hook must not decide permissions: {answer}"
-        );
-
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    /// Everything it cannot confidently rewrite runs untouched. This sits in front of every command
-    /// a Claude agent issues, so silence is the only safe way to be wrong.
-    #[test]
-    fn the_hook_stays_out_of_the_way_of_everything_else() {
-        let home = scratch("hook-pass");
-        let pass = |payload: &str| {
-            assert_eq!(
-                hook_answer(&home, "watcher", "conv", payload),
-                "{}",
-                "should have passed through: {payload}"
-            );
-        };
-
-        pass("not json at all");
-        pass(r#"{"tool_name":"Read","tool_input":{"path":"x"}}"#);
-        pass(r#"{"tool_name":"Bash","tool_input":{"command":"   "}}"#);
-        pass(r#"{"tool_name":"Bash","tool_input":{}}"#);
-        pass(r#"{"tool_name":"Bash"}"#);
-        // A backgrounded command outlives the call, so its recording would land after later
-        // commands had already made theirs.
-        pass(r#"{"tool_name":"Bash","tool_input":{"command":"sleep 300","run_in_background":true}}"#);
-
-        let _ = std::fs::remove_dir_all(&home);
-    }
 
     /// A broken env file is skipped rather than taking the shell down with it — a sourced syntax
     /// error would otherwise end every command in the conversation, not just the one that wrote it.
