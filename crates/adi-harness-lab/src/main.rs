@@ -26,7 +26,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use adi_agents::{Agents, Backend, StoredAgent};
 
@@ -914,14 +914,6 @@ fn truncate(s: &str, n: usize) -> String {
         return one_line;
     }
     one_line.chars().take(n).collect::<String>() + "…"
-}
-
-#[allow(dead_code)]
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
 }
 
 /// Stand over the live harness until a real overshoot happens, and photograph it.

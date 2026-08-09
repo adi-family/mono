@@ -26,8 +26,6 @@ struct Header {
 pub struct EmbeddingStore {
     path: std::path::PathBuf,
     dimensions: u32,
-    #[allow(dead_code)]
-    model_hash: [u8; 32],
 }
 
 impl EmbeddingStore {
@@ -47,7 +45,6 @@ impl EmbeddingStore {
         Ok(Self {
             path: path.to_path_buf(),
             dimensions,
-            model_hash,
         })
     }
 
@@ -72,7 +69,6 @@ impl EmbeddingStore {
         Ok(Self {
             path: path.to_path_buf(),
             dimensions: header.dimensions,
-            model_hash: header.model_hash,
         })
     }
 

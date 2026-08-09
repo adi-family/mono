@@ -8,7 +8,7 @@
 
 use adi_webapp_api::types::{
     AgentDto, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo, AgentStep, AgentTokenSource,
-    AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, Dashboard,
+    AgentTokens, AgentToolStatus, AgentTurn, AgentsState, Dashboard,
     FleetDashboards, NodeDashboard, NodeDashboards,
 };
 use leptos::prelude::*;
@@ -809,18 +809,16 @@ fn run_detail_row(
     .into_any()
 }
 
-/// The progress feed under a selected run: the turns (each with its tool/thinking steps and metrics)
-/// which the poll refreshes as they stream in — plus, for answerable backends, the reply box.
+/// The progress feed under a selected run: the turns (each with its tool/thinking steps) which the
+/// poll refreshes as they stream in — plus, for answerable backends, the reply box. What a turn cost
+/// is not here; the analytics rail totals it.
 ///
 /// The transcript reads as one alternating stream — message, that turn's tool calls, the message
 /// before it, its tool calls, and so on — **newest first**, so the latest answer is at the top.
 ///
 /// The reply box sits at the **top**, above the transcript — new turns land at the top of the
-/// transcript, right beneath where you type. The scroll container (`.adi-chat`) is built **once**
-/// here, never inside the 1s poll's reactive island — so its scroll offset survives a refresh
-/// instead of snapping to the top every second. Inside it, a keyed [`For`] reconciles the transcript:
-/// a settled turn keeps its exact DOM (and the scroll position with it); only the still-streaming
-/// turn — whose key folds in its growth — re-renders as it updates.
+/// transcript, right beneath where you type. The transcript itself is [`adi_ui::Chat`], which owns
+/// the scroll container and reconciles the turns as the poll rewrites them.
 ///
 /// Messages still waiting in the queue trail the transcript, so in a newest-first feed they sit at
 /// the very top: what you have already said is nearest the box you said it in.
@@ -982,89 +980,6 @@ fn chat_placeholder(watch: AgentsWatch) -> Option<AnyView> {
     Some(view! { <div class="adi-chat__empty">{msg}</div> }.into_any())
 }
 
-/// A cheap fingerprint of a still-streaming turn's activity: how many steps there are, each one's
-/// status, and how much detail has landed. Folded into the [`For`] key so a tool flipping ⟳ → ✓ —
-/// which leaves the step *count* unchanged — still re-renders the live turn.
-fn steps_fingerprint(steps: &[AgentStep]) -> String {
-    let mut out = String::with_capacity(steps.len() * 6);
-    for s in steps {
-        let (mark, len) = match s {
-            AgentStep::Message { text } => ('m', text.len()),
-            AgentStep::Thinking { text } => ('t', text.len()),
-            AgentStep::Tool { status, output, .. } => {
-                let mark = match status {
-                    AgentToolStatus::Running => 'r',
-                    AgentToolStatus::Ok => 'o',
-                    AgentToolStatus::Error => 'e',
-                    AgentToolStatus::Unanswered => 'u',
-                };
-                (mark, output.len())
-            }
-        };
-        out.push(mark);
-        out.push_str(&len.to_string());
-        out.push('.');
-    }
-    out
-}
-
-/// One transcript turn, laid out **newest-first** down the feed: the turn's final message on top
-/// (with the role label and, for an assistant turn, its metrics footer), then its timeline in
-/// reverse — the tool calls it ran, the message it wrote before those, the tools before *that*, and
-/// so on. So a turn reads as `message → toolcall ×N → message → toolcall ×N`, with the most recent
-/// thing at the top and every mid-turn message left where it was written rather than merged into the
-/// answer. Nothing is hidden behind a disclosure. The still-streaming answer is tagged and, while it
-/// has no body yet, shows a typing ellipsis.
-///
-/// `idx` is the turn's place in the transcript, and it is load-bearing beyond layout: it names the
-/// bubble and each of its steps in the DOM, which is how the analytics rail points at one. The index
-/// is the one the [`For`] enumerates — the same one the rail counts from — so the two cannot drift.
-fn chat_bubble(state: State, idx: usize, turn: AgentTurn, answerable: bool) -> AnyView {
-    let is_user = turn.role == "user";
-    // Only an assistant turn on a conversation backend may carry an `adi-form` block to render.
-    let forms = answerable && !is_user;
-    let pending = turn.pending;
-    let errored = turn.metrics.as_ref().is_some_and(|m| m.is_error);
-    let has_body = !turn.text.trim().is_empty() || !turn.steps.is_empty();
-    let text = if pending && !has_body {
-        "\u{2026}".to_string()
-    } else {
-        turn.text
-    };
-    let steps = turn.steps;
-    let metrics = turn.metrics;
-    let turn_class = if is_user {
-        "adi-chat__turn adi-chat__turn--user"
-    } else {
-        "adi-chat__turn adi-chat__turn--agent"
-    };
-    let who = if is_user { "you" } else { "agent" };
-
-    // The turn's final message comes first (on top); the text renders as Markdown, and the metrics
-    // footer rides with it.
-    let message = view! {
-        <div class=turn_class id=turn_anchor(idx) data-error=errored.then_some("1")>
-            <div class="adi-chat__role">
-                {who}
-                {pending.then(|| view! { <span class="adi-chat__typing">" · answering…"</span> })}
-            </div>
-            {(!text.trim().is_empty()).then(|| super::emitted_form::render_message(state, &text, forms))}
-            // A settled answer with nothing in it at all — most often a turn stopped before it spoke.
-            // Say so, rather than leaving an empty box the reader has to interpret.
-            {(!is_user && !pending && !has_body).then(|| view! {
-                <div class="adi-chat__none">"no answer"</div>
-            })}
-            {metrics.map(metrics_view)}
-        </div>
-    };
-
-    view! {
-        {message}
-        {timeline_views(state, idx, steps)}
-    }
-    .into_any()
-}
-
 /// What a turn is called in the DOM, so the analytics rail can scroll to one.
 fn turn_anchor(turn: usize) -> String {
     format!("adi-turn-{turn}")
@@ -1075,145 +990,6 @@ fn turn_anchor(turn: usize) -> String {
 /// and the one the transcript on the server agrees to.
 fn step_anchor(turn: usize, step: usize) -> String {
     format!("adi-step-{turn}-{step}")
-}
-
-/// The turn's timeline below its final message, in reverse (newest first). A run of tool/thinking
-/// steps becomes one stack of rows; a message the agent wrote mid-turn breaks that stack and renders
-/// as its own bubble — which is what makes the feed alternate `message → toolcall ×N → message`
-/// instead of showing one merged wall of text above an undifferentiated pile of tool calls.
-fn timeline_views(state: State, turn: usize, steps: Vec<AgentStep>) -> Vec<AnyView> {
-    let mut out: Vec<AnyView> = Vec::new();
-    let mut run: Vec<AnyView> = Vec::new();
-    // Numbered before the reversal, so a step's anchor is its place in the turn rather than its place
-    // on the screen — the rail and the server both count the former.
-    for (i, step) in steps.into_iter().enumerate().rev() {
-        match step {
-            AgentStep::Message { text } => {
-                flush_steps(&mut run, &mut out);
-                out.push(mid_turn_message(state, &text));
-            }
-            other => run.push(step_bubble(turn, i, other)),
-        }
-    }
-    flush_steps(&mut run, &mut out);
-    out
-}
-
-/// Close off the current run of tool/thinking rows into one stack, if it has any.
-fn flush_steps(run: &mut Vec<AnyView>, out: &mut Vec<AnyView>) {
-    if run.is_empty() {
-        return;
-    }
-    let rows = std::mem::take(run);
-    out.push(view! { <div class="adi-chat__steps">{rows}</div> }.into_any());
-}
-
-/// Something the agent said *during* the turn, between tool calls: a normal agent bubble, dimmed a
-/// touch so the turn's final answer still leads. Rendered as plain Markdown — an emitted form is an
-/// ask, and only the turn's final message is the live one, so a superseded mid-turn form must not
-/// come back as a second interactive card.
-fn mid_turn_message(state: State, text: &str) -> AnyView {
-    view! {
-        <div class="adi-chat__turn adi-chat__turn--agent adi-chat__turn--mid">
-            {super::emitted_form::render_message(state, text, false)}
-        </div>
-    }
-    .into_any()
-}
-
-/// One activity step as its own row beneath the message — a tool call or a thinking block.
-fn step_bubble(turn: usize, step_idx: usize, step: AgentStep) -> AnyView {
-    view! {
-        <div class="adi-chat__turn adi-chat__turn--agent adi-chat__turn--step">
-            {step_row(step_anchor(turn, step_idx), step)}
-        </div>
-    }
-    .into_any()
-}
-
-/// One activity row. A `<details>` so its arguments/output (or reasoning) expand in place — no JS.
-/// A [`AgentStep::Message`] never reaches here — [`timeline_views`] renders it as its own bubble —
-/// but it is handled rather than dropped so a message can never silently vanish from the feed.
-fn step_row(anchor: String, step: AgentStep) -> AnyView {
-    match step {
-        AgentStep::Message { text } => crate::markdown::render(&text),
-        AgentStep::Thinking { text } => view! {
-            <details class="adi-step adi-step--thinking" id=anchor>
-                <summary class="adi-step__head">
-                    <span class="adi-step__icon">"💭"</span>
-                    <span class="adi-step__name">"thinking"</span>
-                </summary>
-                <pre class="adi-step__detail">{text}</pre>
-            </details>
-        }
-        .into_any(),
-        AgentStep::Tool {
-            name,
-            input,
-            status,
-            output,
-        } => {
-            let (badge, status_attr) = match status {
-                AgentToolStatus::Running => ("\u{27F3}", "running"),
-                AgentToolStatus::Ok => ("\u{2713}", "ok"),
-                AgentToolStatus::Error => ("\u{2717}", "error"),
-                // The run ended on top of this call: it was never answered, which is a slash
-                // through the circle rather than the cross a tool earns by answering badly.
-                AgentToolStatus::Unanswered => ("\u{2298}", "unanswered"),
-            };
-            let arg = truncate_task(&input);
-            let detail = match (input.trim().is_empty(), output.trim().is_empty()) {
-                (true, true) => String::new(),
-                (false, true) => input,
-                (true, false) => output,
-                (false, false) => format!("{input}\n\u{2500}\u{2500}\u{2500}\n{output}"),
-            };
-            view! {
-                <details class="adi-step adi-step--tool" id=anchor data-status=status_attr>
-                    <summary class="adi-step__head">
-                        <span class="adi-step__icon">"🔧"</span>
-                        <span class="adi-step__name adi-mono">{name}</span>
-                        {(!arg.is_empty()).then(|| view! {
-                            <span class="adi-step__arg adi-mono">{arg}</span>
-                        })}
-                        <span class="adi-step__status">{badge}</span>
-                    </summary>
-                    {(!detail.is_empty()).then(|| view! {
-                        <pre class="adi-step__detail adi-mono">{detail}</pre>
-                    })}
-                </details>
-            }
-            .into_any()
-        }
-    }
-}
-
-/// The metrics footer of a settled turn: tokens · cost · duration, plus any blocked-tool warning.
-fn metrics_view(m: AgentTurnMetrics) -> AnyView {
-    let mut chips: Vec<String> = Vec::new();
-    let tokens = m.input_tokens.unwrap_or(0) + m.output_tokens.unwrap_or(0);
-    if tokens > 0 {
-        chips.push(format!("{} tok", fmt_count(tokens)));
-    }
-    if let Some(micro) = m.cost_micro_usd.filter(|c| *c > 0) {
-        chips.push(fmt_cost(micro));
-    }
-    if let Some(ms) = m.duration_ms.filter(|d| *d > 0) {
-        chips.push(fmt_duration(ms));
-    }
-    let denied = m.permission_denials.len();
-    if chips.is_empty() && denied == 0 {
-        return ().into_any();
-    }
-    view! {
-        <div class="adi-chat__metrics adi-mono">
-            {chips.join(" \u{00B7} ")}
-            {(denied > 0).then(|| view! {
-                <span class="adi-chat__denied">{format!(" \u{00B7} \u{26A0} {denied} blocked")}</span>
-            })}
-        </div>
-    }
-    .into_any()
 }
 
 /// A compact count: `1.2k` past a thousand, else the plain number.
@@ -3028,18 +2804,6 @@ fn chat_local_groups(state: State) -> Vec<AnyView> {
         );
     }
     out
-}
-
-/// A header row inside a rail: the project a group of dashboards is filed under, or the agent a
-/// group of sessions belongs to.
-fn chat_group(name: &str) -> AnyView {
-    view! {
-        <h3 class="caps m-0 flex items-baseline justify-between gap-2 px-2.5 pt-4 pb-1.5 \
-                   text-faint">
-            <span class="truncate">{name.to_string()}</span>
-        </h3>
-    }
-    .into_any()
 }
 
 /// One dashboard row in the rail: a link to its running frontend, or a dimmed row when it's down.

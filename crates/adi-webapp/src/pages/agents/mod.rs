@@ -21,7 +21,6 @@ use crate::ui::{
 pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags", ""];
 
 mod actions;
-mod emitted_form;
 mod form;
 
 use actions::apply_agents;

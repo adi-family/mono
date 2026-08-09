@@ -10,7 +10,7 @@
 
 #![allow(non_snake_case)] // Leptos components are PascalCase by convention.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 mod fetch;
 mod highlight;

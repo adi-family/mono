@@ -831,7 +831,6 @@ struct Header {
 pub struct EmbeddingStore {
     path: std::path::PathBuf,
     dimensions: u32,
-    model_hash: [u8; 32],
 }
 ```
 

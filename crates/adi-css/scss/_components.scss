@@ -437,20 +437,12 @@ $runlog-dim: #8b93a1;
 }
 
 // ---- conversation chat (answerable harness runs) ----------------------------------
-// A scrollable column of message bubbles. It is the app's main reading surface (the chat home's
-// centre pane, the dashboard popup), so it dresses in the `--chat-*` tokens and follows the theme
-// like every other panel. Inside the run-log card the same markup still reads as a console, because
-// that card pins the dark tokens for everything within it (see `_tokens.scss`).
-.adi-chat {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  padding: 12px;
-  max-height: 460px;
-  overflow: auto;
-}
+// What survives of the old bubble transcript now that the feed itself is `adi_ui::Chat`: the queued
+// message that has not been sent yet, and the placeholder shown before the first turn lands. Both
+// dress in the `--chat-*` tokens and follow the theme like every other panel.
 
-// One message. Bubbles cap their width and hug their side: the agent on the left, you on the right.
+// One message. A bubble caps its width and hugs its side — a queued message is yours, so it hugs
+// the right.
 .adi-chat__turn {
   max-width: 82%;
   padding: 7px 11px;
@@ -458,45 +450,9 @@ $runlog-dim: #8b93a1;
   border: 1px solid var(--chat-line);
 }
 
-.adi-chat__turn--agent {
-  align-self: flex-start;
-  background: var(--chat-bubble);
-}
-
 .adi-chat__turn--user {
   align-self: flex-end;
   background: var(--chat-user);
-}
-
-// An agent-emitted inline form (see `emitted_form.rs`): a bordered card inside the agent's
-// message, stacking its title over the prefilled fields the human confirms and submits. The
-// combined selector out-specifies `.adi-form` so these win regardless of source order.
-.adi-form.adi-chatform {
-  flex-direction: column;
-  align-items: stretch;
-  margin-top: 8px;
-  padding: 10px 11px;
-  border: 1px solid var(--accent);
-  border-radius: var(--radius-sm);
-  background: var(--chat-fill);
-}
-
-.adi-chatform__title {
-  font-weight: 600;
-}
-
-// The form footer once acted on: a muted pending line, or a green terminal ✓.
-.adi-chatform__status {
-  margin: 0;
-  color: var(--chat-dim);
-  font-size: var(--text-sm);
-}
-
-.adi-chatform__done {
-  margin: 0;
-  color: var(--online);
-  font-weight: 600;
-  font-size: var(--text-sm);
 }
 
 // The speaker label above the message text.
@@ -506,18 +462,6 @@ $runlog-dim: #8b93a1;
   letter-spacing: .02em;
   color: var(--chat-dim);
   margin-bottom: 3px;
-}
-
-// The "answering…" tag on the still-streaming turn — a soft pulse to show it is live.
-.adi-chat__typing {
-  color: var(--accent);
-  font-weight: 500;
-  animation: adi-chat-pulse 1.2s ease-in-out infinite;
-}
-
-@keyframes adi-chat-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: .45; }
 }
 
 // The message text, rendered as Markdown (see `crate::markdown`). Sized to the chat: sans body,
@@ -628,31 +572,6 @@ $runlog-dim: #8b93a1;
   font-size: var(--text-sm);
 }
 
-// The reply box sits above the transcript now, so its divider is on the bottom edge — between it
-// and the messages — rather than the top.
-.adi-chat__replybar {
-  gap: var(--space-2);
-  padding: 8px 10px;
-  margin: 0;
-  background: var(--chat-bar);
-  border-bottom: 1px solid var(--chat-line);
-}
-
-// A turn that ended in error gets a red edge so a failed answer reads at a glance.
-.adi-chat__turn[data-error] {
-  border-color: color-mix(in srgb, var(--down) 55%, transparent);
-}
-
-// Stop: the one destructive control in the bar, so it wears the down colour as an outline rather
-// than a fill — present, but never competing with Send for the eye.
-.adi-chat__stop {
-  color: var(--down);
-  border-color: color-mix(in srgb, var(--down) 45%, transparent);
-  background: transparent;
-
-  &:hover { background: color-mix(in srgb, var(--down) 12%, transparent); }
-}
-
 // A message said but not yet asked: your own bubble, hollowed out — dashed edge, no fill — so the
 // queue reads as intent rather than history. Same treatment as a mid-turn message, one column over.
 .adi-chat__turn--queued {
@@ -661,13 +580,6 @@ $runlog-dim: #8b93a1;
   border-color: var(--chat-line-2);
 
   .adi-md { color: var(--chat-dim); }
-}
-
-// A settled answer that said nothing — a turn stopped before it spoke.
-.adi-chat__none {
-  color: var(--chat-dim);
-  font-size: var(--text-sm);
-  font-style: italic;
 }
 
 // The "queued" tag and the × that takes the message back, both riding the role line.
@@ -686,117 +598,6 @@ $runlog-dim: #8b93a1;
   &:hover { color: var(--down); }
 }
 
-// ---- progress feed (tool calls + thinking) ------------------------------------------
-// A turn's activity sits directly below its message as a plain stack of rows — nothing hidden
-// behind a disclosure, so the feed reads straight down as message → tool calls → message → tool
-// calls. Rows are newest-first (the last step to run is nearest its message), and each step is
-// itself a <details> that expands its args/output in place.
-.adi-chat__steps {
-  align-self: stretch;
-  max-width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  // A hairline rail on the left ties the run of tool calls back to the message above them.
-  padding-left: 10px;
-  border-left: 2px solid var(--chat-line);
-}
-
-// A step rendered as its own row: full-width and frameless, so the step's own `.adi-step` border
-// carries it.
-.adi-chat__turn--step {
-  max-width: 100%;
-  align-self: stretch;
-  padding: 0;
-  border: 0;
-  background: transparent;
-}
-
-// Something the agent said *during* the turn, between tool calls. A real message bubble — it is
-// prose, not activity — but softened so the turn's final answer still leads the eye.
-.adi-chat__turn--mid {
-  background: transparent;
-  border-style: dashed;
-  border-color: var(--chat-line-2);
-
-  .adi-md { color: var(--chat-dim); }
-}
-
-.adi-step {
-  border: 1px solid var(--chat-line);
-  border-radius: var(--radius-sm);
-  background: var(--chat-fill);
-  font-size: var(--text-xs);
-}
-
-// The clickable row: icon, name, a peek at the arguments, and a status badge pushed to the right.
-.adi-step__head {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: 4px 8px;
-  cursor: pointer;
-  list-style: none;
-  color: var(--chat-ink);
-
-  &::-webkit-details-marker { display: none; }
-}
-
-.adi-step__icon { flex: none; opacity: .85; }
-
-.adi-step__name { font-weight: 600; flex: none; }
-
-// The argument preview takes the remaining width and truncates — the full text is in the expansion.
-.adi-step__arg {
-  color: var(--chat-dim);
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-// Status badge colour by outcome; the running one pulses.
-.adi-step__status { flex: none; margin-left: auto; font-weight: 700; }
-
-.adi-step--tool[data-status="ok"] .adi-step__status { color: var(--online); }
-.adi-step--tool[data-status="error"] .adi-step__status { color: var(--down); }
-// Never answered — the run ended on top of this call. Amber, and emphatically not pulsing:
-// the pulse is what says "right now", and nothing is happening here any more.
-.adi-step--tool[data-status="unanswered"] .adi-step__status { color: var(--warn); }
-.adi-step--tool[data-status="running"] .adi-step__status {
-  color: var(--accent);
-  animation: adi-chat-pulse 1.2s ease-in-out infinite;
-}
-
-.adi-step--thinking {
-  border-style: dashed;
-  .adi-step__name { color: var(--chat-dim); font-weight: 500; font-style: italic; }
-}
-
-// The expanded detail: a scrollable, wrapped block of the tool's args/output (or the reasoning).
-.adi-step__detail {
-  margin: 0;
-  padding: 6px 8px;
-  border-top: 1px solid var(--chat-line);
-  max-height: 260px;
-  overflow: auto;
-  font-size: 11px;
-  line-height: 1.45;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--chat-dim);
-}
-
-// The metrics footer under the answer: tokens · cost · duration, muted and small.
-.adi-chat__metrics {
-  margin-top: 6px;
-  font-size: var(--text-xs);
-  color: var(--chat-dim);
-}
-
-.adi-chat__denied { color: var(--warn); }
-
 // ---- the transcript on a phone ------------------------------------------------------
 // Everything above is sized for the chat home's centre pane on a desktop: a column between two
 // rails, read at arm's length, where 12px prose and 11px code are dense but comfortable. On a
@@ -807,13 +608,6 @@ $runlog-dim: #8b93a1;
 // Last in the section on purpose: a media query adds no specificity, so these have to come after
 // the rules they raise or source order would quietly discard them.
 @include narrow {
-  .adi-chat {
-    gap: 10px;
-    // The reply box sits above the transcript, so it is the *last message* that has to clear the
-    // home indicator on a device with `viewport-fit=cover`.
-    padding: 10px 10px max(14px, env(safe-area-inset-bottom));
-  }
-
   // A 82% cap gives away a fifth of a 390px screen to margin on both sides at once.
   .adi-chat__turn {
     max-width: 94%;
@@ -1119,43 +913,9 @@ $runlog-dim: #8b93a1;
   }
 }
 
-// ---- card + summary tiles ----------------------------------------------------------
+// ---- card ---------------------------------------------------------------------------
 .adi-card {
   @include card;
-}
-
-.adi-tiles {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: var(--space-3);
-  margin-bottom: 16px;
-
-  @include narrow { grid-template-columns: 1fr; }
-}
-
-.adi-tile {
-  @include card;
-  padding: 10px 14px 12px;
-
-  &__label {
-    @include eyebrow(var(--text-xs));
-  }
-
-  &__value {
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    font-size: var(--text-xl);
-    font-weight: 550;
-    margin-top: 4px;
-    letter-spacing: -.03em;
-    line-height: 1.15;
-  }
-
-  &__note {
-    font-size: var(--text-sm);
-    color: var(--muted);
-    margin-top: 2px;
-  }
 }
 
 // ---- panel -------------------------------------------------------------------------

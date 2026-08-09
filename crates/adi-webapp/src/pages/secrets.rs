@@ -33,10 +33,6 @@ const OAUTH_ROUTER: &str = "https://oauth-router.withadi.dev";
 /// The localStorage key holding the secret we're mid-OAuth for, across the provider round-trip.
 const PENDING_KEY: &str = "adi.oauth.pending";
 
-/// The localStorage key the OAuth tab writes (the stored secret's name) once the secret lands, so a
-/// chat tab that launched an agent-emitted form learns the flow completed. See [`read_oauth_done`].
-pub(crate) const OAUTH_DONE_KEY: &str = "adi.oauth.done";
-
 /// The columns of the global secrets table.
 pub(crate) const COLS: &[&str] = &["Name", "Value", "Description", "Project", ""];
 
@@ -276,28 +272,6 @@ fn start_oauth(state: State, form: SecretsForm, scoped: Option<String>) {
             provider,
         },
         requested_scope.as_deref(),
-    );
-}
-
-// ── Entry points for agent-emitted inline forms ─────────────────────────────────────────────
-//
-// An agent can emit a "create a secret" form into the chat (see `pages::agents::emitted_form`); its
-// submit calls straight into these, so a button in the conversation behaves exactly like the Set /
-// Authorize on this page and reuses the same OAuth capture on return.
-
-/// Begin the OAuth authorize flow for a secret from an agent-emitted form: park the intent and
-/// leave for the provider, requesting `scope` (space-joined) when given. On return the Secrets page
-/// captures the token (see [`handle_oauth_return`]). `scope` empty ⇒ the provider's default scopes.
-pub(crate) fn begin_oauth_secret(
-    name: String,
-    project: Option<String>,
-    description: Option<String>,
-    provider: String,
-    scope: Option<String>,
-) {
-    oauth_initiate(
-        &PendingOAuth { name, project, description, provider },
-        scope.as_deref(),
     );
 }
 
@@ -601,17 +575,12 @@ fn handle_oauth_return(state: State) {
         expires_in: params.get("expires_in").and_then(|s| s.parse::<u64>().ok()),
         scope: params.get("scope").filter(|s| !s.is_empty()),
     };
-    // Store the secret; on success drop a cross-tab "done" marker (this runs in the OAuth tab, so
-    // the chat tab that launched the form learns it completed — see `emitted_form`).
     let name = pending.name.clone();
     spawn_local(async move {
         match fetch::set_oauth_secret(body).await {
             Ok(sec) => {
                 state.secrets.set(Some(sec));
                 state.flash.set(Some(Flash::ok(format!("Stored OAuth secret \u{201c}{name}\u{201d}."))));
-                if let Some(store) = oauth_store() {
-                    let _ = store.set_item(OAUTH_DONE_KEY, &name);
-                }
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -631,19 +600,6 @@ fn take_pending() -> Option<PendingOAuth> {
 /// Consumed one-shot by [`take_pending`] on return.
 fn oauth_store() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
-}
-
-/// Peek at the cross-tab OAuth "done" marker (the stored secret's name), without consuming it — a
-/// chat-form listener matches it against its own secret before clearing. `None` when absent.
-pub(crate) fn read_oauth_done() -> Option<String> {
-    oauth_store()?.get_item(OAUTH_DONE_KEY).ok().flatten()
-}
-
-/// Clear the cross-tab OAuth "done" marker once a form has consumed it.
-pub(crate) fn clear_oauth_done() {
-    if let Some(store) = oauth_store() {
-        let _ = store.remove_item(OAUTH_DONE_KEY);
-    }
 }
 
 /// Strip the token fragment from the URL so a refresh can't replay it and nothing lingers.

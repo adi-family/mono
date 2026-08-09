@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-52 structs · 11 enums · 1 type alias across 20 files.
+52 structs · 10 enums · 1 type alias across 19 files.
 
 ## Index
 
@@ -14,7 +14,6 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Align`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
-- [`src/pages/agents/emitted_form.rs`](#srcpagesagentsemitted_formrs) — `FormStatus`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
@@ -242,23 +241,6 @@ struct SessionRef {
     run_id: String,
     title: String,
     hidden: bool,
-}
-```
-
----
-
-## `src/pages/agents/emitted_form.rs`
-
-### enum `FormStatus`
-
-A form's progress after the human acts on it: idle (show the submit button), a pending line, or a terminal ✓. Held in a signal so the footer re-renders as the action resolves.
-
-```rust
-#[derive(Clone, PartialEq)]
-enum FormStatus {
-    Idle,
-    Pending(String),
-    Done(String),
 }
 ```
 

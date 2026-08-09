@@ -46,51 +46,6 @@ stored refresh token) or **Re-authorized** from its row's menu. Reading one retu
 access token**, refreshed server-side when it has expired — so read it fresh at the point of use
 rather than caching it in a variable a long-running job keeps reusing.
 
-## Send the user a ready-to-submit form
-In a **conversation** (a harness/answerable agent), you can drop a form straight into your reply and
-the chat renders it live — prefilled — so the human only reviews and clicks. Emit a fenced
-`adi-form` block whose body is this JSON:
-
-- `title` (required), `description?`, `submit_label?`.
-- `action` — `{ "type": "set_secret" }` for a typed secret, or
-  `{ "type": "oauth_secret", "provider": "google", "scopes": ["…"] }` to start the OAuth flow.
-- `fields[]` — each `{ "name", "label", "type", "value?", "placeholder?", "hint?", "required?",
-  "mono?", "options?" }`. `type` is one of `text`, `textarea`, `number`, `select`, `checkbox`,
-  `secret` (masked). For secret actions the well-known field names are `name`, `value`,
-  `description`, `project`; prefill them via `value`.
-
-Gmail (OAuth) — the human just clicks Authorize:
-
-```adi-form
-{
-  "title": "Create the Gmail secret",
-  "description": "Read access to your Gmail. You'll sign in with Google, then land back here with the token stored.",
-  "action": { "type": "oauth_secret", "provider": "google", "scopes": ["https://www.googleapis.com/auth/gmail.readonly", "email"] },
-  "fields": [
-    { "name": "name", "label": "Secret name", "type": "text", "value": "GMAIL_TOKEN", "mono": true, "hint": "the env-var name it injects as" },
-    { "name": "project", "label": "Project", "type": "text", "value": "", "placeholder": "(global — a project id scopes it)", "mono": true },
-    { "name": "description", "label": "What it's for", "type": "text", "value": "Gmail read access for the mail client" }
-  ]
-}
-```
-
-A typed key the human pastes:
-
-```adi-form
-{
-  "title": "Save the API key",
-  "action": { "type": "set_secret" },
-  "fields": [
-    { "name": "name", "label": "Secret name", "type": "text", "value": "OPENAI_API_KEY", "mono": true },
-    { "name": "value", "label": "Value", "type": "secret", "placeholder": "paste the key" }
-  ]
-}
-```
-
-Submit calls the same endpoints as the Secrets page (`/api/secrets/set`, or the OAuth flow), so the
-result appears on `/extended/secrets`. A malformed block just renders as a code block — it's never
-silently dropped.
-
 ## Notes
 - **Least privilege.** `{{cli}} secrets read` (and the `sys-secrets` tool) returns any secret's value to
   a shell-capable agent — enable that tool deliberately. For a run, prefer the per-agent secret
