@@ -4,13 +4,13 @@
 //! rail gives it the whole content pane — these are configs and JSON, and a 300px column is not
 //! where you read them.
 
+use adi_ui::Lang;
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::Lang;
 use crate::state::{Flash, State};
-use crate::ui::{code_editor, flash_view};
+use crate::ui::{flash_view};
 
 /// The editor page: a header with the path and Save, then the buffer. Shows a placeholder when
 /// no file is selected, and the failure in place when one couldn't be read.
@@ -48,7 +48,8 @@ pub(crate) fn store_file_view(state: State) -> AnyView {
                         <div class="adi-flash" data-kind="err">{e}</div>
                     })}
 
-                    {code_editor(move || lang, store.buffer, "", "store-file-editor")}
+                    <adi_ui::CodeEditor value=store.buffer lang=lang id="store-file-editor"
+                        class="adi-ui-type min-h-0 flex-1"/>
                 </section>
                 }
                 .into_any()

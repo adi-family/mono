@@ -51,14 +51,15 @@ mod panel;
 mod path;
 mod rail;
 mod session;
+mod table;
 mod topbar;
 mod tree;
 
 pub use badge::{Badge, BadgeTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use app::{AppItem, AppState};
-pub use chat::{Chat, Role, ToolCall, ToolState, Turn};
-pub use code::{CodeEditor, CodeFrame, CodeHeight};
+pub use chat::{Chat, Queued, Role, ToolCall, ToolState, Turn};
+pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
 pub use faq::{Faq, Qna};
 pub use feedback::{Empty, Flash, FlashKind};
@@ -72,6 +73,7 @@ pub use panel::Panel;
 pub use path::{DirEntry, PathPicker, PathRoot, dir_of, leaf_of, trim_dir};
 pub use rail::{Rail, RailCard, RailGroup};
 pub use session::{SessionItem, SessionState};
+pub use table::{Column, Layout, Sort, SortKey, TableState, sort_rows};
 pub use topbar::{Crumb, Crumbs, TopBar};
 pub use tree::{Tree, TreeNode, TreeState};
 

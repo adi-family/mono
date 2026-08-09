@@ -6,15 +6,15 @@
 //! **Execute** is the deliberate write. The distinction is the safety property, so the UI states it
 //! rather than hiding it behind a single "go".
 
+use adi_ui::Lang;
 use adi_webapp_api::types::{DbInfoDto, DbQueryResult, DbTableDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::Lang;
 use crate::state::{DbConsole, Flash, State, load};
 use crate::ui::{
-    Key, body_row, code_editor, code_viewer, configurable_table, placeholder_row, sort_rows,
+    Key, body_row, configurable_table, placeholder_row, sort_rows,
     updated_text,
 };
 
@@ -91,7 +91,8 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
                     <button class="adi-btn adi-btn--link" type="button"
                         on:click=move |_| console.schema.set(String::new())>"Close"</button>
                 </div>
-                {code_viewer(|| Lang::Sql, console.schema, "", "db-schema")}
+                <adi_ui::CodeLog value=console.schema lang=Lang::Sql id="db-schema"
+                    class="adi-ui-type island max-h-105"/>
             </section>
         })}
 
@@ -104,7 +105,8 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
                 </span>
             </div>
 
-            {code_editor(|| Lang::Sql, console.sql, "adi-code--form", "db-sql")}
+            <adi_ui::CodeEditor value=console.sql lang=Lang::Sql
+                height=adi_ui::CodeHeight::Form id="db-sql" class="adi-ui-type island"/>
 
             <div class="adi-form">
                 <button class="adi-btn adi-btn--primary" type="button"

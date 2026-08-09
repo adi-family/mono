@@ -12,16 +12,16 @@
 
 use std::collections::BTreeMap;
 
+use adi_ui::Lang;
 use adi_webapp_api::types::{SaveTrigger, TriggerDto, TriggerPreset, TriggersState};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, code_editor, configurable_table, field_hint,
+    Key, TextField, apply_mutation, body_row, configurable_table, field_hint,
     flash_view, fmt_date, fmt_uptime, menu_item, placeholder_row, row_actions, sort_rows,
     updated_text,
 };
@@ -191,7 +191,10 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                     <label class="adi-field__label" for="trigger-code">"Code block"</label>
                     // The same editor the store file page uses, so a trigger's code gets the
                     // highlighting its language deserves — and follows the runtime picker above.
-                    {code_editor(move || code_lang(&runtime.get()), code, "adi-code--form", "trigger-code")}
+                    <adi_ui::CodeEditor value=code
+                        lang=Signal::derive(move || code_lang(&runtime.get()))
+                        height=adi_ui::CodeHeight::Form id="trigger-code"
+                        class="adi-ui-type island"/>
                     {field_hint(move || code_hint(&kind.get(), &runtime.get()))}
                 </div>
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>

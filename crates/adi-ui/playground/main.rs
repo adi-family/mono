@@ -20,10 +20,10 @@ use std::time::Duration;
 
 use adi_ui::{
     AppItem, AppState, Badge, BadgeTone, Chat, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame,
-    CodeHeight, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
-    Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna, Rail,
-    RailCard, RailGroup, Role, Select, SessionItem, SessionState, Textarea, ToolCall, ToolState,
-    TopBar, Tree, TreeNode, TreeState, Turn, dir_of,
+    CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
+    Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
+    Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, Textarea,
+    ToolCall, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, dir_of,
 };
 use leptos::prelude::*;
 
@@ -476,6 +476,48 @@ fn FilesDemo() -> impl IntoView {
     }
 }
 
+/// A log that grows on demand, because the follow is only interesting against output that
+/// is still arriving. Append with the box scrolled to the bottom and it comes with you;
+/// scroll up first, append again, and it stays where you left it.
+#[component]
+fn CodeLogDemo() -> impl IntoView {
+    const LINES: &[&str] = &[
+        "   Compiling adi-css v0.1.0",
+        "   Compiling adi-ui v0.1.0",
+        "warning: unused import: `std::fmt`",
+        "  --> crates/adi-app/src/serve.rs:11:5",
+        "   Compiling adi-webapp v0.1.0",
+        "   Compiling adi-app v0.1.0",
+        "    Finished `release` profile [optimized] target(s) in 51.02s",
+        "$ ./target/release/adi-app 8000",
+        "listening on 127.0.0.1:8000",
+        "GET /api/health 200 0.4ms",
+    ];
+    let buffer = RwSignal::new(String::from("$ cargo build --release -p adi-app"));
+    let at = RwSignal::new(0usize);
+
+    view! {
+        <div class="flex flex-col items-start gap-2">
+            <CodeLog value=buffer lang=Lang::Sh height=CodeHeight::Form class="island w-full"/>
+            <Button
+                size=ButtonSize::Small
+                variant=ButtonVariant::Ghost
+                on:click=move |_| {
+                    // Wrap rather than run dry, so the demo never needs resetting.
+                    let i = at.get_untracked();
+                    buffer.update(|b| {
+                        b.push('\n');
+                        b.push_str(LINES[i % LINES.len()]);
+                    });
+                    at.set(i + 1);
+                }
+            >
+                "Append a line"
+            </Button>
+        </div>
+    }
+}
+
 /// A stand-in favicon: a rounded square with a letter in it, as a `data:` URI so the
 /// playground stays a single page with no requests. A real app serves its own.
 fn favicon(letter: char, fill: &str) -> String {
@@ -661,6 +703,8 @@ The first two                    are the same bug. I will read the pairing path 
     // The transcript above ends on a call that is still running, so this box opens in the state
     // the Stop exists for. Pressing it settles the turn and the button goes with it.
     let answering = RwSignal::new(true);
+    // One message already said but not yet asked, so the hollow bubble has something to be.
+    let queued = RwSignal::new(true);
 
     view! {
         <div class="flex flex-col gap-3">
@@ -683,6 +727,17 @@ The first two                    are the same bug. I will read the pairing path 
             </Show>
             <Show when=move || !answering.get()>
                 <Flash kind=FlashKind::Ok>"stopped — the turn was cut short"</Flash>
+            </Show>
+            // A queued message sits between the composer and the transcript, which is where
+            // the newest-first order puts a thing that has not happened yet. Its × takes it
+            // back; press it and the bubble goes, which is the whole of the interaction.
+            <Show when=move || queued.get()>
+                <div class="px-1">
+                    <Queued
+                        body="And once that lands, run the migration against staging.".to_string()
+                        on_unqueue=Callback::new(move |()| queued.set(false))
+                    />
+                </div>
             </Show>
             <Chat turns=turns.clone() class="max-h-140 p-1"/>
         </div>
@@ -1184,6 +1239,21 @@ fn Playground() -> impl IntoView {
                 </div>
                 <div class="p-4">
                     <FilesDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="CodeLog" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "The read-only half: a log that grows under a poll. It follows the tail \
+                     while you are at the bottom and stops the moment you scroll up, so \
+                     history holds still while output keeps arriving — scroll back down and \
+                     it picks the follow up again. A "
+                    <span class="font-mono">"<pre>"</span>
+                    ", not a read-only editor: writing a textarea's value resets its scroll, \
+                     which under a poll means being yanked to the top every second."
+                </div>
+                <div class="p-4">
+                    <CodeLogDemo/>
                 </div>
             </Panel>
 

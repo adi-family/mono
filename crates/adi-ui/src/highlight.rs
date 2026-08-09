@@ -10,9 +10,11 @@
 //! still emitted, so no file can produce a panic or lose characters. [`highlight`] is a pure
 //! function over `&str`, so the render path never has to guard it.
 //!
-//! It is a copy of `adi-webapp`'s `highlight.rs`, which is the same scanner against the
-//! `adi-css` token classes. The two are meant to converge: when a screen moves to adi-ui it
-//! stops needing that one, and the last screen to move takes it with it.
+//! This began as a second copy of the same scanner, one here and one in `adi-webapp` against
+//! the `adi-css` `.tok--*` classes. They have since converged onto this one, and with them
+//! the two palettes: every code view in the app now colours from the `--syn-*` tokens below
+//! rather than borrowing the app's status colours (`--online` for a number, `--warn` for a
+//! keyword) for a job they were never picked for.
 
 /// What a run of characters is, which is all the renderer needs to pick a colour.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

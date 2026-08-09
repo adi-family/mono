@@ -19,6 +19,11 @@ path = "playground/main.rs"
 [dependencies]
 leptos = { version = "0.8", features = ["csr"] }
 
+# One browser API, named so the feature that unlocks it is on: a table remembers how it was
+# sorted and arranged (see `table`), which is `localStorage` and nothing else. Leptos's own
+# `window()` returns the handle; this is only here to switch the `Storage` binding on.
+web-sys = { version = "0.3", features = ["Storage", "Window"] }
+
 # Playground-only: routes a wasm panic to the browser console instead of an opaque
 # `unreachable`. Cheap enough that the library carries it rather than gating it on a feature.
 console_error_panic_hook = "0.1"

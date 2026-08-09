@@ -829,8 +829,8 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
         {answerable.then(|| reply_bar(state, watch))}
 
         // Queued messages are said but not yet asked, so they belong above everything that
-        // has happened — and they keep the old bubble, which carries the × that takes one
-        // back before the agent ever sees it.
+        // has happened — as [`adi_ui::Queued`], the hollowed-out twin of the bubbles below,
+        // each carrying the × that takes one back before the agent ever sees it.
         {move || {
             let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
             let mut queued: Vec<AnyView> = turns
@@ -839,9 +839,15 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
                 .enumerate()
                 .map(|(place, t)| queued_bubble(state, watch, t.clone(), place))
                 .collect();
+            if queued.is_empty() {
+                return None;
+            }
             // Newest first, like everything below them.
             queued.reverse();
-            queued
+            // These are siblings of the `Chat`, not turns inside it, so the transcript's own
+            // padding and gap have to be reproduced here for them to line up with it — and
+            // `adi-ui-type` for the same reason every adi-ui subtree on this page carries it.
+            Some(view! { <div class="adi-ui-type flex flex-col gap-3 px-3 pt-3">{queued}</div> })
         }}
 
         <adi_ui::Chat
@@ -948,18 +954,14 @@ fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
 }
 
 /// A message still waiting its turn: your own bubble, dashed and dimmed — said, but not yet asked —
-/// carrying an × that takes it back before the agent ever sees it.
+/// carrying an × that takes it back before the agent ever sees it. The bubble itself is
+/// [`adi_ui::Queued`], which is the same shape as the sent messages above it in the feed.
 fn queued_bubble(state: State, watch: AgentsWatch, turn: AgentTurn, place: usize) -> AnyView {
     view! {
-        <div class="adi-chat__turn adi-chat__turn--user adi-chat__turn--queued">
-            <div class="adi-chat__role">
-                "you"
-                <span class="adi-chat__queued">" · queued"</span>
-                <button class="adi-chat__unqueue" type="button" title="don't send this after all"
-                    on:click=move |_| unqueue_message(state, watch, place)>"\u{2715}"</button>
-            </div>
-            {crate::markdown::render(&turn.text)}
-        </div>
+        <adi_ui::Queued
+            body=turn.text.clone()
+            on_unqueue=Callback::new(move |()| unqueue_message(state, watch, place))
+        />
     }
     .into_any()
 }
@@ -977,7 +979,7 @@ fn chat_placeholder(watch: AgentsWatch) -> Option<AnyView> {
         Some(p) if p.running => "Working…",
         Some(_) => "No output.",
     };
-    Some(view! { <div class="adi-chat__empty">{msg}</div> }.into_any())
+    Some(view! { <adi_ui::Empty class="adi-ui-type">{msg}</adi_ui::Empty> }.into_any())
 }
 
 /// What a turn is called in the DOM, so the analytics rail can scroll to one.

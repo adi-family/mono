@@ -23,20 +23,6 @@ $light: (
   warn:       #d97706,
   down:       #dc2626,
   shadow:     0 1px 2px rgba(9, 11, 15, .04),
-
-  // Chat surfaces. The transcript is the app's main reading surface, so it belongs to the
-  // page it sits in rather than looking like a console dropped onto it: bubbles, rails and
-  // code fills all flip with the theme. (The one place it stays dark is the run-log console
-  // island at the bottom of this file.)
-  chat-bar:    #ffffff,
-  chat-bubble: #ffffff,
-  chat-user:   #edeff3,
-  chat-ink:    #0d0f12,
-  chat-dim:    #6b7280,
-  chat-line:   #e3e6eb,
-  chat-line-2: #d2d7df,
-  chat-fill:   rgba(13, 15, 18, .04),
-  chat-pre:    rgba(13, 15, 18, .06),
 );
 
 $dark: (
@@ -53,17 +39,6 @@ $dark: (
   warn:       #fbbf24,
   down:       #f87171,
   shadow:     0 1px 2px rgba(0, 0, 0, .3),
-
-  // Chat surfaces — the console palette this UI grew up with, kept as the dark theme's values.
-  chat-bar:    #171a20,
-  chat-bubble: #171a20,
-  chat-user:   rgba(255, 255, 255, .06),
-  chat-ink:    #d5dae2,
-  chat-dim:    #8b93a1,
-  chat-line:   rgba(255, 255, 255, .08),
-  chat-line-2: rgba(255, 255, 255, .15),
-  chat-fill:   rgba(255, 255, 255, .03),
-  chat-pre:    rgba(0, 0, 0, .28),
 );
 
 // Emit `--name: value` for every entry of a theme map, plus the `color-scheme` that goes
@@ -123,6 +98,6 @@ $dark: (
 
 // A fifth context: the run-log console (`.adi-runlog__card`, see `_components.scss`) is a terminal,
 // and a terminal looks the same everywhere — so it carries the dark tokens as an island. Everything
-// inside it (a run's chat transcript, its reply box, highlighted code) then resolves against the
-// dark theme even while the page around it is light, instead of each rule hard-coding a dark value.
+// inside it then resolves against the dark theme even while the page around it is light, instead
+// of each rule hard-coding a dark value.
 .adi-runlog__card { @include theme($dark, dark); }

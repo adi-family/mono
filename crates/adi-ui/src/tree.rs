@@ -81,10 +81,31 @@ impl TreeNode {
         self
     }
 
+    /// The badge a row may or may not have — [`TreeNode::badge`] for a value that arrives
+    /// already `Option`-shaped, which is how a count out of a store arrives.
+    ///
+    /// It is a second method rather than a wider bound on the first because one method
+    /// cannot be both: `impl Into<Option<S>>` accepts a literal *and* an `Option`, but then
+    /// `Option<String>` leaves `S` ambiguous and every data-driven caller — the ones this
+    /// exists for — has to turbofish it back.
+    #[must_use]
+    pub fn maybe_badge(mut self, badge: Option<String>) -> Self {
+        self.badge = badge;
+        self
+    }
+
     /// The native tooltip (see [`TreeNode::title`]).
     #[must_use]
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = Some(title.into());
+        self
+    }
+
+    /// The tooltip a row may or may not have — [`TreeNode::title`] for an already-`Option`
+    /// value, paired with it the way [`TreeNode::maybe_badge`] is with the badge.
+    #[must_use]
+    pub fn maybe_title(mut self, title: Option<String>) -> Self {
+        self.title = title;
         self
     }
 

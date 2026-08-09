@@ -216,6 +216,57 @@ fn Said(role: Role, body: String) -> impl IntoView {
     }
 }
 
+/// A message said but not yet asked: your own bubble, hollowed out.
+///
+/// It is not a [`Turn`], and deliberately so — a queue is not transcript. The turns a [`Chat`]
+/// holds are things that happened; this is a thing that has not, and it sits *outside* the
+/// transcript (below it on screen, where the newest-first order puts what comes next). Keeping
+/// it out of `Vec<Turn>` is what stops a queued message from being indistinguishable from a
+/// sent one the moment anything reads the list.
+///
+/// Same geometry as the user bubble in [`Said`], then emptied: dashed edge, no fill, dimmed
+/// text — intent rather than history.
+///
+/// ```ignore
+/// <Queued body=text on_unqueue=Callback::new(move |()| drop_from_queue(place))/>
+/// ```
+#[component]
+pub fn Queued(
+    /// Markdown, the same as anything else said.
+    #[prop(into)]
+    body: String,
+    /// Take it back before the agent ever sees it. With no handler the × is not drawn, which
+    /// is the honest rendering of a queue you cannot edit.
+    #[prop(optional, into)]
+    on_unqueue: Option<Callback<()>>,
+    #[prop(optional, into)] class: String,
+) -> impl IntoView {
+    view! {
+        <div class=merge(
+            &format!("{LAZY} island ml-8 border-dashed bg-transparent px-3 py-2 text-meta"),
+            class,
+        )>
+            <div class="caps mb-1 flex items-center gap-1 text-faint">
+                "you · queued"
+                {on_unqueue.map(|cb| view! {
+                    <button
+                        class="-my-0.5 ml-auto cursor-pointer rounded-sm px-1 py-0.5 leading-none \
+                               text-faint hover:text-err focus-visible:outline-2 \
+                               focus-visible:outline-offset-1 focus-visible:outline-accent"
+                        type="button"
+                        title="don't send this after all"
+                        aria-label="Remove from queue"
+                        on:click=move |_| cb.run(())
+                    >
+                        "\u{2715}"
+                    </button>
+                })}
+            </div>
+            <Markdown source=body class="text-meta"/>
+        </div>
+    }
+}
+
 /// A folded run of tool calls.
 ///
 /// Closed by default, always: a run is what you skip. It is one `<details>` for the whole

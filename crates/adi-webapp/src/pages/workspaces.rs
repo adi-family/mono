@@ -3,6 +3,7 @@
 //! themselves with Run/Log/Edit actions. Hooks are plain files at `.adi/hooks/<name>`; the
 //! Edit action opens them in a dedicated hook editor panel rendered right above this one.
 
+use adi_ui::Lang;
 use adi_webapp_api::types::{
     NewProjectHook, NewWorkspace, ProjectHookDto, WorkspaceDto, WorkspacesState,
 };
@@ -10,11 +11,10 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
 use crate::ui::{
-    Key, TextField, body_row, code_editor, configurable_table, confirm, fmt_date, menu_item,
+    Key, TextField, body_row, configurable_table, confirm, fmt_date, menu_item,
     placeholder_row, row_actions, sort_rows,
 };
 
@@ -636,7 +636,8 @@ pub(crate) fn hook_editor_view(state: State, editor: HookEditor) -> Option<AnyVi
                 <button class="adi-btn adi-btn--link" type="button"
                     on:click=move |_| editor.close()>"Close"</button>
             </div>
-            {code_editor(move || Lang::Sh, editor.buffer, "", "hook-editor")}
+            <adi_ui::CodeEditor value=editor.buffer lang=Lang::Sh id="hook-editor"
+                class="adi-ui-type island h-[60vh]"/>
         </section>
     }
     .into_any()

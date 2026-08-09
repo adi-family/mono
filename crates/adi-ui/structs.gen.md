@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-7 structs · 15 enums across 14 files.
+11 structs · 16 enums across 15 files.
 
 ## Index
 
@@ -20,6 +20,7 @@
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`, `Align`
 - [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
+- [`src/table.rs`](#srctablers) — `Sort`, `Column`, `Layout`, `TableState`, `SortKey`
 - [`src/topbar.rs`](#srctopbarrs) — `Crumb`
 - [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
 
@@ -351,6 +352,76 @@ pub enum SessionState {
     Waiting,
     Error,
     Working,
+}
+```
+
+---
+
+## `src/table.rs`
+
+### struct `Sort`
+
+How a `TableState` is ordered: which column, and which way.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sort {
+    pub col: &'static str,
+    pub desc: bool,
+}
+```
+
+### struct `Column`
+
+One configurable column: the header it renders under, and whether the user is showing it.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Column {
+    pub header: &'static str,
+    pub shown: bool,
+}
+```
+
+### struct `Layout`
+
+A table's column arrangement: every column it *can* show, in the user's order, each flagged shown or hidden.
+
+```rust
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Layout {
+    columns: Vec<Column>,
+    has_actions: bool,
+}
+```
+
+### struct `TableState`
+
+One table's user-owned view of itself: how it's sorted, how its columns are arranged, and whether its settings menu is open.
+
+```rust
+#[derive(Clone, Copy, Debug)]
+pub struct TableState {
+    key: &'static str,
+    headers: &'static [&'static str],
+    default_sort: Sort,
+    pub sort: RwSignal<Sort>,
+    pub layout: RwSignal<Layout>,
+    pub open: RwSignal<bool>,
+}
+```
+
+### enum `SortKey`
+
+One row's value under one column, reduced to something orderable.
+
+```rust
+#[derive(Clone, Debug)]
+pub enum SortKey {
+    Bool(bool),
+    Int(i64),
+    Float(f64),
+    Text(String),
 }
 ```
 

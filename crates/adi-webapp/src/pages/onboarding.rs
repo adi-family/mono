@@ -12,6 +12,7 @@
 
 use std::collections::BTreeSet;
 
+use adi_ui::Lang;
 use adi_webapp_api::types::{
     AgentBackendOption, AgentDto, AgentFormSpec, AgentSetupPreset, AgentSetupSecret, MetaState,
     SaveAgent, SecretRef, SetSecret,
@@ -20,9 +21,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::Lang;
 use crate::state::{AgentsForm, State};
-use crate::ui::code_editor;
 
 use super::agents::{
     agent_argument_values, agent_environment_fields, agent_param_applies, agent_schema_fields,
@@ -446,8 +445,9 @@ fn prompt_disclosure(form: OnboardingForm) -> AnyView {
                         " (dashboards, tasks, tools, …). Edit freely — you can change it
                          later."
                     </p>
-                    {code_editor(|| Lang::Md, form.agent.system_prompt, "adi-code--form",
-                        "onb-prompt")}
+                    <adi_ui::CodeEditor value=form.agent.system_prompt lang=Lang::Md
+                        height=adi_ui::CodeHeight::Form id="onb-prompt"
+                        class="adi-ui-type island"/>
                 </div>
             })}
         </div>

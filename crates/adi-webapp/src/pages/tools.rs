@@ -8,16 +8,16 @@
 //! The run panel and the script editor are shared with a project's Tools panel (they render the
 //! same way there), so their view + action helpers are `pub(crate)`.
 
+use adi_ui::Lang;
 use adi_webapp_api::types::{LinkTool, NewTool, ToolDto, ToolsState};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::highlight::Lang;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, ToolEditor, ToolRunView, ToolsForm};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, body_row, code_editor, code_viewer,
+    Key, TableState, TextField, apply_mutation, body_row,
     configurable_table, confirm, flash_view, menu_item, placeholder_row, row_actions, segmented,
     sort_rows, updated_text,
 };
@@ -387,7 +387,9 @@ pub(crate) fn tool_run_view(state: State, run: ToolRunView) -> Option<AnyView> {
                     }>"▶ Run again"</button>
             </div>
             <div class="adi-panel__body">
-                {code_viewer(|| Lang::Sh, run.output, "adi-code--form", "tool-run-output")}
+                <adi_ui::CodeLog value=run.output lang=Lang::Sh
+                    height=adi_ui::CodeHeight::Form id="tool-run-output"
+                    class="adi-ui-type island"/>
             </div>
         </section>
     }
@@ -456,8 +458,13 @@ pub(crate) fn tool_editor_view(state: State, editor: ToolEditor) -> Option<AnyVi
                     on:click=move |_| editor.close()>"Close"</button>
             </div>
             <div class="adi-panel__body">
-                {code_editor(move || Lang::from_path(&format!("s.{}", editor.runtime.get())),
-                    editor.buffer, "adi-code--form", "tool-script-edit")}
+                <adi_ui::CodeEditor
+                    value=editor.buffer
+                    lang=Signal::derive(move || Lang::from_path(&format!("s.{}", editor.runtime.get())))
+                    height=adi_ui::CodeHeight::Form
+                    id="tool-script-edit"
+                    class="adi-ui-type island"
+                />
             </div>
         </section>
     }

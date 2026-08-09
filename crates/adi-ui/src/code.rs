@@ -1,5 +1,6 @@
-//! [`CodeEditor`] — a syntax-highlighted editor built out of two stacked layers — and
-//! [`CodeFrame`], the card it sits in.
+//! [`CodeEditor`] — a syntax-highlighted editor built out of two stacked layers —
+//! [`CodeLog`], the read-only half of it that follows a growing file, and [`CodeFrame`], the
+//! card either one sits in.
 
 use leptos::prelude::*;
 
@@ -29,6 +30,17 @@ impl CodeHeight {
         match self {
             Self::Fill => "h-full min-h-0",
             Self::Form => "h-85",
+        }
+    }
+
+    /// The same step for [`CodeLog`], which is one scrolling element rather than two stacked
+    /// absolute ones — so it can be told a *ceiling* and take less when the output is short,
+    /// where the editor has to be given a height outright or collapse to nothing.
+    #[must_use]
+    fn max_classes(self) -> &'static str {
+        match self {
+            Self::Fill => "h-full min-h-0",
+            Self::Form => "max-h-85",
         }
     }
 }
@@ -128,6 +140,10 @@ pub fn CodeEditor(
     /// and keyboard scrolling — but refuses input.
     #[prop(optional, into)]
     readonly: Signal<bool>,
+    /// DOM id for the textarea — the editable element, so a `<label for=…>` points at the
+    /// thing that actually takes focus rather than at the box around it.
+    #[prop(optional, into)]
+    id: String,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let area = NodeRef::<leptos::html::Textarea>::new();
@@ -179,6 +195,7 @@ pub fn CodeEditor(
                                [-webkit-text-fill-color:transparent] selection:bg-meta/35")
                 spellcheck="false"
                 autocomplete="off"
+                id=(!id.is_empty()).then_some(id)
                 node_ref=area
                 readonly=move || readonly.get()
                 prop:value=move || value.get()
@@ -189,5 +206,87 @@ pub fn CodeEditor(
                 }
             ></textarea>
         </div>
+    }
+}
+
+/// A growing file, read: [`CodeEditor`]'s highlighting with none of its editing, following
+/// the tail the way `tail -f` does.
+///
+/// **Not a read-only [`CodeEditor`].** That one is a textarea, and a textarea's scroll
+/// position resets every time its `value` is written — which for output arriving under a
+/// poll is every second, yanking the reader back to the top of a log they were reading.
+/// This is a single scrolling `<pre>`: appending to it moves nothing on its own, so the
+/// follow can be a decision rather than a side effect.
+///
+/// The decision is the reader's, and it is made by scrolling. Pinned to the bottom, new
+/// lines pull the view down with them; scroll up and the follow stops, so history holds
+/// still while the log keeps growing; scroll back to the end and it resumes. Nothing has to
+/// be toggled, because scrolling away from the newest line *is* the statement that you are
+/// reading something else.
+///
+/// ```ignore
+/// <CodeLog value=output lang=Lang::Sh height=CodeHeight::Form/>
+/// ```
+#[component]
+pub fn CodeLog(
+    /// The text, which is expected to grow. Read-only here — the component never writes it.
+    #[prop(into)]
+    value: Signal<String>,
+    /// What to scan it as (see [`CodeEditor`]'s `lang`).
+    #[prop(optional, into)]
+    lang: Signal<Lang>,
+    #[prop(optional)] height: CodeHeight,
+    /// DOM id, for a `<label for=…>` or an anchor.
+    #[prop(optional, into)]
+    id: String,
+    #[prop(optional, into)] class: String,
+) -> impl IntoView {
+    let pre = NodeRef::<leptos::html::Pre>::new();
+    // Whether the view is pinned to the newest line. Starts pinned, so a log opens on what
+    // just happened rather than on how it began.
+    let follow = RwSignal::new(true);
+
+    // Follow the tail. Reading `value` is what subscribes this to the growth — and it also
+    // makes the effect run on mount, which is what lands a log that arrived complete on its
+    // last line instead of its first.
+    Effect::new(move |_| {
+        let _ = value.get();
+        if follow.get_untracked()
+            && let Some(p) = pre.get_untracked()
+        {
+            p.set_scroll_top(p.scroll_height());
+        }
+    });
+
+    view! {
+        <pre
+            class=merge(
+                &format!(
+                    "{LAYER} overflow-auto bg-card text-syn-plain {}",
+                    height.max_classes(),
+                ),
+                class,
+            )
+            id=(!id.is_empty()).then_some(id)
+            node_ref=pre
+            // Focusable, so the log can be scrolled from the keyboard like any other pane.
+            tabindex="0"
+            on:scroll=move |_| {
+                if let Some(p) = pre.get_untracked() {
+                    // Within a couple of lines of the end still counts as following: a
+                    // browser's own scroll maths lands a pixel or two short of the bottom
+                    // often enough that exact equality would unpin a log nobody moved.
+                    let dist = p.scroll_height() - p.scroll_top() - p.client_height();
+                    follow.set(dist <= 24);
+                }
+            }
+        >
+            {move || {
+                highlight(lang.get(), &value.get())
+                    .into_iter()
+                    .map(|(tok, run)| view! { <span class=tok.classes()>{run}</span> })
+                    .collect::<Vec<_>>()
+            }}
+        </pre>
     }
 }

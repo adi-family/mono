@@ -13,22 +13,22 @@
 use std::collections::BTreeMap;
 
 mod fetch;
-mod highlight;
 mod icons;
 mod live;
-mod markdown;
 mod pages;
 mod pwa;
 mod routing;
 mod state;
 mod store_browser;
-mod tree;
 mod ui;
 
 // The component library. The titlebar is the first thing on this page built from it; the
 // rest of the screen is still the `adi-*` layer, and the two share a page by load order
 // (see `styles/tailwind.css`).
-use adi_ui::{Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Faq, Modal, Qna, TopBar};
+use adi_ui::{
+    Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Faq, Modal, Qna, TopBar, Tree, TreeNode,
+    TreeState,
+};
 use adi_webapp_api::types::{
     AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
     MeshState, MetaState,
@@ -612,7 +612,7 @@ fn App() -> impl IntoView {
 
     // The explorer's own tree state, separate from the Projects page's: the two rails are
     // on screen at once and must not fight over the selection.
-    let explorer = tree::TreeState::new();
+    let explorer = TreeState::new();
 
     let dashboards_form = DashboardsForm {
         name: RwSignal::new(String::new()),
@@ -1104,26 +1104,29 @@ enum Nav {
 /// The explorer: one tree holding every scope. Global and Settings come first, then the
 /// project hierarchy — and every scope expands into its own sections, so a project is
 /// browsed like a directory rather than as one page of stacked panels.
-fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>) -> AnyView {
-    let mut nodes: Vec<tree::TreeNode> = Vec::new();
+fn explorer_tree(state: State, explorer: TreeState, route: RwSignal<Route>) -> AnyView {
+    let mut nodes: Vec<TreeNode> = Vec::new();
 
     for (label, routes) in GLOBAL_SCOPES {
         nodes.push(
-            tree::TreeNode::new(format!("scope:{label}"), 0, label)
+            TreeNode::new(format!("scope:{label}"), 0, label)
                 .children(true)
                 .container(true)
                 .icon(scope_icon(label).path()),
         );
         for r in routes {
             nodes.push(
-                tree::TreeNode::new(format!("route:{}", r.path()), 1, r.title())
+                TreeNode::new(format!("route:{}", r.path()), 1, r.title())
                     .icon(icons::route_icon(*r).path()),
             );
         }
     }
 
     let Some(projects) = state.projects.get() else {
-        return tree::tree_view(nodes, explorer, None, "Loading…");
+        return view! {
+            <Tree nodes=nodes state=explorer empty="Loading…" class="adi-ui-type"/>
+        }
+        .into_any();
     };
     let rows = pages::project_tree_rows(
         projects
@@ -1150,18 +1153,18 @@ fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>
                 .count()
         });
         nodes.push(
-            tree::TreeNode::new(format!("proj:{}", p.id), *depth, p.name.clone())
+            TreeNode::new(format!("proj:{}", p.id), *depth, p.name.clone())
                 // Always a branch: even a project with no sub-projects holds its sections.
                 .children(true)
                 .icon(icons::Icon::Folder.path())
                 .emphasis(true)
                 .separated(first_child)
-                .badge(open.filter(|n| *n > 0).map(|n| n.to_string()))
-                .title(p.description.clone()),
+                .maybe_badge(open.filter(|n| *n > 0).map(|n| n.to_string()))
+                .maybe_title(p.description.clone()),
         );
         for section in ProjectSection::ALL {
             nodes.push(
-                tree::TreeNode::new(
+                TreeNode::new(
                     format!("proj:{}:{}", p.id, section.slug()),
                     depth + 1,
                     section.title(),
@@ -1181,5 +1184,14 @@ fn explorer_tree(state: State, explorer: tree::TreeState, route: RwSignal<Route>
             state.current_section.get().slug()
         )),
     };
-    tree::tree_view(nodes, explorer, selected, "Nothing here yet.")
+    view! {
+        <Tree
+            nodes=nodes
+            state=explorer
+            selected=selected
+            empty="Nothing here yet."
+            class="adi-ui-type"
+        />
+    }
+    .into_any()
 }

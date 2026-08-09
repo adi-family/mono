@@ -4,15 +4,13 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-52 structs · 10 enums · 1 type alias across 19 files.
+46 structs · 6 enums · 1 type alias across 15 files.
 
 ## Index
 
-- [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/icons.rs`](#srciconsrs) — `Icon`
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
-- [`src/markdown.rs`](#srcmarkdownrs) — `Align`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
@@ -25,48 +23,6 @@
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
 - [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Flash`
-- [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
-- [`src/ui.rs`](#srcuirs) — `Sort`, `Column`, `Layout`, `TableState`, `Key`
-
----
-
-## `src/highlight.rs`
-
-### enum `Tok`
-
-What a run of characters is, which is all the renderer needs to pick a colour.
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Tok {
-    Plain,
-    Comment,
-    Str,
-    Num,
-    Key,
-    Kw,
-    Func,
-    Punct,
-}
-```
-
-### enum `Lang`
-
-The language to scan `path` as, from its extension. Unknown extensions get `Lang::None`, which emits the text as one plain run — highlighting is an enhancement, never a gate.
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Lang {
-    Toml,
-    Json,
-    Yaml,
-    Ts,
-    Sh,
-    Sql,
-    Md,
-    None,
-}
-```
 
 ---
 
@@ -153,24 +109,6 @@ Where a tree selection points.
 enum Nav {
     Global(Route),
     Project(String, ProjectSection),
-}
-```
-
----
-
-## `src/markdown.rs`
-
-### enum `Align`
-
-Per-column text alignment declared by a table's delimiter row.
-
-```rust
-#[derive(Clone, Copy)]
-enum Align {
-    None,
-    Left,
-    Center,
-    Right,
 }
 ```
 
@@ -1051,112 +989,6 @@ A one-line status message under the form; `kind` drives its colour via `data-kin
 pub(crate) struct Flash {
     pub(crate) kind: &'static str,
     pub(crate) msg: String,
-}
-```
-
----
-
-## `src/tree.rs`
-
-### struct `TreeNode`
-
-One row of a tree. `depth` is the nesting level (0 = root); `has_children` decides whether the row gets a twisty and the branch glyph.
-
-```rust
-#[derive(Clone)]
-pub(crate) struct TreeNode {
-    pub(crate) id: String,
-    pub(crate) depth: usize,
-    pub(crate) label: String,
-    pub(crate) has_children: bool,
-    pub(crate) badge: Option<String>,
-    pub(crate) title: Option<String>,
-    pub(crate) container: bool,
-    pub(crate) icon: Option<&'static str>,
-    pub(crate) separated: bool,
-    pub(crate) emphasis: bool,
-}
-```
-
-### struct `TreeState`
-
-The interaction state of one tree: the row the user last activated, and which branches the user has opened. `Copy`, so it threads into the page view and its event handlers like the page state does.
-
-```rust
-#[derive(Clone, Copy)]
-pub(crate) struct TreeState {
-    pub(crate) selected: RwSignal<Option<String>>,
-    pub(crate) expanded: RwSignal<HashSet<String>>,
-}
-```
-
----
-
-## `src/ui.rs`
-
-### struct `Sort`
-
-How a `configurable_table` is ordered: which column, and which way.
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Sort {
-    pub(crate) col: &'static str,
-    pub(crate) desc: bool,
-}
-```
-
-### struct `Column`
-
-One configurable column: the header it renders under, and whether the user is showing it.
-
-```rust
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) struct Column {
-    pub(crate) header: &'static str,
-    pub(crate) shown: bool,
-}
-```
-
-### struct `Layout`
-
-A table's column arrangement: every column it *can* show, in the user's order, each flagged shown or hidden.
-
-```rust
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub(crate) struct Layout {
-    columns: Vec<Column>,
-    has_actions: bool,
-}
-```
-
-### struct `TableState`
-
-One `configurable_table`'s user-owned view of itself: how it's sorted, how its columns are arranged, and whether its settings menu is open.
-
-```rust
-#[derive(Clone, Copy)]
-pub(crate) struct TableState {
-    key: &'static str,
-    headers: &'static [&'static str],
-    default_sort: Sort,
-    pub(crate) sort: RwSignal<Sort>,
-    pub(crate) layout: RwSignal<Layout>,
-    open: RwSignal<bool>,
-}
-```
-
-### enum `Key`
-
-One row's value under one column, reduced to something orderable.
-
-```rust
-#[derive(Clone, Debug)]
-pub(crate) enum Key {
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    Text(String),
 }
 ```
 
