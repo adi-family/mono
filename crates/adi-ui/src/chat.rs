@@ -49,13 +49,17 @@ pub enum Role {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ToolState {
     /// Still going. At most one call in a transcript is, and it is the one worth showing
-    /// without being asked.
+    /// without being asked. **Only while something is alive to finish it** — a call left
+    /// green in a run that ended weeks ago is the transcript lying about the present.
     Running,
     /// It returned.
     #[default]
     Ok,
     /// It did not.
     Failed,
+    /// Nothing came back: the run ended while this call was in flight. Amber rather than
+    /// red, because the tool never got to fail — it was never answered.
+    Unanswered,
 }
 
 impl ToolState {
@@ -66,6 +70,7 @@ impl ToolState {
             Self::Running => "bg-accent",
             Self::Ok => "bg-faint",
             Self::Failed => "bg-err",
+            Self::Unanswered => "bg-attention",
         }
     }
 }
@@ -228,7 +233,14 @@ fn Did(calls: Vec<ToolCall>) -> impl IntoView {
         .find(|c| c.state == ToolState::Running)
         .or_else(|| calls.last())
         .cloned();
-    let running = head.as_ref().is_some_and(|c| c.state == ToolState::Running);
+    // The one word the closed run says about its head call, when there is one worth saying.
+    // "running" is a claim about right now and must be true; a run that ended on a call says
+    // so instead, which is the honest version of the flag it used to leave behind.
+    let chip = match head.as_ref().map(|c| c.state) {
+        Some(ToolState::Running) => Some(("running", "text-accent")),
+        Some(ToolState::Unanswered) => Some(("no result", "text-attention")),
+        _ => None,
+    };
 
     view! {
         <details class=format!("{LAZY} group island overflow-hidden bg-card")>
@@ -262,8 +274,8 @@ fn Did(calls: Vec<ToolCall>) -> impl IntoView {
                         <span class="truncate font-mono text-mini text-meta">{c.summary()}</span>
                     }
                 })}
-                {running.then(|| view! {
-                    <span class="caps ml-auto shrink-0 text-accent">"running"</span>
+                {chip.map(|(word, ink)| view! {
+                    <span class=format!("caps ml-auto shrink-0 {ink}")>{word}</span>
                 })}
             </summary>
             <div class="flex flex-col gap-2 border-t border-divider p-3">

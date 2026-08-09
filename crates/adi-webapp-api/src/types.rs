@@ -981,13 +981,15 @@ pub struct AgentTurn {
     pub metrics: Option<AgentTurnMetrics>,
 }
 
-/// A tool step's lifecycle status.
+/// A tool step's lifecycle status. `unanswered` is a call the run ended on top of — it went out and
+/// nothing ever came back, which is not the same as a tool that answered with an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentToolStatus {
     Running,
     Ok,
     Error,
+    Unanswered,
 }
 
 /// One item on an assistant turn's timeline, in the order it happened: something the agent said, a

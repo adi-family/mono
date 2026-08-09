@@ -45,13 +45,36 @@ pub enum Step {
     },
 }
 
-/// A tool step's lifecycle: still running, finished ok, or failed.
+/// A tool step's lifecycle: still running, finished ok, failed — or never answered at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolStatus {
     Running,
     Ok,
     Error,
+    /// The call went out and nothing came back: the run ended — stopped, killed, out of budget —
+    /// while that call was still in flight. Deliberately not [`Error`](Self::Error), which is a
+    /// tool that *answered* and said no; here the tool said nothing at all, and blaming it for a
+    /// run somebody interrupted would put it in the failed column of every tally.
+    Unanswered,
+}
+
+/// Close a finished turn's timeline: a call still marked [`ToolStatus::Running`] once the run is
+/// over is a claim about a process that no longer exists.
+///
+/// The last thing an interrupted turn did is almost always a call whose result never landed — the
+/// engine was killed between writing the invocation and reading the answer — so without this every
+/// interrupted conversation keeps a live-looking call at the top of it for ever. Called wherever a
+/// turn is known to be over: on the way into the transcript, on the way back out of it (rows
+/// recorded before this existed), and on the live parse of a run whose child has exited.
+pub(crate) fn close_open_calls(steps: &mut [Step]) {
+    for step in steps {
+        if let Step::Tool { status, .. } = step
+            && *status == ToolStatus::Running
+        {
+            *status = ToolStatus::Unanswered;
+        }
+    }
 }
 
 /// Per-turn telemetry from the engine's final event. Cost is kept in micro-dollars (integer) so the

@@ -761,6 +761,9 @@ $runlog-dim: #8b93a1;
 
 .adi-step--tool[data-status="ok"] .adi-step__status { color: var(--online); }
 .adi-step--tool[data-status="error"] .adi-step__status { color: var(--down); }
+// Never answered — the run ended on top of this call. Amber, and emphatically not pulsing:
+// the pulse is what says "right now", and nothing is happening here any more.
+.adi-step--tool[data-status="unanswered"] .adi-step__status { color: var(--warn); }
 .adi-step--tool[data-status="running"] .adi-step__status {
   color: var(--accent);
   animation: adi-chat-pulse 1.2s ease-in-out infinite;

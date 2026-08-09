@@ -33,7 +33,7 @@ use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
-use crate::progress::{Step, TurnContent, TurnMetrics};
+use crate::progress::{Step, TurnContent, TurnMetrics, close_open_calls};
 
 use super::db::sql_err;
 
@@ -115,6 +115,10 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
 /// second pending answer in beside it. The recorded moment is filled in for the same reason — a
 /// stored turn always says when it landed, whether or not its author remembered to.
 ///
+/// A still-running tool call is closed on the way in for exactly that reason: a recorded turn is
+/// final, so nothing in it can still be happening. A turn killed mid-call is the ordinary way one
+/// arrives here, and left alone it would sit "running" in a finished conversation for ever.
+///
 /// All of it in one transaction: the sequence number is read and used under the same lock, so two
 /// processes appending at once cannot mint the same one, and a session's activity can never
 /// disagree with its last turn.
@@ -124,6 +128,7 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
 pub(super) fn append(conn: &Connection, agent: &str, id: &str, mut turn: Turn) -> Result<()> {
     turn.pending = false;
     turn.queued = false;
+    close_open_calls(&mut turn.steps);
     if turn.at == 0 {
         turn.at = now_ms();
     }
@@ -170,6 +175,10 @@ pub(super) fn append(conn: &Connection, agent: &str, id: &str, mut turn: Turn) -
 ///
 /// A row that will not decode is skipped rather than failing the read — one torn turn must not take
 /// a whole conversation out of the view.
+///
+/// Open calls are closed here as well as on the way in, because the rows written before that was
+/// true are still on disk, and a conversation from last week does not get a second chance to be
+/// recorded correctly. Closing on read is what heals them.
 pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<Turn> {
     let Ok(mut stmt) = conn.prepare_cached(
         "SELECT json FROM turns WHERE agent = ?1 AND session = ?2 ORDER BY seq",
@@ -180,6 +189,10 @@ pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<Turn> {
         .map(|rows| {
             rows.flatten()
                 .filter_map(|json| serde_json::from_str::<Turn>(&json).ok())
+                .map(|mut turn| {
+                    close_open_calls(&mut turn.steps);
+                    turn
+                })
                 .collect()
         })
         .unwrap_or_default()
@@ -194,7 +207,8 @@ pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<Turn> {
 ///
 /// `running` decides only the flag, not the splice: an answer whose child has exited but which
 /// nobody has committed yet is still the truest thing to show for that question — it just is not
-/// streaming any more.
+/// streaming any more. Which is also why it decides whether that answer's calls stay open: nothing
+/// is left to answer them once the child is gone.
 pub(super) fn view(
     mut turns: Vec<Turn>,
     live: Option<TurnContent>,
@@ -204,6 +218,10 @@ pub(super) fn view(
     if let Some(content) = live
         && turns.last().map(|t| t.role.as_str()) == Some(ROLE_USER)
     {
+        let mut steps = content.steps;
+        if !running {
+            close_open_calls(&mut steps);
+        }
         turns.push(Turn {
             role: ROLE_ASSISTANT.to_string(),
             text: content.text,
@@ -211,7 +229,7 @@ pub(super) fn view(
             at: 0,
             pending: running,
             queued: false,
-            steps: content.steps,
+            steps,
             metrics: content.metrics,
         });
     }
@@ -237,6 +255,7 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::progress::ToolStatus;
     use crate::store::SessionStore;
     use crate::Backend;
 
@@ -322,5 +341,117 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A call the engine never answered, which is how an interrupted run almost always ends: the
+    /// child was killed between writing the invocation and reading the result.
+    fn open_call() -> Step {
+        Step::Tool {
+            name: "Edit".to_string(),
+            input: "{}".to_string(),
+            status: ToolStatus::Running,
+            output: String::new(),
+        }
+    }
+
+    fn statuses(turn: &Turn) -> Vec<ToolStatus> {
+        turn.steps
+            .iter()
+            .filter_map(|s| match s {
+                Step::Tool { status, .. } => Some(*status),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A recorded turn is final, so nothing in it can still be running — the same contradiction as a
+    /// recorded `pending` flag, and it does not settle either. Left alone, an interrupted run kept a
+    /// green "running" call at the top of a conversation that had been over for weeks.
+    #[test]
+    fn a_recorded_turn_never_keeps_a_call_open() {
+        let store = scratch("open-call");
+        let s = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+
+        store
+            .append_turn(
+                "chat",
+                &s.id,
+                assistant_turn(&TurnContent {
+                    text: String::new(),
+                    steps: vec![open_call()],
+                    metrics: None,
+                }),
+            )
+            .expect("append");
+
+        assert_eq!(
+            statuses(&store.turns("chat", &s.id)[0]),
+            [ToolStatus::Unanswered],
+            "a committed call that never came back is unanswered, not running",
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// And the rows written before that was true are still on disk. A conversation from last week
+    /// does not get a second chance to be recorded, so the read is what heals it.
+    #[test]
+    fn a_row_recorded_with_an_open_call_is_closed_on_the_way_out() {
+        let store = scratch("heal");
+        let s = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "go")
+            .expect("create");
+
+        // Written the way an older build wrote it: committed, and still claiming to be running.
+        let json = serde_json::to_string(&Turn {
+            steps: vec![open_call()],
+            ..assistant_turn(&TurnContent::default())
+        })
+        .expect("encode");
+        super::super::db::conn(&store.db_path())
+            .expect("conn")
+            .execute(
+                "INSERT INTO turns (agent, session, seq, at, role, json)
+                 VALUES ('chat', ?1, 0, 1, 'assistant', ?2)",
+                rusqlite::params![&s.id, json],
+            )
+            .expect("insert");
+
+        assert_eq!(
+            statuses(&store.turns("chat", &s.id)[0]),
+            [ToolStatus::Unanswered],
+            "an old row reads as what it is, however it was written",
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The answer being written right now is the one place a call may still be open — and only for
+    /// as long as there is a child left to answer it. `running` decides, because it is the only
+    /// thing here that knows.
+    #[test]
+    fn the_spliced_answer_keeps_its_calls_open_only_while_the_child_is_alive() {
+        let live = || TurnContent {
+            text: "working".to_string(),
+            steps: vec![open_call()],
+            metrics: None,
+        };
+        let asked = vec![user_turn("go")];
+
+        let alive = view(asked.clone(), Some(live()), true, Vec::new());
+        assert_eq!(
+            statuses(&alive[1]),
+            [ToolStatus::Running],
+            "a child still working can still answer its call",
+        );
+
+        let exited = view(asked, Some(live()), false, Vec::new());
+        assert_eq!(
+            statuses(&exited[1]),
+            [ToolStatus::Unanswered],
+            "and one that has exited never will",
+        );
     }
 }

@@ -122,6 +122,7 @@ pub enum ToolState {
     #[default]
     Ok,
     Failed,
+    Unanswered,
 }
 ```
 

@@ -634,6 +634,18 @@ The first two                    are the same bug. I will read the pairing path 
                 .param("offset", "60")
                 .param("limit", "80")
                 .result("…retry loop, 3 attempts, no backoff…"),
+            // Stopped mid-call: the run ended before this returned, so it reads as unanswered
+            // rather than keeping a green "running" flag over a conversation that is over.
+            ToolCall::new("Bash")
+                .param("command", "cargo test -p adi-mesh --all-features")
+                .param("description", "Run the whole mesh suite")
+                .state(ToolState::Unanswered),
+        ]),
+        Turn::Said {
+            role: Role::User,
+            body: "Stopped that — just the pairing tests.".into(),
+        },
+        Turn::Did(vec![
             ToolCall::new("Bash")
                 .param(
                     "command",

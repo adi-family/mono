@@ -1224,7 +1224,7 @@ pub struct AgentTurn {
 
 ### enum `AgentToolStatus`
 
-A tool step's lifecycle status.
+A tool step's lifecycle status. `unanswered` is a call the run ended on top of — it went out and nothing ever came back, which is not the same as a tool that answered with an error.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1233,6 +1233,7 @@ pub enum AgentToolStatus {
     Running,
     Ok,
     Error,
+    Unanswered,
 }
 ```
 

@@ -927,6 +927,7 @@ fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
                         AgentToolStatus::Running => ToolState::Running,
                         AgentToolStatus::Ok => ToolState::Ok,
                         AgentToolStatus::Error => ToolState::Failed,
+                        AgentToolStatus::Unanswered => ToolState::Unanswered,
                     });
                 for (key, value) in tool_params(input) {
                     call = call.param(key, value);
@@ -995,6 +996,7 @@ fn steps_fingerprint(steps: &[AgentStep]) -> String {
                     AgentToolStatus::Running => 'r',
                     AgentToolStatus::Ok => 'o',
                     AgentToolStatus::Error => 'e',
+                    AgentToolStatus::Unanswered => 'u',
                 };
                 (mark, output.len())
             }
@@ -1155,6 +1157,9 @@ fn step_row(anchor: String, step: AgentStep) -> AnyView {
                 AgentToolStatus::Running => ("\u{27F3}", "running"),
                 AgentToolStatus::Ok => ("\u{2713}", "ok"),
                 AgentToolStatus::Error => ("\u{2717}", "error"),
+                // The run ended on top of this call: it was never answered, which is a slash
+                // through the circle rather than the cross a tool earns by answering badly.
+                AgentToolStatus::Unanswered => ("\u{2298}", "unanswered"),
             };
             let arg = truncate_task(&input);
             let detail = match (input.trim().is_empty(), output.trim().is_empty()) {
@@ -1741,7 +1746,9 @@ fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
                     match status {
                         AgentToolStatus::Error => s.failed.push(step_ref()),
                         AgentToolStatus::Running => s.running.push(step_ref()),
-                        AgentToolStatus::Ok => {}
+                        // Never answered is not a failure to link to: the call is the last line
+                        // of an interrupted run, and the rail already says the run is over.
+                        AgentToolStatus::Ok | AgentToolStatus::Unanswered => {}
                     }
                 }
                 AgentStep::Message { .. } => {}

@@ -1075,7 +1075,7 @@ pub enum Step {
 
 ### enum `ToolStatus`
 
-A tool step's lifecycle: still running, finished ok, or failed.
+A tool step's lifecycle: still running, finished ok, failed — or never answered at all.
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1084,6 +1084,7 @@ pub enum ToolStatus {
     Running,
     Ok,
     Error,
+    Unanswered,
 }
 ```
 

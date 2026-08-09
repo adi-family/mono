@@ -635,6 +635,7 @@ fn agent_step(s: adi_agents::Step) -> AgentStep {
                 adi_agents::ToolStatus::Running => AgentToolStatus::Running,
                 adi_agents::ToolStatus::Ok => AgentToolStatus::Ok,
                 adi_agents::ToolStatus::Error => AgentToolStatus::Error,
+                adi_agents::ToolStatus::Unanswered => AgentToolStatus::Unanswered,
             },
             output,
         },

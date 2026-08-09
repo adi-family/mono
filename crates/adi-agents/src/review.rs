@@ -761,6 +761,7 @@ fn turn_block(n: usize, turn: &Turn) -> String {
                 let tail = match status {
                     ToolStatus::Ok => String::new(),
                     ToolStatus::Running => " → still running".to_string(),
+                    ToolStatus::Unanswered => " → *never returned* (the run ended first)".to_string(),
                     ToolStatus::Error => format!(" → **failed**: {}", clip(&one_line(output), 160)),
                 };
                 let _ = writeln!(out, "- `{name}` {}{tail}", clip(&one_line(input), 140));
