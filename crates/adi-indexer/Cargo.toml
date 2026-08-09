@@ -88,7 +88,12 @@ candle-core = { version = "0.10", optional = true }
 candle-nn = { version = "0.10", optional = true }
 candle-transformers = { version = "0.10", optional = true }
 tokenizers = { version = "0.21", optional = true, default-features = false, features = ["onig"] }
-hf-hub = { version = "0.5", optional = true, default-features = false, features = ["native-tls", "ureq"] }
+# `ureq` alone, never `native-tls`: we only ever call `hf_hub::api::sync` (embed/candle.rs), and
+# ureq's own default is rustls. The `native-tls` feature would additionally pull reqwest with its
+# default features, and feature unification hands that default-tls to *every* reqwest in the
+# workspace — which puts openssl-sys back in the graph and breaks the musl node build
+# (apps/linux/build.sh) on any host without a cross-built OpenSSL.
+hf-hub = { version = "0.5", optional = true, default-features = false, features = ["ureq"] }
 
 # --- tree-sitter grammars (feature lang-*) ---
 tree-sitter-c = { version = "0.24", optional = true }
