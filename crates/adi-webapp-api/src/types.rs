@@ -682,6 +682,62 @@ pub struct ToolRunResult {
 pub struct AgentFormSpec {
     pub backends: Vec<AgentBackendOption>,
     pub fields: Vec<AgentFormField>,
+    /// The ready-made ways to stand an agent up, in the order the setup page offers them. The
+    /// onboarding wizard renders these instead of a bare backend picker; the last one is the
+    /// manual escape hatch onto the full field list.
+    #[serde(default)]
+    pub presets: Vec<AgentSetupPreset>,
+}
+
+/// One ready-made way to stand an agent up — "Claude Code SDK", "Kimi API key" — holding
+/// everything that choice implies: the backend it saves as, the arguments it pins without asking,
+/// the handful of fields still worth a question, and the API key it stores as a secret. The last
+/// preset is [`AgentSetupPreset::manual`]: it pins nothing and hands the user the whole schema.
+///
+/// Server-owned because every value in it is backend knowledge — which provider id, which
+/// environment variable holds its key, which endpoint it lives at. A client that hardcoded those
+/// would drift from the backends the moment one moved.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetupPreset {
+    pub id: String,
+    pub label: String,
+    /// One line under the picker: what this choice actually runs, and on whose credentials.
+    pub blurb: String,
+    /// The backend id this preset saves as. Empty on the manual preset, which asks instead.
+    #[serde(default)]
+    pub backend: String,
+    /// The arguments this preset writes. A key that also appears in `fields` is a **prefill** the
+    /// user can still edit; every other key is pinned and never shown.
+    #[serde(default)]
+    pub arguments: BTreeMap<String, String>,
+    /// The fields to ask for, named from [`AgentFormSpec::fields`] and rendered in this order.
+    /// Empty on the manual preset, which renders everything the chosen backend takes.
+    #[serde(default)]
+    pub fields: Vec<String>,
+    /// The API key this preset stores as a global secret and attaches to the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<AgentSetupSecret>,
+    /// Whether this preset drops the user into the full schema-driven form — the backend picker
+    /// and every field that backend takes — instead of its own short list.
+    #[serde(default)]
+    pub manual: bool,
+}
+
+/// The API key a preset asks for: the environment variable the backend reads it from (which is
+/// also the secret's name), and the copy for its input. The value itself is stored through
+/// `POST /api/secrets/set` and attached to the agent — it never rides along in the agent manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSetupSecret {
+    /// The environment variable the backend reads the key from — also the secret's name.
+    pub env: String,
+    pub label: String,
+    #[serde(default)]
+    pub hint: String,
+    #[serde(default)]
+    pub placeholder: String,
+    /// Whether the agent cannot run without it. `false` where a CLI login is the other way in.
+    #[serde(default)]
+    pub required: bool,
 }
 
 /// One selectable agent backend in the form: an `executor:what` pair, where the executor is the

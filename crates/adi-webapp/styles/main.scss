@@ -225,6 +225,57 @@
     gap: var(--space-4);
     margin-top: var(--space-1);
   }
+  // --- the setup-preset picker ------------------------------------------------------
+  // One segment per way in ("Claude Code SDK", "Kimi API key", "Manual"). A segmented row
+  // rather than a select: there are three, and the chosen one gets a line of explanation
+  // underneath that a dropdown has nowhere to put.
+  &__presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 4px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--surface-2);
+  }
+  &__preset {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 8px 12px;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: var(--text-sm);
+    font-weight: 550;
+    color: var(--muted);
+    white-space: nowrap;
+    transition: color var(--transition), background var(--transition),
+      border-color var(--transition);
+
+    &:hover { color: var(--ink); background: var(--surface); }
+    &[data-on="true"] {
+      color: var(--ink);
+      background: var(--surface);
+      border-color: var(--accent);
+    }
+  }
+  // The fields a preset asks for — and, on the manual preset, the whole schema. A wrapping
+  // row so the narrow controls pair up, while anything the schema marks wide (and the API
+  // key) claims a line of its own through the inline `flex:1 1 100%` the renderer writes.
+  &__fields {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: var(--space-3);
+
+    > .adi-field { flex: 1 1 220px; min-width: 0; }
+    .adi-input, .adi-textarea, select.adi-input { width: 100%; }
+    // The card gives textareas the height the system-prompt editor wants; a schema field's own
+    // `rows` is the better answer for the two-line boxes down here (extra PATH, environment).
+    .adi-textarea { min-height: 0; }
+  }
   // A field label paired with its "help me to choose?" affordance, on one baseline.
   &__field-head {
     display: flex;

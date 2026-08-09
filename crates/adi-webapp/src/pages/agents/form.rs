@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{
-    AgentBackendOption, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption, AgentsState,
+    AgentBackendOption, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption,
+    AgentFormSpec,
 };
 use leptos::prelude::*;
 
@@ -17,7 +18,8 @@ use super::{argument_text, scalar_argument_text};
 /// `provider` argument. Must match the id served by the API's form spec.
 const ADI_HARNESS: &str = "harness:adi";
 
-/// Render the agent form from the server-provided schema.
+/// Render the agent form from the server-provided schema — every field that applies to the chosen
+/// backend, which is what the full Agents page wants.
 pub(crate) fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
     let Some(st) = state.agents.get() else {
         return view! {
@@ -25,6 +27,22 @@ pub(crate) fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
         }
         .into_any();
     };
+    agent_schema_fields(&st.form, None, &[], state, form)
+}
+
+/// Render fields from a schema, for callers that hold one directly (the onboarding wizard reads
+/// its schema from `/api/meta`, not `/api/agents`).
+///
+/// `only` names the fields to render **in that order** — how a setup preset asks its two or three
+/// questions out of a schema of forty. `None` renders every field that applies to the chosen
+/// backend, in schema order, minus the names in `skip`.
+pub(crate) fn agent_schema_fields(
+    spec: &AgentFormSpec,
+    only: Option<&[String]>,
+    skip: &[&str],
+    state: State,
+    form: AgentsForm,
+) -> AnyView {
     let backend = form.backend.get();
     let provider = form
         .argument_values
@@ -32,11 +50,24 @@ pub(crate) fn agent_form_fields(state: State, form: AgentsForm) -> AnyView {
         .get("provider")
         .cloned()
         .unwrap_or_default();
-    let backends = st.form.backends.clone();
-    st.form
-        .fields
+    let backends = spec.backends.clone();
+    let shown: Vec<AgentFormField> = match only {
+        // A preset's own list: its order, and its say over which backend the field belongs to —
+        // the preset already pinned that backend, so a field it names is a field it means.
+        Some(names) => names
+            .iter()
+            .filter_map(|name| spec.fields.iter().find(|f| &f.name == name).cloned())
+            .collect(),
+        None => spec
+            .fields
+            .iter()
+            .filter(|field| !skip.contains(&field.name.as_str()))
+            .filter(|field| field_applies(field, &backend, &provider))
+            .cloned()
+            .collect(),
+    };
+    shown
         .into_iter()
-        .filter(|field| field_applies(field, &backend, &provider))
         .map(|field| render_agent_field(field, backends.clone(), state, form))
         .collect::<Vec<_>>()
         .into_any()
@@ -442,14 +473,13 @@ fn selected_backend<'a>(
 /// `temperature`) applies to the chosen backend, keeping the gating in sync with the
 /// server-owned field scoping.
 pub(crate) fn agent_param_applies(
-    st: Option<&AgentsState>,
+    spec: Option<&AgentFormSpec>,
     backend: &str,
     provider: &str,
     name: &str,
 ) -> bool {
-    st.is_some_and(|st| {
-        st.form
-            .fields
+    spec.is_some_and(|spec| {
+        spec.fields
             .iter()
             .any(|f| f.name == name && field_applies(f, backend, provider))
     })
@@ -476,7 +506,10 @@ fn agent_field_value(form: AgentsForm, name: &str) -> String {
     }
 }
 
-fn set_agent_field_value(form: AgentsForm, name: &str, value: String) {
+/// Write a value into whichever signal backs the named field — the first-class ones have their
+/// own, the rest live in `argument_values`. Public so a setup preset can seed the same slots the
+/// user's own typing would land in.
+pub(crate) fn set_agent_field_value(form: AgentsForm, name: &str, value: String) {
     match name {
         "name" => form.name.set(value),
         "backend" => form.backend.set(value),
@@ -529,7 +562,7 @@ fn set_agent_argument_value(
 }
 
 pub(crate) fn agent_argument_values(
-    st: Option<&AgentsState>,
+    spec: Option<&AgentFormSpec>,
     backend: &str,
     mut arguments: BTreeMap<String, serde_json::Value>,
     scalar_values: BTreeMap<String, String>,
@@ -554,8 +587,8 @@ pub(crate) fn agent_argument_values(
     for name in scalar_values.keys() {
         arguments.remove(name);
     }
-    if let Some(st) = st {
-        for field in &st.form.fields {
+    if let Some(spec) = spec {
+        for field in &spec.fields {
             if is_argument_field(&field.name) {
                 arguments.remove(&field.name);
             }
@@ -591,8 +624,8 @@ pub(crate) fn agent_argument_values(
         if name.is_empty() || value.is_empty() {
             continue;
         }
-        let field = st.and_then(|st| {
-            st.form.fields.iter().find(|field| {
+        let field = spec.and_then(|spec| {
+            spec.fields.iter().find(|field| {
                 field.name == name
                     && is_scalar_argument_field(&field.name)
                     && field_applies(field, backend, &provider)

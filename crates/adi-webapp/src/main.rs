@@ -30,9 +30,9 @@ mod ui;
 // (see `styles/tailwind.css`).
 use adi_ui::{Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Faq, Modal, Qna, TopBar};
 use adi_webapp_api::types::{
-    AgentBackendOption, AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
+    AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
     MeshState, MetaState,
-    PortsState, ProjectDetail, ProjectsState, SaveAgent, SecretsState, TasksState, ToolsState,
+    PortsState, ProjectDetail, ProjectsState, SecretsState, TasksState, ToolsState,
     TriggersState, UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
@@ -42,10 +42,11 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    agents_view, chat_home_view, dashboards_view, database_view, fleet_view, hive_view, live_view,
-    load_dir, load_store_file,
-    mesh_view, meta_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
-    ports_manager_view, project_detail_view, projects_view, secrets_view, store_file_view,
+    OnboardingForm, agents_view, chat_home_view, dashboards_view, database_view, fleet_view,
+    hive_view, live_view, load_dir, load_store_file,
+    mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
+    ports_manager_view, project_detail_view, projects_view, secrets_view, seed_onboarding,
+    start_onb_reconfigure, store_file_view,
     tasks_view, tools_view, triggers_view,
 };
 use routing::{
@@ -59,8 +60,7 @@ use state::{
     ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
     refresh_fleet_dashboards,
 };
-use highlight::Lang;
-use ui::{apply_saved_theme, code_editor, fmt_uptime, toggle_theme};
+use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -110,50 +110,6 @@ fn boot_splash() -> AnyView {
     .into_any()
 }
 
-/// The onboarding steps, in order. Only step 1 is interactive today; the rest scaffold the
-/// wizard so "step 1 of N" reads true and there is somewhere to grow into.
-const ONBOARDING_STEPS: [&str; 2] = ["Set up your primary agent", "You're ready"];
-
-/// One "do you have…?" branch in the runtime picker: the situation, a note on the shared
-/// credential, and the runtimes that fit it. Each option is an `(id, how)` pair — the backend id
-/// (matched against the server form spec for its label) and a short note on how that runtime runs.
-struct RuntimeGuide {
-    question: &'static str,
-    note: &'static str,
-    options: &'static [(&'static str, &'static str)],
-}
-
-/// The "help me to choose?" guidance: a short "do you have…?" checklist that maps what a user
-/// already has (a subscription, an API key) onto one or more runtimes. Every id matches a backend
-/// in the server's form spec, so picking one drops straight into the runtime select. A Claude
-/// login powers both the live-terminal CLI and the headless SDK — same credentials — so it lists
-/// both.
-const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
-    RuntimeGuide {
-        question: "I have a Claude subscription (Pro / Max), or the Claude CLI already logged in",
-        note: "Uses your existing Claude login — no API key needed. Same credentials either way:",
-        options: &[
-            ("pty:claude", "Claude Code in a live terminal session"),
-            ("harness:claude-sdk", "the Claude SDK, headless, on the same login"),
-        ],
-    },
-    RuntimeGuide {
-        question: "I have a ChatGPT / Codex subscription",
-        note: "Uses your Codex login.",
-        options: &[("pty:codex", "the Codex CLI in a live terminal session")],
-    },
-    RuntimeGuide {
-        question: "I have an Anthropic API key",
-        note: "Talks to the Claude API directly with your key — no CLI login required.",
-        options: &[("harness:claude-sdk", "the Claude SDK, headless")],
-    },
-    RuntimeGuide {
-        question: "I have another provider's API key (OpenAI, Gemini, Kimi, …)",
-        note: "ADI's built-in agent loop speaks to many providers with your key.",
-        options: &[("harness:adi", "the ADI agent loop")],
-    },
-];
-
 /// The root (`/`). It opens on the wordmark ([`boot_splash`]) and commits to a shape only once
 /// `/api/meta` answers: before the root agent exists, a guided onboarding wizard (welcome,
 /// stepper, setup form) behind a slim `adi. · extended →` bar; **once the agent exists the app is
@@ -165,38 +121,27 @@ fn Home() -> impl IntoView {
     let watch = AgentsWatch::new();
     // The chat and the wizard share one meta signal — it decides which of the two shows.
     let meta = state.meta;
-    let backend = RwSignal::new(String::new());
-    let prompt = RwSignal::new(String::new());
-    let busy = RwSignal::new(false);
-    let error = RwSignal::new(None::<String>);
-    // True while editing an existing agent, so the wizard's setup form shows instead of the chat.
-    let reconfiguring = RwSignal::new(false);
-    // Whether the "help me to choose?" runtime-picker modal is open.
-    let show_help = RwSignal::new(false);
-    // The system prompt is advanced and seeded from a sensible default, so it's collapsed by
-    // default; this reveals the in-app editor for it.
-    let show_prompt = RwSignal::new(false);
+    // Everything the setup wizard edits: the agent form, the chosen setup preset, its API key.
+    let onb = OnboardingForm::new();
     // True once the browser will let us offer "install as an app" (see [`pwa`]).
     let can_install = pwa::installable();
     // The FAQ dialog. It lives here rather than in the bar so both shapes of this page —
     // the chat and the wizard — open the same one.
     let faq_open = RwSignal::new(false);
 
-    // Load the meta state once, seeding the form from the server's default prompt and first
-    // backend when the agent hasn't been created yet.
+    // Load the meta state once, seeding the wizard from the server's defaults (or from the agent
+    // itself, when there already is one).
     spawn_local(async move {
         if let Ok(m) = fetch::meta().await {
-            if m.agent.is_none() {
-                if prompt.get_untracked().is_empty() {
-                    prompt.set(m.default_prompt.clone());
-                }
-                if backend.get_untracked().is_empty()
-                    && let Some(first) = m.form.backends.first()
-                {
-                    backend.set(first.id.clone());
-                }
-            }
+            seed_onboarding(onb, &m);
             meta.set(Some(m));
+        }
+    });
+    // The secret names already in the store — how the wizard knows not to ask again for a key that
+    // was pasted once. Names only: `/api/secrets` never carries a value.
+    spawn_local(async move {
+        if let Ok(s) = fetch::secrets().await {
+            state.secrets.set(Some(s));
         }
     });
 
@@ -330,10 +275,8 @@ fn Home() -> impl IntoView {
     // Bar "reconfigure": seed the setup form from the stored agent, then flip into reconfigure mode
     // so the centred wizard shows in place of the chat.
     let start_reconfigure = move || {
-        if let Some(agent) = meta.get_untracked().and_then(|m| m.agent) {
-            backend.set(agent.backend.clone());
-            prompt.set(arg_text(&agent.arguments, "system_prompt"));
-            reconfiguring.set(true);
+        if let Some(m) = meta.get_untracked() {
+            start_onb_reconfigure(onb, &m);
         }
     };
 
@@ -347,7 +290,7 @@ fn Home() -> impl IntoView {
         let Some(m) = meta.get() else {
             return boot_splash();
         };
-        if m.agent.is_some() && !reconfiguring.get() {
+        if m.agent.is_some() && !onb.reconfiguring.get() {
             view! {
                 <div class="adi-chome-root">
                     // No `home` on the mark: this page *is* home, and a link to where you
@@ -397,14 +340,7 @@ fn Home() -> impl IntoView {
                         <Faq items=faq()/>
                     </Modal>
                     <main class="adi-onb__body">
-                        <div class="adi-onb__panel">
-                            {onb_intro(m.agent.is_none())}
-                            <ol class="adi-onb__steps">{onb_steps(meta, reconfiguring)}</ol>
-                            {onb_setup_form(
-                                meta, backend, prompt, busy, error, reconfiguring, show_help,
-                                show_prompt, m,
-                            )}
-                        </div>
+                        <div class="adi-onb__panel">{onboarding_view(state, onb, m)}</div>
                     </main>
                 </div>
             }
@@ -506,309 +442,6 @@ fn install_pill(can_install: RwSignal<bool>) -> impl IntoView {
     }
 }
 
-/// The wizard's heading. "Welcome to adi." is the greeting for an actual first run — no agent
-/// exists yet — so a reconfigure (same form, reached from the chat's bar) gets a heading that
-/// says where you are instead of greeting someone who has been here all along.
-fn onb_intro(first_run: bool) -> AnyView {
-    if first_run {
-        view! {
-            <div class="adi-onb__intro">
-                <h1 class="adi-onb__welcome">
-                    "Welcome to adi"<span class="adi-onb__dot">"."</span>
-                </h1>
-                <p class="adi-onb__sub">"Let\u{2019}s set up your primary agent."</p>
-            </div>
-        }
-        .into_any()
-    } else {
-        view! {
-            <div class="adi-onb__intro">
-                <h1 class="adi-onb__welcome">"Reconfigure your agent"</h1>
-                <p class="adi-onb__sub">
-                    "Change the runtime it runs on, or its system prompt."
-                </p>
-            </div>
-        }
-        .into_any()
-    }
-}
-
-/// The stepper row: one node per onboarding step. Step 1 is `done` once `adi-agent` exists
-/// (and we aren't mid-reconfigure), otherwise `active`; later steps are `upcoming`.
-fn onb_steps(meta: RwSignal<Option<MetaState>>, reconfiguring: RwSignal<bool>) -> impl IntoView {
-    let done_first =
-        move || meta.get().is_some_and(|m| m.agent.is_some()) && !reconfiguring.get();
-    ONBOARDING_STEPS
-        .iter()
-        .enumerate()
-        .map(|(i, label)| {
-            let label = (*label).to_string();
-            let num = (i + 1).to_string();
-            let is_first = i == 0;
-            let state = move || {
-                if is_first {
-                    if done_first() { "done" } else { "active" }
-                } else {
-                    "upcoming"
-                }
-            };
-            let num_view = move || {
-                if is_first && done_first() {
-                    "\u{2713}".to_string()
-                } else {
-                    num.clone()
-                }
-            };
-            view! {
-                <li class="adi-onb__step" data-state=state>
-                    <span class="adi-onb__step-num">{num_view}</span>
-                    <span class="adi-onb__step-label">{label}</span>
-                </li>
-            }
-        })
-        .collect::<Vec<_>>()
-}
-
-/// Step 1's setup form — root-runtime picker + prefilled system prompt. Doubles as create (no
-/// agent yet) and reconfigure (an agent exists and Cancel returns to the summary). The runtime
-/// select carries a "help me to choose?" link that opens the [`onb_help_modal`] picker.
-fn onb_setup_form(
-    meta: RwSignal<Option<MetaState>>,
-    backend: RwSignal<String>,
-    prompt: RwSignal<String>,
-    busy: RwSignal<bool>,
-    error: RwSignal<Option<String>>,
-    reconfiguring: RwSignal<bool>,
-    show_help: RwSignal<bool>,
-    show_prompt: RwSignal<bool>,
-    m: MetaState,
-) -> AnyView {
-    let creating = m.agent.is_none();
-    let backends = m.form.backends.clone();
-    let backends_modal = m.form.backends.clone();
-    view! {
-        <div class="adi-onb__card">
-            <span class="adi-onb__eyebrow">"Step 1"</span>
-            <h2 class="adi-onb__title">"Set up your primary agent"</h2>
-            <p class="adi-onb__desc">
-                <strong>"adi-agent"</strong>
-                " is your environment's root agent — a meta-agent that helps you set up and
-                 operate this ADI stack. Pick the runtime it runs on and give it a system prompt;
-                 every tool in your store is enabled on it. You can change all of it later."
-            </p>
-            <form class="adi-onb__form" on:submit=move |ev| {
-                ev.prevent_default();
-                submit_onb_agent(meta, backend, prompt, busy, error, reconfiguring);
-            }>
-                <div class="adi-field">
-                    <div class="adi-onb__field-head">
-                        <label class="adi-field__label" for="onb-backend">
-                            "Select your root agent runtime"
-                        </label>
-                        <button class="adi-onb__help-link" type="button"
-                            on:click=move |_| show_help.set(true)>"help me to choose?"</button>
-                    </div>
-                    <select class="adi-input" id="onb-backend"
-                        prop:value=move || backend.get()
-                        on:change=move |ev| backend.set(event_target_value(&ev))>
-                        <option value="">"— pick a runtime —"</option>
-                        {backends.into_iter().map(|b| view! {
-                            <option value=b.id>{b.label}</option>
-                        }).collect::<Vec<_>>()}
-                    </select>
-                </div>
-                <div class="adi-field">
-                    <button class="adi-onb__disclosure" type="button"
-                        aria-expanded=move || show_prompt.get().to_string()
-                        on:click=move |_| show_prompt.update(|v| *v = !*v)>
-                        <span class="adi-onb__disclosure-caret"
-                            class:is-open=move || show_prompt.get()>"\u{25b8}"</span>
-                        <span class="adi-onb__disclosure-label">"System prompt"</span>
-                        <span class="adi-onb__disclosure-hint">"optional \u{00b7} advanced"</span>
-                    </button>
-                    {move || show_prompt.get().then(|| view! {
-                        <div class="adi-onb__prompt">
-                            <p class="adi-onb__hint">
-                                "Seeded with a default that orients the agent in your ADI stack and
-                                 points it at the guides in "
-                                <code class="adi-onb__code">"~/.adi/mono/guides"</code>
-                                " (dashboards, tasks, tools, …). Edit freely — you can change it
-                                 later."
-                            </p>
-                            {code_editor(|| Lang::Md, prompt, "adi-code--form", "onb-prompt")}
-                        </div>
-                    })}
-                </div>
-
-                {move || error.get().map(|e| view! { <p class="adi-onb__error">{e}</p> })}
-
-                <div class="adi-onb__actions">
-                    {(!creating).then(|| view! {
-                        <button class="adi-btn adi-btn--link" type="button"
-                            on:click=move |_| reconfiguring.set(false)>"Cancel"</button>
-                    })}
-                    <span class="adi-spacer"></span>
-                    <button class="adi-btn adi-btn--primary adi-onb__submit" type="submit"
-                        prop:disabled=move || busy.get()>
-                        {move || match (busy.get(), creating) {
-                            (true, _) => "Saving…",
-                            (false, true) => "Create adi-agent",
-                            (false, false) => "Save changes",
-                        }}
-                    </button>
-                </div>
-            </form>
-        </div>
-
-        {move || show_help.get()
-            .then(|| onb_help_modal(show_help, backend, backends_modal.clone()))}
-    }
-    .into_any()
-}
-
-/// The "help me to choose?" modal: a "do you have…?" checklist (from [`RUNTIME_GUIDE`]) that
-/// recommends a runtime for what the user already has and, on "Use this", writes it into the
-/// select and closes. Clicking the scrim or the ✕ dismisses it. Only rendered while open.
-fn onb_help_modal(
-    show_help: RwSignal<bool>,
-    backend: RwSignal<String>,
-    backends: Vec<AgentBackendOption>,
-) -> AnyView {
-    let rows = RUNTIME_GUIDE
-        .iter()
-        .map(|guide| {
-            let opts = guide
-                .options
-                .iter()
-                .map(|(id, how)| {
-                    let id = (*id).to_string();
-                    // Show the server's own label for the runtime when it offers one, so the modal
-                    // never drifts from the select; fall back to the raw id if the list lacks it.
-                    let label = backends
-                        .iter()
-                        .find(|b| b.id == id)
-                        .map_or_else(|| id.clone(), |b| b.label.clone());
-                    let pick = id.clone();
-                    view! {
-                        <div class="adi-help__opt">
-                            <div class="adi-help__opt-main">
-                                <code class="adi-onb__code">{label}</code>
-                                <span class="adi-help__how">{(*how).to_string()}</span>
-                            </div>
-                            <span class="adi-spacer"></span>
-                            <button class="adi-btn adi-btn--ghost adi-help__use" type="button"
-                                on:click=move |_| {
-                                    backend.set(pick.clone());
-                                    show_help.set(false);
-                                }>"Use this"</button>
-                        </div>
-                    }
-                })
-                .collect::<Vec<_>>();
-            view! {
-                <li class="adi-help__row">
-                    <p class="adi-help__q">{guide.question}</p>
-                    <p class="adi-help__note">{guide.note}</p>
-                    <div class="adi-help__opts">{opts}</div>
-                </li>
-            }
-        })
-        .collect::<Vec<_>>();
-
-    view! {
-        <div class="adi-help" role="dialog" aria-modal="true" aria-label="Choose a runtime"
-            on:click=move |_| show_help.set(false)>
-            <div class="adi-help__panel" on:click=|ev| ev.stop_propagation()>
-                <header class="adi-help__head">
-                    <h3 class="adi-help__title">"Which runtime should I pick?"</h3>
-                    <button class="adi-btn adi-btn--icon-sm" type="button" aria-label="Close"
-                        on:click=move |_| show_help.set(false)>"\u{00d7}"</button>
-                </header>
-                <p class="adi-help__intro">
-                    "Tell us what you already have — we\u{2019}ll point you at a matching runtime.
-                     You can change it any time."
-                </p>
-                <ul class="adi-help__list">{rows}</ul>
-                <p class="adi-help__foot">
-                    "Still unsure? Start with " <strong>"Claude CLI"</strong>
-                    " — every runtime is swappable from Extended \u{2192} Meta later."
-                </p>
-            </div>
-        </div>
-    }
-    .into_any()
-}
-
-/// Save the setup form as the `adi-agent` definition (create or update), preserving any other
-/// arguments (model, tools, …) the agent already carries. Refreshes `/api/meta` on success.
-fn submit_onb_agent(
-    meta: RwSignal<Option<MetaState>>,
-    backend: RwSignal<String>,
-    prompt: RwSignal<String>,
-    busy: RwSignal<bool>,
-    error: RwSignal<Option<String>>,
-    reconfiguring: RwSignal<bool>,
-) {
-    let chosen = backend.get_untracked().trim().to_string();
-    if chosen.is_empty() {
-        error.set(Some("Pick a backend for the agent.".to_string()));
-        return;
-    }
-    let text = prompt.get_untracked();
-    let current = meta.get_untracked();
-    let name = current
-        .as_ref()
-        .map_or_else(|| ROOT_AGENT.to_string(), |m| m.name.clone());
-    // The root agent is created with every tool the store has (see `meta_bin_tools`); sending an
-    // empty `bin_tools` would instead un-tick the ones it has.
-    let bin_tools = pages::meta_bin_tools(current.as_ref());
-    let mut arguments = current
-        .and_then(|m| m.agent)
-        .map(|a| a.arguments)
-        .unwrap_or_default();
-    if text.trim().is_empty() {
-        arguments.remove("system_prompt");
-    } else {
-        arguments.insert("system_prompt".to_string(), serde_json::Value::String(text));
-    }
-    let body = SaveAgent {
-        name,
-        backend: chosen,
-        arguments,
-        tags: Vec::new(),
-        starred: false,
-        project: None,
-        bin_tools,
-        secrets: Vec::new(),
-        // This form doesn't edit the run environment — `None` leaves whatever the
-        // agent already has, instead of clearing it on every save.
-        path: None,
-        env: None,
-        rename_from: None,
-    };
-    busy.set(true);
-    error.set(None);
-    spawn_local(async move {
-        match fetch::save_agent(body).await {
-            Ok(_) => {
-                reconfiguring.set(false);
-                if let Ok(m) = fetch::meta().await {
-                    meta.set(Some(m));
-                }
-            }
-            Err(e) => error.set(Some(e)),
-        }
-        busy.set(false);
-    });
-}
-
-/// A scalar string argument as text, or empty when absent/structured.
-fn arg_text(arguments: &BTreeMap<String, serde_json::Value>, name: &str) -> String {
-    match arguments.get(name) {
-        Some(serde_json::Value::String(s)) => s.clone(),
-        _ => String::new(),
-    }
-}
 
 /// The chrome-less dashboard-agent embed (`/embed/dashboard-agent?dashboard=<id>`): the one global
 /// `adi-agent` chat, opened from a dashboard's launcher. It reuses the agent live view, points it at
@@ -1005,27 +638,7 @@ fn App() -> impl IntoView {
         show_done: RwSignal::new(false),
     };
 
-    let agents_form = AgentsForm {
-        name: RwSignal::new(String::new()),
-        backend: RwSignal::new(String::new()),
-        project: RwSignal::new(String::new()),
-        model: RwSignal::new(String::new()),
-        permission_mode: RwSignal::new(String::new()),
-        temperature: RwSignal::new(String::new()),
-        max_turns: RwSignal::new(String::new()),
-        tags: RwSignal::new(String::new()),
-        tools: RwSignal::new(String::new()),
-        bin_tools: RwSignal::new(BTreeSet::new()),
-        secrets: RwSignal::new(BTreeSet::new()),
-        path: RwSignal::new(String::new()),
-        env: RwSignal::new(String::new()),
-        system_prompt: RwSignal::new(String::new()),
-        starred: RwSignal::new(false),
-        arguments: RwSignal::new(BTreeMap::new()),
-        argument_values: RwSignal::new(BTreeMap::new()),
-        editing: RwSignal::new(None::<String>),
-        busy: RwSignal::new(false),
-    };
+    let agents_form = AgentsForm::new();
 
     // The Meta page's setup form for the default `adi-agent`. Seeded from the server's default
     // prompt by an effect below, once `/api/meta` first reports the agent isn't set up yet.

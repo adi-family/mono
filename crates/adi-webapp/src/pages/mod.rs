@@ -8,6 +8,7 @@ mod fleet;
 mod hive;
 mod mesh;
 mod meta;
+mod onboarding;
 mod ports;
 mod project_detail;
 mod projects;
@@ -54,6 +55,9 @@ pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use meta::{meta_bin_tools, meta_view};
+pub(crate) use onboarding::{
+    OnboardingForm, onboarding_view, seed_onboarding, start_reconfigure as start_onb_reconfigure,
+};
 pub(crate) use ports::ports_manager_view;
 pub(crate) use project_detail::{load_dir, project_detail_view};
 pub(crate) use projects::{project_tree_rows, projects_view};

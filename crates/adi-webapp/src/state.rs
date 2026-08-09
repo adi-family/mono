@@ -783,6 +783,34 @@ pub(crate) struct AgentsForm {
     pub(crate) busy: RwSignal<bool>,
 }
 
+impl AgentsForm {
+    /// A blank form — "New agent" on the Agents page, and the starting point the onboarding
+    /// wizard seeds from `/api/meta`.
+    pub(crate) fn new() -> Self {
+        Self {
+            name: RwSignal::new(String::new()),
+            backend: RwSignal::new(String::new()),
+            project: RwSignal::new(String::new()),
+            model: RwSignal::new(String::new()),
+            permission_mode: RwSignal::new(String::new()),
+            temperature: RwSignal::new(String::new()),
+            max_turns: RwSignal::new(String::new()),
+            tags: RwSignal::new(String::new()),
+            tools: RwSignal::new(String::new()),
+            bin_tools: RwSignal::new(BTreeSet::new()),
+            secrets: RwSignal::new(BTreeSet::new()),
+            path: RwSignal::new(String::new()),
+            env: RwSignal::new(String::new()),
+            system_prompt: RwSignal::new(String::new()),
+            starred: RwSignal::new(false),
+            arguments: RwSignal::new(BTreeMap::new()),
+            argument_values: RwSignal::new(BTreeMap::new()),
+            editing: RwSignal::new(None),
+            busy: RwSignal::new(false),
+        }
+    }
+}
+
 /// The Meta page's setup form for the default `adi-agent`: the chosen backend and the (editable)
 /// system prompt, a busy flag while a save is in flight, and `editing` — true while reconfiguring
 /// an agent that already exists (the same form doubles as create and edit). `Copy` so it threads

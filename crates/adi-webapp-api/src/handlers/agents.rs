@@ -11,10 +11,11 @@ use adi_agents::contains_json_null;
 use crate::types::{
     AgentBackendOption, AgentCapabilities, AgentDto, AgentFormField, AgentFormFieldKind,
     AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek, AgentRef, AgentRepeat,
-    AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunResult, AgentRuns, AgentStep,
-    AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn,
-    AgentTurnMetrics, AgentsState, AllAgentRuns, HideRun, ProjectRunLimit, ReplyToRun, ReviewRun,
-    RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit, UnqueueFromRun,
+    AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunResult, AgentRuns, AgentSetupPreset,
+    AgentSetupSecret, AgentStep, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
+    AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, HideRun,
+    ProjectRunLimit, ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit,
+    UnqueueFromRun,
 };
 
 use super::response::{Response, clean, error, ok_json, parse_body};
@@ -1404,7 +1405,82 @@ fn agent_form_spec() -> AgentFormSpec {
             ),
         ],
         fields,
+        presets: setup_presets(),
     }
+}
+
+/// The ready-made setups the onboarding wizard offers, in order. Two named routes in — the Claude
+/// login most people already have, and an API key anyone can paste — then the manual escape hatch
+/// onto every backend and every field.
+///
+/// Each named preset asks for as little as it can: the credential it cannot work without, and the
+/// model, which is the one knob people change on day one. Everything else it pins from what the
+/// backend already knows (the provider's endpoint, the variable its key is read from), because a
+/// question with one right answer is not a question.
+fn setup_presets() -> Vec<AgentSetupPreset> {
+    vec![
+        AgentSetupPreset {
+            id: "claude-sdk".into(),
+            label: "Claude Code SDK".into(),
+            blurb: "Runs Claude Code headless on the login you already have (Pro / Max), or on an \
+                    Anthropic API key."
+                .into(),
+            backend: "harness:claude-sdk".into(),
+            arguments: BTreeMap::new(),
+            fields: strings(&["model", "permission_mode"]),
+            // The CLI's own login is the usual way in, so a key is the alternative, not a
+            // requirement — an empty box here means "use whatever `claude` is already logged in as".
+            secret: Some(AgentSetupSecret {
+                env: "ANTHROPIC_API_KEY".into(),
+                label: "Anthropic API key".into(),
+                hint: "Optional — leave blank to use the Claude login on this machine.".into(),
+                placeholder: "sk-ant-…".into(),
+                required: false,
+            }),
+            manual: false,
+        },
+        AgentSetupPreset {
+            id: "kimi".into(),
+            label: "Kimi API key".into(),
+            blurb: "ADI's own agent loop, talking to Moonshot's API with your key. No CLI, no \
+                    subscription."
+                .into(),
+            backend: ADI_HARNESS.into(),
+            // The provider is what the loop needs to know; its endpoint and key variable are the
+            // provider's own defaults, so they are not asked for and not written. The model is
+            // both pinned and asked: the adi loop refuses to run without one, so an empty box
+            // would be a saved agent that fails on its first turn.
+            arguments: [
+                ("provider".to_string(), "monshoot".to_string()),
+                ("model".to_string(), "kimi-k2.6".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            fields: strings(&["model"]),
+            secret: Some(AgentSetupSecret {
+                env: "MOONSHOT_API_KEY".into(),
+                label: "Kimi (Moonshot) API key".into(),
+                hint: "From platform.moonshot.ai — stored encrypted and injected into this \
+                       agent's runs only."
+                    .into(),
+                placeholder: "sk-…".into(),
+                required: true,
+            }),
+            manual: false,
+        },
+        AgentSetupPreset {
+            id: "manual".into(),
+            label: "Manual".into(),
+            blurb: "Pick any runtime and set every option yourself — the full agent form, \
+                    prefilled."
+                .into(),
+            backend: String::new(),
+            arguments: BTreeMap::new(),
+            fields: Vec::new(),
+            secret: None,
+            manual: true,
+        },
+    ]
 }
 
 fn agent_backend(
@@ -1763,5 +1839,85 @@ mod tests {
         let m = saved(&store);
         assert_eq!(m.path, vec!["~/node22/bin".to_string()]);
         assert_eq!(m.env.keys().collect::<Vec<_>>(), vec!["NODE_ENV"]);
+    }
+
+    /// Whether the schema shows `name` for this backend/provider — the same rule the client
+    /// renders by, restated here so a preset that names a field nobody would see fails the test
+    /// rather than the setup page.
+    fn field_applies(spec: &AgentFormSpec, name: &str, backend: &str, provider: &str) -> bool {
+        spec.fields.iter().any(|f| {
+            f.name == name
+                && (f.backend_ids.is_empty() && f.executors.is_empty() && f.providers.is_empty()
+                    || f.backend_ids.iter().any(|id| id == backend)
+                    || f.executors
+                        .iter()
+                        .any(|e| Some(e.as_str()) == backend.split(':').next())
+                    || (backend == ADI_HARNESS && f.providers.iter().any(|p| p == provider)))
+        })
+    }
+
+    /// A preset is a promise about the schema: the backend it names is selectable, and every field
+    /// it asks for or pins is one the client can actually render for that backend. Nothing in the
+    /// wizard checks this at runtime — a stale name would simply render nothing and save nothing.
+    #[test]
+    fn every_preset_names_a_real_backend_and_real_fields() {
+        let spec = agent_form_spec();
+        assert!(!spec.presets.is_empty());
+
+        for preset in &spec.presets {
+            if preset.manual {
+                // The manual preset pins nothing and asks nothing: it *is* the whole schema.
+                assert!(preset.backend.is_empty(), "{}", preset.id);
+                assert!(preset.fields.is_empty(), "{}", preset.id);
+                continue;
+            }
+            assert!(
+                spec.backends.iter().any(|b| b.id == preset.backend),
+                "preset {} names unknown backend {}",
+                preset.id,
+                preset.backend
+            );
+            let provider = preset.arguments.get("provider").cloned().unwrap_or_default();
+            for name in preset.fields.iter().chain(preset.arguments.keys()) {
+                assert!(
+                    field_applies(&spec, name, &preset.backend, &provider),
+                    "preset {} names field {name}, which does not apply to {}",
+                    preset.id,
+                    preset.backend
+                );
+            }
+        }
+    }
+
+    /// The two named ways in, and what each is for: a Claude login that needs no key, and a key
+    /// that needs no login. Both are load-bearing — the wizard reads `secret.required` to decide
+    /// whether it may save with the box left empty.
+    #[test]
+    fn the_named_presets_ask_for_the_credential_they_actually_need() {
+        let spec = agent_form_spec();
+        let preset = |id: &str| {
+            spec.presets
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap_or_else(|| panic!("no {id} preset"))
+                .clone()
+        };
+
+        let claude = preset("claude-sdk");
+        assert_eq!(claude.backend, "harness:claude-sdk");
+        let key = claude.secret.expect("an API key is offered");
+        assert_eq!(key.env, "ANTHROPIC_API_KEY");
+        assert!(!key.required, "the CLI login is the other way in");
+
+        let kimi = preset("kimi");
+        assert_eq!(kimi.backend, ADI_HARNESS);
+        assert_eq!(kimi.arguments.get("provider").map(String::as_str), Some("monshoot"));
+        // The loop refuses to start without a model, so the preset arrives with one — in the box,
+        // where it can still be changed.
+        assert!(kimi.arguments.contains_key("model"), "{:?}", kimi.arguments);
+        assert!(kimi.fields.iter().any(|f| f == "model"), "{:?}", kimi.fields);
+        let key = kimi.secret.expect("an API key is required");
+        assert_eq!(key.env, "MOONSHOT_API_KEY");
+        assert!(key.required, "there is no login for this one");
     }
 }

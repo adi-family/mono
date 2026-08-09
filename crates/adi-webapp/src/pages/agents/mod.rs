@@ -29,11 +29,13 @@ pub(crate) use actions::{
     CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, agent_actions, all_chats_view,
     chat_home_view, live_view, poll_watch, project_run_limit_view, run_limit_view,
 };
-pub(crate) use form::load_agent_into_form;
-use form::{
-    agent_argument_values, agent_environment_fields, agent_form_fields, agent_param_applies,
-    clear_agent_form, parsed_env_vars, parsed_path_dirs,
+// The onboarding wizard renders the same fields from the same schema, so its half of the form
+// lives here rather than as a second copy of these renderers.
+pub(crate) use form::{
+    agent_argument_values, agent_environment_fields, agent_param_applies, agent_schema_fields,
+    load_agent_into_form, parsed_env_vars, parsed_path_dirs, set_agent_field_value,
 };
+use form::{agent_form_fields, clear_agent_form};
 
 /// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
 /// pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
@@ -101,18 +103,18 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                     flash.set(Some(Flash::err("Pick a backend.".to_string())));
                     return;
                 }
-                let st = agents.get();
+                let spec = agents.get().map(|st| st.form);
                 let prov = argument_values.get().get("provider").cloned().unwrap_or_default();
                 // Whether each backend-conditional first-class param applies is driven by the
                 // server schema (does a field of that name apply to this backend?), so rescoping a
                 // field in the API also stops its value being sent for backends it no longer fits.
-                let pm_applies = agent_param_applies(st.as_ref(), &be, &prov, "permission_mode");
-                let temp_applies = agent_param_applies(st.as_ref(), &be, &prov, "temperature");
+                let pm_applies = agent_param_applies(spec.as_ref(), &be, &prov, "permission_mode");
+                let temp_applies = agent_param_applies(spec.as_ref(), &be, &prov, "temperature");
                 let body = SaveAgent {
                     name: nm.clone(),
                     backend: be.clone(),
                     arguments: agent_argument_values(
-                        st.as_ref(),
+                        spec.as_ref(),
                         &be,
                         arguments.get(),
                         argument_values.get(),

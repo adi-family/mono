@@ -4,18 +4,19 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-51 structs · 11 enums · 1 type alias across 19 files.
+52 structs · 11 enums · 1 type alias across 20 files.
 
 ## Index
 
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/icons.rs`](#srciconsrs) — `Icon`
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
-- [`src/main.rs`](#srcmainrs) — `RuntimeGuide`, `Nav`
+- [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Align`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
 - [`src/pages/agents/emitted_form.rs`](#srcpagesagentsemitted_formrs) — `FormStatus`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
+- [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
 - [`src/pages/project_detail/services.rs`](#srcpagesproject_detailservicesrs) — `QuickServiceForm`
 - [`src/pages/project_detail/subprojects.rs`](#srcpagesproject_detailsubprojectsrs) — `QuickSubprojectForm`
@@ -144,18 +145,6 @@ struct Live {
 ---
 
 ## `src/main.rs`
-
-### struct `RuntimeGuide`
-
-One "do you have…?" branch in the runtime picker: the situation, a note on the shared credential, and the runtimes that fit it. Each option is an `(id, how)` pair — the backend id (matched against the server form spec for its label) and a short note on how that runtime runs.
-
-```rust
-struct RuntimeGuide {
-    question: &'static str,
-    note: &'static str,
-    options: &'static [(&'static str, &'static str)],
-}
-```
 
 ### enum `Nav`
 
@@ -286,6 +275,39 @@ Where a service comes from, as the Source cell reads it. A service carries only 
 struct Source {
     group: u8,
     label: String,
+}
+```
+
+---
+
+## `src/pages/onboarding.rs`
+
+### struct `RuntimeGuide`
+
+One "do you have…?" branch in the runtime picker: the situation, a note on the shared credential, and the runtimes that fit it. Each option is an `(id, how)` pair — the backend id (matched against the server form spec for its label) and a short note on how that runtime runs.
+
+```rust
+struct RuntimeGuide {
+    question: &'static str,
+    note: &'static str,
+    options: &'static [(&'static str, &'static str)],
+}
+```
+
+### struct `OnboardingForm`
+
+Everything the wizard edits. The agent itself rides in the same `AgentsForm` the full Agents page uses — that is what lets the manual preset be the real form rather than a copy of it — with the wizard's own state around it: which preset is chosen, the API key typed into it (held apart from the agent, because it is stored as a secret and never as an argument), and the two disclosures. `Copy`, so it threads into handlers.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct OnboardingForm {
+    pub(crate) agent: AgentsForm,
+    preset: RwSignal<String>,
+    key: RwSignal<String>,
+    error: RwSignal<Option<String>>,
+    pub(crate) reconfiguring: RwSignal<bool>,
+    show_help: RwSignal<bool>,
+    show_prompt: RwSignal<bool>,
 }
 ```
 
