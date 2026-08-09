@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-68 structs · 17 enums · 5 type aliases across 30 files.
+68 structs · 18 enums · 5 type aliases across 30 files.
 
 ## Index
 
@@ -16,7 +16,7 @@
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
-- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Wire`, `OpenAiDialect`
+- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `Wire`, `OpenAiDialect`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
@@ -709,6 +709,18 @@ struct Reply {
     raw: Value,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
+}
+```
+
+### enum `Calls`
+
+Whether a round is allowed to reach for a tool.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Calls {
+    Allowed,
+    Withheld,
 }
 ```
 

@@ -14,9 +14,12 @@
 //!
 //! **A turn is a loop, not a call.** The model is offered the [`tools`](super::tools) every coding
 //! agent has — `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep` — and while it asks for them, this
-//! runs them and asks again, up to [`MAX_ROUNDS`]. The four providers disagree about how tools are
-//! declared, how a call comes back, and how a result is handed over; [`Wire`] is where those four
-//! disagreements live, so the loop itself is written once and reads the same for all of them.
+//! runs them and asks again, up to [`MAX_ROUNDS`]. Running out of rounds is not a failure: the
+//! model gets one last round with the tools withheld, so the turn still ends in an answer that
+//! says what it did and what is left. The four providers disagree about how tools are declared,
+//! how a call comes back, how a result is handed over, and how they are taken away again; [`Wire`]
+//! is where those disagreements live, so the loop itself is written once and reads the same for
+//! all of them.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -42,10 +45,22 @@ const DEFAULT_MAX_TOKENS: u64 = 4096;
 const MONSHOOT_DEFAULT_MAX_TOKENS: u64 = 16_384;
 /// A generous per-round ceiling — a local model can be slow, and a round is one blocking call.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(600);
-/// How many model round-trips one turn may take before the loop gives up. High enough for real
-/// work (read a few files, edit, check), low enough that a model stuck in a call/retry rut costs
-/// a bounded amount of money and time. An agent's `max_turns` overrides it.
-const MAX_ROUNDS: u64 = 16;
+/// How many model round-trips one turn may spend *calling tools* before it is asked to wrap up.
+/// An agent's `max_turns` overrides it.
+///
+/// It was 16, which is under what ordinary work costs: reading a handful of files, editing three
+/// and running the build is already 15 round-trips, so real turns hit the ceiling mid-task and
+/// died there. Turns on this machine routinely run past a hundred steps. The number still exists
+/// because a model stuck in a call/retry rut has to cost a bounded amount of money and time — but
+/// the bound belongs well above the work, not inside it.
+const MAX_ROUNDS: u64 = 64;
+
+/// What the model is told once its rounds are spent. It is not a scolding: the point is to get the
+/// work it *did* do written down, in the same message that admits what it did not.
+const WRAP_UP: &str = "You have used every tool call this turn allows, and no more are possible — \
+                       the tools are no longer available to you. Write your final answer now from \
+                       what you already know: what you did, what you found, and what still needs \
+                       doing. Do not ask to run anything else.";
 
 /// Where `adi-mono` actually is, for spawning: **beside the running executable**, falling back to
 /// the bare name for a PATH lookup.
@@ -190,7 +205,7 @@ fn tool_loop(
     let mut metrics = TurnMetrics::default();
 
     for round in 1..=max_rounds {
-        let reply = wire.round(&messages)?;
+        let reply = wire.round(&messages, Calls::Allowed)?;
         metrics.num_turns = Some(round);
         add(&mut metrics.input_tokens, reply.input_tokens);
         add(&mut metrics.output_tokens, reply.output_tokens);
@@ -231,12 +246,40 @@ fn tool_loop(
         wire.append(&mut messages, &reply, &results);
     }
 
-    metrics.is_error = true;
+    // The rounds are spent and the model was still working. Failing the turn here is the wrong end
+    // to stop at: every tool call it made was real work, and whoever asked gets an error where an
+    // answer should be. So it gets one more round with the tools taken off the table — it can only
+    // write — and what it writes is the turn's answer: what it did, and what it never reached.
+    let rounds = if max_rounds == 1 {
+        "1 round".to_string()
+    } else {
+        format!("{max_rounds} rounds")
+    };
+    adi_events::message(
+        sink,
+        &format!(
+            "Out of tool calls after {rounds} — wrapping up with what I have. Raise this agent's \
+             max turns if the work genuinely needs more."
+        ),
+    );
+    wire.nudge(&mut messages, WRAP_UP);
+    let reply = wire.round(&messages, Calls::Withheld)?;
+    metrics.num_turns = Some(max_rounds + 1);
+    add(&mut metrics.input_tokens, reply.input_tokens);
+    add(&mut metrics.output_tokens, reply.output_tokens);
+
+    if reply.text.trim().is_empty() {
+        metrics.is_error = true;
+        adi_events::metrics(sink, &metrics);
+        return Err(Error::Process(format!(
+            "the turn was still calling tools after {rounds}, and wrote nothing when asked to \
+             stop and summarise — the steps above are what it did; raise the agent's max turns if \
+             the work genuinely needs more"
+        )));
+    }
+    adi_events::answer(sink, &reply.text);
     adi_events::metrics(sink, &metrics);
-    Err(Error::Process(format!(
-        "the turn was still calling tools after {max_rounds} rounds and was stopped — the steps \
-         above are what it did; raise the agent's max turns if the work genuinely needs more"
-    )))
+    Ok(reply.text)
 }
 
 fn add(total: &mut Option<u64>, more: Option<u64>) {
@@ -246,6 +289,25 @@ fn add(total: &mut Option<u64>, more: Option<u64>) {
 }
 
 // ---- the four wire formats ---------------------------------------------------------
+
+/// Whether a round is allowed to reach for a tool.
+///
+/// [`Withheld`](Self::Withheld) is the wrap-up round, and it is *not* implemented by dropping the
+/// declarations: Anthropic rejects a request whose history contains `tool_use` blocks unless that
+/// same request also declares tools, and a wrap-up round's history is nothing but. So the tools
+/// stay declared and the **choice** is closed instead — each provider spells that differently, and
+/// Ollama, which has no such field and no such objection, simply doesn't get sent any.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Calls {
+    Allowed,
+    Withheld,
+}
+
+impl Calls {
+    fn withheld(self) -> bool {
+        self == Self::Withheld
+    }
+}
 
 /// A provider's tool-calling dialect: how the conversation starts, how one round is sent and read,
 /// and how a round plus its tool results is appended for the next one.
@@ -335,16 +397,45 @@ impl<'a> Wire<'a> {
     }
 
     /// Send one round and read it back.
-    fn round(&self, messages: &[Value]) -> Result<Reply> {
+    fn round(&self, messages: &[Value], calls: Calls) -> Result<Reply> {
         match self {
-            Self::Anthropic { args, model } => anthropic_round(args, model, messages),
+            Self::Anthropic { args, model } => anthropic_round(args, model, messages, calls),
             Self::OpenAi {
                 args,
                 model,
                 dialect,
-            } => openai_round(args, model, messages, dialect),
-            Self::Gemini { args, model } => gemini_round(args, model, messages),
-            Self::Ollama { args, model } => ollama_round(args, model, messages),
+            } => openai_round(args, model, messages, dialect, calls),
+            Self::Gemini { args, model } => gemini_round(args, model, messages, calls),
+            Self::Ollama { args, model } => ollama_round(args, model, messages, calls),
+        }
+    }
+
+    /// Add one more instruction from the user's side — how the wrap-up round is asked for.
+    ///
+    /// Where the last message is already the user's (the block-shaped providers answer tool calls
+    /// in a user turn), this rides *inside* it as one more part rather than following it: both
+    /// Anthropic and Gemini want the two roles to alternate, and a second user turn in a row is
+    /// the one shape that would make the wrap-up round fail outright.
+    fn nudge(&self, messages: &mut Vec<Value>, text: &str) {
+        match self {
+            Self::Anthropic { .. } => {
+                if let Some(blocks) = last_user_list(messages, "content") {
+                    blocks.push(json!({ "type": "text", "text": text }));
+                } else {
+                    messages.push(json!({ "role": "user", "content": text }));
+                }
+            }
+            Self::Gemini { .. } => {
+                if let Some(parts) = last_user_list(messages, "parts") {
+                    parts.push(json!({ "text": text }));
+                } else {
+                    messages.push(json!({ "role": "user", "parts": [{ "text": text }] }));
+                }
+            }
+            // Both take a plain user message after the tool results, and neither minds it.
+            Self::OpenAi { .. } | Self::Ollama { .. } => {
+                messages.push(json!({ "role": "user", "content": text }));
+            }
         }
     }
 
@@ -396,6 +487,16 @@ impl<'a> Wire<'a> {
     }
 }
 
+/// The content list of the trailing message when it is the user's and holds a list — the place a
+/// further instruction belongs on the providers that want alternating roles.
+fn last_user_list<'m>(messages: &'m mut [Value], field: &str) -> Option<&'m mut Vec<Value>> {
+    let last = messages.last_mut()?;
+    if last.get("role").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    last.get_mut(field).and_then(Value::as_array_mut)
+}
+
 /// The tool set as JSON Schema function declarations — the shape `OpenAI`, Ollama and (nested one
 /// level deeper) Gemini all take.
 fn function_declarations() -> Vec<Value> {
@@ -417,6 +518,7 @@ fn anthropic_round(
     args: &HarnessAdiArguments,
     model: &str,
     messages: &[Value],
+    calls: Calls,
 ) -> Result<Reply> {
     let key = api_key(args, "ANTHROPIC_API_KEY", "Anthropic")?;
 
@@ -431,6 +533,9 @@ fn anthropic_round(
             "input_schema": (t.schema)(),
         })).collect::<Vec<_>>(),
     });
+    if calls.withheld() {
+        body["tool_choice"] = json!({ "type": "none" });
+    }
     if let Some(system) = system_prompt(args) {
         body["system"] = json!(system);
     }
@@ -563,6 +668,7 @@ fn openai_round(
     model: &str,
     messages: &[Value],
     dialect: &OpenAiDialect,
+    calls: Calls,
 ) -> Result<Reply> {
     let key = api_key(args, dialect.default_key_env, dialect.provider)?;
 
@@ -577,6 +683,9 @@ fn openai_round(
             .collect::<Vec<_>>(),
     });
     body[dialect.max_tokens_field] = json!(max_tokens);
+    if calls.withheld() {
+        body["tool_choice"] = json!("none");
+    }
     if let Some(t) = args.temperature {
         body["temperature"] = json!(t);
     }
@@ -663,7 +772,12 @@ fn openai_round(
 /// name is part of the URL rather than the body, tool declarations nest one level deeper, and a
 /// 2.5-series reply interleaves *thought* parts with answer parts in one list — so the read keeps
 /// only the parts that aren't thoughts.
-fn gemini_round(args: &HarnessAdiArguments, model: &str, messages: &[Value]) -> Result<Reply> {
+fn gemini_round(
+    args: &HarnessAdiArguments,
+    model: &str,
+    messages: &[Value],
+    calls: Calls,
+) -> Result<Reply> {
     let key = api_key(args, "GEMINI_API_KEY", "Gemini")?;
 
     let mut config = serde_json::Map::new();
@@ -685,6 +799,9 @@ fn gemini_round(args: &HarnessAdiArguments, model: &str, messages: &[Value]) -> 
         "contents": messages,
         "tools": [{ "functionDeclarations": function_declarations() }],
     });
+    if calls.withheld() {
+        body["toolConfig"] = json!({ "functionCallingConfig": { "mode": "NONE" } });
+    }
     if let Some(system) = system_prompt(args) {
         body["systemInstruction"] = json!({ "parts": [{ "text": system }] });
     }
@@ -768,7 +885,12 @@ fn gemini_round(args: &HarnessAdiArguments, model: &str, messages: &[Value]) -> 
 
 // ---- Ollama (local) ----------------------------------------------------------------
 
-fn ollama_round(args: &HarnessAdiArguments, model: &str, messages: &[Value]) -> Result<Reply> {
+fn ollama_round(
+    args: &HarnessAdiArguments,
+    model: &str,
+    messages: &[Value],
+    calls: Calls,
+) -> Result<Reply> {
     let mut options = serde_json::Map::new();
     put_f64(&mut options, "temperature", args.temperature);
     put_f64(&mut options, "top_p", args.top_p);
@@ -788,11 +910,16 @@ fn ollama_round(args: &HarnessAdiArguments, model: &str, messages: &[Value]) -> 
         "model": model,
         "messages": messages,
         "stream": false,
-        "tools": function_declarations()
-            .into_iter()
-            .map(|f| json!({ "type": "function", "function": f }))
-            .collect::<Vec<_>>(),
     });
+    // No tool_choice here, so withholding is literal: declare nothing and there is nothing to call.
+    if !calls.withheld() {
+        body["tools"] = json!(
+            function_declarations()
+                .into_iter()
+                .map(|f| json!({ "type": "function", "function": f }))
+                .collect::<Vec<_>>()
+        );
+    }
     if !options.is_empty() {
         body["options"] = Value::Object(options);
     }
@@ -1156,6 +1283,49 @@ mod tests {
             .expect("wire")
             .append(&mut messages, &reply(vec![call()]), &results);
         assert_eq!(messages[1]["parts"][0]["functionResponse"]["name"], "Read");
+    }
+
+    /// The wrap-up instruction has to reach the model without breaking the request that carries
+    /// it: on the two block-shaped providers a second user turn in a row is rejected, so it rides
+    /// inside the tool-result turn that is already there.
+    #[test]
+    fn the_wrap_up_nudge_never_makes_two_user_turns_in_a_row() {
+        let anthropic = args_for(HarnessProvider::Anthropic);
+        let mut messages = vec![
+            json!({ "role": "assistant", "content": [] }),
+            json!({ "role": "user", "content": [{ "type": "tool_result", "content": "out" }] }),
+        ];
+        Wire::of(&anthropic, "m")
+            .expect("wire")
+            .nudge(&mut messages, "stop now");
+        assert_eq!(messages.len(), 2, "it joined the turn: {messages:?}");
+        assert_eq!(messages[1]["content"][1]["type"], "text");
+        assert_eq!(messages[1]["content"][1]["text"], "stop now");
+
+        let gemini = args_for(HarnessProvider::Gemini);
+        let mut messages = vec![json!({ "role": "user", "parts": [{ "functionResponse": {} }] })];
+        Wire::of(&gemini, "m")
+            .expect("wire")
+            .nudge(&mut messages, "stop now");
+        assert_eq!(messages.len(), 1, "it joined the turn: {messages:?}");
+        assert_eq!(messages[0]["parts"][1]["text"], "stop now");
+
+        // With an assistant turn last — a round that called nothing — it is a turn of its own.
+        let mut messages = vec![json!({ "role": "model", "parts": [] })];
+        Wire::of(&gemini, "m")
+            .expect("wire")
+            .nudge(&mut messages, "stop now");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["role"], "user");
+
+        // The chat dialects answer tool calls in `tool` messages, so the nudge is its own message.
+        let openai = args_for(HarnessProvider::Openai);
+        let mut messages = vec![json!({ "role": "tool", "tool_call_id": "c1", "content": "out" })];
+        Wire::of(&openai, "m")
+            .expect("wire")
+            .nudge(&mut messages, "stop now");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1], json!({ "role": "user", "content": "stop now" }));
     }
 
     #[test]
