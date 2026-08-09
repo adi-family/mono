@@ -21,6 +21,11 @@ use crate::merge;
 /// Sending is the caller's: `on_send` gets the text, and clearing the box is the caller's
 /// call too — a send that fails should not have thrown the message away.
 ///
+/// Interrupting is the caller's too, and optional: give it `on_stop` and it grows a Stop
+/// *beside* the send button for as long as `stoppable` holds. Beside, not instead —
+/// whether typing during a reply is refused, queued, or sent alongside is the caller's
+/// question, and a box that swapped its send away would have answered it for them.
+///
 /// ```ignore
 /// <Composer value=draft busy=sending on_send=Callback::new(move |text| post(text))/>
 /// ```
@@ -36,6 +41,14 @@ pub fn Composer(
     /// A send is in flight. The box stays readable and stops accepting.
     #[prop(optional, into)]
     busy: Signal<bool>,
+    /// Called when Stop is pressed. Without it the composer has no Stop at all — a box whose
+    /// caller has nothing to interrupt should not carry a control that says otherwise.
+    #[prop(optional, into)]
+    on_stop: Option<Callback<()>>,
+    /// Whether there is something to interrupt *right now*. Reactive, and the Stop appears and
+    /// leaves with it: a stop button standing there with nothing running is a button that lies.
+    #[prop(optional, into)]
+    stoppable: Signal<bool>,
     /// Reactive, because what a composer asks for can change under it: the same box starts a
     /// conversation or takes a one-shot task depending on what the backend turns out to be,
     /// and that answer arrives after the box is already on screen.
@@ -123,6 +136,25 @@ pub fn Composer(
                     }
                 }
             ></textarea>
+            // Stop sits to the left of send, so send keeps the corner the hand already goes to
+            // and the row does not shuffle under it when a turn starts.
+            {move || on_stop.filter(|_| stoppable.get()).map(|on_stop| view! {
+                <button
+                    class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-sm \
+                           border border-dim bg-card text-meta transition-colors duration-100 \
+                           hover:border-err-edge-2 hover:text-err \
+                           focus-visible:outline-2 focus-visible:outline-offset-2 \
+                           focus-visible:outline-accent"
+                    type="button"
+                    aria-label="Stop"
+                    title="Stop"
+                    on:click=move |_| on_stop.run(())
+                >
+                    <svg class="size-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                        <rect x="3" y="3" width="10" height="10" rx="1.5"></rect>
+                    </svg>
+                </button>
+            })}
             <button
                 class="grid size-8 shrink-0 cursor-pointer place-items-center rounded-sm \
                        bg-accent-fill text-on-accent transition-opacity duration-100 \

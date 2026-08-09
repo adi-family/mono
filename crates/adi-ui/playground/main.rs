@@ -658,6 +658,9 @@ The first two                    are the same bug. I will read the pairing path 
 
     let draft = RwSignal::new(String::new());
     let sent = RwSignal::new(String::new());
+    // The transcript above ends on a call that is still running, so this box opens in the state
+    // the Stop exists for. Pressing it settles the turn and the button goes with it.
+    let answering = RwSignal::new(true);
 
     view! {
         <div class="flex flex-col gap-3">
@@ -670,11 +673,16 @@ The first two                    are the same bug. I will read the pairing path 
                     sent.set(text);
                     draft.set(String::new());
                 })
+                stoppable=answering
+                on_stop=Callback::new(move |()| answering.set(false))
             />
             <Show when=move || !sent.get().is_empty()>
                 <Flash kind=FlashKind::Ok>
                     {move || format!("sent: {}", sent.get())}
                 </Flash>
+            </Show>
+            <Show when=move || !answering.get()>
+                <Flash kind=FlashKind::Ok>"stopped — the turn was cut short"</Flash>
             </Show>
             <Chat turns=turns.clone() class="max-h-140 p-1"/>
         </div>

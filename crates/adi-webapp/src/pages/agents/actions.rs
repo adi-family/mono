@@ -1276,6 +1276,14 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                     watch.reply.set(String::new());
                     send_reply(state, watch, with_context(watch, message));
                 })
+                // Only while a turn is actually in flight: between turns there is nothing to cut
+                // short, and the conversation itself is not a thing you stop — you just stop
+                // typing into it.
+                stoppable=Signal::derive(answering)
+                on_stop=Callback::new(move |()| {
+                    let Some(run_id) = watch.run_id.get_untracked() else { return };
+                    stop_one_run(state, watch, run_id);
+                })
             />
             <div class="mt-1 px-1 text-mini text-meta">
                 {move || if answering() { "queued — the agent is answering" } else { "" }}
