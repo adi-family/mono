@@ -11,6 +11,7 @@ use adi_webapp_api::types::{
     AgentTokens, AgentToolStatus, AgentTurn, AgentsState, Dashboard,
     FleetDashboards, NodeDashboard, NodeDashboards,
 };
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
@@ -20,7 +21,7 @@ use crate::state::{
     AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SessionMenu, State, refresh_fleet_dashboards,
 };
 use crate::ui::{
-    Key, Sort, TableState, apply_mutation, body_row, configurable_table, placeholder_row, sort_rows,
+    Key, Sort, TableState, apply_mutation, sort_rows,
 };
 
 use super::send_bar;
@@ -529,8 +530,7 @@ pub(crate) fn all_chats_view(state: State, watch: AgentsWatch, only: Option<Vec<
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">"every agent's conversations — open one below"</span>
             </div>
-            {configurable_table(state.tables.chats, CHAT_COLS,
-                move || all_chats_rows(state, watch, &only))}
+            <Table state=state.tables.chats>{move || all_chats_rows(state, watch, &only)}</Table>
         </section>
     }
     .into_any()
@@ -576,16 +576,12 @@ fn all_chats_flatten(
 /// Open that reveals it in the live view below). Loading/empty placeholders otherwise.
 fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) -> AnyView {
     let table = state.tables.chats;
-    let layout = table.layout.get();
     if state.all_chats.get().is_none() {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     }
     let mut rows = all_chats_flatten(state, only);
     if rows.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            "No chats yet — start one from an agent below.",
-        );
+        return view! { <EmptyRow state=table>"No chats yet — start one from an agent below."</EmptyRow> }.into_any();
     }
     // By the start time, not the "3m ago" the cell renders — the two disagree the moment the
     // ages cross a unit boundary. Ties go to the newest, so the index stays newest-first.
@@ -600,7 +596,6 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
         },
         |(_, _, _, r)| Key::num(u64::MAX - r.started_at),
     );
-    let shown = layout.shown();
     rows.into_iter()
         .map(|(agent, answerable, interactive, r)| {
             let (name, run_id) = (agent.clone(), r.run_id.clone());
@@ -611,14 +606,10 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
                 </button>
             }
             .into_any();
-            body_row(
-                &shown,
-                |col| match col {
-                    "Agent" => view! { <td class="adi-mono">{agent.clone()}</td> }.into_any(),
+            view! { <TableRow state=table cell=move |col| match col {
+                    "Agent" => view! { <span class="font-mono">{agent.clone()}</span> }.into_any(),
                     other => run_cell(other, &r, answerable),
-                },
-                Some(open),
-            )
+                } actions=open/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -641,15 +632,15 @@ fn run_status(answerable: bool, running: bool) -> &'static str {
 /// builder knowing about it.
 fn run_cell(col: &str, r: &AgentRunInfo, answerable: bool) -> AnyView {
     match col {
-        "Status" => view! { <td>{run_status(answerable, r.running)}</td> }.into_any(),
+        "Status" => view! { <span>{run_status(answerable, r.running)}</span> }.into_any(),
         "Conversation" | "Task" => {
             let full = r.message.clone();
             let short = truncate_task(&full);
-            view! { <td class="adi-mono" title=full>{short}</td> }.into_any()
+            view! { <span class="font-mono" title=full>{short}</span> }.into_any()
         }
         // "When", and anything the layout offers that this match doesn't name.
         _ => view! {
-            <td class="adi-muted" style="white-space:nowrap">{run_age(r.started_at)}</td>
+            <span class="text-meta" style="white-space:nowrap">{run_age(r.started_at)}</span>
         }
         .into_any(),
     }
@@ -736,13 +727,13 @@ fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
         return view! { <div class="adi-empty">{msg}</div> }.into_any();
     }
     // Two backends, two column sets — and so two arrangements to remember, since a conversation
-    // history and a task history are not the same table.
-    let (table, headers): (TableState, &'static [&'static str]) = if answerable {
-        (state.tables.chat_runs, CHAT_RUN_COLS)
+    // history and a task history are not the same table. Each `TableState` already carries the
+    // headers it was built with, so only the state has to be picked here.
+    let table: TableState = if answerable {
+        state.tables.chat_runs
     } else {
-        (state.tables.runs, RUN_COLS)
+        state.tables.runs
     };
-    let layout = table.layout.get();
     sort_rows(
         &mut runs,
         table.sort.get(),
@@ -753,24 +744,23 @@ fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
         },
         |r| Key::num(u64::MAX - r.started_at),
     );
-    let shown = layout.shown();
     let selected = watch.run_id.get();
     let mut rows: Vec<AnyView> = Vec::with_capacity(runs.len() + 1);
     for r in &runs {
         let is_selected = selected.as_deref() == Some(r.run_id.as_str());
-        rows.push(run_row(state, watch, r, &shown, is_selected, answerable));
+        rows.push(run_row(state, watch, r, table, is_selected, answerable));
         // The log / chat opens as a detail row right beneath the run it belongs to.
         if is_selected {
             rows.push(run_detail_row(
                 state,
                 watch,
                 r.run_id.clone(),
-                layout.span(),
+                table.layout.get().span(),
                 answerable,
             ));
         }
     }
-    configurable_table(table, headers, rows).into_any()
+    view! { <Table state=table>{rows}</Table> }.into_any()
 }
 
 /// The expanded log for the selected run: a full-width table row directly under it, holding the run
@@ -789,7 +779,14 @@ fn run_detail_row(
     let title = if answerable { "\u{25A4} Chat" } else { "\u{25A4} Run" };
     view! {
         <tr class="adi-runlog">
-            <td class="adi-runlog__cell" colspan=span>
+            // The padding, tint and wrapping used to come from `.adi-table td.adi-runlog__cell`,
+            // which stopped matching when this table left the `adi-*` layer. The card inside is
+            // still adi-css — only the cell around it had to move.
+            <td
+                class="adi-runlog__cell border-t border-divider bg-bubble px-3.5 pt-2.5 pb-3.5 \
+                       whitespace-normal"
+                colspan=span
+            >
                 // A titled, bordered card — obviously a console/chat, not another grey row.
                 <div class="adi-runlog__card">
                     <div class="adi-runlog__bar">
@@ -1135,7 +1132,7 @@ fn run_row(
     state: State,
     watch: AgentsWatch,
     r: &AgentRunInfo,
-    shown: &[&'static str],
+    table: TableState,
     is_selected: bool,
     answerable: bool,
 ) -> AnyView {
@@ -1146,13 +1143,9 @@ fn run_row(
     let del_id = run_id.clone();
     // Truncated, because it goes into a confirm dialog — not the whole first message.
     let del_title = truncate_task(&r.message);
-    // Built by hand rather than through `body_row`: the selected row tints itself, so its `<tr>`
-    // carries a style the shared helper has no business knowing about.
-    let row_style = if is_selected {
-        "background:var(--surface-2)"
-    } else {
-        ""
-    };
+    // The selected row tints itself; `Row`'s `class` takes it, so this still goes through the
+    // shared row rather than a hand-built `<tr>`.
+    let row_class = if is_selected { "bg-selected" } else { "" };
     // The action toggles this row's detail drawer: Open reveals the chat/log beneath it, and while
     // open it reads "● Open" and a second click collapses it. Only the drawer carries an explicit
     // "Close", so there is one thing labelled Close, not two.
@@ -1172,14 +1165,13 @@ fn run_row(
     } else {
         "delete this run and its log"
     };
-    let cells: Vec<AnyView> = shown
-        .iter()
-        .map(|col| run_cell(col, r, answerable))
-        .collect();
+    let r = r.clone();
     view! {
-        <tr style=row_style>
-            {cells}
-            <td class="adi-table__actions">
+        <TableRow
+            state=table
+            class=row_class
+            cell=move |col| run_cell(col, &r, answerable)
+            actions=view! {
                 <button class="adi-btn adi-btn--link"
                     on:click=move |_| if is_selected {
                         close_run_view(watch);
@@ -1197,8 +1189,9 @@ fn run_row(
                         state, watch, watch.name.get_untracked().unwrap_or_default(),
                         del_id.clone(), del_title.clone(),
                     )>"Delete"</button>
-            </td>
-        </tr>
+            }
+            .into_any()
+        />
     }
     .into_any()
 }

@@ -2,6 +2,7 @@
 
 use adi_webapp_api::types::{AgentsState, SaveAgent};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::pages::agents::{
@@ -10,8 +11,7 @@ use crate::pages::agents::{
 use crate::routing::{ProjectSection, Route, push_state, scroll_top};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, configurable_table, menu_item, placeholder_row,
-    row_actions, sort_rows,
+    Key, TextField, apply_mutation, menu_item, row_actions, sort_rows,
 };
 
 /// The panel's columns. No Project column — every row is this project's (or a sub-project's,
@@ -57,8 +57,7 @@ pub(crate) fn agents_panel(
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">"filed under this project & its sub-projects"</span>
             </div>
-            {configurable_table(state.tables.project_agents, COLS,
-                move || project_agent_rows(state, watch, edit_form, route))}
+            <Table state=state.tables.project_agents>{move || project_agent_rows(state, watch, edit_form, route)}</Table>
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -144,9 +143,8 @@ fn project_agent_rows(
     // The sub-projects nested under this one — their agents fold into this panel, marked as such.
     let subs = super::descendant_projects(state, &id);
     let table = state.tables.project_agents;
-    let layout = table.layout.get();
     let Some(st) = state.agents.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     let mut mine: Vec<_> = st
         .agents
@@ -157,10 +155,7 @@ fn project_agent_rows(
         })
         .collect();
     if mine.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            "No agents in this project yet — add one below.",
-        );
+        return view! { <EmptyRow state=table>"No agents in this project yet — add one below."</EmptyRow> }.into_any();
     }
     sort_rows(
         &mut mine,
@@ -172,7 +167,6 @@ fn project_agent_rows(
         },
         |a| Key::text(&a.name),
     );
-    let shown = layout.shown();
     mine.into_iter()
         .map(|a| {
             // If the agent belongs to a sub-project rather than this one, mark it with a chip
@@ -195,17 +189,15 @@ fn project_agent_rows(
             });
             let actions = row_actions(state, format!("agent:{}", a.name),
                 agent_actions(state, watch, &a), vec![edit]);
-            body_row(
-                &shown,
-                |col| match col {
+            view! { <TableRow state=table cell=move |col| match col {
                     "Status" => {
                         if a.running {
                             view! {
-                                <td><span class="adi-tstatus" data-status="ready">"Running"</span></td>
+                                <span><span class="adi-tstatus" data-status="ready">"Running"</span></span>
                             }
                             .into_any()
                         } else {
-                            view! { <td><span class="adi-muted">"—"</span></td> }.into_any()
+                            view! { <span><span class="adi-muted">"—"</span></span> }.into_any()
                         }
                     }
                     // Only the Name cell differs from the global page's, by carrying the owning
@@ -219,12 +211,10 @@ fn project_agent_rows(
                         let marker = owner.clone().map(|(oid, oname)| {
                             super::sub_marker(state, route, oid, oname, ProjectSection::Agents)
                         });
-                        view! { <td>{name}{marker}</td> }.into_any()
+                        view! { <span>{name}{marker}</span> }.into_any()
                     }
                     other => agent_cell(other, &a),
-                },
-                Some(actions),
-            )
+                } actions=actions/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

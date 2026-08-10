@@ -4,12 +4,13 @@
 
 use adi_webapp_api::types::{NewTask, TaskRow, TasksState};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, configurable_table, confirm, effective_label_title,
-    flash_view, placeholder_row, sort_rows, task_tree_rows, updated_text,
+    Key, TextField, apply_mutation, confirm, effective_label_title,
+    flash_view, sort_rows, task_tree_rows, updated_text,
 };
 
 /// The columns of both task tables — the open tree and the collapsed Done block, which are the
@@ -44,7 +45,7 @@ pub(crate) fn tasks_view(state: State, form: TasksForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(tasks, secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.tasks, COLS, move || task_rows(state, false))}
+            <Table state=state.tables.tasks>{move || task_rows(state, false)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -162,8 +163,7 @@ fn done_section(state: State, show: RwSignal<bool>) -> AnyView {
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        {open.then(|| configurable_table(state.tables.tasks_done, COLS,
-                            move || task_rows(state, true)))}
+                        {open.then(|| view! { <Table state=state.tables.tasks_done>{move || task_rows(state, true)}</Table> }.into_any())}
                     </section>
                 }
                 .into_any()
@@ -198,9 +198,8 @@ fn task_rows(state: State, finished: bool) -> AnyView {
     } else {
         state.tables.tasks
     };
-    let layout = table.layout.get();
     let Some(state_tasks) = state.tasks.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     let mut rows: Vec<_> = state_tasks
         .tasks
@@ -208,19 +207,15 @@ fn task_rows(state: State, finished: bool) -> AnyView {
         .filter(|t| is_finished(&t.effective) == finished)
         .collect();
     if rows.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            if finished {
+        return view! { <EmptyRow state=table>{if finished {
                 "Nothing finished yet."
             } else {
                 "No open tasks — add one below, or use the adi-mono tasks add CLI command."
-            },
-        );
+            }}</EmptyRow> }.into_any();
     }
     sort_rows(&mut rows, table.sort.get(), task_key, |t| {
         Key::text(&t.title)
     });
-    let shown = layout.shown();
 
     task_tree_rows(rows)
         .into_iter()
@@ -257,7 +252,7 @@ fn task_rows(state: State, finished: bool) -> AnyView {
                     .into_any()
                 }
             };
-            body_row(&shown, |col| task_cell(col, &t, depth), Some(action))
+            view! { <TableRow state=table cell=move |col| task_cell(col, &t, depth) actions=action/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -285,19 +280,19 @@ pub(crate) fn task_cell(col: &str, t: &TaskRow, depth: usize) -> AnyView {
     fn chip(value: Option<&String>) -> AnyView {
         match value {
             Some(v) if !v.trim().is_empty() => {
-                view! { <td><span class="adi-chip adi-mono">{v.clone()}</span></td> }.into_any()
+                view! { <span><span class="adi-chip adi-mono">{v.clone()}</span></span> }.into_any()
             }
-            _ => view! { <td><span class="adi-muted">"—"</span></td> }.into_any(),
+            _ => view! { <span><span class="adi-muted">"—"</span></span> }.into_any(),
         }
     }
     match col {
-        "ID" => view! { <td class="adi-mono adi-muted">{t.id.clone()}</td> }.into_any(),
+        "ID" => view! { <span class="font-mono text-meta">{t.id.clone()}</span> }.into_any(),
         "Project" => chip(t.project.as_ref()),
         "Tag" => chip(t.tag.as_ref()),
         "Status" => {
             let label = effective_label_title(&t.effective);
             view! {
-                <td><span class="adi-tstatus" data-status=t.effective.clone()>{label}</span></td>
+                <span><span class="adi-tstatus" data-status=t.effective.clone()>{label}</span></span>
             }
             .into_any()
         }
@@ -307,7 +302,7 @@ pub(crate) fn task_cell(col: &str, t: &TaskRow, depth: usize) -> AnyView {
             } else {
                 String::new()
             };
-            view! { <td class="adi-mono adi-muted">{subtasks}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{subtasks}</span> }.into_any()
         }
         // "Task", and anything the layout offers that this match doesn't name.
         _ => {
@@ -322,7 +317,7 @@ pub(crate) fn task_cell(col: &str, t: &TaskRow, depth: usize) -> AnyView {
                 hover.push_str(&format!("cwd: {cwd}"));
             }
             view! {
-                <td title=hover><span style=indent>{t.title.clone()}</span></td>
+                <span title=hover><span style=indent>{t.title.clone()}</span></span>
             }
             .into_any()
         }

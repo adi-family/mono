@@ -2,13 +2,14 @@
 
 use adi_webapp_api::types::{NewTask, TasksState};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::pages::tasks::{is_finished, task_cell, task_key};
 use crate::routing::{ProjectSection, Route};
 use crate::state::{Flash, State};
 use crate::ui::{
-    Key, Sort, TextField, apply_mutation, body_row, configurable_table, placeholder_row, sort_rows,
+    Key, Sort, TextField, apply_mutation, sort_rows,
     task_tree_rows,
 };
 
@@ -51,8 +52,7 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
                 <h2 class="adi-panel__title">"Tasks"</h2>
                 <span class="adi-updated">"filed under this project & its sub-projects"</span>
             </div>
-            {configurable_table(state.tables.project_tasks, COLS,
-                move || project_task_rows(state, route))}
+            <Table state=state.tables.project_tasks>{move || project_task_rows(state, route)}</Table>
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -154,20 +154,15 @@ fn project_task_tree(
 /// rollup. Loading/empty placeholders otherwise.
 fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
     let table = state.tables.project_tasks;
-    let layout = table.layout.get();
     if state.tasks.get().is_none() {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     }
     let id = state.current_project.get();
     let subs = super::descendant_projects(state, &id);
     let tree = project_task_tree(state, true, table.sort.get());
     if tree.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            "No tasks in this project yet — add one below.",
-        );
+        return view! { <EmptyRow state=table>"No tasks in this project yet — add one below."</EmptyRow> }.into_any();
     }
-    let shown = layout.shown();
     tree.into_iter()
         .map(|(depth, t)| {
             // A task belonging to a sub-project is marked with a chip opening that sub-project's
@@ -199,9 +194,7 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                     .into_any()
                 }
             };
-            body_row(
-                &shown,
-                |col| {
+            view! { <TableRow state=table cell=move |col| {
                     // Every column but Task renders exactly as it does on the global page; only
                     // this one differs, by carrying the owning sub-project's marker.
                     if col != "Task" {
@@ -213,14 +206,12 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                         super::sub_marker(state, route, oid, oname, ProjectSection::Tasks)
                     });
                     view! {
-                        <td title=details>
+                        <span title=details>
                             <span style=indent>{t.title.clone()}</span>{marker}
-                        </td>
+                        </span>
                     }
                     .into_any()
-                },
-                Some(action),
-            )
+                } actions=action/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

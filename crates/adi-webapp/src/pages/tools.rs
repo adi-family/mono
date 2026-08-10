@@ -11,14 +11,14 @@
 use adi_ui::Lang;
 use adi_webapp_api::types::{LinkTool, NewTool, ToolDto, ToolsState};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, ToolEditor, ToolRunView, ToolsForm};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, body_row,
-    configurable_table, confirm, flash_view, menu_item, placeholder_row, row_actions, segmented,
+    Key, TableState, TextField, apply_mutation, confirm, flash_view, menu_item, row_actions, segmented,
     sort_rows, updated_text,
 };
 
@@ -53,8 +53,7 @@ pub(crate) fn tools_view(
                 </span>
                 <span class="adi-updated">{move || updated_text(tools, secs_since)}</span>
             </div>
-            {configurable_table(state.tables.tools, COLS,
-                move || rows_view(state, state.tables.tools, editor, run, false, None))}
+            <Table state=state.tables.tools>{move || rows_view(state, state.tables.tools, editor, run, false, None)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -187,8 +186,7 @@ fn archived_section(
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        {open.then(|| configurable_table(state.tables.tools_archived, COLS,
-                            move || rows_view(state, state.tables.tools_archived, editor, run, true, None)))}
+                        {open.then(|| view! { <Table state=state.tables.tools_archived>{move || rows_view(state, state.tables.tools_archived, editor, run, true, None)}</Table> }.into_any())}
                     </section>
                 }
                 .into_any()
@@ -209,9 +207,8 @@ pub(crate) fn rows_view(
     archived: bool,
     project: Option<String>,
 ) -> AnyView {
-    let layout = table.layout.get();
     let Some(loaded) = state.tools.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     let mut rows: Vec<ToolDto> = loaded
         .tools
@@ -220,14 +217,11 @@ pub(crate) fn rows_view(
         .filter(|t| project.as_deref().is_none_or(|p| t.project.as_deref() == Some(p)))
         .collect();
     if rows.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            if archived {
+        return view! { <EmptyRow state=table>{if archived {
                 "Nothing archived."
             } else {
                 "No tools yet — create or link one below."
-            },
-        );
+            }}</EmptyRow> }.into_any();
     }
     sort_rows(
         &mut rows,
@@ -240,11 +234,10 @@ pub(crate) fn rows_view(
         },
         |t| Key::text(&t.name),
     );
-    let shown = layout.shown();
     rows.into_iter()
         .map(|t| {
             let action = tool_actions(state, editor, run, &t);
-            body_row(&shown, |col| cell(col, &t), Some(action))
+            view! { <TableRow state=table cell=move |col| cell(col, &t) actions=action/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -256,16 +249,16 @@ pub(crate) fn rows_view(
 /// about it, and is also how the project panel's narrower column set works from the same code.
 fn cell(col: &str, t: &ToolDto) -> AnyView {
     match col {
-        "Runtime" => view! { <td class="adi-mono">{t.runtime.clone()}</td> }.into_any(),
+        "Runtime" => view! { <span class="font-mono">{t.runtime.clone()}</span> }.into_any(),
         "Invoke" => view! {
-            <td class="adi-mono" title=format!("adi-mono tools run {}", t.id)>
+            <span class="font-mono" title=format!("adi-mono tools run {}", t.id)>
                 {format!(".bin/{}", t.bin_name)}
-            </td>
+            </span>
         }
         .into_any(),
         "Project" => {
             let project = t.project.clone().unwrap_or_else(|| "—".to_string());
-            view! { <td class="adi-mono adi-muted">{project}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{project}</span> }.into_any()
         }
         // "Tool", and anything the layout offers that this match doesn't name.
         _ => {
@@ -281,10 +274,10 @@ fn cell(col: &str, t: &ToolDto) -> AnyView {
                 None => format!("{source} · {}", short_id(&t.id)),
             };
             view! {
-                <td title=t.id.clone()>
+                <span title=t.id.clone()>
                     <div>{t.name.clone()}</div>
                     <div class="adi-mono adi-muted" style="font-size:var(--text-sm)">{sub}</div>
-                </td>
+                </span>
             }
             .into_any()
         }

@@ -2,12 +2,13 @@
 
 use adi_webapp_api::types::{NewProject, Project};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, State};
 use crate::ui::{
-    Key, TextField, body_row, configurable_table, fmt_date, placeholder_row, sort_rows,
+    Key, TextField, fmt_date, sort_rows,
 };
 
 /// The panel's columns. No action column — archive and restore live on the Projects page; a row
@@ -40,8 +41,7 @@ pub(crate) fn subprojects_panel(
                 <h2 class="adi-panel__title">"Sub-projects"</h2>
                 <span class="adi-updated">"nested under this project"</span>
             </div>
-            {configurable_table(state.tables.subprojects, COLS,
-                move || subproject_rows(state, route))}
+            <Table state=state.tables.subprojects>{move || subproject_rows(state, route)}</Table>
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let parent = state.current_project.get_untracked();
@@ -81,12 +81,11 @@ pub(crate) fn subprojects_panel(
 /// Loading/empty placeholders otherwise.
 fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
     let table = state.tables.subprojects;
-    let layout = table.layout.get();
     let Some(d) = state.project_detail.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if d.subprojects.is_empty() {
-        return placeholder_row(layout.span(), "No sub-projects yet — add one below.");
+        return view! { <EmptyRow state=table>"No sub-projects yet — add one below."</EmptyRow> }.into_any();
     }
     let mut subprojects = d.subprojects;
     sort_rows(
@@ -100,10 +99,9 @@ fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
         },
         |p| Key::text(&p.name),
     );
-    let shown = layout.shown();
     subprojects
         .into_iter()
-        .map(|p| body_row(&shown, |col| subproject_cell(col, &p, state, route), None))
+        .map(|p| view! { <TableRow state=table cell=move |col| subproject_cell(col, &p, state, route)/> }.into_any())
         .collect::<Vec<_>>()
         .into_any()
 }
@@ -112,15 +110,15 @@ fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
 /// is what lets the user hide and reorder columns without the row builder knowing about it.
 fn subproject_cell(col: &str, p: &Project, state: State, route: RwSignal<Route>) -> AnyView {
     match col {
-        "ID" => view! { <td class="adi-mono">{p.id.clone()}</td> }.into_any(),
+        "ID" => view! { <span class="font-mono">{p.id.clone()}</span> }.into_any(),
         "Created" => {
-            view! { <td class="adi-mono adi-muted">{fmt_date(p.created_at)}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{fmt_date(p.created_at)}</span> }.into_any()
         }
         "Status" => {
             if p.is_archived() {
-                view! { <td><span class="adi-chip">"Archived"</span></td> }.into_any()
+                view! { <span><span class="adi-chip">"Archived"</span></span> }.into_any()
             } else {
-                view! { <td><span class="adi-muted">"Active"</span></td> }.into_any()
+                view! { <span><span class="adi-muted">"Active"</span></span> }.into_any()
             }
         }
         // "Name", and anything the layout offers that this match doesn't name.
@@ -129,14 +127,14 @@ fn subproject_cell(col: &str, p: &Project, state: State, route: RwSignal<Route>)
             let href = project_href(&p.id);
             let title = p.description.clone().unwrap_or_default();
             view! {
-                <td title=title>
+                <span title=title>
                     <a class="adi-btn adi-btn--link" href=href
                         on:click=move |ev: web_sys::MouseEvent| {
                             if ev.meta_key() || ev.ctrl_key() || ev.shift_key() || ev.button() != 0 { return; }
                             ev.prevent_default();
                             open_project(state, route, open_id.clone());
                         }>{p.name.clone()}</a>
-                </td>
+                </span>
             }
             .into_any()
         }

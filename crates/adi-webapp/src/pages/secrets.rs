@@ -16,6 +16,7 @@
 
 use adi_webapp_api::types::{OAuthInfoDto, SecretDto, SecretsState, SetOAuthSecret, SetSecret};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
@@ -23,8 +24,8 @@ use crate::fetch;
 use crate::routing::Route;
 use crate::state::{Flash, SecretsForm, State};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, body_row, configurable_table, confirm, flash_view,
-    menu_item, placeholder_row, row_actions, sort_rows, updated_text,
+    Key, TableState, TextField, apply_mutation, confirm, flash_view,
+    menu_item, row_actions, sort_rows, updated_text,
 };
 
 /// The OAuth router that runs the provider flow and returns the token in the redirect fragment.
@@ -60,8 +61,7 @@ pub(crate) fn secrets_view(state: State, form: SecretsForm) -> AnyView {
                 </span>
                 <span class="adi-updated">{move || updated_text(secrets, secs_since)}</span>
             </div>
-            {configurable_table(state.tables.secrets, COLS,
-                move || rows_view(state, state.tables.secrets, form, None))}
+            <Table state=state.tables.secrets>{move || rows_view(state, state.tables.secrets, form, None)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -300,9 +300,8 @@ pub(crate) fn rows_view(
     form: SecretsForm,
     project: Option<String>,
 ) -> AnyView {
-    let layout = table.layout.get();
     let Some(loaded) = state.secrets.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     let want = project;
     let mut rows: Vec<SecretDto> = loaded
@@ -311,7 +310,7 @@ pub(crate) fn rows_view(
         .filter(|s| s.project.as_deref() == want.as_deref())
         .collect();
     if rows.is_empty() {
-        return placeholder_row(layout.span(), "No secrets yet — set one below.");
+        return view! { <EmptyRow state=table>"No secrets yet — set one below."</EmptyRow> }.into_any();
     }
     sort_rows(
         &mut rows,
@@ -326,11 +325,10 @@ pub(crate) fn rows_view(
         },
         |s| Key::text(&s.name),
     );
-    let shown = layout.shown();
     rows.into_iter()
         .map(|s| {
             let action = secret_actions(state, form, &s);
-            body_row(&shown, |col| cell(col, &s, form), Some(action))
+            view! { <TableRow state=table cell=move |col| cell(col, &s, form) actions=action/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -346,12 +344,12 @@ fn cell(col: &str, s: &SecretDto, form: SecretsForm) -> AnyView {
         "Value" => {
             let value_key = reveal_key(s.project.as_deref(), &s.name);
             view! {
-                <td class="adi-mono">
+                <span class="font-mono">
                     {move || match form.revealed.get().get(&value_key) {
                         Some(v) => view! { <span>{v.clone()}</span> }.into_any(),
                         None => view! { <span class="adi-muted">"••••••••"</span> }.into_any(),
                     }}
-                </td>
+                </span>
             }
             .into_any()
         }
@@ -362,20 +360,20 @@ fn cell(col: &str, s: &SecretDto, form: SecretsForm) -> AnyView {
             } else {
                 desc
             };
-            view! { <td class="adi-muted">{text}</td> }.into_any()
+            view! { <span class="text-meta">{text}</span> }.into_any()
         }
         "Project" => {
             let project = s.project.clone().unwrap_or_else(|| "—".to_string());
-            view! { <td class="adi-mono adi-muted">{project}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{project}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
             let badge = s.oauth.as_ref().map(oauth_badge);
             view! {
-                <td>
+                <span>
                     <div class="adi-mono">{s.name.clone()}</div>
                     {badge}
-                </td>
+                </span>
             }
             .into_any()
         }

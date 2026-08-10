@@ -2,11 +2,12 @@
 
 use adi_webapp_api::types::FileEntry;
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, State};
-use crate::ui::{Key, body_row, configurable_table, fmt_date, placeholder_row, sort_rows};
+use crate::ui::{Key, fmt_date, sort_rows};
 
 use super::load_dir;
 
@@ -101,7 +102,7 @@ pub(crate) fn files_view(state: State) -> AnyView {
             <div class="adi-panel__body">
                 {move || crumbs_view(state)}
             </div>
-            {configurable_table(state.tables.files, COLS, move || file_rows(state))}
+            <Table state=state.tables.files>{move || file_rows(state)}</Table>
             {move || match files.open.get() {
                 None => view! {
                     <div class="adi-panel__body">
@@ -156,23 +157,19 @@ fn crumbs_view(state: State) -> AnyView {
 fn file_rows(state: State) -> AnyView {
     let files = state.files;
     let table = state.tables.files;
-    let layout = table.layout.get();
     let Some(listing) = files.listing.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     let dir = listing.path.clone();
-    let shown = layout.shown();
     let mut rows: Vec<AnyView> = Vec::new();
 
     // The way out stays pinned at the top whatever the sort says — it is navigation, not an entry.
     if let Some(parent) = listing.parent.clone() {
-        rows.push(body_row(
-            &shown,
-            |col| match col {
+        rows.push(view! { <TableRow state=table cell=move |col| match col {
                 "Name" => {
                     let parent = parent.clone();
                     view! {
-                        <td>
+                        <span>
                             <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
                                 on:click=move |ev: web_sys::MouseEvent| {
                                     ev.prevent_default();
@@ -180,18 +177,16 @@ fn file_rows(state: State) -> AnyView {
                                 }>
                                 <span class="adi-filerow__icon">"↑"</span><span>".."</span>
                             </a>
-                        </td>
+                        </span>
                     }
                     .into_any()
                 }
-                _ => view! { <td class="adi-muted">"—"</td> }.into_any(),
-            },
-            None,
-        ));
+                _ => view! { <span class="text-meta">"—"</span> }.into_any(),
+            }/> }.into_any());
     }
 
     if listing.entries.is_empty() && listing.parent.is_none() {
-        return placeholder_row(layout.span(), "This project directory is empty.");
+        return view! { <EmptyRow state=table>"This project directory is empty."</EmptyRow> }.into_any();
     }
 
     let mut entries = listing.entries;
@@ -212,11 +207,7 @@ fn file_rows(state: State) -> AnyView {
     for entry in entries {
         let path = join_rel(&dir, &entry.name);
         let is_open = state.files.open.get().as_deref() == Some(path.as_str());
-        rows.push(body_row(
-            &shown,
-            |col| file_cell(col, &entry, &path, is_open, state),
-            None,
-        ));
+        rows.push(view! { <TableRow state=table cell=move |col| file_cell(col, &entry, &path, is_open, state)/> }.into_any());
     }
     rows.into_any()
 }
@@ -226,17 +217,17 @@ fn file_rows(state: State) -> AnyView {
 fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: State) -> AnyView {
     match col {
         // A directory has no meaningful size, so it shows a dash rather than a misleading zero.
-        "Size" if entry.is_dir => view! { <td class="adi-muted">"—"</td> }.into_any(),
-        "Size" => view! { <td class="adi-mono adi-muted">{fmt_size(entry.size)}</td> }.into_any(),
+        "Size" if entry.is_dir => view! { <span class="text-meta">"—"</span> }.into_any(),
+        "Size" => view! { <span class="font-mono text-meta">{fmt_size(entry.size)}</span> }.into_any(),
         "Modified" => {
             let modified = entry.modified.map_or_else(|| "—".to_string(), fmt_date);
-            view! { <td class="adi-mono adi-muted">{modified}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{modified}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ if entry.is_dir => {
             let path = path.to_string();
             view! {
-                <td>
+                <span>
                     <a class="adi-btn adi-btn--link adi-filerow adi-filerow--dir" href="#"
                         on:click=move |ev: web_sys::MouseEvent| {
                             ev.prevent_default();
@@ -245,14 +236,14 @@ fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: Sta
                         <span class="adi-filerow__icon">"▸"</span>
                         <span>{entry.name.clone()}"/"</span>
                     </a>
-                </td>
+                </span>
             }
             .into_any()
         }
         _ => {
             let path = path.to_string();
             view! {
-                <td>
+                <span>
                     <a class="adi-btn adi-btn--link adi-filerow" href="#"
                         aria-current=move || if is_open { "true" } else { "false" }
                         on:click=move |ev: web_sys::MouseEvent| {
@@ -261,7 +252,7 @@ fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: Sta
                         }>
                         <span class="adi-filerow__icon">"·"</span><span>{entry.name.clone()}</span>
                     </a>
-                </td>
+                </span>
             }
             .into_any()
         }

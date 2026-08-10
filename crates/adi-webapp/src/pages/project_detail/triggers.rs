@@ -2,14 +2,15 @@
 
 use adi_webapp_api::types::{SaveTrigger, TriggersState};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::pages::triggers::{
-    PROJECT_COLS, trigger_actions, trigger_cell, trigger_key, trigger_toggle_item,
+    trigger_actions, trigger_cell, trigger_key, trigger_toggle_item,
 };
 use crate::state::{Flash, State, TriggersLogView};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, configurable_table, placeholder_row, row_actions,
+    Key, TextField, apply_mutation, row_actions,
     sort_rows,
 };
 
@@ -45,8 +46,7 @@ pub(crate) fn triggers_panel(
                 <h2 class="adi-panel__title">"Triggers"</h2>
                 <span class="adi-updated">"filed under this project"</span>
             </div>
-            {configurable_table(state.tables.project_triggers, PROJECT_COLS,
-                move || project_trigger_rows(state, log))}
+            <Table state=state.tables.project_triggers>{move || project_trigger_rows(state, log)}</Table>
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let id = state.current_project.get_untracked();
@@ -121,10 +121,9 @@ pub(crate) fn triggers_panel(
 /// Fire/Log/Enable-Disable actions. Loading/empty placeholders otherwise.
 fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
     let table = state.tables.project_triggers;
-    let layout = table.layout.get();
     let id = state.current_project.get();
     let Some(st) = state.triggers.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     let mut mine: Vec<_> = st
         .triggers
@@ -132,15 +131,11 @@ fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
         .filter(|t| t.project.as_deref() == Some(id.as_str()))
         .collect();
     if mine.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            "No triggers in this project yet — add one below.",
-        );
+        return view! { <EmptyRow state=table>"No triggers in this project yet — add one below."</EmptyRow> }.into_any();
     }
     sort_rows(&mut mine, table.sort.get(), trigger_key, |t| {
         Key::text(&t.name)
     });
-    let shown = layout.shown();
     mine.into_iter()
         .map(|t| {
             let actions = row_actions(
@@ -149,7 +144,7 @@ fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
                 trigger_actions(state, log, &t),
                 vec![trigger_toggle_item(state, &t)],
             );
-            body_row(&shown, |col| trigger_cell(col, &t), Some(actions))
+            view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

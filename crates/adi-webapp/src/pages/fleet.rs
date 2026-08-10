@@ -24,12 +24,13 @@
 
 use adi_webapp_api::types::{FleetNode, FleetState};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::state::{FleetForm, State};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, configurable_table, confirm, fmt_date, menu_item,
-    placeholder_row, row_actions, sort_rows, updated_text,
+    Key, TextField, apply_mutation, confirm, fmt_date, menu_item,
+    row_actions, sort_rows, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -57,7 +58,7 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(fleet, state.secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.fleet, COLS, move || node_rows(state))}
+            <Table state=state.tables.fleet>{move || node_rows(state)}</Table>
 
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
@@ -177,15 +178,11 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
 /// per node with its grants and the actions that change them.
 fn node_rows(state: State) -> AnyView {
     let table = state.tables.fleet;
-    let layout = table.layout.get();
     let Some(fleet) = state.fleet.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if fleet.nodes.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            "No nodes paired yet — see “Pair a node” below.",
-        );
+        return view! { <EmptyRow state=table>"No nodes paired yet — see “Pair a node” below."</EmptyRow> }.into_any();
     }
     let mut nodes = fleet.nodes;
     sort_rows(
@@ -202,12 +199,11 @@ fn node_rows(state: State) -> AnyView {
         },
         |n| Key::text(&n.petname),
     );
-    let shown = layout.shown();
     nodes
         .into_iter()
         .map(|n| {
             let action = row_action(state, &n);
-            body_row(&shown, |col| cell(col, &n, state), Some(action))
+            view! { <TableRow state=table cell=move |col| cell(col, &n, state) actions=action/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -218,15 +214,15 @@ fn node_rows(state: State) -> AnyView {
 fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
     match col {
         "Key" => view! {
-            <td class="adi-mono adi-muted" title=n.key.clone()>{n.key_short()}</td>
+            <span class="font-mono text-meta" title=n.key.clone()>{n.key_short()}</span>
         }
         .into_any(),
-        "Grants" => view! { <td>{grants_cell(state, n)}</td> }.into_any(),
-        "Password" => view! { <td>{password_cell(n.has_password)}</td> }.into_any(),
+        "Grants" => view! { <span>{grants_cell(state, n)}</span> }.into_any(),
+        "Password" => view! { <span>{password_cell(n.has_password)}</span> }.into_any(),
         "Paired" => view! {
-            <td class="adi-mono adi-muted" title="When this machine pinned the name to the key">
+            <span class="font-mono text-meta" title="When this machine pinned the name to the key">
                 {fmt_date(n.paired_at)}
-            </td>
+            </span>
         }
         .into_any(),
         // "Node", and anything the layout offers that this match doesn't name: the two names,
@@ -235,7 +231,7 @@ fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
             let href = format!("http://{}/", n.app_host());
             let host = n.app_host();
             view! {
-                <td>
+                <span>
                     <div>
                         <a href=href.clone() target="_blank" rel="noreferrer"
                             title=format!("This node's control panel, over the mesh: {host}")>
@@ -246,7 +242,7 @@ fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
                         "calls itself "<span class="adi-mono">{n.nickname.clone()}</span>
                     </div>
                     {pending_marker(n)}
-                </td>
+                </span>
             }
             .into_any()
         }

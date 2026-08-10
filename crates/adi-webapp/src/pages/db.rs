@@ -11,12 +11,11 @@ use adi_webapp_api::types::{DbInfoDto, DbQueryResult, DbTableDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
+
 use crate::fetch;
 use crate::state::{DbConsole, Flash, State, load};
-use crate::ui::{
-    Key, body_row, configurable_table, placeholder_row, sort_rows,
-    updated_text,
-};
+use crate::ui::{Key, placeholder_row, sort_rows, updated_text};
 
 /// The databases table: one row per scope in the store. No action column — a row's control is the
 /// Scope cell itself, which opens that database.
@@ -64,8 +63,7 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || updated_text(db, secs_since)}</span>
             </div>
-            {configurable_table(state.tables.db_scopes, SCOPE_COLS,
-                move || scope_rows(state, console))}
+            <Table state=state.tables.db_scopes>{move || scope_rows(state, console)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -78,8 +76,7 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
                         |t| format!("{} table(s)", t.tables.len()))}
                 </span>
             </div>
-            {configurable_table(state.tables.db_tables, TABLE_COLS,
-                move || table_rows(state, console))}
+            <Table state=state.tables.db_tables>{move || table_rows(state, console)}</Table>
         </section>
 
         // The schema panel, open only once a table's `Schema` is clicked.
@@ -137,15 +134,16 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
 /// The databases table: one row per scope, the open one marked. Clicking a row opens that scope.
 fn scope_rows(state: State, console: DbConsole) -> AnyView {
     let table = state.tables.db_scopes;
-    let layout = table.layout.get();
     let Some(listing) = state.db.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if listing.databases.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            "No databases yet — the first write creates one. Try a `create table` below.",
-        );
+        return view! {
+            <EmptyRow state=table>
+                "No databases yet — the first write creates one. Try a `create table` below."
+            </EmptyRow>
+        }
+        .into_any();
     }
 
     let mut databases = listing.databases;
@@ -161,10 +159,12 @@ fn scope_rows(state: State, console: DbConsole) -> AnyView {
         },
         |d| Key::text(scope_name(d.project.as_deref())),
     );
-    let shown = layout.shown();
     databases
         .into_iter()
-        .map(|d| body_row(&shown, |col| scope_cell(col, &d, console), None))
+        .map(|d| {
+            view! { <TableRow state=table cell=move |col| scope_cell(col, &d, console)/> }
+                .into_any()
+        })
         .collect::<Vec<_>>()
         .into_any()
 }
@@ -178,16 +178,18 @@ fn scope_name(project: Option<&str>) -> String {
 /// what lets the user hide and reorder columns without the row builder knowing about it.
 fn scope_cell(col: &str, d: &DbInfoDto, console: DbConsole) -> AnyView {
     match col {
-        "Tables" => view! { <td class="adi-mono">{d.tables.to_string()}</td> }.into_any(),
-        "Size" => view! { <td class="adi-mono adi-muted">{human_bytes(d.bytes)}</td> }.into_any(),
-        "Path" => view! { <td class="adi-mono adi-muted">{d.path.clone()}</td> }.into_any(),
+        "Tables" => view! { <span class="font-mono">{d.tables.to_string()}</span> }.into_any(),
+        "Size" => {
+            view! { <span class="font-mono text-meta">{human_bytes(d.bytes)}</span> }.into_any()
+        }
+        "Path" => view! { <span class="font-mono text-meta">{d.path.clone()}</span> }.into_any(),
         // "Scope", and anything the layout offers that this match doesn't name.
         _ => {
             let id = d.project.clone().unwrap_or_default();
             let label = scope_name(d.project.as_deref());
             let open = console.project.get() == id;
             view! {
-                <td>
+                <>
                     <button class="adi-btn adi-btn--link adi-mono" on:click=move |_| {
                         if console.project.get_untracked() != id {
                             console.project.set(id.clone());
@@ -197,7 +199,7 @@ fn scope_cell(col: &str, d: &DbInfoDto, console: DbConsole) -> AnyView {
                         }
                     }>{label}</button>
                     {open.then(|| view! { <span class="adi-chip">"open"</span> })}
-                </td>
+                </>
             }
             .into_any()
         }
@@ -207,12 +209,14 @@ fn scope_cell(col: &str, d: &DbInfoDto, console: DbConsole) -> AnyView {
 /// The open scope's tables: shape, live row count, and a preview button per table.
 fn table_rows(state: State, console: DbConsole) -> AnyView {
     let table = state.tables.db_tables;
-    let layout = table.layout.get();
     let Some(loaded) = console.tables.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if loaded.tables.is_empty() {
-        return placeholder_row(layout.span(), "This database has no tables yet.");
+        return view! {
+            <EmptyRow state=table>"This database has no tables yet."</EmptyRow>
+        }
+        .into_any();
     }
 
     let mut tables = loaded.tables;
@@ -226,33 +230,40 @@ fn table_rows(state: State, console: DbConsole) -> AnyView {
         },
         |t| Key::text(&t.name),
     );
-    let shown = layout.shown();
     tables
         .into_iter()
         .map(|t| {
             let name = t.name.clone();
-            let schema_of = t.name.clone();
-            let action = view! {
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    // Quote the identifier the way SQLite does, so a name with a space or
-                    // a keyword still parses.
-                    let quoted = name.replace('"', "\"\"");
-                    console.sql.set(format!(
-                        "select * from \"{quoted}\" limit {PREVIEW_LIMIT}"
-                    ));
-                }>"Preview"</button>
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    let table = schema_of.clone();
-                    spawn_local(async move {
-                        match fetch::db_schema(console.scope(), Some(table)).await {
-                            Ok(s) => console.schema.set(s.schema),
-                            Err(e) => console.error.set(Some(e)),
+            view! {
+                <TableRow
+                    state=table
+                    cell=move |col| table_cell(col, &t)
+                    actions={
+                        let (preview_of, schema_of) = (name.clone(), name.clone());
+                        view! {
+                            <button class="adi-btn adi-btn--link" on:click=move |_| {
+                                // Quote the identifier the way SQLite does, so a name with a
+                                // space or a keyword still parses.
+                                let quoted = preview_of.replace('"', "\"\"");
+                                console.sql.set(format!(
+                                    "select * from \"{quoted}\" limit {PREVIEW_LIMIT}"
+                                ));
+                            }>"Preview"</button>
+                            <button class="adi-btn adi-btn--link" on:click=move |_| {
+                                let table = schema_of.clone();
+                                spawn_local(async move {
+                                    match fetch::db_schema(console.scope(), Some(table)).await {
+                                        Ok(s) => console.schema.set(s.schema),
+                                        Err(e) => console.error.set(Some(e)),
+                                    }
+                                });
+                            }>"Schema"</button>
                         }
-                    });
-                }>"Schema"</button>
+                        .into_any()
+                    }
+                />
             }
-            .into_any();
-            body_row(&shown, |col| table_cell(col, &t), Some(action))
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -261,12 +272,12 @@ fn table_rows(state: State, console: DbConsole) -> AnyView {
 /// One table's cell under `col`. See [`scope_cell`] on why this matches header text.
 fn table_cell(col: &str, t: &DbTableDto) -> AnyView {
     match col {
-        "Rows" => view! { <td class="adi-mono">{t.rows.to_string()}</td> }.into_any(),
-        "Columns" => view! { <td class="adi-muted">{column_summary(t)}</td> }.into_any(),
+        "Rows" => view! { <span class="font-mono">{t.rows.to_string()}</span> }.into_any(),
+        "Columns" => view! { <span class="text-meta">{column_summary(t)}</span> }.into_any(),
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
             let kind = (t.kind == "view").then(|| view! { <span class="adi-chip">"view"</span> });
-            view! { <td class="adi-mono">{t.name.clone()} {kind}</td> }.into_any()
+            view! { <span class="font-mono">{t.name.clone()} {kind}</span> }.into_any()
         }
     }
 }
@@ -354,7 +365,7 @@ fn result_table(result: DbQueryResult) -> AnyView {
                         result.rows.into_iter()
                             .map(|row| view! {
                                 <tr>{row.iter().map(|cell| view! {
-                                    <td class="adi-mono">{cell_text(cell)}</td>
+                                    <span class="font-mono">{cell_text(cell)}</span>
                                 }).collect::<Vec<_>>()}</tr>
                             })
                             .collect::<Vec<_>>()

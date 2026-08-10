@@ -8,12 +8,13 @@ use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{
-    Key, body_row, configurable_table, flash_view, menu_item, placeholder_row, row_actions,
+    Key, flash_view, menu_item, row_actions,
     sort_rows, updated_text,
 };
 
@@ -73,8 +74,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                 <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.agents, COLS,
-                move || agent_rows(state, form, watch))}
+            <Table state=state.tables.agents>{move || agent_rows(state, form, watch)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -324,18 +324,16 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
 /// View (live session), Edit (loads it into the form), and Delete actions.
 fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
     let table = state.tables.agents;
-    let layout = table.layout.get();
     let Some(st) = state.agents.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if st.agents.is_empty() {
-        return placeholder_row(layout.span(), "No agents yet — define one below.");
+        return view! { <EmptyRow state=table>"No agents yet — define one below."</EmptyRow> }.into_any();
     }
     let mut agents = st.agents;
     sort_rows(&mut agents, table.sort.get(), agent_key, |a| {
         Key::text(&a.name)
     });
-    let shown = layout.shown();
     agents
         .into_iter()
         .map(|a| {
@@ -351,7 +349,10 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
                 }),
             ];
             let actions = row_actions(state, format!("agent:{}", a.name), agent_actions(state, watch, &a), items);
-            body_row(&shown, |col| agent_cell(col, &a), Some(actions))
+            view! {
+                <TableRow state=table cell=move |col| agent_cell(col, &a) actions=actions/>
+            }
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -376,18 +377,18 @@ pub(crate) fn agent_key(a: &AgentDto, col: &str) -> Key {
 /// column belongs to a project's panel, which builds it there from the live watch.
 pub(crate) fn agent_cell(col: &str, a: &AgentDto) -> AnyView {
     match col {
-        "Backend" => view! { <td class="adi-mono">{a.backend.clone()}</td> }.into_any(),
+        "Backend" => view! { <span class="font-mono">{a.backend.clone()}</span> }.into_any(),
         "Model" => view! {
-            <td class="adi-mono adi-muted">{argument_text(&a.arguments, "model")}</td>
+            <span class="font-mono text-meta">{argument_text(&a.arguments, "model")}</span>
         }
         .into_any(),
         "Project" => match &a.project {
             Some(p) if !p.trim().is_empty() => {
-                view! { <td><span class="adi-chip adi-mono">{p.clone()}</span></td> }.into_any()
+                view! { <span><span class="adi-chip adi-mono">{p.clone()}</span></span> }.into_any()
             }
-            _ => view! { <td><span class="adi-muted">"—"</span></td> }.into_any(),
+            _ => view! { <span><span class="adi-muted">"—"</span></span> }.into_any(),
         },
-        "Tags" => view! { <td class="adi-muted">{a.tags.join(", ")}</td> }.into_any(),
+        "Tags" => view! { <span class="text-meta">{a.tags.join(", ")}</span> }.into_any(),
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
             let name = if a.starred {
@@ -395,7 +396,7 @@ pub(crate) fn agent_cell(col: &str, a: &AgentDto) -> AnyView {
             } else {
                 a.name.clone()
             };
-            view! { <td>{name}</td> }.into_any()
+            view! { <span>{name}</span> }.into_any()
         }
     }
 }

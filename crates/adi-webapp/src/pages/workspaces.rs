@@ -8,14 +8,15 @@ use adi_webapp_api::types::{
     NewProjectHook, NewWorkspace, ProjectHookDto, WorkspaceDto, WorkspacesState,
 };
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
 use crate::ui::{
-    Key, TextField, body_row, configurable_table, confirm, fmt_date, menu_item,
-    placeholder_row, row_actions, sort_rows,
+    Key, TextField, confirm, fmt_date, menu_item,
+    row_actions, sort_rows,
 };
 
 /// The workspaces table's columns; the trailing blank one holds ⌨ Terminal and Unregister.
@@ -79,8 +80,7 @@ pub(crate) fn workspaces_panel(
                 <span class="adi-spacer"></span>
                 {move || initialize_button(state, form)}
             </div>
-            {configurable_table(state.tables.workspaces, WORKSPACE_COLS,
-                move || workspace_rows(state, term))}
+            <Table state=state.tables.workspaces>{move || workspace_rows(state, term)}</Table>
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_workspace(state, form);
@@ -107,8 +107,7 @@ pub(crate) fn workspaces_panel(
                 <h2 class="adi-panel__title">"Hooks"</h2>
                 <span class="adi-updated">"plain files under " <code>".adi/hooks"</code></span>
             </div>
-            {configurable_table(state.tables.hooks, HOOK_COLS,
-                move || hook_rows(state, log, editor))}
+            <Table state=state.tables.hooks>{move || hook_rows(state, log, editor)}</Table>
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 submit_hook(state, hook_form);
@@ -143,9 +142,8 @@ pub(crate) fn workspaces_panel(
 /// Unregister action in the kebab (behind a confirm; files stay on disk).
 fn workspace_rows(state: State, term: TermWatch) -> AnyView {
     let table = state.tables.workspaces;
-    let layout = table.layout.get();
     let Some(snapshot) = current_snapshot(state) else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if snapshot.workspaces.is_empty() {
         let hint = if snapshot.has_init_hook {
@@ -153,7 +151,7 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
         } else {
             "No workspaces yet — create an init hook below first, then press ⚡ Initialize."
         };
-        return placeholder_row(layout.span(), hint);
+        return view! { <EmptyRow state=table>{hint}</EmptyRow> }.into_any();
     }
     let mut workspaces = snapshot.workspaces;
     sort_rows(
@@ -168,7 +166,6 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
         },
         |w| Key::text(&w.name),
     );
-    let shown = layout.shown();
     workspaces
         .into_iter()
         .map(|w| {
@@ -194,7 +191,14 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
                 terminal,
                 vec![unregister],
             );
-            body_row(&shown, |col| workspace_cell(col, &w), Some(actions))
+            view! {
+                <TableRow
+                    state=table
+                    cell=move |col| workspace_cell(col, &w)
+                    actions=actions
+                />
+            }
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -205,12 +209,12 @@ fn workspace_rows(state: State, term: TermWatch) -> AnyView {
 fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
     match col {
         "Path" => view! {
-            <td class="adi-mono adi-muted" style="font-size:var(--text-sm); word-break:break-all">
+            <span class="font-mono text-meta" style="font-size:var(--text-sm); word-break:break-all">
                 {w.path.clone()}
-            </td>
+            </span>
         }
         .into_any(),
-        "Kind" => view! { <td class="adi-mono">{w.kind.clone()}</td> }.into_any(),
+        "Kind" => view! { <span class="font-mono">{w.kind.clone()}</span> }.into_any(),
         "Status" => {
             let status_data = match w.status.as_str() {
                 "ready" => "ready",
@@ -233,9 +237,9 @@ fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
                 .map(|h| format!("created by the {h} hook"))
                 .unwrap_or_default();
             view! {
-                <td>
+                <span>
                     <span class="adi-tstatus" data-status=status_data title=title>{status_label}</span>
-                </td>
+                </span>
             }
             .into_any()
         }
@@ -245,16 +249,16 @@ fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
             } else {
                 "—".to_string()
             };
-            view! { <td class="adi-mono adi-muted">{created}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{created}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => view! {
-            <td>
+            <span>
                 <span class="adi-mono">{w.name.clone()}</span>
                 {w.primary.then(|| view! {
                     <span class="adi-muted" style="font-size:var(--text-sm); display:block">"★ primary"</span>
                 })}
-            </td>
+            </span>
         }
         .into_any(),
     }
@@ -263,12 +267,11 @@ fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
 /// Rows for the hooks table: each hook file with Run / Log / Edit actions.
 fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
     let table = state.tables.hooks;
-    let layout = table.layout.get();
     let Some(snapshot) = current_snapshot(state) else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if snapshot.hooks.is_empty() {
-        return placeholder_row(layout.span(), "No hooks yet — add one below.");
+        return view! { <EmptyRow state=table>"No hooks yet — add one below."</EmptyRow> }.into_any();
     }
     let mut hooks = snapshot.hooks;
     sort_rows(
@@ -281,7 +284,6 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
         },
         |h| Key::text(&h.name),
     );
-    let shown = layout.shown();
     hooks
         .into_iter()
         .map(|h| {
@@ -311,7 +313,7 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
                 menu_item(state, "Edit", false, move || open_hook_editor(state, editor, edit_name.clone())),
             ];
             let actions = row_actions(state, format!("hook:{}", h.name), inline, items);
-            body_row(&shown, |col| hook_cell(col, &h), Some(actions))
+            view! { <TableRow state=table cell=move |col| hook_cell(col, &h) actions=actions/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -334,22 +336,22 @@ fn hook_cell(col: &str, h: &ProjectHookDto) -> AnyView {
                 (_, None) => "Failed".to_string(),
             };
             view! {
-                <td><span class="adi-tstatus" data-status=status_data>{status_label}</span></td>
+                <span><span class="adi-tstatus" data-status=status_data>{status_label}</span></span>
             }
             .into_any()
         }
         "Last run" => {
             let ran = h.last_run_at.map_or_else(|| "—".to_string(), fmt_date);
-            view! { <td class="adi-mono adi-muted">{ran}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{ran}</span> }.into_any()
         }
         // "Hook", and anything the layout offers that this match doesn't name.
         _ => view! {
-            <td>
+            <span>
                 <span class="adi-mono">{h.name.clone()}</span>
                 <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">
                     {hook_rel_path(&h.name)}
                 </span>
-            </td>
+            </span>
         }
         .into_any(),
     }

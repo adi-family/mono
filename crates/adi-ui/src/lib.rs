@@ -73,7 +73,7 @@ pub use panel::Panel;
 pub use path::{DirEntry, PathPicker, PathRoot, dir_of, leaf_of, trim_dir};
 pub use rail::{Rail, RailCard, RailGroup};
 pub use session::{SessionItem, SessionState};
-pub use table::{Column, Layout, Sort, SortKey, TableState, sort_rows};
+pub use table::{Column, EmptyRow, Layout, Row, Sort, SortKey, Table, TableState, sort_rows};
 pub use topbar::{Crumb, Crumbs, TopBar};
 pub use tree::{Tree, TreeNode, TreeState};
 

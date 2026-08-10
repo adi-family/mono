@@ -5,15 +5,15 @@
 
 use adi_webapp_api::types::{Dashboard, HiveService, Project};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href, push_state};
 use crate::state::{Flash, State};
 use crate::ui::{
-    Sort, configurable_table, cpu_cell, dash, fmt_bytes, fmt_cpu, fmt_ports, memory_cell,
-    placeholder_row,
-};
+    Sort, cpu_cell, dash, fmt_bytes, fmt_cpu, fmt_ports, memory_cell,
+    };
 
 /// Every column the Hive table can show, in its declared order — the set the settings menu
 /// offers, and the order a user who has never rearranged it sees. Sort keys and cell builders
@@ -66,7 +66,7 @@ pub(crate) fn hive_view(state: State, route: RwSignal<Route>) -> AnyView {
                     title="Re-read every project's .adi/hive.yaml and the global hive from disk"
                     on:click=move |_| reload_hive(state)>"Reload config"</button>
             </div>
-            {configurable_table(state.tables.hive, COLS, move || hive_rows(state, route))}
+            <Table state=state.tables.hive>{move || hive_rows(state, route)}</Table>
         </section>
     }
     .into_any()
@@ -198,15 +198,12 @@ fn mem(s: &HiveService) -> u64 {
 
 /// Rows for the aggregated hive table, in the order and arrangement the header controls select.
 fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
-    let layout = state.tables.hive.layout.get();
+    let table = state.tables.hive;
     let Some(h) = state.hive.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if h.services.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            "No hive services declared in any project or the global hive.",
-        );
+        return view! { <EmptyRow state=table>"No hive services declared in any project or the global hive."</EmptyRow> }.into_any();
     }
     // A service names its origin by id; the Source cell shows the name path instead, resolved
     // against the projects list (shell data, loaded on every route) and the dashboards listing
@@ -226,14 +223,9 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
         })
         .collect();
     sort_rows(&mut rows, state.tables.hive.sort.get());
-    let shown = layout.shown();
     rows.into_iter()
         .map(|(s, src)| {
-            let cells: Vec<AnyView> = shown
-                .iter()
-                .map(|col| cell(col, &s, &src, state, route))
-                .collect();
-            view! { <tr>{cells}</tr> }
+            view! { <TableRow state=table cell=move |col| cell(col, &s, &src, state, route)/> }
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -243,13 +235,13 @@ fn hive_rows(state: State, route: RwSignal<Route>) -> AnyView {
 /// what lets the user hide and reorder columns without the row builder knowing about it.
 fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<Route>) -> AnyView {
     match col {
-        "Service" => view! { <td class="adi-mono">{s.name.clone()}</td> }.into_any(),
+        "Service" => view! { <span class="font-mono">{s.name.clone()}</span> }.into_any(),
         "Host" => host_cell(s.host.as_deref()),
         "Ports" => {
-            view! { <td class="adi-mono adi-table__port">{fmt_ports(&s.ports)}</td> }.into_any()
+            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }.into_any()
         }
-        "Command" => view! { <td class="adi-mono adi-muted">{dash(s.run.clone())}</td> }.into_any(),
-        "Restart" => view! { <td class="adi-muted">{dash(s.restart.clone())}</td> }.into_any(),
+        "Command" => view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any(),
+        "Restart" => view! { <span class="text-meta">{dash(s.restart.clone())}</span> }.into_any(),
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),
         "Status" => {
@@ -259,16 +251,16 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
                 ("down", "Stopped")
             };
             view! {
-                <td>
+                <span>
                     <span class="adi-status" data-state=attr>
                         <span class="adi-status__led"></span><span>{label}</span>
                     </span>
-                </td>
+                </span>
             }
             .into_any()
         }
         // "Source", and anything the layout offers that this match doesn't name.
-        _ => view! { <td>{source_cell(s, src, state, route)}</td> }.into_any(),
+        _ => view! { <span>{source_cell(s, src, state, route)}</span> }.into_any(),
     }
 }
 
@@ -276,13 +268,13 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
 /// as the way in. A new tab, since leaving the panel to visit a service is rarely what was meant.
 fn host_cell(host: Option<&str>) -> AnyView {
     let Some(host) = host else {
-        return view! { <td class="adi-mono">{dash(None)}</td> }.into_any();
+        return view! { <span class="font-mono">{dash(None)}</span> }.into_any();
     };
     let href = format!("http://{host}/");
     view! {
-        <td class="adi-mono">
+        <span class="font-mono">
             <a href=href.clone() target="_blank" rel="noreferrer" title=href>{host.to_string()}</a>
-        </td>
+        </span>
     }
     .into_any()
 }

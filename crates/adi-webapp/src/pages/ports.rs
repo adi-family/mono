@@ -7,10 +7,9 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, Form, State, load};
-use crate::ui::{
-    Key, TextField, body_row, configurable_table, dash, flash_view, placeholder_row, segmented,
-    sort_rows, updated_text,
-};
+use adi_ui::{EmptyRow, Row as TableRow, Table};
+
+use crate::ui::{Key, TextField, dash, flash_view, segmented, sort_rows, updated_text};
 
 /// The port registry's columns; the trailing blank one holds the row's Release control.
 pub(crate) const LEASE_COLS: &[&str] = &["Service", "Key", "Port", ""];
@@ -51,7 +50,7 @@ pub(crate) fn ports_manager_view(
                 <span class="adi-updated">{move || updated_text(ports, secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.leases, LEASE_COLS, move || rows_view(state))}
+            <Table state=state.tables.leases>{move || rows_view(state)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -102,8 +101,9 @@ pub(crate) fn ports_manager_view(
                 <span class="adi-spacer"></span>
                 {segmented("Filter ports", managed_only, "All", "ADI managed")}
             </div>
-            {configurable_table(state.tables.used_ports, USED_COLS,
-                move || used_rows_view(state, managed_only))}
+            <Table state=state.tables.used_ports>
+                {move || used_rows_view(state, managed_only)}
+            </Table>
         </section>
     }
     .into_any()
@@ -114,12 +114,14 @@ pub(crate) fn ports_manager_view(
 /// refresh.
 fn rows_view(state: State) -> AnyView {
     let table = state.tables.leases;
-    let layout = table.layout.get();
     let Some(p) = state.ports.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if p.leases.is_empty() {
-        return placeholder_row(layout.span(), "No ports reserved yet — reserve one below.");
+        return view! {
+            <EmptyRow state=table>"No ports reserved yet — reserve one below."</EmptyRow>
+        }
+        .into_any();
     }
     let mut leases = p.leases;
     // By the port number itself, not its rendering — the lease list reads as an allocation map.
@@ -133,49 +135,64 @@ fn rows_view(state: State) -> AnyView {
         },
         |l| Key::Int(i64::from(l.port)),
     );
-    let shown = layout.shown();
     leases
         .into_iter()
         .map(|l| {
             let service = l.service.clone();
             let key = l.key.clone();
-            let release = view! {
-                <button class="adi-btn adi-btn--link" on:click=move |_| {
-                    let service = service.clone();
-                    let key = key.clone();
-                    spawn_local(async move {
-                        let req = LeaseRef { service, key };
-                        match fetch::release(&req).await {
-                            Ok(r) => {
-                                let msg = match r.freed {
-                                    Some(port) => format!("Released port {port}."),
-                                    None => "Nothing to release.".to_string(),
-                                };
-                                state.flash.set(Some(Flash::ok(msg)));
-                                load(state).await;
-                            }
-                            Err(e) => state.flash.set(Some(Flash::err(e))),
-                        }
-                    });
-                }>"Release"</button>
+            view! {
+                <TableRow
+                    state=table
+                    // The row owns its lease: the cell builder is stored and re-run whenever
+                    // the layout changes, so it cannot borrow one.
+                    cell=move |col| lease_cell(col, &l)
+                    actions=view! {
+                            <button
+                                class="adi-btn adi-btn--link"
+                                on:click=move |_| {
+                                    let (service, key) = (service.clone(), key.clone());
+                                    spawn_local(async move {
+                                        let req = LeaseRef { service, key };
+                                        match fetch::release(&req).await {
+                                            Ok(r) => {
+                                                let msg = match r.freed {
+                                                    Some(port) => format!("Released port {port}."),
+                                                    None => "Nothing to release.".to_string(),
+                                                };
+                                                state.flash.set(Some(Flash::ok(msg)));
+                                                load(state).await;
+                                            }
+                                            Err(e) => state.flash.set(Some(Flash::err(e))),
+                                        }
+                                    });
+                                }
+                            >
+                                "Release"
+                            </button>
+                    }
+                    .into_any()
+                />
             }
-            .into_any();
-            body_row(&shown, |col| lease_cell(col, &l), Some(release))
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
 }
 
-/// One lease's cell under `col`. Matching the header text — the same key the sort uses — is what
-/// lets the user hide and reorder columns without the row builder knowing about it.
+/// One lease's cell under `col` — the cell's *contents*, since [`adi_ui::Row`] owns the `<td>`
+/// and the padding, rule and hover that go with it.
+///
+/// Matching the header text — the same key the sort uses — is what lets the user hide and
+/// reorder columns without the row builder knowing about it.
 fn lease_cell(col: &str, l: &Lease) -> AnyView {
     match col {
-        "Key" => view! { <td class="adi-mono">{l.key.clone()}</td> }.into_any(),
-        "Port" => {
-            view! { <td class="adi-mono adi-table__port">{l.port.to_string()}</td> }.into_any()
+        "Key" => view! { <span class="font-mono">{l.key.clone()}</span> }.into_any(),
+        "Port" => view! {
+            <span class="font-mono font-medium text-accent">{l.port.to_string()}</span>
         }
+        .into_any(),
         // "Service", and anything the layout offers that this match doesn't name.
-        _ => view! { <td class="adi-mono">{l.service.clone()}</td> }.into_any(),
+        _ => view! { <span class="font-mono">{l.service.clone()}</span> }.into_any(),
     }
 }
 
@@ -183,9 +200,8 @@ fn lease_cell(col: &str, l: &Lease) -> AnyView {
 /// ones when `managed_only`. A port is ADI-managed when a registry lease binds it.
 fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
     let table = state.tables.used_ports;
-    let layout = table.layout.get();
     let Some(used) = state.used.get() else {
-        return placeholder_row(layout.span(), "Scanning…");
+        return view! { <EmptyRow state=table>"Scanning…"</EmptyRow> }.into_any();
     };
     let leases = state.ports.get().map(|p| p.leases).unwrap_or_default();
     let managed = managed_only.get();
@@ -211,7 +227,7 @@ fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
         } else {
             "No listening ports found."
         };
-        return placeholder_row(layout.span(), msg);
+        return view! { <EmptyRow state=table>{msg}</EmptyRow> }.into_any();
     }
 
     // An unowned port sorts as empty rather than dropping out, so "who owns what?" reads as one
@@ -232,9 +248,11 @@ fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
         |(u, _)| Key::Int(i64::from(u.port)),
     );
 
-    let shown = layout.shown();
     rows.into_iter()
-        .map(|(u, lease)| body_row(&shown, |col| used_cell(col, &u, lease.as_ref()), None))
+        .map(|(u, lease)| {
+            view! { <TableRow state=table cell=move |col| used_cell(col, &u, lease.as_ref())/> }
+                .into_any()
+        })
         .collect::<Vec<_>>()
         .into_any()
 }
@@ -242,19 +260,22 @@ fn used_rows_view(state: State, managed_only: RwSignal<bool>) -> AnyView {
 /// One listening port's cell under `col`. See [`lease_cell`] on why this matches header text.
 fn used_cell(col: &str, u: &UsedPort, lease: Option<&Lease>) -> AnyView {
     match col {
-        "Process" => view! { <td>{dash(u.process.clone())}</td> }.into_any(),
+        "Process" => view! { {dash(u.process.clone())} }.into_any(),
         "PID" => {
             let pid = u.pid.map_or_else(|| "—".to_string(), |p| p.to_string());
-            view! { <td class="adi-mono adi-muted">{pid}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{pid}</span> }.into_any()
         }
         "Owner" => match lease {
             Some(l) => view! {
-                <td><span class="adi-chip">{format!("{}/{}", l.service, l.key)}</span></td>
+                <span class="adi-chip">{format!("{}/{}", l.service, l.key)}</span>
             }
             .into_any(),
-            None => view! { <td class="adi-muted">"—"</td> }.into_any(),
+            None => view! { <span class="text-meta">"—"</span> }.into_any(),
         },
         // "Port", and anything the layout offers that this match doesn't name.
-        _ => view! { <td class="adi-mono adi-table__port">{u.port.to_string()}</td> }.into_any(),
+        _ => view! {
+            <span class="font-mono font-medium text-accent">{u.port.to_string()}</span>
+        }
+        .into_any(),
     }
 }

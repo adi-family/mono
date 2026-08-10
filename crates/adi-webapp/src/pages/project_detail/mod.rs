@@ -4,6 +4,7 @@
 
 use adi_webapp_api::types::{ProjectDetail, ProjectsState};
 use leptos::prelude::*;
+use adi_ui::{Table};
 use wasm_bindgen_futures::spawn_local;
 
 use super::agents::{all_chats_view, live_view as agent_live_view};
@@ -20,7 +21,7 @@ use crate::state::{
     AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, SecretsForm, State, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
 };
-use crate::ui::{configurable_table, flash_view, fmt_date};
+use crate::ui::{flash_view, fmt_date};
 
 mod agents_panel;
 mod files;
@@ -304,8 +305,7 @@ fn detail_body(
             </div>
             // A closure, not a rendered value: re-sorting or rearranging then redraws just this
             // tbody instead of the whole panel around it.
-            {configurable_table(state.tables.services, SERVICE_COLS,
-                move || service_rows(state, rows_id.clone(), services.clone(), has_hive))}
+            <Table state=state.tables.services>{move || service_rows(state, rows_id.clone(), services.clone(), has_hive)}</Table>
             {service_create_form(state, service_form)}
             <div class="adi-hint">
                 "Written to the project's " <code>".adi/hive.yaml"</code> " — the front door picks the "

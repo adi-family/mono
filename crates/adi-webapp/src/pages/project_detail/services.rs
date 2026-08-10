@@ -2,13 +2,13 @@
 
 use adi_webapp_api::types::{NewService, NewServiceDocker, ProjectDetail, ProjectService};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, State};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, cpu_cell, dash, fmt_ports, memory_cell,
-    placeholder_row, sort_rows,
+    Key, TextField, apply_mutation, cpu_cell, dash, fmt_ports, memory_cell, sort_rows,
 };
 
 /// The Services panel's columns; the trailing blank one holds the row's Start/Stop control and
@@ -56,7 +56,7 @@ pub(crate) fn service_rows(
     mut services: Vec<ProjectService>,
     has_hive: bool,
 ) -> AnyView {
-    let layout = state.tables.services.layout.get();
+    let table = state.tables.services;
     sort_rows(
         &mut services,
         state.tables.services.sort.get(),
@@ -69,9 +69,8 @@ pub(crate) fn service_rows(
         } else {
             "No .adi/hive.yaml — this project has no runtime services yet."
         };
-        return placeholder_row(layout.span(), msg);
+        return view! { <EmptyRow state=table>{msg}</EmptyRow> }.into_any();
     }
-    let shown = layout.shown();
     services
         .into_iter()
         .map(|s| {
@@ -101,7 +100,7 @@ pub(crate) fn service_rows(
                 }
                 .into_any()
             };
-            body_row(&shown, |col| cell(col, &s), Some(action))
+            view! { <TableRow state=table cell=move |col| cell(col, &s) actions=action/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -111,16 +110,16 @@ pub(crate) fn service_rows(
 /// what lets the user hide and reorder columns without the row builder knowing about it.
 fn cell(col: &str, s: &ProjectService) -> AnyView {
     match col {
-        "Host" => view! { <td class="adi-mono">{dash(s.host.clone())}</td> }.into_any(),
+        "Host" => view! { <span class="font-mono">{dash(s.host.clone())}</span> }.into_any(),
         "Ports" => {
-            view! { <td class="adi-mono adi-table__port">{fmt_ports(&s.ports)}</td> }.into_any()
+            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }.into_any()
         }
-        "Command" => view! { <td class="adi-mono adi-muted">{dash(s.run.clone())}</td> }.into_any(),
-        "Restart" => view! { <td class="adi-muted">{dash(s.restart.clone())}</td> }.into_any(),
+        "Command" => view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any(),
+        "Restart" => view! { <span class="text-meta">{dash(s.restart.clone())}</span> }.into_any(),
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),
         // "Service", and anything the layout offers that this match doesn't name.
-        _ => view! { <td class="adi-mono">{s.name.clone()}</td> }.into_any(),
+        _ => view! { <span class="font-mono">{s.name.clone()}</span> }.into_any(),
     }
 }
 

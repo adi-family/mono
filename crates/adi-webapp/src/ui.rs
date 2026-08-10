@@ -9,20 +9,20 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::state::{Flash, RowMenu, State};
 
-/// The table's state — sorting, the column arrangement, and its persistence — now lives in
-/// [`adi_ui::table`], because none of it is about how a table *looks*. What stays here is the
-/// markup it drives ([`configurable_table`] and friends), which is still written against the
-/// `adi-*` layer rather than adi-ui's utilities.
+/// A table — its state *and* its markup — now lives entirely in [`adi_ui`]: a page builds one
+/// from [`adi_ui::Table`], [`adi_ui::Row`] and [`adi_ui::EmptyRow`]. Nothing about a table is
+/// written against the `adi-*` layer any more.
 ///
 /// Re-exported under the names the pages already import, so `use crate::ui::{Key, TableState}`
 /// keeps meaning what it meant. `SortKey` comes back as `Key`: unqualified it is too vague to
 /// export from a component library, and too long to write 115 times in a comparator.
 pub(crate) use adi_ui::{Sort, SortKey as Key, TableState, sort_rows};
 
-/// A single full-width placeholder row spanning `colspan` columns — the
-/// `<tr><td class="adi-empty">…</td></tr>` every table body falls back to for its loading, empty,
-/// or error state. A table's span is whatever its user left showing, so callers pass
-/// [`adi_ui::Layout::span`] rather than a literal.
+/// A full-width placeholder row spanning `colspan` columns.
+///
+/// The one caller left is the SQL console's result grid, which has no [`TableState`] to take a
+/// span from — its columns are whatever the query returned. Every table that *does* have one
+/// uses [`adi_ui::EmptyRow`] instead, which reads the span off the layout itself.
 pub(crate) fn placeholder_row(colspan: usize, msg: &str) -> AnyView {
     view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
 }
@@ -132,162 +132,9 @@ pub(crate) fn fmt_uptime(s: u64) -> String {
     }
 }
 
-/// One body row: a cell per shown column, in the user's order, then the row's controls in the
-/// trailing action cell when the table declares one (`action` of `None` for a table without).
-///
-/// `shown` is [`adi_ui::Layout::shown`], hoisted out of the row loop by the caller. Building cells by
-/// asking for a header rather than emitting a fixed sequence is what makes hiding and reordering
-/// invisible to a page's row builder.
-pub(crate) fn body_row(
-    shown: &[&'static str],
-    cell: impl Fn(&'static str) -> AnyView,
-    action: Option<AnyView>,
-) -> AnyView {
-    let cells: Vec<AnyView> = shown.iter().map(|col| cell(col)).collect();
-    view! {
-        <tr>
-            {cells}
-            {action.map(|a| view! { <td class="adi-table__actions">{a}</td> })}
-        </tr>
-    }
-    .into_any()
-}
 
-/// The app's one table: the `adi-tablewrap` scroll box, click-to-sort headers, and a gear that
-/// opens a menu for showing, hiding, and reordering columns.
-///
-/// This owns the chrome and the state, never the data: the page reads the same `table.sort` and
-/// `table.layout` signals when it builds `body`, emitting one cell per [`adi_ui::Layout::shown`] header
-/// (see [`body_row`]). `headers` is the full set the table can ever show — the user's subset and
-/// order live in the layout.
-///
-/// A table with a single named column gets sorting but no gear: there is nothing to reorder, and
-/// its one column may not be hidden, so the menu would offer only disabled controls.
-pub(crate) fn configurable_table(
-    table: TableState,
-    headers: &'static [&'static str],
-    body: impl IntoView + 'static,
-) -> AnyView {
-    let sort = table.sort;
-    let cells = move || {
-        let mut cells: Vec<AnyView> = table
-            .layout
-            .get()
-            .shown()
-            .into_iter()
-            .map(|header| {
-                view! {
-                    <th class="adi-table__sort" aria-sort=move || sort.get().aria(header)>
-                        // A real button, so the header is reachable and operable by keyboard.
-                        <button type="button" title=format!("Sort by {header}")
-                            on:click=move |_| table.set_sort(sort.get_untracked().toggled(header))>
-                            {header}
-                        </button>
-                    </th>
-                }
-                .into_any()
-            })
-            .collect();
-        if headers.iter().any(|h| h.is_empty()) {
-            cells.push(view! { <th></th> }.into_any());
-        }
-        cells
-    };
-    // Without a gear there is no absolute box to anchor and no header padding to reserve, so the
-    // shell is rendered bare rather than wrapped in a `.adi-tablebox` that does nothing.
-    if headers.iter().filter(|h| !h.is_empty()).count() < 2 {
-        return table_shell(cells, body);
-    }
-    view! {
-        <div class="adi-tablebox">
-            {column_menu(table)}
-            {table_shell(cells, body)}
-        </div>
-    }
-    .into_any()
-}
 
-/// The shared scroll box + table markup, so the shell exists once.
-fn table_shell(header_cells: impl IntoView + 'static, body: impl IntoView + 'static) -> AnyView {
-    view! {
-        <div class="adi-tablewrap">
-            <table class="adi-table">
-                <thead><tr>{header_cells}</tr></thead>
-                <tbody>{body}</tbody>
-            </table>
-        </div>
-    }
-    .into_any()
-}
 
-/// The gear and the panel it opens: one row per column with a show/hide toggle and a pair of
-/// move buttons, plus Reset. Buttons rather than drag-and-drop — the list is short, and this
-/// works from the keyboard without a custom drop target.
-fn column_menu(table: TableState) -> AnyView {
-    let open = table.open;
-    let rows = move || {
-        let layout = table.layout.get();
-        let last = layout.columns().len().saturating_sub(1);
-        layout
-            .columns()
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let (header, shown) = (c.header, c.shown);
-                let locked = layout.is_last_shown(i);
-                view! {
-                    <div class="adi-colmenu__row">
-                        <button class="adi-colmenu__pick" type="button"
-                            role="checkbox" aria-checked=shown.to_string()
-                            prop:disabled=locked
-                            title=if locked { "A table keeps at least one column" }
-                                  else if shown { "Hide this column" } else { "Show this column" }
-                            on:click=move |_| table.edit_layout(|l| l.toggle(i))>
-                            <span class="adi-colmenu__box" data-on=shown.to_string()>
-                                {if shown { "\u{2713}" } else { "" }}
-                            </span>
-                            <span>{header}</span>
-                        </button>
-                        <button class="adi-btn adi-btn--icon-sm" type="button"
-                            title="Move up" aria-label=format!("Move {header} up")
-                            prop:disabled=i == 0
-                            on:click=move |_| table.edit_layout(|l| l.shift(i, true))>"\u{2191}"</button>
-                        <button class="adi-btn adi-btn--icon-sm" type="button"
-                            title="Move down" aria-label=format!("Move {header} down")
-                            prop:disabled=i == last
-                            on:click=move |_| table.edit_layout(|l| l.shift(i, false))>"\u{2193}"</button>
-                    </div>
-                }
-                .into_any()
-            })
-            .collect::<Vec<_>>()
-    };
-    view! {
-        <button class="adi-btn adi-btn--icon-sm adi-tablebox__cog" type="button"
-            title="Columns" aria-label="Configure columns"
-            aria-expanded=move || open.get().to_string()
-            on:click=move |_| open.update(|o| *o = !*o)>
-            <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
-                stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"
-                inner_html=crate::icons::Icon::Gear.path()></svg>
-        </button>
-        // Mounted but hidden until opened, matching the row kebab: the scrim makes the next
-        // click anywhere a dismiss.
-        <div class="adi-menu__scrim"
-            style=move || if open.get() { String::new() } else { "display:none".to_string() }
-            on:click=move |_| open.set(false)></div>
-        <div class="adi-menu adi-colmenu"
-            style=move || if open.get() { String::new() } else { "display:none".to_string() }>
-            <div class="adi-menu__head">
-                <span>"Columns"</span>
-                <button class="adi-btn adi-btn--link" type="button"
-                    on:click=move |_| table.reset()>"Reset"</button>
-            </div>
-            {rows}
-        </div>
-    }
-    .into_any()
-}
 
 /// The one-line status message shown under a form: reads the shared `flash` signal, colouring
 /// itself via `data-kind`.

@@ -15,14 +15,15 @@ use std::collections::BTreeMap;
 use adi_ui::Lang;
 use adi_webapp_api::types::{SaveTrigger, TriggerDto, TriggerPreset, TriggersState};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, configurable_table, field_hint,
-    flash_view, fmt_date, fmt_uptime, menu_item, placeholder_row, row_actions, sort_rows,
+    Key, TextField, apply_mutation, field_hint,
+    flash_view, fmt_date, fmt_uptime, menu_item, row_actions, sort_rows,
     updated_text,
 };
 
@@ -73,8 +74,7 @@ pub(crate) fn triggers_view(state: State, form: TriggersForm, log: TriggersLogVi
                 <span class="adi-updated">{move || updated_text(triggers, secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.triggers, COLS,
-                move || trigger_rows(state, form, log))}
+            <Table state=state.tables.triggers>{move || trigger_rows(state, form, log)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -514,18 +514,16 @@ fn current_extras(state: State, form: TriggersForm) -> BTreeMap<String, String> 
 /// Render the triggers table body: a loading/empty placeholder, or one row per trigger.
 fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyView {
     let table = state.tables.triggers;
-    let layout = table.layout.get();
     let Some(st) = state.triggers.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     if st.triggers.is_empty() {
-        return placeholder_row(layout.span(), "No triggers yet — define one below.");
+        return view! { <EmptyRow state=table>"No triggers yet — define one below."</EmptyRow> }.into_any();
     }
     let mut triggers = st.triggers;
     sort_rows(&mut triggers, table.sort.get(), trigger_key, |t| {
         Key::text(&t.name)
     });
-    let shown = layout.shown();
     triggers
         .into_iter()
         .map(|t| {
@@ -538,7 +536,7 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
             });
             let actions = row_actions(state, format!("trigger:{}", t.name),
                 trigger_actions(state, log, &t), vec![trigger_toggle_item(state, &t), edit, delete]);
-            body_row(&shown, |col| trigger_cell(col, &t), Some(actions))
+            view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -564,28 +562,28 @@ pub(crate) fn trigger_key(t: &TriggerDto, col: &str) -> Key {
 /// also how a project's narrower panel works from the same code. Shared with that panel.
 pub(crate) fn trigger_cell(col: &str, t: &TriggerDto) -> AnyView {
     match col {
-        "Launches" => view! { <td class="adi-mono">{launch_label(t)}</td> }.into_any(),
+        "Launches" => view! { <span class="font-mono">{launch_label(t)}</span> }.into_any(),
         "Project" => match &t.project {
             Some(p) if !p.trim().is_empty() => {
-                view! { <td><span class="adi-chip adi-mono">{p.clone()}</span></td> }.into_any()
+                view! { <span><span class="adi-chip adi-mono">{p.clone()}</span></span> }.into_any()
             }
-            _ => view! { <td><span class="adi-muted">"—"</span></td> }.into_any(),
+            _ => view! { <span><span class="adi-muted">"—"</span></span> }.into_any(),
         },
-        "Status" => view! { <td>{status_cell(t)}</td> }.into_any(),
+        "Status" => view! { <span>{status_cell(t)}</span> }.into_any(),
         "Last run" => {
             let fired = t.last_fired_at.map_or_else(|| "—".to_string(), fmt_date);
-            view! { <td class="adi-mono adi-muted">{fired}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{fired}</span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
             let hook_hint = (t.kind == "webhook").then(|| format!("/api/hooks/{}", t.name));
             view! {
-                <td title=t.description.clone()>
+                <span title=t.description.clone()>
                     <span>{t.name.clone()}</span>
                     {hook_hint.map(|h| view! {
                         <span class="adi-muted adi-mono" style="font-size:var(--text-sm); display:block">{h}</span>
                     })}
-                </td>
+                </span>
             }
             .into_any()
         }

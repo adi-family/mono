@@ -18,13 +18,14 @@ use adi_webapp_api::types::{
     Dashboard, DashboardsState, NewDashboard, TransferDashboard, TransferMode,
 };
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{DashboardsForm, Flash, State, load};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, body_row, configurable_table, confirm, field_hint,
-    flash_view, menu_item, placeholder_row, row_actions, segmented, sort_rows, updated_text,
+    Key, TableState, TextField, apply_mutation, confirm, field_hint,
+    flash_view, menu_item, row_actions, segmented, sort_rows, updated_text,
 };
 
 /// The columns shared by the live table and the archived disclosure — both render one dashboard
@@ -58,8 +59,7 @@ pub(crate) fn dashboards_view(state: State, form: DashboardsForm) -> AnyView {
                 <span class="adi-updated">{move || updated_text(dashboards, secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.dashboards, COLS,
-                move || rows_view(state, form, false))}
+            <Table state=state.tables.dashboards>{move || rows_view(state, form, false)}</Table>
         </section>
 
         {transfer_panel(state, form)}
@@ -388,8 +388,7 @@ fn archived_section(state: State, form: DashboardsForm) -> AnyView {
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        {open.then(|| configurable_table(state.tables.dashboards_archived, COLS,
-                            move || rows_view(state, form, true)))}
+                        {open.then(|| view! { <Table state=state.tables.dashboards_archived>{move || rows_view(state, form, true)}</Table> }.into_any())}
                     </section>
                 }
                 .into_any()
@@ -407,9 +406,8 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
     } else {
         state.tables.dashboards
     };
-    let layout = table.layout.get();
     let Some(loaded) = state.dashboards.get() else {
-        return placeholder_row(layout.span(), "Loading…");
+        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     };
     let mut rows: Vec<Dashboard> = loaded
         .dashboards
@@ -417,14 +415,11 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
         .filter(|d| d.is_archived() == archived)
         .collect();
     if rows.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            if archived {
+        return view! { <EmptyRow state=table>{if archived {
                 "Nothing archived."
             } else {
                 "No dashboards yet — create one under ~/.adi/mono/dashboards/."
-            },
-        );
+            }}</EmptyRow> }.into_any();
     }
     // A dead service sorts below every live one at the same port, so a descending Frontend sort
     // answers "what is actually up?" rather than interleaving the stopped ones.
@@ -450,11 +445,17 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
         },
         |d| Key::text(&d.name),
     );
-    let shown = layout.shown();
     rows.into_iter()
         .map(|d| {
             let action = row_action(state, form, &d.id, d.is_archived());
-            body_row(&shown, |col| cell(col, &d, state), Some(action))
+            view! {
+                <TableRow
+                    state=table
+                    cell=move |col| cell(col, &d, state)
+                    actions=action
+                />
+            }
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -468,17 +469,17 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
 /// page, so the row can be verified by clicking rather than by reading a port number.
 fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
     match col {
-        "Project" => view! { <td>{project_cell(state, d)}</td> }.into_any(),
+        "Project" => view! { <span>{project_cell(state, d)}</span> }.into_any(),
         // Only the frontend is a link — the backend serves JSON to the page, not the reader.
         "Frontend" => {
-            view! { <td>{service_cell(d.frontend_port, d.frontend_running, open_url(d))}</td> }
+            view! { <span>{service_cell(d.frontend_port, d.frontend_running, open_url(d))}</span> }
                 .into_any()
         }
         "Backend" => {
-            view! { <td>{service_cell(d.backend_port, d.backend_running, None)}</td> }.into_any()
+            view! { <span>{service_cell(d.backend_port, d.backend_running, None)}</span> }.into_any()
         }
-        "Modules" => view! { <td class="adi-mono">{summarize(&d.modules)}</td> }.into_any(),
-        "Routes" => view! { <td class="adi-mono">{summarize(&d.routes)}</td> }.into_any(),
+        "Modules" => view! { <span class="font-mono">{summarize(&d.modules)}</span> }.into_any(),
+        "Routes" => view! { <span class="font-mono">{summarize(&d.routes)}</span> }.into_any(),
         // "Dashboard", and anything the layout offers that this match doesn't name.
         _ => {
             let name = match open_url(d) {
@@ -492,12 +493,12 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
                 None => view! { <span>{d.name.clone()}</span> }.into_any(),
             };
             view! {
-                <td>
+                <span>
                     <div>{name}</div>
                     <div class="adi-mono adi-muted" title=d.id.clone()>{short_id(&d.id)}</div>
                     {moved_marker(d)}
                     {no_host_hint(d)}
-                </td>
+                </span>
             }
             .into_any()
         }

@@ -5,13 +5,14 @@ use std::collections::HashMap;
 
 use adi_webapp_api::types::{NewProject, Project, ProjectsState, TasksState};
 use leptos::prelude::*;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, ProjectsForm, State};
 use crate::ui::{
-    Key, TextField, apply_mutation, body_row, configurable_table, confirm, flash_view, fmt_date,
-    menu_item, placeholder_row, row_actions, sort_rows, updated_text,
+    Key, TextField, apply_mutation, confirm, flash_view, fmt_date,
+    menu_item, row_actions, sort_rows, updated_text,
 };
 
 /// The live projects table's columns; the trailing blank one holds the row's Archive control.
@@ -49,8 +50,7 @@ pub(crate) fn projects_view(state: State, form: ProjectsForm, route: RwSignal<Ro
                 <span class="adi-updated">{move || updated_text(projects, secs_since)}</span>
             </div>
 
-            {configurable_table(state.tables.projects, COLS,
-                move || project_rows(state, route, false))}
+            <Table state=state.tables.projects>{move || project_rows(state, route, false)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -139,8 +139,7 @@ fn archived_section(state: State, route: RwSignal<Route>, show: RwSignal<bool>) 
                             </button>
                             <span class="adi-chip adi-mono">{n.to_string()}</span>
                         </div>
-                        {open.then(|| configurable_table(state.tables.projects_archived,
-                            ARCHIVED_COLS, move || project_rows(state, route, true)))}
+                        {open.then(|| view! { <Table state=state.tables.projects_archived>{move || project_rows(state, route, true)}</Table> }.into_any())}
                     </section>
                 }
                 .into_any()
@@ -166,9 +165,8 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
     } else {
         state.tables.projects
     };
-    let layout = table.layout.get();
     let Some(loaded) = state.projects.get() else {
-        return placeholder_row(layout.span(), "Loading\u{2026}");
+        return view! { <EmptyRow state=table>"Loading\u{2026}"</EmptyRow> }.into_any();
     };
     // Rolled up once, not per comparison: the Tasks column is both a sort key and a cell, and
     // both would otherwise rescan the whole task list for every project they touch.
@@ -194,16 +192,12 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
     );
     let rows = project_tree_rows(mine);
     if rows.is_empty() {
-        return placeholder_row(
-            layout.span(),
-            if archived {
+        return view! { <EmptyRow state=table>{if archived {
                 "Nothing archived."
             } else {
                 "No projects yet \u{2014} register one below."
-            },
-        );
+            }}</EmptyRow> }.into_any();
     }
-    let shown = layout.shown();
 
     rows.into_iter()
         .map(|(depth, p)| {
@@ -241,11 +235,7 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
                 }
             };
             let tasks = counts.get(&p.id).copied();
-            body_row(
-                &shown,
-                |col| project_cell(col, &p, depth, tasks, state, route),
-                Some(action),
-            )
+            view! { <TableRow state=table cell=move |col| project_cell(col, &p, depth, tasks, state, route) actions=action/> }.into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -262,26 +252,26 @@ fn project_cell(
     route: RwSignal<Route>,
 ) -> AnyView {
     match col {
-        "ID" => view! { <td class="adi-mono">{p.id.clone()}</td> }.into_any(),
+        "ID" => view! { <span class="font-mono">{p.id.clone()}</span> }.into_any(),
         "Tasks" => match counts {
             Some((open, total)) => {
                 let tip = format!("{open} open \u{b7} {total} total");
                 view! {
-                    <td>
+                    <span>
                         <span class="adi-chip adi-mono" title=tip>{format!("{open} open")}</span>
-                    </td>
+                    </span>
                 }
                 .into_any()
             }
-            None => view! { <td><span class="adi-muted">"\u{2014}"</span></td> }.into_any(),
+            None => view! { <span><span class="adi-muted">"\u{2014}"</span></span> }.into_any(),
         },
         // The archive dates rows by when they were archived; the live table by creation.
         "Created" => {
-            view! { <td class="adi-mono adi-muted">{fmt_date(p.created_at)}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{fmt_date(p.created_at)}</span> }.into_any()
         }
         "Archived" => {
             let at = fmt_date(p.archived_at.unwrap_or(p.created_at));
-            view! { <td class="adi-mono adi-muted">{at}</td> }.into_any()
+            view! { <span class="font-mono text-meta">{at}</span> }.into_any()
         }
         "Status" => {
             let label = if p.is_archived() {
@@ -289,7 +279,7 @@ fn project_cell(
             } else {
                 "Active"
             };
-            view! { <td><span class="adi-muted">{label}</span></td> }.into_any()
+            view! { <span><span class="adi-muted">{label}</span></span> }.into_any()
         }
         // "Name", and anything the layout offers that this match doesn't name.
         _ => {
@@ -299,7 +289,7 @@ fn project_cell(
             // A computed per-row indent — the one thing here that genuinely varies per row.
             let indent = format!("padding-left:{}px", depth * 16);
             view! {
-                <td title=title>
+                <span title=title>
                     <span style=indent>
                         <a class="adi-btn adi-btn--link" href=href
                             on:click=move |ev: web_sys::MouseEvent| {
@@ -308,7 +298,7 @@ fn project_cell(
                                 open_project(state, route, open_id.clone());
                             }>{p.name.clone()}</a>
                     </span>
-                </td>
+                </span>
             }
             .into_any()
         }

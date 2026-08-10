@@ -19,12 +19,18 @@
 use std::time::Duration;
 
 use adi_ui::{
-    AppItem, AppState, Badge, BadgeTone, Chat, Button, ButtonSize, ButtonVariant, CodeEditor, CodeFrame,
+    AppItem, AppState, Badge, BadgeTone, Chat, Button, ButtonSize,
+    ButtonVariant, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
     Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
-    Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, Textarea,
-    ToolCall, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, dir_of,
+    Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, SortKey, Table,
+    TableState, Textarea, ToolCall, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, dir_of,
+    sort_rows,
 };
+// The gallery's own `Row` is the label-plus-specimen line every panel is built from; the
+// crate's is a table row. Both earn the name in their own context, so the import is aliased
+// rather than either being renamed.
+use adi_ui::{EmptyRow, Row as TableRow};
 use leptos::prelude::*;
 
 fn main() {
@@ -864,6 +870,135 @@ fn SessionsDemo() -> impl IntoView {
     }
 }
 
+/// One reserved port, for the table demo. Deliberately mixed types: a number that must not
+/// sort as text, a name that must, and a duration whose cell says `2h 14m` while its key is
+/// seconds.
+struct Reservation {
+    port: u16,
+    service: &'static str,
+    pid: u32,
+    uptime: u64,
+    state: &'static str,
+}
+
+/// The columns this table can show. The trailing blank is the action column — not data, so
+/// the settings menu never offers it.
+const PORT_HEADERS: &[&str] = &["Port", "Service", "PID", "Uptime", "State", ""];
+
+const PORTS: &[Reservation] = &[
+    // The uptimes are chosen to make the sort key visible: as text, `9h 5m` sorts *after*
+    // `53h 11m` — as a number it does not. A demo where both orders agree proves nothing.
+    Reservation { port: 80, service: "adi-hive", pid: 4417, uptime: 191_460, state: "up" },
+    Reservation { port: 8000, service: "adi-app", pid: 88_231, uptime: 8_040, state: "up" },
+    Reservation { port: 9081, service: "adi-ui-playground", pid: 91_002, uptime: 92, state: "up" },
+    Reservation { port: 15353, service: "adi.hive · dns", pid: 512, uptime: 356_460, state: "up" },
+    Reservation { port: 45353, service: "adi-dns · scratch", pid: 0, uptime: 0, state: "down" },
+    Reservation { port: 5432, service: "postgres", pid: 3301, uptime: 32_700, state: "idle" },
+];
+
+/// An uptime as `Ns` / `Nm Ss` / `Nh Mm` — the rendered cell, which is exactly what must not
+/// be what the column sorts on.
+fn fmt_uptime(s: u64) -> String {
+    if s == 0 {
+        "—".to_string()
+    } else if s < 60 {
+        format!("{s}s")
+    } else if s < 3_600 {
+        format!("{}m {}s", s / 60, s % 60)
+    } else {
+        format!("{}h {}m", s / 3_600, (s % 3_600) / 60)
+    }
+}
+
+/// A live table: click a header to sort, open the gear to show, hide and reorder columns.
+/// Both survive a reload — `TableState` persists them under the key it was built with.
+#[component]
+fn PortsDemo() -> impl IntoView {
+    let table = TableState::new("playground-ports", PORT_HEADERS);
+
+    let rows = move || {
+        let sort = table.sort.get();
+        let mut order: Vec<&Reservation> = PORTS.iter().collect();
+        sort_rows(
+            &mut order,
+            sort,
+            |p, col| match col {
+                // The number, never the string that was rendered from it: `9081` sorts after
+                // `80`, and `2h 14m` after `92s`.
+                "Port" => SortKey::num(u64::from(p.port)),
+                "PID" => SortKey::num(u64::from(p.pid)),
+                "Uptime" => SortKey::num(p.uptime),
+                "State" => SortKey::text(p.state),
+                _ => SortKey::text(p.service),
+            },
+            // Ties break on the port, ascending in both directions, so a re-sort never
+            // reshuffles rows that compared equal.
+            |p| SortKey::num(u64::from(p.port)),
+        );
+        order
+            .into_iter()
+            .map(|p| {
+                view! {
+                    <TableRow
+                        state=table
+                        cell=move |col| match col {
+                            "Port" => {
+                                view! { <span class="font-medium text-accent">{p.port}</span> }
+                                    .into_any()
+                            }
+                            "Service" => view! { <span class="text-ink">{p.service}</span> }.into_any(),
+                            "PID" => {
+                                view! {
+                                    <span class="font-mono text-mini text-meta">
+                                        {if p.pid == 0 { "—".to_string() } else { p.pid.to_string() }}
+                                    </span>
+                                }
+                                    .into_any()
+                            }
+                            "Uptime" => {
+                                view! { <span class="text-meta">{fmt_uptime(p.uptime)}</span> }
+                                    .into_any()
+                            }
+                            "State" => {
+                                view! {
+                                    <Badge tone=match p.state {
+                                        "up" => BadgeTone::Online,
+                                        "idle" => BadgeTone::Warn,
+                                        _ => BadgeTone::Down,
+                                    }>{p.state}</Badge>
+                                }
+                                    .into_any()
+                            }
+                            // A header the row builder does not know is its own business.
+                            _ => ().into_any(),
+                        }
+                        actions=view! {
+                            <Button size=ButtonSize::Small variant=ButtonVariant::Link>
+                                "Free"
+                            </Button>
+                        }
+                            .into_any()
+                    />
+                }
+            })
+            .collect_view()
+    };
+
+    view! { <Table state=table>{rows}</Table> }
+}
+
+/// The same table with nothing in it — the placeholder spans whatever the user is currently
+/// showing, so hiding a column keeps it centred.
+#[component]
+fn EmptyTableDemo() -> impl IntoView {
+    let table = TableState::new("playground-leases", &["Lease", "Owner", "Expires"]);
+    view! {
+        <Table state=table>
+            <EmptyRow state=table>"No leases held."</EmptyRow>
+        </Table>
+    }
+}
+
 #[component]
 fn Playground() -> impl IntoView {
     // The theme override the tokens read off <html data-theme>. `None` follows the OS — the
@@ -1166,6 +1301,40 @@ fn Playground() -> impl IntoView {
 
             // Controls shown where they actually live — closing a panel, not floating in a
             // row of their own. A form strip only looks right against the body above it.
+            <Panel title="Table" flush=true>
+                <div class="px-4 pt-3 pb-3 text-mini text-meta">
+                    "Live: click a header to sort it, click again to reverse, and open the \
+                     gear to show, hide and reorder columns. Both are persisted, so the \
+                     table is still arranged that way after a reload. What is compared is \
+                     the "
+                    <span class="font-mono">"SortKey"</span>
+                    ", never the rendered cell — which is why Uptime puts "
+                    <span class="font-mono">"9h 5m"</span>
+                    " before "
+                    <span class="font-mono">"53h 11m"</span>
+                    " and Port puts "
+                    <span class="font-mono">"9081"</span>
+                    " before "
+                    <span class="font-mono">"15353"</span>
+                    ". Sort either column as text and both of those come out backwards. The \
+                     last column is the action column: blank header, never offered by the \
+                     gear, and shrink-wrapped so the data keeps the width."
+                </div>
+                <PortsDemo/>
+            </Panel>
+
+            <Panel title="Table · empty" flush=true>
+                <div class="px-4 pt-3 pb-3 text-mini text-meta">
+                    "The placeholder spans the columns the table is "
+                    <em>"currently"</em>
+                    " showing, so it stays centred after a column is hidden. This one has no \
+                     action column, which is the other half of the gear's rule: three \
+                     columns to arrange, so the gear is there — a one-column table has \
+                     nothing to offer and shows none."
+                </div>
+                <EmptyTableDemo/>
+            </Panel>
+
             <Panel title="Form · Field · Input" flush=true>
                 <div class="px-4 pt-3 pb-1 text-mini text-meta">
                     "Fields align on their inputs, not their labels. Hover a "

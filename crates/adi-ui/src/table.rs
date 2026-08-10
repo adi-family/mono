@@ -1,19 +1,41 @@
-//! The state behind a sortable, user-configurable table — and **only** the state.
+//! A sortable, user-configurable table: the state, and the markup that wears it.
 //!
-//! There is no component here. A table's markup is the one thing that genuinely differs
-//! between the screens that have one, while the parts that are fiddly and worth getting
-//! right exactly once are all invisible: what "sorted by Size descending" means when the
-//! cell says `4 GB`, what happens to a saved column arrangement when a release adds a
-//! column, and which column a table refuses to let you hide.
+//! The state half is what is fiddly and worth getting right exactly once, and all of it is
+//! invisible: what "sorted by Size descending" means when the cell says `4 GB`, what happens
+//! to a saved column arrangement when a release adds a column, and which column a table
+//! refuses to let you hide. [`TableState`] owns that, and is usable on its own.
 //!
-//! So this is headless. A page builds its own `<table>`, and drives it from here:
+//! The markup half is [`Table`] — the scroll box, the click-to-sort header row, and the gear
+//! that opens the show/hide/reorder menu. What it deliberately does *not* own is a cell:
+//! rows are the caller's, because a cell holds badges, links and buttons that no table API
+//! can anticipate.
 //!
 //! ```ignore
 //! let table = TableState::new("ports", &["Port", "Service", "PID", ""]);
 //! let mut rows = load();
 //! sort_rows(&mut rows, table.sort.get(), key_of, |r| SortKey::text(&r.name));
-//! for header in table.layout.get().shown() { /* one cell per header */ }
+//!
+//! view! {
+//!     <Table state=table>
+//!         {rows.into_iter().map(|r| view! {
+//!             <Row state=table
+//!                 cell=move |col| match col {
+//!                     "Port" => view! { <span class="text-accent">{r.port}</span> }.into_any(),
+//!                     _ => view! { {r.service.clone()} }.into_any(),
+//!                 }
+//!                 actions=move || view! { <Button size=ButtonSize::Small>"Free"</Button> }.into_any()
+//!             />
+//!         }).collect_view()}
+//!     </Table>
+//! }
 //! ```
+//!
+//! # A cell is asked for, never assumed
+//!
+//! [`Row`] walks [`Layout::shown`] and asks `cell` for each header by name, rather than
+//! taking a fixed sequence of cells. That indirection is the whole reason hiding and
+//! reordering work: a row builder that answers questions cannot fall out of step with a
+//! column order the user has since rearranged.
 //!
 //! # Sorting on keys, not on cells
 //!
@@ -31,6 +53,8 @@
 //! invisible until they find Reset.
 
 use leptos::prelude::*;
+
+use crate::merge;
 
 /// How a [`TableState`] is ordered: which column, and which way.
 ///
@@ -139,6 +163,13 @@ impl Layout {
     #[must_use]
     pub fn span(&self) -> usize {
         self.columns.iter().filter(|c| c.shown).count() + usize::from(self.has_actions)
+    }
+
+    /// Whether the table declared a trailing action column (a blank header). The header row
+    /// owes it an empty `<th>` and every body row a cell, so both halves of the markup ask.
+    #[must_use]
+    pub const fn has_actions(&self) -> bool {
+        self.has_actions
     }
 
     /// Whether `col` is the sole remaining column — the one a table may not hide, since an
@@ -434,6 +465,329 @@ fn storage() -> Option<web_sys::Storage> {
     {
         None
     }
+}
+
+/// The table: a scroll box, a click-to-sort header row, and a gear that opens the column
+/// menu.
+///
+/// It owns the chrome and the state, never the data — `children` is the caller's rows, which
+/// are built with [`Row`] so that hiding and reordering reach them.
+///
+/// The gear appears only when there are at least two columns to arrange. One column cannot be
+/// reordered and may not be hidden, so the menu would open onto nothing but disabled controls.
+///
+/// ```ignore
+/// <Panel title="Ports" flush=true>
+///     <Table state=table>{rows}</Table>
+/// </Panel>
+/// ```
+#[component]
+pub fn Table(
+    state: TableState,
+    #[prop(optional, into)] class: String,
+    children: Children,
+) -> impl IntoView {
+    // The gear floats over the header's right edge. It cannot live inside the scroll box —
+    // that scrolls away from it — nor in a column of its own, which every row would then owe
+    // a matching empty cell. So the box it is pinned to is this outer one.
+    let has_gear = move || state.layout.get().columns().len() > 1;
+
+    view! {
+        <div class=merge("relative", class)>
+            <Show when=has_gear>{move || column_menu(state)}</Show>
+            <div class="overflow-x-auto">
+                <table class="w-full border-collapse">
+                    <thead>
+                        <tr>
+                            {move || {
+                                let layout = state.layout.get();
+                                let shown = layout.shown();
+                                let last = shown.len().saturating_sub(1);
+                                let gear = has_gear();
+                                let mut cells: Vec<AnyView> = shown
+                                    .iter()
+                                    .enumerate()
+                                    // Only the final header reserves room, and only when
+                                    // there is a gear to reserve it for — and only if the
+                                    // table has no action column already holding that corner.
+                                    .map(|(i, h)| {
+                                        header_cell(
+                                            state,
+                                            h,
+                                            gear && !layout.has_actions() && i == last,
+                                        )
+                                    })
+                                    .collect();
+                                if layout.has_actions() {
+                                    cells.push(
+                                        view! {
+                                            <th class=if gear {
+                                                "w-px bg-card pr-8"
+                                            } else {
+                                                "w-px bg-card"
+                                            }></th>
+                                        }
+                                            .into_any(),
+                                    );
+                                }
+                                cells
+                            }}
+                        </tr>
+                    </thead>
+                    <tbody>{children()}</tbody>
+                </table>
+            </div>
+        </div>
+    }
+}
+
+/// One click-to-sort header. The button fills the cell — hence the cell's own padding moves
+/// onto it — so the whole header is the target, and the keyboard reaches it without a custom
+/// handler.
+fn header_cell(state: TableState, header: &'static str, pad_for_gear: bool) -> AnyView {
+    let sort = state.sort;
+    let active = move || sort.get().col == header;
+
+    view! {
+        <th
+            class=if pad_for_gear {
+                "bg-card p-0 pr-8 text-left align-middle whitespace-nowrap"
+            } else {
+                "bg-card p-0 text-left align-middle whitespace-nowrap"
+            }
+            aria-sort=move || sort.get().aria(header)
+        >
+            <button
+                // The active column stays lit while the pointer is on a neighbour, so the
+                // hover colour is only in the inactive arm.
+                class=move || {
+                    if active() {
+                        "caps group flex w-full cursor-pointer items-center gap-1 px-3.5 \
+                         py-[7px] text-left text-accent"
+                    } else {
+                        "caps group flex w-full cursor-pointer items-center gap-1 px-3.5 \
+                         py-[7px] text-left text-faint hover:text-ink"
+                    }
+                }
+                type="button"
+                title=format!("Sort by {header}")
+                on:click=move |_| state.set_sort(sort.get_untracked().toggled(header))
+            >
+                {header}
+                // The caret always occupies its space and only its ink changes, so switching
+                // the sorted column never reflows the header row.
+                <span class=move || {
+                    if active() { "opacity-100" } else { "opacity-0 group-hover:opacity-40" }
+                }>
+                    {move || if active() && sort.get().desc { "\u{2193}" } else { "\u{2191}" }}
+                </span>
+            </button>
+        </th>
+    }
+    .into_any()
+}
+
+/// One body row: a cell per shown column, in the user's order, then the row's controls in the
+/// trailing action cell when the table declared one.
+///
+/// `cell` is asked for a header by name rather than handed an index, which is what keeps a row
+/// builder in step with a column order the user has rearranged. A header the builder does not
+/// recognise is its own business — return an empty view for it.
+/// # Why the data cells are reactive and the action cell is not
+///
+/// Only the *data* cells depend on the layout, so only they are rebuilt when it changes. The
+/// action column cannot be hidden or reordered — [`Layout`] tracks it as a flag fixed at
+/// construction, never as a configurable column — so its cell is rendered once. That is also
+/// what lets `actions` be a plain view instead of a closure: it is never asked for twice.
+#[component]
+pub fn Row<F>(
+    state: TableState,
+    /// This row's content under one header.
+    cell: F,
+    /// The row's controls, for a table whose headers end in a blank.
+    #[prop(optional, into)]
+    actions: Option<AnyView>,
+    #[prop(optional, into)] class: String,
+) -> impl IntoView
+where
+    // `Send` because Leptos requires it of anything inside a reactive view, even under CSR
+    // where nothing ever crosses a thread.
+    F: Fn(&'static str) -> AnyView + Send + 'static,
+{
+    view! {
+        <tr class=merge("hover:bg-bubble", class)>
+            {move || {
+                state
+                    .layout
+                    .get()
+                    .shown()
+                    .into_iter()
+                    .map(|col| {
+                        view! {
+                            <td class="border-t border-divider px-3.5 py-[7px] text-row \
+                                       whitespace-nowrap">
+                                {cell(col)}
+                            </td>
+                        }
+                            .into_any()
+                    })
+                    .collect::<Vec<_>>()
+            }}
+            // Right-aligned and shrink-wrapped, so the data columns keep the width.
+            {actions
+                .map(|a| {
+                    view! {
+                        <td class="w-px border-t border-divider px-3.5 py-[7px] text-right \
+                                   whitespace-nowrap">
+                            {a}
+                        </td>
+                    }
+                })}
+        </tr>
+    }
+}
+
+/// The row a table shows instead of rows. It spans the columns the table is *currently*
+/// showing, which is why it takes the state rather than a count.
+#[component]
+pub fn EmptyRow(state: TableState, children: Children) -> impl IntoView {
+    view! {
+        <tr>
+            <td
+                class="border-t border-divider px-3.5 py-6 text-center text-mini text-meta"
+                colspan=move || state.layout.get().span()
+            >
+                {children()}
+            </td>
+        </tr>
+    }
+}
+
+/// The gear and the panel it opens: one row per column with a show/hide toggle and a pair of
+/// move buttons, plus Reset.
+///
+/// Buttons rather than drag-and-drop — the list is short, and this works from the keyboard
+/// without a custom drop target.
+fn column_menu(state: TableState) -> AnyView {
+    let open = state.open;
+    let rows = move || {
+        let layout = state.layout.get();
+        let last = layout.columns().len().saturating_sub(1);
+        layout
+            .columns()
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let (header, shown) = (c.header, c.shown);
+                let locked = layout.is_last_shown(i);
+                view! {
+                    <div class="flex items-center gap-1 px-1.5 py-0.5">
+                        <button
+                            class="flex flex-1 cursor-pointer items-center gap-2 rounded-sm \
+                                   px-1.5 py-1 text-left text-row text-body hover:bg-bubble \
+                                   disabled:cursor-default disabled:opacity-50"
+                            type="button"
+                            role="checkbox"
+                            aria-checked=shown.to_string()
+                            prop:disabled=locked
+                            title=if locked {
+                                "A table keeps at least one column"
+                            } else if shown {
+                                "Hide this column"
+                            } else {
+                                "Show this column"
+                            }
+                            on:click=move |_| state.edit_layout(|l| l.toggle(i))
+                        >
+                            <span class=if shown {
+                                "grid size-3.5 place-items-center rounded-sm border \
+                                 border-transparent bg-accent-fill text-[9px] text-on-accent"
+                            } else {
+                                "grid size-3.5 place-items-center rounded-sm border \
+                                 border-edge bg-card text-[9px]"
+                            }>{if shown { "\u{2713}" } else { "" }}</span>
+                            <span>{header}</span>
+                        </button>
+                        {move_button(state, i, true, i == 0)}
+                        {move_button(state, i, false, i == last)}
+                    </div>
+                }
+                .into_any()
+            })
+            .collect::<Vec<_>>()
+    };
+
+    view! {
+        <button
+            class="absolute top-1 right-1.5 z-20 grid size-6 cursor-pointer place-items-center \
+                   rounded-sm text-meta hover:bg-card hover:text-ink"
+            type="button"
+            title="Columns"
+            aria-label="Configure columns"
+            aria-expanded=move || open.get().to_string()
+            on:click=move |_| open.update(|o| *o = !*o)
+        >
+            <svg
+                class="size-3.5"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+            >
+                <circle cx="8" cy="8" r="2.25"></circle>
+                <path d="M8 1.5v1.75M8 12.75v1.75M1.5 8h1.75M12.75 8h1.75M3.4 3.4l1.25 1.25M11.35 11.35l1.25 1.25M12.6 3.4l-1.25 1.25M4.65 11.35L3.4 12.6"></path>
+            </svg>
+        </button>
+        <Show when=move || open.get()>
+            // The scrim makes the next click anywhere a dismiss, so it has to be its own
+            // element under the panel rather than a handler on the page.
+            <div class="fixed inset-0 z-20" on:click=move |_| open.set(false)></div>
+            // Anchored under the gear rather than at the click point: this control sits in a
+            // fixed corner, so the panel can too.
+            <div class="island absolute top-7 right-1.5 z-30 min-w-55 bg-card py-1">
+                <div class="flex items-center justify-between gap-2 border-b border-divider \
+                            px-3 py-1.5">
+                    <span class="caps text-faint">"Columns"</span>
+                    <button
+                        class="cursor-pointer text-row text-accent hover:underline"
+                        type="button"
+                        on:click=move |_| state.reset()
+                    >
+                        "Reset"
+                    </button>
+                </div>
+                {rows}
+            </div>
+        </Show>
+    }
+    .into_any()
+}
+
+/// One of the pair of arrows that moves a column in the settings menu.
+fn move_button(state: TableState, col: usize, up: bool, at_end: bool) -> AnyView {
+    let (label, glyph) = if up {
+        ("Move up", "\u{2191}")
+    } else {
+        ("Move down", "\u{2193}")
+    };
+    view! {
+        <button
+            class="grid size-6 shrink-0 cursor-pointer place-items-center rounded-sm text-meta \
+                   hover:bg-bubble hover:text-ink disabled:cursor-default disabled:opacity-30 \
+                   disabled:hover:bg-transparent"
+            type="button"
+            title=label
+            aria-label=label
+            prop:disabled=at_end
+            on:click=move |_| state.edit_layout(|l| l.shift(col, up))
+        >
+            {glyph}
+        </button>
+    }
+    .into_any()
 }
 
 #[cfg(test)]
