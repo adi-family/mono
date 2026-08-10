@@ -98,6 +98,13 @@ pub struct TurnMetrics {
     pub permission_denials: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_error: bool,
+    /// How the engine says the turn ended, in its own vocabulary — `completed`, `api_error`,
+    /// `aborted_tools`, and so on. Carried rather than folded into [`is_error`](Self::is_error)
+    /// because the distinctions are what a reader actually acts on: a run that ran out of
+    /// authorization and one whose tools were cut off are both errors and want opposite responses.
+    /// `None` from an engine that reports no such thing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
 }
 
 impl TurnMetrics {

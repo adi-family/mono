@@ -579,9 +579,8 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         agent_param_applies(Some(&spec), &backend, &provider, "temperature"),
     );
 
-    // The root agent is created with every tool the store has (see `meta_bin_tools`); sending an
-    // empty `bin_tools` would instead un-tick the ones it has.
-    let bin_tools = meta_bin_tools(Some(m));
+    // The root agent is created with every tool the store has (see `meta_bin_tools`).
+    let bin_tools = Some(meta_bin_tools(Some(m)));
     let manual = preset.as_ref().is_some_and(|p| p.manual);
     let body = SaveAgent {
         name: m.name.clone(),

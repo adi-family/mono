@@ -313,6 +313,7 @@ mod tests {
             env: Vec::new(),
             arguments,
             tools: Vec::new(),
+            tool_help: None,
             system_prompt: None,
             workspace_note: None,
         }

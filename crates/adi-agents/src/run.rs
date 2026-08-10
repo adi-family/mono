@@ -13,6 +13,7 @@ use crate::backend::Backend;
 use crate::backends::pty;
 use crate::error::{Error, Result};
 use crate::runner::{RunSpec, Session, runner_for};
+use crate::store::RunOutcome;
 
 pub use crate::store::Turn;
 pub use pty::{running_sessions, session_name};
@@ -80,6 +81,9 @@ pub struct RunInfo {
     /// kept in the run's metadata so it survives a reload: a hidden run still runs, still keeps its
     /// log and transcript, and is still returned here — it is up to the *view* to leave it out.
     pub hidden: bool,
+    /// What became of it, once it has stopped. `None` while it runs, and for runs that ended
+    /// before the store began keeping this.
+    pub outcome: Option<RunOutcome>,
 }
 
 /// Whether this agent could run at all: something here runs its backend, and that runner accepts
@@ -101,6 +105,7 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
             env: Vec::new(),
             arguments: manifest.arguments_value(),
             tools: Vec::new(),
+            tool_help: None,
             system_prompt: None,
             workspace_note: None,
         })
@@ -224,6 +229,7 @@ mod tests {
                 env: Vec::new(),
                 arguments: manifest.arguments_value(),
                 tools: Vec::new(),
+                tool_help: None,
                 system_prompt: None,
                 workspace_note: None,
             }),

@@ -86,7 +86,7 @@ pub(crate) fn agents_panel(
                     tags: Vec::new(),
                     starred: false,
                     project: Some(id),
-                    bin_tools: Vec::new(),
+                    bin_tools: None,
                     secrets: Vec::new(),
                     // This panel only creates; renaming lives on the Agents page.
                     // This form doesn't edit the run environment — `None` leaves whatever the

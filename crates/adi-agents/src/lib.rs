@@ -61,8 +61,8 @@ pub use agent::{
 pub use backend::Backend;
 pub use error::{Error, Result};
 pub use events::{
-    AgentDeleted, AgentQuestionAnswered, AgentQuestionAsked, AgentRunDeleted, AgentRunStarted,
-    AgentRunStopped, AgentSaved, event_catalog, event_types,
+    AgentDeleted, AgentQuestionAnswered, AgentQuestionAsked, AgentRunDeleted, AgentRunFinished,
+    AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
 pub use progress::{
@@ -489,7 +489,7 @@ impl Agents {
             return Err(Error::AlreadyRunning(name.to_string()));
         }
 
-        let spec = self.launch_spec(&agent, working_dir);
+        let mut spec = self.launch_spec(&agent, working_dir);
         // Fail before anything is written down: a mistyped argument should leave no session behind.
         runner.check(&spec)?;
         let store = self.sessions();
@@ -499,6 +499,8 @@ impl Agents {
             &spec.cwd,
             message,
         )?;
+        // What this conversation's prompt says about its tools, settled here and not asked again.
+        pin_tool_help(&store, &agent.name, &record.id, &mut spec);
         let session = store.session(&agent.name, &record.id);
         // The opening question, recorded as a turn so the run reads as a conversation from its
         // first line. Not for a terminal: its launch message is deliberately never typed (the TUI
@@ -810,9 +812,13 @@ impl Agents {
     /// The tool store split by what this agent was given: the tools on its PATH, and the ones it was
     /// not. The second half is what lets a reviewer say "there is already a tool for that".
     ///
-    /// System tools are on every agent's PATH whether or not they are listed in `bin_tools`
-    /// (`adi_tools::Tools::sync_agent_bin`), so they count as enabled here regardless — reporting one
-    /// as available-but-off would send a reviewer to switch on something already there.
+    /// Enabled means *ticked on*, system tools included: what an agent can run is the set
+    /// [`sync_agent_bin`](adi_tools::Tools::sync_agent_bin) writes shims for, and nothing is
+    /// force-fed there. This used to count every system tool as enabled regardless, on the belief
+    /// that they were always on the PATH — so a review of an agent holding two of the nine claimed
+    /// all nine, and read as an agent that could already do what it was in fact never given.
+    /// Overstating capability is the worse error of the two: it sends a reviewer looking for a
+    /// reason other than the missing tool.
     fn tool_split(&self, agent: &StoredAgent) -> (Vec<(String, String)>, Vec<(String, String)>) {
         let tools = adi_tools::Tools::with_config(self.config.clone());
         let Ok(all) = tools.list() else {
@@ -820,7 +826,7 @@ impl Agents {
         };
         let (mut on, mut off) = (Vec::new(), Vec::new());
         for tool in all.into_iter().filter(|t| !t.is_archived()) {
-            let enabled = tool.is_system() || agent.manifest.bin_tools.contains(&tool.id);
+            let enabled = agent.manifest.bin_tools.contains(&tool.id);
             let entry = (
                 tool.manifest.name.clone(),
                 tool.manifest.description.clone().unwrap_or_default(),
@@ -917,7 +923,10 @@ impl Agents {
             &live_content(runner, &session, false),
         );
 
-        let spec = self.spec_in(agent, session_dir(&self.config, record));
+        let mut spec = self.spec_in(agent, session_dir(&self.config, record));
+        // The tool section this conversation opened with, re-used rather than re-derived — see
+        // [`RunSpec::tool_help`] for what re-deriving it every turn used to cost.
+        pin_tool_help(store, &agent.name, &record.id, &mut spec);
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
         runner.check(&spec)?;
@@ -1061,13 +1070,18 @@ impl Agents {
             path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
             env,
             arguments: agent.manifest.arguments_value(),
-            // Asked once per launch, not stored: enabling a tool, editing its help, or upgrading
-            // the CLI underneath it shows up on the next run without anyone rewriting a prompt.
+            // Asked once per launch: enabling a tool, editing its help, or upgrading the CLI
+            // underneath it shows up on the next run without anyone rewriting a prompt. What is
+            // rendered from this is then pinned to the conversation (see [`pin_tool_help`]), so
+            // "the next run" is exactly what it says and not "the next turn".
             tools: if agent.manifest.bin_tools.is_empty() {
                 Vec::new()
             } else {
                 tools.help_for(&agent.manifest.bin_tools)
             },
+            // Filled in against the session once there is one; a spec built to answer a question
+            // about an agent has no conversation to inherit from.
+            tool_help: None,
             system_prompt: agent.manifest.system_prompt(),
             workspace_note,
         }
@@ -1114,7 +1128,10 @@ impl Agents {
             return Vec::new();
         }
         let store = self.sessions();
-        let runs = Self::list_runs(&store, agent, runner.as_ref());
+        let mut runs = Self::list_runs(&store, agent, runner.as_ref());
+        // Anything that stopped since the last look gets its ending written down and published,
+        // before the queue below can start a next turn over the top of it.
+        self.note_finished(agent, runner.as_ref(), &mut runs);
         // Which sessions have anything waiting, in one question rather than one per run. Nothing is
         // waiting in nearly every poll, and asking each run separately made the *empty* answer the
         // expensive one.
@@ -1150,8 +1167,51 @@ impl Agents {
                 last_activity: record.last_activity,
                 message: record.message,
                 hidden: record.hidden,
+                outcome: record.outcome,
             })
             .collect()
+    }
+
+    /// Write down — and announce — the ending of every listed run that has stopped without one.
+    ///
+    /// This is the whole of the "noticing" machinery, and it hangs off a listing on purpose. There
+    /// is no reaper: a detached child's ending is observed by the process that spawned it, and a
+    /// run launched from a CLI that has since exited has no such process left. So the ending is
+    /// found the first time anybody looks, exactly as a finished turn is folded into the transcript
+    /// by the next read of it — and because looking is something the app does twice a second, "the
+    /// first time anybody looks" is in practice immediately.
+    ///
+    /// Reading the log to build the outcome is the expensive part, so it happens once per run ever:
+    /// the record's own `outcome` gates it, and [`record_outcome`](SessionStore::record_outcome)
+    /// settles the race between watchers so the event goes out exactly once.
+    fn note_finished(&self, agent: &StoredAgent, runner: &dyn Runner, runs: &mut [RunInfo]) {
+        let store = self.sessions();
+        for run in runs.iter_mut().filter(|r| !r.running && r.outcome.is_none()) {
+            let session = store.session(&agent.name, &run.run_id);
+            let content = live_content(runner, &session, false);
+            let outcome =
+                store::RunOutcome::of(content.metrics.as_ref(), &content.text, store::now_ms());
+            // Only the writer announces. A database error is not a reason to hold a listing up:
+            // the run stays outcome-less and the next look tries again.
+            if store
+                .record_outcome(&agent.name, &run.run_id, &outcome)
+                .unwrap_or(false)
+            {
+                self.emit(
+                    "adi.agents.run.finished",
+                    &AgentRunFinished {
+                        agent: agent.name.clone(),
+                        run_id: run.run_id.clone(),
+                        terminal_reason: outcome.terminal_reason.clone(),
+                        is_error: outcome.is_error,
+                        duration_ms: outcome.duration_ms,
+                        cost_micro_usd: outcome.cost_micro_usd,
+                        result_head: outcome.result_head.clone(),
+                    },
+                );
+            }
+            run.outcome = Some(outcome);
+        }
     }
 
     /// A read-only snapshot of one specific run of a headless agent (or the pty screen, for an
@@ -1332,6 +1392,24 @@ impl Agents {
         }
         Ok(removed)
     }
+}
+
+/// Settle what `spec`'s prompt says about its tools: the section this conversation opened with, or
+/// — the first time — the one just rendered, kept for every turn after it.
+///
+/// See [`RunSpec::tool_help`] for why the alternative is expensive. The re-read after writing is
+/// not belt-and-braces: the write is gated on `IS NULL`, so a caller that loses the race must go
+/// on with the section that actually landed rather than its own.
+fn pin_tool_help(store: &SessionStore, agent: &str, id: &str, spec: &mut RunSpec) {
+    if let Some(frozen) = store.tool_help(agent, id) {
+        spec.tool_help = Some(frozen);
+        return;
+    }
+    let Some(block) = tool_help::block(&spec.tools) else {
+        return;
+    };
+    let _ = store.freeze_tool_help(agent, id, &block);
+    spec.tool_help = store.tool_help(agent, id).or(Some(block));
 }
 
 /// Whether this runner keeps a thread a reply can continue — a live pane is typed into, not replied
@@ -1547,6 +1625,76 @@ mod tests {
             backend: backend.into(),
             ..AgentManifest::default()
         }
+    }
+
+    /// What a review says an agent can run has to be what it can actually run. System tools were
+    /// once counted as enabled whether or not the agent had them, so a review of an agent holding
+    /// two of the nine claimed all nine — and a reader chasing why the agent did something the
+    /// hard way was told it already had the tool for it.
+    #[test]
+    fn the_tool_split_reports_only_the_tools_the_agent_was_given() {
+        let store = scratch("tool-split");
+        let tools = adi_tools::Tools::with_config(store.config.clone());
+        tools.seed_system().expect("seed");
+
+        let mut m = spec("process:claude");
+        m.bin_tools = vec!["sys-tasks".into()];
+        store.save("solver", m).expect("save");
+        let agent = store.get("solver").expect("get").expect("agent");
+
+        let (on, off) = store.tool_split(&agent);
+        let named = |split: &[(String, String)]| -> Vec<String> {
+            split.iter().map(|(name, _)| name.clone()).collect()
+        };
+        assert_eq!(named(&on), ["adi-tasks"], "only what it was given");
+        assert!(
+            named(&off).iter().any(|name| name == "adi-agents"),
+            "a system tool it does not have reads as available-but-off: {:?}",
+            named(&off),
+        );
+    }
+
+    /// A conversation's prompt must not move under it. Each tool is asked to describe itself under
+    /// a shared time budget, so the same set can render one way on one turn and another way on the
+    /// next — and the model, which sees only the prompt, is handed a different one mid-thread while
+    /// every cached token behind it is thrown away and paid for again.
+    #[test]
+    fn a_conversation_keeps_the_tool_section_it_opened_with() {
+        let store = scratch("tool-help-pin");
+        adi_tools::Tools::with_config(store.config.clone())
+            .seed_system()
+            .expect("seed");
+        let mut m = spec("process:claude");
+        m.bin_tools = vec!["sys-tasks".into()];
+        store.save("solver", m).expect("save");
+        let agent = store.get("solver").expect("get").expect("agent");
+
+        let sessions = store.sessions();
+        let record = sessions
+            .create("solver", Backend::ProcessClaude, "/tmp/work", "go")
+            .expect("create");
+
+        let mut opening = store.launch_spec(&agent, None);
+        pin_tool_help(&sessions, "solver", &record.id, &mut opening);
+        let opened_with = opening.tool_help.clone().expect("a section was rendered");
+        assert!(opened_with.contains("adi-tasks"), "{opened_with}");
+
+        // A later turn whose own derivation came back with less — the budget ran out, or a script
+        // was touched and its cached help thrown away — still runs the section it opened with.
+        let mut later = store.launch_spec(&agent, None);
+        later.tools.clear();
+        pin_tool_help(&sessions, "solver", &record.id, &mut later);
+        assert_eq!(later.tool_help.as_deref(), Some(opened_with.as_str()));
+
+        // …and the next *run* is where a changed tool set is supposed to show up, so a fresh
+        // session renders fresh.
+        let next = sessions
+            .create("solver", Backend::ProcessClaude, "/tmp/work", "again")
+            .expect("create");
+        let mut second_run = store.launch_spec(&agent, None);
+        second_run.tools.clear();
+        pin_tool_help(&sessions, "solver", &next.id, &mut second_run);
+        assert_eq!(second_run.tool_help, None, "nothing to render, nothing kept");
     }
 
     #[test]

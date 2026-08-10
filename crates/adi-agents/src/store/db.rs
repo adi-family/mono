@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_activity INTEGER NOT NULL DEFAULT 0,
     hidden        INTEGER NOT NULL DEFAULT 0,
     runner_state  TEXT,
+    outcome       TEXT,
+    tool_help     TEXT,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -102,6 +104,19 @@ CREATE INDEX IF NOT EXISTS questions_open
     ON questions (asked_at, id) WHERE answer IS NULL;
 ";
 
+/// Columns added to a table that already exists, applied after [`SCHEMA`].
+///
+/// SQLite has no `ADD COLUMN IF NOT EXISTS`, and `CREATE TABLE IF NOT EXISTS` is a no-op against a
+/// store built before the column existed — so a plain schema bump reaches new machines and silently
+/// skips every old one. Each statement here is run on its own and its error swallowed: the only one
+/// it can raise on a healthy store is *duplicate column name*, which is this having already been
+/// applied. A real failure surfaces at the first query that needs the column, which is where it can
+/// be read, rather than as an open error every process has to survive.
+const MIGRATIONS: &[&str] = &[
+    "ALTER TABLE sessions ADD COLUMN outcome TEXT",
+    "ALTER TABLE sessions ADD COLUMN tool_help TEXT",
+];
+
 // One connection per thread per database.
 //
 // Not an optimization: `Agents::sessions` builds a store once per agent *and* again per idle run,
@@ -132,6 +147,9 @@ pub(super) fn conn(path: &Path) -> Result<Rc<Connection>> {
         connection
             .execute_batch(SCHEMA)
             .map_err(|e| sql_err("create the schema in", e))?;
+        for statement in MIGRATIONS {
+            let _ = connection.execute(statement, []);
+        }
         let connection = Rc::new(connection);
         cache
             .borrow_mut()

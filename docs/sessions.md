@@ -78,12 +78,28 @@ Three tables, all keyed `(agent, id)`; `turns` and `queue` cascade off `sessions
 
 | table | holds | ordered by |
 |---|---|---|
-| `sessions` | the record: backend, cwd, message, `started_at`, `last_activity`, `hidden`, `runner_state` | index `sessions_newest (agent, started_at DESC, id DESC)` |
+| `sessions` | the record: backend, cwd, message, `started_at`, `last_activity`, `hidden`, `runner_state`, `outcome`, `tool_help` | index `sessions_newest (agent, started_at DESC, id DESC)` |
 | `turns` | one row per turn; the whole `Turn` as JSON plus `at` and `role` | `seq` |
 | `queue` | what is waiting to be said next | `seq` |
 
 The id is `{unix_millis:013}-{seq:04}` (`store/record.rs`), so it carries its own start time and
 sorts by it.
+
+Two of those columns are write-once, and both are written under an `IS NULL` gate so that whoever
+gets there first decides and everyone after is a no-op:
+
+- **`outcome`** — how the run ended (`RunOutcome`: the engine's `terminal_reason`, `is_error`, cost,
+  duration, the head of the answer). There is no reaper, so an ending is noticed by whoever lists
+  the run first; the gate is what makes the accompanying `adi.agents.run.finished` fire exactly once
+  across the app, the CLI and every trigger's child (`Agents::note_finished`, `lib.rs`).
+- **`tool_help`** — the rendered tool section this conversation opened with, re-used by every later
+  turn instead of being derived again (`pin_tool_help`, `lib.rs`). Deriving it per turn made the
+  same conversation's system prompt differ between turns — each tool is asked to describe itself
+  under a shared time budget — which invalidated the whole prompt cache behind it.
+
+Both were added to a table that already existed on every machine, so they arrive through
+`db::MIGRATIONS` (`ALTER TABLE … ADD COLUMN`, error swallowed) rather than through `SCHEMA`, which
+`CREATE TABLE IF NOT EXISTS` makes a no-op against an existing store.
 
 WAL, `busy_timeout = 5000`, `synchronous = NORMAL` — the CLI, the app, and every trigger's child
 open this independently, and the pragma order is load-bearing (`busy_timeout` first, or switching

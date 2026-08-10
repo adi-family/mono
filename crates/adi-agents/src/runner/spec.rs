@@ -33,6 +33,17 @@ pub struct RunSpec {
     /// message, or nowhere at all for an engine whose "system prompt" is really an opening user
     /// turn — is a fact about the engine, so the runner composes it.
     pub tools: Vec<ToolHelp>,
+    /// The tool section this conversation was opened with, already rendered — use this instead of
+    /// re-rendering [`tools`](Self::tools) when it is set.
+    ///
+    /// Deriving the section fresh is right at *launch* and wrong on every turn after it. Each tool
+    /// is asked to describe itself under a shared time budget, and one that isn't cached when the
+    /// budget runs out is listed by name alone and fully described on the next turn — so the same
+    /// conversation's system prompt changed between turns for no reason the model could see, and
+    /// every cached token after it was thrown away and paid for again. Touching a tool's script
+    /// did the same thing. Freezing what the conversation opened with keeps the stated bargain
+    /// exactly: edit a tool and the *next run* sees it, not the turn you are in the middle of.
+    pub tool_help: Option<String>,
     /// The agent's own system prompt, unmodified. Nothing above the runner writes into it.
     pub system_prompt: Option<String>,
     /// Where the run starts, stated in prose for the prompt — `None` when there is nothing to say.

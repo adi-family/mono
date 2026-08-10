@@ -53,12 +53,98 @@ pub struct SessionRecord {
     /// engine lives behind an API keeps nothing at all. That last case is why this is an untyped
     /// slot rather than a handle the store would have to understand.
     pub runner_state: Option<serde_json::Value>,
+    /// How this session ended, written once the first time anybody notices it stopped running.
+    ///
+    /// `None` means either still running or ended before this column existed. Kept on the record
+    /// rather than re-read from the log, because "did it work?" is the question every listing is
+    /// really asking and the log is a megabyte of somebody else's wire format.
+    pub outcome: Option<RunOutcome>,
+}
+
+/// What became of a run: the engine's own verdict, its telemetry, and the head of what it said.
+///
+/// Stored as JSON in one column rather than as columns of its own. The fields are an engine's
+/// self-report and differ between them — the Claude CLI's `terminal_reason` has no counterpart in
+/// the adi loop — so a column apiece would be a table mostly full of nulls, migrated again every
+/// time an engine learns to say something new.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RunOutcome {
+    /// The engine's own word for how it ended (`completed`, `api_error`, `aborted_tools`, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+    /// Whether the engine called it a failure.
+    #[serde(default)]
+    pub is_error: bool,
+    /// Cost in micro-dollars (1e-6 USD), as the engine reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_turns: Option<u64>,
+    /// The opening of the run's answer — enough to tell a run that did the work from one that
+    /// died saying it was not logged in, without opening anything.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_head: String,
+    /// Unix milliseconds this was recorded — when the ending was *noticed*, which for a run
+    /// nobody watched is later than when it happened.
+    #[serde(default)]
+    pub noted_at: u64,
+}
+
+/// How much of the answer travels with the outcome.
+const MAX_RESULT_HEAD: usize = 400;
+
+impl RunOutcome {
+    /// Whether the engine said anything at all about how this ended.
+    ///
+    /// A run whose log held no telemetry to parse still gets an outcome — that it stopped, and
+    /// when it was noticed — and that record must not be read as *it went fine*. `false` here is
+    /// "nobody knows", which is the one case worth opening the log for; a caller that flattens it
+    /// to a word should say so rather than pick the optimistic one.
+    #[must_use]
+    pub fn is_reported(&self) -> bool {
+        self.terminal_reason.is_some()
+            || self.is_error
+            || self.duration_ms.is_some()
+            || self.cost_micro_usd.is_some()
+            || self.num_turns.is_some()
+    }
+
+    /// The outcome of a finished run, from whatever its engine reported and what it said.
+    #[must_use]
+    pub fn of(metrics: Option<&crate::progress::TurnMetrics>, answer: &str, noted_at: u64) -> Self {
+        let mut outcome = Self {
+            result_head: head(answer),
+            noted_at,
+            ..Self::default()
+        };
+        if let Some(m) = metrics {
+            outcome.terminal_reason = m.terminal_reason.clone();
+            outcome.is_error = m.is_error;
+            outcome.cost_micro_usd = m.cost_micro_usd;
+            outcome.duration_ms = m.duration_ms;
+            outcome.num_turns = m.num_turns;
+        }
+        outcome
+    }
+}
+
+/// `text`'s first [`MAX_RESULT_HEAD`] characters, cut on a character boundary and marked when cut.
+fn head(text: &str) -> String {
+    let text = text.trim();
+    let mut out: String = text.chars().take(MAX_RESULT_HEAD).collect();
+    if out.chars().count() < text.chars().count() {
+        out.push('…');
+    }
+    out
 }
 
 /// Build a record from a row of the columns named by
 /// [`RECORD_COLUMNS`](super::RECORD_COLUMNS), in that order.
 pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
     let state: Option<String> = row.get(8)?;
+    let outcome: Option<String> = row.get(9)?;
     Ok(SessionRecord {
         agent: row.get(0)?,
         id: row.get(1)?,
@@ -71,6 +157,9 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
         // A slot that will not parse reads as empty rather than failing the row: it belongs to a
         // runner, and a listing has no stake in what is in it.
         runner_state: state.and_then(|t| serde_json::from_str(&t).ok()),
+        // Same rule, and it matters more here: an outcome written by a newer build must not make
+        // an older one unable to list the session at all.
+        outcome: outcome.and_then(|t| serde_json::from_str(&t).ok()),
     })
 }
 

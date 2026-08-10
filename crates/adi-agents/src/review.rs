@@ -940,6 +940,7 @@ mod tests {
             last_activity: 2_000,
             hidden: false,
             runner_state: None,
+            outcome: None,
         }
     }
 

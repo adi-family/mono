@@ -90,6 +90,40 @@ pub struct AgentRunStopped {
     pub run_id: Option<String>,
 }
 
+/// `adi.agents.run.finished` — a run ended on its own, and here is what became of it.
+///
+/// The counterpart `stopped` never was: that one says *somebody stopped it*, so a run that failed
+/// at four in the morning published nothing at all and the only way to learn of it was to go and
+/// look. Every watcher therefore polled, and polling a conversation costs a whole turn. This is the
+/// event that makes not-looking possible — it carries the verdict, so a subscriber decides whether
+/// to care without opening anything.
+///
+/// Published when the ending is **noticed**, which for a run nobody was watching is later than when
+/// it happened; [`duration_ms`](Self::duration_ms) is the run's own, not the wait.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunFinished {
+    /// The agent's name.
+    pub agent: String,
+    /// The run that ended.
+    pub run_id: String,
+    /// The engine's own word for how it ended — `completed`, `api_error`, `aborted_tools`, and so
+    /// on. Absent from an engine that reports no such thing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+    /// Whether the engine called it a failure. The one field a trigger can match on without
+    /// knowing any engine's vocabulary.
+    pub is_error: bool,
+    /// How long the run took, in milliseconds, as the engine reported it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    /// What it cost, in micro-dollars (1e-6 USD).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micro_usd: Option<u64>,
+    /// The opening of what it answered — enough to tell work from a refusal in a notification.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_head: String,
+}
+
 /// `adi.agents.run.deleted` — one run of an agent was deleted outright: it was stopped if still
 /// live, and its log, metadata and any transcript are gone. Distinct from `stopped`, which ends a
 /// run but leaves it in the history to read.
@@ -183,6 +217,20 @@ pub fn event_types() -> Vec<EventType> {
             &AgentRunStopped {
                 agent: "my-agent".into(),
                 run_id: Some("r-1a2b3c".into()),
+            },
+        ),
+        EventType::of(
+            "adi.agents.run.finished",
+            "An agent run ended on its own, with the engine's verdict on how it went.",
+            schema::<AgentRunFinished>(),
+            &AgentRunFinished {
+                agent: "my-agent".into(),
+                run_id: "r-1a2b3c".into(),
+                terminal_reason: Some("completed".into()),
+                is_error: false,
+                duration_ms: Some(23_169),
+                cost_micro_usd: Some(2_137_364),
+                result_head: "Filed three tasks and left a note on the scope.".into(),
             },
         ),
         EventType::of(

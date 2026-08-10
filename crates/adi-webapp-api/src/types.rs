@@ -927,9 +927,11 @@ pub struct SaveAgent {
     pub project: Option<String>,
     /// The ids of the adi **tools** enabled for this agent (its per-tool checkboxes). Each becomes
     /// a shim in the agent's own `.bin` at launch. Named `bin_tools` to stay distinct from the LLM
-    /// `--allowed-tools`.
+    /// `--allowed-tools`. **Omit to keep whatever the agent already has**, exactly as for `path`
+    /// and `env` below — a form that doesn't offer the tool checkboxes must not un-tick them by
+    /// saying nothing. Send an empty list to actually clear.
     #[serde(default)]
-    pub bin_tools: Vec<String>,
+    pub bin_tools: Option<Vec<String>>,
     /// The secrets to attach to this agent (its per-secret checkboxes). Each is a `(scope, name)`
     /// reference; only these are decrypted and injected into the agent's runs — an allowlist.
     #[serde(default)]
@@ -1228,6 +1230,39 @@ pub struct AgentRunInfo {
     /// cannot: finished and blocked-on-you look identical from there, and they are opposites.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_question: Option<AgentAsk>,
+    /// What became of the run, once it has stopped — the engine's own verdict, carried by the
+    /// listing for the same reason `pending_question` is: `running: false` says a run is over and
+    /// nothing at all about whether it worked, and the alternative is opening every one to find out.
+    /// `None` while it runs, and for runs that ended before the store began keeping this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<AgentRunOutcome>,
+}
+
+/// How a run ended, as reported by whatever engine ran it.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentRunOutcome {
+    /// The engine's own word for how it ended (`completed`, `api_error`, `aborted_tools`, …).
+    /// Absent from an engine that reports no such thing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+    /// Whether the engine called it a failure — the one field to branch on without knowing any
+    /// particular engine's vocabulary.
+    #[serde(default)]
+    pub is_error: bool,
+    /// Cost in micro-dollars (1e-6 USD).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_turns: Option<u64>,
+    /// The opening of what the run answered.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_head: String,
+    /// Unix milliseconds the ending was noticed — later than when it happened, for a run nobody
+    /// was watching.
+    #[serde(default)]
+    pub noted_at: u64,
 }
 
 /// `POST /api/agents/runs` — a headless agent's run history, newest first. `interactive` is true for

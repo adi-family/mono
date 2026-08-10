@@ -30,7 +30,7 @@ pub use adi_agents::arguments::AgentSummaryArguments;
 pub use adi_agents::store::Ask;
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
-    Launch, RawAgentArguments, RunLimits, SecretAttachment, Sent, StoredAgent,
+    Launch, RawAgentArguments, RunInfo, RunLimits, SecretAttachment, Sent, StoredAgent,
     StoredAgentManifest, contains_json_null, event_catalog,
 };
 

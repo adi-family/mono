@@ -4,11 +4,11 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-3 structs · 15 enums across 13 files.
+4 structs · 15 enums across 13 files.
 
 ## Index
 
-- [`src/agents.rs`](#srcagentsrs) — `AgentsCommand`
+- [`src/agents.rs`](#srcagentsrs) — `AgentsCommand`, `RunRow`
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
@@ -64,6 +64,8 @@ pub(crate) enum AgentsCommand {
         project: Option<String>,
         #[arg(long = "tool")]
         tools: Vec<String>,
+        #[arg(long, conflicts_with = "tools")]
+        no_tool: bool,
         #[arg(long = "secret")]
         secrets: Vec<String>,
         #[arg(long = "path")]
@@ -79,6 +81,8 @@ pub(crate) enum AgentsCommand {
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
         #[arg(long)]
+        no_argument: bool,
+        #[arg(long)]
         json: bool,
     },
     Run {
@@ -91,6 +95,18 @@ pub(crate) enum AgentsCommand {
         force: bool,
         #[arg(long)]
         wait: bool,
+    },
+    Runs {
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        status: Option<String>,
+        #[arg(long)]
+        since: Option<String>,
+        #[arg(long, default_value_t = 40)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
     },
     Limit {
         max: Option<u32>,
@@ -122,6 +138,29 @@ pub(crate) enum AgentsCommand {
     Delete {
         name: String,
     },
+}
+```
+
+### struct `RunRow`
+
+One run in a cross-agent listing: who ran it, when, and what became of it.
+
+```rust
+#[derive(Debug, serde::Serialize)]
+struct RunRow {
+    agent: String,
+    run_id: String,
+    started_at: u64,
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost_micro_usd: Option<u64>,
+    message: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    result_head: String,
 }
 ```
 

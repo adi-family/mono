@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, Agents, AgentSummaryArguments, AgentsError, Launch, SecretAttachment,
-    StoredAgent,
+    Adi, AgentManifest, Agents, AgentSummaryArguments, AgentsError, Launch, RunInfo,
+    SecretAttachment, StoredAgent,
 };
 use clap::Subcommand;
 
@@ -56,9 +56,14 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         project: Option<String>,
         /// An adi tool id to enable for this agent (its own `.bin`). Repeatable; comma-separated
-        /// values are also accepted. Distinct from `--command-scope` (the LLM's allowed tools).
+        /// values are also accepted. Omit every `--tool` to leave an existing agent's tools as they
+        /// are; pass `--no-tool` to take them all away. Distinct from `--command-scope` (the LLM's
+        /// allowed tools).
         #[arg(long = "tool")]
         tools: Vec<String>,
+        /// Clear the agent's enabled tools (see `--tool`).
+        #[arg(long, conflicts_with = "tools")]
+        no_tool: bool,
         /// A secret to attach to this agent (injected into its runs as an env var under its name).
         /// Give `NAME` for a global secret or `PROJECT/NAME` for a project-scoped one. Repeatable;
         /// comma-separated values are also accepted. Only attached secrets are injected — an
@@ -88,8 +93,14 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         unattended: bool,
         /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
+        /// Overlaid on the agent's existing arguments — what you don't state stays as it was.
+        /// Pass `--no-argument` to start from nothing instead.
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
+        /// Discard the agent's existing backend arguments (its system prompt included) and keep
+        /// only what this invocation states.
+        #[arg(long)]
+        no_argument: bool,
         #[arg(long)]
         json: bool,
     },
@@ -116,6 +127,29 @@ pub(crate) enum AgentsCommand {
         /// no ending to wait for, only a pane somebody is looking at.
         #[arg(long)]
         wait: bool,
+    },
+    /// List runs across every agent (or one), newest first, with what became of each.
+    ///
+    /// What a supervisor reads instead of opening conversations: a finished run carries its
+    /// engine's own verdict, so "which of these died, and how" is one command rather than a hunt
+    /// through logs. Listing is also what *notices* an ending, so running this is what publishes
+    /// `adi.agents.run.finished` for anything that stopped since the last look.
+    Runs {
+        /// Only this agent's runs.
+        #[arg(long)]
+        agent: Option<String>,
+        /// `running`, `failed` (the engine called it an error), `done` (finished without one), or
+        /// `unknown` (stopped before an outcome was ever recorded).
+        #[arg(long)]
+        status: Option<String>,
+        /// Only runs started within this window: `90s`, `30m`, `2h`, `7d`.
+        #[arg(long)]
+        since: Option<String>,
+        /// At most this many rows, after filtering.
+        #[arg(long, default_value_t = 40)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
     },
     /// Show, or set, how many agent runs may be live at once — overall, or (with `--project`) for
     /// one project's agents. The caps bind every launch the platform makes on its own (a trigger
@@ -207,17 +241,36 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             starred,
             project,
             tools,
+            no_tool,
             secrets,
             path,
             no_path,
             env,
             no_env,
             unattended,
-            arguments,
+            arguments: arguments_flags,
+            no_argument,
             json,
         } => {
             let backend = clean_required("backend", backend)?;
-            let mut arguments = parse_arguments(arguments)?;
+            // Read first: everything below either states a field or leaves the stored one alone,
+            // and both need what is already there.
+            let stored = store.get(&name).ok().flatten().map(|a| a.manifest);
+            // The engine's arguments are *overlaid* on what the agent already had, not swapped for
+            // them. They are one map holding unrelated things — the system prompt beside the model
+            // beside a max-turns cap — so a save that states the model and says nothing else means
+            // "set the model", never "and throw the prompt away". It used to mean the latter, which
+            // made `agents save --tool …` on a live agent a way to silently erase its instructions.
+            // `--no-argument` is how the map is actually emptied.
+            let mut arguments = if no_argument {
+                BTreeMap::new()
+            } else {
+                stored
+                    .as_ref()
+                    .map(|m| m.arguments.clone())
+                    .unwrap_or_default()
+            };
+            arguments.extend(parse_arguments(arguments_flags)?);
             if let Some(value) = clean(system_prompt) {
                 arguments.insert("system_prompt".into(), value.into());
             }
@@ -236,17 +289,24 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             if let Some(value) = max_turns {
                 arguments.insert("max_turns".into(), value.into());
             }
-            // A save states the whole agent, so the run environment has to be carried over when
-            // this invocation says nothing about it — otherwise every `agents save` on an existing
-            // agent would silently strip the toolchain it was pinned to.
-            let stored = store.get(&name).ok().flatten().map(|a| a.manifest);
+            // Everything below follows the same rule as the arguments above: stated wins, omitted
+            // keeps, and each field has an explicit `--no-…` for actually taking it away.
             let manifest = AgentManifest {
                 backend: backend.into(),
                 arguments,
                 tags: clean_tags(tags),
                 starred,
                 project: clean(project),
-                bin_tools: clean_tags(tools),
+                bin_tools: if no_tool {
+                    Vec::new()
+                } else if tools.is_empty() {
+                    stored
+                        .as_ref()
+                        .map(|m| m.bin_tools.clone())
+                        .unwrap_or_default()
+                } else {
+                    clean_tags(tools)
+                },
                 secrets: parse_secret_attachments(secrets),
                 path: if no_path {
                     Vec::new()
@@ -323,6 +383,56 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     println!("  run:     {run_id}");
                     println!("  command: {command}");
                     println!("  log:     {}", log.display());
+                }
+            }
+        }
+        AgentsCommand::Runs {
+            agent,
+            status,
+            since,
+            limit,
+            json,
+        } => {
+            let cutoff = match since.as_deref().map(parse_since).transpose()? {
+                Some(window) => now_ms().saturating_sub(window),
+                None => 0,
+            };
+            let wanted = status.as_deref().map(str::trim).filter(|s| !s.is_empty());
+            let agents = match &agent {
+                Some(name) => vec![
+                    store
+                        .get(name)
+                        .map_err(|e| e.to_string())?
+                        .ok_or_else(|| format!("no such agent: {name}"))?,
+                ],
+                None => store.list().map_err(|e| e.to_string())?,
+            };
+
+            let mut rows: Vec<RunRow> = Vec::new();
+            for a in &agents {
+                for run in store.runs(a) {
+                    if run.started_at < cutoff {
+                        continue;
+                    }
+                    let row = RunRow::of(&a.name, run);
+                    if wanted.is_some_and(|want| row.status != want) {
+                        continue;
+                    }
+                    rows.push(row);
+                }
+            }
+            // Newest first across every agent, which is the order a supervisor reads in — the
+            // per-agent listings arrive already sorted but interleaved.
+            rows.sort_unstable_by(|a, b| b.started_at.cmp(&a.started_at));
+            rows.truncate(limit);
+
+            if json {
+                print_json(&rows);
+            } else if rows.is_empty() {
+                println!("No runs match.");
+            } else {
+                for row in &rows {
+                    row.print();
                 }
             }
         }
@@ -505,6 +615,114 @@ fn parse_secret_attachments(values: Vec<String>) -> Vec<SecretAttachment> {
             (!attachment.name.is_empty()).then_some(attachment)
         })
         .collect()
+}
+
+/// One run in a cross-agent listing: who ran it, when, and what became of it.
+#[derive(Debug, serde::Serialize)]
+struct RunRow {
+    agent: String,
+    run_id: String,
+    started_at: u64,
+    /// `running`, `failed`, `done`, or `unknown` — the one word every engine's verdict is
+    /// flattened to, so a filter works without knowing any of their vocabularies.
+    status: &'static str,
+    /// The engine's own word, kept beside `status` because the distinctions are what a reader acts
+    /// on: `api_error` and `aborted_tools` are both failures wanting opposite responses.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    terminal_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cost_micro_usd: Option<u64>,
+    message: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    result_head: String,
+}
+
+impl RunRow {
+    fn of(agent: &str, run: RunInfo) -> Self {
+        let outcome = run.outcome;
+        Self {
+            agent: agent.to_string(),
+            run_id: run.run_id,
+            started_at: run.started_at,
+            status: match (run.running, &outcome) {
+                (true, _) => "running",
+                (false, Some(o)) if o.is_error => "failed",
+                (false, Some(o)) if o.is_reported() => "done",
+                // Stopped, and nothing is actually known about how: a run from before the store
+                // kept outcomes, or one whose log held no telemetry to parse. Not `done` — that
+                // would be this listing claiming a run worked on the strength of having noticed
+                // it stop.
+                (false, _) => "unknown",
+            },
+            terminal_reason: outcome.as_ref().and_then(|o| o.terminal_reason.clone()),
+            duration_ms: outcome.as_ref().and_then(|o| o.duration_ms),
+            cost_micro_usd: outcome.as_ref().and_then(|o| o.cost_micro_usd),
+            message: title(&run.message),
+            result_head: outcome.map(|o| o.result_head).unwrap_or_default(),
+        }
+    }
+
+    fn print(&self) {
+        let reason = self
+            .terminal_reason
+            .as_deref()
+            .filter(|r| *r != self.status)
+            .map(|r| format!(" ({r})"))
+            .unwrap_or_default();
+        println!("{} {}{}", self.agent, self.status, reason);
+        println!("  run: {}", self.run_id);
+        let mut facts = Vec::new();
+        if let Some(ms) = self.duration_ms {
+            facts.push(format!("{:.1}s", ms as f64 / 1000.0));
+        }
+        if let Some(micro) = self.cost_micro_usd {
+            facts.push(format!("${:.2}", micro as f64 / 1_000_000.0));
+        }
+        if !facts.is_empty() {
+            println!("  {}", facts.join("  "));
+        }
+        println!("  task: {}", self.message);
+        if !self.result_head.is_empty() {
+            println!("  said: {}", self.result_head);
+        }
+    }
+}
+
+/// `text`'s first line, cut to `width` characters — a listing shows one line per run.
+fn title(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default().trim();
+    let mut out: String = line.chars().take(100).collect();
+    if out.chars().count() < line.chars().count() {
+        out.push('…');
+    }
+    out
+}
+
+/// A `90s` / `30m` / `2h` / `7d` window, in milliseconds.
+fn parse_since(text: &str) -> Result<u64, String> {
+    let text = text.trim();
+    let (digits, unit) = text.split_at(text.len().saturating_sub(1));
+    let per = match unit {
+        "s" => 1_000,
+        "m" => 60 * 1_000,
+        "h" => 60 * 60 * 1_000,
+        "d" => 24 * 60 * 60 * 1_000,
+        _ => return Err(format!("--since wants a unit of s/m/h/d, got {text:?}")),
+    };
+    digits
+        .parse::<u64>()
+        .map(|n| n * per)
+        .map_err(|_| format!("--since wants a number then s/m/h/d, got {text:?}"))
+}
+
+/// The moment, in unix milliseconds.
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 /// Print an agent definition in the compact human CLI format.

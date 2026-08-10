@@ -47,7 +47,7 @@ pub use db::now_ms;
 pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
-pub use record::SessionRecord;
+pub use record::{RunOutcome, SessionRecord};
 pub use session::SessionRef;
 pub use transcript::{Turn, assistant_turn, user_turn};
 
@@ -64,7 +64,7 @@ const DB_FILE: &str = "sessions.db";
 
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str =
-    "agent, id, backend, cwd, message, started_at, last_activity, hidden, runner_state";
+    "agent, id, backend, cwd, message, started_at, last_activity, hidden, runner_state, outcome";
 
 /// The sessions under one root.
 ///
@@ -181,6 +181,7 @@ impl SessionStore {
             message: message.to_string(),
             hidden: false,
             runner_state: None,
+            outcome: None,
         };
         self.conn()?
             .execute(
@@ -271,6 +272,62 @@ impl SessionStore {
             )
             .map_err(|e| db::sql_err("hide a session in", e))?;
         Ok(changed > 0)
+    }
+
+    /// Write down how a run ended, **once**. Returns whether this call was the one that recorded it.
+    ///
+    /// The `outcome IS NULL` in the statement is the whole design. A run's ending is noticed by
+    /// whoever happens to look first — the app's poll, a CLI listing, a trigger's child — and each
+    /// of them is a separate process racing the others. Gating on the write rather than on a read
+    /// beforehand makes the first one the winner and every later one a no-op, atomically, so the
+    /// caller can hang "and announce it" off a `true` and know the announcement happens exactly
+    /// once. A read-then-write would announce it once per watcher.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn record_outcome(&self, agent: &str, id: &str, outcome: &RunOutcome) -> Result<bool> {
+        let json = serde_json::to_string(outcome).unwrap_or_else(|_| "{}".into());
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET outcome = ?3
+                 WHERE agent = ?1 AND id = ?2 AND outcome IS NULL",
+                rusqlite::params![agent, id, json],
+            )
+            .map_err(|e| db::sql_err("record a run's outcome in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// The tool section this conversation was opened with, if one was ever frozen for it.
+    #[must_use]
+    pub fn tool_help(&self, agent: &str, id: &str) -> Option<String> {
+        self.conn()
+            .ok()?
+            .query_row(
+                "SELECT tool_help FROM sessions WHERE agent = ?1 AND id = ?2",
+                [agent, id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .ok()
+            .flatten()
+    }
+
+    /// Keep the tool section this conversation opened with, so every later turn re-uses it rather
+    /// than rendering a new one. Written once — a second call is a no-op, on the same `IS NULL`
+    /// gate and for the same reason as [`record_outcome`](Self::record_outcome): whichever turn
+    /// gets there first decides what this conversation's prompt says.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn freeze_tool_help(&self, agent: &str, id: &str, block: &str) -> Result<()> {
+        self.conn()?
+            .execute(
+                "UPDATE sessions SET tool_help = ?3
+                 WHERE agent = ?1 AND id = ?2 AND tool_help IS NULL",
+                rusqlite::params![agent, id, block],
+            )
+            .map_err(|e| db::sql_err("freeze the tool section of", e))?;
+        Ok(())
     }
 
     /// The runner's scratch space for this session, as it is on disk right now.
@@ -628,6 +685,58 @@ mod tests {
                 rusqlite::params![agent, id, message, started],
             )
             .unwrap();
+    }
+
+    /// The ending is recorded by whoever notices it first, and by nobody after that. Several
+    /// processes watch the same run — the app's poll, a CLI listing, a trigger's child — and the
+    /// announcement hangs off this returning `true`, so a second writer must be told `false`
+    /// rather than allowed to overwrite and re-announce.
+    #[test]
+    fn an_outcome_is_written_once_and_the_first_writer_is_told_so() {
+        let store = scratch("outcome");
+        let run = store
+            .create("solver", Backend::ProcessClaude, "/tmp/work", "go")
+            .expect("create");
+        assert!(
+            store.get("solver", &run.id).expect("get").outcome.is_none(),
+            "a running session has no outcome yet"
+        );
+
+        let finished = RunOutcome {
+            terminal_reason: Some("completed".into()),
+            result_head: "Filed three tasks.".into(),
+            duration_ms: Some(23_169),
+            ..RunOutcome::default()
+        };
+        assert!(
+            store
+                .record_outcome("solver", &run.id, &finished)
+                .expect("record"),
+            "the first writer records it"
+        );
+
+        // A second watcher, arriving with a different story, changes nothing and is told so.
+        let later = RunOutcome {
+            terminal_reason: Some("api_error".into()),
+            is_error: true,
+            ..RunOutcome::default()
+        };
+        assert!(
+            !store
+                .record_outcome("solver", &run.id, &later)
+                .expect("record again"),
+            "the second writer is refused"
+        );
+
+        let stored = store.get("solver", &run.id).expect("get").outcome;
+        assert_eq!(stored, Some(finished), "the first outcome is the one kept");
+
+        // And it survives the listing, which is where a reader actually meets it.
+        let listed = store.list("solver");
+        assert_eq!(
+            listed[0].outcome.as_ref().and_then(|o| o.terminal_reason.as_deref()),
+            Some("completed"),
+        );
     }
 
     #[test]

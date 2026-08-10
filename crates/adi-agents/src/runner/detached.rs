@@ -550,8 +550,15 @@ pub(super) fn with_workspace(spec: &RunSpec, existing: Option<String>) -> Option
 ///
 /// Appended, never substituted: whatever the agent was told to be survives, with the inventory
 /// after it — instructions are read before equipment.
+///
+/// A conversation past its first turn carries the section it opened with
+/// ([`RunSpec::tool_help`]) and that is used verbatim; only a fresh run renders one.
 pub(super) fn with_tool_help(spec: &RunSpec, existing: Option<String>) -> Option<String> {
-    let Some(block) = tool_help::block(&spec.tools) else {
+    let Some(block) = spec
+        .tool_help
+        .clone()
+        .or_else(|| tool_help::block(&spec.tools))
+    else {
         return existing;
     };
     match existing.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
@@ -734,6 +741,7 @@ mod tests {
             env: Vec::new(),
             arguments,
             tools: Vec::new(),
+            tool_help: None,
             system_prompt: None,
             workspace_note: None,
         }

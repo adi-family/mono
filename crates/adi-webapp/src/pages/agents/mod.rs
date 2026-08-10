@@ -124,8 +124,9 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                     tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
                     starred: starred.get(),
                     project: opt_str(project.get()),
-                    // The adi tools ticked on for this agent — its own `.bin` at launch.
-                    bin_tools: form.bin_tools.get().into_iter().collect(),
+                    // The adi tools ticked on for this agent — its own `.bin` at launch. This is
+                    // the form that owns the checkboxes, so it states the set even when empty.
+                    bin_tools: Some(form.bin_tools.get().into_iter().collect()),
                     // The secrets ticked on for this agent — injected into its runs as env vars.
                     secrets: form.secrets.get().into_iter()
                         .map(|(project, name)| SecretRef { project, name })

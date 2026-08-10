@@ -200,9 +200,9 @@ fn submit_setup(state: State, form: MetaForm) {
         .as_ref()
         .map_or_else(|| "adi-agent".to_string(), |m| m.name.clone());
     // The meta-agent runs the whole environment, so it gets every tool the store has: the
-    // server's default set unioned with whatever is already enabled. `bin_tools` is a top-level
-    // field, not an argument — sending an empty one here would silently un-tick the agent's tools.
-    let bin_tools = meta_bin_tools(meta.as_ref());
+    // server's default set unioned with whatever is already enabled. Stated rather than omitted
+    // because a reconfigure is also how the agent picks up tools registered since it was made.
+    let bin_tools = Some(meta_bin_tools(meta.as_ref()));
     // Start from the agent's existing arguments so a reconfigure keeps its model/etc.
     let mut arguments = meta
         .and_then(|m| m.agent)

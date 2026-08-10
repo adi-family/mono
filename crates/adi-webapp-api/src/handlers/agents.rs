@@ -12,7 +12,7 @@ use crate::types::{
     AgentAsk, AgentBackendOption, AgentCapabilities, AgentChoice, AgentDto, AgentFormField,
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek,
     AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo,
-    AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
+    AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
     AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
     AgentsState, AllAgentRuns, AnswerRun, HideRun, PendingAsk, PendingAsks, ProjectRunLimit,
     ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit, UnqueueFromRun,
@@ -671,6 +671,7 @@ fn runs_response_with(store: &Agents, agent: &StoredAgent, waiting: &Waiting) ->
                 message: title_of(&r.message),
                 running: r.running,
                 hidden: r.hidden,
+                outcome: r.outcome.map(agent_run_outcome),
             })
             .collect(),
     }
@@ -708,6 +709,19 @@ fn agent_caps(agent: &StoredAgent) -> AgentCapabilities {
         // Asking is answering in reverse: a backend with no thread to continue has nowhere to
         // deliver an answer into, so there is nothing to derive separately.
         asks: c.answerable,
+    }
+}
+
+/// Map a stored [`RunOutcome`](adi_agents::store::RunOutcome) onto its wire shape.
+fn agent_run_outcome(outcome: adi_agents::store::RunOutcome) -> AgentRunOutcome {
+    AgentRunOutcome {
+        terminal_reason: outcome.terminal_reason,
+        is_error: outcome.is_error,
+        cost_micro_usd: outcome.cost_micro_usd,
+        duration_ms: outcome.duration_ms,
+        num_turns: outcome.num_turns,
+        result_head: outcome.result_head,
+        noted_at: outcome.noted_at,
     }
 }
 
@@ -829,12 +843,19 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         project: clean(req.project),
         // The adi tools enabled for this agent (its per-tool checkboxes) — each becomes a shim in
         // the agent's own `.bin` at launch. Trimmed and de-blanked; order + dedup left to the store.
-        bin_tools: req
-            .bin_tools
-            .into_iter()
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect(),
+        // Omitted means unchanged, for the reason `path` and `env` below are: a save from a form
+        // that never offered the checkboxes would otherwise take every tool away.
+        bin_tools: match req.bin_tools {
+            Some(ids) => ids
+                .into_iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            None => stored
+                .as_ref()
+                .map(|m| m.bin_tools.clone())
+                .unwrap_or_default(),
+        },
         // The secrets attached to this agent (its per-secret checkboxes). Only these are decrypted
         // and injected into the agent's runs. A blank scope is normalized to `None` (global).
         secrets: req
@@ -1972,6 +1993,29 @@ mod tests {
         let m = saved(&store);
         assert!(m.path.is_empty(), "{:?}", m.path);
         assert!(m.env.is_empty(), "{:?}", m.env);
+    }
+
+    /// The tool checkboxes are omit-to-keep for the same reason the run environment is. This was
+    /// once a plain list, so a save from any form that didn't render the checkboxes took every
+    /// tool away — the project panel and the onboarding wizard each carried a workaround for it.
+    #[test]
+    fn a_save_that_omits_the_tools_keeps_them() {
+        let store = scratch("tools");
+        let with = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "bin_tools": ["sys-tasks", "sys-status"],
+        });
+        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+
+        // A body from a form that never offered the checkboxes.
+        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert_eq!(saved(&store).bin_tools, ["sys-tasks", "sys-status"]);
+
+        // …and stating them empty is how they are actually taken away.
+        let none = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "bin_tools": [],
+        });
+        assert_eq!(save_agent(&store, none.to_string().as_bytes()).status, 200);
+        assert!(saved(&store).bin_tools.is_empty());
     }
 
     /// `unattended` is omit-to-keep for the same reason `path` and `env` are: only the full agent

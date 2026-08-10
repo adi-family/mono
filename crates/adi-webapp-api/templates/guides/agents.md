@@ -101,6 +101,29 @@ Two things worth knowing when you write an agent's prompt:
   that must ask but might not be watched should name `after_seconds` and `defaults` instead: the
   question waits that long, then takes its own assumption and carries on.
 
+## What became of a run
+A run that ends says so, once, and the verdict is kept — so "did the overnight batch work?" is a
+question you ask the store rather than a stack of logs.
+
+```
+{{cli}} agents runs --since 6h            # every agent, newest first, with how each one ended
+{{cli}} agents runs --status failed       # just the ones that died, and what killed them
+{{cli}} agents runs --agent <name> --json
+```
+
+- Each finished run carries its engine's own `terminal_reason` — `completed`, `api_error`,
+  `aborted_tools` — plus how long it took, what it cost, and the opening of what it said. The
+  status is flattened to `running` / `failed` / `done` / `unknown` so a filter works without
+  knowing any engine's vocabulary.
+- `adi.agents.run.finished` is published on the bus the moment a run's ending is noticed, carrying
+  the same verdict. Subscribe a trigger to it and a 3am failure reaches you without anything
+  polling for one (see `triggers.md`). Note it is a *different* event from `adi.agents.run.stopped`,
+  which means somebody stopped it.
+- The ending is noticed by whoever looks first — the panel's poll, this command, a trigger's child
+  — and written down exactly once, so the event does not repeat.
+- `unknown` means the run stopped without leaving anything an engine parser could read. That is the
+  one case worth opening the log for.
+
 ## How many may run at once
 Runs are launched from everywhere — a click, a trigger firing, a chat queue draining — and nothing
 about a *definition* bounds how many exist. Two numbers do, both in

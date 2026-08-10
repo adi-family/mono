@@ -246,6 +246,14 @@ fn parse_metrics(event: &Value) -> TurnMetrics {
         num_turns: event.get("num_turns").and_then(Value::as_u64),
         permission_denials: denials,
         is_error: event.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+        // The engine's own word for how it ended. `subtype` is the older spelling of the same
+        // thing and stands in for builds that don't send `terminal_reason`.
+        terminal_reason: event
+            .get("terminal_reason")
+            .or_else(|| event.get("subtype"))
+            .and_then(Value::as_str)
+            .filter(|reason| !reason.is_empty())
+            .map(str::to_string),
     }
 }
 

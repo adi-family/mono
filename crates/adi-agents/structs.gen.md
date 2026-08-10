@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-77 structs · 19 enums · 5 type aliases across 33 files.
+79 structs · 19 enums · 5 type aliases across 33 files.
 
 ## Index
 
@@ -23,7 +23,7 @@
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`
 - [`src/lib.rs`](#srclibrs) — `Agents`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
@@ -38,7 +38,7 @@
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
 - [`src/store/questions.rs`](#srcstorequestionsrs) — `Question`, `Choice`, `AnsweredBy`, `Answer`, `Ask`, `Request`
-- [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`
+- [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`, `RunOutcome`
 - [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StateSource`, `StoredState`
 - [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`
 
@@ -973,6 +973,27 @@ pub struct AgentRunStopped {
 }
 ```
 
+### struct `AgentRunFinished`
+
+`adi.agents.run.finished` — a run ended on its own, and here is what became of it.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentRunFinished {
+    pub agent: String,
+    pub run_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+    pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_head: String,
+}
+```
+
 ### struct `AgentRunDeleted`
 
 `adi.agents.run.deleted` — one run of an agent was deleted outright: it was stopped if still live, and its log, metadata and any transcript are gone. Distinct from `stopped`, which ends a run but leaves it in the history to read.
@@ -1165,6 +1186,8 @@ pub struct TurnMetrics {
     pub permission_denials: Vec<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
 }
 ```
 
@@ -1369,6 +1392,7 @@ pub struct RunInfo {
     pub message: String,
     pub running: bool,
     pub hidden: bool,
+    pub outcome: Option<RunOutcome>,
 }
 ```
 
@@ -1546,6 +1570,7 @@ pub struct RunSpec {
     pub env: Vec<(String, String)>,
     pub arguments: serde_json::Value,
     pub tools: Vec<ToolHelp>,
+    pub tool_help: Option<String>,
     pub system_prompt: Option<String>,
     pub workspace_note: Option<String>,
 }
@@ -1683,6 +1708,31 @@ pub struct SessionRecord {
     pub last_activity: u64,
     pub hidden: bool,
     pub runner_state: Option<serde_json::Value>,
+    pub outcome: Option<RunOutcome>,
+}
+```
+
+### struct `RunOutcome`
+
+What became of a run: the engine's own verdict, its telemetry, and the head of what it said.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct RunOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub terminal_reason: Option<String>,
+    #[serde(default)]
+    pub is_error: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cost_micro_usd: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub result_head: String,
+    #[serde(default)]
+    pub noted_at: u64,
 }
 ```
 
