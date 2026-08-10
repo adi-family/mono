@@ -64,6 +64,15 @@ pub struct AgentManifest<Args> {
     /// without its tools. Stored as a TOML table (`[env]`).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Whether this agent runs with nobody watching — a trigger's agent, a scheduled sweep, a run
+    /// nobody will see until morning.
+    ///
+    /// It changes exactly one thing: the [`Ask`](crate::backends::harness) tool refuses, telling
+    /// the run to decide for itself and say what it assumed. A question nobody is going to answer
+    /// is worse than a judgement call, because the judgement call at least ships — and an
+    /// unattended run that asks is a run that has quietly stopped without failing.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unattended: bool,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -105,6 +114,7 @@ impl<Args> AgentManifest<Args> {
             secrets: self.secrets.clone(),
             path: self.path.clone(),
             env: self.env.clone(),
+            unattended: self.unattended,
             created_at: self.created_at,
             updated_at: self.updated_at,
         }

@@ -154,7 +154,11 @@ pub(crate) fn run_turn(
         agent: &agent.name,
         conv: conv_id,
         awaits: crate::awaits::Awaits::open(),
+        // The same store this child already read its transcript from — a question outlives this
+        // turn by being a row in it.
+        sessions: store.clone(),
         agent_dir: &agent_dir,
+        unattended: agent.manifest.unattended,
     };
     let wire = Wire::of(&args, model)?;
     tool_loop(&wire, &args, &turns, &ctx, sink)

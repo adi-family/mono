@@ -603,6 +603,8 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         // whatever the agent already has instead of clearing it on every save.
         path: manual.then(|| parsed_path_dirs(&form.agent.path.get_untracked())),
         env: manual.then(|| parsed_env_vars(&form.agent.env.get_untracked())),
+        // Not offered here, so not stated — `None` leaves whatever the agent already has.
+        unattended: None,
         rename_from: None,
     };
 

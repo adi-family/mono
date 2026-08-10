@@ -88,16 +88,12 @@ impl DetachedRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt =
                     with_tool_help(spec, with_workspace(spec, config.append_system_prompt));
-                let (allowed, disallowed) = crate::backends::mcp::scope_tools(
-                    config.allowed_tools.as_deref(),
-                    config.disallowed_tools.as_deref(),
-                );
-                config.allowed_tools = Some(allowed);
-                config.disallowed_tools = Some(disallowed);
+                let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(process::claude::argv(
                     &config,
                     message,
                     Some(&crate::backends::mcp::config(spec, session)),
+                    &tools,
                 ))
             }
             Backend::ProcessCodex => {
@@ -118,17 +114,13 @@ impl DetachedRunner {
                 } else {
                     Continuation::First { session_id }
                 };
-                let (allowed, disallowed) = crate::backends::mcp::scope_tools(
-                    config.allowed_tools.as_deref(),
-                    config.disallowed_tools.as_deref(),
-                );
-                config.allowed_tools = Some(allowed);
-                config.disallowed_tools = Some(disallowed);
+                let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(harness::claude_sdk::argv(
                     &config,
                     message,
                     &cont,
                     Some(&crate::backends::mcp::config(spec, session)),
+                    &tools,
                 ))
             }
             Backend::HarnessAdi => {
@@ -978,10 +970,10 @@ mod tests {
     }
 
     /// The two halves that make the MCP server usable rather than merely present: the engine's own
-    /// shell is taken away, and ours is granted. Granting is what is easy to forget — an ungranted
-    /// MCP tool is advertised to the model and then refused when it calls it.
+    /// built-ins are off — the shell for good — and ours is granted. Granting is what is easy to
+    /// forget: an ungranted MCP tool is advertised to the model and then refused when it calls it.
     #[test]
-    fn the_engines_shell_is_replaced_by_ours_without_discarding_the_agents_own_lists() {
+    fn a_run_starts_with_no_engine_tools_and_the_grant_for_ours() {
         let flag = |argv: &[String], name: &str| -> String {
             let at = argv
                 .iter()
@@ -997,25 +989,18 @@ mod tests {
                 &FakeSession::new("scoped"),
                 "go",
             );
-            let allowed = flag(&argv, "--allowed-tools");
-            let disallowed = flag(&argv, "--disallowed-tools");
             // The server-level grant covers every tool the server serves, so adding one later needs
             // no change here.
+            let allowed = flag(&argv, "--allowed-tools");
             assert!(allowed.split(',').any(|t| t == "mcp__adi"), "{allowed}");
-            for engine_tool in crate::backends::mcp::ENGINE_SHELL_TOOLS {
-                assert!(
-                    disallowed.split(',').any(|t| t == *engine_tool),
-                    "{engine_tool} must be denied: {disallowed}"
-                );
-            }
+            // An agent that asked for nothing gets nothing of the engine's own — and the flag is
+            // present-and-empty rather than absent, which is what makes that true.
+            assert_eq!(flag(&argv, "--tools"), "", "{argv:?}");
         }
 
-        // An agent's own lists are a decision somebody made about that agent: this adds to them
-        // rather than replacing them, and does not duplicate what is already there.
-        let opinionated = spec(json!({
-            "allowed_tools": "Read,mcp__adi",
-            "disallowed_tools": "WebFetch,Bash",
-        }));
+        // An agent's own list is a decision somebody made about that agent: it is what switches the
+        // engine's built-ins on, and it is not duplicated where it already names our server.
+        let opinionated = spec(json!({ "allowed_tools": "Read,mcp__adi,Bash" }));
         let argv = argv_of(
             Backend::ProcessClaude,
             &opinionated,
@@ -1023,19 +1008,20 @@ mod tests {
             "go",
         );
         let allowed = flag(&argv, "--allowed-tools");
-        let disallowed = flag(&argv, "--disallowed-tools");
+        assert_eq!(flag(&argv, "--tools"), "Read", "{argv:?}");
         assert!(allowed.split(',').any(|t| t == "Read"), "{allowed}");
-        assert!(disallowed.split(',').any(|t| t == "WebFetch"), "{disallowed}");
         assert_eq!(
             allowed.split(',').filter(|t| *t == "mcp__adi").count(),
             1,
             "a grant already present is not repeated: {allowed}"
         );
-        assert_eq!(
-            disallowed.split(',').filter(|t| *t == "Bash").count(),
-            1,
-            "a denial already present is not repeated: {disallowed}"
-        );
+        // The engine's shell is the one thing an agent cannot ask its way back into.
+        for engine_tool in crate::backends::mcp::ENGINE_SHELL_TOOLS {
+            assert!(
+                !flag(&argv, "--tools").split(',').any(|t| t == *engine_tool),
+                "{engine_tool} is never grantable: {argv:?}"
+            );
+        }
     }
 
     /// Tool help is prompt material for the Claude engines and poison for Codex, whose

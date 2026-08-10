@@ -21,6 +21,7 @@ use serde_json::{Value, json};
 use crate::backends::jobs;
 use crate::backends::shell::Shell;
 use crate::awaits::{self, Awaits, Request};
+use crate::store::{AskRequest, Choice, MAX_QUESTIONS, SessionStore};
 
 /// A tool as the model sees it: a name, a sentence about when to reach for it, and the JSON Schema
 /// of its arguments. Providers disagree only about where these three go on the wire.
@@ -49,9 +50,16 @@ pub(crate) struct Ctx<'a> {
     /// Where a registered wake is written. Held here rather than opened at the call site so a test
     /// can point it at a scratch store without touching the environment every other test reads.
     pub awaits: Awaits,
+    /// The session store — where an [`Ask`](TOOLS) writes the question that outlives this turn.
+    /// Held for the same reason as `awaits`: a test points it somewhere harmless.
+    pub sessions: SessionStore,
     /// This agent's session directory — where a background job files its log and its status, in the
     /// session's own `<id>.*` namespace beside the shell's own sidecars.
     pub agent_dir: &'a Path,
+    /// Whether this agent runs with nobody watching (see
+    /// [`AgentManifest::unattended`](crate::AgentManifest::unattended)). The one thing it changes
+    /// is that `Ask` refuses.
+    pub unattended: bool,
 }
 
 /// What `Bash` is, told in the terms that decide how a command gets written: the shell is the
@@ -210,6 +218,70 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
             })
         },
     },
+    ToolSpec {
+        name: "Ask",
+        description:
+            "Put a decision to the person you are working for, then **end your turn**. You are not \
+             waiting here: the question is written down, this conversation is marked as blocked on \
+             them, and their answer arrives as a new message with your whole transcript still in \
+             front of you. Nothing is held open in the meantime.\n\nReach for this when the work \
+             genuinely forks on something only they can settle — which of two designs to build, \
+             whether to touch production, which of three ambiguous readings of the request is the \
+             real one. Do **not** reach for it to confirm something you can determine yourself, to \
+             ask permission for what you were already asked to do, or to report progress. A \
+             judgement call you make and state plainly is worth more than a question that stops the \
+             work, so if you can proceed under a stated assumption, do that instead.\n\nAsk for \
+             everything you need in **one** call — up to four questions. Every answer costs a full \
+             turn, so four questions asked one at a time cost four, and the person answering sees \
+             the whole decision at once instead of being led through it a click at a time. Give \
+             `options` wherever you can: an answer someone taps is an answer you get, and one they \
+             have to compose is one you wait for.\n\nNever ask for a password, an API key, or any \
+             other secret — the answer is stored in this transcript in the clear and replayed to \
+             the model on every later turn. Ask them to store it (`adi-mono secrets set NAME`) and \
+             tell you the name.",
+        schema: || {
+            json!({
+                "type": "object",
+                "properties": {
+                    "note": { "type": "string", "description": "What you were doing when you stopped to ask, in a sentence or two. Shown above the questions — a question read without context gets answered wrongly by someone who would have got it right." },
+                    "questions": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_QUESTIONS,
+                        "description": "Everything you need decided, asked together.",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "header": { "type": "string", "description": "Two or three words naming the decision — `Auth method`, `Rollout`. It is the chip shown beside the question, and what a notification says." },
+                                "question": { "type": "string", "description": "The question, as you would put it to a colleague." },
+                                "options": {
+                                    "type": "array",
+                                    "description": "The answers worth offering as one tap. Leave empty only when the answer really is free-form.",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "label": { "type": "string", "description": "What the button says. Short — a few words." },
+                                            "description": { "type": "string", "description": "What choosing it implies. This is where the trade-off goes, and it is what turns picking a word into making a decision." },
+                                        },
+                                        "required": ["label"],
+                                    },
+                                },
+                                "multi_select": { "type": "boolean", "description": "Whether more than one option may be chosen. Default false." },
+                            },
+                            "required": ["question"],
+                        },
+                    },
+                    "after_seconds": { "type": "integer", "description": "Stop waiting after this long and take `defaults` instead. Use it whenever the work should not stall on silence; without it the question waits indefinitely, which is right only when you know somebody is watching." },
+                    "defaults": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "What to assume per question when `after_seconds` passes, in the same order. Required with `after_seconds` — a deadline is a statement about what happens when nobody answers, so it is only a deadline if you say what you will assume.",
+                    },
+                },
+                "required": ["questions"],
+            })
+        },
+    },
 ];
 
 /// How much of a tool's output goes back to the model. A turn replays its whole transcript on every
@@ -236,6 +308,7 @@ pub(crate) fn run(name: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Resu
         "Glob" => glob(input, ctx.cwd),
         "Grep" => grep(input, ctx.cwd),
         "Await" => await_wake(input, ctx),
+        "Ask" => ask(input, ctx),
         other => Err(format!(
             "no tool named {other} — the tools you have are: {}",
             TOOLS
@@ -520,18 +593,7 @@ fn grep(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
 fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     let req = Request {
         note: arg_str(input, "note")?.to_string(),
-        events: input
-            .get("events")
-            .and_then(Value::as_array)
-            .map(|list| {
-                list.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::trim)
-                    .filter(|e| !e.is_empty())
-                    .map(str::to_string)
-                    .collect()
-            })
-            .unwrap_or_default(),
+        events: string_list(input, "events"),
         after_seconds: arg_u64(input, "after_seconds"),
         every_seconds: arg_u64(input, "every_seconds"),
         check: input
@@ -552,6 +614,120 @@ fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, Strin
     ))
 }
 
+/// Write down a decision for a person to make, and tell the turn to end.
+///
+/// The refusal an unattended agent gets is deliberately an `Err` — the model reads a failed tool
+/// result and corrects, and what it must correct here is *stopping at all*. Returned as an `Ok`
+/// it would read as "asked, now end your turn", which is exactly the silent halt the flag exists
+/// to prevent.
+fn ask(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    if ctx.unattended {
+        return Err(
+            "this agent runs unattended — nobody is going to see a question, so asking one would \
+             stop the work silently. Decide it yourself, carry on, and say plainly in your answer \
+             what you assumed and what would change if the assumption is wrong."
+                .to_string(),
+        );
+    }
+
+    let questions = input
+        .get("questions")
+        .and_then(Value::as_array)
+        .ok_or("this tool needs a `questions` array — one entry per thing you need decided")?
+        .iter()
+        .map(parse_question)
+        .collect::<std::result::Result<Vec<_>, String>>()?;
+
+    let req = AskRequest {
+        note: input
+            .get("note")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        questions,
+        after_seconds: arg_u64(input, "after_seconds"),
+        defaults: string_list(input, "defaults"),
+    };
+    let asked = ctx
+        .sessions
+        .ask(ctx.agent, ctx.conv, &req)
+        .map_err(|e| e.to_string())?;
+
+    // Announced on the bus rather than delivered anywhere: this crate has no idea who is watching,
+    // and a trigger subscribed to `adi.agents.question.**` is how the question reaches a phone.
+    // Best-effort — a question nobody was told about is still a question that got written down.
+    let _ = adi_events::Events::with_config(ctx.awaits.config().clone()).emit(
+        crate::events::QUESTION_ASKED,
+        serde_json::to_string(&crate::events::AgentQuestionAsked {
+            agent: ctx.agent.to_string(),
+            conv: ctx.conv.to_string(),
+            ask: asked.id.clone(),
+            question: asked.headline(),
+        })
+        .unwrap_or_default(),
+    );
+
+    let deadline = match asked.deadline {
+        Some(_) => " If nobody answers in time, your defaults are taken and you are told so.",
+        None => "",
+    };
+    Ok(format!(
+        "asked {} — {} question(s) put to the person you are working for.{deadline} End your turn \
+         now; their answer arrives as a new message with this whole conversation still in front of \
+         you.",
+        asked.id,
+        asked.questions.len()
+    ))
+}
+
+/// One entry of the `questions` array, as the model spelled it.
+fn parse_question(value: &Value) -> std::result::Result<crate::store::Question, String> {
+    let text = value
+        .get("question")
+        .and_then(Value::as_str)
+        .ok_or("every entry of `questions` needs a `question` string")?;
+    let options = value
+        .get("options")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|option| {
+                    // A bare string where an object was asked for is the commonest way a model
+                    // spells a list of choices, and reading it is cheaper than refusing it.
+                    let (label, description) = match option {
+                        Value::String(label) => (label.as_str(), ""),
+                        other => (
+                            other.get("label").and_then(Value::as_str)?,
+                            other
+                                .get("description")
+                                .and_then(Value::as_str)
+                                .unwrap_or_default(),
+                        ),
+                    };
+                    Some(Choice {
+                        label: label.trim().to_string(),
+                        description: description.trim().to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(crate::store::Question {
+        header: value
+            .get("header")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        question: text.trim().to_string(),
+        options,
+        multi_select: value
+            .get("multi_select")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    })
+}
+
 // ---- shared helpers ----------------------------------------------------------------
 
 /// A relative path means "in the directory this run is about"; an absolute one means itself.
@@ -562,6 +738,23 @@ fn resolve(path: &str, cwd: &Path) -> PathBuf {
     } else {
         cwd.join(p)
     }
+}
+
+/// A string-array argument, trimmed, with the empties dropped. Absent reads as empty — a list
+/// nobody gave and a list given empty mean the same thing everywhere it is used here.
+fn string_list(input: &Value, key: &str) -> Vec<String> {
+    input
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .filter(|item| !item.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn arg_str<'a>(input: &'a Value, key: &str) -> std::result::Result<&'a str, String> {
@@ -830,20 +1023,80 @@ mod tests {
         dir
     }
 
-    /// A tool context whose await store is scratch, so registering a wake in a test never reaches
-    /// the real one.
+    /// A tool context whose await and session stores are both scratch, so registering a wake or a
+    /// question in a test never reaches the real ones.
     fn ctx_in<'a>(cwd: &'a Path, tag: &str) -> Ctx<'a> {
-        let root = std::env::temp_dir()
-            .join(format!("adi-tools-awaits-{tag}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("adi-tools-awaits-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         Ctx {
             cwd,
             shell: Shell::new(cwd, "conv-1"),
             agent: "watcher",
             conv: "conv-1",
-            awaits: Awaits::with_config(adi_config::Config::with_root(root)),
+            awaits: Awaits::with_config(adi_config::Config::with_root(root.join("await-store"))),
+            sessions: SessionStore::new(root.join("sessions")),
             agent_dir: cwd,
+            unattended: false,
         }
+    }
+
+    /// A scratch store with one conversation already open in it.
+    ///
+    /// An ask is a row that cascades off its session's, so there is nowhere to file a question in a
+    /// conversation nobody opened. The id is minted by the store rather than chosen, which is why
+    /// this owns the pieces and hands out a borrowed [`Ctx`] instead of being one.
+    struct Conversation {
+        root: std::path::PathBuf,
+        sessions: SessionStore,
+        awaits: Awaits,
+        conv: String,
+    }
+
+    impl Conversation {
+        fn open(tag: &str) -> Self {
+            let root =
+                std::env::temp_dir().join(format!("adi-tools-ask-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&root);
+            let sessions = SessionStore::new(root.join("sessions"));
+            let conv = sessions
+                .create("watcher", crate::Backend::HarnessAdi, &root, "go")
+                .expect("open a conversation")
+                .id;
+            Self {
+                awaits: Awaits::with_config(adi_config::Config::with_root(root.join("awaits"))),
+                sessions,
+                conv,
+                root,
+            }
+        }
+
+        fn ctx(&self) -> Ctx<'_> {
+            Ctx {
+                cwd: &self.root,
+                shell: Shell::new(&self.root, &self.conv),
+                agent: "watcher",
+                conv: &self.conv,
+                awaits: self.awaits.clone(),
+                sessions: self.sessions.clone(),
+                agent_dir: &self.root,
+                unattended: false,
+            }
+        }
+    }
+
+    impl Drop for Conversation {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.root);
+        }
+    }
+
+    fn question(text: &str) -> Value {
+        json!({
+            "header": "Choice",
+            "question": text,
+            "options": [{ "label": "yes", "description": "do it" }, "no"],
+        })
     }
 
     #[test]
@@ -1050,6 +1303,7 @@ mod tests {
         let err = run("Frobnicate", &json!({}), &ctx).expect_err("unknown tool");
         assert!(err.contains("Read"), "{err}");
         assert!(err.contains("Await"), "the wake tool is advertised too: {err}");
+        assert!(err.contains("Ask"), "and so is the question tool: {err}");
     }
 
     /// The wake tool's arguments reach the store, and a request that can never fire comes back as a
@@ -1080,5 +1334,114 @@ mod tests {
         assert_eq!(pending[0].cwd, dir.display().to_string());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What the model wrote reaches the store intact, and what it gets back tells it the one thing
+    /// it has to do next: stop.
+    #[test]
+    fn ask_records_the_question_and_tells_the_turn_to_end() {
+        let chat = Conversation::open("records");
+        let ctx = chat.ctx();
+
+        let reply = ask(
+            &json!({
+                "note": "two ways to do the migration",
+                "questions": [question("in place, or a new table?")],
+            }),
+            &ctx,
+        )
+        .expect("asked");
+        assert!(reply.contains("End your turn"), "{reply}");
+
+        let pending = ctx
+            .sessions
+            .pending_question("watcher", &chat.conv)
+            .expect("the conversation is blocked on it");
+        assert_eq!(pending.note, "two ways to do the migration");
+        assert_eq!(pending.questions.len(), 1);
+        assert_eq!(pending.questions[0].options.len(), 2);
+        // A bare string where an object was asked for is the commonest way a model spells a list of
+        // choices, and it is read rather than refused.
+        assert_eq!(pending.questions[0].options[1].label, "no");
+        assert!(pending.deadline.is_none(), "no deadline was named");
+    }
+
+    /// A deadline is a statement about what happens when nobody answers — so it is only a deadline
+    /// if the run says what it will assume. Both halves reach the store together or not at all.
+    #[test]
+    fn ask_takes_a_deadline_only_with_the_assumption_to_go_with_it() {
+        let chat = Conversation::open("deadline");
+        let ctx = chat.ctx();
+
+        let err = ask(
+            &json!({ "questions": [question("deploy?")], "after_seconds": 600 }),
+            &ctx,
+        )
+        .expect_err("refused");
+        assert!(err.contains("defaults"), "{err}");
+
+        let reply = ask(
+            &json!({
+                "questions": [question("deploy?")],
+                "after_seconds": 600,
+                "defaults": ["no — leave it for a human"],
+            }),
+            &ctx,
+        )
+        .expect("asked");
+        assert!(reply.contains("defaults are taken"), "{reply}");
+        assert!(
+            ctx.sessions
+                .pending_question("watcher", &chat.conv)
+                .expect("pending")
+                .deadline
+                .is_some()
+        );
+    }
+
+    /// Nobody is watching an unattended run, so a question there is not a question — it is the work
+    /// stopping without failing. The refusal is an `Err` on purpose: the model reads a failed tool
+    /// result and corrects, and what it must correct is stopping at all.
+    #[test]
+    fn an_unattended_agent_is_told_to_decide_for_itself() {
+        let chat = Conversation::open("unattended");
+        let ctx = Ctx {
+            unattended: true,
+            ..chat.ctx()
+        };
+
+        let err = ask(&json!({ "questions": [question("deploy?")] }), &ctx).expect_err("refused");
+        assert!(err.contains("unattended"), "{err}");
+        assert!(
+            err.contains("what you assumed"),
+            "and it is told what to do instead: {err}"
+        );
+        assert!(
+            ctx.sessions
+                .pending_question("watcher", &chat.conv)
+                .is_none(),
+            "nothing was written down"
+        );
+    }
+
+    /// The malformed cases, each answered in the voice of the tool rather than as a failed turn.
+    #[test]
+    fn a_malformed_ask_explains_itself_to_the_model() {
+        let chat = Conversation::open("malformed");
+        let ctx = chat.ctx();
+
+        let err = ask(&json!({ "note": "hello" }), &ctx).expect_err("no questions");
+        assert!(err.contains("`questions`"), "{err}");
+
+        let err = ask(&json!({ "questions": [json!({ "header": "x" })] }), &ctx)
+            .expect_err("a question with no text");
+        assert!(err.contains("`question`"), "{err}");
+
+        let err = ask(
+            &json!({ "questions": (0..=MAX_QUESTIONS).map(|_| question("q?")).collect::<Vec<_>>() }),
+            &ctx,
+        )
+        .expect_err("too many");
+        assert!(err.contains(&MAX_QUESTIONS.to_string()), "{err}");
     }
 }

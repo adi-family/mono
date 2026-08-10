@@ -74,6 +74,8 @@ pub(crate) enum AgentsCommand {
         env: Vec<String>,
         #[arg(long, conflicts_with = "env")]
         no_env: bool,
+        #[arg(long)]
+        unattended: bool,
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
         #[arg(long)]
@@ -96,6 +98,20 @@ pub(crate) enum AgentsCommand {
         project: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    Questions {
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Answer {
+        name: String,
+        conv: String,
+        #[arg(required = true)]
+        replies: Vec<String>,
+        #[arg(long)]
+        ask: Option<String>,
     },
     Stop {
         name: String,

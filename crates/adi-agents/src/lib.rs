@@ -38,6 +38,7 @@ mod events;
 mod launch;
 mod limits;
 mod memo;
+pub mod questions;
 pub mod progress;
 pub mod review;
 mod run;
@@ -60,8 +61,8 @@ pub use agent::{
 pub use backend::Backend;
 pub use error::{Error, Result};
 pub use events::{
-    AgentDeleted, AgentRunDeleted, AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog,
-    event_types,
+    AgentDeleted, AgentQuestionAnswered, AgentQuestionAsked, AgentRunDeleted, AgentRunStarted,
+    AgentRunStopped, AgentSaved, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
 pub use progress::{
@@ -74,7 +75,10 @@ pub use run::{
 
 use agent::validate_name;
 use runner::{RunEvent, RunSpec, Runner, Session, runner_for};
-use store::{SessionRecord, SessionRef, SessionStore, assistant_turn, user_turn};
+use store::{
+    Answer, AnsweredBy, Ask, SessionRecord, SessionRef, SessionStore, assistant_turn, now_ms,
+    user_turn,
+};
 
 const AGENTS_MODULE: &str = "agents";
 const SESSIONS_MODULE: &str = "sessions";
@@ -232,6 +236,22 @@ impl Agents {
     /// registry neither knows nor cares whether anything subscribes, and a spool failure must
     /// never fail the lifecycle action that caused it. Emitted against **this store's** [`Config`],
     /// so a scratch store stays isolated.
+    /// Announce that a question is settled, so whatever told a person about it can say so too.
+    pub(crate) fn emit_answered(&self, ask: &Ask, by: AnsweredBy) {
+        self.emit(
+            events::QUESTION_ANSWERED,
+            &AgentQuestionAnswered {
+                agent: ask.agent.clone(),
+                conv: ask.conv.clone(),
+                ask: ask.id.clone(),
+                by: match by {
+                    AnsweredBy::Human => "human".to_string(),
+                    AnsweredBy::Default => "default".to_string(),
+                },
+            },
+        );
+    }
+
     fn emit(&self, event: &str, payload: &impl serde::Serialize) {
         if let Ok(json) = serde_json::to_string(payload) {
             let _ = adi_events::Events::with_config(self.config.clone()).emit(event, json);
@@ -303,7 +323,7 @@ impl Agents {
     /// `/api/agents/runs/all` paid for it four hundred times over — and it could never finish
     /// anyway, because a legacy directory holding a session the new layout already has is left
     /// standing on purpose, and so is rescanned for ever.
-    fn sessions(&self) -> SessionStore {
+    pub(crate) fn sessions(&self) -> SessionStore {
         SessionStore::new(self.config.module(SESSIONS_MODULE).dir())
     }
 
@@ -513,6 +533,133 @@ impl Agents {
     /// Returns [`Error::NotFound`] or backend launch errors — including [`Error::NotRunnable`] for a
     /// backend that keeps no conversation.
     pub fn reply(&self, name: &str, conv_id: &str, message: &str) -> Result<Sent> {
+        // A person typing into a conversation that is waiting on them is answering it, whether or
+        // not they used the card. Settled first, so the message that actually goes in carries the
+        // marker naming the ask it closes — otherwise the model reads an unattached sentence and
+        // the card sits there, answered and still asking.
+        //
+        // But only once this conversation is known to be one that can take a message at all: a
+        // settled question cannot be unsettled, so consuming one to then refuse the message would
+        // lose the answer and the question together.
+        self.check_deliverable(name, conv_id)?;
+        let settled = self
+            .sessions()
+            .resolve_question(
+                name,
+                conv_id,
+                None,
+                &Answer {
+                    at: now_ms(),
+                    by: AnsweredBy::Human,
+                    replies: vec![message.to_string()],
+                },
+            )
+            .ok()
+            .flatten();
+        match settled {
+            Some(ask) => {
+                let text = ask.render_reply(message);
+                let sent = self.deliver(name, conv_id, &text)?;
+                self.emit_answered(&ask, AnsweredBy::Human);
+                Ok(sent)
+            }
+            None => self.deliver(name, conv_id, message),
+        }
+    }
+
+    /// Answer a conversation's pending question with one reply per question — what the card in the
+    /// chat sends, and what `adi-mono agents answer` sends.
+    ///
+    /// `ask_id` names the ask being answered so a stale card cannot settle the question that
+    /// replaced it; `None` takes whatever is pending. Either way, exactly one caller wins: settling
+    /// is a conditional update, and the loser hears [`Error::NotFound`] rather than starting a
+    /// second turn on the same question.
+    ///
+    /// # Errors
+    /// [`Error::NotFound`] for an unknown agent, or when there was no such question left to answer.
+    /// [`Error::Unsupported`] for a backend that keeps no conversation, plus launch errors.
+    pub fn answer(
+        &self,
+        name: &str,
+        conv_id: &str,
+        ask_id: Option<&str>,
+        replies: &[String],
+    ) -> Result<Sent> {
+        // Before the claim, for the reason `reply` gives: settling is one-way.
+        self.check_deliverable(name, conv_id)?;
+        let answer = Answer {
+            at: now_ms(),
+            by: AnsweredBy::Human,
+            replies: replies.to_vec(),
+        };
+        let ask = self
+            .sessions()
+            .resolve_question(name, conv_id, ask_id, &answer)?
+            .ok_or_else(|| {
+                Error::NotFound(format!(
+                    "{name}: no question waiting in {conv_id} — it was answered already, or the \
+                     deadline took its default"
+                ))
+            })?;
+        let sent = self.deliver(name, conv_id, &ask.render(&answer))?;
+        self.emit_answered(&ask, AnsweredBy::Human);
+        Ok(sent)
+    }
+
+    /// What this conversation is waiting on a person for, if anything.
+    #[must_use]
+    pub fn pending_question(&self, name: &str, conv_id: &str) -> Option<Ask> {
+        self.sessions().pending_question(name, conv_id)
+    }
+
+    /// Every unanswered question anywhere — the "needs you" inbox, in one query over the store.
+    #[must_use]
+    pub fn pending_questions(&self) -> Vec<Ask> {
+        self.sessions().all_pending_questions()
+    }
+
+    /// Every ask a conversation has made, oldest first — pending and settled alike, so a reader can
+    /// show what was decided and by whom.
+    #[must_use]
+    pub fn question_history(&self, name: &str, conv_id: &str) -> Vec<Ask> {
+        self.sessions().question_history(name, conv_id)
+    }
+
+    /// Whether a message could be delivered into this conversation at all — the agent is
+    /// registered, its backend keeps a thread, and the conversation exists.
+    ///
+    /// Everything [`deliver`](Self::deliver) checks before it can *fail*, asked ahead of a claim so
+    /// that settling a question and refusing its answer cannot happen in the same call. What is
+    /// deliberately not covered is the launch itself: a spawn can fail after the claim, and that
+    /// window is the same one an [await](crate::awaits) lives with — the alternative, un-settling a
+    /// question somebody has already answered, would ask them to answer it twice.
+    fn check_deliverable(&self, name: &str, conv_id: &str) -> Result<()> {
+        let agent = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let runner = Self::runner_of(&agent)?;
+        if !answerable(runner.as_ref()) {
+            return Err(Error::Unsupported(format!(
+                "backend {} isn't answerable — only a backend that continues the same thread keeps \
+                 conversations you can reply to",
+                agent.manifest.backend
+            )));
+        }
+        if self.sessions().get(name, conv_id).is_none() {
+            return Err(Error::NotFound(format!(
+                "{name}: no conversation {conv_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Say `message` into a conversation without settling anything it may be waiting on.
+    ///
+    /// The delivery half of [`reply`](Self::reply), split out because two callers must *not* count
+    /// as an answer: an [await](crate::awaits) firing, and the deadline sweep delivering a question's
+    /// own default (which has settled it already, by a different route). Both are the platform
+    /// speaking, and a person's question stays open until a person answers it.
+    pub(crate) fn deliver(&self, name: &str, conv_id: &str, message: &str) -> Result<Sent> {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
@@ -832,19 +979,21 @@ impl Agents {
     /// [`Error::Process`] if the transport fails. A tool that fails is not an error: its message
     /// travels back as the call's result, exactly as it does in the adi loop.
     pub fn serve_mcp(&self, agent: &str, conv: &str, cwd: &std::path::Path) -> Result<()> {
-        let agent_dir = self.sessions().agent_dir(agent);
-        // The conversation's shell keeps its state in sidecars of this directory, and writes them
-        // from inside the command it runs — so a missing directory is not an error anybody sees, it
-        // is a `Bash` that reports a redirection failure instead of the output the model asked for.
-        // The store creates it on the write paths; this entry point is reached by a *child of the
-        // engine's CLI* and cannot assume any of them ran first.
-        std::fs::create_dir_all(&agent_dir)?;
+        let store = self.sessions();
+        // A manifest that has gone missing under a running conversation reads as attended: refusing
+        // to let it ask would be the more surprising of the two guesses, and the flag is opt-in.
+        let unattended = self
+            .get(agent)
+            .ok()
+            .flatten()
+            .is_some_and(|a| a.manifest.unattended);
         let stdin = std::io::stdin();
         backends::mcp::serve(
             agent,
             conv,
             cwd,
-            &agent_dir,
+            &store,
+            unattended,
             stdin.lock(),
             std::io::stdout().lock(),
         )
@@ -1170,6 +1319,10 @@ impl Agents {
         if removed {
             // Nothing left to wake: every await this agent's conversations registered goes too.
             let _ = awaits::Awaits::with_config(self.config.clone()).forget_agent(name);
+            // And nothing left to answer. Its transcripts outlive the definition on purpose, so a
+            // *settled* question stays where the conversation that explains it is — but a pending
+            // one is a thing to do, and there is no longer anything that could read the answer.
+            let _ = self.sessions().forget_questions(name);
             self.emit(
                 "adi.agents.deleted",
                 &AgentDeleted {
@@ -2575,5 +2728,126 @@ mod tests {
         );
         let spec = store.spec_in(&agent, store.config.root().to_path_buf());
         assert!(spec.tools.is_empty(), "{:?}", spec.tools);
+    }
+
+    // ---- questions -----------------------------------------------------------------
+    //
+    // What is exercised here is the *claiming*: which caller settles a question, and what happens
+    // to the ones that do not. Delivering the answer spawns an engine, so these stop at the point
+    // the turn would start — the store's own tests cover the row, and the tool's cover what a
+    // model may write.
+
+    /// A conversation must exist to be answered into, and the check has to come *before* the
+    /// claim: settling is one-way, so a call that consumed the question and then refused the
+    /// message would lose the answer and the question together.
+    #[test]
+    fn answering_a_conversation_that_cannot_take_one_settles_nothing() {
+        let store = scratch("answer-undeliverable");
+        store
+            .save("solver", spec("harness:adi"))
+            .expect("save the agent");
+        let sessions = store.sessions();
+        let conv = sessions
+            .create("solver", Backend::HarnessAdi, "/tmp", "go")
+            .expect("open a conversation")
+            .id;
+        sessions
+            .ask(
+                "solver",
+                &conv,
+                &store::AskRequest {
+                    questions: vec![store::Question {
+                        header: String::new(),
+                        question: "which one?".to_string(),
+                        options: Vec::new(),
+                        multi_select: false,
+                    }],
+                    ..store::AskRequest::default()
+                },
+            )
+            .expect("ask");
+
+        // An unknown conversation of a real agent: refused, and the real one is untouched.
+        let err = store
+            .answer("solver", "no-such-conversation", None, &["a".to_string()])
+            .expect_err("refused");
+        assert!(matches!(err, Error::NotFound(_)), "{err}");
+        assert!(
+            store.pending_question("solver", &conv).is_some(),
+            "the question this call never named is still waiting"
+        );
+
+        // And an unknown agent, which cannot even be looked up.
+        assert!(matches!(
+            store.answer("ghost", &conv, None, &["a".to_string()]),
+            Err(Error::NotFound(_))
+        ));
+    }
+
+    /// Answering something nobody asked is a 404, not a turn. This is what a card left open in a
+    /// second tab hits, and hearing "there was no question" is the whole point — the alternative is
+    /// a second turn on a conversation that has already moved on.
+    #[test]
+    fn answering_when_nothing_was_asked_is_not_found() {
+        let store = scratch("answer-nothing");
+        store
+            .save("solver", spec("harness:adi"))
+            .expect("save the agent");
+        let conv = store
+            .sessions()
+            .create("solver", Backend::HarnessAdi, "/tmp", "go")
+            .expect("open a conversation")
+            .id;
+
+        let err = store
+            .answer("solver", &conv, None, &["yes".to_string()])
+            .expect_err("nothing to answer");
+        assert!(
+            err.to_string().contains("no question waiting"),
+            "and it says so plainly: {err}"
+        );
+    }
+
+    /// The inbox is a question about the machine, not about an agent: one query, every agent.
+    #[test]
+    fn pending_questions_span_every_agent() {
+        let store = scratch("inbox");
+        let sessions = store.sessions();
+        let mut expected = Vec::new();
+        for name in ["one", "two"] {
+            store.save(name, spec("harness:adi")).expect("save");
+            let conv = sessions
+                .create(name, Backend::HarnessAdi, "/tmp", "go")
+                .expect("open")
+                .id;
+            let ask = sessions
+                .ask(
+                    name,
+                    &conv,
+                    &store::AskRequest {
+                        questions: vec![store::Question {
+                            header: "Choice".to_string(),
+                            question: format!("what should {name} do?"),
+                            options: Vec::new(),
+                            multi_select: false,
+                        }],
+                        ..store::AskRequest::default()
+                    },
+                )
+                .expect("ask");
+            expected.push((name.to_string(), conv, ask.id));
+        }
+
+        let waiting = store.pending_questions();
+        assert_eq!(waiting.len(), 2);
+        for (name, conv, id) in expected {
+            let found = waiting
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap_or_else(|| panic!("{name}'s question is in the inbox"));
+            assert_eq!(found.agent, name);
+            assert_eq!(found.conv, conv);
+            assert!(found.headline().contains(&name));
+        }
     }
 }

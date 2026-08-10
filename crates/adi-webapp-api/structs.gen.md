@@ -4,16 +4,16 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-167 structs · 6 enums · 1 type alias across 6 files.
+174 structs · 6 enums · 1 type alias across 6 files.
 
 ## Index
 
-- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `RunCaps`
+- [`src/handlers/agents.rs`](#srchandlersagentsrs) — `RunCaps`, `Waiting`
 - [`src/handlers/dashboards.rs`](#srchandlersdashboardsrs) — `Manifest`, `HiveFile`, `HiveService`, `HiveProxy`, `DecodedFiles`
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
 - [`src/handlers/response.rs`](#srchandlersresponsers) — `Response`
 - [`src/handlers/services.rs`](#srchandlersservicesrs) — `HiveDoc`, `YamlService`, `HiveProxy`, `HiveRollout`, `HiveRecreate`, `HiveRunner`, `HiveScript`, `HiveDocker`
-- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `BundleFile`, `DashboardBundle`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `ApiError`
+- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `BundleFile`, `DashboardBundle`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `ApiError`
 
 ---
 
@@ -28,6 +28,14 @@ struct RunCaps {
     limits: adi_agents::RunLimits,
     load: adi_agents::RunLoad,
 }
+```
+
+### struct `Waiting`
+
+Every conversation that is blocked on a person, keyed by the pair that names one.
+
+```rust
+struct Waiting(std::collections::HashMap<(String, String), adi_agents::store::Ask>);
 ```
 
 ---
@@ -1080,6 +1088,8 @@ pub struct AgentDto {
     pub created_at: u64,
     pub updated_at: u64,
     #[serde(default)]
+    pub unattended: bool,
+    #[serde(default)]
     pub runnable: bool,
     #[serde(default)]
     pub running: bool,
@@ -1160,6 +1170,8 @@ pub struct SaveAgent {
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
     #[serde(default)]
+    pub unattended: Option<bool>,
+    #[serde(default)]
     pub rename_from: Option<String>,
 }
 ```
@@ -1227,6 +1239,97 @@ pub struct ReplyToRun {
     pub name: String,
     pub run_id: String,
     pub message: String,
+}
+```
+
+### struct `AnswerRun`
+
+`POST /api/agents/run/answer` request — settle the question a conversation is waiting on, with one reply per question in the order they were asked.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerRun {
+    pub name: String,
+    pub run_id: String,
+    #[serde(default)]
+    pub ask: Option<String>,
+    pub replies: Vec<String>,
+}
+```
+
+### struct `AgentQuestion`
+
+One question a run stopped to ask, on the wire.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQuestion {
+    #[serde(default)]
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<AgentChoice>,
+    #[serde(default)]
+    pub multi_select: bool,
+}
+```
+
+### struct `AgentChoice`
+
+One offered answer: what the button says, and what choosing it implies.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentChoice {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+```
+
+### struct `AgentAsk`
+
+A run's request for a human decision — everything the card needs to draw itself.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentAsk {
+    pub id: String,
+    #[serde(default)]
+    pub asked_at: u64,
+    #[serde(default)]
+    pub note: String,
+    pub questions: Vec<AgentQuestion>,
+    #[serde(default)]
+    pub deadline: Option<u64>,
+    #[serde(default)]
+    pub headline: String,
+}
+```
+
+### struct `PendingAsk`
+
+One row of the cross-agent "needs you" inbox: an unanswered ask, and enough about the conversation it came from to open it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAsk {
+    pub agent: String,
+    pub run_id: String,
+    #[serde(default)]
+    pub conversation: String,
+    pub ask: AgentAsk,
+}
+```
+
+### struct `PendingAsks`
+
+`GET /api/agents/questions` — every unanswered question across every agent, oldest first.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAsks {
+    pub asks: Vec<PendingAsk>,
 }
 ```
 
@@ -1343,6 +1446,8 @@ pub struct AgentCapabilities {
     pub tool_steps: bool,
     pub thinking: bool,
     pub metrics: bool,
+    #[serde(default)]
+    pub asks: bool,
 }
 ```
 
@@ -1362,6 +1467,8 @@ pub struct AgentRunInfo {
     pub running: bool,
     #[serde(default)]
     pub hidden: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_question: Option<AgentAsk>,
 }
 ```
 
@@ -1474,6 +1581,8 @@ pub struct AgentPeek {
     pub answerable: bool,
     #[serde(default = "default_caps")]
     pub caps: AgentCapabilities,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_question: Option<AgentAsk>,
     #[serde(default)]
     pub turns: Vec<AgentTurn>,
 }

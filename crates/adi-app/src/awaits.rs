@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 
-use adi_agents::{Agents, awaits};
+use adi_agents::{Agents, awaits, questions};
 use adi_events::EventRecord;
 use adi_triggers::EventObserver;
 use tracing::{info, warn};
@@ -66,6 +66,7 @@ fn run(agents: &Agents, rx: &Receiver<Posted>) {
         }
         if Instant::now() >= next_tick {
             report(&awaits::tick(agents));
+            report_settled(&questions::tick(agents));
             next_tick = Instant::now() + TICK;
         }
     }
@@ -84,6 +85,27 @@ fn report(woken: &[awaits::Woken]) {
             Some(error) => warn!(
                 await_id = %w.id, agent = %w.agent, conversation = %w.conv, cause = %w.cause, %error,
                 "await fired but its wake could not be delivered"
+            ),
+        }
+    }
+}
+
+/// Say what a lapsed question decided on the run's behalf.
+///
+/// Louder than a wake, and deliberately: a default taken is a decision nobody made, and the whole
+/// reason it is allowed is that it is visible afterwards. A fleet whose log is full of these is a
+/// fleet asking questions nobody is there to answer.
+fn report_settled(settled: &[questions::Settled]) {
+    for s in settled {
+        match s.error.as_deref() {
+            None => info!(
+                ask = %s.id, agent = %s.agent, conversation = %s.conv, question = %s.question,
+                queued = s.queued,
+                "nobody answered in time — took the run's own default"
+            ),
+            Some(error) => warn!(
+                ask = %s.id, agent = %s.agent, conversation = %s.conv, question = %s.question, %error,
+                "a question's deadline passed but its default could not be delivered"
             ),
         }
     }

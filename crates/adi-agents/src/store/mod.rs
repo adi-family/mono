@@ -32,6 +32,7 @@
 
 mod db;
 mod queue;
+mod questions;
 mod record;
 mod session;
 mod transcript;
@@ -42,6 +43,10 @@ use crate::Backend;
 use crate::error::{Error, Result};
 use crate::progress::TurnContent;
 
+pub use db::now_ms;
+pub use questions::{
+    Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
+};
 pub use record::SessionRecord;
 pub use session::SessionRef;
 pub use transcript::{Turn, assistant_turn, user_turn};
@@ -429,6 +434,76 @@ impl SessionStore {
     pub fn clear_queue(&self, agent: &str, id: &str) -> Result<()> {
         let conn = self.conn()?;
         queue::clear(&conn, agent, id)
+    }
+
+    // ---- questions -----------------------------------------------------------------
+
+    /// Write down what this conversation is blocked on, returning the stored ask.
+    ///
+    /// # Errors
+    /// Returns [`Error::Arguments`] for a malformed request or one made while another ask is still
+    /// pending, and database errors. See [`questions`](self::questions) for the whole contract.
+    pub fn ask(&self, agent: &str, id: &str, req: &AskRequest) -> Result<Ask> {
+        let conn = self.conn()?;
+        questions::register(&conn, agent, id, req)
+    }
+
+    /// Settle an ask — `ask_id` naming one, or `None` taking whatever this conversation has pending
+    /// (what an ordinary typed reply means). `None` back means someone else settled it first.
+    ///
+    /// # Errors
+    /// Returns database and encoding errors.
+    pub fn resolve_question(
+        &self,
+        agent: &str,
+        id: &str,
+        ask_id: Option<&str>,
+        answer: &Answer,
+    ) -> Result<Option<Ask>> {
+        let conn = self.conn()?;
+        questions::resolve(&conn, agent, id, ask_id, answer)
+    }
+
+    /// What this conversation is waiting on, if it is waiting on anything.
+    #[must_use]
+    pub fn pending_question(&self, agent: &str, id: &str) -> Option<Ask> {
+        let conn = self.conn().ok()?;
+        questions::pending(&conn, agent, id)
+    }
+
+    /// Every ask this conversation has made, oldest first.
+    #[must_use]
+    pub fn question_history(&self, agent: &str, id: &str) -> Vec<Ask> {
+        self.conn()
+            .ok()
+            .map(|conn| questions::history(&conn, agent, id))
+            .unwrap_or_default()
+    }
+
+    /// Every unanswered ask in the whole store, oldest first — the inbox's one query.
+    #[must_use]
+    pub fn all_pending_questions(&self) -> Vec<Ask> {
+        self.conn()
+            .ok()
+            .map(|conn| questions::all_pending(&conn))
+            .unwrap_or_default()
+    }
+
+    /// Drop every unanswered ask of an agent, returning how many went — what deleting the agent
+    /// takes with it. Settled ones stay with the transcript that explains them.
+    pub fn forget_questions(&self, agent: &str) -> usize {
+        self.conn()
+            .ok()
+            .map_or(0, |conn| questions::forget_agent(&conn, agent))
+    }
+
+    /// Every pending ask past its deadline, paired with the default it should be settled with.
+    #[must_use]
+    pub fn overdue_questions(&self, now_ms: u64) -> Vec<(Ask, Answer)> {
+        self.conn()
+            .ok()
+            .map(|conn| questions::overdue(&conn, now_ms))
+            .unwrap_or_default()
     }
 
     // ---- the transcript ------------------------------------------------------------

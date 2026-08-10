@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-68 structs · 18 enums · 5 type aliases across 30 files.
+77 structs · 19 enums · 5 type aliases across 33 files.
 
 ## Index
 
@@ -20,13 +20,15 @@
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
+- [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunDeleted`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`
 - [`src/lib.rs`](#srclibrs) — `Agents`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
 - [`src/progress.rs`](#srcprogressrs) — `Step`, `ToolStatus`, `TurnMetrics`, `TurnContent`, `BackendCapabilities`
+- [`src/questions.rs`](#srcquestionsrs) — `Settled`
 - [`src/review.rs`](#srcreviewrs) — `Options`, `Review`, `Evidence`, `History`, `Totals`
 - [`src/run.rs`](#srcrunrs) — `Launch`, `Sent`, `Peek`, `RunInfo`, `Pane`
 - [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `Cursor`
@@ -35,6 +37,7 @@
 - [`src/runner/pty.rs`](#srcrunnerptyrs) — `PtyRunner`, `State`
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
+- [`src/store/questions.rs`](#srcstorequestionsrs) — `Question`, `Choice`, `AnsweredBy`, `Answer`, `Ask`, `Request`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`
 - [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StateSource`, `StoredState`
 - [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`
@@ -96,6 +99,8 @@ pub struct AgentManifest<Args> {
     pub path: Vec<String>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unattended: bool,
     pub created_at: u64,
     pub updated_at: u64,
 }
@@ -277,8 +282,6 @@ pub struct PtyClaudeArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disallowed_tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub append_system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub add_dir: Option<String>,
@@ -305,8 +308,6 @@ pub struct ProcessClaudeArguments {
     pub output_format: Option<ClaudeOutputFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disallowed_tools: Option<String>,
     #[serde( default, skip_serializing_if = "Option::is_none", deserialize_with = "option_f64" )]
     pub max_budget_usd: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -396,8 +397,6 @@ pub struct HarnessClaudeSdkArguments {
     pub effort: Option<ClaudeEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disallowed_tools: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -810,7 +809,9 @@ pub(crate) struct Ctx<'a> {
     pub agent: &'a str,
     pub conv: &'a str,
     pub awaits: Awaits,
+    pub sessions: SessionStore,
     pub agent_dir: &'a Path,
+    pub unattended: bool,
 }
 ```
 
@@ -840,6 +841,21 @@ pub(crate) struct Job {
     pub log: PathBuf,
     pub exit: PathBuf,
     pub pid: u32,
+}
+```
+
+---
+
+## `src/backends/mcp.rs`
+
+### struct `ToolScope`
+
+One run's tool surface: what exists, and what it may use without stopping to ask.
+
+```rust
+pub(crate) struct ToolScope {
+    pub(crate) builtins: String,
+    pub(crate) allowed: String,
 }
 ```
 
@@ -966,6 +982,34 @@ pub struct AgentRunStopped {
 pub struct AgentRunDeleted {
     pub agent: String,
     pub run_id: String,
+}
+```
+
+### struct `AgentQuestionAsked`
+
+The payload of `QUESTION_ASKED`. Carries the headline rather than the whole ask: a subscriber is deciding whether to interrupt somebody, and reads the rest in the app if it does.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentQuestionAsked {
+    pub agent: String,
+    pub conv: String,
+    pub ask: String,
+    pub question: String,
+}
+```
+
+### struct `AgentQuestionAnswered`
+
+The payload of `QUESTION_ANSWERED`.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentQuestionAnswered {
+    pub agent: String,
+    pub conv: String,
+    pub ask: String,
+    pub by: String,
 }
 ```
 
@@ -1151,6 +1195,26 @@ pub struct BackendCapabilities {
     pub tool_steps: bool,
     pub thinking: bool,
     pub metrics: bool,
+}
+```
+
+---
+
+## `src/questions.rs`
+
+### struct `Settled`
+
+One ask the deadline settled, reported back so the app can log it. `error` is set when the ask was claimed but the message could not be delivered — the default is taken either way, which is why it is worth saying out loud.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Settled {
+    pub id: String,
+    pub agent: String,
+    pub conv: String,
+    pub question: String,
+    pub queued: bool,
+    pub error: Option<String>,
 }
 ```
 
@@ -1499,6 +1563,103 @@ The sessions under one root.
 #[derive(Debug, Clone)]
 pub struct SessionStore {
     dir: PathBuf,
+}
+```
+
+---
+
+## `src/store/questions.rs`
+
+### struct `Question`
+
+One thing a run wants to know.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Question {
+    #[serde(default)]
+    pub header: String,
+    pub question: String,
+    #[serde(default)]
+    pub options: Vec<Choice>,
+    #[serde(default)]
+    pub multi_select: bool,
+}
+```
+
+### struct `Choice`
+
+One offered answer: what the button says, and what it means.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Choice {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+```
+
+### enum `AnsweredBy`
+
+What settled an ask. Recorded because it changes how the answer should be read: a person meant it, a default merely happened.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnsweredBy {
+    Human,
+    Default,
+}
+```
+
+### struct `Answer`
+
+How an ask was settled.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Answer {
+    pub at: u64,
+    pub by: AnsweredBy,
+    pub replies: Vec<String>,
+}
+```
+
+### struct `Ask`
+
+A run's request for a human decision, pending or settled.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Ask {
+    pub id: String,
+    pub agent: String,
+    pub conv: String,
+    pub asked_at: u64,
+    #[serde(default)]
+    pub note: String,
+    pub questions: Vec<Question>,
+    #[serde(default)]
+    pub deadline: Option<u64>,
+    #[serde(default)]
+    pub defaults: Vec<String>,
+    #[serde(default)]
+    pub answer: Option<Answer>,
+}
+```
+
+### struct `Request`
+
+What a turn asked for, before it becomes a stored `Ask`. The tool builds one of these from the model's arguments; `register` is what turns it into a row.
+
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct Request {
+    pub note: String,
+    pub questions: Vec<Question>,
+    pub after_seconds: Option<u64>,
+    pub defaults: Vec<String>,
 }
 ```
 

@@ -20,11 +20,17 @@
 //! [`every`](Await::every), so `every_seconds: 60` with a check is "look every minute until it's
 //! true". A candidate with no check wakes immediately.
 //!
-//! Waking is [`Agents::reply`](crate::Agents::reply) into the same conversation: a new user turn
-//! carrying the run's own [`note`](Await::note), what happened, and what the check printed. The next
-//! turn replays the whole transcript, so the run comes back with everything it knew — this is a
-//! continuation, not a new run. If a turn happens to be in flight the message waits in that
-//! conversation's queue, exactly like anything else said mid-answer.
+//! Waking delivers a new user turn into the same conversation, carrying the run's own
+//! [`note`](Await::note), what happened, and what the check printed. The next turn replays the whole
+//! transcript, so the run comes back with everything it knew — this is a continuation, not a new
+//! run. If a turn happens to be in flight the message waits in that conversation's queue, exactly
+//! like anything else said mid-answer.
+//!
+//! It is deliberately *not* [`Agents::reply`](crate::Agents::reply). A reply is a person speaking,
+//! and a person speaking into a conversation that has stopped to ask them something is answering
+//! it — so a wake sent that way would settle the run's own [question](crate::store::Ask) with this
+//! note, and leave whoever it was actually asked of with nothing left to answer. A wake goes
+//! through the delivery half alone.
 //!
 //! **An await fires once.** It is claimed by deleting its record before the reply goes out, so two
 //! callers racing on the same await (the event side and the timer side both live in the app) can
@@ -230,6 +236,16 @@ impl Awaits {
     #[must_use]
     pub fn dir(&self) -> PathBuf {
         self.config.module(MODULE).dir().to_path_buf()
+    }
+
+    /// The root this store was opened against.
+    ///
+    /// Exposed for the tools that run beside an await in the same turn — they need the same root to
+    /// reach the same event bus, and taking it from here is what stops a second `Config::open()`
+    /// pointing a test's tool at the real one.
+    #[must_use]
+    pub fn config(&self) -> &Config {
+        &self.config
     }
 
     /// Every pending await, oldest first. An unreadable or unparseable record is skipped rather
@@ -512,8 +528,12 @@ fn wake(
         return None;
     }
     let message = wake_message(a, cause, check_output);
+    // `deliver`, not `reply`: a reply is a *person* speaking, and a person speaking into a
+    // conversation that is waiting on them settles the question it is waiting on. A wake is the
+    // platform speaking. Sent through `reply` it would answer the run's own question with this
+    // wake note — leaving the person it was actually asked of with nothing to answer.
     let error = agents
-        .reply(&a.agent, &a.conv, &message)
+        .deliver(&a.agent, &a.conv, &message)
         .err()
         .map(|e| e.to_string());
     Some(Woken {

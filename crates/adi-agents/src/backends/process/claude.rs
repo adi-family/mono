@@ -3,12 +3,14 @@
 use crate::arguments::{
     ClaudeEffort, ClaudeOutputFormat, ClaudePermissionMode, ProcessClaudeArguments,
 };
-use crate::backends::push_option;
+use crate::backends::mcp::ToolScope;
+use crate::backends::{push_option, push_tool_scope};
 
 pub(crate) fn argv(
     config: &ProcessClaudeArguments,
     message: &str,
     mcp: Option<&str>,
+    tools: &ToolScope,
 ) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
@@ -35,16 +37,9 @@ pub(crate) fn argv(
         }
         other => push_option(&mut argv, "--output-format", Some(other.as_str())),
     }
-    push_option(
-        &mut argv,
-        "--allowed-tools",
-        config.allowed_tools.as_deref(),
-    );
-    push_option(
-        &mut argv,
-        "--disallowed-tools",
-        config.disallowed_tools.as_deref(),
-    );
+    // The run's tool surface, deny-by-default: `--tools` is what exists (nothing, unless the agent
+    // asked), `--allowed-tools` is what needs no permission. See `crate::backends::mcp`.
+    push_tool_scope(&mut argv, tools);
     if let Some(value) = config.max_budget_usd {
         push_option(&mut argv, "--max-budget-usd", Some(&value.to_string()));
     }
@@ -75,8 +70,8 @@ pub(crate) fn argv(
         argv.extend(["--mcp-config".to_string(), mcp.to_string()]);
         argv.push("--strict-mcp-config".to_string());
     }
-    // `--allowed-tools` / `--disallowed-tools` are variadic, so end option parsing with `--` before
-    // the positional prompt or it could be swallowed as another tool value.
+    // `--tools` / `--allowed-tools` are variadic, so end option parsing with `--` before the
+    // positional prompt or it could be swallowed as another tool value.
     argv.push("--".to_string());
     argv.push(run_message(message));
     argv
@@ -95,6 +90,7 @@ fn run_message(message: &str) -> String {
 mod tests {
     use super::*;
     use crate::AgentManifest;
+    use crate::backends::mcp::scope_tools;
 
     #[test]
     fn argv_uses_print_mode_and_process_options() {
@@ -112,7 +108,12 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest.arguments, "prepare the release", None),
+            argv(
+                &manifest.arguments,
+                "prepare the release",
+                None,
+                &scope_tools(manifest.arguments.allowed_tools.as_deref()),
+            ),
             [
                 "claude",
                 "--print",
@@ -124,6 +125,11 @@ mod tests {
                 "high",
                 "--output-format",
                 "json",
+                // Named no tools, so it has none of the engine's own — see `crate::backends::mcp`.
+                "--tools",
+                "",
+                "--allowed-tools",
+                "mcp__adi",
                 "--max-budget-usd",
                 "2.5",
                 "--append-system-prompt",
@@ -136,7 +142,12 @@ mod tests {
 
     #[test]
     fn argv_defaults_to_stream_json_so_a_run_emits_progress() {
-        let argv = argv(&ProcessClaudeArguments::default(), "go", None);
+        let argv = argv(
+            &ProcessClaudeArguments::default(),
+            "go",
+            None,
+            &scope_tools(None),
+        );
         // No explicit output format → streamed events (with --verbose) rather than the CLI's plain
         // text default, so the run's tool/thinking/metric events are captured.
         let window = argv.windows(3).find(|w| w[0] == "--output-format");

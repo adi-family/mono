@@ -47,10 +47,13 @@ const PRAGMAS: &str = "\
 
 /// The schema. `IF NOT EXISTS` throughout, so any process may be the one that creates it.
 ///
-/// `turns` and `queue` cascade off `sessions`: deleting a session takes its messages with it in one
-/// statement rather than three that could half-fail. The index on `sessions` is the listing's own
-/// order — newest first, id as tiebreak — so the query that replaced the directory walk reads it
-/// straight off the index without a sort.
+/// `turns`, `queue` and `questions` all cascade off `sessions`: deleting a session takes its
+/// messages and anything it was waiting to be told with it, in one statement rather than four that
+/// could half-fail. The index on `sessions` is the listing's own order — newest first, id as
+/// tiebreak — so the query that replaced the directory walk reads it straight off the index without
+/// a sort, and `questions_open` is partial for the same reason in reverse: the inbox and the
+/// deadline sweep both ask only about unanswered rows, which are a handful among every question
+/// ever asked.
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS sessions (
     agent         TEXT    NOT NULL,
@@ -84,6 +87,19 @@ CREATE TABLE IF NOT EXISTS queue (
     PRIMARY KEY (agent, session, seq),
     FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS questions (
+    agent    TEXT    NOT NULL,
+    session  TEXT    NOT NULL,
+    id       TEXT    NOT NULL,
+    asked_at INTEGER NOT NULL DEFAULT 0,
+    deadline INTEGER,
+    json     TEXT    NOT NULL,
+    answer   TEXT,
+    PRIMARY KEY (agent, session, id),
+    FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS questions_open
+    ON questions (asked_at, id) WHERE answer IS NULL;
 ";
 
 // One connection per thread per database.
@@ -134,4 +150,15 @@ pub(super) fn forget_connections() {
 /// A stored error, named after what was being attempted.
 pub(super) fn sql_err(doing: &str, e: rusqlite::Error) -> Error {
     Error::Session(format!("couldn't {doing} the session database: {e}"))
+}
+
+/// The moment, in unix milliseconds — the unit every timestamp in this store is in.
+///
+/// Shared rather than written per module: three tables stamp rows with it, and three copies of the
+/// same five lines is exactly the shape `adi-mono indexer clones` exists to find.
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }

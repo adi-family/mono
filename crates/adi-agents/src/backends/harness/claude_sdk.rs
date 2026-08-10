@@ -3,7 +3,8 @@
 //! by scoping the agent to a set of adi-mono command groups.
 
 use crate::arguments::{ClaudeEffort, ClaudePermissionMode, HarnessClaudeSdkArguments};
-use crate::backends::push_option;
+use crate::backends::mcp::ToolScope;
+use crate::backends::{push_option, push_tool_scope};
 
 /// Which continuation flag a turn's command carries.
 ///
@@ -23,6 +24,7 @@ pub(crate) fn argv(
     message: &str,
     cont: &Continuation<'_>,
     mcp: Option<&str>,
+    tools: &ToolScope,
 ) -> Vec<String> {
     let mut argv = vec!["claude".to_string(), "--print".to_string()];
     // Stream the turn as NDJSON events (tool calls, thinking, result + metrics) so the harness can
@@ -54,16 +56,9 @@ pub(crate) fn argv(
         "--effort",
         config.effort.map(ClaudeEffort::as_str),
     );
-    push_option(
-        &mut argv,
-        "--allowed-tools",
-        config.allowed_tools.as_deref(),
-    );
-    push_option(
-        &mut argv,
-        "--disallowed-tools",
-        config.disallowed_tools.as_deref(),
-    );
+    // The run's tool surface, deny-by-default: `--tools` is what exists (nothing, unless the agent
+    // asked), `--allowed-tools` is what needs no permission. See `crate::backends::mcp`.
+    push_tool_scope(&mut argv, tools);
     push_option(
         &mut argv,
         "--fallback-model",
@@ -85,9 +80,9 @@ pub(crate) fn argv(
         argv.extend(["--mcp-config".to_string(), mcp.to_string()]);
         argv.push("--strict-mcp-config".to_string());
     }
-    // `--allowed-tools` / `--disallowed-tools` are variadic (`<tools...>`), so a bare positional
-    // prompt right after them would be swallowed as another tool. `--` ends option parsing, so the
-    // prompt is always taken as the prompt regardless of which flags precede it.
+    // `--tools` / `--allowed-tools` are variadic (`<tools...>`), so a bare positional prompt right
+    // after them would be swallowed as another tool. `--` ends option parsing, so the prompt is
+    // always taken as the prompt regardless of which flags precede it.
     argv.push("--".to_string());
     argv.push(run_message(message));
     argv
@@ -96,6 +91,9 @@ pub(crate) fn argv(
 /// Fold the agent's system prompts and its adi-mono command scope into a single
 /// `--append-system-prompt` value. The scope is surfaced here rather than enforced because the
 /// runner-side command allow-list is future work — this at least tells the agent what it may use.
+///
+/// `config.tools` is the *adi-mono command* scope and has nothing to do with the engine's `--tools`
+/// flag: one names groups of this platform's own commands, the other the CLI's built-in tools.
 fn append_system_prompt(config: &HarnessClaudeSdkArguments) -> Option<String> {
     let mut parts = [
         config.system_prompt.as_deref(),
@@ -135,6 +133,7 @@ fn run_message(message: &str) -> String {
 mod tests {
     use super::*;
     use crate::arguments::{ClaudeEffort, ClaudePermissionMode};
+    use crate::backends::mcp::scope_tools;
 
     #[test]
     fn argv_caps_turns_and_scopes_to_adi_commands() {
@@ -145,6 +144,7 @@ mod tests {
             max_turns: Some(20),
             tools: Some("tasks,projects".into()),
             system_prompt: Some("You are a planner.".into()),
+            allowed_tools: Some("Read,Edit".into()),
             ..HarnessClaudeSdkArguments::default()
         };
         assert_eq!(
@@ -153,6 +153,7 @@ mod tests {
                 "plan the migration",
                 &Continuation::First { session_id: "sid-1" },
                 None,
+                &scope_tools(config.allowed_tools.as_deref()),
             ),
             [
                 "claude",
@@ -168,6 +169,10 @@ mod tests {
                 "plan",
                 "--effort",
                 "high",
+                "--tools",
+                "Read,Edit",
+                "--allowed-tools",
+                "Read,Edit,mcp__adi",
                 "--max-turns",
                 "20",
                 "--append-system-prompt",
@@ -185,6 +190,7 @@ mod tests {
             "and now write a test",
             &Continuation::Resume { session_id: "sid-1" },
             None,
+            &scope_tools(None),
         );
         assert_eq!(
             argv,
@@ -196,19 +202,27 @@ mod tests {
                 "--verbose",
                 "--resume",
                 "sid-1",
+                "--tools",
+                "",
+                "--allowed-tools",
+                "mcp__adi",
                 "--",
                 "and now write a test",
             ]
         );
     }
 
+    /// The bare run is the one that matters most: an agent that configured nothing still carries an
+    /// explicit empty `--tools`, because the flag's *absence* is what hands over every built-in the
+    /// engine ships.
     #[test]
-    fn argv_defaults_to_a_bare_print_run() {
+    fn argv_defaults_to_a_bare_print_run_with_no_builtin_tools() {
         let argv = argv(
             &HarnessClaudeSdkArguments::default(),
             "",
             &Continuation::First { session_id: "sid-1" },
             None,
+            &scope_tools(None),
         );
         assert_eq!(
             argv,
@@ -220,6 +234,10 @@ mod tests {
                 "--verbose",
                 "--session-id",
                 "sid-1",
+                "--tools",
+                "",
+                "--allowed-tools",
+                "mcp__adi",
                 "--",
                 "run",
             ]

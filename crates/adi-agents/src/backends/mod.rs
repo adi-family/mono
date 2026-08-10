@@ -19,3 +19,14 @@ pub(crate) fn push_option(argv: &mut Vec<String>, flag: &str, value: Option<&str
         argv.extend([flag.into(), value.into()]);
     }
 }
+
+/// Push one run's tool surface onto a Claude CLI command line — the same two flags, in the same
+/// order, for every engine that speaks this CLI (see [`mcp::ToolScope`] for what each one does).
+///
+/// `--tools` is pushed *always*, empty included: an empty value is the CLI's spelling of "no
+/// built-ins at all", and it is exactly the case [`push_option`] would drop — leaving the flag off
+/// hands the run every built-in the engine ships, which is the opposite of what was asked for.
+pub(crate) fn push_tool_scope(argv: &mut Vec<String>, scope: &mcp::ToolScope) {
+    argv.extend(["--tools".to_string(), scope.builtins.clone()]);
+    push_option(argv, "--allowed-tools", Some(&scope.allowed));
+}

@@ -2,7 +2,7 @@
 
 use adi_webapp_api::types::{
     AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns, AgentTokens,
-    AgentsState, AllAgentRuns, ApiError, Dashboard, DashboardRef, DashboardTransferred,
+    AgentsState, AllAgentRuns, AnswerRun, ApiError, Dashboard, DashboardRef, DashboardTransferred,
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
     FilesRef, FleetDashboards, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent,
@@ -440,6 +440,27 @@ pub async fn reply_to_run(
             name,
             run_id,
             message,
+        },
+    )
+    .await
+}
+
+/// Settle the question a conversation is waiting on, with one reply per question in the order they
+/// were asked. `ask` names the ask so a card left open in another tab cannot answer the question
+/// that has since replaced it — a stale one comes back 404, which is the useful answer.
+pub async fn answer_run(
+    name: String,
+    run_id: String,
+    ask: String,
+    replies: Vec<String>,
+) -> Result<AgentPeek, String> {
+    post(
+        "/api/agents/run/answer",
+        &AnswerRun {
+            name,
+            run_id,
+            ask: Some(ask),
+            replies,
         },
     )
     .await

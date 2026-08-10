@@ -612,6 +612,12 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(agents),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
         ("POST", "/api/agents/run/reply") => handlers::reply_run(agents, &req.body),
+        // Settle the question a conversation stopped to ask. Distinct from a reply because it
+        // names the ask it answers, so a card left open in another tab cannot answer the question
+        // that replaced it.
+        ("POST", "/api/agents/run/answer") => handlers::answer_run(agents, &req.body),
+        // Every conversation waiting on a person, across every agent — the "needs you" inbox.
+        ("GET", "/api/agents/questions") => handlers::pending_questions(agents),
         // What a conversation spent its context on. Its own endpoint, not part of the peek: it
         // re-tokenizes the whole transcript, and the peek is polled once a second.
         ("POST", "/api/agents/run/tokens") => handlers::run_tokens(agents, &req.body),

@@ -1,10 +1,15 @@
 //! `pty:claude` command construction.
 
 use crate::arguments::{ClaudeEffort, ClaudePermissionMode, PtyClaudeArguments};
-use crate::backends::push_option;
+use crate::backends::mcp::ToolScope;
+use crate::backends::{push_option, push_tool_scope};
 
 /// Build the Claude CLI command run by the shared pty executor.
-pub(crate) fn argv(config: &PtyClaudeArguments, mcp: Option<&str>) -> Vec<String> {
+pub(crate) fn argv(
+    config: &PtyClaudeArguments,
+    mcp: Option<&str>,
+    tools: &ToolScope,
+) -> Vec<String> {
     let mut argv = vec!["claude".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
@@ -17,16 +22,9 @@ pub(crate) fn argv(config: &PtyClaudeArguments, mcp: Option<&str>) -> Vec<String
         "--effort",
         config.effort.map(ClaudeEffort::as_str),
     );
-    push_option(
-        &mut argv,
-        "--allowed-tools",
-        config.allowed_tools.as_deref(),
-    );
-    push_option(
-        &mut argv,
-        "--disallowed-tools",
-        config.disallowed_tools.as_deref(),
-    );
+    // The run's tool surface, deny-by-default: `--tools` is what exists (nothing, unless the agent
+    // asked), `--allowed-tools` is what needs no permission. See `crate::backends::mcp`.
+    push_tool_scope(&mut argv, tools);
     push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
     // ADI's own tools, over MCP (see `crate::backends::mcp`). `--strict-mcp-config` rides with it so
     // the run gets *this* server and nothing else.
@@ -56,6 +54,7 @@ mod tests {
     use super::*;
     use crate::AgentManifest;
     use crate::arguments::{ClaudeEffort, ClaudePermissionMode};
+    use crate::backends::mcp::scope_tools;
 
     #[test]
     fn argv_honors_model_permission_mode_and_prompt() {
@@ -66,7 +65,6 @@ mod tests {
                 permission_mode: Some(ClaudePermissionMode::Plan),
                 effort: Some(ClaudeEffort::High),
                 allowed_tools: Some("Read Edit".into()),
-                disallowed_tools: Some("WebFetch".into()),
                 add_dir: Some("/work".into()),
                 system_prompt: Some("You are a solver.".into()),
                 append_system_prompt: Some("Stay concise.".into()),
@@ -74,7 +72,11 @@ mod tests {
             ..AgentManifest::default()
         };
         assert_eq!(
-            argv(&manifest.arguments, None),
+            argv(
+                &manifest.arguments,
+                None,
+                &scope_tools(manifest.arguments.allowed_tools.as_deref()),
+            ),
             [
                 "claude",
                 "--model",
@@ -83,10 +85,10 @@ mod tests {
                 "plan",
                 "--effort",
                 "high",
+                "--tools",
+                "Read,Edit",
                 "--allowed-tools",
-                "Read Edit",
-                "--disallowed-tools",
-                "WebFetch",
+                "Read,Edit,mcp__adi",
                 "--add-dir",
                 "/work",
                 "--append-system-prompt",

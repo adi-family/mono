@@ -95,7 +95,7 @@ pub const GUIDES: &[Guide] = &[
     },
     Guide {
         file: "secrets.md",
-        summary: "encrypted secrets, Gmail/Google OAuth, agent-emitted create forms",
+        summary: "encrypted secrets and Gmail/Google OAuth",
         body: include_str!("../../templates/guides/secrets.md"),
     },
     Guide {

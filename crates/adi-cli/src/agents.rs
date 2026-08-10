@@ -82,6 +82,11 @@ pub(crate) enum AgentsCommand {
         /// Clear the agent's extra environment variables (see `--env`).
         #[arg(long, conflicts_with = "env")]
         no_env: bool,
+        /// This agent runs with nobody watching, so it may not stop to ask: the `Ask` tool refuses
+        /// and tells the run to decide for itself and say what it assumed. For a trigger's agent, a
+        /// scheduled sweep — anything whose questions nobody would see.
+        #[arg(long)]
+        unattended: bool,
         /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
@@ -125,6 +130,34 @@ pub(crate) enum AgentsCommand {
         project: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    /// List the questions runs are waiting on a person to answer.
+    ///
+    /// A run that needs a decision writes it down and ends its turn, so nothing is held open —
+    /// which also means nothing will move until somebody answers. This is what is waiting.
+    Questions {
+        /// Only this agent's questions.
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Answer the question a conversation is waiting on, and let it carry on.
+    ///
+    /// Give one reply per question, in the order they were asked (`agents questions` prints them
+    /// numbered). One reply for a single-question ask is the ordinary case.
+    Answer {
+        /// The agent whose conversation is waiting.
+        name: String,
+        /// The conversation id — what `agents questions` prints as `conv`.
+        conv: String,
+        /// The answers, in the order the questions were asked.
+        #[arg(required = true)]
+        replies: Vec<String>,
+        /// Answer this specific ask, refusing if it has been settled since. Without it, whatever is
+        /// pending now is answered.
+        #[arg(long)]
+        ask: Option<String>,
     },
     /// Stop a running agent using its executor's lifecycle.
     Stop { name: String },
@@ -179,6 +212,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_path,
             env,
             no_env,
+            unattended,
             arguments,
             json,
         } => {
@@ -233,6 +267,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 } else {
                     parse_env_vars(env)?
                 },
+                unattended,
                 created_at: 0,
                 updated_at: 0,
             };
@@ -336,6 +371,40 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 }
             }
         }
+        AgentsCommand::Questions { agent, json } => {
+            let agent = clean(agent);
+            let waiting: Vec<_> = store
+                .pending_questions()
+                .into_iter()
+                .filter(|ask| agent.as_ref().is_none_or(|name| ask.agent == *name))
+                .collect();
+            if json {
+                print_json(&waiting);
+            } else if waiting.is_empty() {
+                println!("Nothing is waiting on you.");
+            } else {
+                for ask in &waiting {
+                    print_ask(ask);
+                }
+            }
+        }
+        AgentsCommand::Answer {
+            name,
+            conv,
+            replies,
+            ask,
+        } => {
+            let ask = clean(ask);
+            let sent = store
+                .answer(&name, &conv, ask.as_deref(), &replies)
+                .map_err(|e| e.to_string())?;
+            match sent {
+                adi_core::Sent::Started(_) => println!("Answered — {name} is working on it."),
+                adi_core::Sent::Queued { place } => println!(
+                    "Answered — {place} in line behind what {name} is already saying."
+                ),
+            }
+        }
         AgentsCommand::Stop { name } => {
             if store.stop(&name).map_err(|e| e.to_string())? {
                 println!("Stopped agent {name}.");
@@ -352,6 +421,43 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         }
     }
     Ok(())
+}
+
+/// Print one waiting ask: who is blocked, on what, and the numbered questions to answer in order.
+///
+/// Numbered because `agents answer` takes the replies positionally — the numbers here are the order
+/// to type them in, which is the whole reason a multi-question ask is legible from a terminal at all.
+fn print_ask(ask: &adi_core::Ask) {
+    println!("{} · conv {}", ask.agent, ask.conv);
+    println!("  ask {}", ask.id);
+    if !ask.note.is_empty() {
+        println!("  {}", ask.note);
+    }
+    for (index, question) in ask.questions.iter().enumerate() {
+        let header = if question.header.is_empty() {
+            String::new()
+        } else {
+            format!("[{}] ", question.header)
+        };
+        println!("  {}. {header}{}", index + 1, question.question);
+        for option in &question.options {
+            match option.description.is_empty() {
+                true => println!("       - {}", option.label),
+                false => println!("       - {} — {}", option.label, option.description),
+            }
+        }
+    }
+    println!(
+        "  answer with: adi-mono agents answer {} {} {}",
+        ask.agent,
+        ask.conv,
+        ask.questions
+            .iter()
+            .map(|_| "'…'")
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+    println!();
 }
 
 /// Parse `--secret` values into attachments. Each value is a comma-separated list of

@@ -9,13 +9,13 @@ use adi_agents::StoredAgent;
 use adi_agents::contains_json_null;
 
 use crate::types::{
-    AgentBackendOption, AgentCapabilities, AgentDto, AgentFormField, AgentFormFieldKind,
-    AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek, AgentRef, AgentRepeat,
-    AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunResult, AgentRuns, AgentSetupPreset,
-    AgentSetupSecret, AgentStep, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
-    AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, HideRun,
-    ProjectRunLimit, ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit,
-    UnqueueFromRun,
+    AgentAsk, AgentBackendOption, AgentCapabilities, AgentChoice, AgentDto, AgentFormField,
+    AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek,
+    AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo,
+    AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
+    AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
+    AgentsState, AllAgentRuns, AnswerRun, HideRun, PendingAsk, PendingAsks, ProjectRunLimit,
+    ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit, UnqueueFromRun,
 };
 
 use super::response::{Response, clean, error, ok_json, parse_body};
@@ -230,6 +230,10 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
         run_id: run_id.to_string(),
         answerable: caps.answerable,
         caps,
+        pending_question: store
+            .pending_question(&agent.name, run_id)
+            .as_ref()
+            .map(agent_ask),
         turns,
     })
 }
@@ -476,8 +480,70 @@ fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> R
         run_id: run_id.to_string(),
         answerable: true,
         caps: agent_caps(agent),
+        pending_question: store
+            .pending_question(&agent.name, run_id)
+            .as_ref()
+            .map(agent_ask),
         turns,
     })
+}
+
+/// `POST /api/agents/run/answer` — settle the question a conversation is waiting on, and reply with
+/// a fresh snapshot so the card disappears and the answer's turn appears in one round-trip.
+///
+/// A 404 here is the useful answer, not a failure: it means somebody else answered first, or the
+/// deadline took the run's own default while this card sat open.
+#[must_use]
+pub fn answer_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_body::<AnswerRun>(body) else {
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"ask\"?: \"…\", \"replies\": [\"…\"] }",
+        );
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    let ask = clean(req.ask);
+    if let Err(e) = store.answer(&agent.name, run_id, ask.as_deref(), &req.replies) {
+        return Response::from(&e);
+    }
+    conversation_snapshot(store, &agent, run_id)
+}
+
+/// `GET /api/agents/questions` — every unanswered question across every agent, oldest first: the
+/// "needs you" inbox.
+///
+/// One query over a partial index, so this is cheap enough to sit on a poll. The conversation title
+/// costs a lookup apiece, which is bounded by how many questions are actually open — a number that
+/// is nearly always nought and never large, because one conversation may only have one.
+#[must_use]
+pub fn pending_questions(store: &Agents) -> Response {
+    let asks = store
+        .pending_questions()
+        .into_iter()
+        .map(|ask| PendingAsk {
+            conversation: store
+                .get(&ask.agent)
+                .ok()
+                .flatten()
+                .map(|agent| {
+                    store
+                        .runs(&agent)
+                        .into_iter()
+                        .find(|r| r.run_id == ask.conv)
+                        .map(|r| title_of(&r.message))
+                        .unwrap_or_default()
+                })
+                .unwrap_or_default(),
+            agent: ask.agent.clone(),
+            run_id: ask.conv.clone(),
+            ask: agent_ask(&ask),
+        })
+        .collect();
+    ok_json(&PendingAsks { asks })
 }
 
 /// `POST /api/agents/run/stop` — stop one specific run, then report the fresh run history. For a
@@ -544,15 +610,50 @@ pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
 pub fn all_agent_runs(store: &Agents) -> Response {
     match store.list() {
         Ok(agents) => {
-            let agents = agents.iter().map(|a| runs_response(store, a)).collect();
+            // One question query for the whole answer rather than one per agent: the index is
+            // partial and the usual row count is zero, but this endpoint is the chat rail's poll
+            // and everything on its path is paid for on every tick.
+            let waiting = Waiting::of(store);
+            let agents = agents
+                .iter()
+                .map(|a| runs_response_with(store, a, &waiting))
+                .collect();
             ok_json(&AllAgentRuns { agents })
         }
         Err(e) => Response::from(&e),
     }
 }
 
+/// Every conversation that is blocked on a person, keyed by the pair that names one.
+///
+/// Built once and read per run. The alternative — asking per row — is a round trip apiece to
+/// answer *nothing pending* for all but a handful of several hundred conversations.
+struct Waiting(std::collections::HashMap<(String, String), adi_agents::store::Ask>);
+
+impl Waiting {
+    fn of(store: &Agents) -> Self {
+        Self(
+            store
+                .pending_questions()
+                .into_iter()
+                .map(|ask| ((ask.agent.clone(), ask.conv.clone()), ask))
+                .collect(),
+        )
+    }
+
+    fn get(&self, agent: &str, conv: &str) -> Option<AgentAsk> {
+        self.0
+            .get(&(agent.to_string(), conv.to_string()))
+            .map(agent_ask)
+    }
+}
+
 /// Build the [`AgentRuns`] history answer for an agent.
 fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
+    runs_response_with(store, agent, &Waiting::of(store))
+}
+
+fn runs_response_with(store: &Agents, agent: &StoredAgent, waiting: &Waiting) -> AgentRuns {
     let caps = agent_caps(agent);
     AgentRuns {
         name: agent.name.clone(),
@@ -563,6 +664,7 @@ fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
             .runs(agent)
             .into_iter()
             .map(|r| AgentRunInfo {
+                pending_question: waiting.get(&agent.name, &r.run_id),
                 run_id: r.run_id,
                 started_at: r.started_at,
                 last_activity: r.last_activity,
@@ -603,6 +705,37 @@ fn agent_caps(agent: &StoredAgent) -> AgentCapabilities {
         tool_steps: c.tool_steps,
         thinking: c.thinking,
         metrics: c.metrics,
+        // Asking is answering in reverse: a backend with no thread to continue has nowhere to
+        // deliver an answer into, so there is nothing to derive separately.
+        asks: c.answerable,
+    }
+}
+
+/// Map a stored [`Ask`](adi_agents::store::Ask) onto the wire shape the card draws itself from.
+fn agent_ask(ask: &adi_agents::store::Ask) -> AgentAsk {
+    AgentAsk {
+        id: ask.id.clone(),
+        asked_at: ask.asked_at,
+        note: ask.note.clone(),
+        questions: ask
+            .questions
+            .iter()
+            .map(|q| AgentQuestion {
+                header: q.header.clone(),
+                question: q.question.clone(),
+                options: q
+                    .options
+                    .iter()
+                    .map(|o| AgentChoice {
+                        label: o.label.clone(),
+                        description: o.description.clone(),
+                    })
+                    .collect(),
+                multi_select: q.multi_select,
+            })
+            .collect(),
+        deadline: ask.deadline,
+        headline: ask.headline(),
     }
 }
 
@@ -728,6 +861,12 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
                 .collect(),
             None => stored.as_ref().map(|m| m.env.clone()).unwrap_or_default(),
         },
+        // Omitted means unchanged, for the same reason `path` and `env` are: only the full agent
+        // editor offers this checkbox, and a save from the meta setup or the project panel must not
+        // quietly re-enable an agent's ability to stop and wait for somebody.
+        unattended: req
+            .unattended
+            .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.unattended)),
         // The store owns the timestamps.
         created_at: 0,
         updated_at: 0,
@@ -820,6 +959,9 @@ fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
         attach: peek.attach,
         interactive: peek.interactive,
         run_id: String::new(),
+        // …and no question either, for the same reason: being blocked on somebody is a property of
+        // one conversation, and this snapshot is not of one.
+        pending_question: None,
         // A name-based peek isn't scoped to a run, so it carries no transcript. The progress feed is
         // driven by the run-scoped `peek_run` / `reply_run` above.
         answerable: false,
@@ -865,6 +1007,7 @@ fn agent_dto(
             .collect(),
         path: m.path,
         env: m.env,
+        unattended: m.unattended,
         created_at: m.created_at,
         updated_at: m.updated_at,
         runnable,
@@ -897,25 +1040,31 @@ const CLAUDE_BACKENDS: &[&str] = &["pty:claude", "process:claude", "harness:clau
 /// The backends whose engine is the Codex CLI.
 const CODEX_BACKENDS: &[&str] = &["pty:codex", "process:codex"];
 
-/// The built-in Claude Code tools offered as one-tap toggles on the allow/deny tool pickers.
-/// These are the bare tool names; a scoped specifier (e.g. `Bash(git *)`) is still typed by hand
+/// The built-in Claude Code tools offered as one-tap toggles on the tool picker. Since the engine's
+/// surface is deny-by-default (see `adi_agents`'s `backends::mcp`), this list is a *grant*: an agent
+/// gets exactly the tools ticked here, and nothing else the CLI happens to ship.
+///
+/// These are the bare tool names, verified against `claude --tools <names>` — the CLI accepts each
+/// one and advertises exactly those. A scoped specifier (e.g. `Edit(src/**)`) is still typed by hand
 /// into the same field. Kept in the order they read best in the picker, not alphabetically.
+///
+/// `Bash` is deliberately absent, and so are its `BashOutput` / `KillShell` companions: a run's
+/// shell is always ADI's own MCP `Bash`, so ticking the engine's would be a toggle that does
+/// nothing. The rest of the CLI's surface (cron, claude.ai, worktrees, its own task tracker) is off
+/// unless typed in by hand — nothing here needs it, and each is a power an agent never asked for.
 const CLAUDE_TOOLS: &[&str] = &[
     "Read",
     "Edit",
     "Write",
-    "Bash",
     "Glob",
     "Grep",
-    "Task",
-    "TodoWrite",
     "NotebookEdit",
     "WebFetch",
     "WebSearch",
-    "BashOutput",
-    "KillShell",
-    "ExitPlanMode",
-    "SlashCommand",
+    "Task",
+    "Skill",
+    "ToolSearch",
+    "Workflow",
 ];
 
 /// Suggested models per backend, offered as one-tap chips on the Model picker. These mirror each
@@ -1029,15 +1178,8 @@ fn agent_form_spec() -> AgentFormSpec {
     fields.push(tools_field(
         "allowed_tools",
         "Allowed tools",
-        "Bash(git *) Edit Read",
-        "built-in tools to allow — tap to toggle, or type a scoped rule like Bash(git *)",
-    ));
-
-    fields.push(tools_field(
-        "disallowed_tools",
-        "Disallowed tools",
-        "Bash(rm *) WebFetch",
-        "built-in tools to deny — tap to toggle, or type a scoped rule like Bash(rm *)",
+        "Read Edit Write Glob Grep",
+        "the engine's built-in tools this agent gets — everything else is off. Empty means ADI's own tools only. Scoped rules like Edit(src/**) work too",
     ));
 
     fields.push(num_field(
@@ -1333,6 +1475,16 @@ fn agent_form_spec() -> AgentFormSpec {
         AgentFormFieldKind::Checkbox,
     ));
 
+    let mut unattended = agent_field(
+        "unattended",
+        "Runs unattended",
+        AgentFormFieldKind::Checkbox,
+    );
+    unattended.hint = "nobody is watching this one, so it may not stop to ask — the Ask tool \
+                       refuses and tells the run to decide for itself and say what it assumed"
+        .into();
+    fields.push(unattended);
+
     let mut tags = agent_field("tags", "Tags", AgentFormFieldKind::Text);
     tags.placeholder = "comma-separated (dispatch / filtering)".into();
     tags.wide = true;
@@ -1604,7 +1756,7 @@ fn chk_field(name: &str, label: &str, ids: &[&str]) -> AgentFormField {
 }
 
 /// A tool-picker for the Claude backends: toggle chips for [`CLAUDE_TOOLS`] over a free-text
-/// input, both editing the one space-separated tool spec (`--allowed-tools` / `--disallowed-tools`).
+/// input, both editing the one space-separated tool spec the run is scoped to.
 fn tools_field(name: &str, label: &str, placeholder: &str, hint: &str) -> AgentFormField {
     let mut f = field_ids(name, label, AgentFormFieldKind::ToolPicker, CLAUDE_BACKENDS);
     f.options = CLAUDE_TOOLS.iter().map(|&t| agent_option(t, t)).collect();
@@ -1820,6 +1972,77 @@ mod tests {
         let m = saved(&store);
         assert!(m.path.is_empty(), "{:?}", m.path);
         assert!(m.env.is_empty(), "{:?}", m.env);
+    }
+
+    /// `unattended` is omit-to-keep for the same reason `path` and `env` are: only the full agent
+    /// editor offers the checkbox, and a save from the meta setup or the project panel must not
+    /// quietly re-grant an agent the ability to stop and wait for somebody.
+    #[test]
+    fn a_save_that_omits_unattended_keeps_it() {
+        let store = scratch("unattended");
+        let on = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "unattended": true,
+        });
+        assert_eq!(save_agent(&store, on.to_string().as_bytes()).status, 200);
+        assert!(saved(&store).unattended);
+
+        // A body from a form that never offered it.
+        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        assert!(saved(&store).unattended, "still unattended");
+
+        // …and stating it false is how it is actually turned off.
+        let off = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "unattended": false,
+        });
+        assert_eq!(save_agent(&store, off.to_string().as_bytes()).status, 200);
+        assert!(!saved(&store).unattended);
+    }
+
+    /// Answering into a conversation that is not there is a 404, not a turn: it is what a card
+    /// left open in a second tab hits after the chat it belonged to was deleted, and starting a
+    /// turn on the strength of a stale card would be the one outcome worse than saying so.
+    ///
+    /// The *settled-since* case — the question answered a second ago by somebody else — is the
+    /// same 404 through the same path, and is pinned where the claim lives (`adi-agents`).
+    #[test]
+    fn answering_a_conversation_that_is_gone_is_a_404() {
+        let store = scratch("answer-404");
+        assert_eq!(
+            save_agent(
+                &store,
+                serde_json::json!({ "name": "solver", "backend": "harness:adi" })
+                    .to_string()
+                    .as_bytes(),
+            )
+            .status,
+            200
+        );
+
+        let answer = serde_json::json!({
+            "name": "solver", "run_id": "1750000000000-0001", "replies": ["yes"],
+        });
+        assert_eq!(
+            answer_run(&store, answer.to_string().as_bytes()).status,
+            404
+        );
+    }
+
+    /// A malformed body is answered in the shape it should have had, not with a bare 400.
+    #[test]
+    fn a_malformed_answer_body_says_what_it_wanted() {
+        let store = scratch("answer-400");
+        let response = answer_run(&store, b"{}");
+        assert_eq!(response.status, 400);
+    }
+
+    /// The inbox is one query over every agent, and empty is the ordinary answer.
+    #[test]
+    fn the_question_inbox_answers_even_with_nothing_in_it() {
+        let store = scratch("inbox");
+        let response = pending_questions(&store);
+        assert_eq!(response.status, 200);
+        let body: PendingAsks = serde_json::from_str(&response.body).expect("json");
+        assert!(body.asks.is_empty());
     }
 
     /// A blank line left in the form's textarea must not reach the run as an empty `PATH` entry —

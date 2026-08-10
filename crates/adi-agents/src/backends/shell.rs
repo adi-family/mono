@@ -16,8 +16,8 @@
 //!
 //! [`Shell::script`] is what a `Bash` call actually runs, and there is one caller shape:
 //! [`crate::backends::harness::tools`]. The adi loop calls those tools directly; every Claude
-//! engine reaches the same ones over MCP (see [`crate::backends::mcp`]), because the runner
-//! disallows that CLI's own `Bash` and serves ours in its place.
+//! engine reaches the same ones over MCP (see [`crate::backends::mcp`]), because that CLI's own
+//! `Bash` is never granted to a run and ours is served in its place.
 //!
 //! This replaced a `PreToolUse` hook that rewrote the CLI's `Bash` command in flight. The hook
 //! worked, but it could only bend a *command* — never the tool's working directory, and never a

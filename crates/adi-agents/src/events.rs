@@ -101,6 +101,43 @@ pub struct AgentRunDeleted {
     pub run_id: String,
 }
 
+/// `adi.agents.question.asked` — a run stopped to ask a person something and ended its turn.
+///
+/// Named by a constant rather than spelled at each site because, unlike every other event here,
+/// this one is emitted from a *child process* — the harness turn, or the MCP server serving a
+/// Claude engine — and matched by whatever forwards it to a human. Three spellings that have to
+/// agree is two too many.
+pub const QUESTION_ASKED: &str = "adi.agents.question.asked";
+
+/// `adi.agents.question.answered` — the question was settled and the conversation is moving again.
+pub const QUESTION_ANSWERED: &str = "adi.agents.question.answered";
+
+/// The payload of [`QUESTION_ASKED`]. Carries the headline rather than the whole ask: a subscriber
+/// is deciding whether to interrupt somebody, and reads the rest in the app if it does.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentQuestionAsked {
+    /// The agent that asked.
+    pub agent: String,
+    /// The conversation blocked on the answer — what an answer must be delivered into.
+    pub conv: String,
+    /// The ask's id.
+    pub ask: String,
+    /// The first question, plus how many came with it — one line, fit to be a notification.
+    pub question: String,
+}
+
+/// The payload of [`QUESTION_ANSWERED`].
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentQuestionAnswered {
+    pub agent: String,
+    pub conv: String,
+    pub ask: String,
+    /// `human` when somebody answered, `default` when the deadline passed and the run's own
+    /// assumption was taken. Worth publishing: a fleet where most asks time out is a fleet asking
+    /// the wrong questions, or asking nobody.
+    pub by: String,
+}
+
 /// The JSON Schema of `T` as a plain `serde_json::Value` for a catalog entry — `to_value` of the
 /// reflected schema, so nothing in the catalog is hand-written.
 fn schema<T: JsonSchema>() -> Value {
@@ -155,6 +192,28 @@ pub fn event_types() -> Vec<EventType> {
             &AgentRunDeleted {
                 agent: "my-agent".into(),
                 run_id: "r-1a2b3c".into(),
+            },
+        ),
+        EventType::of(
+            QUESTION_ASKED,
+            "A run stopped to ask a person a question, and is waiting on the answer.",
+            schema::<AgentQuestionAsked>(),
+            &AgentQuestionAsked {
+                agent: "my-agent".into(),
+                conv: "1750000000000-0001".into(),
+                ask: "q-1750000000000-0001".into(),
+                question: "Auth method: session cookies or bearer tokens?".into(),
+            },
+        ),
+        EventType::of(
+            QUESTION_ANSWERED,
+            "A run's question was answered and the conversation is moving again.",
+            schema::<AgentQuestionAnswered>(),
+            &AgentQuestionAnswered {
+                agent: "my-agent".into(),
+                conv: "1750000000000-0001".into(),
+                ask: "q-1750000000000-0001".into(),
+                by: "human".into(),
             },
         ),
     ]

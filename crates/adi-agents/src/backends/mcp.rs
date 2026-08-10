@@ -9,16 +9,16 @@
 //!
 //! # What it serves, and what it deliberately does not
 //!
-//! Only [`SERVED`] — `Bash` and `Await`. The runner disallows the CLI's built-in `Bash` (see
-//! [`super::super::runner::detached`]) precisely so ours is the shell an agent gets: one shell per
-//! *conversation*, where a `cd` and an `export` outlive the call and the turn (see [`super::shell`]).
-//! The CLI's own `Read`/`Write`/`Edit`/`Glob`/`Grep` are left alone and keep serving that run —
-//! they are better than ours (diff-aware edits, the CLI's own permission prompts), and nothing about
-//! them needs to be a conversation-scoped thing.
+//! Only [`SERVED`] — `Bash`, `Await` and `Ask`. The engine's own built-in `Bash` never reaches a run
+//! (see [`scope_tools`]) precisely so ours is the shell an agent gets: one shell per *conversation*,
+//! where a `cd` and an `export` outlive the call and the turn (see [`super::shell`]). The CLI's own
+//! `Read`/`Write`/`Edit`/`Glob`/`Grep` are better than ours would be — diff-aware edits, the CLI's
+//! own permission prompts — so they are not reimplemented here; they are simply switched on for the
+//! agents that ask for them.
 //!
 //! Our `Bash` keeps its name rather than being renamed out of the way. Measured against the CLI:
-//! disallowing `Bash` does not touch `mcp__adi__Bash`, because the deny list matches whole tool
-//! names and an MCP tool's name is server-qualified. So the vocabulary stays the one
+//! taking the built-in `Bash` away does not touch `mcp__adi__Bash`, because `--tools` gates the
+//! built-in set alone and an MCP tool's name is server-qualified. So the vocabulary stays the one
 //! [`tools`](super::harness::tools) already documents, and a prompt moves between `harness:adi` and
 //! a Claude backend without learning a second set of names.
 //!
@@ -41,6 +41,7 @@ use super::shell::Shell;
 use crate::awaits::Awaits;
 use crate::error::{Error, Result};
 use crate::runner::{RunSpec, Session};
+use crate::store::SessionStore;
 
 /// The name the runner registers this server under, and therefore the `mcp__<server>__<tool>`
 /// prefix the model sees. Referenced by the runner when it grants the server's tools, so the two
@@ -55,7 +56,7 @@ const DEFAULT_PROTOCOL: &str = "2025-11-25";
 
 /// Which of the shared tools this server hands to a Claude engine. See the module docs: the file
 /// tools stay the CLI's own, and only what has to be *ours* crosses the wire.
-const SERVED: &[&str] = &["Bash", "Await"];
+const SERVED: &[&str] = &["Bash", "Await", "Ask"];
 
 /// The `--mcp-config` value that gives a Claude engine ADI's own tools: this binary, re-entered as
 /// a stdio MCP server scoped to one conversation (see the module docs).
@@ -84,115 +85,123 @@ pub(crate) fn config(spec: &RunSpec, session: &dyn Session) -> String {
     serde_json::json!({ "mcpServers": servers }).to_string()
 }
 
-/// The engine's own shell, switched off. Ours replaces it — see the module docs for why
+/// The engine's own shell, which no run ever gets. Ours replaces it — see the module docs for why
 /// that trade is worth making, and [`super::shell`] for what the engine's own `Bash` could
 /// never do.
 ///
 /// `BashOutput` and `KillShell` go with it: they exist only to poll and kill the background jobs the
-/// built-in `Bash` starts, so leaving them enabled would advertise two tools that can no longer
-/// refer to anything.
+/// built-in `Bash` starts, so switching them on would advertise two tools that can no longer refer
+/// to anything.
 ///
-/// Unlike [`ENGINE_EXTRA_TOOLS`], an agent cannot opt back into these. It is not a preference: a
-/// second shell would be a second conversation state, and the one thing this whole arrangement
-/// exists to guarantee is that there is exactly one.
+/// Unlike every other built-in, an agent cannot ask for these back — naming `Bash` in its own list
+/// still gets it ours. It is not a preference: a second shell would be a second conversation state,
+/// and the one thing this whole arrangement exists to guarantee is that there is exactly one.
 pub(crate) const ENGINE_SHELL_TOOLS: &[&str] = &["Bash", "BashOutput", "KillShell"];
 
-/// Everything else the engine's CLI brings that an ADI agent was never asked whether it wanted —
-/// **off unless the agent says otherwise**.
+/// One run's tool surface: what exists, and what it may use without stopping to ask.
 ///
-/// A Claude run arrives with the CLI's whole built-in surface, and a good deal of it reaches past
-/// this machine or spends money on its own: cloud cron schedules, claude.ai design and trigger
-/// surfaces, push notifications, skills, a second task tracker beside the platform's own. An agent
-/// definition never mentioned any of it, so defaulting it *on* means every agent silently holds
-/// powers nobody granted. Deny-by-default inverts that: the agent's own `allowed_tools` is the
-/// grant, and an empty one means the file tools, the web tools, subagents, and ours.
-///
-/// `ToolSearch` is in here and looks load-bearing, because MCP tools arrive deferred and it is what
-/// loads them. Measured: with `ToolSearch` denied, a run still calls `mcp__adi__Bash` perfectly
-/// well — the deferral is a context optimisation, not a gate.
-///
-/// What is deliberately *not* here: `Read`/`Write`/`Edit`/`Glob`/`Grep` (the working surface, and
-/// better than ours), `WebSearch`/`WebFetch` and `Agent` — several agents' own prompts require
-/// those by name, and switching them off would break the workflow those prompts describe.
-pub(crate) const ENGINE_EXTRA_TOOLS: &[&str] = &[
-    // Cloud schedules, and the claude.ai surfaces.
-    "CronCreate",
-    "CronDelete",
-    "CronList",
-    "DesignSync",
-    "RemoteTrigger",
-    "PushNotification",
-    // Harness machinery an ADI agent has its own answer for, or no use for.
-    "Skill",
-    "SendMessage",
-    "ListAgents",
-    "ReportFindings",
-    "ScheduleWakeup",
-    "EnterWorktree",
-    "ExitWorktree",
-    "LSP",
-    "Monitor",
-    "NotebookEdit",
-    // The CLI's own task tracker — the platform has `adi-tasks`, and two is worse than either.
-    "TaskCreate",
-    "TaskGet",
-    "TaskList",
-    "TaskUpdate",
-    // Deferred-tool loading (see above) and multi-agent fan-out, which is real money.
-    "ToolSearch",
-    "Workflow",
-];
-
-/// `existing` with `names` added, as the CLI's comma-separated tool list.
-///
-/// Additive rather than authoritative: an agent's own `--allowed-tools` is a decision somebody made
-/// about that agent, and this has no business replacing it. Already-listed names are not repeated,
-/// so re-running this over a list it already touched is a no-op rather than a slow leak.
-fn with_tools(existing: Option<&str>, names: &[&str]) -> String {
-    let mut listed: Vec<String> = existing
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .map(ToString::to_string)
-        .collect();
-    for name in names {
-        if !listed.iter().any(|entry| entry == name) {
-            listed.push((*name).to_string());
-        }
-    }
-    listed.join(",")
+/// Two flags doing two different jobs, which is the confusion this type exists to end.
+/// `--allowed-tools` is a *permission* list: it pre-approves calls that would otherwise prompt, and
+/// a prompt is not something a headless turn can survive. It grants nothing and hides nothing —
+/// everything it does not name still exists, and the model still sees it. `--tools` is the
+/// *availability* list, and it is the one that denies: the run's built-in set is exactly what it
+/// names, and nothing else is there to be called.
+pub(crate) struct ToolScope {
+    /// `--tools`: the built-ins this run has at all. Empty — the default — means none of them.
+    pub(crate) builtins: String,
+    /// `--allowed-tools`: those same grants, pre-approved, plus this run's own MCP server.
+    pub(crate) allowed: String,
 }
 
-/// Grant this run's own MCP tools, and take the engine's shell away.
+/// Read an agent's own tool list as the grant it is, and derive the run's whole surface from it.
 ///
-/// Both halves are required for either to be worth doing. Measured against the CLI: an MCP tool the
-/// run has not been granted is *advertised and then refused* — the model sees it, calls it, and is
-/// told it lacks permission — so registering the server without granting it produces an agent that
-/// can see a shell it may not use. The server-level grant (`mcp__adi`) covers every tool the server
-/// serves, so adding one later needs no change here.
-pub(crate) fn scope_tools(allowed: Option<&str>, disallowed: Option<&str>) -> (String, String) {
-    let grant = format!("mcp__{SERVER}");
-    // The agent's own allow-list is the opt-in: naming an extra there takes it back off the deny
-    // list. Removing it rather than relying on which flag the CLI weighs more heavily — a
-    // precedence we would be guessing at, and one that could change under us.
-    let opted_in: Vec<&str> = allowed
-        .unwrap_or_default()
-        .split(',')
-        .map(str::trim)
-        .filter(|entry| !entry.is_empty())
-        .collect();
-    let mut deny: Vec<&str> = ENGINE_SHELL_TOOLS.to_vec();
-    deny.extend(
-        ENGINE_EXTRA_TOOLS
-            .iter()
-            .copied()
-            .filter(|extra| !opted_in.contains(extra)),
-    );
-    (
-        with_tools(allowed, &[grant.as_str()]),
-        with_tools(disallowed, &deny),
-    )
+/// **Deny by default.** A Claude run arrives holding every built-in the engine ships, and a good
+/// deal of it reaches past this machine or spends money on its own: cloud cron schedules, claude.ai
+/// design and trigger surfaces, push notifications, skills, subagent fan-out, a second task tracker
+/// beside the platform's own. An agent definition never mentioned any of it, so defaulting it *on*
+/// means every agent silently holds powers nobody granted — and the list of them grows with each
+/// release of somebody else's CLI. So nothing is on unless the agent named it, and an agent that
+/// names nothing runs on this run's MCP tools alone.
+///
+/// Measured against the CLI: with `--tools ""` and `--strict-mcp-config`, a run's advertised set is
+/// exactly `mcp__adi__Bash` and `mcp__adi__Await` — `--tools` gates the built-in set only, and an
+/// MCP tool's server-qualified name is never part of it. `--tools` also takes the whole list in one
+/// comma-separated argument, so this returns strings rather than pushing one flag per name.
+///
+/// The one grant nobody has to ask for is this run's own server: an MCP tool that is registered but
+/// not permitted is *advertised and then refused* — the model sees a shell, calls it, and is told it
+/// lacks permission — so the server-level grant (`mcp__adi`) always rides along. It covers every
+/// tool the server serves, so serving one more later needs no change here.
+///
+/// A scoped rule keeps its scope where it is a rule and loses it where it is a name: `Edit(src/**)`
+/// is pre-approved exactly as written, and switches on the `Edit` tool.
+pub(crate) fn scope_tools(allowed: Option<&str>) -> ToolScope {
+    let mut builtins: Vec<String> = Vec::new();
+    let mut grants: Vec<String> = Vec::new();
+    for entry in entries(allowed) {
+        let name = tool_name(&entry);
+        if ENGINE_SHELL_TOOLS.contains(&name) {
+            continue;
+        }
+        if !grants.iter().any(|granted| granted == &entry) {
+            grants.push(entry.clone());
+        }
+        // An MCP tool is not part of the built-in set `--tools` gates, and naming one there is not
+        // a request the CLI understands.
+        if !name.starts_with("mcp__") && !builtins.iter().any(|listed| listed == name) {
+            builtins.push(name.to_string());
+        }
+    }
+    let server = format!("mcp__{SERVER}");
+    if !grants.iter().any(|granted| granted == &server) {
+        grants.push(server);
+    }
+    ToolScope {
+        builtins: builtins.join(","),
+        allowed: grants.join(","),
+    }
+}
+
+/// Split a tool list into entries, in either spelling that reaches us — the CLI takes comma- or
+/// space-separated lists, and both are written in the wild — without cutting a rule in half.
+/// `Bash(git *)` holds a space of its own, so a plain `split_whitespace` turns one rule into two
+/// entries that name nothing.
+fn entries(list: Option<&str>) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut current = String::new();
+    let mut depth = 0_usize;
+    for ch in list.unwrap_or_default().chars() {
+        match ch {
+            '(' => {
+                depth += 1;
+                current.push(ch);
+            }
+            ')' => {
+                depth = depth.saturating_sub(1);
+                current.push(ch);
+            }
+            ',' if depth == 0 => take(&mut found, &mut current),
+            ch if ch.is_whitespace() && depth == 0 => take(&mut found, &mut current),
+            ch => current.push(ch),
+        }
+    }
+    take(&mut found, &mut current);
+    found
+}
+
+/// Close off the entry being read, keeping it only if it is not empty — a list may be written with
+/// stray separators, and `Read,,Edit` names two tools rather than three.
+fn take(found: &mut Vec<String>, current: &mut String) {
+    let entry = current.trim();
+    if !entry.is_empty() {
+        found.push(entry.to_string());
+    }
+    current.clear();
+}
+
+/// The tool a list entry names, with any rule scope dropped: `Edit(src/**)` is the `Edit` tool.
+fn tool_name(entry: &str) -> &str {
+    entry.split('(').next().unwrap_or(entry).trim()
 }
 
 /// Serve one run's tools until the client closes the pipe.
@@ -208,19 +217,28 @@ pub(crate) fn serve(
     agent: &str,
     conv: &str,
     cwd: &Path,
-    agent_dir: &Path,
+    sessions: &SessionStore,
+    unattended: bool,
     input: impl BufRead,
     mut output: impl Write,
 ) -> Result<()> {
+    let agent_dir = sessions.agent_dir(agent);
+    // The conversation's shell keeps its state in sidecars of this directory and writes them from
+    // inside the command it runs, so a missing directory is not an error anybody sees — it is a
+    // `Bash` reporting a redirection failure instead of the output the model asked for. Made here
+    // because this process is a grandchild of the runner and cannot assume any write path ran first.
+    std::fs::create_dir_all(&agent_dir)?;
     let ctx = Ctx {
         cwd,
         // The conversation's shell, keyed by session id exactly as the adi loop keys it — so one
         // conversation has one shell whichever engine answered which turn.
-        shell: Shell::new(agent_dir, conv),
+        shell: Shell::new(&agent_dir, conv),
         agent,
         conv,
         awaits: Awaits::open(),
-        agent_dir,
+        sessions: sessions.clone(),
+        agent_dir: &agent_dir,
+        unattended,
     };
 
     for line in input.lines() {
@@ -356,7 +374,8 @@ mod tests {
             "watcher",
             "conv-1",
             &dir,
-            &dir,
+            &SessionStore::new(dir.join("sessions")),
+            false,
             std::io::Cursor::new(requests.as_bytes()),
             &mut out,
         )
@@ -369,47 +388,75 @@ mod tests {
             .collect()
     }
 
-    /// The default an agent gets when it has said nothing about tools: our shell in, the engine's
-    /// shell out, and the CLI's extra surface off. What stays on is the working surface — an agent
-    /// that never asked for anything still reads, writes, searches the web, and delegates.
+    /// The default, and the whole point of the arrangement: an agent that said nothing about tools
+    /// gets *no* built-ins — not the file tools, not the web, not subagents, and none of the cloud
+    /// surfaces the engine's CLI happens to ship this month. What it has is this run's own server.
     #[test]
-    fn the_engines_extra_surface_is_off_unless_an_agent_asks_for_it() {
-        let (allowed, disallowed) = scope_tools(None, None);
-        let denied: Vec<&str> = disallowed.split(',').collect();
+    fn an_agent_that_names_no_tools_gets_none_of_the_engines_own() {
+        let scope = scope_tools(None);
 
-        assert!(allowed.split(',').any(|t| t == "mcp__adi"));
-        for off in ["CronCreate", "RemoteTrigger", "Skill", "Workflow", "ToolSearch", "TaskCreate"] {
-            assert!(denied.contains(&off), "{off} is off by default: {disallowed}");
-        }
-        // The line this draws, and the reason it is drawn there: these are named by agents' own
-        // prompts, so switching them off would break the workflow those prompts describe.
-        for on in ["Read", "Write", "Edit", "Glob", "Grep", "WebSearch", "WebFetch", "Agent"] {
-            assert!(!denied.contains(&on), "{on} must stay available: {disallowed}");
-        }
+        assert_eq!(scope.builtins, "", "empty is the CLI's spelling of 'none'");
+        assert_eq!(scope.allowed, "mcp__adi", "ours is the one grant nobody asks for");
     }
 
-    /// The opt-in: an agent that names an extra in its own `allowed_tools` gets it back. Taken off
-    /// the deny list rather than left on both, so nothing depends on which flag the CLI weighs more.
+    /// The grant: an agent's own list is what switches a built-in on, and it does both jobs at once
+    /// — the tool has to exist, and calling it must not stop to ask.
     #[test]
-    fn an_agent_can_ask_for_an_extra_back_and_never_for_a_second_shell() {
-        let (allowed, disallowed) = scope_tools(Some("Read,Workflow,CronList"), None);
-        let denied: Vec<&str> = disallowed.split(',').collect();
+    fn an_agents_own_list_is_the_grant_and_never_buys_a_second_shell() {
+        let scope = scope_tools(Some("Read,Edit,Workflow"));
+        let available: Vec<&str> = scope.builtins.split(',').collect();
 
-        assert!(!denied.contains(&"Workflow"), "asked for, so granted: {disallowed}");
-        assert!(!denied.contains(&"CronList"), "asked for, so granted: {disallowed}");
-        assert!(denied.contains(&"Skill"), "everything else stays off: {disallowed}");
-        assert!(allowed.split(',').any(|t| t == "Read"), "its own list survives: {allowed}");
+        assert_eq!(available, ["Read", "Edit", "Workflow"], "named, so present");
+        assert!(scope.allowed.split(',').any(|t| t == "Read"), "{}", scope.allowed);
+        assert!(scope.allowed.split(',').any(|t| t == "mcp__adi"), "{}", scope.allowed);
+        // Nothing it did not name comes along for the ride.
+        for off in ["CronCreate", "Skill", "WebFetch", "Task", "ToolSearch"] {
+            assert!(!available.contains(&off), "{off} was not asked for: {}", scope.builtins);
+        }
 
         // The shell is not a preference. An agent that names `Bash` — as one written before ours
         // existed well might — still gets ours, because a second shell is a second conversation
         // state and the whole arrangement exists to guarantee there is one.
-        let (_, disallowed) = scope_tools(Some("Read,Edit,Write,Bash,Glob"), None);
+        let scope = scope_tools(Some("Read Edit Write Bash Glob"));
         for shell in ENGINE_SHELL_TOOLS {
             assert!(
-                disallowed.split(',').any(|t| t == *shell),
-                "{shell} is never opt-in-able: {disallowed}"
+                !scope.builtins.split(',').any(|t| t == *shell),
+                "{shell} is never grantable: {}",
+                scope.builtins
             );
         }
+        // ...and the space-separated spelling is read as five names, not one.
+        assert_eq!(scope.builtins, "Read,Edit,Write,Glob");
+    }
+
+    /// A scoped rule is two things at once: a permission written exactly as the agent wrote it, and
+    /// the name of the tool it permits. Splitting a list on whitespace alone would cut `Bash(git *)`
+    /// in half — and the entry that survived would grant a tool nobody named.
+    #[test]
+    fn a_scoped_rule_keeps_its_scope_where_it_is_a_rule_and_loses_it_where_it_is_a_name() {
+        let scope = scope_tools(Some("Edit(src/**) WebFetch(domain:docs.rs)"));
+
+        assert_eq!(scope.builtins, "Edit,WebFetch");
+        assert!(
+            scope.allowed.split(',').any(|t| t == "Edit(src/**)"),
+            "the rule survives whole: {}",
+            scope.allowed
+        );
+
+        // A rule against the engine's shell goes the way of the shell itself.
+        let scope = scope_tools(Some("Bash(git *),Read"));
+        assert_eq!(scope.builtins, "Read");
+        assert!(!scope.allowed.contains("Bash"), "{}", scope.allowed);
+    }
+
+    /// An agent that names our server itself is not given it twice, and stray separators name
+    /// nothing.
+    #[test]
+    fn the_grant_is_not_repeated_and_empty_entries_are_not_tools() {
+        let scope = scope_tools(Some("Read,,mcp__adi, "));
+
+        assert_eq!(scope.builtins, "Read", "an MCP name is not a built-in");
+        assert_eq!(scope.allowed.split(',').filter(|t| *t == "mcp__adi").count(), 1);
     }
 
     /// The handshake agrees with the client rather than insisting on a version of its own, and says

@@ -27,7 +27,6 @@
 //! that is the whole point of the layering: adding an engine must not mean teaching the store a
 //! wire format.
 
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -35,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::progress::{Step, TurnContent, TurnMetrics, close_open_calls};
 
-use super::db::sql_err;
+use super::db::{now_ms, sql_err};
 
 /// One message in a session's transcript.
 ///
@@ -243,13 +242,6 @@ pub(super) fn view(
         metrics: None,
     }));
     turns
-}
-
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
 }
 
 #[cfg(test)]

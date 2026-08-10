@@ -134,6 +134,8 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                     // `Some(empty)` clears, where the `None` other forms send means "leave as is".
                     path: Some(parsed_path_dirs(&form.path.get())),
                     env: Some(parsed_env_vars(&form.env.get())),
+                    // …and the same for whether this agent may stop and wait for somebody.
+                    unattended: Some(form.unattended.get()),
                     // Editing with the name field changed is a rename, not a second agent.
                     rename_from: editing.get(),
                 };

@@ -27,10 +27,11 @@ pub use adi_update::{Check as UpdateCheck, Error as UpdateError, State as Update
 pub use adi_update::BUILT_VERSION as VERSION;
 
 pub use adi_agents::arguments::AgentSummaryArguments;
+pub use adi_agents::store::Ask;
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
-    Launch, RawAgentArguments, RunLimits, SecretAttachment, StoredAgent, StoredAgentManifest,
-    contains_json_null, event_catalog,
+    Launch, RawAgentArguments, RunLimits, SecretAttachment, Sent, StoredAgent,
+    StoredAgentManifest, contains_json_null, event_catalog,
 };
 
 pub use adi_db::{

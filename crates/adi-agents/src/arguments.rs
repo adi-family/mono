@@ -156,10 +156,13 @@ pub struct PtyClaudeArguments {
     pub permission_mode: Option<ClaudePermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ClaudeEffort>,
+    /// The engine's built-in tools this agent may use — **the whole grant**. A tool it does not
+    /// name is not merely un-approved, it is not there at all: the run is scoped down to this list
+    /// (`--tools`) as well as pre-approved for it (`--allowed-tools`). Empty means the agent runs on
+    /// ADI's own MCP tools alone. Scoped rules are welcome — `Edit(src/**)` grants `Edit` and
+    /// permits exactly that scope. See `crate::backends::mcp::scope_tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disallowed_tools: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub append_system_prompt: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,10 +183,13 @@ pub struct ProcessClaudeArguments {
     pub effort: Option<ClaudeEffort>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_format: Option<ClaudeOutputFormat>,
+    /// The engine's built-in tools this agent may use — **the whole grant**. A tool it does not
+    /// name is not merely un-approved, it is not there at all: the run is scoped down to this list
+    /// (`--tools`) as well as pre-approved for it (`--allowed-tools`). Empty means the agent runs on
+    /// ADI's own MCP tools alone. Scoped rules are welcome — `Edit(src/**)` grants `Edit` and
+    /// permits exactly that scope. See `crate::backends::mcp::scope_tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disallowed_tools: Option<String>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -263,10 +269,13 @@ pub struct HarnessClaudeSdkArguments {
     pub permission_mode: Option<ClaudePermissionMode>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<ClaudeEffort>,
+    /// The engine's built-in tools this agent may use — **the whole grant**. A tool it does not
+    /// name is not merely un-approved, it is not there at all: the run is scoped down to this list
+    /// (`--tools`) as well as pre-approved for it (`--allowed-tools`). Empty means the agent runs on
+    /// ADI's own MCP tools alone. Scoped rules are welcome — `Edit(src/**)` grants `Edit` and
+    /// permits exactly that scope. See `crate::backends::mcp::scope_tools`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowed_tools: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disallowed_tools: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fallback_model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

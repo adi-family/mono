@@ -93,6 +93,7 @@ pub(crate) fn agents_panel(
                     // agent already has, instead of clearing it on every save.
                     path: None,
                     env: None,
+                    unattended: None,
                     rename_from: None,
                 };
                 name.set(String::new());

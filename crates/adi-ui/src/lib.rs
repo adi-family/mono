@@ -33,6 +33,7 @@
 // Leptos components are PascalCase functions by convention, which is not a Rust function name.
 #![allow(non_snake_case)]
 
+mod ask;
 mod badge;
 mod button;
 mod app;
@@ -55,6 +56,7 @@ mod table;
 mod topbar;
 mod tree;
 
+pub use ask::{Ask, AskOption, AskQuestion};
 pub use badge::{Badge, BadgeTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use app::{AppItem, AppState};

@@ -19,7 +19,7 @@
 use std::time::Duration;
 
 use adi_ui::{
-    AppItem, AppState, Badge, BadgeTone, Chat, Button, ButtonSize,
+    AppItem, AppState, Ask, AskOption, AskQuestion, Badge, BadgeTone, Chat, Button, ButtonSize,
     ButtonVariant, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
     Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
@@ -750,6 +750,75 @@ The first two                    are the same bug. I will read the pairing path 
     }
 }
 
+/// The question card, in both of its shapes: the one-question ask a click settles outright, and
+/// the batched one that has to be read before it can be sent.
+#[component]
+fn AskDemo() -> impl IntoView {
+    let answered = RwSignal::new(String::new());
+    let batch_answered = RwSignal::new(String::new());
+    view! {
+        <div class="flex flex-col gap-4">
+            <Ask
+                note="The migration touches `orders`, which is 40M rows. Both ways work; they \
+                      fail differently."
+                questions=vec![AskQuestion {
+                    header: "Migration".into(),
+                    question: "Alter in place, or write to a new table and swap?".into(),
+                    options: vec![
+                        AskOption {
+                            label: "In place".into(),
+                            description: "one statement, but locks writes for ~4 minutes".into(),
+                        },
+                        AskOption {
+                            label: "New table".into(),
+                            description: "no lock, but doubles disk until the swap".into(),
+                        },
+                    ],
+                    multi_select: false,
+                }]
+                deadline_note="takes its own default in 12m"
+                on_answer=Callback::new(move |replies: Vec<String>| {
+                    answered.set(replies.join(" | "));
+                })
+            />
+            <Show when=move || !answered.get().is_empty()>
+                <Flash kind=FlashKind::Ok>
+                    {move || format!("answered: {}", answered.get())}
+                </Flash>
+            </Show>
+
+            <Ask
+                questions=vec![
+                    AskQuestion {
+                        header: "Rollout".into(),
+                        question: "Which environments should this go to first?".into(),
+                        options: vec![
+                            AskOption { label: "staging".into(), description: String::new() },
+                            AskOption { label: "eu-west".into(), description: String::new() },
+                            AskOption { label: "us-east".into(), description: String::new() },
+                        ],
+                        multi_select: true,
+                    },
+                    AskQuestion {
+                        header: "Rollback".into(),
+                        question: "How long do I keep the old table before dropping it?".into(),
+                        options: Vec::new(),
+                        multi_select: false,
+                    },
+                ]
+                on_answer=Callback::new(move |replies: Vec<String>| {
+                    batch_answered.set(replies.join(" | "));
+                })
+            />
+            <Show when=move || !batch_answered.get().is_empty()>
+                <Flash kind=FlashKind::Ok>
+                    {move || format!("answered: {}", batch_answered.get())}
+                </Flash>
+            </Show>
+        </div>
+    }
+}
+
 /// The sessions rail, assembled: a live selection across three bands, and the filter box
 /// wired to the one band long enough to need it.
 #[component]
@@ -1473,6 +1542,23 @@ fn Playground() -> impl IntoView {
                 </div>
                 <div class="p-4">
                     <ChatDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="Ask" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "What a run puts up when it needs a person to decide something. It is the \
+                     visible half of a stored question: while the card is there the conversation \
+                     is blocked, and when it goes the answer is a turn like any other. One \
+                     question with a fixed set of answers sends on the click — an answer somebody \
+                     taps is an answer you get. Anything longer has to be read first, so it gets \
+                     a button, and Send lights up as soon as *any* question has an answer rather \
+                     than holding the conversation hostage to the one nobody can settle. Every \
+                     question keeps a free-text box, because “neither, do this instead” is \
+                     regularly the right answer."
+                </div>
+                <div class="p-4">
+                    <AskDemo/>
                 </div>
             </Panel>
 

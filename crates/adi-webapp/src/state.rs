@@ -774,6 +774,9 @@ pub(crate) struct AgentsForm {
     pub(crate) env: RwSignal<String>,
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) starred: RwSignal<bool>,
+    /// Whether the agent runs with nobody watching — the `Ask` tool refuses on an unattended agent,
+    /// so a question can never leave the work stopped in silence.
+    pub(crate) unattended: RwSignal<bool>,
     /// The complete backend argument map loaded for editing, including structured values the
     /// schema-driven form does not render directly.
     pub(crate) arguments: RwSignal<BTreeMap<String, serde_json::Value>>,
@@ -803,6 +806,7 @@ impl AgentsForm {
             env: RwSignal::new(String::new()),
             system_prompt: RwSignal::new(String::new()),
             starred: RwSignal::new(false),
+            unattended: RwSignal::new(false),
             arguments: RwSignal::new(BTreeMap::new()),
             argument_values: RwSignal::new(BTreeMap::new()),
             editing: RwSignal::new(None),
@@ -1019,6 +1023,9 @@ pub(crate) struct AgentsWatch {
     /// Text buffer for the chat reply box under a selected answerable (harness) conversation —
     /// kept apart from `input` (the new-conversation composer) so the two don't clobber each other.
     pub(crate) reply: RwSignal<String>,
+    /// True while an answer to the open conversation's question is in flight, so the card cannot be
+    /// sent twice by an impatient second click on a request that is already gone.
+    pub(crate) answering: RwSignal<bool>,
     /// A context line prepended to every message this view sends (new run *and* reply). Empty in the
     /// normal app; the dashboard-agent embed sets it to "editing dashboard <id> …" so the one global
     /// `adi-agent` session always knows which dashboard it was opened from.
@@ -1059,6 +1066,7 @@ impl AgentsWatch {
             log: RwSignal::new(String::new()),
             input: RwSignal::new(String::new()),
             reply: RwSignal::new(String::new()),
+            answering: RwSignal::new(false),
             context_prefix: RwSignal::new(String::new()),
             run_dir: RwSignal::new(String::new()),
             tokens: RwSignal::new(None),

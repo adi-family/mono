@@ -215,7 +215,8 @@ fn render_agent_input(
     .into_any()
 }
 
-/// Render a checkbox. `starred` is ADI metadata; every other checkbox is a backend argument.
+/// Render a checkbox. `starred` and `unattended` are ADI metadata; every other checkbox is a
+/// backend argument.
 fn render_agent_checkbox(field: AgentFormField, form: AgentsForm) -> AnyView {
     let label = field.label.clone();
     let name_for_value = field.name.clone();
@@ -528,6 +529,7 @@ pub(crate) fn set_agent_field_value(form: AgentsForm, name: &str, value: String)
 fn agent_field_bool(form: AgentsForm, name: &str) -> bool {
     match name {
         "starred" => form.starred.get(),
+        "unattended" => form.unattended.get(),
         other => form
             .argument_values
             .get()
@@ -538,6 +540,7 @@ fn agent_field_bool(form: AgentsForm, name: &str) -> bool {
 
 fn set_agent_field_bool(form: AgentsForm, name: &str, value: bool) {
     match name {
+        "unattended" => form.unattended.set(value),
         "starred" => form.starred.set(value),
         other => set_agent_argument_value(
             form.argument_values,
@@ -662,7 +665,10 @@ fn insert_text_argument(
 }
 
 fn is_argument_field(name: &str) -> bool {
-    !matches!(name, "name" | "backend" | "project" | "tags" | "starred")
+    !matches!(
+        name,
+        "name" | "backend" | "project" | "tags" | "starred" | "unattended"
+    )
 }
 
 fn is_scalar_argument_field(name: &str) -> bool {
@@ -679,6 +685,7 @@ fn is_scalar_argument_field(name: &str) -> bool {
             | "tools"
             | "system_prompt"
             | "starred"
+            | "unattended"
     )
 }
 
@@ -766,6 +773,7 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.system_prompt
         .set(argument_text(&a.arguments, "system_prompt"));
     form.starred.set(a.starred);
+    form.unattended.set(a.unattended);
     form.arguments.set(a.arguments.clone());
     form.argument_values.set(
         a.arguments
@@ -797,6 +805,7 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.env.set(String::new());
     form.system_prompt.set(String::new());
     form.starred.set(false);
+    form.unattended.set(false);
     form.arguments.set(BTreeMap::new());
     form.argument_values.set(BTreeMap::new());
     form.editing.set(None);

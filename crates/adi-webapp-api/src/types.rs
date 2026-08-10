@@ -849,6 +849,11 @@ pub struct AgentDto {
     pub env: BTreeMap<String, String>,
     pub created_at: u64,
     pub updated_at: u64,
+    /// Whether this agent runs with nobody watching. It changes one thing: the `Ask` tool refuses,
+    /// telling the run to decide for itself and say what it assumed — because a question nobody
+    /// will see is the work stopping without failing.
+    #[serde(default)]
+    pub unattended: bool,
     /// Whether this agent's backend has a run adapter, i.e. whether ▶ Run can work at all.
     #[serde(default)]
     pub runnable: bool,
@@ -939,6 +944,11 @@ pub struct SaveAgent {
     /// exactly as for `path` above; an empty table clears.
     #[serde(default)]
     pub env: Option<BTreeMap<String, String>>,
+    /// Whether the agent runs unattended (see [`AgentDto::unattended`]). **Omit to keep whatever
+    /// the agent already has** — only the full agent editor offers it, so the meta setup and the
+    /// project panel can save without silently switching it off.
+    #[serde(default)]
+    pub unattended: Option<bool>,
     /// The agent's previous name when an edit renames it. The manifest is moved first (keeping
     /// `created_at`), then saved under `name`, so no orphan is left behind. Omitted — or equal to
     /// `name` — for a plain create/update.
@@ -999,6 +1009,87 @@ pub struct ReplyToRun {
     pub name: String,
     pub run_id: String,
     pub message: String,
+}
+
+/// `POST /api/agents/run/answer` request — settle the question a conversation is waiting on, with
+/// one reply per question in the order they were asked.
+///
+/// `ask` names the ask being answered so a card left open in another tab cannot settle the question
+/// that has since replaced it; omit it to answer whatever is pending. Either way exactly one caller
+/// wins — the loser gets a 404 rather than starting a second turn on a settled question.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnswerRun {
+    pub name: String,
+    pub run_id: String,
+    #[serde(default)]
+    pub ask: Option<String>,
+    pub replies: Vec<String>,
+}
+
+/// One question a run stopped to ask, on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentQuestion {
+    /// Two or three words naming the decision — the chip beside the question.
+    #[serde(default)]
+    pub header: String,
+    pub question: String,
+    /// The answers offered as one tap. Empty means free text only.
+    #[serde(default)]
+    pub options: Vec<AgentChoice>,
+    #[serde(default)]
+    pub multi_select: bool,
+}
+
+/// One offered answer: what the button says, and what choosing it implies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentChoice {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A run's request for a human decision — everything the card needs to draw itself.
+///
+/// Carried on [`AgentRunInfo`] (so a listing can badge the conversations that need somebody) and on
+/// [`AgentPeek`] (so the open chat can draw the card). Present only while it is unanswered: a
+/// settled ask is history, and history is the transcript's job.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentAsk {
+    pub id: String,
+    /// Unix milliseconds it was asked.
+    #[serde(default)]
+    pub asked_at: u64,
+    /// What the run was doing when it stopped to ask, in its own words.
+    #[serde(default)]
+    pub note: String,
+    pub questions: Vec<AgentQuestion>,
+    /// Unix milliseconds after which the run's own defaults are taken instead, if it named a
+    /// deadline. The client counts down against it — an answer that arrives after this has no
+    /// question left to settle.
+    #[serde(default)]
+    pub deadline: Option<u64>,
+    /// The first question plus how many came with it: one line, fit for a rail badge.
+    #[serde(default)]
+    pub headline: String,
+}
+
+/// One row of the cross-agent "needs you" inbox: an unanswered ask, and enough about the
+/// conversation it came from to open it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAsk {
+    pub agent: String,
+    /// The conversation blocked on it — the `run_id` every other agent endpoint takes.
+    pub run_id: String,
+    /// That conversation's title (the message it was opened with, cut short).
+    #[serde(default)]
+    pub conversation: String,
+    pub ask: AgentAsk,
+}
+
+/// `GET /api/agents/questions` — every unanswered question across every agent, oldest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingAsks {
+    pub asks: Vec<PendingAsk>,
 }
 
 /// `POST /api/agents/run/unqueue` request — drop the message at `index` from a conversation's queue,
@@ -1100,6 +1191,11 @@ pub struct AgentCapabilities {
     pub tool_steps: bool,
     pub thinking: bool,
     pub metrics: bool,
+    /// Whether a run of this backend can stop and ask a person something. True wherever
+    /// `answerable` is — asking is answering in reverse, and a backend with no thread to continue
+    /// has nowhere to deliver an answer into.
+    #[serde(default)]
+    pub asks: bool,
 }
 
 /// One entry in a headless agent's run history: an independent run spawned from the agent's settings.
@@ -1125,6 +1221,13 @@ pub struct AgentRunInfo {
     /// server does — so a full history view can still show it.
     #[serde(default)]
     pub hidden: bool,
+    /// The question this conversation is waiting on a person for, if it is waiting on one.
+    ///
+    /// Carried by the *listing* and not only by the open chat, because "which of these needs me?"
+    /// is the question a rail of forty conversations exists to answer. `running: false` alone
+    /// cannot: finished and blocked-on-you look identical from there, and they are opposites.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_question: Option<AgentAsk>,
 }
 
 /// `POST /api/agents/runs` — a headless agent's run history, newest first. `interactive` is true for
@@ -1164,6 +1267,7 @@ fn default_caps() -> AgentCapabilities {
         tool_steps: false,
         thinking: false,
         metrics: false,
+        asks: false,
     }
 }
 
@@ -1252,6 +1356,10 @@ pub struct AgentPeek {
     /// The backend's capability profile — drives the progress feed (which columns) for this run.
     #[serde(default = "default_caps")]
     pub caps: AgentCapabilities,
+    /// The question this conversation is waiting on a person for, if any — what the chat draws its
+    /// card from. Gone the moment it is answered; the answer itself is a turn like any other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_question: Option<AgentAsk>,
     /// The run/conversation transcript, oldest first — for backends that produce turns (conversations,
     /// and one-shot runs synthesized as a single answered turn); empty otherwise. Includes the
     /// still-streaming answer, with its parsed tool steps, while a turn is in flight.

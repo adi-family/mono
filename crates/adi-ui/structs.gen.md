@@ -4,11 +4,12 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-11 structs · 16 enums across 15 files.
+14 structs · 16 enums across 16 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `AppState`
+- [`src/ask.rs`](#srcaskrs) — `AskQuestion`, `AskOption`, `Picked`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
 - [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Turn`
@@ -39,6 +40,48 @@ pub enum AppState {
     Live,
     Offline,
     ViewOnly,
+}
+```
+
+---
+
+## `src/ask.rs`
+
+### struct `AskQuestion`
+
+One thing the run wants decided.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AskQuestion {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<AskOption>,
+    pub multi_select: bool,
+}
+```
+
+### struct `AskOption`
+
+One offered answer: what the button says, and what choosing it implies.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AskOption {
+    pub label: String,
+    pub description: String,
+}
+```
+
+### struct `Picked`
+
+What one question has been answered with so far.
+
+```rust
+#[derive(Clone, Copy)]
+struct Picked {
+    chosen: RwSignal<BTreeSet<usize>>,
+    typed: RwSignal<String>,
 }
 ```
 

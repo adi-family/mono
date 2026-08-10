@@ -229,6 +229,7 @@ fn submit_setup(state: State, form: MetaForm) {
         // agent already has, instead of clearing it on every save.
         path: None,
         env: None,
+        unattended: None,
         rename_from: None,
     };
     form.busy.set(true);

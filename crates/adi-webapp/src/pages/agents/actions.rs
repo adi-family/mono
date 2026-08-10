@@ -821,6 +821,11 @@ fn run_detail_row(
 /// the very top: what you have already said is nearest the box you said it in.
 fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
     view! {
+        // Above even the composer: while this is up the conversation is not going anywhere, and
+        // burying the one thing that would move it under the box you would otherwise type into is
+        // how a run sits blocked all afternoon in plain sight.
+        {move || question_card(state, watch)}
+
         // The composer sits above the transcript, because the transcript reads newest-first:
         // what you type appears at the top, next to the box you typed it in.
         {answerable.then(|| reply_bar(state, watch))}
@@ -1067,6 +1072,107 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     }
 }
 
+/// The open conversation's question, if it is waiting on one — [`adi_ui::Ask`] wired to the answer
+/// endpoint.
+///
+/// Drawn from the poll's own snapshot, so it appears within a second of the run asking and vanishes
+/// within a second of anybody answering, wherever they answered from: the card is a view of a
+/// stored question, never a thing this tab owns.
+fn question_card(state: State, watch: AgentsWatch) -> Option<AnyView> {
+    let ask = watch.peek.get()?.pending_question?;
+    let ask_id = ask.id.clone();
+    let questions: Vec<adi_ui::AskQuestion> = ask
+        .questions
+        .iter()
+        .map(|q| adi_ui::AskQuestion {
+            header: q.header.clone(),
+            question: q.question.clone(),
+            options: q
+                .options
+                .iter()
+                .map(|o| adi_ui::AskOption {
+                    label: o.label.clone(),
+                    description: o.description.clone(),
+                })
+                .collect(),
+            multi_select: q.multi_select,
+        })
+        .collect();
+    // Recomputed on every poll rather than on a timer of its own: the snapshot already arrives
+    // about once a second, which is finer than a countdown in minutes can show.
+    let deadline = ask.deadline;
+    let deadline_note = Signal::derive(move || match deadline {
+        None => String::new(),
+        Some(at) => match at.saturating_sub(js_sys::Date::now() as u64) {
+            0 => "taking its own default now".to_string(),
+            left => format!("takes its own default in {}", short_duration(left)),
+        },
+    });
+    Some(
+        view! {
+            <div class="adi-ui-type px-3 pt-3">
+                <adi_ui::Ask
+                    note=ask.note.clone()
+                    questions=questions
+                    deadline_note=deadline_note
+                    busy=watch.answering
+                    on_answer=Callback::new(move |replies: Vec<String>| {
+                        send_answer(state, watch, ask_id.clone(), replies);
+                    })
+                />
+            </div>
+        }
+        .into_any(),
+    )
+}
+
+/// Answer the open conversation's question, applying the returned snapshot at once so the card goes
+/// and the answer's turn appears in the same round-trip.
+///
+/// A 404 here is not a failure to report as one: it means the question was settled while this card
+/// sat open — somebody else answered, or its deadline took the run's own default. The poll is
+/// resumed either way, which is what clears the card.
+fn send_answer(state: State, watch: AgentsWatch, ask: String, replies: Vec<String>) {
+    let Some(name) = watch.name.get_untracked() else {
+        return;
+    };
+    let Some(run_id) = watch.run_id.get_untracked() else {
+        return;
+    };
+    watch.answering.set(true);
+    spawn_local(async move {
+        let answered = fetch::answer_run(name.clone(), run_id.clone(), ask, replies).await;
+        // Only apply if the view is still on this same conversation.
+        if watch.name.get_untracked().as_deref() != Some(name.as_str())
+            || watch.run_id.get_untracked().as_deref() != Some(run_id.as_str())
+        {
+            return;
+        }
+        watch.answering.set(false);
+        match answered {
+            Ok(peek) => {
+                watch.peek.set(Some(peek));
+                poll_watch(watch);
+            }
+            Err(e) => {
+                state.flash.set(Some(Flash::err(e)));
+                poll_watch(watch);
+            }
+        }
+    });
+}
+
+/// Milliseconds as the coarsest unit that still says something: `40s`, `12m`, `3h`, `2d`.
+fn short_duration(ms: u64) -> String {
+    let secs = ms / 1000;
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
+    }
+}
+
 /// Say the reply box's message into the conversation, applying the returned snapshot at once (so the
 /// message — asked or queued — and any streaming answer appear immediately) and resuming the poll.
 /// Errors go to flash.
@@ -1196,6 +1302,26 @@ fn run_row(
     .into_any()
 }
 
+/// How many conversations, across every agent, are stopped waiting on a person.
+///
+/// Read off the cross-agent index the rail is already drawn from rather than from
+/// `/api/agents/questions` — that endpoint exists for the CLI and for whatever forwards a question
+/// to a phone, and fetching it here as well would be a second count of the same thing, arriving on
+/// its own schedule and free to disagree with the rail underneath it.
+fn waiting_on_you(state: State) -> usize {
+    state
+        .all_chats
+        .get()
+        .map(|all| {
+            all.agents
+                .iter()
+                .flat_map(|a| &a.runs)
+                .filter(|r| r.pending_question.is_some())
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 /// The composer that starts a new run/conversation: the same box the reply bar is, plus an
 /// optional directory to run it in. A message is required — the send button is out until one is
 /// typed. Sending launches it and opens its detail: a streaming log for a one-shot run, or the
@@ -1310,6 +1436,18 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                     on:click=move |_| toggle_drawer(state, ChatDrawer::Sessions)>
                     <span class="adi-chome__drawer-icon" aria-hidden="true">"\u{2630}"</span>
                     <span>"Sessions"</span>
+                    // Down here the rail is behind this button, so the one thing it says that
+                    // cannot wait for somebody to open it is how many chats are stopped on you.
+                    {move || {
+                        let n = waiting_on_you(state);
+                        (n > 0).then(|| view! {
+                            <span class="adi-ui-type">
+                                <adi_ui::Badge tone=adi_ui::BadgeTone::Accent mono=true>
+                                    {n.to_string()}
+                                </adi_ui::Badge>
+                            </span>
+                        })
+                    }}
                 </button>
                 <span class="adi-spacer"></span>
                 <button class="adi-chome__drawer-btn" type="button"
@@ -2280,6 +2418,14 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     // Two bands, as in the playground: what is working right now, then everything else.
     // The counts are what the band heading is for — "how many are going" is the question the
     // rail is scanned for.
+    // Three bands, not two. A conversation stopped on a question is neither working nor finished,
+    // and it is the only kind you have to *do* something about — so it goes first, above what is
+    // merely in progress. This is the whole of the "needs you" inbox: the rail is already the
+    // cross-agent index, and a second surface fed by a second request would only be a copy of it
+    // that could disagree.
+    let (waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
+        .into_iter()
+        .partition(|r| r.run.as_ref().is_some_and(|run| run.pending_question.is_some()));
     let (running, rest): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.running);
     // Keyed, and that is not tidiness: a row's click handler is bound when the row is
@@ -2317,8 +2463,12 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
         }
         .into_any()
     };
-    vec![band("Running now", running), band("Recent", rest)]
-        .into_any()
+    vec![
+        band("Waiting on you", waiting),
+        band("Running now", running),
+        band("Recent", rest),
+    ]
+    .into_any()
 }
 
 /// One session in the rail: its task, then the agent it belongs to and when it last moved. Clicking
@@ -2329,6 +2479,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
     let SessionRow { agent, run, when, running } = item;
     let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
+    let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
     let (title, sub, run_id) = match run {
         Some(r) => {
             let t = truncate_task(&r.message);
@@ -2362,7 +2513,12 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     // The row itself is `adi-ui`; the delete control is laid over it rather than inside,
     // because the row is one hit target and a button inside a button is not a thing a
     // browser will do. It appears on hover, where it cannot be hit by accident.
-    let state_of = if running {
+    // Waiting outranks working. A conversation with a question up is stopped on *you*, and the
+    // one thing the rail exists to answer is which of forty rows needs you — `running: false`
+    // alone cannot say it, because finished and blocked-on-you look identical from there.
+    let state_of = if waiting {
+        adi_ui::SessionState::Waiting
+    } else if running {
         adi_ui::SessionState::Working
     } else {
         adi_ui::SessionState::Done
@@ -2379,6 +2535,9 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
                 title=title.clone()
                 state=state_of
                 agent=sub
+                // The only coloured words in the row, and spent on the one thing a rail is
+                // scanned for. What it wants, not how much of it there is.
+                alert=if waiting { "your answer" } else { "" }
                 selected=is_sel
                 attr:title=hint
                 on:click=move |_| {

@@ -55,15 +55,11 @@ impl PtyRunner {
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt =
                     with_tool_help(spec, with_workspace(spec, config.append_system_prompt));
-                let (allowed, disallowed) = crate::backends::mcp::scope_tools(
-                    config.allowed_tools.as_deref(),
-                    config.disallowed_tools.as_deref(),
-                );
-                config.allowed_tools = Some(allowed);
-                config.disallowed_tools = Some(disallowed);
+                let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(pty::claude::argv(
                     &config,
                     Some(&crate::backends::mcp::config(spec, session)),
+                    &tools,
                 ))
             }
             Backend::PtyCodex => {
@@ -426,7 +422,8 @@ mod tests {
             claude[at + 1].clone()
         };
         assert!(flag("--allowed-tools").split(',').any(|t| t == "mcp__adi"));
-        assert!(flag("--disallowed-tools").split(',').any(|t| t == "Bash"));
+        // Deny-by-default: this agent named no tools, so the engine's own built-in set is empty.
+        assert_eq!(flag("--tools"), "");
 
         let codex = PtyRunner::new(Backend::PtyCodex)
             .argv(&spec, &FakeSession::new("paned"))
