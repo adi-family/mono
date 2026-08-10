@@ -1,5 +1,6 @@
-//! Thin subprocess helper — the engine drives the macOS toolchain (`curl`, `hdiutil`,
-//! `codesign`, `shasum`, `plutil`) through this, mirroring `adi-core`'s `proc`.
+//! Thin subprocess helper — the engine drives the tools it needs (`curl`, `tar`, and the
+//! macOS bundle toolchain `hdiutil`, `codesign`, `plutil`) through this, mirroring
+//! `adi-core`'s `proc`.
 
 use std::ffi::OsStr;
 use std::process::Command;

@@ -16,8 +16,10 @@
 //!
 //! Restarting services onto the new binaries — and rolling back when they don't come up —
 //! is the caller's job (`adi-core`), since that's where the supervisor knowledge lives.
-//! Everything shells out to tools the OS already ships (`curl`, `shasum`, `tar`, and on
-//! macOS `hdiutil`, `codesign`, `plutil`) — no network or crypto dependencies.
+//! Everything shells out to tools the OS already ships (`curl`, `tar`, and on macOS
+//! `hdiutil`, `codesign`, `plutil`) — no network dependency. The one exception is the
+//! artifact's sha256, hashed in-process: there is no checksum tool all three platforms
+//! have, and the macOS-only `shasum` this used to call is absent on every stock Linux.
 
 mod engine;
 mod manifest;

@@ -13,6 +13,10 @@ adi-config = { workspace = true }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The artifact's checksum, computed in-process. The only dependency here, and it buys the one
+# thing shelling out cannot: a checksum on every platform. No OS ships a hashing tool the other
+# two also have — see `engine::sha256`.
+sha2 = "0.10"
 
 [lints]
 workspace = true

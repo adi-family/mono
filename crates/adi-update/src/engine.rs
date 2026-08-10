@@ -28,6 +28,12 @@ pub const DEFAULT_APP_PATH: &str = "/Applications/ADI.app";
 /// bundle signed by anyone else is rejected. Override with `ADI_UPDATE_TEAM_ID`.
 pub const DEFAULT_TEAM_ID: &str = "752556J5V6";
 
+/// How the manifest and the artifact are fetched. Resolved through `PATH` rather than named
+/// absolutely: `/usr/bin/curl` is a macOS path, and while Linux distributions usually agree
+/// with it, Windows keeps `curl.exe` in System32 — where an absolute unix path finds nothing
+/// and every check fails before it has even read the manifest.
+const CURL: &str = "curl";
+
 /// How long a stale lock (from a crashed updater) blocks the next run.
 const LOCK_STALE_SECS: u64 = 2 * 3600;
 
@@ -167,7 +173,7 @@ impl Engine {
     /// [`Error::Manifest`] when the fetch or parse fails.
     pub fn fetch_manifest(&self) -> Result<Manifest, Error> {
         let mut argv = vec![
-            "/usr/bin/curl".to_string(),
+            CURL.to_string(),
             "-fsSL".to_string(),
             "--retry".to_string(),
             "2".to_string(),
@@ -330,7 +336,7 @@ impl Engine {
 
     fn download(&self, url: &str, dest: &Path) -> Result<(), Error> {
         let mut argv = vec![
-            "/usr/bin/curl".to_string(),
+            CURL.to_string(),
             "-fsSL".to_string(),
             "--retry".to_string(),
             "3".to_string(),
@@ -398,25 +404,43 @@ fn download_name(url: &str) -> String {
     }
 }
 
-/// Hex sha256 of a file, via the system `shasum`.
+/// Hex sha256 of a file, hashed in-process.
+///
+/// This one step deliberately does *not* shell out like the rest of the engine does. There is
+/// no checksum tool all three platforms ship: `shasum` is macOS's (it comes from perl, and a
+/// stock Debian, Ubuntu or Alpine has no such file), `sha256sum` is coreutils and absent on
+/// macOS and Windows, and Windows only has `certutil`, whose output format changed between
+/// releases. Shelling out to any one of them is how Linux nodes came to download the artifact
+/// on every scheduled run and then fail here, forever, with `--quiet` swallowing the reason.
+///
+/// Streamed in chunks: the artifact is tens of megabytes and there is no reason to hold it in
+/// memory a second time when it is already on disk.
 fn sha256(path: &Path) -> Result<String, Error> {
-    let out = shell::capture(&[
-        Path::new("/usr/bin/shasum").as_os_str(),
-        std::ffi::OsStr::new("-a"),
-        std::ffi::OsStr::new("256"),
-        path.as_os_str(),
-    ]);
-    if !out.ok() {
-        return Err(Error::Download(format!(
-            "shasum failed: {}",
-            out.stderr.trim()
-        )));
+    use std::io::Read;
+
+    use sha2::{Digest, Sha256};
+
+    let mut file = fs::File::open(path)
+        .map_err(|e| Error::Download(format!("could not read {}: {e}", path.display())))?;
+    let mut hasher = Sha256::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buf)
+            .map_err(|e| Error::Download(format!("could not read {}: {e}", path.display())))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
     }
-    String::from_utf8_lossy(&out.stdout)
-        .split_whitespace()
-        .next()
-        .map(str::to_ascii_lowercase)
-        .ok_or_else(|| Error::Download("shasum produced no output".to_string()))
+    Ok(hasher
+        .finalize()
+        .iter()
+        .fold(String::with_capacity(64), |mut acc, b| {
+            use std::fmt::Write as _;
+            let _ = write!(acc, "{b:02x}");
+            acc
+        }))
 }
 
 /// One-update-at-a-time lock (`update/update.lock`); a lock older than
@@ -498,7 +522,33 @@ mod tests {
             sha256(&file).expect("sha"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
+
+        // Empty input, and input larger than one read buffer — the two ends of the streaming
+        // loop, where an off-by-one would still produce a plausible-looking 64 hex chars.
+        let empty = dir.join("empty");
+        fs::write(&empty, b"").unwrap();
+        assert_eq!(
+            sha256(&empty).expect("sha"),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+
+        let big = dir.join("big");
+        fs::write(&big, vec![b'a'; 200_000]).unwrap();
+        let hash = sha256(&big).expect("sha");
+        assert_eq!(hash.len(), 64);
+        assert!(hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn sha256_of_a_missing_file_is_an_error_not_a_hash() {
+        let dir = scratch("sha-missing");
+        let _ = fs::remove_dir_all(&dir);
+        assert!(matches!(
+            sha256(&dir.join("never-downloaded")),
+            Err(Error::Download(_))
+        ));
     }
 
     #[test]
