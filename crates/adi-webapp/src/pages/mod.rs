@@ -48,7 +48,7 @@ pub(crate) mod columns {
     pub(crate) use super::workspaces::{HOOK_COLS, WORKSPACE_COLS};
 }
 
-pub(crate) use agents::{agents_view, chat_home_view, live_view, poll_watch};
+pub(crate) use agents::{agents_view, chat_home_view, live_view, poll_watch, reset_chat_home};
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
 pub(crate) use fleet::fleet_view;

@@ -1114,6 +1114,8 @@ fn Playground() -> impl IntoView {
     ];
 
     let disabled = RwSignal::new(false);
+    // The TopBar panel's miniature window: whether its row is open — what its mark resets.
+    let opened = RwSignal::new(false);
     let name = RwSignal::new(String::from("ports"));
     let port = RwSignal::new(String::from("8000"));
     let backend = RwSignal::new(String::from("claude"));
@@ -1270,12 +1272,21 @@ fn Playground() -> impl IntoView {
                      that is not an island itself, because it is the screen's edge rather \
                      than an object on the screen."
                 </div>
+                <div class="px-4 pt-2 text-mini text-meta">
+                    "The mark has three shapes. With "<code>"home"</code>" it is a link out of \
+                     here; with neither prop it is plain text, because a link to the page you \
+                     are on does nothing. This one has "<code>"on_home"</code>": open the row \
+                     below and click "<code>"adi."</code>" — a screen that keeps \"where you \
+                     are\" in state rather than in the URL still owes you the way back, and \
+                     the way back is putting it as it opened."
+                </div>
                 <div class="p-4">
                     // A window, in miniature: the bar's corners are clipped by the island
                     // around it, which is why that island owns the `overflow-hidden`.
                     <div class="island overflow-hidden bg-canvas">
                         <TopBar
                             logo="adi"
+                            on_home=Callback::new(move |()| opened.set(false))
                             actions=|| {
                                 view! {
                                     <Button
@@ -1298,7 +1309,29 @@ fn Playground() -> impl IntoView {
                         </TopBar>
                         <div class="flex gap-3 p-3">
                             <div class="island h-20 w-32 shrink-0 bg-panel"></div>
-                            <div class="island h-20 flex-1 bg-card"></div>
+                            // Something to be got out of: with a row open the window is no
+                            // longer as it opened, and the mark is what closes it again.
+                            {move || if opened.get() {
+                                view! {
+                                    <div class="island flex h-20 flex-1 items-center \
+                                                justify-center bg-card text-mini text-meta">
+                                        "a row is open — click the mark"
+                                    </div>
+                                }
+                                .into_any()
+                            } else {
+                                view! {
+                                    <button
+                                        type="button"
+                                        class="island h-20 flex-1 cursor-pointer bg-card \
+                                               text-mini text-meta hover:border-accent/60"
+                                        on:click=move |_| opened.set(true)
+                                    >
+                                        "open a row"
+                                    </button>
+                                }
+                                .into_any()
+                            }}
                         </div>
                     </div>
                 </div>

@@ -446,6 +446,20 @@ fn close_run_view(watch: AgentsWatch) {
     watch.reply.set(String::new());
 }
 
+/// Put the chat home back the way it opened: no conversation selected, so the centre pane is the
+/// composer again and the rails are unobstructed. What the bar's wordmark does — the same corner
+/// the rail's "+ New" gets you out of, from the one control every screen has in the same place.
+///
+/// A reset and nothing more. "+ New" on a terminal agent *starts* a session; the mark must not,
+/// because a mark that launches a process is a mark people stop clicking. Closing the live view is
+/// enough: a pty agent then shows its Start affordance, which is exactly how the screen opened.
+/// The composer's draft is left alone for the same reason — it is the reader's text, not view state.
+pub(crate) fn reset_chat_home(state: State, watch: AgentsWatch) {
+    close_run_view(watch);
+    // On a narrow viewport the mark is reachable with a drawer open over the chat.
+    state.chat_drawer.set(None);
+}
+
 /// Refresh the open live view. The shell calls this every second; it no-ops while closed. For an
 /// interactive agent it fetches the pane; for a headless one it refreshes the run history and, if a
 /// run is selected, that run's log. A response landing after the view moved on is dropped.

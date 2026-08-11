@@ -123,9 +123,21 @@ pub fn TopBar(
     logo: String,
     /// Where the mark goes when you click it: the way home, and the one navigation every
     /// screen owes the reader. Left off, the mark is not a link and not focusable, which is
-    /// correct for a screen that *is* home.
+    /// correct for a screen that *is* home *and* has nothing to reset — otherwise see
+    /// `on_home`.
     #[prop(optional, into)]
     home: String,
+    /// What the mark does on a screen that is already home: put it back the way it opened.
+    ///
+    /// A single-page screen keeps "where you are" in state rather than in the URL, so the way
+    /// home there is not a href — it is closing whatever got opened. The mark is still the
+    /// thing every reader clicks to get out of a corner, so it takes that job too, as a
+    /// button. Takes precedence over `home`, since a screen with both is home already.
+    ///
+    /// It must stay a *reset*, not an action: clicking the wordmark may undo a selection, but
+    /// it may never start, send, or destroy anything.
+    #[prop(optional, into)]
+    on_home: Option<Callback<()>>,
     /// Controls pinned to the right: a theme toggle, an install button, an account menu.
     /// Small [`crate::Button`]s — the bar is 38px.
     #[prop(optional, into)]
@@ -144,7 +156,7 @@ pub fn TopBar(
             class,
         )>
             {(!logo.is_empty()).then(|| {
-                // The same mark either way, so it does not move or change weight when a
+                // The same mark all three ways, so it does not move or change weight when a
                 // screen gains a way home. The link only adds what a link is: a target, a
                 // focus ring, and no underline — the mark is a mark, not a sentence.
                 let mark = view! {
@@ -152,10 +164,27 @@ pub fn TopBar(
                 };
                 let cls = "shrink-0 font-mono text-sub font-semibold tracking-[-0.03em] \
                            text-ink no-underline hover:text-ink hover:no-underline";
-                if home.is_empty() {
-                    view! { <span class=cls>{mark}</span> }.into_any()
-                } else {
-                    view! { <a class=cls href=home title="Home">{mark}</a> }.into_any()
+                match (on_home, home.is_empty()) {
+                    // Home already: the mark reopens this screen rather than going to it. A
+                    // button and not a link, because nothing is being navigated to.
+                    (Some(reset), _) => view! {
+                        <button
+                            type="button"
+                            class=format!(
+                                "{cls} cursor-pointer bg-transparent p-0 \
+                                 focus-visible:outline-2 focus-visible:outline-offset-1 \
+                                 focus-visible:outline-accent"
+                            )
+                            title="Back to the start"
+                            on:click=move |_| reset.run(())
+                        >
+                            {mark}
+                        </button>
+                    }
+                    .into_any(),
+                    (None, false) => view! { <a class=cls href=home title="Home">{mark}</a> }
+                        .into_any(),
+                    (None, true) => view! { <span class=cls>{mark}</span> }.into_any(),
                 }
             })}
             <div class="flex min-w-0 flex-1 items-center gap-2">{children.map(|c| c())}</div>

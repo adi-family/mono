@@ -45,8 +45,8 @@ use pages::{
     OnboardingForm, agents_view, chat_home_view, dashboards_view, database_view, fleet_view,
     hive_view, live_view, load_dir, load_store_file,
     mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
-    ports_manager_view, project_detail_view, projects_view, secrets_view, seed_onboarding,
-    start_onb_reconfigure, store_file_view,
+    ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
+    seed_onboarding, start_onb_reconfigure, store_file_view,
     tasks_view, tools_view, triggers_view,
 };
 use routing::{
@@ -294,10 +294,13 @@ fn Home() -> impl IntoView {
             view! {
                 <div class="adi-chome-root">
                     // No `home` on the mark: this page *is* home, and a link to where you
-                    // already are is a control that does nothing.
+                    // already are is a control that does nothing. It still has somewhere to
+                    // put you — this screen as it opened, with no conversation selected — so
+                    // the mark does that instead, the way the rail's "+ New" does.
                     <TopBar
                         class="adi-ui-type"
                         logo="adi"
+                        on_home=Callback::new(move |()| reset_chat_home(state, watch))
                         actions=move || {
                             view! {
                                 {install_pill(can_install)}
