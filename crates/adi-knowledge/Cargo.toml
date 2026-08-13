@@ -1,0 +1,53 @@
+[package]
+name = "adi-knowledge"
+description = "The knowledge base: scoped collections of text notes, embedded for meaning-ranked search. Pure library — `adi-mono knowledge` is its CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# Embedding, borrowed whole from the indexer: the jina-embeddings-v2-base-code model on candle.
+# On by default, so a build that stores knowledge can also search it by meaning. Off, the store
+# still adds/edits/lists/full-text-searches notes and reports every one of them as unembedded —
+# the same degradation `indexer search` makes, for the same reason (~200MB of candle + tokenizers
+# is not something every binary that merely *reads* a note should carry).
+candle = ["adi-indexer/candle"]
+default = ["candle"]
+
+[dependencies]
+# Where bases live: the `knowledge` module of the mono store, so the layout follows $ADI_DIR
+# like every other subsystem.
+adi-config = { workspace = true }
+
+# The embedder, and only the embedder. `default-features = false` deliberately: this crate wants
+# `embed::Embedder` and `embed::CandleEmbedder`, never a tree-sitter grammar, so a dependent that
+# does not turn on `candle` pays for neither. (Cargo unifies features per build, so the CLI —
+# which pulls the indexer whole — gets the real embedder here for free.)
+#
+# A path dependency rather than `workspace = true`: cargo refuses `default-features = false` on
+# an inherited dependency, and the whole point here is to take the embedder without the eleven
+# tree-sitter grammars that come with the indexer's defaults.
+adi-indexer = { path = "../adi-indexer", default-features = false }
+
+rusqlite = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Content addressing: a note's hash is what says its vector is out of date.
+sha2 = "0.10"
+hex = "0.4"
+
+thiserror = "2"
+tracing = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+# The base manifest is TOML on disk (adi-config writes it); the round-trip test parses it back
+# rather than trusting that a settings table survives serialization unasked.
+toml = { workspace = true }
+
+[lints]
+workspace = true

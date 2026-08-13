@@ -18,6 +18,7 @@ A Rust monorepo. All crates live under [`crates/`](crates/) and share one
     ├── adi-agents/        # agent definitions stored under ~/.adi/mono/agents
     ├── adi-tasks/         # task tree stored under ~/.adi/mono/tasks
     ├── adi-indexer/       # the code index: tree-sitter symbols, call graph, semantic search (docs/indexer.md)
+    ├── adi-knowledge/      # knowledge bases: scoped text notes, embedded for meaning-ranked search (docs/knowledge.md)
     ├── adi-mesh/          # the fleet over iroh: remote nodes at *.n.adi, raw port forwards (docs/fleet.md)
     ├── adi-ports-manager/ # port allocator: collision-free static + dynamic ports (library)
     ├── adi-update/        # auto-update engine: one artifact per platform, every binary in it (docs/adi-update.md)

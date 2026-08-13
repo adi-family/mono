@@ -8,6 +8,7 @@ use adi_ui::{Table};
 use wasm_bindgen_futures::spawn_local;
 
 use super::agents::{all_chats_view, live_view as agent_live_view};
+use super::knowledge::knowledge_panel;
 use super::tools::{tool_editor_view, tool_run_view};
 use super::triggers::log_view;
 use super::workspaces::{
@@ -18,7 +19,8 @@ use crate::routing::{
     ProjectSection, Route, go_projects, open_project, open_project_section, project_href,
 };
 use crate::state::{
-    AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, SecretsForm, State, TermWatch,
+    AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, KnowledgeConsole, SecretsForm, State,
+    TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
 };
 use crate::ui::{flash_view, fmt_date};
@@ -58,6 +60,7 @@ pub(crate) fn project_detail_view(
     term: TermWatch,
     tool_editor: ToolEditor,
     tool_run: ToolRunView,
+    knowledge: KnowledgeConsole,
 ) -> AnyView {
     let State {
         project_detail,
@@ -168,6 +171,10 @@ pub(crate) fn project_detail_view(
                 .into_any(),
                 ProjectSection::Secrets => view! {
                     {secrets_panel(state, secrets_form)}
+                }
+                .into_any(),
+                ProjectSection::Knowledge => view! {
+                    {knowledge_panel(state, knowledge)}
                 }
                 .into_any(),
                 ProjectSection::Workspaces => view! {

@@ -13,6 +13,12 @@ adi-config = { workspace = true }
 
 adi-agents = { workspace = true }
 adi-db = { workspace = true }
+
+# The knowledge base. A path dependency with `default-features = false`, not `workspace = true`:
+# the facade only needs the store type, and the default `candle` feature would drag the ~200MB
+# embedding stack into every binary that links adi-core — including adi-app, which never embeds
+# anything. `adi-mono` turns the feature back on for itself (see adi-cli's Cargo.toml).
+adi-knowledge = { path = "../adi-knowledge", default-features = false }
 adi-events = { workspace = true }
 adi-tasks = { workspace = true }
 adi-tools = { workspace = true }

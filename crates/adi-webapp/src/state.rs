@@ -9,7 +9,8 @@ use adi_webapp_api::types::{
     DashboardsState,
     DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards,
     FleetState, Health,
-    HiveState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults, KnowledgeState,
+    MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectsState,
     RunRef, SecretsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState, UsedPorts,
     WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
@@ -97,13 +98,13 @@ pub(crate) struct State {
     /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
     /// a reload closes it again.
     pub(crate) show_hidden: RwSignal<bool>,
-    /// Whether the chat rail is narrowed to the sessions of **starred** agents. **On** by default,
-    /// matching the agent picker above it: a fleet's long tail of one-off and machine-made agents
-    /// is not what the rail is for, and starring is already how this app says which agents matter.
-    /// Turning it off is the way to reach everything else.
+    /// Whether the chat rail is narrowed to the sessions of **starred** agents. **Off** by default:
+    /// the rail opens on every conversation, because a chat that is missing reads as a chat that is
+    /// gone, and no filter should be the first thing a person has to notice and undo. Turning it on
+    /// is the way to narrow to the shortlist the agent picker draws from.
     ///
     /// Page state rather than a stored preference, like the two signals around it — a reload comes
-    /// back to the starred shortlist.
+    /// back to the full list.
     ///
     /// The agent currently on screen is exempt while it is on, the same escape hatch the agent
     /// picker gives itself: a filter must never hide what the centre pane is showing.
@@ -161,6 +162,10 @@ pub(crate) struct Tables {
     pub(crate) projects: TableState,
     pub(crate) projects_archived: TableState,
     pub(crate) secrets: TableState,
+    /// The Knowledge page's base list …
+    pub(crate) knowledge_bases: TableState,
+    /// … and the notes of whichever base is open on it.
+    pub(crate) knowledge_notes: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,
@@ -171,6 +176,10 @@ pub(crate) struct Tables {
     // ---- a project detail page's panels ----
     pub(crate) project_agents: TableState,
     pub(crate) project_secrets: TableState,
+    /// A project's Knowledge panel keeps its own layouts — its bases table drops the Level
+    /// column the global one carries.
+    pub(crate) project_knowledge_bases: TableState,
+    pub(crate) project_knowledge_notes: TableState,
     pub(crate) project_tasks: TableState,
     pub(crate) project_tools: TableState,
     pub(crate) project_triggers: TableState,
@@ -203,6 +212,8 @@ impl Tables {
             projects: TableState::new("projects", c::PROJECT_COLS),
             projects_archived: TableState::new("projects-archived", c::PROJECT_ARCHIVED_COLS),
             secrets: TableState::new("secrets", c::SECRET_COLS),
+            knowledge_bases: TableState::new("knowledge-bases", c::KNOWLEDGE_BASE_COLS),
+            knowledge_notes: TableState::new("knowledge-notes", c::KNOWLEDGE_NOTE_COLS),
             tasks: TableState::new("tasks", c::TASK_COLS),
             tasks_done: TableState::new("tasks-done", c::TASK_COLS),
             tools: TableState::new("tools", c::TOOL_COLS),
@@ -212,6 +223,14 @@ impl Tables {
             hooks: TableState::new("hooks", c::HOOK_COLS),
             project_agents: TableState::new("project-agents", c::PROJECT_AGENT_COLS),
             project_secrets: TableState::new("project-secrets", c::PROJECT_SECRET_COLS),
+            project_knowledge_bases: TableState::new(
+                "project-knowledge-bases",
+                c::PROJECT_KNOWLEDGE_BASE_COLS,
+            ),
+            project_knowledge_notes: TableState::new(
+                "project-knowledge-notes",
+                c::KNOWLEDGE_NOTE_COLS,
+            ),
             project_tasks: TableState::new("project-tasks", c::PROJECT_TASK_COLS),
             project_tools: TableState::new("project-tools", c::PROJECT_TOOL_COLS),
             project_triggers: TableState::new("project-triggers", c::PROJECT_TRIGGER_COLS),
@@ -259,7 +278,7 @@ impl State {
             row_menu: RwSignal::new(None),
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
-            starred_only: RwSignal::new(true),
+            starred_only: RwSignal::new(false),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
         }
@@ -592,6 +611,75 @@ impl SecretsForm {
     }
 }
 
+/// Everything the Knowledge page holds that isn't on the server: the search box and its last
+/// answer, which base is open, and the two create forms.
+///
+/// Page-local, like [`DbConsole`]: a base's counts are a status pass over its storage, so they
+/// are fetched when the page is looked at rather than polled into the shell state every four
+/// seconds whatever page is open.
+#[derive(Clone, Copy)]
+pub(crate) struct KnowledgeConsole {
+    /// Every base and the providers this build offers, or `None` before the first load.
+    pub(crate) state: RwSignal<Option<KnowledgeState>>,
+    /// The search box.
+    pub(crate) query: RwSignal<String>,
+    /// Rank by words instead of by meaning — no model, no wait, and no idea what a synonym is.
+    pub(crate) words: RwSignal<bool>,
+    /// The base the search is narrowed to; empty searches every one of them.
+    pub(crate) scope: RwSignal<String>,
+    /// The last search's answer, or `None` before anything was asked.
+    pub(crate) results: RwSignal<Option<KnowledgeResults>>,
+    /// Which base's notes are open below the search, or empty for none.
+    pub(crate) open_base: RwSignal<String>,
+    pub(crate) notes: RwSignal<Option<KnowledgeNotes>>,
+    /// The note open in the reader — the whole body, which a list never shows.
+    pub(crate) open_note: RwSignal<Option<KnowledgeNoteDto>>,
+    /// The new-base form.
+    pub(crate) new_base: RwSignal<String>,
+    pub(crate) new_provider: RwSignal<String>,
+    /// The new-note form.
+    pub(crate) title: RwSignal<String>,
+    pub(crate) body: RwSignal<String>,
+    pub(crate) tags: RwSignal<String>,
+    /// Why the last action failed, kept beside the page rather than in the shared flash: a
+    /// search that could not load the model is about this page and nothing else.
+    pub(crate) error: RwSignal<Option<String>>,
+    /// Whether a request is in flight — a search may be loading a model, and the page says so
+    /// rather than looking broken for the several seconds that takes.
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl KnowledgeConsole {
+    pub(crate) fn new() -> Self {
+        Self {
+            state: RwSignal::new(None),
+            query: RwSignal::new(String::new()),
+            words: RwSignal::new(false),
+            scope: RwSignal::new(String::new()),
+            results: RwSignal::new(None),
+            open_base: RwSignal::new(String::new()),
+            notes: RwSignal::new(None),
+            open_note: RwSignal::new(None),
+            new_base: RwSignal::new(String::new()),
+            new_provider: RwSignal::new(String::new()),
+            title: RwSignal::new(String::new()),
+            body: RwSignal::new(String::new()),
+            tags: RwSignal::new(String::new()),
+            error: RwSignal::new(None),
+            busy: RwSignal::new(false),
+        }
+    }
+
+    /// Forget the open base, its notes, and the reader — what leaving the page does, so coming
+    /// back shows the store as it is now rather than as it was.
+    pub(crate) fn close(self) {
+        self.open_base.set(String::new());
+        self.notes.set(None);
+        self.open_note.set(None);
+        self.error.set(None);
+    }
+}
+
 /// The Database page's console: which scope is open, that scope's tables, the SQL buffer, and
 /// whatever the last run produced.
 ///
@@ -767,6 +855,17 @@ pub(crate) struct AgentsForm {
     /// `(scope, name)` pair — `None` scope is a global secret. Only these are injected into the
     /// agent's runs as env vars (an allowlist).
     pub(crate) secrets: RwSignal<BTreeSet<(Option<String>, String)>>,
+    /// The knowledge bases this agent works with (its per-base checkboxes), by written id. A
+    /// wish list rather than a grant: what it actually reaches is decided by the three isolation
+    /// levels at read time, which is why the checkbox list marks the ones out of its scope.
+    pub(crate) knowledge: RwSignal<BTreeSet<String>>,
+    /// Whether the agent keeps a memory of its own — the `agent:<name>/memory` base, which it
+    /// alone writes and every other agent may read.
+    pub(crate) memory: RwSignal<bool>,
+    /// The bases the checkbox list offers, fetched once when the form first renders them. Held on
+    /// the form rather than in the shell state because a base's counts are a status pass over its
+    /// storage — not something the 4s poll should run on every page.
+    pub(crate) knowledge_bases: RwSignal<Option<Vec<KnowledgeBaseDto>>>,
     /// Extra `PATH` dirs for the agent's runs, one per line — how an agent pins a toolchain the
     /// machine's default `PATH` doesn't point at. Parsed on submit.
     pub(crate) path: RwSignal<String>,
@@ -801,6 +900,9 @@ impl AgentsForm {
             tags: RwSignal::new(String::new()),
             tools: RwSignal::new(String::new()),
             bin_tools: RwSignal::new(BTreeSet::new()),
+            knowledge: RwSignal::new(BTreeSet::new()),
+            memory: RwSignal::new(false),
+            knowledge_bases: RwSignal::new(None),
             secrets: RwSignal::new(BTreeSet::new()),
             path: RwSignal::new(String::new()),
             env: RwSignal::new(String::new()),

@@ -856,6 +856,24 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
                 .map(|m| m.bin_tools.clone())
                 .unwrap_or_default(),
         },
+        // The knowledge bases this agent works with, and whether it keeps one of its own. Both
+        // are omit-to-keep for the same reason `bin_tools` is: only the full agent editor offers
+        // them, and a save from the meta setup or the project panel must not silently cut an
+        // agent off from what it knows.
+        knowledge: match req.knowledge {
+            Some(bases) => bases
+                .into_iter()
+                .map(|b| b.trim().to_string())
+                .filter(|b| !b.is_empty())
+                .collect(),
+            None => stored
+                .as_ref()
+                .map(|m| m.knowledge.clone())
+                .unwrap_or_default(),
+        },
+        memory: req
+            .memory
+            .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.memory)),
         // The secrets attached to this agent (its per-secret checkboxes). Only these are decrypted
         // and injected into the agent's runs. A blank scope is normalized to `None` (global).
         secrets: req
@@ -1018,6 +1036,8 @@ fn agent_dto(
         starred: m.starred,
         project: m.project,
         bin_tools: m.bin_tools,
+        knowledge: m.knowledge,
+        memory: m.memory,
         secrets: m
             .secrets
             .into_iter()
@@ -2016,6 +2036,34 @@ mod tests {
         });
         assert_eq!(save_agent(&store, none.to_string().as_bytes()).status, 200);
         assert!(saved(&store).bin_tools.is_empty());
+    }
+
+    /// The knowledge fields are omit-to-keep for the same reason the tool checkboxes are: a save
+    /// from a form that never rendered them must not cut the agent off from what it knows, or
+    /// take away the memory somebody deliberately gave it.
+    #[test]
+    fn a_save_that_omits_the_knowledge_fields_keeps_them() {
+        let store = scratch("knowledge");
+        let with = serde_json::json!({
+            "name": "solver", "backend": "pty:claude",
+            "knowledge": ["global/runbooks", "agent:reviewer/memory"], "memory": true,
+        });
+        assert_eq!(save_agent(&store, with.to_string().as_bytes()).status, 200);
+
+        // A body from a form that never offered them.
+        assert_eq!(save_agent(&store, &body(None, None)).status, 200);
+        let m = saved(&store);
+        assert_eq!(m.knowledge, ["global/runbooks", "agent:reviewer/memory"]);
+        assert!(m.memory);
+
+        // …and stating them is how they are actually changed.
+        let none = serde_json::json!({
+            "name": "solver", "backend": "pty:claude", "knowledge": [], "memory": false,
+        });
+        assert_eq!(save_agent(&store, none.to_string().as_bytes()).status, 200);
+        let m = saved(&store);
+        assert!(m.knowledge.is_empty());
+        assert!(!m.memory);
     }
 
     /// `unattended` is omit-to-keep for the same reason `path` and `env` are: only the full agent

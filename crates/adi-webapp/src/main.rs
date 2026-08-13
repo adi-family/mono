@@ -43,7 +43,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use pages::{
     OnboardingForm, agents_view, chat_home_view, dashboards_view, database_view, fleet_view,
-    hive_view, live_view, load_dir, load_store_file,
+    hive_view, knowledge_view, live_view, load_dir, load_store_file,
     mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
     seed_onboarding, start_onb_reconfigure, store_file_view,
@@ -55,7 +55,7 @@ use routing::{
 };
 use state::{
     AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, FleetForm,
-    Flash, Form, HookLogView,
+    Flash, Form, HookLogView, KnowledgeConsole,
     MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, State, Status, TasksForm, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
     refresh_fleet_dashboards,
@@ -599,7 +599,7 @@ fn App() -> impl IntoView {
         row_menu: RwSignal::new(None),
         session_menu: RwSignal::new(None),
         show_hidden: RwSignal::new(false),
-        starred_only: RwSignal::new(true),
+        starred_only: RwSignal::new(false),
         chat_drawer: RwSignal::new(None),
         // Each table restores the arrangement its user last left, else its declared columns.
         tables: state::Tables::new(),
@@ -674,6 +674,11 @@ fn App() -> impl IntoView {
     let tool_editor = ToolEditor::new();
     let tool_run = ToolRunView::new();
     let db_console = DbConsole::new();
+
+    // The Knowledge page's search box, base list, and note reader. Page-local like the SQL
+    // console: a base's counts cost a status pass over every base's storage, which is not
+    // something the shell's 4s poll should be doing on every page.
+    let knowledge = KnowledgeConsole::new();
 
     // The Secrets page's create form + reveal cache, shared with a project's Secrets panel.
     let secrets_form = SecretsForm::new();
@@ -1009,12 +1014,13 @@ fn App() -> impl IntoView {
                     {move || match route.get() {
                         Route::Meta => meta_view(state, route, meta_form, agents_watch),
                         Route::Projects => projects_view(state, projects_form, route),
-                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run),
+                        Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run, knowledge),
                         Route::StoreFile => store_file_view(state),
                         Route::Tasks => tasks_view(state, tasks_form),
                         Route::Agents => agents_view(state, agents_form, agents_watch),
                         Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
                         Route::Secrets => secrets_view(state, secrets_form),
+                        Route::Knowledge => knowledge_view(state, knowledge),
                         Route::Database => database_view(state, db_console),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
@@ -1063,6 +1069,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Agents,
             Route::Tools,
             Route::Secrets,
+            Route::Knowledge,
             Route::Database,
             Route::Triggers,
             Route::Dashboards,

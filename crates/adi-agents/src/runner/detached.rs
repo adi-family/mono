@@ -87,7 +87,7 @@ impl DetachedRunner {
                 let mut config = decode::<ProcessClaudeArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt =
-                    with_tool_help(spec, with_workspace(spec, config.append_system_prompt));
+                    with_tool_help(spec, with_knowledge(spec, with_workspace(spec, config.append_system_prompt)));
                 let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(process::claude::argv(
                     &config,
@@ -108,7 +108,7 @@ impl DetachedRunner {
                 let mut config = decode::<HarnessClaudeSdkArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
                 config.append_system_prompt =
-                    with_tool_help(spec, with_workspace(spec, config.append_system_prompt));
+                    with_tool_help(spec, with_knowledge(spec, with_workspace(spec, config.append_system_prompt)));
                 let cont = if session.has_started() {
                     Continuation::Resume { session_id }
                 } else {
@@ -155,7 +155,7 @@ impl DetachedRunner {
         let mut env = spec.env.clone();
         if matches!(self.backend, Backend::HarnessAdi)
             && let Some(prompt) =
-                with_tool_help(spec, with_workspace(spec, own_prompt(spec, None)))
+                with_tool_help(spec, with_knowledge(spec, with_workspace(spec, own_prompt(spec, None))))
         {
             env.push((SYSTEM_PROMPT_ENV.to_string(), prompt));
         }
@@ -546,6 +546,26 @@ pub(super) fn with_workspace(spec: &RunSpec, existing: Option<String>) -> Option
     }
 }
 
+/// `existing` with what the run knows behind it, or `existing` unchanged when it knows nothing.
+///
+/// Between the location and the tool inventory, deliberately: knowing *where* you are governs the
+/// paths in every section after it, and knowing *what you know* is worth reading before the list
+/// of commands you could run to find out.
+pub(super) fn with_knowledge(spec: &RunSpec, existing: Option<String>) -> Option<String> {
+    let Some(note) = spec
+        .knowledge_note
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    else {
+        return existing;
+    };
+    match existing.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(prompt) => Some(format!("{prompt}\n\n{note}")),
+        None => Some(note.to_string()),
+    }
+}
+
 /// `existing` with the run's tool help behind it, or `existing` unchanged when there are no tools.
 ///
 /// Appended, never substituted: whatever the agent was told to be survives, with the inventory
@@ -744,6 +764,7 @@ mod tests {
             tool_help: None,
             system_prompt: None,
             workspace_note: None,
+            knowledge_note: None,
         }
     }
 

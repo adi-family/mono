@@ -7,6 +7,7 @@ mod db;
 mod dns;
 mod format;
 mod indexer;
+mod knowledge;
 mod mesh;
 mod projects;
 mod secrets;
@@ -24,6 +25,7 @@ use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
 use crate::indexer::{IndexerCommand, run_indexer};
+use crate::knowledge::{KnowledgeCommand, run_knowledge};
 use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::secrets::{SecretsCommand, run_secrets};
@@ -96,6 +98,19 @@ enum Command {
     Triggers {
         #[command(subcommand)]
         command: TriggersCommand,
+    },
+    /// Knowledge base commands: scoped collections of text notes, embedded so they can be
+    /// searched by meaning. Global, per-project, or per-agent.
+    Knowledge {
+        /// Act as this agent, so the isolation levels apply as they would to its runs. Without
+        /// it (and `--as-project`) the CLI is the owner of the store and reaches everything.
+        #[arg(long, value_name = "AGENT")]
+        as_agent: Option<String>,
+        /// Act as somebody working in this project.
+        #[arg(long, value_name = "PROJECT")]
+        as_project: Option<String>,
+        #[command(subcommand)]
+        command: KnowledgeCommand,
     },
     /// Code index commands: index a project's source and search it by meaning, name, or path.
     Indexer {
@@ -201,6 +216,16 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        Command::Knowledge {
+            as_agent,
+            as_project,
+            command,
+        } => {
+            if let Err(e) = run_knowledge(adi, as_agent, as_project, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         // Like `mesh`, no `adi` facade: an index is state under the project, not the platform.
         Command::Indexer { command } => {
             if let Err(e) = run_indexer(command) {
@@ -281,6 +306,30 @@ mod tests {
             }
         ));
         assert!(Cli::try_parse_from(["adi-mono", "indexer"]).is_err());
+    }
+
+    #[test]
+    fn the_knowledge_group_is_reachable_from_the_top_level() {
+        // Its own argv surface is tested in `knowledge.rs`; this pins the wiring, including the
+        // two identity flags — which sit on the group, before the subcommand.
+        let cli = Cli::try_parse_from([
+            "adi-mono",
+            "knowledge",
+            "--as-agent",
+            "solver",
+            "search",
+            "how do I deploy",
+        ])
+        .expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Knowledge {
+                as_agent: Some(ref a),
+                as_project: None,
+                command: KnowledgeCommand::Search { .. },
+            } if a.as_str() == "solver"
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "knowledge"]).is_err());
     }
 
     #[test]

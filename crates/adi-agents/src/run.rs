@@ -108,6 +108,7 @@ pub fn is_runnable(manifest: &StoredAgentManifest) -> bool {
             tool_help: None,
             system_prompt: None,
             workspace_note: None,
+            knowledge_note: None,
         })
         .is_ok()
 }
@@ -232,6 +233,7 @@ mod tests {
                 tool_help: None,
                 system_prompt: None,
                 workspace_note: None,
+            knowledge_note: None,
             }),
             Err(Error::NotRunnable(backend)) if backend == "harness:adi"
         ));

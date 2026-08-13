@@ -44,6 +44,7 @@ use adi_config::{Config, ConfigFile, now_unix};
 pub use error::{Error, Result};
 pub use help::ToolHelp;
 pub use run::RunOutput;
+pub use system::SYS_KNOWLEDGE;
 pub use tool::{
     Manifest, RUNTIME_SH, RUNTIME_TS, Tool, normalize_runtime, runtime_ext, runtime_from_path,
     validate_runtime,
@@ -800,6 +801,29 @@ mod tests {
         assert!(tasks.is_system());
         assert_eq!(tasks.manifest.name, "adi-tasks");
         assert!(store.read_script("sys-tasks").expect("script").contains("adi-mono tasks"));
+    }
+
+    /// The knowledge base is only reachable by an agent if it has a `.bin` for it — a subcommand
+    /// nothing seeds a shim for is a subcommand no agent can run.
+    #[test]
+    fn the_knowledge_base_is_one_of_the_tools_every_agent_can_have() {
+        let store = scratch("knowledge");
+        store.seed_system().expect("seed");
+
+        let tool = store.get("sys-knowledge").expect("get").expect("present");
+        assert!(tool.is_system());
+        assert_eq!(tool.manifest.name, "adi-knowledge");
+        assert!(
+            store
+                .read_script("sys-knowledge")
+                .expect("script")
+                .contains("adi-mono knowledge")
+        );
+
+        let dir = store
+            .sync_agent_bin("solver", &["sys-knowledge".to_string()])
+            .expect("agent bin");
+        assert!(dir.join("adi-knowledge").exists(), "no shim to run it by");
     }
 
     #[test]

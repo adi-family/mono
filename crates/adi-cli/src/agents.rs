@@ -92,6 +92,24 @@ pub(crate) enum AgentsCommand {
         /// scheduled sweep — anything whose questions nobody would see.
         #[arg(long)]
         unattended: bool,
+        /// A knowledge base this agent works with — `global/<name>`, `project:<id>/<name>`, or
+        /// `agent:<name>/<base>`. Repeatable; comma-separated values are also accepted. Omit every
+        /// `--knowledge` to leave an existing agent's bases alone; pass `--no-knowledge` to clear
+        /// them. What the agent may actually reach is still decided by the isolation levels.
+        #[arg(long = "knowledge")]
+        knowledge: Vec<String>,
+        /// Clear the agent's knowledge bases (see `--knowledge`).
+        #[arg(long, conflicts_with = "knowledge")]
+        no_knowledge: bool,
+        /// Give this agent a memory of its own: the `agent:<name>/memory` base, which it alone
+        /// writes and every other agent may read. Omit both this and `--no-memory` to leave the
+        /// setting as it was — unlike `--unattended`, so a save that never mentions memory cannot
+        /// quietly take an agent's away.
+        #[arg(long)]
+        memory: bool,
+        /// Take the agent's own memory away (see `--memory`).
+        #[arg(long, conflicts_with = "memory")]
+        no_memory: bool,
         /// Repeatable key=value backend argument. Objects and arrays may be supplied as JSON.
         /// Overlaid on the agent's existing arguments — what you don't state stays as it was.
         /// Pass `--no-argument` to start from nothing instead.
@@ -248,6 +266,10 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             env,
             no_env,
             unattended,
+            knowledge,
+            no_knowledge,
+            memory,
+            no_memory,
             arguments: arguments_flags,
             no_argument,
             json,
@@ -328,6 +350,25 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     parse_env_vars(env)?
                 },
                 unattended,
+                knowledge: if no_knowledge {
+                    Vec::new()
+                } else if knowledge.is_empty() {
+                    stored
+                        .as_ref()
+                        .map(|m| m.knowledge.clone())
+                        .unwrap_or_default()
+                } else {
+                    clean_tags(knowledge)
+                },
+                // Stated wins; omitted keeps. A boolean that reset itself on every save would
+                // take an agent's memory away the first time somebody renamed a tag.
+                memory: if memory {
+                    true
+                } else if no_memory {
+                    false
+                } else {
+                    stored.as_ref().is_some_and(|m| m.memory)
+                },
                 created_at: 0,
                 updated_at: 0,
             };
@@ -760,6 +801,12 @@ fn print_agent(agent: &StoredAgent) {
             })
             .collect();
         println!("  secrets: {}", refs.join(", "));
+    }
+    if !agent.manifest.knowledge.is_empty() {
+        println!("  knowledge: {}", agent.manifest.knowledge.join(", "));
+    }
+    if agent.manifest.memory {
+        println!("  memory: agent:{}/memory", agent.name);
     }
     if !agent.manifest.path.is_empty() {
         println!("  path: {}", agent.manifest.path.join(", "));

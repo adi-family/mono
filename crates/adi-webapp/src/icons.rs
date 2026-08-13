@@ -29,6 +29,8 @@ pub(crate) enum Icon {
     Wrench,
     Key,
     Database,
+    /// An open book — a collection of written notes, which is what a knowledge base is.
+    Book,
     /// An arrow into a tray — "install this as an app".
     Download,
     /// A question mark in a ring — the way to the FAQ.
@@ -145,6 +147,13 @@ impl Icon {
                    <path d="M2.75 3.75v8.5c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2v-8.5"/>
                    <path d="M2.75 8c0 1.1 2.35 2 5.25 2s5.25-.9 5.25-2"/>"#
             }
+            // An open book: two leaves meeting at a spine. Distinct from `Doc` (one page) and
+            // `Layers` (a stack) at 16px, which is the only size that matters here.
+            Icon::Book => {
+                r#"<path d="M8 4.25C6.9 3.2 5.4 2.75 3.5 2.75H1.75v9.5H3.5c1.9 0 3.4.45 4.5 1.5"/>
+                   <path d="M8 4.25c1.1-1.05 2.6-1.5 4.5-1.5h1.75v9.5H12.5c-1.9 0-3.4.45-4.5 1.5z"/>
+                   <path d="M8 4.25v9.5"/>"#
+            }
         }
     }
 }
@@ -158,6 +167,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Agents => Icon::Agent,
         Route::Tools => Icon::Wrench,
         Route::Secrets => Icon::Key,
+        Route::Knowledge => Icon::Book,
         Route::Database => Icon::Database,
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,
@@ -179,6 +189,7 @@ pub(crate) fn section_icon(section: ProjectSection) -> Icon {
         ProjectSection::Triggers => Icon::Trigger,
         ProjectSection::Tools => Icon::Wrench,
         ProjectSection::Secrets => Icon::Key,
+        ProjectSection::Knowledge => Icon::Book,
         ProjectSection::Services => Icon::Box,
         ProjectSection::Workspaces => Icon::Layers,
         ProjectSection::Files => Icon::File,

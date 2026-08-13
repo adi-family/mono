@@ -30,6 +30,13 @@ adi-tools = { workspace = true }
 
 adi-agents = { workspace = true }
 
+# The knowledge base, with its default features — which is what turns the embedder on for this
+# binary. Deliberate, and the one place the panel pays for it: `adi-core` takes this crate
+# without default features precisely so nothing else has to, but a Knowledge page that could not
+# rank by meaning would be a list, not a search. Loading is lazy, so the cost is paid on the
+# first search and not at start-up.
+adi-knowledge = { workspace = true }
+
 adi-triggers = { workspace = true }
 
 adi-events = { workspace = true }

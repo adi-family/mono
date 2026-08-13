@@ -6,9 +6,12 @@ use adi_webapp_api::types::{
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
     FilesRef, FleetDashboards, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent,
-    FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState, LeaseRef,
+    FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState,
+    KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed,
+    KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState, LeaseRef,
     LinkTool, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState,
-    NewDashboard, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
+    NewDashboard, NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService,
+    NewTask, NewTool, NewWorkspace,
     NodeServiceRef,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
     ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun,
@@ -726,6 +729,68 @@ pub async fn kill_workspace_terminal(id: String, name: String) -> Result<Workspa
         &WorkspaceTermRef { id, name },
     )
     .await
+}
+
+// The knowledge base: scoped collections of text notes, searched by meaning (docs/knowledge.md).
+
+pub async fn knowledge() -> Result<KnowledgeState, String> {
+    get("/api/knowledge").await
+}
+
+/// Search. An empty `bases` covers every base the caller may read, which is what the page's
+/// search box sends — the query is embedded once however many bases it is put to.
+pub async fn knowledge_search(
+    query: String,
+    bases: Vec<String>,
+    words: bool,
+) -> Result<KnowledgeResults, String> {
+    post(
+        "/api/knowledge/search",
+        &KnowledgeSearch {
+            query,
+            bases,
+            limit: None,
+            text: words,
+        },
+    )
+    .await
+}
+
+pub async fn knowledge_notes(base: String) -> Result<KnowledgeNotes, String> {
+    post("/api/knowledge/notes", &base_ref(base)).await
+}
+
+pub async fn knowledge_note(base: String, id: String) -> Result<KnowledgeNoteDto, String> {
+    post("/api/knowledge/note/get", &KnowledgeNoteRef { base, id }).await
+}
+
+pub async fn add_knowledge_note(body: NewKnowledgeNote) -> Result<KnowledgeSaved, String> {
+    post("/api/knowledge/note/add", &body).await
+}
+
+pub async fn remove_knowledge_note(base: String, id: String) -> Result<KnowledgeNotes, String> {
+    post("/api/knowledge/note/remove", &KnowledgeNoteRef { base, id }).await
+}
+
+pub async fn create_knowledge_base(body: NewKnowledgeBase) -> Result<KnowledgeState, String> {
+    post("/api/knowledge/base/create", &body).await
+}
+
+pub async fn remove_knowledge_base(base: String) -> Result<KnowledgeState, String> {
+    post("/api/knowledge/base/remove", &base_ref(base)).await
+}
+
+pub async fn reembed_knowledge(base: String) -> Result<KnowledgeReembed, String> {
+    post("/api/knowledge/reembed", &base_ref(base)).await
+}
+
+/// The `{ base }` body four of the endpoints above share.
+fn base_ref(base: String) -> KnowledgeBaseRef {
+    KnowledgeBaseRef {
+        base,
+        tags: Vec::new(),
+        limit: None,
+    }
 }
 
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {

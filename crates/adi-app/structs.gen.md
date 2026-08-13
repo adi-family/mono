@@ -122,6 +122,7 @@ struct App {
     tasks: Tasks,
     tools: Tools,
     agents: Agents,
+    knowledge: KnowledgeStore,
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,

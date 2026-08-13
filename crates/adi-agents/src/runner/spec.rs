@@ -56,4 +56,13 @@ pub struct RunSpec {
     /// environment gets it right until the first command that forgets to look, and then quietly
     /// writes somewhere else — which is the failure `workspace` exists to end.
     pub workspace_note: Option<String>,
+    /// What the run knows, stated in prose for the prompt — `None` when the agent has no memory
+    /// and no readable base.
+    ///
+    /// Travels beside [`workspace_note`](Self::workspace_note), and folded in by the runner for
+    /// the same reason: an engine whose "system prompt" is really an opening *user* turn must not
+    /// be handed it. And for the same reason it exists at all — `$ADI_MEMORY` is there for a
+    /// script the agent writes, but an agent that is never *told* it has a memory does not use
+    /// one.
+    pub knowledge_note: Option<String>,
 }

@@ -75,6 +75,18 @@ impl Adi {
         adi_agents::Agents::open()
     }
 
+    /// The knowledge store backed by the standard store — `Adi::new().knowledge().search(…)`.
+    ///
+    /// It comes back as the [admin](adi_knowledge::Reader::admin) reader, which is right for the
+    /// CLI and the control panel: they act for the person who owns the store. Anything acting on
+    /// an *agent's* behalf must narrow it with
+    /// [`as_agent`](adi_knowledge::KnowledgeStore::as_agent) first, or the three isolation levels
+    /// will not apply to it.
+    #[must_use]
+    pub fn knowledge(self) -> adi_knowledge::KnowledgeStore {
+        adi_knowledge::KnowledgeStore::open()
+    }
+
     /// The trigger-definition registry backed by the standard store.
     #[must_use]
     pub fn triggers(self) -> adi_triggers::Triggers {

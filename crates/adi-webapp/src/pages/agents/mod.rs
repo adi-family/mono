@@ -131,6 +131,11 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                     secrets: form.secrets.get().into_iter()
                         .map(|(project, name)| SecretRef { project, name })
                         .collect(),
+                    // The knowledge bases ticked on, and whether this agent keeps its own memory.
+                    // This is the form that owns both checkboxes, so it states them even when
+                    // empty — the other forms send `None`, which leaves them as they are.
+                    knowledge: Some(form.knowledge.get().into_iter().collect()),
+                    memory: Some(form.memory.get()),
                     // This is the one form that edits the run environment, so it always states it —
                     // `Some(empty)` clears, where the `None` other forms send means "leave as is".
                     path: Some(parsed_path_dirs(&form.path.get())),
@@ -145,6 +150,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
             }>
                 {move || agent_form_fields(state, form)}
                 {move || agent_tool_checkboxes(state, form)}
+                {move || agent_knowledge_checkboxes(form)}
                 {move || agent_secret_checkboxes(state, form)}
                 {move || agent_environment_fields(form)}
                 <button class="adi-btn adi-btn--primary" type="submit" prop:disabled=move || busy.get()>
@@ -249,6 +255,129 @@ fn agent_tool_checkboxes(state: State, form: AgentsForm) -> AnyView {
 /// secrets are decrypted and injected into the agent's runs as environment variables — an explicit
 /// allowlist, so nothing is inherited from a scope for merely existing. Populated from the shared
 /// secrets list (`state.secrets`), which carries metadata only (never a value).
+/// The agent's knowledge: whether it keeps a memory of its own, and which existing bases it
+/// works with.
+///
+/// The base list is **honest about reach**. `knowledge` on an agent is a wish list, not a grant —
+/// the three isolation levels decide what it actually reads, so a base outside this agent's scope
+/// (another project's) is shown disabled with the reason, rather than offered as a checkbox that
+/// would be silently dropped at read time. Another agent's memory *is* offered: every agent may
+/// read every other's, which is the point of that level.
+///
+/// The list is fetched once, here, rather than polled into the shell state: a base's counts cost
+/// a status pass over its storage.
+fn agent_knowledge_checkboxes(form: AgentsForm) -> AnyView {
+    // One fetch when the fieldset first renders. `Effect` rather than a fetch per render, and
+    // guarded on `None` so re-opening the form doesn't re-ask.
+    Effect::new(move |_| {
+        if form.knowledge_bases.get_untracked().is_none() {
+            spawn_local(async move {
+                if let Ok(state) = fetch::knowledge().await {
+                    form.knowledge_bases.set(Some(state.bases));
+                }
+            });
+        }
+    });
+
+    let memory_toggle = view! {
+        <label class="adi-check" style="display:inline-flex; align-items:center; gap:var(--space-1)">
+            <input type="checkbox" prop:checked=move || form.memory.get()
+                on:change=move |ev| form.memory.set(event_target_checked(&ev)) />
+            <span>"Give this agent a memory of its own"</span>
+        </label>
+        <div class="adi-hint">
+            {move || {
+                let name = form.name.get();
+                let base = if name.trim().is_empty() {
+                    "agent:<name>/memory".to_string()
+                } else {
+                    format!("agent:{}/memory", name.trim())
+                };
+                format!("{base} — it alone writes there, and every other agent may read it. \
+                         Off by default: an agent that records what it learns is a different \
+                         thing from one that does not.")
+            }}
+        </div>
+    };
+
+    view! {
+        <div class="adi-field adi-field--grow">
+            <label class="adi-field__label">"Knowledge"</label>
+            {memory_toggle}
+            <div style="padding-top:var(--space-2)">{move || base_checkboxes(form)}</div>
+        </div>
+    }
+    .into_any()
+}
+
+/// One checkbox per existing base, minus this agent's own memory (which is the toggle above).
+fn base_checkboxes(form: AgentsForm) -> AnyView {
+    let Some(bases) = form.knowledge_bases.get() else {
+        return view! { <div class="adi-muted">"Loading knowledge bases…"</div> }.into_any();
+    };
+    let agent = form.name.get().trim().to_string();
+    let project = form.project.get().trim().to_string();
+    let offered: Vec<_> = bases
+        .into_iter()
+        // The agent's own memory is the toggle, not a checkbox — offering both would be two
+        // controls for one fact.
+        .filter(|b| !(b.memory && b.owner.as_deref() == Some(agent.as_str())))
+        .collect();
+    if offered.is_empty() {
+        return view! {
+            <div class="adi-hint">
+                "No knowledge bases yet — make one on the Knowledge page. Whatever you tick here "
+                "is what this agent searches."
+            </div>
+        }
+        .into_any();
+    }
+    let boxes = offered
+        .into_iter()
+        .map(|b| {
+            let id = b.id.clone();
+            let (id_checked, id_toggle) = (id.clone(), id.clone());
+            let checked = move || form.knowledge.get().contains(&id_checked);
+            // Why this agent could not read it, if it could not. A project base belongs to one
+            // project; an agent filed elsewhere (or nowhere) never sees it.
+            let out_of_reach = match (b.level.as_str(), b.owner.as_deref()) {
+                ("project", Some(owner)) if owner != project => Some(if project.is_empty() {
+                    format!("only agents filed under project {owner} can read this")
+                } else {
+                    format!("this agent is filed under {project}, not {owner}")
+                }),
+                _ => None,
+            };
+            let disabled = out_of_reach.is_some();
+            let title = out_of_reach.clone().unwrap_or_else(|| match b.level.as_str() {
+                "agent" => "another agent's memory — readable, never writable".to_string(),
+                "project" => "this project's knowledge".to_string(),
+                _ => "shared by everything on this machine".to_string(),
+            });
+            let label = b.id.clone();
+            view! {
+                <label class="adi-check" title=title
+                    style="display:inline-flex; align-items:center; gap:var(--space-1); margin:0 var(--space-3) var(--space-1) 0"
+                    class:adi-muted=disabled>
+                    <input type="checkbox" prop:checked=checked prop:disabled=disabled
+                        on:change=move |ev| {
+                            let on = event_target_checked(&ev);
+                            form.knowledge.update(|set| {
+                                if on { set.insert(id_toggle.clone()); } else { set.remove(&id_toggle); }
+                            });
+                        } />
+                    <span class="adi-mono">{label}</span>
+                    {out_of_reach.map(|_| view! { <span class="adi-chip">"out of scope"</span> })}
+                </label>
+            }
+        })
+        .collect::<Vec<_>>();
+    view! {
+        <div style="display:flex; flex-wrap:wrap; align-items:center">{boxes}</div>
+    }
+    .into_any()
+}
+
 fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
     let Some(st) = state.secrets.get() else {
         return view! {

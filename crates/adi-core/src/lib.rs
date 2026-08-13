@@ -38,6 +38,12 @@ pub use adi_db::{
     ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo,
 };
 
+pub use adi_knowledge::{
+    Access as KnowledgeAccess, Base as KnowledgeBase, BaseId, BaseStatus, Error as KnowledgeError,
+    Knowledge, KnowledgePatch, KnowledgeStore, NewKnowledge, Reader as KnowledgeReader,
+    Scope as KnowledgeScope, resolve_agent_bases,
+};
+
 pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
 
 pub use adi_secrets::{Error as SecretsError, Secret, Secrets};

@@ -25,6 +25,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adi_agents::Agents;
+use adi_knowledge::KnowledgeStore;
 use adi_db::Db;
 use adi_events::Events;
 use adi_mesh::Daemon;
@@ -54,6 +55,10 @@ struct App {
     tasks: Tasks,
     tools: Tools,
     agents: Agents,
+    /// The knowledge store, held for the life of the process **on purpose**: the embedding model
+    /// loads lazily into it and stays there, so the second search is instant. A handler that
+    /// opened its own store per request would reload the weights every time.
+    knowledge: KnowledgeStore,
     triggers: Triggers,
     trigger_supervisor: Arc<Supervisor>,
     events: Events,
@@ -234,6 +239,9 @@ async fn main() -> anyhow::Result<()> {
         warn!(error = %e, "bootstrapping the shared database failed");
     }
     let agents = Agents::open();
+    // Opening the store loads nothing — the embedding model is built on the first call that
+    // genuinely needs one (a search, an add), and then stays for the life of the process.
+    let knowledge = KnowledgeStore::open();
     let triggers = Triggers::open();
     let events = Events::open();
     // Background triggers are long-lived processes owned by this app: the supervisor keeps
@@ -262,6 +270,7 @@ async fn main() -> anyhow::Result<()> {
         tasks,
         tools,
         agents,
+        knowledge,
         triggers,
         trigger_supervisor,
         events,
@@ -436,6 +445,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/db",
     "/api/fleet",
     "/api/hive",
+    "/api/knowledge",
     "/api/meta",
     "/api/ports",
     "/api/ports/used",
@@ -495,6 +505,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         tasks,
         tools,
         agents,
+        knowledge: knowledge_store,
         triggers,
         trigger_supervisor,
         events,
@@ -552,6 +563,33 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", p) if p.starts_with("/api/projects/") => {
             let live = scan::listening_ports();
             handlers::project_detail(projects, &p["/api/projects/".len()..], &live)
+        }
+        // The knowledge base (`docs/knowledge.md`): scoped collections of text notes, searched by
+        // meaning. These run here, on the blocking pool, and not as `async_route` arms — a search
+        // may load the embedding model, which is seconds of CPU the async workers must not spend.
+        ("GET", "/api/knowledge") => handlers::knowledge(knowledge_store),
+        ("POST", "/api/knowledge/search") => {
+            handlers::search_knowledge(knowledge_store, &req.body)
+        }
+        ("POST", "/api/knowledge/notes") => handlers::knowledge_notes(knowledge_store, &req.body),
+        ("POST", "/api/knowledge/note/get") => handlers::knowledge_note(knowledge_store, &req.body),
+        ("POST", "/api/knowledge/note/add") => {
+            handlers::add_knowledge_note(knowledge_store, &req.body)
+        }
+        ("POST", "/api/knowledge/note/edit") => {
+            handlers::edit_knowledge_note(knowledge_store, &req.body)
+        }
+        ("POST", "/api/knowledge/note/remove") => {
+            handlers::remove_knowledge_note(knowledge_store, &req.body)
+        }
+        ("POST", "/api/knowledge/base/create") => {
+            handlers::create_knowledge_base(knowledge_store, &req.body)
+        }
+        ("POST", "/api/knowledge/base/remove") => {
+            handlers::remove_knowledge_base(knowledge_store, &req.body)
+        }
+        ("POST", "/api/knowledge/reembed") => {
+            handlers::reembed_knowledge(knowledge_store, &req.body)
         }
         // The fleet: the remote adi nodes this machine is paired with (`docs/fleet.md`). The
         // registry is a file in the shared store, so these take the store the projects registry

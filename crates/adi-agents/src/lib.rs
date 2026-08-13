@@ -35,6 +35,7 @@ mod backend;
 mod backends;
 mod error;
 mod events;
+mod knowledge;
 mod launch;
 mod limits;
 mod memo;
@@ -116,6 +117,24 @@ impl Default for Agents {
     fn default() -> Self {
         Self::open()
     }
+}
+
+/// The agent's enabled tools, plus the knowledge CLI when it has knowledge to reach.
+///
+/// Everywhere else in this platform a tool is opt-in and nothing is added on an agent's behalf.
+/// This is the single exception, and it is not a convenience: `memory = true` and a ticked base
+/// are already the operator saying "this agent works with knowledge", and there is exactly one
+/// way for it to do that — `adi-knowledge` on its `PATH`. Leaving the shim out would turn both
+/// settings into decorations that read as enabled.
+///
+/// Idempotent: an agent that already has the tool ticked gets its list back unchanged, in its own
+/// order, so the `.bin` does not churn between launches.
+fn with_knowledge_tool(bin_tools: &[String], knowledge: &knowledge::RunKnowledge) -> Vec<String> {
+    let mut out = bin_tools.to_vec();
+    if !knowledge.is_empty() && !out.iter().any(|id| id == adi_tools::SYS_KNOWLEDGE) {
+        out.push(adi_tools::SYS_KNOWLEDGE.to_string());
+    }
+    out
 }
 
 impl Agents {
@@ -1034,10 +1053,17 @@ impl Agents {
     /// that knows it.
     fn spec_in(&self, agent: &StoredAgent, cwd: PathBuf) -> RunSpec {
         let tools = adi_tools::Tools::with_config(self.config.clone());
+        // The agent's knowledge, made real: `memory = true` creates the base, and the configured
+        // list is filtered down to what the isolation levels actually allow. Best-effort — a
+        // knowledge store that cannot be opened never blocks a launch (see [`knowledge`]).
+        let knowledge = knowledge::resolve(&self.config, agent);
+        // The tools it runs, plus the knowledge CLI when it has knowledge to reach. Adding that
+        // one shim is the exception to "nothing is auto-added": the memory toggle and the base
+        // checkboxes *are* the request, and honouring them with a tool the agent cannot run would
+        // make both settings do nothing.
+        let bin_tools = with_knowledge_tool(&agent.manifest.bin_tools, &knowledge);
         // Best-effort: a sync failure (or no tools) just means no extra bin on PATH, never a blocked run.
-        let bin_dir = tools
-            .sync_agent_bin(&agent.name, &agent.manifest.bin_tools)
-            .ok();
+        let bin_dir = tools.sync_agent_bin(&agent.name, &bin_tools).ok();
         // Allowlist only — nothing pulled in from a scope just for existing. Resolved against this
         // store's Config (test stores stay isolated). Best-effort: a missing/undecryptable secret is skipped.
         let mut env = attached_secret_env(&self.config, &agent.manifest.secrets);
@@ -1049,6 +1075,9 @@ impl Agents {
         // Where the run starts, what it is called, and what it is scoped to. A run that has to be
         // *told* its directory in prose gets it wrong; a script it writes can't be told at all.
         env.extend(workspace::env(&self.config, agent, &cwd));
+        // `$ADI_MEMORY` and `$ADI_KNOWLEDGE`, so a script the agent writes finds its bases without
+        // being told them — the same reason the database and the working directory are exported.
+        env.extend(knowledge.env());
         // The agent's own declared vars last, so an explicit `[env]` entry wins over a secret or
         // the database pointer it collides with — it is the most specific statement about this
         // agent there is. `PATH` is dropped rather than honoured: it is built from the manifest's
@@ -1065,6 +1094,9 @@ impl Agents {
         // reads prose, and one that has to infer its directory infers it wrong.
         let workspace_note =
             Some(workspace::block(&self.config, agent, &cwd)).filter(|note| !note.trim().is_empty());
+        // …and the same for knowledge: exported for scripts, stated for the agent. An agent that
+        // has to infer it has a memory does not use it.
+        let knowledge_note = Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
         RunSpec {
             cwd,
             path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
@@ -1074,16 +1106,17 @@ impl Agents {
             // underneath it shows up on the next run without anyone rewriting a prompt. What is
             // rendered from this is then pinned to the conversation (see [`pin_tool_help`]), so
             // "the next run" is exactly what it says and not "the next turn".
-            tools: if agent.manifest.bin_tools.is_empty() {
+            tools: if bin_tools.is_empty() {
                 Vec::new()
             } else {
-                tools.help_for(&agent.manifest.bin_tools)
+                tools.help_for(&bin_tools)
             },
             // Filled in against the session once there is one; a spec built to answer a question
             // about an agent has no conversation to inherit from.
             tool_help: None,
             system_prompt: agent.manifest.system_prompt(),
             workspace_note,
+            knowledge_note,
         }
     }
 
@@ -1625,6 +1658,32 @@ mod tests {
             backend: backend.into(),
             ..AgentManifest::default()
         }
+    }
+
+    /// The one exception to "nothing is auto-added": an agent that was given knowledge gets the
+    /// CLI that reaches it. Ticking a memory on and finding the agent cannot run `adi-knowledge`
+    /// would be a setting that reads as enabled and does nothing.
+    #[test]
+    fn an_agent_with_knowledge_gets_the_cli_that_reaches_it() {
+        let nothing = knowledge::RunKnowledge::default();
+        let some = knowledge::RunKnowledge {
+            memory: Some("agent:solver/memory".into()),
+            bases: vec!["agent:solver/memory".into()],
+        };
+
+        // No knowledge, no shim — an agent that asked for none is left exactly as configured.
+        assert_eq!(with_knowledge_tool(&["sys-tasks".into()], &nothing), vec!["sys-tasks"]);
+
+        // With knowledge, the shim is there.
+        assert_eq!(
+            with_knowledge_tool(&["sys-tasks".into()], &some),
+            vec!["sys-tasks", adi_tools::SYS_KNOWLEDGE]
+        );
+
+        // Idempotent, and order-preserving: an agent that already ticked it does not get it
+        // twice, and its `.bin` does not churn between launches.
+        let already = vec![adi_tools::SYS_KNOWLEDGE.to_string(), "sys-tasks".to_string()];
+        assert_eq!(with_knowledge_tool(&already, &some), already);
     }
 
     /// What a review says an agent can run has to be what it can actually run. System tools were
@@ -2174,6 +2233,109 @@ mod tests {
         manifest.bin_tools = tools;
         store.save(name, manifest).expect("save");
         store.get(name).expect("read back").expect("the agent")
+    }
+
+    /// The whole launch path for an agent that was given knowledge, in one assertion set: the
+    /// memory base is **created**, the readable bases are **filtered** by the isolation levels,
+    /// both reach the run as environment variables, the CLI that uses them lands in the agent's
+    /// `.bin`, and the prompt says so. Every one of those had to be true for the two checkboxes
+    /// to mean anything, and each was a separate place it could have been dropped.
+    #[test]
+    fn a_launch_makes_an_agents_knowledge_real() {
+        let store = scratch("knowledge-launch");
+        adi_tools::Tools::with_config(store.config.clone())
+            .seed_system()
+            .expect("seed");
+
+        // Two bases the agent may read, and one it may not.
+        let kb = adi_knowledge::KnowledgeStore::with_config(store.config.clone());
+        for id in ["global/runbooks", "project:acme/notes", "project:other/notes"] {
+            kb.ensure_base(&id.parse().expect("id")).expect("base");
+        }
+
+        let mut manifest = spec("harness:claude-sdk");
+        manifest.arguments.system_prompt = Some("You are a careful operator.".into());
+        manifest.project = Some("acme".into());
+        manifest.memory = true;
+        manifest.knowledge = vec![
+            "global/runbooks".into(),
+            "project:acme/notes".into(),
+            "project:other/notes".into(),
+        ];
+        store.save("solver", manifest).expect("save");
+        let agent = store.get("solver").expect("read back").expect("the agent");
+
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+
+        // The memory exists on disk, not merely as an intention.
+        let memory: adi_knowledge::BaseId = "agent:solver/memory".parse().expect("id");
+        assert!(
+            kb.get_base(&memory).expect("get").is_some(),
+            "the memory toggle did not create the base"
+        );
+
+        let env: std::collections::BTreeMap<&str, &str> = spec
+            .env
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(env.get("ADI_MEMORY").copied(), Some("agent:solver/memory"));
+        let readable = env.get("ADI_KNOWLEDGE").copied().expect("ADI_KNOWLEDGE");
+        assert!(readable.contains("agent:solver/memory"));
+        assert!(readable.contains("global/runbooks"));
+        assert!(readable.contains("project:acme/notes"));
+        assert!(
+            !readable.contains("project:other/notes"),
+            "another project's base reached the run: {readable}"
+        );
+
+        // The CLI it reaches all of that with is on its PATH …
+        assert!(
+            spec.tools
+                .iter()
+                .any(|t| t.name == "adi-knowledge"),
+            "the knowledge CLI is not among the run's tools"
+        );
+        assert!(
+            spec.path.contains(".agent-bin/solver"),
+            "the agent's own bin is not on the run PATH: {}",
+            spec.path
+        );
+
+        // … and it is told, in prose, that it has a memory and what else it can read.
+        let note = spec.knowledge_note.as_deref().expect("a knowledge note");
+        assert!(note.contains("agent:solver/memory"), "{note}");
+        assert!(note.contains("global/runbooks"), "{note}");
+        assert!(note.contains("adi-knowledge search"), "{note}");
+        // The agent's own instructions are still its own.
+        assert_eq!(
+            spec.system_prompt.as_deref(),
+            Some("You are a careful operator.")
+        );
+    }
+
+    /// An agent nobody gave knowledge to must be untouched by any of it — no base, no variables,
+    /// no shim it did not ask for, no paragraph.
+    #[test]
+    fn an_agent_without_knowledge_launches_exactly_as_before() {
+        let store = scratch("knowledge-none");
+        adi_tools::Tools::with_config(store.config.clone())
+            .seed_system()
+            .expect("seed");
+        let agent = agent_with_tools(&store, "plain", "harness:claude-sdk", vec!["sys-tasks".into()]);
+
+        let spec = store.spec_in(&agent, store.config.root().to_path_buf());
+
+        assert!(spec.knowledge_note.is_none());
+        assert!(spec.env.iter().all(|(k, _)| k != "ADI_MEMORY" && k != "ADI_KNOWLEDGE"));
+        assert!(
+            !spec.tools.iter().any(|t| t.name == "adi-knowledge"),
+            "the knowledge CLI was added to an agent that never asked for it"
+        );
+        assert!(
+            !store.config.module("knowledge").dir().exists(),
+            "a knowledge store was created for an agent that has none"
+        );
     }
 
     /// The store's half of the seam, end to end: a tool that answers `llm help` is really asked, and

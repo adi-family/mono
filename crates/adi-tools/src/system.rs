@@ -6,6 +6,13 @@
 //! stable `sys-*` ids and the `system` flag (see [`Tools::seed_system`](crate::Tools::seed_system)),
 //! so they are idempotent, always present, and protected from a hard delete.
 
+/// The knowledge CLI's stable id.
+///
+/// Exported because the agent launch path adds this one shim on its own: an agent configured with
+/// a memory or a knowledge base has *asked* for knowledge, and a setting it cannot reach would be
+/// a setting that does nothing. Named here so the two crates cannot drift apart on a string.
+pub const SYS_KNOWLEDGE: &str = "sys-knowledge";
+
 /// One built-in system tool: a stable id, the name agents invoke it by, a one-line description,
 /// and the `adi-mono` subcommand it forwards to.
 pub(crate) struct SystemTool {
@@ -90,5 +97,11 @@ pub(crate) const SYSTEM_TOOLS: &[SystemTool] = &[
         name: "adi-secrets",
         description: "Read and manage secrets (list/read/set/rm). `adi-secrets read <NAME>` prints the value.",
         subcommand: "secrets",
+    },
+    SystemTool {
+        id: SYS_KNOWLEDGE,
+        name: "adi-knowledge",
+        description: "Search and write knowledge bases — text notes ranked by meaning (search/add/list/get/edit/rm/bases). A base is `global/<name>`, `project:<id>/<name>`, or `agent:<name>/<base>`; `--as-agent <you>` applies your isolation.",
+        subcommand: "knowledge",
     },
 ];

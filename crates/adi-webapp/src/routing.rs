@@ -27,6 +27,8 @@ pub(crate) enum Route {
     Tools,
     /// Encrypted secrets — global & per-project key-values (`/secrets`).
     Secrets,
+    /// Knowledge bases — scoped text notes, searched by meaning (`/knowledge`).
+    Knowledge,
     /// The shared SQLite store — browse tables and run SQL (`/database`).
     Database,
     /// Trigger definitions (`/triggers`).
@@ -60,6 +62,7 @@ impl Route {
             "/agents" => Route::Agents,
             "/tools" => Route::Tools,
             "/secrets" => Route::Secrets,
+            "/knowledge" => Route::Knowledge,
             "/database" => Route::Database,
             "/triggers" => Route::Triggers,
             "/dashboards" => Route::Dashboards,
@@ -83,6 +86,7 @@ impl Route {
             Route::Agents => "/extended/agents",
             Route::Tools => "/extended/tools",
             Route::Secrets => "/extended/secrets",
+            Route::Knowledge => "/extended/knowledge",
             Route::Database => "/extended/database",
             Route::Triggers => "/extended/triggers",
             Route::Dashboards => "/extended/dashboards",
@@ -105,6 +109,7 @@ impl Route {
             Route::Agents => "Agents",
             Route::Tools => "Tools",
             Route::Secrets => "Secrets",
+            Route::Knowledge => "Knowledge",
             Route::Database => "Database",
             Route::Triggers => "Triggers",
             Route::Dashboards => "Dashboards",
@@ -128,6 +133,7 @@ pub(crate) enum ProjectSection {
     Triggers,
     Tools,
     Secrets,
+    Knowledge,
     Services,
     Workspaces,
     Files,
@@ -135,13 +141,14 @@ pub(crate) enum ProjectSection {
 
 impl ProjectSection {
     /// Every section, in the order the explorer lists them.
-    pub(crate) const ALL: [ProjectSection; 9] = [
+    pub(crate) const ALL: [ProjectSection; 10] = [
         ProjectSection::Overview,
         ProjectSection::Tasks,
         ProjectSection::Agents,
         ProjectSection::Triggers,
         ProjectSection::Tools,
         ProjectSection::Secrets,
+        ProjectSection::Knowledge,
         ProjectSection::Services,
         ProjectSection::Workspaces,
         ProjectSection::Files,
@@ -156,6 +163,7 @@ impl ProjectSection {
             ProjectSection::Triggers => "triggers",
             ProjectSection::Tools => "tools",
             ProjectSection::Secrets => "secrets",
+            ProjectSection::Knowledge => "knowledge",
             ProjectSection::Services => "services",
             ProjectSection::Workspaces => "workspaces",
             ProjectSection::Files => "files",
@@ -170,6 +178,7 @@ impl ProjectSection {
             ProjectSection::Triggers => "Triggers",
             ProjectSection::Tools => "Tools",
             ProjectSection::Secrets => "Secrets",
+            ProjectSection::Knowledge => "Knowledge",
             ProjectSection::Services => "Services",
             ProjectSection::Workspaces => "Workspaces",
             ProjectSection::Files => "Files",

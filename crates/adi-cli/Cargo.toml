@@ -30,6 +30,12 @@ adi-mesh = { workspace = true }
 # adi-indexer with `--no-default-features` (see its Cargo.toml) rather than splitting the CLI.
 adi-indexer = { workspace = true }
 
+# The `knowledge` command group. Default features on, which turns the embedder back on for this
+# binary: adi-core deliberately takes adi-knowledge without it (see its Cargo.toml), and cargo
+# unifies features per build — so `adi-mono` embeds notes while `adi-app`, which links the same
+# facade, carries none of the model stack.
+adi-knowledge = { workspace = true }
+
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -833,6 +833,15 @@ pub struct AgentDto {
     /// `--allowed-tools` in `arguments.tools`.
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    /// The knowledge bases this agent works with, written as `global/<name>`,
+    /// `project:<id>/<name>`, or `agent:<name>/<base>`. A wish list rather than a grant: what the
+    /// agent may actually reach is decided by the three isolation levels at read time.
+    #[serde(default)]
+    pub knowledge: Vec<String>,
+    /// Whether the agent keeps a memory of its own — the `agent:<name>/memory` base, which it
+    /// alone writes and every other agent may read.
+    #[serde(default)]
+    pub memory: bool,
     /// The secrets attached to this agent (its per-secret checkboxes). Each is a `(scope, name)`
     /// reference; at launch exactly these are decrypted and injected into the run's environment
     /// under their literal names — an explicit allowlist, never the whole scope.
@@ -932,6 +941,16 @@ pub struct SaveAgent {
     /// saying nothing. Send an empty list to actually clear.
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
+    /// The knowledge bases this agent works with (see [`AgentDto::knowledge`]). **Omit to keep
+    /// whatever the agent already has**, for the same reason as `bin_tools`; send an empty list
+    /// to clear.
+    #[serde(default)]
+    pub knowledge: Option<Vec<String>>,
+    /// Whether the agent keeps its own memory (see [`AgentDto::memory`]). Omitted means
+    /// unchanged — a save from a form that never offered the toggle must not take an agent's
+    /// memory away.
+    #[serde(default)]
+    pub memory: Option<bool>,
     /// The secrets to attach to this agent (its per-secret checkboxes). Each is a `(scope, name)`
     /// reference; only these are decrypted and injected into the agent's runs — an allowlist.
     #[serde(default)]
@@ -2628,4 +2647,188 @@ impl ApiError {
             error: message.into(),
         }
     }
+}
+
+// ---------------------------------------------------------------- knowledge
+
+/// One knowledge base, with what it holds. Counts come from the store's own status pass, so a
+/// base that cannot be opened (a provider this build has never heard of) still lists — with its
+/// error where the counts would be, rather than vanishing from the page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeBaseDto {
+    /// The written id: `global/runbooks`, `project:acme/notes`, `agent:solver/memory`.
+    pub id: String,
+    /// The isolation level: `global`, `project`, or `agent`.
+    pub level: String,
+    /// The owner id — a project id or an agent name; absent for a global base.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// The base's name within its scope.
+    pub name: String,
+    /// Which backend provider holds it.
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether this is an agent's own memory (`agent:<name>/memory`).
+    #[serde(default)]
+    pub memory: bool,
+    pub notes: usize,
+    /// How many notes have current vectors …
+    pub embedded: usize,
+    /// … and how many need embedding or re-embedding.
+    pub stale: usize,
+    /// Why the counts are missing, when they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// One storage provider a base can be held in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeProviderDto {
+    pub name: String,
+    pub description: String,
+}
+
+/// `GET /api/knowledge` — every base, and what this build can hold one in.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeState {
+    pub bases: Vec<KnowledgeBaseDto>,
+    pub providers: Vec<KnowledgeProviderDto>,
+    /// The embedding model, once one has been loaded. `None` means nothing has needed it yet —
+    /// not that none is available, which is why the page says "not loaded" rather than "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// One note. `body` is the whole note on a single-note read, and a preview in a list — the
+/// page never has to ask which, because a list is never long enough to matter and a read is
+/// always deliberate.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeNoteDto {
+    pub id: String,
+    pub base: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    /// Whether its vectors are current — a `false` here is what the page marks as "not embedded".
+    #[serde(default)]
+    pub embedded: bool,
+    #[serde(default)]
+    pub chunks: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+/// `POST /api/knowledge/notes` — the notes in one base.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeNotes {
+    pub base: String,
+    pub notes: Vec<KnowledgeNoteDto>,
+}
+
+/// One search result: the note, how well it matched, and which chunk of it did.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeHitDto {
+    #[serde(flatten)]
+    pub note: KnowledgeNoteDto,
+    pub score: f32,
+    #[serde(default)]
+    pub chunk: u32,
+}
+
+/// `POST /api/knowledge/search` — what was asked, and what came back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeResults {
+    pub query: String,
+    /// Whether this ranked by meaning (embeddings) or by words (full text).
+    pub semantic: bool,
+    /// The bases actually searched, so a result page can say what it covered.
+    #[serde(default)]
+    pub bases: Vec<String>,
+    pub hits: Vec<KnowledgeHitDto>,
+}
+
+/// `POST /api/knowledge/search` request. An empty `bases` searches everything readable.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeSearch {
+    pub query: String,
+    #[serde(default)]
+    pub bases: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    /// Rank by words instead of by meaning — no model, no wait.
+    #[serde(default)]
+    pub text: bool,
+}
+
+/// A base by id — for status, delete, re-embed, and listing its notes.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeBaseRef {
+    pub base: String,
+    /// Listing only: keep the notes carrying every one of these tags.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// `POST /api/knowledge/base/create`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NewKnowledgeBase {
+    pub base: String,
+    /// Which provider holds it; omitted means the default (sqlite).
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+/// `POST /api/knowledge/note/add`.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NewKnowledgeNote {
+    pub base: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+/// One note by id, within its base.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeNoteRef {
+    pub base: String,
+    pub id: String,
+}
+
+/// What a write to a note answers with: the note, and whether it came back searchable by
+/// meaning. An unembedded note is still stored — the reason travels with the result rather than
+/// failing the write, so the page can say so instead of the user finding out at search time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeSaved {
+    pub note: KnowledgeNoteDto,
+    pub embedded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_error: Option<String>,
+}
+
+/// What a re-embed pass did.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeReembed {
+    pub base: String,
+    pub scanned: usize,
+    pub embedded: usize,
+    pub unchanged: usize,
+    pub chunks: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
 }

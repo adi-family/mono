@@ -756,6 +756,8 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
     form.tags.set(a.tags.join(", "));
     form.tools.set(argument_text(&a.arguments, "tools"));
     form.bin_tools.set(a.bin_tools.iter().cloned().collect());
+    form.knowledge.set(a.knowledge.iter().cloned().collect());
+    form.memory.set(a.memory);
     form.secrets.set(
         a.secrets
             .iter()
@@ -800,6 +802,8 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.tags.set(String::new());
     form.tools.set(String::new());
     form.bin_tools.set(std::collections::BTreeSet::new());
+    form.knowledge.set(std::collections::BTreeSet::new());
+    form.memory.set(false);
     form.secrets.set(std::collections::BTreeSet::new());
     form.path.set(String::new());
     form.env.set(String::new());

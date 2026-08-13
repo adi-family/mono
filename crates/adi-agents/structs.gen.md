@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-79 structs · 19 enums · 5 type aliases across 33 files.
+80 structs · 19 enums · 5 type aliases across 34 files.
 
 ## Index
 
@@ -24,6 +24,7 @@
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`
+- [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
 - [`src/lib.rs`](#srclibrs) — `Agents`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
@@ -93,6 +94,10 @@ pub struct AgentManifest<Args> {
     pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bin_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge: Vec<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub memory: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub secrets: Vec<SecretAttachment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1036,6 +1041,22 @@ pub struct AgentQuestionAnswered {
 
 ---
 
+## `src/knowledge.rs`
+
+### struct `RunKnowledge`
+
+What one run gets: its memory base (if any) and every base it may read.
+
+```rust
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub(crate) struct RunKnowledge {
+    pub(crate) memory: Option<String>,
+    pub(crate) bases: Vec<String>,
+}
+```
+
+---
+
 ## `src/lib.rs`
 
 ### struct `Agents`
@@ -1573,6 +1594,7 @@ pub struct RunSpec {
     pub tool_help: Option<String>,
     pub system_prompt: Option<String>,
     pub workspace_note: Option<String>,
+    pub knowledge_note: Option<String>,
 }
 ```
 

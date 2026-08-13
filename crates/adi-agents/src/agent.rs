@@ -44,6 +44,26 @@ pub struct AgentManifest<Args> {
     /// `--allowed-tools` (which lives in `arguments.tools`); these are ADI CLIs the agent can run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bin_tools: Vec<String>,
+    /// The knowledge bases this agent works with, written the way `adi-mono knowledge` writes
+    /// them: `global/runbooks`, `project:acme/notes`, `agent:reviewer/memory`.
+    ///
+    /// A **wish list**, not a grant. What an agent may actually reach is decided by the three
+    /// isolation levels at read time (see `adi_knowledge::Reader::access`), so naming another
+    /// project's base here gets it dropped, and naming another agent's gets it read-only. Empty
+    /// = whatever the agent finds for itself; nothing here is required for it to run.
+    ///
+    /// Stays ahead of [`secrets`](Self::secrets) in declaration order because the registry is
+    /// TOML, where a plain array cannot follow an array-of-tables.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub knowledge: Vec<String>,
+    /// Whether this agent keeps a memory of its own — the `agent:<name>/memory` base, which it
+    /// alone writes and every other agent may read.
+    ///
+    /// Off by default, deliberately: an agent that records what it learns is a different thing
+    /// from one that does not, and that should be a decision somebody made rather than one the
+    /// default made for them.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub memory: bool,
     /// The secrets attached to this agent (its per-secret checkboxes). At launch, exactly these
     /// are decrypted and injected into the run's environment under their literal names — an
     /// explicit allowlist, so nothing is inherited from a scope just for existing. Empty = the
@@ -111,6 +131,8 @@ impl<Args> AgentManifest<Args> {
             starred: self.starred,
             project: self.project.clone(),
             bin_tools: self.bin_tools.clone(),
+            knowledge: self.knowledge.clone(),
+            memory: self.memory,
             secrets: self.secrets.clone(),
             path: self.path.clone(),
             env: self.env.clone(),
@@ -291,6 +313,67 @@ mod tests {
         for top_level in ["system_prompt", "tools", "model", "max_turns"] {
             assert!(serialized.get(top_level).is_none(), "top-level {top_level}");
         }
+    }
+
+    /// `rewrap` is respelled once per field, so a field added to the manifest and forgotten here
+    /// is silently dropped on every encode/decode round trip — the agent keeps its knowledge
+    /// bases until something saves it, and then quietly doesn't.
+    #[test]
+    fn the_knowledge_fields_survive_the_arguments_round_trip() {
+        let mut manifest = StoredAgentManifest {
+            backend: "harness:adi".into(),
+            knowledge: vec!["global/runbooks".into(), "agent:reviewer/memory".into()],
+            memory: true,
+            ..Default::default()
+        };
+        manifest
+            .arguments
+            .insert("system_prompt".into(), "Solve it".into());
+
+        let stored = manifest.to_stored().expect("to stored");
+        assert_eq!(stored.knowledge, manifest.knowledge);
+        assert!(stored.memory);
+
+        let back: StoredAgentManifest = stored.into_typed().expect("back to typed");
+        assert_eq!(back.knowledge, manifest.knowledge);
+        assert!(back.memory);
+        assert_eq!(back.arguments, manifest.arguments);
+    }
+
+    /// The registry is TOML, where a plain array may not follow an array-of-tables — so
+    /// `knowledge` has to be declared ahead of `secrets`. Serializing a manifest carrying both
+    /// is what catches a later reorder.
+    #[test]
+    fn a_manifest_with_knowledge_and_secrets_still_encodes_as_toml() {
+        let manifest = StoredAgentManifest {
+            backend: "harness:adi".into(),
+            knowledge: vec!["global/runbooks".into()],
+            memory: true,
+            secrets: vec![SecretAttachment {
+                project: None,
+                name: "API_KEY".into(),
+            }],
+            ..Default::default()
+        };
+        let text = toml::to_string_pretty(&manifest).expect("toml");
+        let back: StoredAgentManifest = toml::from_str(&text).expect("parse back");
+        assert_eq!(back.knowledge, manifest.knowledge);
+        assert!(back.memory);
+        assert_eq!(back.secrets, manifest.secrets);
+    }
+
+    /// Both fields are omit-when-default, so every agent definition written before knowledge
+    /// existed still loads — and does not grow two lines of noise when saved again.
+    #[test]
+    fn an_agent_definition_from_before_knowledge_still_loads() {
+        let older = "backend = \"harness:adi\"\nstarred = false\ncreated_at = 1\nupdated_at = 2\n";
+        let manifest: StoredAgentManifest = toml::from_str(older).expect("parse");
+        assert!(manifest.knowledge.is_empty());
+        assert!(!manifest.memory);
+
+        let text = toml::to_string_pretty(&manifest).expect("toml");
+        assert!(!text.contains("knowledge"), "{text}");
+        assert!(!text.contains("memory"), "{text}");
     }
 
     #[test]

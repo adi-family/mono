@@ -598,6 +598,12 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         project: None,
         bin_tools,
         secrets: attached_secrets(state, form, &presets, secret.as_ref(), &key),
+        // No form offers the knowledge bases or the memory toggle yet, so none of them
+        // states one: `None` leaves whatever the agent already has. Set them with
+        // `adi-mono agents save --knowledge … --memory` until the editor grows the
+        // checkboxes.
+        knowledge: None,
+        memory: None,
         // Only the manual preset offers the run environment, so only it states one — `None` leaves
         // whatever the agent already has instead of clearing it on every save.
         path: manual.then(|| parsed_path_dirs(&form.agent.path.get_untracked())),

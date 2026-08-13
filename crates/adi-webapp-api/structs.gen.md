@@ -4,16 +4,17 @@
 
 > The wire contract and server handlers for the adi webapp: serde DTO types (compiled everywhere, incl. wasm) plus the /api/* logic over adi-ports-manager behind the `server` feature.
 
-175 structs · 6 enums · 1 type alias across 6 files.
+190 structs · 6 enums · 1 type alias across 7 files.
 
 ## Index
 
 - [`src/handlers/agents.rs`](#srchandlersagentsrs) — `RunCaps`, `Waiting`
 - [`src/handlers/dashboards.rs`](#srchandlersdashboardsrs) — `Manifest`, `HiveFile`, `HiveService`, `HiveProxy`, `DecodedFiles`
 - [`src/handlers/guides.rs`](#srchandlersguidesrs) — `Guide`
+- [`src/handlers/knowledge.rs`](#srchandlersknowledgers) — `EditNote`
 - [`src/handlers/response.rs`](#srchandlersresponsers) — `Response`
 - [`src/handlers/services.rs`](#srchandlersservicesrs) — `HiveDoc`, `YamlService`, `HiveProxy`, `HiveRollout`, `HiveRecreate`, `HiveRunner`, `HiveScript`, `HiveDocker`
-- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `BundleFile`, `DashboardBundle`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `ApiError`
+- [`src/types.rs`](#srctypesrs) — `Health`, `Range`, `Lease`, `PortsState`, `ProcessUsage`, `UsedPort`, `UsedPorts`, `LeaseRef`, `ReserveResponse`, `ReleaseResponse`, `MeshState`, `MeshForward`, `MeshPortRef`, `MeshPeerRef`, `MeshForwardRef`, `MeshListenRef`, `FleetState`, `FleetNode`, `FleetRef`, `FleetRename`, `FleetGrantRef`, `Project`, `ProjectsState`, `NewProject`, `ProjectRef`, `StartService`, `StartResult`, `StopResult`, `NewService`, `NewServiceDocker`, `ServicePort`, `ProjectService`, `ProjectDetail`, `TaskRow`, `TasksState`, `NewTask`, `TaskRef`, `ToolDto`, `ToolsState`, `NewTool`, `LinkTool`, `ToolRef`, `ToolScript`, `WriteToolScript`, `RunTool`, `ToolRunResult`, `AgentFormSpec`, `AgentSetupPreset`, `AgentSetupSecret`, `AgentBackendOption`, `AgentFormField`, `AgentFormOption`, `AgentFormFieldKind`, `AgentDto`, `AgentsState`, `ProjectRunLimit`, `SetRunLimit`, `SaveAgent`, `AgentRef`, `RunAgent`, `RunRef`, `HideRun`, `ReplyToRun`, `AnswerRun`, `AgentQuestion`, `AgentChoice`, `AgentAsk`, `PendingAsk`, `PendingAsks`, `UnqueueFromRun`, `AgentTurn`, `AgentToolStatus`, `AgentStep`, `AgentTurnMetrics`, `AgentCapabilities`, `AgentRunInfo`, `AgentRunOutcome`, `AgentRuns`, `AllAgentRuns`, `AgentRunResult`, `ReviewRun`, `AgentReviewStarted`, `AgentKeys`, `AgentPeek`, `AgentTokenSource`, `AgentRepeatShape`, `AgentTokenSite`, `AgentTokenSplit`, `AgentRepeat`, `AgentNearDup`, `AgentTokens`, `MetaState`, `TriggerKindOption`, `TriggerRuntimeOption`, `TriggerPresetField`, `TriggerPreset`, `TriggerDto`, `TriggersState`, `EventTypeDto`, `SaveTrigger`, `EmitEvent`, `EmitAck`, `TriggerRef`, `TriggerFireResult`, `TriggerLog`, `HookAck`, `FileEntry`, `FilesRef`, `DirListing`, `FileContent`, `WriteFile`, `FsRef`, `FsListing`, `FsContent`, `FsWrite`, `FsCreate`, `ProjectHookDto`, `WorkspaceDto`, `WorkspacesState`, `WorkspacesRef`, `NewWorkspace`, `WorkspaceRef`, `ProjectHookRef`, `NewProjectHook`, `WorkspaceCreateResult`, `ProjectHookRunResult`, `WorkspaceTermRef`, `WorkspaceTermKeys`, `WorkspaceTerm`, `ProjectHookLog`, `HiveService`, `HiveState`, `Dashboard`, `NewDashboard`, `DashboardsState`, `DashboardRef`, `SetDashboardProject`, `BundleFile`, `DashboardBundle`, `TransferMode`, `TransferDashboard`, `DashboardTransferred`, `FleetDashboards`, `NodeDashboards`, `NodeDashboard`, `UnlockNode`, `NodeServiceRef`, `SecretDto`, `OAuthInfoDto`, `SetOAuthSecret`, `SecretsState`, `SetSecret`, `SecretRef`, `RevealedSecret`, `DbInfoDto`, `DbState`, `DbScope`, `DbColumnDto`, `DbTableDto`, `DbTablesState`, `DbSchema`, `DbQuery`, `DbQueryResult`, `DbExecResult`, `ApiError`, `KnowledgeBaseDto`, `KnowledgeProviderDto`, `KnowledgeState`, `KnowledgeNoteDto`, `KnowledgeNotes`, `KnowledgeHitDto`, `KnowledgeResults`, `KnowledgeSearch`, `KnowledgeBaseRef`, `NewKnowledgeBase`, `NewKnowledgeNote`, `KnowledgeNoteRef`, `KnowledgeSaved`, `KnowledgeReembed`
 
 ---
 
@@ -116,6 +117,30 @@ pub struct Guide {
     pub file: &'static str,
     pub summary: &'static str,
     pub body: &'static str,
+}
+```
+
+---
+
+## `src/handlers/knowledge.rs`
+
+### struct `EditNote`
+
+The edit request. Declared here rather than in `types` because every field is a three-state (absent = unchanged), which only this endpoint speaks.
+
+```rust
+#[derive(Debug, serde::Deserialize)]
+struct EditNote {
+    base: String,
+    id: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    source: Option<String>,
 }
 ```
 
@@ -1080,6 +1105,10 @@ pub struct AgentDto {
     #[serde(default)]
     pub bin_tools: Vec<String>,
     #[serde(default)]
+    pub knowledge: Vec<String>,
+    #[serde(default)]
+    pub memory: bool,
+    #[serde(default)]
     pub secrets: Vec<SecretRef>,
     #[serde(default)]
     pub path: Vec<String>,
@@ -1163,6 +1192,10 @@ pub struct SaveAgent {
     pub project: Option<String>,
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
+    #[serde(default)]
+    pub knowledge: Option<Vec<String>>,
+    #[serde(default)]
+    pub memory: Option<bool>,
     #[serde(default)]
     pub secrets: Vec<SecretRef>,
     #[serde(default)]
@@ -2872,6 +2905,235 @@ A JSON error body: `{ "ok": false, "error": "…" }`.
 pub struct ApiError {
     pub ok: bool,
     pub error: String,
+}
+```
+
+### struct `KnowledgeBaseDto`
+
+One knowledge base, with what it holds. Counts come from the store's own status pass, so a base that cannot be opened (a provider this build has never heard of) still lists — with its error where the counts would be, rather than vanishing from the page.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeBaseDto {
+    pub id: String,
+    pub level: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    pub name: String,
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub memory: bool,
+    pub notes: usize,
+    pub embedded: usize,
+    pub stale: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+```
+
+### struct `KnowledgeProviderDto`
+
+One storage provider a base can be held in.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeProviderDto {
+    pub name: String,
+    pub description: String,
+}
+```
+
+### struct `KnowledgeState`
+
+`GET /api/knowledge` — every base, and what this build can hold one in.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeState {
+    pub bases: Vec<KnowledgeBaseDto>,
+    pub providers: Vec<KnowledgeProviderDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+```
+
+### struct `KnowledgeNoteDto`
+
+One note. `body` is the whole note on a single-note read, and a preview in a list — the page never has to ask which, because a list is never long enough to matter and a read is always deliberate.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeNoteDto {
+    pub id: String,
+    pub base: String,
+    pub title: String,
+    pub body: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub embedded: bool,
+    #[serde(default)]
+    pub chunks: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+```
+
+### struct `KnowledgeNotes`
+
+`POST /api/knowledge/notes` — the notes in one base.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeNotes {
+    pub base: String,
+    pub notes: Vec<KnowledgeNoteDto>,
+}
+```
+
+### struct `KnowledgeHitDto`
+
+One search result: the note, how well it matched, and which chunk of it did.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeHitDto {
+    #[serde(flatten)]
+    pub note: KnowledgeNoteDto,
+    pub score: f32,
+    #[serde(default)]
+    pub chunk: u32,
+}
+```
+
+### struct `KnowledgeResults`
+
+`POST /api/knowledge/search` — what was asked, and what came back.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KnowledgeResults {
+    pub query: String,
+    pub semantic: bool,
+    #[serde(default)]
+    pub bases: Vec<String>,
+    pub hits: Vec<KnowledgeHitDto>,
+}
+```
+
+### struct `KnowledgeSearch`
+
+`POST /api/knowledge/search` request. An empty `bases` searches everything readable.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeSearch {
+    pub query: String,
+    #[serde(default)]
+    pub bases: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub text: bool,
+}
+```
+
+### struct `KnowledgeBaseRef`
+
+A base by id — for status, delete, re-embed, and listing its notes.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeBaseRef {
+    pub base: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+```
+
+### struct `NewKnowledgeBase`
+
+`POST /api/knowledge/base/create`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NewKnowledgeBase {
+    pub base: String,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+```
+
+### struct `NewKnowledgeNote`
+
+`POST /api/knowledge/note/add`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NewKnowledgeNote {
+    pub base: String,
+    pub title: String,
+    #[serde(default)]
+    pub body: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub source: Option<String>,
+}
+```
+
+### struct `KnowledgeNoteRef`
+
+One note by id, within its base.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeNoteRef {
+    pub base: String,
+    pub id: String,
+}
+```
+
+### struct `KnowledgeSaved`
+
+What a write to a note answers with: the note, and whether it came back searchable by meaning. An unembedded note is still stored — the reason travels with the result rather than failing the write, so the page can say so instead of the user finding out at search time.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct KnowledgeSaved {
+    pub note: KnowledgeNoteDto,
+    pub embedded: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embed_error: Option<String>,
+}
+```
+
+### struct `KnowledgeReembed`
+
+What a re-embed pass did.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct KnowledgeReembed {
+    pub base: String,
+    pub scanned: usize,
+    pub embedded: usize,
+    pub unchanged: usize,
+    pub chunks: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<String>,
 }
 ```
 

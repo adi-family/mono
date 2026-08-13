@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-46 structs · 6 enums · 1 type alias across 15 files.
+48 structs · 6 enums · 1 type alias across 16 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
+- [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
 - [`src/pages/project_detail/services.rs`](#srcpagesproject_detailservicesrs) — `QuickServiceForm`
@@ -22,7 +23,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Flash`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Flash`
 
 ---
 
@@ -53,6 +54,7 @@ pub(crate) enum Icon {
     Wrench,
     Key,
     Database,
+    Book,
     Download,
     Question,
     Contrast,
@@ -195,6 +197,23 @@ Where a service comes from, as the Source cell reads it. A service carries only 
 struct Source {
     group: u8,
     label: String,
+}
+```
+
+---
+
+## `src/pages/knowledge.rs`
+
+### struct `Scope`
+
+Where this rendering sits: which project it is fixed to (if any) and which table states it draws with, so the global page and a project's panel keep their own column layouts.
+
+```rust
+#[derive(Clone, Copy)]
+struct Scope {
+    project: Option<RwSignal<String>>,
+    bases: TableState,
+    notes: TableState,
 }
 ```
 
@@ -397,6 +416,7 @@ pub(crate) enum Route {
     Agents,
     Tools,
     Secrets,
+    Knowledge,
     Database,
     Triggers,
     Dashboards,
@@ -421,6 +441,7 @@ pub(crate) enum ProjectSection {
     Triggers,
     Tools,
     Secrets,
+    Knowledge,
     Services,
     Workspaces,
     Files,
@@ -500,6 +521,8 @@ pub(crate) struct Tables {
     pub(crate) projects: TableState,
     pub(crate) projects_archived: TableState,
     pub(crate) secrets: TableState,
+    pub(crate) knowledge_bases: TableState,
+    pub(crate) knowledge_notes: TableState,
     pub(crate) tasks: TableState,
     pub(crate) tasks_done: TableState,
     pub(crate) tools: TableState,
@@ -509,6 +532,8 @@ pub(crate) struct Tables {
     pub(crate) hooks: TableState,
     pub(crate) project_agents: TableState,
     pub(crate) project_secrets: TableState,
+    pub(crate) project_knowledge_bases: TableState,
+    pub(crate) project_knowledge_notes: TableState,
     pub(crate) project_tasks: TableState,
     pub(crate) project_tools: TableState,
     pub(crate) project_triggers: TableState,
@@ -712,6 +737,31 @@ pub(crate) struct SecretsForm {
 }
 ```
 
+### struct `KnowledgeConsole`
+
+Everything the Knowledge page holds that isn't on the server: the search box and its last answer, which base is open, and the two create forms.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct KnowledgeConsole {
+    pub(crate) state: RwSignal<Option<KnowledgeState>>,
+    pub(crate) query: RwSignal<String>,
+    pub(crate) words: RwSignal<bool>,
+    pub(crate) scope: RwSignal<String>,
+    pub(crate) results: RwSignal<Option<KnowledgeResults>>,
+    pub(crate) open_base: RwSignal<String>,
+    pub(crate) notes: RwSignal<Option<KnowledgeNotes>>,
+    pub(crate) open_note: RwSignal<Option<KnowledgeNoteDto>>,
+    pub(crate) new_base: RwSignal<String>,
+    pub(crate) new_provider: RwSignal<String>,
+    pub(crate) title: RwSignal<String>,
+    pub(crate) body: RwSignal<String>,
+    pub(crate) tags: RwSignal<String>,
+    pub(crate) error: RwSignal<Option<String>>,
+    pub(crate) busy: RwSignal<bool>,
+}
+```
+
 ### struct `DbConsole`
 
 The Database page's console: which scope is open, that scope's tables, the SQL buffer, and whatever the last run produced.
@@ -783,6 +833,9 @@ pub(crate) struct AgentsForm {
     pub(crate) tools: RwSignal<String>,
     pub(crate) bin_tools: RwSignal<BTreeSet<String>>,
     pub(crate) secrets: RwSignal<BTreeSet<(Option<String>, String)>>,
+    pub(crate) knowledge: RwSignal<BTreeSet<String>>,
+    pub(crate) memory: RwSignal<bool>,
+    pub(crate) knowledge_bases: RwSignal<Option<Vec<KnowledgeBaseDto>>>,
     pub(crate) path: RwSignal<String>,
     pub(crate) env: RwSignal<String>,
     pub(crate) system_prompt: RwSignal<String>,

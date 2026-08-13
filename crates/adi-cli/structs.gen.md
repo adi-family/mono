@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-4 structs · 15 enums across 13 files.
+4 structs · 17 enums across 14 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
+- [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/mesh.rs`](#srcmeshrs) — `MeshCommand`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectsCommand`, `WorkspaceCommand`, `HookCommand`, `WorkspaceRow`, `HookRow`
@@ -78,6 +79,14 @@ pub(crate) enum AgentsCommand {
         no_env: bool,
         #[arg(long)]
         unattended: bool,
+        #[arg(long = "knowledge")]
+        knowledge: Vec<String>,
+        #[arg(long, conflicts_with = "knowledge")]
+        no_knowledge: bool,
+        #[arg(long)]
+        memory: bool,
+        #[arg(long, conflicts_with = "memory")]
+        no_memory: bool,
         #[arg(long = "argument", visible_alias = "extra")]
         arguments: Vec<String>,
         #[arg(long)]
@@ -371,6 +380,141 @@ pub(crate) enum IndexerCommand {
 
 ---
 
+## `src/knowledge.rs`
+
+### enum `KnowledgeCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum KnowledgeCommand {
+    Bases {
+        #[arg(long)]
+        global: bool,
+        #[arg(long)]
+        project: Option<String>,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Base {
+        #[command(subcommand)]
+        command: BaseCommand,
+    },
+    Providers {
+        #[arg(long)]
+        json: bool,
+    },
+    Add {
+        base: String,
+        #[arg(short, long)]
+        title: String,
+        #[arg(short, long)]
+        body: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        id: Option<String>,
+        #[arg(long)]
+        create: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Get {
+        base: String,
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Edit {
+        base: String,
+        id: String,
+        #[arg(short, long)]
+        title: Option<String>,
+        #[arg(short, long)]
+        body: Option<String>,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long)]
+        no_tag: bool,
+        #[arg(long)]
+        source: Option<String>,
+        #[arg(long)]
+        no_source: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Rm {
+        base: String,
+        id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    List {
+        base: String,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long)]
+        stale: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Search {
+        query: String,
+        #[arg(long = "base")]
+        bases: Vec<String>,
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+        #[arg(long)]
+        text: bool,
+        #[arg(long)]
+        json: bool,
+    },
+    Reembed {
+        base: String,
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        json: bool,
+    },
+}
+```
+
+### enum `BaseCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum BaseCommand {
+    New {
+        base: String,
+        #[arg(long)]
+        provider: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        settings: Vec<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Rm {
+        base: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Status {
+        base: String,
+        #[arg(long)]
+        json: bool,
+    },
+}
+```
+
+---
+
 ## `src/main.rs`
 
 ### struct `Cli`
@@ -427,6 +571,14 @@ enum Command {
     Triggers {
         #[command(subcommand)]
         command: TriggersCommand,
+    },
+    Knowledge {
+        #[arg(long, value_name = "AGENT")]
+        as_agent: Option<String>,
+        #[arg(long, value_name = "PROJECT")]
+        as_project: Option<String>,
+        #[command(subcommand)]
+        command: KnowledgeCommand,
     },
     Indexer {
         #[command(subcommand)]
