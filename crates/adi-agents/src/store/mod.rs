@@ -63,8 +63,8 @@ pub const MAX_SESSIONS: usize = 50;
 const DB_FILE: &str = "sessions.db";
 
 /// The columns of a record, in the order [`record::from_row`] reads them.
-const RECORD_COLUMNS: &str =
-    "agent, id, backend, cwd, message, started_at, last_activity, hidden, runner_state, outcome";
+const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
+                              hidden, runner_state, outcome, runner";
 
 /// The sessions under one root.
 ///
@@ -166,6 +166,30 @@ impl SessionStore {
         cwd: impl Into<PathBuf>,
         message: &str,
     ) -> Result<SessionRecord> {
+        self.create_as(agent, backend, None, cwd, message)
+    }
+
+    /// [`create`](Self::create), naming the runner that is going to drive it.
+    ///
+    /// The backend says which engine the agent is pointed at; the runner says who is actually
+    /// driving, and the two are not the same question. A simulated run has the agent's own backend
+    /// — that is the point of it — and a person in the model's seat, so nothing but this
+    /// distinguishes it, and a later read that resolved it by backend would hand it the engine's
+    /// runner and be told the run is dead.
+    ///
+    /// `None` records nothing and reads back as "whatever runs its backend", which is what every
+    /// session opened before this existed was.
+    ///
+    /// # Errors
+    /// Returns directory-creation and database errors.
+    pub fn create_as(
+        &self,
+        agent: &str,
+        backend: Backend,
+        runner: Option<crate::runner::RunnerKind>,
+        cwd: impl Into<PathBuf>,
+        message: &str,
+    ) -> Result<SessionRecord> {
         // The agent's directory is made here rather than at first spawn: a runner is handed
         // `log_path` and expects to be able to open it.
         std::fs::create_dir_all(self.agent_dir(agent))?;
@@ -177,6 +201,7 @@ impl SessionStore {
             id,
             agent: agent.to_string(),
             backend,
+            runner,
             cwd: cwd.into(),
             message: message.to_string(),
             hidden: false,
@@ -186,8 +211,8 @@ impl SessionStore {
         self.conn()?
             .execute(
                 "INSERT INTO sessions
-                   (agent, id, backend, cwd, message, started_at, last_activity, hidden)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0)",
+                   (agent, id, backend, cwd, message, started_at, last_activity, hidden, runner)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
                 rusqlite::params![
                     session.agent,
                     session.id,
@@ -196,6 +221,7 @@ impl SessionStore {
                     session.message,
                     session.started_at,
                     session.last_activity,
+                    session.runner.as_ref().map(|k| k.as_str().to_string()),
                 ],
             )
             .map_err(|e| db::sql_err("open a session in", e))?;

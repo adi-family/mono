@@ -4,8 +4,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
-    AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentTokens, AgentsState, AllAgentRuns,
+    AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState, AgentTokens, AgentsState,
+    AllAgentRuns,
     DashboardsState,
     DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards,
     FleetState, Health,
@@ -1313,6 +1315,44 @@ impl Status {
             Status::Connecting => "connecting…",
             Status::Online => "online",
             Status::Down => "offline",
+        }
+    }
+}
+
+/// The simulator's own state: which run is open, what has been staged into the turn that is still
+/// open, and the flags taken while reading.
+///
+/// Deliberately apart from [`AgentsWatch`]. That view watches a run somebody else is doing; this one
+/// *is* the run. Sharing a struct would mean one poll clobbering the other's idea of which run is on
+/// screen, and the two are never the same run.
+#[derive(Clone, Copy)]
+pub(crate) struct Simulate {
+    /// The agent being simulated, or `None` while the simulator is closed.
+    pub(crate) name: RwSignal<Option<String>>,
+    /// The run as the server last reported it — the composed prompt, its split, its tools, its
+    /// turns. `None` between opening the simulator and the run existing.
+    pub(crate) run: RwSignal<Option<AgentSimState>>,
+    /// The declared tools, with a signal-backed field per parameter. Rebuilt on every landing, so a
+    /// call that has been made does not leave its arguments sitting in the form.
+    pub(crate) tools: RwSignal<Vec<ToolDecl>>,
+    /// What has been emitted into the open turn. Held here rather than server-side because nothing
+    /// has happened yet: a staged block is a thing a person may still drop.
+    pub(crate) blocks: RwSignal<Vec<Block>>,
+    /// Passages marked while reading, each with its note. These are the point of the feature.
+    pub(crate) flags: RwSignal<Vec<Flag>>,
+    /// A request is in flight — a turn executing, or a reply being sent.
+    pub(crate) busy: RwSignal<bool>,
+}
+
+impl Simulate {
+    pub(crate) fn new() -> Self {
+        Self {
+            name: RwSignal::new(None),
+            run: RwSignal::new(None),
+            tools: RwSignal::new(Vec::new()),
+            blocks: RwSignal::new(Vec::new()),
+            flags: RwSignal::new(Vec::new()),
+            busy: RwSignal::new(false),
         }
     }
 }

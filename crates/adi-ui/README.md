@@ -41,6 +41,12 @@ overlap. Migrate a screen by rewriting it, not by hoping the palettes meet in th
 | `Rail` / `RailGroup` / `RailCard` | the column down either side of a chat: a title, an optional filter box that sticks while the title scrolls away, labelled bands, and the card every row is. Knows nothing about what a row holds |
 | `SessionItem` / `SessionState` | a conversation, as a row in the left rail: done, waiting, error, working |
 | `AppItem` / `AppState` / `RowMenu` | a **living app**, as a row in the right rail: its favicon leads, the band is its project, the name under its title is the fleet node it runs on. Live, offline, view-only — and the state says its own words, so no row can put an age there |
+| `TokenStream` / `PromptText` / `Token` | one prompt, two readings: every split shown as its own chip, or the string as a person reads it with only the template's control tokens marked. A newline is drawn `⏎` **and** still taken. Tokenizes nothing — the ranks stay server-side and the caller is handed the split, the way `PathPicker` is handed a listing |
+| `ToolForm` / `Param` / `ParamKind` | a tool's parameters as a form, built from the tool's own declaration, so a parameter added to the tool cannot go quietly missing. Wide controls take their own row. Builds no JSON: the values are signals the caller owns, because a call's wire shape belongs to whoever is about to send it |
+| `TurnBlocks` / `Block` | what has been emitted into the **open turn** — prose and calls, in the order written, each droppable. A staging area, not a transcript: nothing in it has happened. Calls are drawn by the same component the transcript draws real ones with |
+| `StopLine` / `Stop` | how the last turn ended: `tool_use` (results append, the loop runs again) or `end_turn` (the run yields), with the OpenAI spelling beside it. A hairline rather than a card, because a stop reason is response metadata and no model was ever handed one |
+| `FlagMark` / `FlagList` / `Flag` | select a passage and mark what is wrong with it. The offer follows the selection; the quote is a **copy**, not an offset, so a flag survives the document being edited under it |
+| `Simulator` / `ToolDecl` | the screen where a person takes the model's seat: what the model sees on the left, what it does on the right. Purely presentational — every value is a signal in, every action a callback out, so the prompt, the tools and the execution all stay the runner's |
 
 ## Develop here
 

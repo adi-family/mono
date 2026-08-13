@@ -19,10 +19,21 @@ path = "playground/main.rs"
 [dependencies]
 leptos = { version = "0.8", features = ["csr"] }
 
-# One browser API, named so the feature that unlocks it is on: a table remembers how it was
-# sorted and arranged (see `table`), which is `localStorage` and nothing else. Leptos's own
-# `window()` returns the handle; this is only here to switch the `Storage` binding on.
-web-sys = { version = "0.3", features = ["Storage", "Window"] }
+# The browser APIs used by name, so the bindings that unlock them are on. Leptos's own
+# `window()` returns the handle; these only switch the types on.
+#
+# - `Storage`: a table remembers how it was sorted and arranged (see `table`).
+# - `Selection` / `Range` / `DomRect` / `Node` / `Element`: flagging a passage of a prompt
+#   (see `flag`) reads what the user selected and measures where to put the offer.
+web-sys = { version = "0.3", features = [
+    "DomRect",
+    "Element",
+    "Node",
+    "Range",
+    "Selection",
+    "Storage",
+    "Window",
+] }
 
 # Playground-only: routes a wasm panic to the browser console instead of an opaque
 # `unreachable`. Cheap enough that the library carries it rather than gating it on a feature.

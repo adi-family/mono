@@ -25,6 +25,16 @@ pub struct SessionRecord {
     pub agent: String,
     /// Which engine ran it — a label carried with the session, not a place it is kept.
     pub backend: Backend,
+    /// Which runner started it, when that is not simply whatever runs [`backend`](Self::backend).
+    ///
+    /// The backend says what engine the agent is pointed at; this says who was actually driving. A
+    /// simulated run is the same agent, in the same environment, with the same backend — and a
+    /// person in the model's seat, so only this tells the two apart.
+    ///
+    /// `None` on every session written before the column existed, and on every one opened without a
+    /// runner in hand, and it reads as "whatever runs its backend" — which is what those sessions
+    /// were. See [`runner_of`](crate::runner::runner_of).
+    pub runner: Option<crate::runner::RunnerKind>,
     /// The directory this session runs in, resolved once at creation and re-used for every later
     /// turn. An engine's own session store is keyed by the directory it ran in, so re-resolving
     /// mid-conversation makes the session unresumable and puts earlier turns' files out of reach.
@@ -145,10 +155,16 @@ fn head(text: &str) -> String {
 pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecord> {
     let state: Option<String> = row.get(8)?;
     let outcome: Option<String> = row.get(9)?;
+    let runner: Option<String> = row.get(10)?;
     Ok(SessionRecord {
         agent: row.get(0)?,
         id: row.get(1)?,
         backend: Backend::from(row.get::<_, String>(2)?.as_str()),
+        // A blank is the same as absent: an older row has NULL here, and nothing should be able to
+        // record the empty string as the name of a runner.
+        runner: runner
+            .filter(|kind| !kind.trim().is_empty())
+            .map(crate::runner::RunnerKind::new),
         cwd: PathBuf::from(row.get::<_, String>(3)?),
         message: row.get(4)?,
         started_at: row.get(5)?,

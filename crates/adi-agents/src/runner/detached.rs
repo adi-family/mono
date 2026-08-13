@@ -31,10 +31,10 @@ use crate::backends::harness::claude_sdk::Continuation;
 use crate::backends::{adi_events, claude_stream, detached, harness, process};
 use crate::error::{Error, Result};
 use crate::progress::{self, MAX_PARSE_BYTES, TurnContent};
+use crate::runner::prompt::{compose, own_prompt, with_knowledge, with_tool_help, with_workspace};
 use crate::runner::{
     EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, StateWriter, Stopped,
 };
-use crate::tool_help;
 
 /// How often a stopping run is re-probed while its grace period runs down. Short enough that a
 /// cooperative CLI's exit is noticed almost immediately, long enough not to spin.
@@ -154,8 +154,7 @@ impl DetachedRunner {
     fn run_env(&self, spec: &RunSpec) -> Vec<(String, String)> {
         let mut env = spec.env.clone();
         if matches!(self.backend, Backend::HarnessAdi)
-            && let Some(prompt) =
-                with_tool_help(spec, with_knowledge(spec, with_workspace(spec, own_prompt(spec, None))))
+            && let Some(prompt) = compose(spec, None)
         {
             env.push((SYSTEM_PROMPT_ENV.to_string(), prompt));
         }
@@ -500,12 +499,11 @@ impl Cursor {
     }
 }
 
-// The three helpers below are the prompt-and-argument rules every runner in this module tree
-// follows, so [`super::pty`] borrows them rather than keeping a second copy that could drift. They
-// are `pub(super)` and nothing more: no caller outside `runner/` has any business composing an
-// engine's prompt.
-
 /// Decode an engine's own argument struct out of a spec.
+///
+/// Kept here beside the runner that needs it most, and `pub(super)` so [`super::pty`] borrows it
+/// rather than keeping a second copy that could drift. Prompt composition used to live here too and
+/// now lives in [`super::prompt`], which is the one place that renders one.
 ///
 /// A spec carrying no engine configuration at all reads as that engine's defaults rather than as a
 /// decode failure — `arguments` is optional storage, not a required document.
@@ -516,75 +514,6 @@ pub(super) fn decode<T: DeserializeOwned>(arguments: &Value) -> Result<T> {
         arguments.clone()
     };
     serde_json::from_value(value).map_err(|e| Error::Arguments(e.to_string()))
-}
-
-/// The agent's own prompt for this run: the spec's when it carries one, else whatever the engine's
-/// stored arguments already said. The spec's copy is the user's prompt *unmodified* — nothing above
-/// this layer writes into it any more — so it wins where both exist.
-pub(super) fn own_prompt(spec: &RunSpec, stored: Option<String>) -> Option<String> {
-    spec.system_prompt
-        .as_deref()
-        .map(str::trim)
-        .filter(|prompt| !prompt.is_empty())
-        .map(ToString::to_string)
-        .or(stored)
-}
-
-
-
-/// `existing` with the run's location behind it, or `existing` unchanged when there is none.
-///
-/// Applied before [`with_tool_help`] so the order the old decorator established survives: location
-/// first — it is the shorter block, and it governs every path named in the sections around it.
-pub(super) fn with_workspace(spec: &RunSpec, existing: Option<String>) -> Option<String> {
-    let Some(note) = spec.workspace_note.as_deref().map(str::trim).filter(|n| !n.is_empty()) else {
-        return existing;
-    };
-    match existing.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(prompt) => Some(format!("{prompt}\n\n{note}")),
-        None => Some(note.to_string()),
-    }
-}
-
-/// `existing` with what the run knows behind it, or `existing` unchanged when it knows nothing.
-///
-/// Between the location and the tool inventory, deliberately: knowing *where* you are governs the
-/// paths in every section after it, and knowing *what you know* is worth reading before the list
-/// of commands you could run to find out.
-pub(super) fn with_knowledge(spec: &RunSpec, existing: Option<String>) -> Option<String> {
-    let Some(note) = spec
-        .knowledge_note
-        .as_deref()
-        .map(str::trim)
-        .filter(|n| !n.is_empty())
-    else {
-        return existing;
-    };
-    match existing.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(prompt) => Some(format!("{prompt}\n\n{note}")),
-        None => Some(note.to_string()),
-    }
-}
-
-/// `existing` with the run's tool help behind it, or `existing` unchanged when there are no tools.
-///
-/// Appended, never substituted: whatever the agent was told to be survives, with the inventory
-/// after it — instructions are read before equipment.
-///
-/// A conversation past its first turn carries the section it opened with
-/// ([`RunSpec::tool_help`]) and that is used verbatim; only a fresh run renders one.
-pub(super) fn with_tool_help(spec: &RunSpec, existing: Option<String>) -> Option<String> {
-    let Some(block) = spec
-        .tool_help
-        .clone()
-        .or_else(|| tool_help::block(&spec.tools))
-    else {
-        return existing;
-    };
-    match existing.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-        Some(prompt) => Some(format!("{prompt}\n\n{block}")),
-        None => Some(block),
-    }
 }
 
 /// One turn's content as an event sequence: its timeline in order, then its answer, then the

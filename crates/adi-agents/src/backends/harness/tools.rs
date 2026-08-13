@@ -294,12 +294,80 @@ const SKIP_DIRS: &[&str] = &["target", "node_modules", ".git", "dist", ".build",
 /// How long a `Bash` command may run before it is killed, when the call names no timeout.
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
+/// One tool as a model is told about it: the three things every provider's dialect carries, in a
+/// shape that is nobody's dialect.
+///
+/// The owned twin of [`ToolSpec`], which is `'static` data this crate keeps in a table. This is
+/// what leaves the crate — a screen that lets a person take the model's seat has to show them the
+/// tools the model was actually declared, and it cannot be handed a `&'static [ToolSpec]` full of
+/// function pointers.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ToolDeclaration {
+    /// The name a call writes.
+    pub name: String,
+    /// The sentence the model is given about when to reach for it.
+    pub description: String,
+    /// The JSON Schema `object` describing the call's arguments.
+    pub schema: Value,
+}
+
+/// Every tool an `harness:adi` turn can call, exactly as declared to the model.
+///
+/// Read off the same [`TOOLS`] table [`super::adi_loop`] builds its provider payloads from, so a
+/// tool added there appears here without anybody remembering to. Anything that renders this list
+/// for a person is then showing the inventory the model has rather than a second copy of it that
+/// can fall behind.
+#[must_use]
+pub fn declarations() -> Vec<ToolDeclaration> {
+    TOOLS
+        .iter()
+        .map(|t| ToolDeclaration {
+            name: t.name.to_string(),
+            description: t.description.to_string(),
+            schema: (t.schema)(),
+        })
+        .collect()
+}
+
+impl<'a> Ctx<'a> {
+    /// The context one conversation's tool calls run in.
+    ///
+    /// Built here rather than at each call site because the pieces are not interchangeable: the
+    /// shell is keyed by the *conversation*, so a second construction that keyed it by the turn
+    /// would silently give a run a fresh shell — no `cd`, no exports — and the tools would keep
+    /// working while quietly meaning something else. The adi loop and the simulator both come
+    /// through here, which is what makes a call made by a person the same call the model makes.
+    pub(crate) fn for_conversation(
+        agent: &'a str,
+        unattended: bool,
+        cwd: &'a Path,
+        conv: &'a str,
+        agent_dir: &'a Path,
+        sessions: SessionStore,
+    ) -> Self {
+        Self {
+            cwd,
+            shell: Shell::new(agent_dir, conv),
+            agent,
+            conv,
+            awaits: awaits::Awaits::open(),
+            sessions,
+            agent_dir,
+            unattended,
+        }
+    }
+}
+
 /// Run one tool call in `cwd`.
 ///
 /// The error half of the result is not a failure of the loop — it is the tool's *answer*, handed
 /// back to the model as a failed result so it can correct itself and try again, which is why every
 /// message here is written to be read by the model rather than by a log reader.
-pub(crate) fn run(name: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+pub(crate) fn execute(
+    name: &str,
+    input: &Value,
+    ctx: &Ctx<'_>,
+) -> std::result::Result<String, String> {
     match name {
         "Read" => read(input, ctx.cwd),
         "Write" => write(input, ctx.cwd),
@@ -1300,7 +1368,7 @@ mod tests {
     #[test]
     fn an_unknown_tool_names_the_ones_that_exist() {
         let ctx = ctx_in(Path::new("."), "unknown-tool");
-        let err = run("Frobnicate", &json!({}), &ctx).expect_err("unknown tool");
+        let err = execute("Frobnicate", &json!({}), &ctx).expect_err("unknown tool");
         assert!(err.contains("Read"), "{err}");
         assert!(err.contains("Await"), "the wake tool is advertised too: {err}");
         assert!(err.contains("Ask"), "and so is the question tool: {err}");

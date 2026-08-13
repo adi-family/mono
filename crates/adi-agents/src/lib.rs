@@ -60,6 +60,8 @@ pub use agent::{
     contains_json_null,
 };
 pub use backend::Backend;
+/// A tool as a model is told about it — see [`Agents::simulated_tools`].
+pub use backends::harness::tools::ToolDeclaration;
 pub use error::{Error, Result};
 pub use events::{
     AgentDeleted, AgentQuestionAnswered, AgentQuestionAsked, AgentRunDeleted, AgentRunFinished,
@@ -75,7 +77,8 @@ pub use run::{
 };
 
 use agent::validate_name;
-use runner::{RunEvent, RunSpec, Runner, Session, runner_for};
+use backends::adi_events as turn_events;
+use runner::{RunEvent, RunSpec, Runner, Session, human::HumanRunner, runner_for, runner_of};
 use store::{
     Answer, AnsweredBy, Ask, SessionRecord, SessionRef, SessionStore, assistant_turn, now_ms,
     user_turn,
@@ -348,9 +351,14 @@ impl Agents {
 
     /// The runner for this agent's backend, or the honest refusal.
     ///
+    /// By *backend*, so this is the question to ask when there is no session yet — a launch about
+    /// to open one. Once a session exists it answers for itself: use
+    /// [`runner_of`](crate::runner::runner_of) on its record, because a session can be run by
+    /// something its agent's current backend does not imply.
+    ///
     /// # Errors
     /// [`Error::NotRunnable`] when nothing here runs that backend.
-    fn runner_of(agent: &StoredAgent) -> Result<Box<dyn Runner>> {
+    fn runner_of_agent(agent: &StoredAgent) -> Result<Box<dyn Runner>> {
         runner_for(&agent.manifest.backend)
             .ok_or_else(|| Error::NotRunnable(agent.manifest.backend.to_string()))
     }
@@ -361,7 +369,7 @@ impl Agents {
     /// engine must not make its existing runs unreadable, which is the whole reason the backend is
     /// a field of the session rather than a directory it lives in.
     fn session_is_alive(store: &SessionStore, record: &SessionRecord) -> bool {
-        runner_for(&record.backend)
+        runner_of(record)
             .is_some_and(|runner| runner.is_alive(&store.session(&record.agent, &record.id)))
     }
 
@@ -501,7 +509,7 @@ impl Agents {
         {
             return Err(full);
         }
-        let runner = Self::runner_of(&agent)?;
+        let runner = Self::runner_of_agent(&agent)?;
         // One pane per agent, so a second Run is not a launch — it would type this task into the
         // session already open. Say so instead.
         if runner.as_terminal().is_some() && self.is_running(&agent) {
@@ -658,18 +666,31 @@ impl Agents {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        let runner = Self::runner_of(&agent)?;
-        if !answerable(runner.as_ref()) {
-            return Err(Error::Unsupported(format!(
+        let unanswerable = || {
+            Error::Unsupported(format!(
                 "backend {} isn't answerable — only a backend that continues the same thread keeps \
                  conversations you can reply to",
                 agent.manifest.backend
-            )));
-        }
-        if self.sessions().get(name, conv_id).is_none() {
-            return Err(Error::NotFound(format!(
-                "{name}: no conversation {conv_id}"
-            )));
+            ))
+        };
+        // Asked of the runner that started *this* conversation, not of the agent's backend. They
+        // disagree for a simulated run — a person always keeps a thread you can answer, whatever
+        // engine the agent is pointed at — and answering the wrong one would refuse a reply the
+        // conversation can plainly take.
+        let Some(record) = self.sessions().get(name, conv_id) else {
+            // No such conversation. Which of the two things is wrong is worth getting right: an
+            // agent whose backend keeps no thread never had one to find, and saying so is more use
+            // than reporting the id missing.
+            return Err(if answerable(Self::runner_of_agent(&agent)?.as_ref()) {
+                Error::NotFound(format!("{name}: no conversation {conv_id}"))
+            } else {
+                unanswerable()
+            });
+        };
+        let runner =
+            runner_of(&record).ok_or_else(|| Error::NotRunnable(record.backend.to_string()))?;
+        if !answerable(runner.as_ref()) {
+            return Err(unanswerable());
         }
         Ok(())
     }
@@ -684,7 +705,13 @@ impl Agents {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        let runner = Self::runner_of(&agent)?;
+        let store = self.sessions();
+        let record = store
+            .get(name, conv_id)
+            .ok_or_else(|| Error::NotFound(format!("{name}: no conversation {conv_id}")))?;
+        // The conversation's own runner — see `check_deliverable`.
+        let runner =
+            runner_of(&record).ok_or_else(|| Error::NotRunnable(record.backend.to_string()))?;
         if !answerable(runner.as_ref()) {
             return Err(Error::Unsupported(format!(
                 "backend {} isn't answerable — only a backend that continues the same thread keeps \
@@ -692,10 +719,6 @@ impl Agents {
                 agent.manifest.backend
             )));
         }
-        let store = self.sessions();
-        let record = store
-            .get(name, conv_id)
-            .ok_or_else(|| Error::NotFound(format!("{name}: no conversation {conv_id}")))?;
         let may_start = !self.at_capacity_for(&agent);
 
         let _gate = turn_gate();
@@ -735,13 +758,12 @@ impl Agents {
     #[must_use]
     pub fn transcript(&self, agent: &StoredAgent, conv_id: &str) -> Vec<Turn> {
         self.advance_queue(agent, conv_id);
-        let Some(runner) = runner_for(&agent.manifest.backend) else {
+        let store = self.sessions();
+        // The session's own runner, not the agent's current backend's: a simulated run and a real
+        // one of the same agent carry the same backend, and only the record tells them apart.
+        let Some(runner) = store.get(&agent.name, conv_id).as_ref().and_then(runner_of) else {
             return Vec::new();
         };
-        let store = self.sessions();
-        if store.get(&agent.name, conv_id).is_none() {
-            return Vec::new();
-        }
         let session = store.session(&agent.name, conv_id);
         let running = runner.is_alive(&session);
         let live = live_content(runner.as_ref(), &session, running);
@@ -886,15 +908,15 @@ impl Agents {
         if store.queue_len(&agent.name, conv_id) == 0 {
             return false;
         }
-        let Some(runner) = runner_for(&agent.manifest.backend) else {
+        let Some(record) = store.get(&agent.name, conv_id) else {
+            return false;
+        };
+        let Some(runner) = runner_of(&record) else {
             return false;
         };
         if !answerable(runner.as_ref()) || self.at_capacity_for(agent) {
             return false;
         }
-        let Some(record) = store.get(&agent.name, conv_id) else {
-            return false;
-        };
 
         let _gate = turn_gate();
         // Re-decided here, where only one poller can be holding the gate.
@@ -1193,8 +1215,12 @@ impl Agents {
             .into_iter()
             .map(|record| RunInfo {
                 // From the record just listed: liveness reads the runner's state slot, which is a
-                // column that row already carried.
-                running: runner.is_alive(&store.session_as_listed(&record)),
+                // column that row already carried — and it is asked of the runner that started
+                // *this* session, which is not always the one the listing was opened with.
+                running: runner_of(&record)
+                    .as_deref()
+                    .unwrap_or(runner)
+                    .is_alive(&store.session_as_listed(&record)),
                 run_id: record.id,
                 started_at: record.started_at,
                 last_activity: record.last_activity,
@@ -1251,10 +1277,18 @@ impl Agents {
     /// interactive backend, where `run_id` is ignored).
     #[must_use]
     pub fn peek_run(&self, agent: &StoredAgent, run_id: &str) -> Peek {
-        let Some(runner) = runner_for(&agent.manifest.backend) else {
+        let store = self.sessions();
+        // A terminal has no run list, so `peek` hands this an empty id and there is no record to
+        // resolve from — fall back to the agent's backend, which is the only thing that can answer
+        // for a pane. Everywhere else the record is the authority.
+        let Some(runner) = store
+            .get(&agent.name, run_id)
+            .as_ref()
+            .and_then(runner_of)
+            .or_else(|| runner_for(&agent.manifest.backend))
+        else {
             return empty_peek();
         };
-        let store = self.sessions();
         let session = store.session(&agent.name, run_id);
         let running = runner.is_alive(&session);
         if let Some(terminal) = runner.as_terminal() {
@@ -1281,13 +1315,15 @@ impl Agents {
     /// Returns name validation or backend lifecycle errors.
     pub fn stop_run(&self, name: &str, run_id: &str) -> Result<bool> {
         validate_name(name)?;
-        let Some(agent) = self.get(name)? else {
+        // Still gated on the agent existing — a run id under a deleted agent is not a run to stop —
+        // but the runner comes from the run's own record, not from that agent's current backend.
+        if self.get(name)?.is_none() {
             return Ok(false);
-        };
-        let Some(runner) = runner_for(&agent.manifest.backend) else {
-            return Ok(false);
-        };
+        }
         let store = self.sessions();
+        let Some(runner) = store.get(name, run_id).as_ref().and_then(runner_of) else {
+            return Ok(false);
+        };
         let stopped = runner
             .stop(&store.session(name, run_id), STOP_GRACE)?
             .was_running;
@@ -1319,16 +1355,18 @@ impl Agents {
     /// history, or lifecycle errors from stopping a live run.
     pub fn delete_run(&self, name: &str, run_id: &str) -> Result<bool> {
         validate_name(name)?;
-        let Some(agent) = self.get(name)? else {
+        // Gated on the agent existing, but the runner comes from the run's own record — see
+        // `stop_run`.
+        if self.get(name)?.is_none() {
             return Ok(false);
-        };
+        }
         let store = self.sessions();
         if store.get(name, run_id).is_none() {
             return Ok(false);
         }
         // Stop it first. The store cannot signal anything — that is the runner's half — so a child
         // still running here would outlive its own log and write into a slot nothing is reading.
-        if let Some(runner) = runner_for(&agent.manifest.backend) {
+        if let Some(runner) = store.get(name, run_id).as_ref().and_then(runner_of) {
             runner.stop(&store.session(name, run_id), STOP_GRACE)?;
         }
         let deleted = store.delete(name, run_id)?;
@@ -1373,17 +1411,19 @@ impl Agents {
     /// Returns name validation or backend lifecycle errors.
     pub fn stop(&self, name: &str) -> Result<bool> {
         validate_name(name)?;
-        let Some(agent) = self.get(name)? else {
+        if self.get(name)?.is_none() {
             return Ok(false);
-        };
-        let Some(runner) = runner_for(&agent.manifest.backend) else {
-            return Ok(false);
-        };
+        }
         // Every live session of the agent, not only the ones a run list would show: a terminal
-        // keeps no history, and stopping "the agent" has always meant closing its pane too.
+        // keeps no history, and stopping "the agent" has always meant closing its pane too. Each
+        // session is stopped by whatever started it — an agent can have a simulated run and a real
+        // one open at once, and one runner cannot close the other's.
         let store = self.sessions();
         let mut stopped = false;
         for record in store.list(name) {
+            let Some(runner) = runner_of(&record) else {
+                continue;
+            };
             if runner
                 .stop(&store.session(name, &record.id), STOP_GRACE)?
                 .was_running
@@ -1425,6 +1465,274 @@ impl Agents {
         }
         Ok(removed)
     }
+
+    // ---- the simulator -------------------------------------------------------------------
+    //
+    // A run of the agent with a person in the model's seat. Everything here goes through the paths
+    // a real run goes through — the same spec, the same composer, the same tool table, the same
+    // store, the same event log. Where one of these looks like it is doing something itself, read
+    // the comment: it is delegating, and the delegation is the point. A simulator that grew its own
+    // copy of any of this would be showing somebody a run that never happens.
+
+    /// Open a run of `name` with a person in the model's seat.
+    ///
+    /// Always a fresh run. Continuing an existing transcript is out of scope on purpose: a
+    /// simulated turn in the middle of a real conversation would be indistinguishable from the
+    /// model's own afterwards, and the transcript is the record everything else reads.
+    ///
+    /// The [run cap](RunLimits) is not weighed. It bounds engines the platform is running, and this
+    /// starts nothing — the "engine" is a browser, and refusing to let somebody *read a prompt*
+    /// because four agents are busy would be the cap answering a question nobody asked it.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] for an unknown agent, or store errors.
+    pub fn simulate(&self, name: &str, message: &str) -> Result<Launch> {
+        validate_name(name)?;
+        let agent = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let runner = HumanRunner::new();
+        // The same spec a real launch builds: the resolved cwd, the synced `.bin`, the assembled
+        // PATH, the secrets, the workspace and knowledge notes. This is what makes the tools the
+        // person calls be the agent's own tools rather than a copy of them.
+        let mut spec = self.launch_spec(&agent, None);
+        let store = self.sessions();
+        let record = store.create_as(
+            &agent.name,
+            agent.manifest.backend.clone(),
+            Some(runner.kind()),
+            &spec.cwd,
+            message,
+        )?;
+        pin_tool_help(&store, &agent.name, &record.id, &mut spec);
+        let session = store.session(&agent.name, &record.id);
+        store.append_turn(&agent.name, &record.id, user_turn(message))?;
+        // Composes the prompt and opens the seat. No child is spawned.
+        runner.send(&spec, &session, message)?;
+        store.prune_old(&agent.name, |record| {
+            Self::session_is_alive(&store, record)
+        });
+
+        let launch = launch_of(&agent, &runner, &session);
+        self.emit(
+            "adi.agents.run.started",
+            &AgentRunStarted::of(name, message, &launch),
+        );
+        Ok(launch)
+    }
+
+    /// The system prompt a simulated run was composed with — the string the model would receive.
+    ///
+    /// Read out of what the run froze at its first turn rather than composed again here, for two
+    /// reasons: composing means assembling a spec, which is a write path (it syncs the agent's
+    /// `.bin`), and this is polled by a page; and the frozen copy is the *true* one — what this run
+    /// opened with, not what an identical launch would open with now.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] when there is no such run, or [`Error::Unsupported`] when it is
+    /// not a simulated one.
+    pub fn simulated_prompt(&self, name: &str, run_id: &str) -> Result<String> {
+        validate_name(name)?;
+        let store = self.sessions();
+        self.require_simulated(&store, name, run_id)?;
+        Ok(HumanRunner::prompt_of(&store.session(name, run_id)).unwrap_or_default())
+    }
+
+    /// The tools a simulated run may call, exactly as they are declared to a model.
+    ///
+    /// Straight off the table [`adi_loop`](crate::backends::harness::adi_loop) builds its provider
+    /// payloads from, so a tool added there appears here without anybody remembering to.
+    #[must_use]
+    pub fn simulated_tools() -> Vec<ToolDeclaration> {
+        backends::harness::tools::declarations()
+    }
+
+    /// Close the open turn: run every call in it, in order, and append what each returned.
+    ///
+    /// The blocks are what the person emitted this turn — prose and calls, in the order written.
+    /// Calls really run, in the agent's own directory, through its own shell, against its own
+    /// secrets, because they go through the same [`execute`](crate::backends::harness::tools) the
+    /// adi loop calls. A failed call comes back as the text the model would have read, not as an
+    /// error of this request: that is the tool's *answer*.
+    ///
+    /// The turn ends one of two ways, and it is the blocks that decide, not the caller. With a call
+    /// in it the run stays open and the person is asked again as the model (`tool_use`); with none,
+    /// the last thing said is the answer, the run yields, and the seat is empty until somebody
+    /// speaks as themselves (`end_turn`).
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] for an unknown agent or run, [`Error::Unsupported`] for a run
+    /// that is not simulated, and store or log write errors.
+    pub fn simulate_turn(&self, name: &str, run_id: &str, blocks: &[SimBlock]) -> Result<SimTurn> {
+        validate_name(name)?;
+        let agent = self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?;
+        let store = self.sessions();
+        let record = self.require_simulated(&store, name, run_id)?;
+        let session = store.session(name, run_id);
+
+        // Appended to, never truncated: the turn's log slot was opened by `send`, and the person
+        // may close the turn over several requests as they stack blocks. A `Write::create` here
+        // would drop everything said earlier in the same turn.
+        let mut log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(session.log_path())?;
+
+        // Where the run is, which is what every relative path in a call resolves against — the
+        // directory pinned to this session at creation, the same one a real turn re-enters.
+        let cwd = session_dir(&self.config, &record);
+        let agent_dir = store.agent_dir(name);
+        let ctx = backends::harness::tools::Ctx::for_conversation(
+            name,
+            agent.manifest.unattended,
+            &cwd,
+            run_id,
+            &agent_dir,
+            store.clone(),
+        );
+
+        let mut results = Vec::new();
+        let mut answer = String::new();
+        for (i, block) in blocks.iter().enumerate() {
+            match block {
+                SimBlock::Text(text) => {
+                    // Commentary while calls follow, the answer when none do — the same rule the
+                    // adi loop applies to what a model writes before reaching for a tool.
+                    turn_events::message(&mut log, text);
+                    answer = text.clone();
+                }
+                SimBlock::Call { name: tool, input } => {
+                    // The provider supplies a call id; a person does not, so one is synthesized
+                    // from its place in the turn, exactly as the loop does for the providers that
+                    // identify a call only by position.
+                    let id = format!("call-{}", i + 1);
+                    turn_events::tool_started(&mut log, &id, tool, input);
+                    let (output, ok) = match backends::harness::tools::execute(tool, input, &ctx) {
+                        Ok(out) => (out, true),
+                        Err(err) => (err, false),
+                    };
+                    turn_events::tool_finished(&mut log, &id, tool, &output, ok);
+                    results.push(SimResult {
+                        name: tool.clone(),
+                        output,
+                        ok,
+                    });
+                }
+            }
+        }
+
+        let called = blocks.iter().any(|b| matches!(b, SimBlock::Call { .. }));
+        if called {
+            // The loop goes round: results are in the log, the seat stays occupied, and the person
+            // is asked again as the model.
+            return Ok(SimTurn {
+                stop_reason: STOP_TOOL_USE.to_string(),
+                results,
+            });
+        }
+
+        // Nothing was called, so the turn is the answer. Written as the answer event and closed
+        // with telemetry, which is what turns it into a committed transcript turn and an outcome
+        // the next listing publishes — none of which is simulator-specific code.
+        turn_events::answer(&mut log, &answer);
+        turn_events::metrics(
+            &mut log,
+            &TurnMetrics {
+                num_turns: Some(1),
+                terminal_reason: Some("simulated".to_string()),
+                ..TurnMetrics::default()
+            },
+        );
+        drop(log);
+        // Vacating the seat is what says the turn ended, and it is the runner's to say.
+        let runner = HumanRunner::new();
+        runner.stop(&session, Duration::ZERO)?;
+        Ok(SimTurn {
+            stop_reason: STOP_END_TURN.to_string(),
+            results,
+        })
+    }
+
+    /// Answer a simulated run as yourself, once it has yielded.
+    ///
+    /// Delegates to [`reply`](Self::reply) rather than reimplementing it, so a simulated
+    /// conversation queues, settles a pending question, and starts its next turn by the same code
+    /// every other conversation does.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`], [`Error::Unsupported`] for a run that is not simulated, or
+    /// launch errors.
+    pub fn simulate_user(&self, name: &str, run_id: &str, text: &str) -> Result<Sent> {
+        validate_name(name)?;
+        self.require_simulated(&self.sessions(), name, run_id)?;
+        self.reply(name, run_id, text)
+    }
+
+    /// This run's record, if it is one a person is driving.
+    ///
+    /// Every simulator verb starts here. A real run reaching these would be a person writing turns
+    /// into a transcript the model is also writing into — two hands on the same conversation, and
+    /// nothing downstream could tell which wrote what.
+    fn require_simulated(
+        &self,
+        store: &SessionStore,
+        name: &str,
+        run_id: &str,
+    ) -> Result<SessionRecord> {
+        let record = store
+            .get(name, run_id)
+            .ok_or_else(|| Error::NotFound(format!("{name}: no run {run_id}")))?;
+        if record.runner.as_ref().map(runner::RunnerKind::as_str) != Some(runner::human::KIND) {
+            return Err(Error::Unsupported(format!(
+                "{name}: run {run_id} is not a simulation — only a run started by `simulate` has a \
+                 seat for a person"
+            )));
+        }
+        Ok(record)
+    }
+}
+
+/// The stop reason of a turn that called something: the results append and the loop runs again.
+/// Anthropic's spelling, which is the one the runner reads; `OpenAI` calls it `tool_calls`.
+pub const STOP_TOOL_USE: &str = "tool_use";
+/// The stop reason of a turn that only spoke: the run yields to a person. `OpenAI` calls it `stop`.
+pub const STOP_END_TURN: &str = "end_turn";
+
+/// One thing a person emitted into a simulated turn.
+///
+/// Two kinds, because a model emits two kinds. A result is not one of them — it is what comes back
+/// after the turn is closed, and it is never something the seat produces.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SimBlock {
+    /// Prose. The last one in a turn with no calls is the turn's answer.
+    Text(String),
+    /// A call to one of the agent's tools, with its arguments as the tool's schema declares them.
+    Call {
+        name: String,
+        input: serde_json::Value,
+    },
+}
+
+/// What one call returned.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SimResult {
+    pub name: String,
+    /// What the model would read next — the tool's output, or its refusal. Both are answers.
+    pub output: String,
+    /// Whether the tool succeeded. `false` is a result the model is expected to act on, not an
+    /// error of the request that ran it.
+    pub ok: bool,
+}
+
+/// How a simulated turn ended, and what its calls returned.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SimTurn {
+    /// [`STOP_TOOL_USE`] or [`STOP_END_TURN`] — decided by the blocks, never by the caller.
+    pub stop_reason: String,
+    /// One entry per call, in the order they ran.
+    pub results: Vec<SimResult>,
 }
 
 /// Settle what `spec`'s prompt says about its tools: the section this conversation opened with, or
@@ -3158,6 +3466,232 @@ mod tests {
             assert_eq!(found.agent, name);
             assert_eq!(found.conv, conv);
             assert!(found.headline().contains(&name));
+        }
+    }
+
+    // ---- the simulator ---------------------------------------------------------------------
+
+    /// A prompt is a prompt. The one claim the whole feature rests on is that what a person reads
+    /// in the seat is byte-for-byte what the model is handed — so the two must come out of the same
+    /// composer, and this is what says they do.
+    #[test]
+    fn a_simulated_run_is_composed_by_the_same_composer_as_a_real_one() {
+        let store = scratch("sim-prompt");
+        let mut manifest = spec("harness:adi");
+        manifest.arguments = TestArguments {
+            system_prompt: Some("You review code. Read before you judge.".into()),
+            model: Some("claude-opus-5".into()),
+            ..TestArguments::default()
+        };
+        store.save("reviewer", manifest).expect("save");
+        let agent = store.get("reviewer").expect("get").expect("present");
+
+        let launch = store.simulate("reviewer", "review the runner").expect("simulate");
+        let run_id = match &launch {
+            Launch::Process { run_id, .. } => run_id.clone(),
+            other => panic!("a simulated run is not a pane: {other:?}"),
+        };
+        let shown = store
+            .simulated_prompt("reviewer", &run_id)
+            .expect("the prompt it opened with");
+
+        // What a real launch of the same agent, in the same directory, would compose. Through
+        // `runner::prompt::compose`, which is the function the runners call — not a copy of it.
+        let sessions = store.sessions();
+        let record = sessions.get("reviewer", &run_id).expect("the record");
+        let mut real = store.launch_spec(&agent, None);
+        pin_tool_help(&sessions, "reviewer", &run_id, &mut real);
+        real.cwd = record.cwd.clone();
+        let expected = runner::prompt::compose(&real, None).expect("a prompt");
+
+        assert_eq!(shown, expected);
+        assert!(shown.contains("You review code."), "the agent's own words: {shown}");
+        assert!(shown.contains("# Where you are"), "and where it is: {shown}");
+    }
+
+    /// A call made from the seat is the call the model makes: same table, same executor, same text
+    /// back — including the refusal for a tool that does not exist, which a model really does hit
+    /// and really does read.
+    #[test]
+    fn a_call_from_the_seat_is_the_call_the_loop_makes() {
+        let store = scratch("sim-tools");
+        store.save("hands", spec("harness:adi")).expect("save");
+        let launch = store.simulate("hands", "look around").expect("simulate");
+        let Launch::Process { run_id, .. } = &launch else {
+            panic!("expected a headless run");
+        };
+
+        let sessions = store.sessions();
+        let cwd = sessions.get("hands", run_id).expect("record").cwd;
+        std::fs::create_dir_all(&cwd).expect("the run's directory");
+        std::fs::write(cwd.join("note.txt"), "two\nlines\n").expect("a file to read");
+
+        let turn = store
+            .simulate_turn(
+                "hands",
+                run_id,
+                &[
+                    SimBlock::Text("Reading it.".into()),
+                    SimBlock::Call {
+                        name: "Read".into(),
+                        input: serde_json::json!({ "path": "note.txt" }),
+                    },
+                    SimBlock::Call {
+                        name: "Frobnicate".into(),
+                        input: serde_json::json!({}),
+                    },
+                ],
+            )
+            .expect("the turn runs");
+
+        // Two calls, two results, in the order they were written — and the turn is not over,
+        // because a turn that called something is asked again.
+        assert_eq!(turn.stop_reason, STOP_TOOL_USE);
+        assert_eq!(turn.results.len(), 2);
+        assert_eq!(turn.results[0].name, "Read");
+        assert!(turn.results[0].ok);
+        assert_eq!(turn.results[0].output, "two\nlines");
+
+        // A failed call is an *answer*, not an error of the request that ran it, and it is the same
+        // sentence `tools::execute` gives the loop.
+        assert_eq!(turn.results[1].name, "Frobnicate");
+        assert!(!turn.results[1].ok);
+        assert!(
+            turn.results[1].output.starts_with("no tool named Frobnicate"),
+            "the model reads the tool's own words: {}",
+            turn.results[1].output,
+        );
+
+        // The run is still open: the loop came back round to the seat rather than yielding.
+        assert!(
+            store.runs(&store.get("hands").expect("get").expect("present"))
+                .iter()
+                .any(|r| r.run_id == *run_id && r.running),
+            "a turn that called something leaves the seat occupied",
+        );
+    }
+
+    /// A turn that only spoke yields, and the run ends like any other: listed, settled into the
+    /// transcript, and carrying an outcome. None of that is simulator code — it falls out of the
+    /// session being an ordinary session.
+    #[test]
+    fn a_turn_that_calls_nothing_yields_and_the_run_ends() {
+        let store = scratch("sim-end-turn");
+        store.save("talker", spec("harness:adi")).expect("save");
+        let launch = store.simulate("talker", "say something").expect("simulate");
+        let Launch::Process { run_id, .. } = &launch else {
+            panic!("expected a headless run");
+        };
+
+        let turn = store
+            .simulate_turn("talker", run_id, &[SimBlock::Text("Nothing to change.".into())])
+            .expect("the turn runs");
+        assert_eq!(turn.stop_reason, STOP_END_TURN);
+        assert!(turn.results.is_empty());
+
+        let agent = store.get("talker").expect("get").expect("present");
+        let listed = store.runs(&agent);
+        let run = listed
+            .iter()
+            .find(|r| r.run_id == *run_id)
+            .expect("a simulated run is in the run list");
+        assert!(!run.running, "the seat is empty once the turn ends");
+        assert!(
+            run.outcome.as_ref().is_some_and(store::RunOutcome::is_reported),
+            "how it ended is recorded: {:?}",
+            run.outcome,
+        );
+
+        // And what was said is in the transcript, as the answer to the message it opened with.
+        let turns = store.transcript(&agent, run_id);
+        assert_eq!(turns.first().map(|t| t.text.as_str()), Some("say something"));
+        assert_eq!(turns.last().map(|t| t.text.as_str()), Some("Nothing to change."));
+    }
+
+    /// Re-pointing an agent at another engine must not lose the runs it already has. The record
+    /// says who was driving; the manifest says nothing about a run that has already happened.
+    #[test]
+    fn changing_the_backend_does_not_lose_a_simulated_run() {
+        let store = scratch("sim-rebackend");
+        store.save("drifter", spec("harness:adi")).expect("save");
+        let launch = store.simulate("drifter", "hold this").expect("simulate");
+        let Launch::Process { run_id, .. } = &launch else {
+            panic!("expected a headless run");
+        };
+
+        store.save("drifter", spec("process:claude")).expect("re-point it");
+        let agent = store.get("drifter").expect("get").expect("present");
+
+        let listed = store.runs(&agent);
+        let run = listed
+            .iter()
+            .find(|r| r.run_id == *run_id)
+            .expect("the run survives its agent being re-pointed");
+        assert!(run.running, "and it is still the person's seat, not the new engine's");
+
+        // Still answerable, too: `process:claude` keeps no thread, but this run was never its.
+        assert!(
+            store.simulated_prompt("drifter", run_id).is_ok(),
+            "the prompt it opened with is still readable",
+        );
+        assert!(store.stop_run("drifter", run_id).expect("stop"));
+    }
+
+    /// `Ask` refuses under an unattended agent, in a simulated run exactly as in a real one —
+    /// because it is the same tool, told the same thing about the agent it is running for.
+    #[test]
+    fn ask_refuses_in_a_simulated_run_of_an_unattended_agent() {
+        let store = scratch("sim-unattended");
+        let mut manifest = spec("harness:adi");
+        manifest.unattended = true;
+        store.save("nobody", manifest).expect("save");
+        let launch = store.simulate("nobody", "go").expect("simulate");
+        let Launch::Process { run_id, .. } = &launch else {
+            panic!("expected a headless run");
+        };
+
+        let turn = store
+            .simulate_turn(
+                "nobody",
+                run_id,
+                &[SimBlock::Call {
+                    name: "Ask".into(),
+                    input: serde_json::json!({
+                        "questions": [{ "question": "which one?", "header": "pick" }],
+                    }),
+                }],
+            )
+            .expect("the turn runs — the refusal is the tool's answer, not a failure");
+        assert!(!turn.results[0].ok);
+        assert!(
+            turn.results[0].output.contains("unattended"),
+            "the tool says why: {}",
+            turn.results[0].output,
+        );
+    }
+
+    /// The simulator verbs are for simulated runs only. A person writing turns into a conversation
+    /// a model is also writing into would leave a transcript nobody could attribute.
+    #[test]
+    fn a_real_run_has_no_seat_to_sit_in() {
+        let store = scratch("sim-refuses-real");
+        store.save("engine", spec("harness:adi")).expect("save");
+        let sessions = store.sessions();
+        let record = sessions
+            .create("engine", Backend::HarnessAdi, "/tmp", "a real run")
+            .expect("a real session");
+
+        for outcome in [
+            store.simulated_prompt("engine", &record.id).err(),
+            store
+                .simulate_turn("engine", &record.id, &[SimBlock::Text("hi".into())])
+                .err(),
+            store.simulate_user("engine", &record.id, "hi").err(),
+        ] {
+            assert!(
+                matches!(outcome, Some(Error::Unsupported(_))),
+                "a real run refuses the seat: {outcome:?}",
+            );
         }
     }
 }

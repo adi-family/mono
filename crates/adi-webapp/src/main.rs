@@ -54,7 +54,7 @@ use routing::{
     project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
-    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, FleetForm,
+    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, FleetForm, Simulate,
     Flash, Form, HookLogView, KnowledgeConsole,
     MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, State, Status, TasksForm, TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
@@ -667,6 +667,9 @@ fn App() -> impl IntoView {
     let hook_log = HookLogView::new();
     let term_watch = TermWatch::new();
     let agents_watch = AgentsWatch::new();
+    // The simulator's own state: which run has a person in its seat. Apart from `agents_watch`,
+    // which watches a run somebody else is doing — see `state::Simulate`.
+    let agents_sim = Simulate::new();
 
     // The Tools page's create/link form, and the run + script-editor panels it shares with a
     // project's Tools panel (page-scoped so they survive re-renders and thread into both).
@@ -1017,7 +1020,7 @@ fn App() -> impl IntoView {
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run, knowledge),
                         Route::StoreFile => store_file_view(state),
                         Route::Tasks => tasks_view(state, tasks_form),
-                        Route::Agents => agents_view(state, agents_form, agents_watch),
+                        Route::Agents => agents_view(state, agents_form, agents_watch, agents_sim),
                         Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
                         Route::Secrets => secrets_view(state, secrets_form),
                         Route::Knowledge => knowledge_view(state, knowledge),

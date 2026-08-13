@@ -12,7 +12,7 @@ use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{AgentsForm, AgentsWatch, Flash, State};
+use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State};
 use crate::ui::{
     Key, flash_view, menu_item, row_actions,
     sort_rows, updated_text,
@@ -23,6 +23,7 @@ pub(crate) const COLS: &[&str] = &["Name", "Backend", "Model", "Project", "Tags"
 
 mod actions;
 mod form;
+mod simulate;
 
 use actions::apply_agents;
 pub(crate) use actions::{
@@ -42,7 +43,12 @@ use form::{agent_form_fields, clear_agent_form};
 /// params. ▶ Run starts either an interactive pty session or a headless background process;
 /// deeper orchestration is future work. The form adapts its params to the chosen backend, and
 /// for the `harness:adi` backend also to its chosen provider.
-pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
+pub(crate) fn agents_view(
+    state: State,
+    form: AgentsForm,
+    watch: AgentsWatch,
+    sim: Simulate,
+) -> AnyView {
     let agents = state.agents;
     let secs_since = state.secs_since;
     let flash = state.flash;
@@ -59,6 +65,10 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
         ..
     } = form;
     view! {
+        // Above everything, when it is open: taking the model's seat is the whole screen, not a
+        // panel beside the list of agents you could take it in.
+        {move || simulate::simulate_view(state, sim)}
+
         {all_chats_view(state, watch, None)}
 
         {move || live_view(state, watch)}
@@ -74,7 +84,7 @@ pub(crate) fn agents_view(state: State, form: AgentsForm, watch: AgentsWatch) ->
                 <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
             </div>
 
-            <Table state=state.tables.agents>{move || agent_rows(state, form, watch)}</Table>
+            <Table state=state.tables.agents>{move || agent_rows(state, form, watch, sim)}</Table>
         </section>
 
         <section class="adi-panel">
@@ -454,7 +464,7 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
 
 /// Render the agents table body: a loading/empty placeholder, or one row per agent with Run or
 /// View (live session), Edit (loads it into the form), and Delete actions.
-fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
+fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, sim: Simulate) -> AnyView {
     let table = state.tables.agents;
     let Some(st) = state.agents.get() else {
         return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
@@ -471,10 +481,22 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch) -> AnyView {
         .map(|a| {
             let del_name = a.name.clone();
             let a_edit = a.clone();
+            let sim_name = a.name.clone();
             // Run/View/Stop stay inline (the live controls); Edit and the destructive Delete
             // move into the kebab.
             let items = vec![
                 menu_item(state, "Edit", false, move || load_agent_into_form(form, &a_edit)),
+                // Take the model's seat in a run of this agent. In the kebab rather than inline
+                // because it is not a way of *running* the agent — it is a way of reading what the
+                // agent is told, and it opens a screen rather than starting work.
+                menu_item(state, "Simulate", false, move || {
+                    simulate::start_simulation(
+                        state,
+                        sim,
+                        sim_name.clone(),
+                        "Simulated run — read the prompt and take the model's seat.".to_string(),
+                    );
+                }),
                 menu_item(state, "Delete", true, move || {
                     apply_agents(state, None, format!("Deleted {del_name}."),
                         fetch::delete_agent(del_name.clone()));

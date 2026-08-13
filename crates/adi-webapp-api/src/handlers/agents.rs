@@ -14,8 +14,10 @@ use crate::types::{
     AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo,
     AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
     AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
-    AgentsState, AllAgentRuns, AnswerRun, HideRun, PendingAsk, PendingAsks, ProjectRunLimit,
-    ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetRunLimit, UnqueueFromRun,
+    AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult, AgentSimSection,
+    AgentSimState, AgentSimTool, AgentSimTurn, AgentToken, AgentsState, AllAgentRuns, AnswerRun,
+    HideRun, PendingAsk, PendingAsks, ProjectRunLimit, ReplyToRun, ReviewRun, RunAgent, RunRef,
+    SaveAgent, SecretRef, SetRunLimit, SimulateAgent, SimulateTurn, UnqueueFromRun,
 };
 
 use super::response::{Response, clean, error, ok_json, parse_body};
@@ -2235,4 +2237,354 @@ mod tests {
         assert_eq!(key.env, "MOONSHOT_API_KEY");
         assert!(key.required, "there is no login for this one");
     }
+}
+
+// ---- the simulator (a run with a person in the model's seat) ------------------------
+//
+// Four endpoints over one state shape. Every one of them ends by rendering `sim_state`, so a page
+// that stacks a block, ends a turn, or replies gets the prompt back grown by what it just did —
+// rather than asking again and drawing something stale in between.
+//
+// Nothing here composes a prompt, declares a tool, or runs one. `adi_agents` does all three, on the
+// paths a real run uses; these handlers are the wire.
+
+/// `POST /api/agents/simulate` — open a run of an agent with a person in the model's seat.
+///
+/// Always a fresh run. The agent's own environment is materialized exactly as a real launch
+/// materializes it — same cwd, same `.bin`, same PATH, same secrets — so the tools the person calls
+/// really are the agent's tools.
+#[must_use]
+pub fn simulate_agent(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_body::<SimulateAgent>(body).filter(|r| !r.name.trim().is_empty()) else {
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"message\": \"…\" } with a non-empty name",
+        );
+    };
+    let name = req.name.trim();
+    let message = req.message.trim();
+    if message.is_empty() {
+        return error(
+            400,
+            "A simulated run opens on a task, the same as a real one — enter what the agent is \
+             being asked to do.",
+        );
+    }
+    let run_id = match store.simulate(name, message) {
+        Ok(adi_agents::Launch::Process { run_id, .. }) => run_id,
+        // A pane has no seat to sit in, and `simulate` never opens one — this cannot happen, and
+        // saying so beats unwrapping it.
+        Ok(adi_agents::Launch::Pty { .. }) => {
+            return error(500, "a simulated run should never be a terminal session");
+        }
+        Err(e) => return Response::from(&e),
+    };
+    sim_state(store, name, &run_id)
+}
+
+/// `POST /api/agents/simulate/prompt` — the run as the model sees it: the composed prompt, its
+/// split, the tools it was declared, and the conversation so far.
+///
+/// The prompt is the one the run *opened with*, read back rather than recomposed. Composing means
+/// assembling a spec, which syncs the agent's `.bin` — a write path, and this is polled by a page.
+#[must_use]
+pub fn simulate_prompt(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_run_ref(body) else {
+        return bad_run_ref();
+    };
+    sim_state(store, req.name.trim(), req.run_id.trim())
+}
+
+/// `POST /api/agents/simulate/turn` — close the open turn.
+///
+/// Every call in it runs, in order, through the same executor the adi loop calls. A failed call is
+/// answered with the text the model would have read, not with an error status: that is the tool's
+/// answer, and seeing it is the lesson. How the turn ends is decided by the blocks — a call in it
+/// means `tool_use` and the seat stays occupied; none means `end_turn` and the run yields.
+#[must_use]
+pub fn simulate_turn(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_body::<SimulateTurn>(body)
+        .filter(|r| !r.name.trim().is_empty() && !r.run_id.trim().is_empty())
+    else {
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"blocks\": [ … ] }",
+        );
+    };
+    let (name, run_id) = (req.name.trim(), req.run_id.trim());
+    if req.blocks.is_empty() {
+        return error(
+            400,
+            "A turn has to contain something — say something, call a tool, or both, before ending \
+             it.",
+        );
+    }
+    let blocks: Vec<adi_agents::SimBlock> = req.blocks.into_iter().map(sim_block).collect();
+    let turn = match store.simulate_turn(name, run_id, &blocks) {
+        Ok(turn) => turn,
+        Err(e) => return Response::from(&e),
+    };
+    let results = turn
+        .results
+        .into_iter()
+        .map(|r| AgentSimResult {
+            name: r.name,
+            output: r.output,
+            ok: r.ok,
+        })
+        .collect();
+    match sim_state_of(store, name, run_id) {
+        Ok(state) => ok_json(&AgentSimTurn { results, state }),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/agents/simulate/reply` — answer a yielded simulated run as yourself.
+#[must_use]
+pub fn simulate_reply(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_body::<ReplyToRun>(body)
+        .filter(|r| !r.name.trim().is_empty() && !r.run_id.trim().is_empty())
+    else {
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"message\": \"…\" }",
+        );
+    };
+    let (name, run_id) = (req.name.trim(), req.run_id.trim());
+    let message = req.message.trim();
+    if message.is_empty() {
+        return error(400, "Nothing to say — type a message before sending it.");
+    }
+    if let Err(e) = store.simulate_user(name, run_id, message) {
+        return Response::from(&e);
+    }
+    sim_state(store, name, run_id)
+}
+
+/// One wire block as the agent layer's own.
+fn sim_block(block: AgentSimBlock) -> adi_agents::SimBlock {
+    match block {
+        AgentSimBlock::Text { text } => adi_agents::SimBlock::Text(text),
+        AgentSimBlock::Call { name, input } => adi_agents::SimBlock::Call { name, input },
+    }
+}
+
+/// The whole state of a simulated run, rendered.
+fn sim_state(store: &Agents, name: &str, run_id: &str) -> Response {
+    match sim_state_of(store, name, run_id) {
+        Ok(state) => ok_json(&state),
+        Err(e) => Response::from(&e),
+    }
+}
+
+fn sim_state_of(
+    store: &Agents,
+    name: &str,
+    run_id: &str,
+) -> Result<AgentSimState, AgentStoreError> {
+    let agent = get_agent(store, name)?;
+    let prompt = store.simulated_prompt(name, run_id)?;
+
+    // The peek answers liveness the same way the run list does, and its transcript is the one the
+    // chat renders — no simulated special case on either.
+    let peek = store.peek_run(&agent, run_id);
+    let turns: Vec<AgentTurn> = store
+        .transcript(&agent, run_id)
+        .into_iter()
+        .map(agent_turn)
+        .collect();
+
+    // Tokenized section by section rather than whole, so the ranges are exact by construction: each
+    // section is a contiguous slice, so the runs concatenate into one stream.
+    //
+    // The conversation is tokenized here too, and it has to be: what a turn *appended* — the calls
+    // and, above all, their results — is the next thing the model reads, and a prompt view that
+    // stopped at the system prompt would show a reader everything except the part their last turn
+    // changed. Which is the one part they came to see.
+    let mut tokens: Vec<AgentToken> = Vec::new();
+    let mut sections: Vec<AgentSimSection> = Vec::new();
+    let mut cut = |label: String, text: &str, tokens: &mut Vec<AgentToken>| {
+        if text.is_empty() {
+            return;
+        }
+        let from = tokens.len();
+        tokens.extend(
+            adi_agents::analytics::split(text)
+                .into_iter()
+                .map(|t| AgentToken {
+                    id: t.id,
+                    text: t.text,
+                    special: t.special,
+                }),
+        );
+        sections.push(AgentSimSection {
+            label,
+            from,
+            to: tokens.len(),
+        });
+    };
+    for section in adi_agents::runner::prompt::sections(&prompt) {
+        cut(section.label.to_string(), section.text, &mut tokens);
+    }
+    for turn in &turns {
+        // A queued message has not been asked yet, so it is not in anybody's context.
+        if turn.queued {
+            continue;
+        }
+        cut(turn.role.clone(), &turn_text(turn), &mut tokens);
+    }
+    // Derived, not stored: a run whose seat is empty has yielded, and a run whose seat is taken is
+    // mid-loop. Keeping a copy would be a second answer to a question the runner already answers.
+    //
+    // Three states, and the pair of questions that separates them is "is the seat occupied?" and
+    // "has anything been emitted into it?". A seat that has been given up means the last turn was
+    // words only. A seat still occupied *after* something was emitted means the last turn called
+    // something and the loop came back round. A seat occupied with nothing emitted is a run that
+    // has not stopped at all, and has no reason for stopping to report.
+    //
+    // Emission is read off the timeline rather than off the turn's text, because the turn that
+    // called something is still `pending` — its answer is exactly what has not been written yet —
+    // so a check for a settled assistant turn reports nothing on the one state this is for.
+    //
+    // And it is the *open* turn that is asked, not the run: after a person answers as themselves the
+    // seat is theirs again with nothing in it, and reporting the previous turn's reason there would
+    // put a stale claim above an empty staging area.
+    let emitted = turns.last().is_some_and(|t| {
+        t.role != "user" && (!t.steps.is_empty() || !t.text.trim().is_empty())
+    });
+    let stop_reason = if !peek.running {
+        adi_agents::STOP_END_TURN.to_string()
+    } else if emitted {
+        adi_agents::STOP_TOOL_USE.to_string()
+    } else {
+        String::new()
+    };
+
+    Ok(AgentSimState {
+        name: agent.name.clone(),
+        run_id: run_id.to_string(),
+        prompt,
+        tokens,
+        sections,
+        encoding: adi_agents::analytics::ENCODING.to_string(),
+        tools: Agents::simulated_tools()
+            .into_iter()
+            .map(sim_tool)
+            .collect(),
+        turns,
+        stop_reason,
+        running: peek.running,
+    })
+}
+
+/// One declared tool, with its JSON Schema decoded into the fields a form can be built from.
+fn sim_tool(tool: adi_agents::ToolDeclaration) -> AgentSimTool {
+    let required: Vec<&str> = tool
+        .schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|r| r.iter().filter_map(serde_json::Value::as_str).collect())
+        .unwrap_or_default();
+    let props = tool
+        .schema
+        .get("properties")
+        .and_then(serde_json::Value::as_object);
+    let field_of = |name: &str| {
+        let spec = props
+            .and_then(|p| p.get(name))
+            .unwrap_or(&serde_json::Value::Null);
+        AgentSimField {
+            kind: field_kind(name, spec),
+            required: required.contains(&name),
+            hint: spec
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            name: name.to_string(),
+        }
+    };
+    // Required first, in the order the tool requires them, then the rest.
+    //
+    // Not the order the schema literal was written in — that order does not survive: a JSON object
+    // decodes into a sorted map, so reading `properties` back gives `background, command,
+    // timeout_ms` for `Bash`, which puts a flag nobody sets above the command the call is *about*.
+    // The `required` array does survive, and it is the tool's own statement of what matters, so it
+    // orders the top of the form and the remainder follows it alphabetically.
+    let mut fields: Vec<AgentSimField> = required.iter().map(|name| field_of(name)).collect();
+    if let Some(props) = props {
+        fields.extend(
+            props
+                .keys()
+                .filter(|name| !required.contains(&name.as_str()))
+                .map(|name| field_of(name)),
+        );
+    }
+    AgentSimTool {
+        name: tool.name,
+        description: tool.description,
+        fields,
+    }
+}
+
+/// Which control a parameter gets.
+///
+/// The schema type decides four of the five, and cannot decide the fifth: a `string` holding a shell
+/// command and a `string` holding a filename are the same type and not the same control. So the
+/// ones that are really *bodies* of text are named — by the parameter name, which is the only thing
+/// that distinguishes them, and which is stable because it is what the model writes.
+fn field_kind(name: &str, spec: &serde_json::Value) -> AgentSimFieldKind {
+    match spec.get("type").and_then(serde_json::Value::as_str) {
+        Some("boolean") => AgentSimFieldKind::Flag,
+        Some("integer" | "number") => AgentSimFieldKind::Number,
+        Some("array") => AgentSimFieldKind::List,
+        _ if matches!(
+            name,
+            "command" | "content" | "old_string" | "new_string" | "prompt" | "question"
+        ) =>
+        {
+            AgentSimFieldKind::Text
+        }
+        _ => AgentSimFieldKind::Line,
+    }
+}
+
+/// One transcript turn as the model reads it: what was said, and every call it made with what came
+/// back.
+///
+/// The call is written as the tagged block a model actually emits rather than as JSON, on the same
+/// reasoning the transcript's own renderer gives: the wire format of some transport is a shape the
+/// model never saw, and teaching a reader that shape means they then debug against it.
+fn turn_text(turn: &AgentTurn) -> String {
+    let mut out = String::new();
+    let mut add = |part: &str| {
+        if part.trim().is_empty() {
+            return;
+        }
+        if !out.is_empty() {
+            out.push_str("\n\n");
+        }
+        out.push_str(part);
+    };
+    for step in &turn.steps {
+        match step {
+            AgentStep::Message { text } | AgentStep::Thinking { text } => add(text),
+            AgentStep::Tool {
+                name,
+                input,
+                status,
+                output,
+            } => {
+                add(&format!("<invoke name=\"{name}\">{input}</invoke>"));
+                // A call still in flight has nothing back yet, and saying so beats an empty result
+                // block — which would read as a tool that answered with silence.
+                match status {
+                    AgentToolStatus::Running => add("<result>(still running)</result>"),
+                    _ => add(&format!("<result>\n{output}\n</result>")),
+                }
+            }
+        }
+    }
+    add(&turn.text);
+    out
 }

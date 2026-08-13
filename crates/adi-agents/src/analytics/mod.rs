@@ -44,6 +44,51 @@ pub const ENCODING: &str = "o200k_base";
 /// array needs a smallest, unique sentinel and must not find it among the data.
 const TOKEN_BASE: u32 = 1;
 
+/// One token of a prompt: the id the encoder produced, and the exact bytes it produced it from.
+///
+/// The pair is the point. A count alone cannot show that a leading space belongs to the *next*
+/// word, that a heading cost four tokens, or that a path was shredded into nine — and those are the
+/// things somebody reading a prompt to find what is wrong with it is looking for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptToken {
+    pub id: u32,
+    /// The token's text, newlines and leading spaces included.
+    pub text: String,
+    /// Whether this is a chat template's own control token rather than content.
+    ///
+    /// Always `false` from [`split`], and honestly so: what this crate composes is a *prompt*, and
+    /// the wrapper around it — the role markers, the tool envelope — is added by each provider's
+    /// API from the JSON body [`adi_loop`](crate::backends::harness::adi_loop) sends. There is no
+    /// point in this pipeline where a rendered chat template exists to be split, and inventing the
+    /// seams would be showing a reader tokens nobody is charged for.
+    pub special: bool,
+}
+
+/// Split `text` into the tokens a model is charged for.
+///
+/// The same encoder [`analyze`] counts with, so a prompt shown here and a prompt counted there
+/// cannot disagree — and it stays on this side of the wire, because the ranks are a megabyte and a
+/// half and a browser has no business carrying them to render a page.
+///
+/// A byte run that is not valid UTF-8 on its own — a token that is half of an emoji, which is
+/// ordinary — comes back through `from_utf8_lossy` rather than being dropped: the boundary is real
+/// and worth drawing even where the fragment is unreadable alone.
+#[must_use]
+pub fn split(text: &str) -> Vec<PromptToken> {
+    let bpe = tiktoken_rs::o200k_base_singleton();
+    bpe.encode_ordinary(text)
+        .into_iter()
+        .map(|id| PromptToken {
+            id,
+            text: bpe
+                .decode_bytes(&[id])
+                .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+                .unwrap_or_default(),
+            special: false,
+        })
+        .collect()
+}
+
 /// Shortest run worth reporting, in tokens. Below roughly this length every conversation repeats
 /// itself constantly and means nothing by it: `", "`, `def `, a closing brace. The floor is what makes
 /// the list findings rather than a histogram of English.

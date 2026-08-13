@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-14 structs · 16 enums across 16 files.
+19 structs · 20 enums across 21 files.
 
 ## Index
 
@@ -16,12 +16,17 @@
 - [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/faq.rs`](#srcfaqrs) — `Qna`
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
+- [`src/flag.rs`](#srcflagrs) — `Flag`, `Offer`
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`, `Align`
 - [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
+- [`src/simulator.rs`](#srcsimulatorrs) — `ToolDecl`, `Tab`
+- [`src/staging.rs`](#srcstagingrs) — `Block`, `Stop`
 - [`src/table.rs`](#srctablers) — `Sort`, `Column`, `Layout`, `TableState`, `SortKey`
+- [`src/tokens.rs`](#srctokensrs) — `Token`
+- [`src/toolform.rs`](#srctoolformrs) — `ParamKind`, `Param`
 - [`src/topbar.rs`](#srctopbarrs) — `Crumb`
 - [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
 
@@ -252,6 +257,35 @@ pub enum FlashKind {
 
 ---
 
+## `src/flag.rs`
+
+### struct `Flag`
+
+A passage somebody marked, and what they had to say about it.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct Flag {
+    pub quote: String,
+    pub note: RwSignal<String>,
+}
+```
+
+### struct `Offer`
+
+Where the button sits, and what it would quote.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+struct Offer {
+    x: f64,
+    y: f64,
+    quote: String,
+}
+```
+
+---
+
 ## `src/highlight.rs`
 
 ### enum `Tok`
@@ -400,6 +434,68 @@ pub enum SessionState {
 
 ---
 
+## `src/simulator.rs`
+
+### struct `ToolDecl`
+
+A tool as this screen offers it: what it is called, what it says it does, and the fields a call to it is written into.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct ToolDecl {
+    pub name: String,
+    pub description: String,
+    pub params: Vec<Param>,
+}
+```
+
+### enum `Tab`
+
+Which composer is up.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Tab {
+    #[default]
+    Prose,
+    Call,
+}
+```
+
+---
+
+## `src/staging.rs`
+
+### enum `Block`
+
+One thing emitted into the open turn.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Block {
+    Text(String),
+    Call {
+        name: String,
+        params: Vec<(String, String)>,
+    },
+}
+```
+
+### enum `Stop`
+
+How a turn ended, which is the same thing as what happens next.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Stop {
+    #[default]
+    ToolUse,
+    EndTurn,
+}
+```
+
+---
+
 ## `src/table.rs`
 
 ### struct `Sort`
@@ -465,6 +561,60 @@ pub enum SortKey {
     Int(i64),
     Float(f64),
     Text(String),
+}
+```
+
+---
+
+## `src/tokens.rs`
+
+### struct `Token`
+
+One token: what the tokenizer produced, and the id it produced it as.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Token {
+    pub id: u32,
+    pub text: String,
+    pub special: bool,
+}
+```
+
+---
+
+## `src/toolform.rs`
+
+### enum `ParamKind`
+
+The control a parameter gets, chosen from its declared type.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParamKind {
+    #[default]
+    Line,
+    Text,
+    Number,
+    List,
+    Flag,
+}
+```
+
+### struct `Param`
+
+One parameter of a tool, and the value being typed into it.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Param {
+    pub name: String,
+    pub kind: ParamKind,
+    pub required: bool,
+    pub hint: String,
+    pub placeholder: String,
+    pub text: RwSignal<String>,
+    pub flag: RwSignal<bool>,
 }
 ```
 

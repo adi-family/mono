@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-48 structs · 6 enums · 1 type alias across 16 files.
+49 structs · 6 enums · 1 type alias across 16 files.
 
 ## Index
 
@@ -23,7 +23,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Flash`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
 
 ---
 
@@ -1032,6 +1032,22 @@ pub(crate) enum Status {
     Connecting,
     Online,
     Down,
+}
+```
+
+### struct `Simulate`
+
+The simulator's own state: which run is open, what has been staged into the turn that is still open, and the flags taken while reading.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct Simulate {
+    pub(crate) name: RwSignal<Option<String>>,
+    pub(crate) run: RwSignal<Option<AgentSimState>>,
+    pub(crate) tools: RwSignal<Vec<ToolDecl>>,
+    pub(crate) blocks: RwSignal<Vec<Block>>,
+    pub(crate) flags: RwSignal<Vec<Flag>>,
+    pub(crate) busy: RwSignal<bool>,
 }
 ```
 

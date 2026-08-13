@@ -19,7 +19,8 @@ use crate::arguments::{PtyClaudeArguments, PtyCodexArguments};
 use crate::backend::Backend;
 use crate::backends::pty;
 use crate::error::{Error, Result};
-use crate::runner::detached::{decode, own_prompt, with_knowledge, with_tool_help, with_workspace};
+use crate::runner::detached::decode;
+use crate::runner::prompt::{own_prompt, with_knowledge, with_tool_help, with_workspace};
 use crate::runner::{
     EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, Stopped, Terminal,
 };

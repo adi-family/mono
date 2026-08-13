@@ -4,12 +4,12 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-80 structs · 19 enums · 5 type aliases across 34 files.
+87 structs · 20 enums · 5 type aliases across 36 files.
 
 ## Index
 
 - [`src/agent.rs`](#srcagentrs) — `RawAgentArguments`, `StoredAgentManifest`, `StoredAgent`, `SecretAttachment`, `AgentManifest`, `Agent`
-- [`src/analytics/mod.rs`](#srcanalyticsmodrs) — `Source`, `Shape`, `Site`, `Repeat`, `NearDuplicates`, `TokenReport`, `Options`, `Segment`
+- [`src/analytics/mod.rs`](#srcanalyticsmodrs) — `PromptToken`, `Source`, `Shape`, `Site`, `Repeat`, `NearDuplicates`, `TokenReport`, `Options`, `Segment`
 - [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
 - [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
 - [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `CheckOutcome`
@@ -18,14 +18,14 @@
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
 - [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `Wire`, `OpenAiDialect`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
-- [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `Drain`
+- [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `ToolDeclaration`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
-- [`src/lib.rs`](#srclibrs) — `Agents`
+- [`src/lib.rs`](#srclibrs) — `Agents`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
 - [`src/progress.rs`](#srcprogressrs) — `Step`, `ToolStatus`, `TurnMetrics`, `TurnContent`, `BackendCapabilities`
@@ -34,7 +34,9 @@
 - [`src/run.rs`](#srcrunrs) — `Launch`, `Sent`, `Peek`, `RunInfo`, `Pane`
 - [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `Cursor`
 - [`src/runner/event.rs`](#srcrunnereventrs) — `RunEvent`, `EventKinds`, `EventBatch`
+- [`src/runner/human.rs`](#srcrunnerhumanrs) — `State`, `HumanRunner`
 - [`src/runner/mod.rs`](#srcrunnermodrs) — `RunnerKind`, `Stopped`
+- [`src/runner/prompt.rs`](#srcrunnerpromptrs) — `Section`
 - [`src/runner/pty.rs`](#srcrunnerptyrs) — `PtyRunner`, `State`
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
@@ -126,6 +128,19 @@ pub struct Agent<Args> {
 ---
 
 ## `src/analytics/mod.rs`
+
+### struct `PromptToken`
+
+One token of a prompt: the id the encoder produced, and the exact bytes it produced it from.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromptToken {
+    pub id: u32,
+    pub text: String,
+    pub special: bool,
+}
+```
 
 ### enum `Source`
 
@@ -820,6 +835,19 @@ pub(crate) struct Ctx<'a> {
 }
 ```
 
+### struct `ToolDeclaration`
+
+One tool as a model is told about it: the three things every provider's dialect carries, in a shape that is nobody's dialect.
+
+```rust
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct ToolDeclaration {
+    pub name: String,
+    pub description: String,
+    pub schema: Value,
+}
+```
+
 ### struct `Drain`
 
 A stream being read on a thread of its own, and the buffer it is filling.
@@ -1067,6 +1095,46 @@ An on-disk agent registry.
 #[derive(Debug, Clone)]
 pub struct Agents {
     config: Config,
+}
+```
+
+### enum `SimBlock`
+
+One thing a person emitted into a simulated turn.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub enum SimBlock {
+    Text(String),
+    Call {
+        name: String,
+        input: serde_json::Value,
+    },
+}
+```
+
+### struct `SimResult`
+
+What one call returned.
+
+```rust
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SimResult {
+    pub name: String,
+    pub output: String,
+    pub ok: bool,
+}
+```
+
+### struct `SimTurn`
+
+How a simulated turn ended, and what its calls returned.
+
+```rust
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SimTurn {
+    pub stop_reason: String,
+    pub results: Vec<SimResult>,
 }
 ```
 
@@ -1525,6 +1593,33 @@ pub struct EventBatch {
 
 ---
 
+## `src/runner/human.rs`
+
+### struct `State`
+
+The state slot: whether a person is currently in the seat.
+
+```rust
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+struct State {
+    #[serde(default)]
+    open: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    prompt: Option<String>,
+}
+```
+
+### struct `HumanRunner`
+
+A run driven by a person taking the model's seat.
+
+```rust
+#[derive(Debug, Clone, Copy, Default)]
+pub struct HumanRunner;
+```
+
+---
+
 ## `src/runner/mod.rs`
 
 ### struct `RunnerKind`
@@ -1532,7 +1627,8 @@ pub struct EventBatch {
 Which runner this is — for labels, telemetry, and the session record.
 
 ```rust
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive( Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize, )]
+#[serde(transparent)]
 pub struct RunnerKind(pub String);
 ```
 
@@ -1545,6 +1641,22 @@ What a `Runner::stop` found and did. `forced` says the grace period ran out and 
 pub struct Stopped {
     pub was_running: bool,
     pub forced: bool,
+}
+```
+
+---
+
+## `src/runner/prompt.rs`
+
+### struct `Section`
+
+One stretch of a composed prompt, and what it is.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Section<'a> {
+    pub label: &'static str,
+    pub text: &'a str,
 }
 ```
 
@@ -1724,6 +1836,7 @@ pub struct SessionRecord {
     pub id: String,
     pub agent: String,
     pub backend: Backend,
+    pub runner: Option<crate::runner::RunnerKind>,
     pub cwd: PathBuf,
     pub message: String,
     pub started_at: u64,

@@ -14,6 +14,8 @@
 
 pub mod detached;
 mod event;
+pub mod human;
+pub mod prompt;
 pub mod pty;
 mod registry;
 mod session;
@@ -24,7 +26,7 @@ use std::time::Duration;
 use crate::error::Result;
 
 pub use event::{EventBatch, EventKinds, RunEvent};
-pub use registry::runner_for;
+pub use registry::{runner_for, runner_of};
 pub use session::{Session, StateWriter};
 pub use spec::RunSpec;
 
@@ -38,7 +40,14 @@ pub use spec::RunSpec;
 /// three kinds and one behaviour; a call site that switches on the name grows an arm per runner and
 /// still has no way to *call* anything. Capability extensions ([`Runner::as_terminal`]) are how you
 /// ask instead, and they answer for all three at once.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+///
+/// Serialized as the bare string it is, because it is written into a session's record: a run is
+/// resolved back to the runner that started it by this name, and a name that round-trips through a
+/// struct wrapper would be a schema to migrate the first time it changed.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
 pub struct RunnerKind(pub String);
 
 impl RunnerKind {

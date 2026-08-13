@@ -353,14 +353,6 @@ fn Did(calls: Vec<ToolCall>) -> impl IntoView {
 }
 
 /// One call, written the way the model wrote it.
-///
-/// **Not JSON.** A tool call is not a JSON document to the model — it is a block of tagged
-/// text it emits into its own stream, and the result comes back as another one. Showing the
-/// wire format of some transport instead teaches the reader a shape the model never saw,
-/// and then they debug against it.
-///
-/// So this is the block: an `invoke` with a `parameter` per argument, values verbatim on
-/// their own lines. It is longer than JSON and it is what is actually there.
 #[component]
 fn Call(call: ToolCall) -> impl IntoView {
     let dot = call.state.dot_classes();
@@ -371,21 +363,7 @@ fn Call(call: ToolCall) -> impl IntoView {
                 </span>
                 <span class="font-mono text-mini text-syn-func">{call.name.clone()}</span>
             </div>
-            <pre class="m-0 shrink-0 overflow-x-auto rounded-sm border border-edge bg-bubble \
-                        p-2.5 font-mono text-mini leading-[1.55] whitespace-pre-wrap \
-                        [word-break:break-word] text-syn-plain">
-                <span class="text-syn-punct">"<invoke name="</span>
-                <span class="text-syn-str">{format!("\"{}\"", call.name)}</span>
-                <span class="text-syn-punct">">\n"</span>
-                {call.params.into_iter().map(|(k, v)| view! {
-                    <span class="text-syn-punct">"  <parameter name="</span>
-                    <span class="text-syn-str">{format!("\"{k}\"")}</span>
-                    <span class="text-syn-punct">">"</span>
-                    {v}
-                    <span class="text-syn-punct">"</parameter>\n"</span>
-                }).collect::<Vec<_>>()}
-                <span class="text-syn-punct">"</invoke>"</span>
-            </pre>
+            <Invoke name=call.name params=call.params/>
             {call.result.map(|r| view! {
                 <pre class="m-0 shrink-0 overflow-x-auto rounded-sm border border-edge \
                             bg-stage p-2.5 font-mono text-mini leading-[1.55] \
@@ -396,5 +374,49 @@ fn Call(call: ToolCall) -> impl IntoView {
                 </pre>
             })}
         </div>
+    }
+}
+
+/// A call as the model actually emits it.
+///
+/// **Not JSON.** A tool call is not a JSON document to the model — it is a block of tagged
+/// text it emits into its own stream, and the result comes back as another one. Showing the
+/// wire format of some transport instead teaches the reader a shape the model never saw,
+/// and then they debug against it.
+///
+/// So this is the block: an `invoke` with a `parameter` per argument, values verbatim on
+/// their own lines. It is longer than JSON and it is what is actually there.
+///
+/// It lives here, shared, rather than once in the transcript and again in
+/// [`TurnBlocks`](crate::TurnBlocks): a simulated call that rendered differently from a real
+/// one would be teaching the reader the wrong shape in exactly the screen built to show them
+/// the right one.
+#[component]
+pub(crate) fn Invoke(
+    /// The tool's name, in the tag and beside it.
+    name: String,
+    /// The arguments, in the order they were written.
+    params: Vec<(String, String)>,
+    #[prop(optional, into)] class: String,
+) -> impl IntoView {
+    view! {
+        <pre class=merge(
+            "m-0 shrink-0 overflow-x-auto rounded-sm border border-edge bg-bubble p-2.5 \
+             font-mono text-mini leading-[1.55] whitespace-pre-wrap [word-break:break-word] \
+             text-syn-plain",
+            class,
+        )>
+            <span class="text-syn-punct">"<invoke name="</span>
+            <span class="text-syn-str">{format!("\"{name}\"")}</span>
+            <span class="text-syn-punct">">\n"</span>
+            {params.into_iter().map(|(k, v)| view! {
+                <span class="text-syn-punct">"  <parameter name="</span>
+                <span class="text-syn-str">{format!("\"{k}\"")}</span>
+                <span class="text-syn-punct">">"</span>
+                {v}
+                <span class="text-syn-punct">"</parameter>\n"</span>
+            }).collect::<Vec<_>>()}
+            <span class="text-syn-punct">"</invoke>"</span>
+        </pre>
     }
 }

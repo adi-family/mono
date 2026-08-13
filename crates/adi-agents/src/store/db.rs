@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     runner_state  TEXT,
     outcome       TEXT,
     tool_help     TEXT,
+    runner        TEXT,
     PRIMARY KEY (agent, id)
 );
 CREATE INDEX IF NOT EXISTS sessions_newest
@@ -115,6 +116,7 @@ CREATE INDEX IF NOT EXISTS questions_open
 const MIGRATIONS: &[&str] = &[
     "ALTER TABLE sessions ADD COLUMN outcome TEXT",
     "ALTER TABLE sessions ADD COLUMN tool_help TEXT",
+    "ALTER TABLE sessions ADD COLUMN runner TEXT",
 ];
 
 // One connection per thread per database.

@@ -1523,6 +1523,160 @@ pub struct AgentTokens {
     pub near_duplicates: Vec<AgentNearDup>,
 }
 
+// ---- the simulator (a run with a person in the model's seat) ------------------------
+
+/// `POST /api/agents/simulate` request — open a run of `name` with a person in the model's seat.
+///
+/// Always a fresh run: there is no field for a run to continue, deliberately. A simulated turn in
+/// the middle of a real conversation would be indistinguishable from the model's own afterwards.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimulateAgent {
+    pub name: String,
+    /// What the run opens with — the first user turn, exactly as a real launch's message.
+    pub message: String,
+}
+
+/// One token of the prompt, as the server's encoder split it.
+///
+/// The split is done server-side and shipped as data: the ranks are a megabyte and a half, and a
+/// browser has no business carrying them to draw a page.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentToken {
+    pub id: u32,
+    /// The token's exact text — newlines and leading spaces included, which is most of the point.
+    pub text: String,
+    /// A chat template's own control token rather than content. Always false today; see
+    /// `adi_agents::analytics::PromptToken::special` for why that is honest rather than missing.
+    #[serde(default)]
+    pub special: bool,
+}
+
+/// One labelled stretch of the prompt, as a range of [`AgentSimState::tokens`].
+///
+/// Ranges rather than nested token lists, so the prompt is still one stream to render and the seams
+/// are drawn over it. `to` is exclusive, and the ranges are contiguous and cover the whole prompt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSimSection {
+    /// `instructions`, `where you are`, `what you know`, `your tools`.
+    pub label: String,
+    pub from: usize,
+    pub to: usize,
+}
+
+/// One field of a tool call, decoded from the tool's own JSON Schema.
+///
+/// Decoded on the server, once, rather than in the browser: the schema is the tool's own
+/// description of itself, and a second decoder in wasm is a second thing to keep in step with it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSimField {
+    /// The parameter name, exactly as the tool declares it — it is what goes on the wire.
+    pub name: String,
+    pub kind: AgentSimFieldKind,
+    pub required: bool,
+    /// The schema's own description, shown as the field's hint.
+    #[serde(default)]
+    pub hint: String,
+}
+
+/// The control a parameter gets, chosen from its declared type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSimFieldKind {
+    /// A single line — a path, a pattern, a name.
+    Line,
+    /// Something with body to it: a command, a file's contents, a question.
+    Text,
+    /// `integer` or `number`.
+    Number,
+    /// An array, written one entry per line.
+    List,
+    /// `boolean`.
+    Flag,
+}
+
+/// One tool the run may call, as it is declared to the model.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSimTool {
+    pub name: String,
+    /// The sentence the model is given about when to reach for it, verbatim.
+    pub description: String,
+    /// Its parameters, in the order the tool declares them.
+    pub fields: Vec<AgentSimField>,
+}
+
+/// The whole state of a simulated run — what every simulator endpoint answers with.
+///
+/// One shape for all four, so a page that stacks a block, ends a turn, or replies gets the new
+/// prompt back in the same round trip rather than having to ask again and render something stale in
+/// between.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSimState {
+    pub name: String,
+    pub run_id: String,
+    /// The composed system prompt, exactly as the model receives it.
+    pub prompt: String,
+    /// The same string, split. Concatenated, the token texts are `prompt`.
+    pub tokens: Vec<AgentToken>,
+    /// Where each part of the prompt begins and ends, in token indices.
+    pub sections: Vec<AgentSimSection>,
+    /// The encoding the split is in. Reported beside the count, because a token number without its
+    /// encoding is a number nobody can check.
+    pub encoding: String,
+    /// The tools the run may call.
+    pub tools: Vec<AgentSimTool>,
+    /// The conversation so far — the same turns the chat view renders.
+    pub turns: Vec<AgentTurn>,
+    /// How the last turn ended: `tool_use`, `end_turn`, or empty before one has.
+    #[serde(default)]
+    pub stop_reason: String,
+    /// Whether the seat is occupied — false once the run has yielded to a person.
+    pub running: bool,
+}
+
+/// One block a person emitted into the open turn.
+///
+/// Tagged rather than a struct with optional halves: a block is one thing or the other, and a wire
+/// shape that can carry both at once is a shape somebody eventually sends both in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentSimBlock {
+    /// Prose. The last one in a turn with no calls is the turn's answer.
+    Text { text: String },
+    /// A call to one of the agent's tools.
+    Call {
+        name: String,
+        input: serde_json::Value,
+    },
+}
+
+/// `POST /api/agents/simulate/turn` request — close the open turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SimulateTurn {
+    pub name: String,
+    pub run_id: String,
+    /// Everything emitted this turn, in the order it was written.
+    pub blocks: Vec<AgentSimBlock>,
+}
+
+/// What one call returned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSimResult {
+    pub name: String,
+    /// What the model would read next — the tool's output, or its refusal. Both are answers.
+    pub output: String,
+    /// Whether the tool succeeded. `false` is a result to act on, not a failed request.
+    pub ok: bool,
+}
+
+/// `POST /api/agents/simulate/turn` response — what the calls returned, and the state after them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentSimTurn {
+    /// One entry per call, in the order they ran.
+    pub results: Vec<AgentSimResult>,
+    /// The run after the turn — including the prompt, which has grown by it.
+    pub state: AgentSimState,
+}
+
 // ---- meta (the default ADI agent — a single well-known global agent) ----------------
 
 /// `GET /api/meta` — the state of the Meta page, which manages one well-known global agent named

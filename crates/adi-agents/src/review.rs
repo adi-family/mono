@@ -934,6 +934,7 @@ mod tests {
             id: "0000000000000-0001".to_string(),
             agent: "solver".to_string(),
             backend: Backend::from("harness:adi"),
+            runner: None,
             cwd: PathBuf::from("/tmp/work"),
             message: "fix the failing test".to_string(),
             started_at: 1_000,

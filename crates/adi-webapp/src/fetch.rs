@@ -1,7 +1,8 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns, AgentTokens,
+    AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
+    AgentSimBlock, AgentSimState, AgentSimTurn, AgentTokens,
     AgentsState, AllAgentRuns, AnswerRun, ApiError, Dashboard, DashboardRef, DashboardTransferred,
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
@@ -15,6 +16,7 @@ use adi_webapp_api::types::{
     NodeServiceRef,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
     ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun,
+    SimulateAgent, SimulateTurn,
     RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
     SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
@@ -412,6 +414,52 @@ pub async fn peek_run(name: String, run_id: String) -> Result<AgentPeek, String>
 /// the transcript and has no business on the one-second poll.
 pub async fn run_tokens(name: String, run_id: String) -> Result<AgentTokens, String> {
     post("/api/agents/run/tokens", &RunRef { name, run_id }).await
+}
+
+/// Open a run of an agent with a person in the model's seat. Always a fresh run.
+pub async fn simulate_agent(name: String, message: String) -> Result<AgentSimState, String> {
+    post("/api/agents/simulate", &SimulateAgent { name, message }).await
+}
+
+/// The simulated run as the model sees it: the composed prompt, its split, its tools, its turns.
+pub async fn simulate_prompt(name: String, run_id: String) -> Result<AgentSimState, String> {
+    post("/api/agents/simulate/prompt", &RunRef { name, run_id }).await
+}
+
+/// Close the open turn: every call in it runs, for real, in the agent's own environment. What comes
+/// back is what the calls returned *and* the run after them, so the prompt on screen is never a turn
+/// behind what was just done.
+pub async fn simulate_turn(
+    name: String,
+    run_id: String,
+    blocks: Vec<AgentSimBlock>,
+) -> Result<AgentSimTurn, String> {
+    post(
+        "/api/agents/simulate/turn",
+        &SimulateTurn {
+            name,
+            run_id,
+            blocks,
+        },
+    )
+    .await
+}
+
+/// Answer a yielded simulated run as yourself.
+pub async fn simulate_reply(
+    name: String,
+    run_id: String,
+    message: String,
+) -> Result<AgentSimState, String> {
+    post(
+        "/api/agents/simulate/reply",
+        &ReplyToRun {
+            name,
+            run_id,
+            message,
+        },
+    )
+    .await
 }
 
 /// Hand one conversation to the root agent and ask how the workflow should have gone. Writes the

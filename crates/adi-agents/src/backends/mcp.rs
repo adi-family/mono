@@ -341,7 +341,7 @@ fn call(request: &Value, ctx: &Ctx<'_>) -> std::result::Result<Value, String> {
         .cloned()
         .unwrap_or_else(|| json!({}));
 
-    let (text, is_error) = match tools::run(name, &arguments, ctx) {
+    let (text, is_error) = match tools::execute(name, &arguments, ctx) {
         Ok(text) => (text, false),
         Err(text) => (text, true),
     };

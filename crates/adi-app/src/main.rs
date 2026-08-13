@@ -662,6 +662,13 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         // Hand the same conversation to an agent and ask how it should have gone. Writes the
         // dossier, then launches the reviewer on it — the answer arrives as its own conversation.
         ("POST", "/api/agents/run/review") => handlers::review_run(agents, &req.body),
+        // A run of the agent with a person in the model's seat: the agent's own environment, its
+        // own composed prompt, and tools that really execute. All four answer the same state
+        // object, so a page never renders a prompt one turn behind what it just did.
+        ("POST", "/api/agents/simulate") => handlers::simulate_agent(agents, &req.body),
+        ("POST", "/api/agents/simulate/prompt") => handlers::simulate_prompt(agents, &req.body),
+        ("POST", "/api/agents/simulate/turn") => handlers::simulate_turn(agents, &req.body),
+        ("POST", "/api/agents/simulate/reply") => handlers::simulate_reply(agents, &req.body),
         ("POST", "/api/agents/run/unqueue") => handlers::unqueue_run(agents, &req.body),
         ("POST", "/api/agents/run/stop") => handlers::stop_run(agents, &req.body),
         ("POST", "/api/agents/run/delete") => handlers::delete_run(agents, &req.body),

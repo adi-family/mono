@@ -23,9 +23,10 @@ use adi_ui::{
     ButtonVariant, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
     Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
-    Queued, Rail, RailCard, RailGroup, Role, Select, SessionItem, SessionState, SortKey, Table,
-    TableState, Textarea, ToolCall, ToolState, TopBar, Tree, TreeNode, TreeState, Turn, dir_of,
-    sort_rows,
+    Block, Flag, FlagList, FlagMark, Param, ParamKind, PromptText, Queued, Rail, RailCard,
+    RailGroup, Role, Select, SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table,
+    TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar,
+    Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of, sort_rows,
 };
 // The gallery's own `Row` is the label-plus-specimen line every panel is built from; the
 // crate's is a table row. Both earn the name in their own context, so the import is aliased
@@ -102,6 +103,371 @@ fn Swatches(label: &'static str, items: Vec<(&'static str, &'static str)>) -> im
                     .collect::<Vec<_>>()}
             </div>
         </div>
+    }
+}
+
+/// A slice of a real agent prompt, already split — the shape the server sends, so the
+/// component is exercised on the thing it will actually be handed.
+///
+/// It has to carry the two cases that break a naive renderer: control tokens (the template's
+/// own seams) and tokens with newlines in them, including one that is *only* a break.
+fn prompt_tokens() -> Vec<Token> {
+    let content = [
+        (27, "You"), (3477, " review"), (2082, " code"), (304, " in"), (420, " this"),
+        (12827, " repository"), (13, "."), (4557, " Read"), (1603, " before"), (499, " you"),
+        (11913, " judge"), (26, ";"), (1475, " every"), (9455, " finding"), (5144, " names"),
+        (264, " a"), (1052, " file"), (627, ".\n"),
+        (2, "#"), (11208, " Where"), (499, " you"), (527, " are"), (271, "\n\n"),
+        (2028, "This"), (1629, " run"), (8638, " starts"), (304, " in"), (38401, " `/"),
+        (7220, "Users"), (14, "/"), (76, "m"), (39847, "gor"), (359, "un"), (14588, "uch"),
+        (14, "/"), (16607, "adi"), (24815, "-family"), (63, "`"), (13, "."),
+    ];
+    let mut out = vec![
+        Token::special(100_264, "<|im_start|>"),
+        Token::new(9125, "system"),
+        Token::special(100_266, "<|im_sep|>"),
+    ];
+    out.extend(content.into_iter().map(|(id, text)| Token::new(id, text)));
+    out.push(Token::special(100_265, "<|im_end|>"));
+    out.push(Token::special(100_264, "<|im_start|>"));
+    out.push(Token::new(882, "user"));
+    out.push(Token::special(100_266, "<|im_sep|>"));
+    for (id, text) in [
+        (19461, "Review"), (279, " the"), (23055, " runner"), (2098, " ref"), (5739, "actor"),
+        (389, " on"), (1925, " main"), (13, "."),
+    ] {
+        out.push(Token::new(id, text));
+    }
+    out.push(Token::special(100_265, "<|im_end|>"));
+    out
+}
+
+/// `Bash` as its schema declares it — the tool with one of every control, which is why it is
+/// the one worth showing: a wide text body, a number, and a flag that explains itself.
+#[component]
+fn ToolFormDemo() -> impl IntoView {
+    let params = vec![
+        Param::new("command", ParamKind::Text)
+            .required()
+            .hint("The command line to run.")
+            .placeholder("git log --oneline -3"),
+        Param::new("timeout_ms", ParamKind::Number)
+            .hint("Give up after this long. Defaults to 120000.")
+            .placeholder("120000"),
+        Param::new("background", ParamKind::Flag)
+            .hint("Start it and return a job id instead of waiting for it."),
+    ];
+    // The caller owns the values, so the preview is written here rather than in the component:
+    // what a call looks like on the wire belongs to whoever is about to send it.
+    let command = params[0].text;
+    let timeout = params[1].text;
+    let background = params[2].flag;
+    let wire = move || {
+        let mut args = format!("{{\"command\":{:?}", command.get());
+        if let Ok(ms) = timeout.get().trim().parse::<u64>() {
+            args.push_str(&format!(",\"timeout_ms\":{ms}"));
+        }
+        if background.get() {
+            args.push_str(",\"background\":true");
+        }
+        args.push('}');
+        vec![
+            Token::special(100_264, "<|im_start|>"),
+            Token::new(0, "assistant to=functions.Bash"),
+            Token::special(100_266, "<|im_sep|>"),
+            Token::new(0, args),
+        ]
+    };
+
+    view! {
+        <div class="flex flex-col gap-4">
+            <ToolForm params=params/>
+            <div>
+                <div class="caps mb-2 text-faint">"sent as"</div>
+                <PromptText
+                    tokens=Signal::derive(wire)
+                    class="rounded-sm border border-edge bg-panel-alt p-3"
+                />
+            </div>
+        </div>
+    }
+}
+
+/// Bash and Read as their schemas declare them, which is what the simulator is handed.
+fn agent_tools() -> Vec<ToolDecl> {
+    vec![
+        ToolDecl::new("Bash", "Run a command in the agent's own shell, in its own cwd.").params(
+            vec![
+                Param::new("command", ParamKind::Text)
+                    .required()
+                    .hint("The command line to run.")
+                    .placeholder("git log --oneline -3"),
+                Param::new("timeout_ms", ParamKind::Number)
+                    .hint("Give up after this long. Defaults to 120000.")
+                    .placeholder("120000"),
+                Param::new("background", ParamKind::Flag)
+                    .hint("Start it and return a job id instead of waiting for it."),
+            ],
+        ),
+        ToolDecl::new("Read", "Read a file from the local filesystem.").params(vec![
+            Param::new("path", ParamKind::Line)
+                .required()
+                .hint("Absolute path to the file.")
+                .placeholder("/Users/you/adi-family/README.md"),
+            Param::new("limit", ParamKind::Number).hint("How many lines to read."),
+        ]),
+    ]
+}
+
+/// What a tool's fields currently hold, as the arguments of a call.
+///
+/// This is the caller's half of the [`ToolForm`] bargain — the component renders the fields
+/// and never guesses at the wire form, so composing one is the job of whoever is about to
+/// send it. Empty optional fields are dropped rather than sent blank, which is what a model
+/// does with a parameter it has nothing to say about.
+fn args_of(tool: &ToolDecl) -> Vec<(String, String)> {
+    tool.params
+        .iter()
+        .filter_map(|p| {
+            let value = if p.kind == ParamKind::Flag {
+                if !p.flag.get_untracked() {
+                    return None;
+                }
+                "true".to_string()
+            } else {
+                let text = p.text.get_untracked();
+                if text.trim().is_empty() && !p.required {
+                    return None;
+                }
+                text
+            };
+            Some((p.name.clone(), value))
+        })
+        .collect()
+}
+
+/// A stand-in for the tokenizer, which in the real thing lives server-side and has tiktoken's
+/// tables compiled in ([`adi_ui::TokenStream`] explains why it is not in the browser).
+///
+/// It splits on spaces keeping the space with the word that follows, and gives every newline
+/// its own token — close enough to a BPE's shape that the playground reads honestly, and ids
+/// that are made up and say so.
+fn fake_tokens(text: &str) -> Vec<Token> {
+    let mut out: Vec<Token> = Vec::new();
+    let mut cur = String::new();
+    let flush = |cur: &mut String, out: &mut Vec<Token>| {
+        if !cur.is_empty() {
+            out.push(Token::new(0, std::mem::take(cur)));
+        }
+    };
+    for ch in text.chars() {
+        if ch == '\n' {
+            flush(&mut cur, &mut out);
+            out.push(Token::new(0, "\n"));
+        } else {
+            if ch == ' ' {
+                flush(&mut cur, &mut out);
+            }
+            cur.push(ch);
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
+/// One turn wrapped in the template's control tokens, the way a chat template does it.
+fn wrapped(role: &str, body: &str) -> Vec<Token> {
+    let mut out = vec![
+        Token::special(100_264, "<|im_start|>"),
+        Token::new(0, role.to_string()),
+        Token::special(100_266, "<|im_sep|>"),
+    ];
+    out.extend(fake_tokens(body));
+    out.push(Token::special(100_265, "<|im_end|>"));
+    out
+}
+
+/// The instructions and tool declarations the simulated agent opens with — everything above
+/// the first turn, which is the part that never changes once a run has launched.
+fn simulator_head() -> Vec<Token> {
+    let mut out = wrapped(
+        "system",
+        "You review code in this repository. Read before you judge; every finding names a \
+         file.\n\n# Where you are\n\nThis run starts in `/Users/mgorunuch/adi-family`.\n\n\
+         # Your tools\n\nBash — run a command in your own shell, in your own cwd.\nRead — read \
+         a file from the local filesystem.",
+    );
+    out.extend(wrapped("user", "Review the runner refactor on main."));
+    out
+}
+
+/// The staging area on its own, with a block of each kind already in it.
+#[component]
+fn StagingDemo() -> impl IntoView {
+    let staged = RwSignal::new(vec![
+        Block::text(
+            "Looking at the runner split now. `detached.rs` still composes the prompt itself, \
+             so I'll read it before saying anything about the refactor.",
+        ),
+        Block::call(
+            "Bash",
+            vec![
+                ("command".into(), "rg -n 'fn own_prompt' crates/adi-agents/src".into()),
+                ("timeout_ms".into(), "30000".into()),
+            ],
+        ),
+        Block::call("Read", vec![("path".into(), "crates/adi-agents/src/runner/prompt.rs".into())]),
+    ]);
+    view! {
+        <TurnBlocks
+            blocks=Signal::derive(move || staged.get())
+            on_drop=Callback::new(move |i: usize| staged.update(|b| { b.remove(i); }))
+        />
+    }
+}
+
+/// A passage worth flagging, and the list it collects into.
+#[component]
+fn FlagDemo() -> impl IntoView {
+    let flags = RwSignal::new(Vec::<Flag>::new());
+    let tokens = Signal::stored(wrapped(
+        "system",
+        "# Your tools\n\nBash — run a command. Be careful with it.\n\nYou should probably \
+         prefer the smallest change that works, unless a bigger one is better. Always be \
+         helpful.",
+    ));
+    view! {
+        <div class="flex flex-col gap-4">
+            <FlagMark
+                on_flag=Callback::new(move |quote: String| {
+                    flags.update(|f| f.push(Flag::new(quote)));
+                })
+            >
+                <PromptText
+                    tokens=tokens
+                    class="rounded-sm border border-edge bg-panel-alt p-3"
+                />
+            </FlagMark>
+            <FlagList
+                flags=Signal::derive(move || flags.get())
+                on_drop=Callback::new(move |i: usize| flags.update(|f| { f.remove(i); }))
+            />
+        </div>
+    }
+}
+
+/// The whole flow, wired to itself: stage blocks, end the turn, watch the prompt grow.
+///
+/// It fakes exactly one thing — executing a call, which here returns a canned line instead of
+/// really running. Everything else is the shape the real screen has, including that ending a
+/// turn is what appends anything to the prompt at all.
+#[component]
+fn SimulatorDemo() -> impl IntoView {
+    let tools = agent_tools();
+    let convo = RwSignal::new(Vec::<Token>::new());
+    let staged = RwSignal::new(Vec::<Block>::new());
+    let stop = RwSignal::new(None::<Stop>);
+    let flags = RwSignal::new(Vec::<Flag>::new());
+
+    let prompt = Signal::derive(move || {
+        let mut all = simulator_head();
+        all.extend(convo.get());
+        all
+    });
+
+    let for_call = tools.clone();
+    let on_call = Callback::new(move |name: String| {
+        let Some(tool) = for_call.iter().find(|t| t.name == name) else {
+            return;
+        };
+        staged.update(|b| b.push(Block::call(&tool.name, args_of(tool))));
+    });
+
+    let on_end_turn = Callback::new(move |()| {
+        let blocks = staged.get_untracked();
+        if blocks.is_empty() {
+            return;
+        }
+        // The turn goes into the prompt as one assistant message, then every call's result
+        // comes back as its own — which is the order the runner appends them in, and the
+        // reason a turn with two calls produces two results before anyone is asked again.
+        let mut body = String::new();
+        for block in &blocks {
+            if !body.is_empty() {
+                body.push_str("\n\n");
+            }
+            match block {
+                Block::Text(text) => body.push_str(text),
+                Block::Call { name, params } => {
+                    body.push_str(&format!("<invoke name=\"{name}\">\n"));
+                    for (k, v) in params {
+                        body.push_str(&format!("  <parameter name=\"{k}\">{v}</parameter>\n"));
+                    }
+                    body.push_str("</invoke>");
+                }
+            }
+        }
+        let mut turn = wrapped("assistant", &body);
+        for block in &blocks {
+            if let Block::Call { name, .. } = block {
+                turn.extend(wrapped(
+                    "tool",
+                    &format!("<result>\n{name} ran here. The playground does not.\n</result>"),
+                ));
+            }
+        }
+        convo.update(|c| c.extend(turn));
+        stop.set(Some(Stop::of(&blocks)));
+        staged.set(Vec::new());
+    });
+
+    view! {
+        <SimulatorShell
+            prompt=prompt
+            staged=staged
+            tools=tools
+            stop=stop
+            flags=flags
+            on_call=on_call
+            on_end_turn=on_end_turn
+            convo=convo
+        />
+    }
+}
+
+/// The callbacks that are one line each, kept out of [`SimulatorDemo`] so its own logic reads.
+#[component]
+fn SimulatorShell(
+    prompt: Signal<Vec<Token>>,
+    staged: RwSignal<Vec<Block>>,
+    tools: Vec<ToolDecl>,
+    stop: RwSignal<Option<Stop>>,
+    flags: RwSignal<Vec<Flag>>,
+    on_call: Callback<String>,
+    on_end_turn: Callback<()>,
+    convo: RwSignal<Vec<Token>>,
+) -> impl IntoView {
+    view! {
+        <Simulator
+            prompt=prompt
+            blocks=Signal::derive(move || staged.get())
+            tools=Signal::stored(tools)
+            stop=Signal::derive(move || stop.get())
+            flags=Signal::derive(move || flags.get())
+            encoding="o200k_base (faked here)"
+            on_text=Callback::new(move |text: String| staged.update(|b| b.push(Block::Text(text))))
+            on_call=on_call
+            on_drop_block=Callback::new(move |i: usize| staged.update(|b| { b.remove(i); }))
+            on_end_turn=on_end_turn
+            on_flag=Callback::new(move |quote: String| flags.update(|f| f.push(Flag::new(quote))))
+            on_unflag=Callback::new(move |i: usize| flags.update(|f| { f.remove(i); }))
+            on_user=Callback::new(move |text: String| {
+                convo.update(|c| c.extend(wrapped("user", &text)));
+                // The person has answered, so the seat is the model's again and there is no
+                // last turn to report a reason for.
+                stop.set(None);
+            })
+        />
     }
 }
 
@@ -1558,6 +1924,100 @@ fn Playground() -> impl IntoView {
                         <div class="caps mb-2 text-faint">"inline"</div>
                         <PathDemo inline=true/>
                     </div>
+                </div>
+            </Panel>
+
+            <Panel title="TokenStream · PromptText" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "The same tokens, twice. Above, every split shown — the boundary is the \
+                     information, so the colour cycles by position and means nothing else. \
+                     Below, the string as a person reads it, with only the template's control \
+                     tokens marked. A newline is drawn "
+                    <span class="font-mono">"⏎"</span>
+                    " and then still taken, which is the only way a long prompt stays both \
+                     legible and honest about where it breaks. Hover a chip for its id and its \
+                     exact text — that is how you catch a leading space belonging to the next \
+                     word."
+                </div>
+                <div class="flex flex-col gap-4 p-4">
+                    <div>
+                        <div class="caps mb-2 text-faint">"tokens"</div>
+                        <TokenStream
+                            tokens=Signal::derive(prompt_tokens)
+                            class="max-h-60 overflow-auto rounded-sm border border-edge p-3"
+                        />
+                    </div>
+                    <div>
+                        <div class="caps mb-2 text-faint">"prompt"</div>
+                        <PromptText
+                            tokens=Signal::derive(prompt_tokens)
+                            class="max-h-60 overflow-auto rounded-sm border border-edge p-3"
+                        />
+                    </div>
+                </div>
+            </Panel>
+
+            <Panel title="ToolForm" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "A tool's parameters, built from the schema the tool itself declares — so a \
+                     parameter added to the tool shows up here rather than being quietly \
+                     missing. Wide controls take their own row. Nothing here builds the call: \
+                     the values are signals the caller owns, and the preview under the form is \
+                     written by the caller too, because what goes on the wire belongs to \
+                     whoever is sending it."
+                </div>
+                <div class="p-4">
+                    <ToolFormDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="TurnBlocks · StopLine" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "A model does not answer and then call a tool — it emits one turn made of \
+                     blocks, and the turn is over when it stops emitting. So this is a list, \
+                     and it is a staging area rather than history: nothing in it has happened, \
+                     and any of it can still be dropped. A call is drawn from the same \
+                     component the transcript draws a real one with, because a simulated call \
+                     that looked different would be teaching the wrong shape on the one screen \
+                     built to teach the right one."
+                </div>
+                <div class="flex flex-col gap-4 p-4">
+                    <StagingDemo/>
+                    <div>
+                        <div class="caps mb-2 text-faint">"how a turn ends"</div>
+                        <StopLine stop=Stop::ToolUse/>
+                        <StopLine stop=Stop::EndTurn/>
+                    </div>
+                </div>
+            </Panel>
+
+            <Panel title="FlagMark · FlagList" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "Select any of the text below with the mouse or with Shift+arrows. The \
+                     offer follows the selection, quotes it as it read at the time — a copy, \
+                     not an offset into a document that is about to be edited — and drops a \
+                     note field under it. Nothing else is asked for: a form standing between \
+                     noticing something and recording it loses most of what gets noticed."
+                </div>
+                <div class="p-4">
+                    <FlagDemo/>
+                </div>
+            </Panel>
+
+            <Panel title="Simulator" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "The whole flow, wired to itself. Left is what the model sees — one \
+                     document, instructions and tools and every turn so far, because to a model \
+                     there is no separate transcript. Right is what the model does. Stack a \
+                     block or two and press "
+                    <span class="font-mono">"end turn"</span>
+                    ": with a call in it the results append and the loop comes back to you as \
+                     the model; without one the run yields and the bottom composer wakes up so \
+                     you can answer as yourself. Only the execution is faked here — the real \
+                     screen calls the runner's own tools."
+                </div>
+                <div class="p-4">
+                    <SimulatorDemo/>
                 </div>
             </Panel>
 
