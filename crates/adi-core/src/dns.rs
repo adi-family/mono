@@ -449,9 +449,15 @@ proxy:
 # a `proxy.host` gets its `.adi` name here. Without these a node scaffolds dashboards that no
 # hostname ever reaches — and the mesh gateway, which answers `<service>.<node>.n.adi` out of
 # this same table, refuses them with \"no such service\".
+# A `*` is one directory level, deliberately: a project's config has a fixed home, so these four
+# lines name it outright. `**` searched for it instead, and the search is proportional to whatever
+# a project keeps inside itself — one dashboard's file-backed data store (17 000 directories) made
+# rediscovery cost more than everything else this daemon does, on every reload tick.
 imports:
-  - $ADI_PROJECTS_DIR/**/hive.yaml
-  - $ADI_DASHBOARDS_DIR/**/hive.yaml
+  - $ADI_PROJECTS_DIR/*/.adi/hive.yaml
+  - $ADI_PROJECTS_DIR/*/hive.yaml
+  - $ADI_DASHBOARDS_DIR/*/.adi/hive.yaml
+  - $ADI_DASHBOARDS_DIR/*/hive.yaml
 
 services:
 {routes}",

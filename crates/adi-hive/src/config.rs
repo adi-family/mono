@@ -2,9 +2,11 @@
 //! fields and the fields needed to run a service locally. Unknown hive.yaml fields are
 //! accepted-but-ignored (no `deny_unknown_fields`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
+use std::sync::{LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use adi_ports_manager::Ports;
 use anyhow::Context as _;
@@ -641,31 +643,155 @@ fn expand_vars(pattern: &str) -> String {
     out
 }
 
-/// Resolve an import pattern to concrete files. Supports `<base>/**/<filename>` (walk `<base>`
-/// recursively, collect files named `<filename>`) and a plain path (included if it exists).
+/// How long a `**` pattern's resolved file list is reused before the tree is walked again.
+///
+/// Discovery and re-reading are two different questions on two different clocks. *Which* hive.yaml
+/// files exist changes when someone adds a project — rarely. What is *in* them changes whenever a
+/// service is edited, and the caller re-reads every one of them on its own tick, so that stays as
+/// responsive as it ever was.
+///
+/// Walking the tree is inherently proportional to the tree, and the tree is not ours: a dashboard
+/// legitimately kept 17 000 directories of records under its `backend/`, and the reload tick ran
+/// every 3 seconds, so *rediscovery alone* cost ~14 000 directory reads a second across two hives —
+/// to re-learn a twelve-item list. Pruning build output (see [`PRUNED_DIRS`]) cut half of it; only
+/// asking less often removes the rest.
+///
+/// The cost of the cache is the only thing it delays: a hive.yaml that appears on disk is imported
+/// within this window rather than within one tick.
+const IMPORT_DISCOVERY_TTL: Duration = Duration::from_secs(60);
+
+/// Resolved `**` patterns, with the instant each was resolved. Keyed by the expanded pattern, so
+/// two hives in one process (or a config that imports two roots) never share an entry.
+static IMPORT_CACHE: LazyLock<Mutex<HashMap<String, (Instant, Vec<PathBuf>)>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+/// Whether a directory entry is a directory, following a symlink but nothing else.
+///
+/// `file_type` is answered by the directory entry itself on Unix, so the common case costs no
+/// `stat` — the syscall that dominated the import walk's profile. A symlink is the one case that
+/// still needs one, because a project may legitimately be linked into the projects dir.
+fn entry_is_dir(entry: &std::fs::DirEntry) -> bool {
+    match entry.file_type() {
+        Ok(kind) if kind.is_symlink() => entry.path().is_dir(),
+        Ok(kind) => kind.is_dir(),
+        Err(_) => entry.path().is_dir(),
+    }
+}
+
+/// Expand a pattern whose wildcards are single `*` segments, each standing for exactly **one**
+/// directory level.
+///
+/// This is the bounded form, and the one the generated configs use. A hive.yaml has a fixed home —
+/// `<root>/<id>/.adi/hive.yaml` — so searching for it buys nothing and costs everything: the cost
+/// here is the number of entries at each named level, and no part of it grows with what a project
+/// happens to keep inside itself.
+///
+/// Only a whole segment may be `*`; a partial wildcard (`proj-*`) is not supported, and says so
+/// rather than silently matching nothing.
+fn expand_star_pattern(pattern: &str) -> Vec<PathBuf> {
+    let root = if pattern.starts_with('/') { "/" } else { "" };
+    let mut heads = vec![PathBuf::from(root)];
+    for segment in pattern.split('/').filter(|s| !s.is_empty()) {
+        if segment == "*" {
+            heads = heads
+                .iter()
+                .filter_map(|dir| std::fs::read_dir(dir).ok())
+                .flat_map(|entries| {
+                    entries
+                        .flatten()
+                        .filter(entry_is_dir)
+                        .map(|entry| entry.path())
+                        .collect::<Vec<_>>()
+                })
+                .collect();
+        } else {
+            if segment.contains('*') {
+                warn!(
+                    segment,
+                    pattern, "a partial wildcard is not supported; use a whole `*` segment"
+                );
+                return Vec::new();
+            }
+            for head in &mut heads {
+                head.push(segment);
+            }
+        }
+    }
+    // Only the files: a `*` level can land on a directory that has no such config in it.
+    heads.retain(|p| p.is_file());
+    heads.sort();
+    heads
+}
+
+/// Resolve an import pattern to concrete files. Three forms:
+///
+/// * `<base>/*/…/<filename>` — each `*` is exactly one directory level. Bounded and predictable;
+///   this is what the generated configs use. See [`expand_star_pattern`].
+/// * `<base>/**/<filename>` — walk `<base>` recursively. Kept for configs written before the
+///   bounded form, and correspondingly defensive: [`PRUNED_DIRS`] keeps it out of build output and
+///   its result is cached for [`IMPORT_DISCOVERY_TTL`], because the walk is proportional to a tree
+///   that is not ours to bound.
+/// * a plain path — included if it exists.
 fn find_imports(pattern: &str) -> Vec<PathBuf> {
     if let Some((base, filename)) = pattern.split_once("/**/") {
+        // A poisoned lock would mean a panic inside the walk; there is nothing to recover, and
+        // falling back to walking is strictly better than propagating it into a reload tick.
+        if let Ok(cache) = IMPORT_CACHE.lock()
+            && let Some((walked_at, files)) = cache.get(pattern)
+            && walked_at.elapsed() < IMPORT_DISCOVERY_TTL
+        {
+            return files.clone();
+        }
         let mut out = Vec::new();
         walk_collect(Path::new(base), filename, &mut out);
         out.sort();
+        if let Ok(mut cache) = IMPORT_CACHE.lock() {
+            cache.insert(pattern.to_string(), (Instant::now(), out.clone()));
+        }
         out
+    } else if pattern.contains('*') {
+        expand_star_pattern(pattern)
     } else {
         let p = PathBuf::from(pattern);
         if p.exists() { vec![p] } else { Vec::new() }
     }
 }
 
-/// Recursively collect files named `filename` under `dir`.
+/// Directory names the import walk never descends into.
+///
+/// A hive.yaml lives at a project's root or in its `.adi/` dir — never inside build output or a
+/// vendored dependency tree. Descending anyway is not merely wasted work: one `target/debug/deps`
+/// in this very repo reached 562 000 files, and this walk runs on **every** reload tick (see
+/// `RELOAD_INTERVAL`), so an unpruned walk keeps a core busy in `stat` forever and starves every
+/// other build on the machine of filesystem metadata — a `cargo` invocation that has to list a
+/// directory of that size went from 0.08s to 141s while two hives were walking it.
+///
+/// Hidden directories are deliberately *not* skipped wholesale: `.adi` is exactly where a
+/// project's hive.yaml lives.
+const PRUNED_DIRS: [&str; 7] = [
+    "target",
+    "node_modules",
+    ".git",
+    "dist",
+    ".venv",
+    "__pycache__",
+    ".next",
+];
+
+/// Recursively collect files named `filename` under `dir`, skipping [`PRUNED_DIRS`].
 fn walk_collect(dir: &Path, filename: &str, out: &mut Vec<PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk_collect(&path, filename, out);
-        } else if path.file_name().is_some_and(|n| n == filename) {
-            out.push(path);
+        let name = entry.file_name();
+        if entry_is_dir(&entry) {
+            if PRUNED_DIRS.iter().any(|pruned| name == *pruned) {
+                continue;
+            }
+            walk_collect(&entry.path(), filename, out);
+        } else if name == *filename {
+            out.push(entry.path());
         }
     }
 }
@@ -823,6 +949,20 @@ impl Hive {
         let mut hive = Self::parse_file(path)?;
         hive.apply_imports(path);
         Ok(hive)
+    }
+
+    /// This file alone, with no import expansion — so the caller pays one read instead of a walk
+    /// of every imported project.
+    ///
+    /// It exists for questions that are answered by the top-level file and nothing else. The bind
+    /// addresses are the one that matters: [`merge_import`](Self::merge_import) merges *services*,
+    /// so an import can never contribute an address, which lets a caller settle "is another
+    /// instance already serving these?" before committing to the expensive load.
+    ///
+    /// # Errors
+    /// Unreadable, or not valid hive YAML.
+    pub fn parse_no_imports(path: &Path) -> anyhow::Result<Self> {
+        Self::parse_file(path)
     }
 
     /// Parse a single hive.yaml with no import expansion: rewrite ``bash`…` `` port commands into
@@ -1358,6 +1498,134 @@ services:
             routes
                 .iter()
                 .any(|r| r.host == "proj.adi" && r.upstream.port() == 9123)
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A build directory is not a place projects live, and walking one is what made this walk
+    /// expensive enough to starve the machine: `target/debug/deps` here reached 562 000 files, and
+    /// the walk runs on every reload tick. A hive.yaml inside a pruned directory is therefore
+    /// deliberately invisible — the sibling real project proves the walk still works.
+    #[test]
+    fn the_import_walk_skips_build_and_vendor_directories() {
+        let base = std::env::temp_dir().join(format!(
+            "adi-hive-pruned-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let service = |host: &str| {
+            format!("services:\n  app:\n    proxy: {{ host: {host} }}\n    rollout: {{ recreate: {{ ports: {{ http: 9124 }} }} }}\n")
+        };
+        for pruned in ["target", "node_modules", ".git", "dist"] {
+            let dir = base.join(pruned).join("buried/.adi");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("hive.yaml"), service("buried.adi")).unwrap();
+        }
+        // `.adi` is hidden too, and is exactly where a real project keeps its config — so the
+        // prune must not be "skip dotted directories".
+        let real = base.join("proj/.adi");
+        std::fs::create_dir_all(&real).unwrap();
+        std::fs::write(real.join("hive.yaml"), service("proj.adi")).unwrap();
+
+        let parent = base.join("parent.yaml");
+        std::fs::write(
+            &parent,
+            format!("imports:\n  - {}/**/hive.yaml\n", base.display()),
+        )
+        .unwrap();
+
+        let hive = Hive::load(&parent).expect("load with imports");
+        assert!(
+            hive.services.contains_key("proj/app"),
+            "the real project must still be imported, got: {:?}",
+            hive.services.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            !hive.services.contains_key("buried/app"),
+            "a hive.yaml inside a pruned directory must not be imported, got: {:?}",
+            hive.services.keys().collect::<Vec<_>>()
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The bounded form: `*` is one directory level, so what a project keeps inside itself cannot
+    /// make discovery more expensive — the whole point of preferring it to `**`.
+    #[test]
+    fn a_star_segment_matches_one_level_and_never_descends() {
+        let base = std::env::temp_dir().join(format!(
+            "adi-hive-star-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        // The real layout: `<root>/<id>/.adi/hive.yaml`, for two projects.
+        for id in ["proj-a", "proj-b"] {
+            let dir = base.join(id).join(".adi");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("hive.yaml"), "services: {}\n").unwrap();
+        }
+        // Deeper than the pattern reaches, and inside a directory a project owns: found by `**`,
+        // deliberately invisible to `*`. This is the data store that made the walk expensive.
+        let deep = base.join("proj-a/backend/database/records/x/.adi");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("hive.yaml"), "services: {}\n").unwrap();
+
+        let found = find_imports(&format!("{}/*/.adi/hive.yaml", base.display()));
+        assert_eq!(
+            found.len(),
+            2,
+            "exactly the two projects at the fixed depth: {found:?}"
+        );
+        assert!(
+            found.iter().all(|p| !p.starts_with(base.join("proj-a/backend"))),
+            "a `*` segment must not descend into a project's own tree: {found:?}"
+        );
+        // A level that exists but holds no such file contributes nothing rather than erroring.
+        std::fs::create_dir_all(base.join("empty-project")).unwrap();
+        assert_eq!(
+            find_imports(&format!("{}/*/.adi/hive.yaml", base.display())).len(),
+            2,
+            "a project without a config is skipped, not fatal"
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// Discovery is cached, and this is the price of that: a hive.yaml that appears *after* a walk
+    /// waits for [`IMPORT_DISCOVERY_TTL`] rather than for the next tick. Asserted rather than left
+    /// implicit, because it is the one behaviour the cache changes — and the reason it is worth it
+    /// is that the walk is proportional to a tree we do not own.
+    #[test]
+    fn import_discovery_is_cached_so_a_reload_tick_does_not_rewalk_the_tree() {
+        let base = std::env::temp_dir().join(format!(
+            "adi-hive-cache-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let first = base.join("one/.adi");
+        std::fs::create_dir_all(&first).unwrap();
+        std::fs::write(first.join("hive.yaml"), "services: {}\n").unwrap();
+        let pattern = format!("{}/**/hive.yaml", base.display());
+
+        let found = find_imports(&pattern);
+        assert_eq!(found.len(), 1, "the first call walks: {found:?}");
+
+        // A second project appears on disk after that walk.
+        let second = base.join("two/.adi");
+        std::fs::create_dir_all(&second).unwrap();
+        std::fs::write(second.join("hive.yaml"), "services: {}\n").unwrap();
+        assert_eq!(
+            find_imports(&pattern).len(),
+            1,
+            "within the TTL the cached list is reused, so the walk is not repeated"
+        );
+
+        // A different root is a different key, and is walked on its own.
+        let other = base.join("other/proj/.adi");
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(other.join("hive.yaml"), "services: {}\n").unwrap();
+        assert_eq!(
+            find_imports(&format!("{}/other/**/hive.yaml", base.display())).len(),
+            1,
+            "a pattern that was never walked must not read another pattern's cache"
         );
         let _ = std::fs::remove_dir_all(&base);
     }

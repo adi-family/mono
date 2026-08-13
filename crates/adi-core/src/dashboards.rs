@@ -68,9 +68,14 @@ proxy:
   bind:
     - "127.0.0.1:45099"
 
+# A `*` is one directory level: a config has a fixed home (`<id>/.adi/hive.yaml`, or the id's own
+# dir), so these lines name it rather than searching for it. The search form (`**`) costs a walk of
+# everything a dashboard keeps inside itself, and it ran on every reload tick.
 imports:
-  - $ADI_DASHBOARDS_DIR/**/hive.yaml
-  - $ADI_PROJECTS_DIR/**/hive.yaml
+  - $ADI_DASHBOARDS_DIR/*/.adi/hive.yaml
+  - $ADI_DASHBOARDS_DIR/*/hive.yaml
+  - $ADI_PROJECTS_DIR/*/.adi/hive.yaml
+  - $ADI_PROJECTS_DIR/*/hive.yaml
 "#;
 
 /// The config path within the store.

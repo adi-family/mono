@@ -6,7 +6,7 @@
 //! tick; every routing decision it makes comes from the library, so the mesh gateway resolves
 //! hostnames through exactly the same table.
 
-use std::net::{IpAddr, Ipv4Addr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -27,6 +27,28 @@ async fn main() -> anyhow::Result<()> {
     let path = std::env::args()
         .nth(1)
         .map_or_else(config::default_config_path, PathBuf::from);
+
+    // Settle "is someone already serving this config?" *before* loading it. The load walks every
+    // imported project, which is far too expensive to spend on a start that cannot succeed: under
+    // a supervisor that keeps the job alive (launchd `KeepAlive`, systemd `Restart`) a duplicate
+    // instance re-walks the whole tree, fails to bind, exits, and is restarted forever — burning a
+    // core in `stat` and starving every other build on the machine of filesystem metadata. Two
+    // supervisors for one config is not hypothetical: two launchd labels pointing at the same
+    // hive.yaml is exactly how it happens, and neither one can see the other.
+    if let Some(taken) = addresses_already_served(&path) {
+        anyhow::bail!(
+            "every address {} declares is already in use ({}); another adi-hive is serving this \
+             config. Stop the duplicate instead of running two — on macOS `launchctl list | grep \
+             adi` names the jobs.",
+            path.display(),
+            taken
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+
     let mut hive = if path.exists() {
         info!(path = %path.display(), "loading hive config");
         Hive::load(&path)?
@@ -66,7 +88,19 @@ async fn main() -> anyhow::Result<()> {
     bind_tls(&path, &resolved, &route_rx, &mut bound, &mut tasks).await;
 
     if tasks.is_empty() {
-        anyhow::bail!("no proxy address could be bound");
+        // Name them: this is the last line before the process exits, and under a supervisor that
+        // restarts it the same failure is about to repeat, so the address is the whole diagnosis.
+        anyhow::bail!(
+            "no proxy address could be bound (tried {}); a privileged port needs root, and an \
+             address already in use means another instance has it",
+            resolved
+                .binds
+                .iter()
+                .chain(&resolved.tls_binds)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
     }
 
     // Status file sits beside the config, overridable via ADI_HIVE_STATUS_FILE. `bound` is cloned so
@@ -156,6 +190,45 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_target(false)
         .init();
+}
+
+/// Every address this config declares, when **all** of them are already in use — the signature of
+/// a second instance running the same hive.yaml.
+///
+/// Costs one file read and one bind attempt per address, which is what makes it usable before the
+/// config load rather than after.
+///
+/// `None` whenever the answer is not certain, because refusing to start is the expensive mistake
+/// here: a config that declares no address (the ports manager leases one), a file that will not
+/// parse (the real load reports that properly), or *any* address that is free or failed for some
+/// other reason — a missing loopback alias, say, which [`bind_plain`] repairs itself. Only a
+/// definite "every one of them is taken" is worth acting on.
+fn addresses_already_served(path: &Path) -> Option<Vec<SocketAddr>> {
+    if !path.exists() {
+        return None;
+    }
+    let hive = Hive::parse_no_imports(path).ok()?;
+    let declared: Vec<SocketAddr> = hive
+        .proxy
+        .bind
+        .iter()
+        .chain(&hive.proxy.tls_bind)
+        .copied()
+        .collect();
+    if declared.is_empty() {
+        return None;
+    }
+    for addr in &declared {
+        // std sets `SO_REUSEADDR`, which still refuses a second *listener* on a live address, so
+        // `AddrInUse` here means someone is really serving it. The probe listener is dropped
+        // immediately; the window that opens is harmless, since the real bind reports its own
+        // failure either way.
+        match std::net::TcpListener::bind(addr) {
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {}
+            _ => return None,
+        }
+    }
+    Some(declared)
 }
 
 /// Bind each plain-HTTP address independently: a failure (a privileged port without root, or one

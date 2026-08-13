@@ -82,7 +82,7 @@ liveness probe the shell polls.
 
 ## How it runs
 
-Two hive services, both supervised by the per-user `family.adi.dashboards` LaunchAgent, sharing
+Two hive services, both supervised by the per-user `family.adi.app.dashboards` LaunchAgent, sharing
 **one hostname** (`.adi/hive.yaml` declares the same `proxy.host` on both):
 
 - **frontend** — the page itself, owning `/` on that host
@@ -103,5 +103,5 @@ processes.
 tail -f ~/Library/Logs/adi-dashboards.log
 
 # restart both (e.g. after editing an index.ts)
-launchctl kickstart -k gui/$(id -u)/family.adi.dashboards
+launchctl kickstart -k gui/$(id -u)/family.adi.app.dashboards
 ```
