@@ -831,43 +831,55 @@ fn run_detail_row(
 /// transcript, right beneath where you type. The transcript itself is [`adi_ui::Chat`], which owns
 /// the scroll container and reconciles the turns as the poll rewrites them.
 ///
+/// **Everything else in the feed rides in that same scroll**, as the transcript's `lead`: the open
+/// question first, then whatever is queued, then the turns. Only the composer is pinned. This is
+/// not a tidiness point — pinned above the scroll, a question card taller than the pane had its
+/// bottom half cut off by the chat frame's `overflow: hidden`, with no scrollbar anywhere that
+/// reached the remaining questions or the Answer button. Inside the scroll it is one more thing in
+/// the feed, and a long one scrolls like a long message does.
+///
+/// Newest-first is what keeps that safe: the scroll opens at the top, so the question is the first
+/// thing on screen even though it is no longer pinned there.
+///
 /// Messages still waiting in the queue trail the transcript, so in a newest-first feed they sit at
 /// the very top: what you have already said is nearest the box you said it in.
 fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
     view! {
-        // Above even the composer: while this is up the conversation is not going anywhere, and
-        // burying the one thing that would move it under the box you would otherwise type into is
-        // how a run sits blocked all afternoon in plain sight.
-        {move || question_card(state, watch)}
-
         // The composer sits above the transcript, because the transcript reads newest-first:
         // what you type appears at the top, next to the box you typed it in.
         {answerable.then(|| reply_bar(state, watch))}
 
-        // Queued messages are said but not yet asked, so they belong above everything that
-        // has happened — as [`adi_ui::Queued`], the hollowed-out twin of the bubbles below,
-        // each carrying the × that takes one back before the agent ever sees it.
-        {move || {
-            let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
-            let mut queued: Vec<AnyView> = turns
-                .iter()
-                .filter(|t| t.queued)
-                .enumerate()
-                .map(|(place, t)| queued_bubble(state, watch, t.clone(), place))
-                .collect();
-            if queued.is_empty() {
-                return None;
-            }
-            // Newest first, like everything below them.
-            queued.reverse();
-            // These are siblings of the `Chat`, not turns inside it, so the transcript's own
-            // padding and gap have to be reproduced here for them to line up with it — and
-            // `adi-ui-type` for the same reason every adi-ui subtree on this page carries it.
-            Some(view! { <div class="adi-ui-type flex flex-col gap-3 px-3 pt-3">{queued}</div> })
-        }}
-
         <adi_ui::Chat
             class="adi-ui-type min-h-0 flex-1 p-3"
+            lead=move || {
+                view! {
+                    // First in the feed while it is up: the conversation is not going anywhere
+                    // until it is answered, and it is what the eye should land on when the pane
+                    // opens.
+                    {move || question_card(state, watch)}
+
+                    // Queued messages are said but not yet asked, so they belong above everything
+                    // that has happened — as [`adi_ui::Queued`], the hollowed-out twin of the
+                    // bubbles below, each carrying the × that takes one back before the agent ever
+                    // sees it.
+                    {move || {
+                        let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
+                        let mut queued: Vec<AnyView> = turns
+                            .iter()
+                            .filter(|t| t.queued)
+                            .enumerate()
+                            .map(|(place, t)| queued_bubble(state, watch, t.clone(), place))
+                            .collect();
+                        if queued.is_empty() {
+                            return None;
+                        }
+                        // Newest first, like everything below them.
+                        queued.reverse();
+                        Some(view! { <div class="flex flex-col gap-3">{queued}</div> })
+                    }}
+                }
+                .into_any()
+            }
             turns=Signal::derive(move || {
                 let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
                 turns.iter().filter(|t| !t.queued).flat_map(feed_turn).collect::<Vec<_>>()
@@ -1122,19 +1134,19 @@ fn question_card(state: State, watch: AgentsWatch) -> Option<AnyView> {
             left => format!("takes its own default in {}", short_duration(left)),
         },
     });
+    // No wrapper of its own: this is the transcript's `lead`, so the padding, the type scale and
+    // the gap between it and the turn below it all come from the `Chat` it sits inside.
     Some(
         view! {
-            <div class="adi-ui-type px-3 pt-3">
-                <adi_ui::Ask
-                    note=ask.note.clone()
-                    questions=questions
-                    deadline_note=deadline_note
-                    busy=watch.answering
-                    on_answer=Callback::new(move |replies: Vec<String>| {
-                        send_answer(state, watch, ask_id.clone(), replies);
-                    })
-                />
-            </div>
+            <adi_ui::Ask
+                note=ask.note.clone()
+                questions=questions
+                deadline_note=deadline_note
+                busy=watch.answering
+                on_answer=Callback::new(move |replies: Vec<String>| {
+                    send_answer(state, watch, ask_id.clone(), replies);
+                })
+            />
         }
         .into_any(),
     )
@@ -2259,10 +2271,11 @@ fn last_touch(r: &AgentRunInfo) -> u64 {
 /// starred on the Agents page — the same shortlist the agent picker already draws from, now
 /// answering "show me only the sessions I care about" as well as "which agent does + New start".
 ///
-/// On by default, so the rail opens as the same shortlist the picker does. The glyph fills and takes
-/// the accent while it is on, because a list showing less than everything has to say so — and it is
-/// the only thing here that says it. Clicking it off is how the long tail is reached, for as long as
-/// the page is open; the setting is not stored, so a reload comes back to the shortlist.
+/// Off by default: the rail opens on every conversation, so nothing a person had is missing until
+/// they ask for it to be. The glyph fills and takes the accent while it is on, because a list showing
+/// less than everything has to say so — and it is the only thing here that says it. Clicking it on
+/// narrows the rail for as long as the page is open; the setting is not stored, so a reload comes
+/// back to the full list.
 fn chat_starred_button(state: State) -> AnyView {
     let on = state.starred_only.get();
     let (glyph, hint) = if on {

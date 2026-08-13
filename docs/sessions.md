@@ -297,7 +297,8 @@ Work down this list when one is missing:
 2. Its agent is **pty** → no history by design; the rail synthesizes one row, and only when the
    session is live or that agent is on screen (`actions.rs:2363-2375`).
 3. `hidden: true` → out of the main bands, in the Hidden band (`actions.rs:2387`, `:2674`).
-4. **★ is on** and its agent is not starred (`actions.rs:2279`) — on by default.
+4. **★ is on** and its agent is not starred (`actions.rs:2279`) — off by default, so this only
+   applies once someone has switched it on this page load.
 5. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs:252`).
    A live session is never swept.
 6. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.

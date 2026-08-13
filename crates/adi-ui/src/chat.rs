@@ -167,10 +167,26 @@ pub fn Chat(
     /// Oldest first. The component flips it.
     #[prop(into)]
     turns: Signal<Vec<Turn>>,
+    /// What sits at the head of the transcript — **inside** its scroll, above the newest turn.
+    ///
+    /// This exists because the alternative does not work. A card pinned *outside* the scroll (a
+    /// pending question, say) is a flex item in a column with a height: the moment it is taller
+    /// than the pane its bottom is simply cut off, and there is no scrollbar anywhere that
+    /// reaches it. Put it in here and it is one more thing in the feed — it scrolls like a
+    /// message, because it is where the messages are.
+    #[prop(optional, into)]
+    lead: Option<ViewFn>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     view! {
         <div class=merge("flex flex-col gap-3 overflow-y-auto", class)>
+            // `shrink-0` for exactly the reason every turn carries it (see [`LAZY`]): this is a
+            // flex item in a column with a height, and a lead that can be squeezed is a lead with
+            // its second half missing. `gap-3` inside, so several lead items sit apart the way the
+            // turns below them do.
+            {lead.map(|lead| view! {
+                <div class="flex shrink-0 flex-col gap-3">{lead.run()}</div>
+            })}
             {move || {
                 let mut turns = turns.get();
                 turns.reverse();
