@@ -59,16 +59,24 @@ pub(crate) enum AgentsCommand {
         max_turns: Option<u32>,
         #[arg(long = "tag")]
         tags: Vec<String>,
+        #[arg(long, conflicts_with = "tags")]
+        no_tag: bool,
         #[arg(long)]
         starred: bool,
+        #[arg(long, conflicts_with = "starred")]
+        no_starred: bool,
         #[arg(long)]
         project: Option<String>,
+        #[arg(long, conflicts_with = "project")]
+        no_project: bool,
         #[arg(long = "tool")]
         tools: Vec<String>,
         #[arg(long, conflicts_with = "tools")]
         no_tool: bool,
         #[arg(long = "secret")]
         secrets: Vec<String>,
+        #[arg(long, conflicts_with = "secrets")]
+        no_secret: bool,
         #[arg(long = "path")]
         path: Vec<String>,
         #[arg(long, conflicts_with = "path")]
@@ -79,6 +87,8 @@ pub(crate) enum AgentsCommand {
         no_env: bool,
         #[arg(long)]
         unattended: bool,
+        #[arg(long, conflicts_with = "unattended")]
+        no_unattended: bool,
         #[arg(long = "knowledge")]
         knowledge: Vec<String>,
         #[arg(long, conflicts_with = "knowledge")]
@@ -577,6 +587,8 @@ enum Command {
         as_agent: Option<String>,
         #[arg(long, value_name = "PROJECT")]
         as_project: Option<String>,
+        #[arg(long)]
+        root: bool,
         #[command(subcommand)]
         command: KnowledgeCommand,
     },

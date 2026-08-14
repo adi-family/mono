@@ -64,6 +64,34 @@ default. Anything that can run `adi-mono` can also pass a different `--as-agent`
 files directly. What isolation buys is that one agent's memory cannot be *rewritten* by another
 — not that it can be kept from them. Secrets belong in `adi-mono secrets`, which encrypts them.
 
+### Writing into somebody else's memory
+
+`--root` runs as the owner of the store, whatever the environment says. It is answered before the
+flags and before `ADI_AGENT`, because a run cannot unset a variable its launcher exported — and a
+root check that came second would scope the caller straight back into the isolation it asked to
+step out of.
+
+```
+$ adi-knowledge-root add agent:solver/memory --create \
+    --id frontdoor-502 --tag from-review \
+    -t "The front door 502s on a stale route" -b "Rebuild adi-hive; a reload is not enough."
+```
+
+This is not `--as-agent solver` by another name. That flag says *"I am solver"* and inherits
+solver's isolation — which still cannot reach a third agent's memory. `--root` says *"apply none of
+it"*, and it is the only way to write to a base whose owner is not the caller.
+
+It reaches agents as the `adi-knowledge-root` system tool (`sys-knowledge-root`), separate from
+plain `adi-knowledge` and given out separately. **That separation is a seatbelt, not a lock.** Every
+system shim forwards to `adi-mono`, so `adi-mono` is on every agent's `PATH` already and any agent
+with a shell can pass `--root` for itself; enforcement was never available at this layer. What
+giving an agent the tool buys is *intent* — it is named in the agent's tool list, it is legible in
+its manifest, and there is one place to say what it is for.
+
+The case it was built for is [the review flow](../crates/adi-agents/src/review.rs): an agent that
+has just worked out how another agent should be run has learned something for *that* agent, and the
+only shelf it belongs on is the one that agent reads first.
+
 ## Staying embedded
 
 Every note carries a `content_hash` over exactly the text that gets embedded — title, tags, body

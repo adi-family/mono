@@ -191,9 +191,10 @@ pub(crate) fn run_knowledge(
     adi: Adi,
     as_agent: Option<String>,
     as_project: Option<String>,
+    root: bool,
     command: KnowledgeCommand,
 ) -> Result<(), String> {
-    let store = reader_store(adi.knowledge(), as_agent, as_project);
+    let store = reader_store(adi.knowledge(), as_agent, as_project, root);
     match command {
         KnowledgeCommand::Bases {
             global,
@@ -487,11 +488,22 @@ fn run_base(store: &KnowledgeStore, command: BaseCommand) -> Result<(), String> 
 /// `adi-agents` exports `ADI_AGENT` and `ADI_PROJECT` into every run, so an agent that invokes
 /// `adi-knowledge` through its own `.bin` gets its isolation applied without having to name
 /// itself — while a person's shell, which has neither, stays the owner of the store.
+///
+/// `root` is the deliberate way back out of that. It is not `--as-agent` by another name: that
+/// flag says *"I am somebody else"* and inherits their isolation, which still cannot reach a third
+/// agent's memory. `--root` says *"apply none of it"*, which is the only way to write to a base
+/// whose owner is not the caller — the point of [`adi-knowledge-root`](adi_tools::SYS_KNOWLEDGE_ROOT).
 fn reader_store(
     store: KnowledgeStore,
     as_agent: Option<String>,
     as_project: Option<String>,
+    root: bool,
 ) -> KnowledgeStore {
+    // Checked before the flags and before the environment: a run that asked for root asked to be
+    // nobody in particular, and an `ADI_AGENT` it cannot unset would otherwise scope it right back.
+    if root {
+        return store;
+    }
     match identity(
         as_agent,
         as_project,
@@ -789,5 +801,28 @@ mod tests {
         // A blank flag is not an identity — it would otherwise silently drop every base.
         assert_eq!(identity(Some("  ".into()), None, None, None), None);
         assert!(store.reader().admin);
+    }
+
+    /// `--root` is answered before the flags and before the environment, and that order is the
+    /// whole feature. A run carries `ADI_AGENT` and cannot unset it, so a root check that came
+    /// second would scope the caller straight back into the isolation it asked to step out of —
+    /// and writing into another agent's memory, the one thing this flag exists for, would stay
+    /// impossible.
+    #[test]
+    fn root_is_the_owner_whatever_the_flags_and_the_environment_say() {
+        let rooted = reader_store(
+            KnowledgeStore::open(),
+            Some("solver".into()),
+            Some("acme".into()),
+            true,
+        );
+        assert!(rooted.reader().admin);
+        assert_eq!(rooted.reader().agent, None, "root is nobody in particular");
+
+        // Without it the same flag scopes the store, which is what makes the flag load-bearing
+        // rather than decorative.
+        let scoped = reader_store(KnowledgeStore::open(), Some("solver".into()), None, false);
+        assert!(!scoped.reader().admin);
+        assert_eq!(scoped.reader().agent.as_deref(), Some("solver"));
     }
 }

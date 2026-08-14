@@ -109,6 +109,10 @@ enum Command {
         /// Act as somebody working in this project.
         #[arg(long, value_name = "PROJECT")]
         as_project: Option<String>,
+        /// Run as the owner of the store regardless of who the environment says you are — the one
+        /// way to write into another agent's memory. Overrides `--as-agent` / `--as-project`.
+        #[arg(long)]
+        root: bool,
         #[command(subcommand)]
         command: KnowledgeCommand,
     },
@@ -219,9 +223,10 @@ fn main() {
         Command::Knowledge {
             as_agent,
             as_project,
+            root,
             command,
         } => {
-            if let Err(e) = run_knowledge(adi, as_agent, as_project, command) {
+            if let Err(e) = run_knowledge(adi, as_agent, as_project, root, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }
@@ -326,6 +331,7 @@ mod tests {
             Command::Knowledge {
                 as_agent: Some(ref a),
                 as_project: None,
+                root: false,
                 command: KnowledgeCommand::Search { .. },
             } if a.as_str() == "solver"
         ));

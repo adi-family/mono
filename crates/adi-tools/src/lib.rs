@@ -44,7 +44,7 @@ use adi_config::{Config, ConfigFile, now_unix};
 pub use error::{Error, Result};
 pub use help::ToolHelp;
 pub use run::RunOutput;
-pub use system::SYS_KNOWLEDGE;
+pub use system::{SYS_KNOWLEDGE, SYS_KNOWLEDGE_ROOT};
 pub use tool::{
     Manifest, RUNTIME_SH, RUNTIME_TS, Tool, normalize_runtime, runtime_ext, runtime_from_path,
     validate_runtime,
@@ -824,6 +824,36 @@ mod tests {
             .sync_agent_bin("solver", &["sys-knowledge".to_string()])
             .expect("agent bin");
         assert!(dir.join("adi-knowledge").exists(), "no shim to run it by");
+    }
+
+    /// The root variant is a separate tool over the same subcommand, and the `--root` in its script
+    /// is the whole of the difference — without it the shim is plain `adi-knowledge` under another
+    /// name, and the one thing it exists for (writing into another agent's memory) silently fails
+    /// the isolation check instead.
+    #[test]
+    fn the_root_knowledge_shim_carries_the_flag_that_makes_it_root() {
+        let store = scratch("knowledge-root");
+        store.seed_system().expect("seed");
+
+        let tool = store.get(SYS_KNOWLEDGE_ROOT).expect("get").expect("present");
+        assert!(tool.is_system());
+        assert_eq!(tool.manifest.name, "adi-knowledge-root");
+        assert!(
+            store
+                .read_script(SYS_KNOWLEDGE_ROOT)
+                .expect("script")
+                .contains("adi-mono knowledge --root")
+        );
+
+        // Ticking one does not tick the other: an agent gets root because somebody gave it root.
+        let dir = store
+            .sync_agent_bin("reviewer", &[SYS_KNOWLEDGE_ROOT.to_string()])
+            .expect("agent bin");
+        assert!(dir.join("adi-knowledge-root").exists(), "no shim to run it by");
+        assert!(
+            !dir.join("adi-knowledge").exists(),
+            "the plain tool arrived on its own"
+        );
     }
 
     #[test]

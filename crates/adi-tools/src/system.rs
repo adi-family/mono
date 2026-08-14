@@ -13,6 +13,21 @@
 /// a setting that does nothing. Named here so the two crates cannot drift apart on a string.
 pub const SYS_KNOWLEDGE: &str = "sys-knowledge";
 
+/// The **root** knowledge CLI's stable id: the same command group, run as the owner of the store.
+///
+/// Its whole reason to exist is the one thing plain `adi-knowledge` will not do — write into
+/// another agent's memory. An agent's own isolation makes `agent:<somebody-else>/…` read-only, and
+/// that is right for ordinary work: a memory nobody else can rewrite is what makes it *theirs*.
+/// But a reviewer that has just worked out how an agent should be run has learned something for
+/// *that* agent, and the only shelf it belongs on is the one that agent reads first.
+///
+/// **This is a seatbelt, not a lock.** Every shim already forwards to `adi-mono`, so `adi-mono` is
+/// on every agent's `PATH` and any agent with a shell can pass `--root` for itself. What giving an
+/// agent this tool buys is intent: it is named in the tool list, it is legible in the manifest, and
+/// there is one place to say what it is for. Enforcement was never available at this layer — see
+/// the note on isolation in `docs/knowledge.md`.
+pub const SYS_KNOWLEDGE_ROOT: &str = "sys-knowledge-root";
+
 /// One built-in system tool: a stable id, the name agents invoke it by, a one-line description,
 /// and the `adi-mono` subcommand it forwards to.
 pub(crate) struct SystemTool {
@@ -22,7 +37,10 @@ pub(crate) struct SystemTool {
     pub name: &'static str,
     /// A one-line description.
     pub description: &'static str,
-    /// The `adi-mono` subcommand this tool forwards its arguments to, e.g. `tasks`.
+    /// The `adi-mono` subcommand this tool forwards its arguments to, e.g. `tasks` — with any
+    /// fixed arguments that always precede the caller's own, as `knowledge --root` does. Those
+    /// belong here rather than in a field of their own: they are part of *which command this tool
+    /// is*, and two tools over one subcommand that differ only by a flag is exactly the case.
     pub subcommand: &'static str,
 }
 
@@ -103,5 +121,11 @@ pub(crate) const SYSTEM_TOOLS: &[SystemTool] = &[
         name: "adi-knowledge",
         description: "Search and write knowledge bases — text notes ranked by meaning (search/add/list/get/edit/rm/bases). A base is `global/<name>`, `project:<id>/<name>`, or `agent:<name>/<base>`; `--as-agent <you>` applies your isolation.",
         subcommand: "knowledge",
+    },
+    SystemTool {
+        id: SYS_KNOWLEDGE_ROOT,
+        name: "adi-knowledge-root",
+        description: "The knowledge CLI as the owner of the store: same verbs, no isolation — the one way to write into another agent's memory (`agent:<them>/memory`). Use it to leave an agent what it should have known; use plain `adi-knowledge` for everything else.",
+        subcommand: "knowledge --root",
     },
 ];
