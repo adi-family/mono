@@ -1,7 +1,5 @@
-//! Shared view helpers and small utilities the pages compose from, so the repeated markup (stat
-//! tiles, table shells, the flash line, segmented filters, labeled fields), the shared formatters,
-//! the generic mutation runner, and the theme toggle live in one place instead of at every call
-//! site.
+//! Shared view helpers, formatters, the generic mutation runner, and the theme toggle the pages
+//! compose from.
 
 use adi_webapp_api::types::{ProcessUsage, ServicePort, TaskRow};
 use leptos::prelude::*;
@@ -9,39 +7,30 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::state::{Flash, RowMenu, State};
 
-/// A table — its state *and* its markup — now lives entirely in [`adi_ui`]: a page builds one
-/// from [`adi_ui::Table`], [`adi_ui::Row`] and [`adi_ui::EmptyRow`]. Nothing about a table is
-/// written against the `adi-*` layer any more.
-///
-/// Re-exported under the names the pages already import, so `use crate::ui::{Key, TableState}`
-/// keeps meaning what it meant. `SortKey` comes back as `Key`: unqualified it is too vague to
-/// export from a component library, and too long to write 115 times in a comparator.
+/// Tables live in [`adi_ui`]; re-exported under the names the pages import. `SortKey` comes back
+/// as `Key` — unqualified it is too vague to export from a component library, and too long to
+/// write 115 times in a comparator.
 pub(crate) use adi_ui::{Sort, SortKey as Key, TableState, sort_rows};
 
 /// A full-width placeholder row spanning `colspan` columns.
 ///
-/// The one caller left is the SQL console's result grid, which has no [`TableState`] to take a
-/// span from — its columns are whatever the query returned. Every table that *does* have one
-/// uses [`adi_ui::EmptyRow`] instead, which reads the span off the layout itself.
+/// For the SQL console's result grid, which has no [`TableState`] to take a span from. Tables
+/// that do have one use [`adi_ui::EmptyRow`], which reads the span off the layout itself.
 pub(crate) fn placeholder_row(colspan: usize, msg: &str) -> AnyView {
     view! { <tr><td class="adi-empty" colspan=colspan>{msg.to_string()}</td></tr> }.into_any()
 }
 
 /// The trailing action controls for a table row: any always-visible `inline` buttons, then — when
-/// `items` is non-empty — a `⋮` kebab that opens an overflow menu holding them (each built with
-/// [`menu_item`], so it closes the menu when chosen). With no items the kebab is dropped and only
-/// `inline` shows. `key` identifies this row's menu and must be unique among the rows on screen
-/// (namespace it per table, e.g. `secret:…`/`tool:…`, so two panels on one page never collide). A
-/// full-viewport scrim behind the open menu makes the next click a dismiss. Shared by every page's
-/// action column, backed by the single [`State::row_menu`] signal (only one menu is ever open), so
-/// this replaces the old per-row `flex-end` button clusters.
+/// `items` is non-empty — a `⋮` kebab opening an overflow menu of them (each built with
+/// [`menu_item`]). `key` identifies this row's menu and must be unique among the rows on screen
+/// (namespace it per table, e.g. `secret:…`/`tool:…`, so two panels on one page never collide).
+/// Backed by the single [`State::row_menu`] signal, so only one menu is ever open.
 pub(crate) fn row_actions(
     state: State,
     key: String,
     inline: impl IntoView + 'static,
     items: Vec<AnyView>,
 ) -> AnyView {
-    // No overflow actions ⇒ no kebab, no menu — just the inline controls in the shared container.
     if items.is_empty() {
         return view! { <div class="adi-rowacts">{inline}</div> }.into_any();
     }
@@ -49,9 +38,8 @@ pub(crate) fn row_actions(
     let toggle_key = key.clone();
     let aria_key = key.clone();
     let scrim_key = key.clone();
-    // The menu and its scrim stay mounted but hidden (display:none) until this row is the open
-    // one — cheaper than rebuilding the menu view on every open, and it keeps each item's click
-    // handler a plain move-closure rather than something rebuildable.
+    // The menu and its scrim stay mounted but `display:none` until this row is the open one, so
+    // each item's click handler can stay a plain move-closure instead of something rebuildable.
     view! {
         <div class="adi-rowacts">
             {inline}
@@ -133,9 +121,6 @@ pub(crate) fn fmt_uptime(s: u64) -> String {
 }
 
 
-
-
-
 /// The one-line status message shown under a form: reads the shared `flash` signal, colouring
 /// itself via `data-kind`.
 pub(crate) fn flash_view(flash: RwSignal<Option<Flash>>) -> impl IntoView {
@@ -167,15 +152,13 @@ pub(crate) fn segmented(
 }
 
 /// A labeled text input bound to a `String` signal — the `adi-field` wrapper the forms repeat.
-/// Optional props toggle the mono/wide input classes, a numeric input mode, a trailing hint line,
-/// and extra classes on the field wrapper (e.g. `adi-field--grow`).
+/// `id` is both the input's `id` and the label's `for`. Optional props toggle the mono/wide input
+/// classes, a numeric input mode, a trailing hint line, and extra classes on the field wrapper
+/// (e.g. `adi-field--grow`).
 #[component]
 pub(crate) fn TextField(
-    /// The input's `id` (also the label's `for`).
     id: &'static str,
-    /// The field's label text.
     label: &'static str,
-    /// The bound value signal.
     value: RwSignal<String>,
     #[prop(optional)] placeholder: &'static str,
     #[prop(optional)] hint: &'static str,
@@ -209,8 +192,8 @@ pub(crate) fn TextField(
 }
 
 /// A field's explanation, rendered as a “?” beside its label that opens the text on hover or
-/// keyboard focus. Written after the control (where it reads naturally in the markup); the
-/// field's grid places it up next to the title, so it costs the form no vertical space.
+/// keyboard focus. Written after the control in the markup; the field's grid places it next to the
+/// title, so it costs the form no vertical space.
 pub(crate) fn field_hint(text: impl IntoView + 'static) -> AnyView {
     view! {
         <span class="adi-field__hint" tabindex="0" role="note">
@@ -221,9 +204,8 @@ pub(crate) fn field_hint(text: impl IntoView + 'static) -> AnyView {
 }
 
 /// Run a mutation that returns fresh state `T`, hand the result to `store`, and flash success or
-/// the error; toggles `busy` around the request when a form is driving it. The `apply_projects` /
-/// `apply_tasks` / `apply_agents` / `apply_mesh` helpers are thin typed wrappers over this — each
-/// differs only in which page-state signal receives the result.
+/// the error; toggles `busy` around the request when a form is driving it. The `apply_*` helpers
+/// are thin typed wrappers over this, differing only in which page-state signal takes the result.
 pub(crate) fn apply_mutation<T, S, F>(
     state: State,
     busy: Option<RwSignal<bool>>,
@@ -251,9 +233,8 @@ pub(crate) fn apply_mutation<T, S, F>(
     });
 }
 
-/// A native confirm dialog, returning `true` only when the user accepts. Gates the irreversible
-/// row actions (permanent deletes) behind an explicit yes; a browser that has no `confirm`
-/// (or denies it) reads as "cancelled", so nothing is destroyed by accident.
+/// A native confirm dialog, returning `true` only when the user accepts. A browser that has no
+/// `confirm` (or denies it) reads as "cancelled", so nothing is destroyed by accident.
 pub(crate) fn confirm(message: &str) -> bool {
     web_sys::window()
         .and_then(|w| w.confirm_with_message(message).ok())
@@ -320,7 +301,7 @@ pub(crate) fn fmt_cpu(percent: f32) -> String {
 }
 
 /// The CPU cell for a service row. Separate from [`memory_cell`] rather than one two-`<td>`
-/// helper, because a [`configurable_table`] lets the user hide or reorder either independently.
+/// helper, because a table's column config can hide or reorder either independently.
 pub(crate) fn cpu_cell(usage: Option<&ProcessUsage>) -> AnyView {
     usage_cell(usage, |u| fmt_cpu(u.cpu_percent))
 }
@@ -346,9 +327,8 @@ fn usage_cell(usage: Option<&ProcessUsage>, value: impl Fn(&ProcessUsage) -> Str
     view! { <td class="adi-mono" title=title>{value(u)}</td> }.into_any()
 }
 
-/// The capitalized display label for a task's computed effective status (`ready`/`blocked`/
-/// `done`/`archived`), used with the `adi-tstatus` pill on both the Tasks page and a project's
-/// detail panel.
+/// The capitalized display label for a task's computed effective status, used with the
+/// `adi-tstatus` pill.
 pub(crate) fn effective_label_title(effective: &str) -> &'static str {
     match effective {
         "ready" => "Ready",
@@ -361,9 +341,8 @@ pub(crate) fn effective_label_title(effective: &str) -> &'static str {
 
 /// Flatten a flat task list into depth-annotated tree order: each task is immediately followed by
 /// its subtree (children in their incoming order), so a caller renders one row per task and indents
-/// by the returned depth. A task whose `parent` isn't in the set is treated as a root, so nothing is
-/// ever dropped. Depth is **unbounded** — the tree may nest arbitrarily deep. Shared by the global
-/// Tasks page and a project's detail panel.
+/// by the returned depth. A task whose `parent` isn't in the set is treated as a root, so nothing
+/// is ever dropped. Depth is unbounded — the tree may nest arbitrarily deep.
 pub(crate) fn task_tree_rows(rows: Vec<TaskRow>) -> Vec<(usize, TaskRow)> {
     use std::collections::{HashMap, HashSet};
 
