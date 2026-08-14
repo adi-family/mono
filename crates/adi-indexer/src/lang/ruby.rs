@@ -78,7 +78,7 @@ fn extract_ruby_symbols(
         symbols.extend(parse_ruby_declaration(node, source, kind));
 
         let mut body_visibility = Visibility::Public;
-        for i in 0..node.child_count() {
+        for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i) {
                 extract_ruby_symbols(child, source, symbols, &mut body_visibility);
             }
@@ -103,7 +103,7 @@ fn extract_ruby_symbols(
     };
     symbols.extend(parsed);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             extract_ruby_symbols(child, source, symbols, current_visibility);
         }
@@ -221,7 +221,7 @@ fn collect_ruby_references(node: Node, source: &str, refs: &mut Vec<ParsedRefere
         _ => {}
     }
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_ruby_references(child, source, refs);
         }

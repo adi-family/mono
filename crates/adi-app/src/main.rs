@@ -209,6 +209,20 @@ const DIST_ENV: &str = "ADI_WEBAPP_DIST";
 /// code block that ignores SIGTERM must not hold the whole app open.
 const TRIGGER_STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// Install `ring` as the process-wide rustls provider, once.
+///
+/// reqwest is built with `rustls-no-provider` (see the workspace manifest), which means it picks
+/// no crypto provider of its own and *panics* when a client is built without one. So this is
+/// called at each client construction rather than once in `main`: the tests reach the request
+/// paths directly, never through `main`, and a start-up-only install left them panicking inside
+/// `Client::builder().build()`. `install_default` errors only if a provider is already set, which
+/// is exactly the outcome wanted on the second and every later call.
+pub(crate) fn ensure_tls_provider() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -824,6 +838,7 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
         oauth_router_url().trim_end_matches('/'),
         oauth.provider
     );
+    ensure_tls_provider();
     let resp = match reqwest::Client::new()
         .post(&url)
         .json(&serde_json::json!({ "refresh_token": refresh_token }))

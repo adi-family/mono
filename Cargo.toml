@@ -98,8 +98,49 @@ tiktoken-rs = "0.12"
 # Reflects `#[derive(JsonSchema)]` types into JSON Schema — the source of truth for the payload
 # shape of every platform event (see adi-tasks / adi-agents event catalogs).
 schemars = "1"
-toml = "0.8"
+toml = "1"
 uuid = { version = "1", features = ["v4"] }
+# The async runtime. Listed with no features: a runtime is only ever as big as the drivers the
+# crate using it asks for, and those differ per crate (adi-cli builds one inside a single
+# subcommand, adi-hive wants process + io-util). Members add their own with
+# `tokio = { workspace = true, features = [...] }` — cargo unions them per build.
+tokio = "1"
+# Structured logging. `tracing` is the facade every crate records through; only the three
+# binaries that own a process (adi-app, adi-dns, adi-hive) also install a subscriber.
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Error plumbing: `anyhow` where a binary just needs a cause to print, `thiserror` where a
+# library owes its callers a typed error they can match on.
+anyhow = "1"
+thiserror = "2"
+async-trait = "0.1"
+# Content addressing — the indexer's parse/embed cache, knowledge note staleness, the updater's
+# artifact checksum, and the mesh's password digest all hash the same way.
+sha2 = "0.11"
+hex = "0.4"
+# The `harness:adi` tool loop's Grep runs a real regular expression.
+regex = "1"
+# HTTP client. rustls rather than native-tls so no target needs a system OpenSSL — see the
+# note in adi-indexer's Cargo.toml about what feature unification does to the musl node build.
+#
+# `rustls-no-provider`, not `rustls`: as of 0.13 the plain `rustls` feature hard-wires the
+# aws-lc-rs provider, which wants cmake and a C toolchain and would put C crypto back into the
+# static musl build (apps/linux/build.sh). The no-provider variant is what iroh already selects,
+# so the whole graph stays on `ring` — but it also means *nobody* picks a provider for us, and a
+# client cannot be built until one is installed process-wide. See `tls::ensure_provider`.
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider"] }
+# The TLS implementation itself. `ring` rather than the default aws-lc-rs provider: no cmake, no
+# C toolchain, so the build stays as portable as the rest of the workspace.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12", "logging"] }
+# The maintained fork of the archived serde_yaml; hive.yaml and the webapp's YAML views parse
+# through it.
+serde_yaml_ng = "0.10"
+# Randomness: per-credential salts and the join nonce/password (adi-mesh).
+rand = "0.10"
+# Mints the front door's local CA and leaf in-process, so a fresh machine needs no openssl/mkcert.
+rcgen = "0.14"
+# Scratch directories for tests.
+tempfile = "3"
 # Lints applied workspace-wide; member crates opt in with `[lints] workspace = true`.
 [workspace.lints.rust]
 unsafe_code = "warn"

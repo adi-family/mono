@@ -103,7 +103,7 @@ impl GenericAnalyzer {
                 return;
             }
 
-        for i in 0..node.child_count() {
+        for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i) {
                 self.extract_generic_symbols(child, source, symbols);
             }
@@ -146,7 +146,7 @@ impl GenericAnalyzer {
             }
         }
 
-        for i in 0..node.child_count() {
+        for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i) {
                 self.collect_generic_references(child, source, refs);
             }
@@ -185,7 +185,7 @@ impl GenericAnalyzer {
             }
             "class_definition" => {
                 if let Some(args) = node.child_by_field_name("superclasses") {
-                    for i in 0..args.child_count() {
+                    for i in 0..args.child_count() as u32 {
                         if let Some(arg) = args.child(i)
                             && (arg.kind() == "identifier" || arg.kind() == "attribute") {
                                 let name = self.base.node_text(arg, source);
@@ -220,7 +220,7 @@ impl GenericAnalyzer {
     fn extract_python_imports(&self, node: Node, source: &str, refs: &mut Vec<ParsedReference>) {
         match node.kind() {
             "import_statement" => {
-                for i in 0..node.child_count() {
+                for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i)
                         && (child.kind() == "dotted_name" || child.kind() == "aliased_import") {
                             let name = if child.kind() == "aliased_import" {
@@ -247,7 +247,7 @@ impl GenericAnalyzer {
                     .map(|n| self.base.node_text(n, source))
                     .unwrap_or_default();
 
-                for i in 0..node.child_count() {
+                for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i)
                         && (child.kind() == "dotted_name"
                             || child.kind() == "aliased_import"
@@ -372,10 +372,10 @@ impl GenericAnalyzer {
             }
             "class_declaration" | "class" => {
                 if let Some(heritage) = node.child_by_field_name("heritage") {
-                    for i in 0..heritage.child_count() {
+                    for i in 0..heritage.child_count() as u32 {
                         if let Some(clause) = heritage.child(i)
                             && clause.kind() == "extends_clause" {
-                                for j in 0..clause.child_count() {
+                                for j in 0..clause.child_count() as u32 {
                                     if let Some(base) = clause.child(j)
                                         && (base.kind() == "identifier"
                                             || base.kind() == "member_expression")
@@ -430,7 +430,7 @@ impl GenericAnalyzer {
                 .trim_matches(|c| c == '"' || c == '\'')
                 .to_string();
 
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i) {
                     match child.kind() {
                         "identifier" => {
@@ -454,7 +454,7 @@ impl GenericAnalyzer {
                             }
                         }
                         "named_imports" => {
-                            for j in 0..child.child_count() {
+                            for j in 0..child.child_count() as u32 {
                                 if let Some(spec) = child.child(j)
                                     && spec.kind() == "import_specifier"
                                         && let Some(name_node) = spec.child_by_field_name("name") {
@@ -601,7 +601,7 @@ impl GenericAnalyzer {
     }
 
     fn extract_go_imports(&self, node: Node, source: &str, refs: &mut Vec<ParsedReference>) {
-        for i in 0..node.child_count() {
+        for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i)
                 && (child.kind() == "import_spec" || child.kind() == "import_spec_list") {
                     self.extract_go_import_spec(child, source, refs);
@@ -627,7 +627,7 @@ impl GenericAnalyzer {
                 }
             }
             "import_spec_list" => {
-                for i in 0..node.child_count() {
+                for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i) {
                         self.extract_go_import_spec(child, source, refs);
                     }
@@ -711,7 +711,7 @@ impl GenericAnalyzer {
                 }
             }
             "import_declaration" => {
-                for i in 0..node.child_count() {
+                for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i)
                         && child.kind() == "scoped_identifier" {
                             let name = self.base.node_text(child, source);
@@ -746,7 +746,7 @@ impl GenericAnalyzer {
                     });
                 }
                 if let Some(interfaces) = node.child_by_field_name("interfaces") {
-                    for i in 0..interfaces.child_count() {
+                    for i in 0..interfaces.child_count() as u32 {
                         if let Some(iface) = interfaces.child(i)
                             && iface.kind() == "type_identifier" {
                                 let name = self.base.node_text(iface, source);
@@ -855,7 +855,7 @@ impl GenericAnalyzer {
                 }
             }
             "base_class_clause" => {
-                for i in 0..node.child_count() {
+                for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i)
                         && (child.kind() == "type_identifier"
                             || child.kind() == "qualified_identifier")

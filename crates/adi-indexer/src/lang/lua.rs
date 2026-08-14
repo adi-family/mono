@@ -83,7 +83,7 @@ fn extract_lua_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
     };
     symbols.extend(parsed);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             extract_lua_symbols(child, source, symbols);
         }
@@ -109,7 +109,7 @@ fn parse_lua_variables(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
     let is_local = node.kind() == "local_variable_declaration";
     let doc_comment = extract_doc_comment(node, source);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && (child.kind() == "variable_list" || child.kind() == "identifier") {
                 let visibility = if is_local {
@@ -126,7 +126,7 @@ fn parse_lua_variables(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
                             .with_doc_comment_opt(doc_comment.clone()),
                     );
                 } else {
-                    for j in 0..child.child_count() {
+                    for j in 0..child.child_count() as u32 {
                         if let Some(var) = child.child(j)
                             && var.kind() == "identifier" {
                                 let name_text = node_text(var, source);
@@ -149,10 +149,10 @@ fn parse_lua_variables(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
 fn parse_lua_assignment(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
     // Check if right side is a function expression - then it's a function assignment
     let mut is_function = false;
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "expression_list" {
-                for j in 0..child.child_count() {
+                for j in 0..child.child_count() as u32 {
                     if let Some(expr) = child.child(j)
                         && expr.kind() == "function_definition" {
                             is_function = true;
@@ -169,10 +169,10 @@ fn parse_lua_assignment(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol
     let doc_comment = extract_doc_comment(node, source);
     let signature = extract_function_signature(node, source);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "variable_list" {
-                for j in 0..child.child_count() {
+                for j in 0..child.child_count() as u32 {
                     if let Some(var) = child.child(j) {
                         let name_text = node_text(var, source);
                         symbols.push(
@@ -242,7 +242,7 @@ fn collect_lua_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
         _ => {}
     }
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_lua_references(child, source, refs);
         }

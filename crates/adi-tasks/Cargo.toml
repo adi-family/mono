@@ -21,7 +21,7 @@ serde_json = { workspace = true }
 # event catalog documents exactly what is emitted.
 schemars = { workspace = true }
 
-anyhow = "1"
+anyhow = { workspace = true }
 
 [lints]
 workspace = true

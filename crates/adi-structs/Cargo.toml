@@ -19,7 +19,7 @@ path = "src/main.rs"
 # The item shapes come straight out of the source text, sliced by span, so a rendered type reads
 # exactly as it was written. That slicing needs proc-macro2's `span-locations`.
 proc-macro2 = { version = "1", features = ["span-locations"] }
-syn = { version = "2", features = ["full", "parsing", "printing"] }
+syn = { version = "3", features = ["full", "parsing", "printing"] }
 # Crate descriptions for the page header come from each member's manifest.
 toml = { workspace = true }
 

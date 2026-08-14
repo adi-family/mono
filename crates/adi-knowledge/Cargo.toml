@@ -37,14 +37,14 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # Content addressing: a note's hash is what says its vector is out of date.
-sha2 = "0.10"
-hex = "0.4"
+sha2 = { workspace = true }
+hex = { workspace = true }
 
-thiserror = "2"
-tracing = "0.1"
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = { workspace = true }
 # The base manifest is TOML on disk (adi-config writes it); the round-trip test parses it back
 # rather than trusting that a settings table survives serialization unasked.
 toml = { workspace = true }

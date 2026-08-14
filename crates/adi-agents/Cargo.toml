@@ -29,7 +29,7 @@ adi-tasks = { workspace = true }
 # operator switched on and that could not be created is not a nicety — the agent would run
 # without the thing its definition says it has, and nobody would be told. Already in the
 # workspace graph, so it costs nothing to build.
-tracing = "0.1"
+tracing = { workspace = true }
 
 # An agent's memory and its readable bases, made real at launch (see src/knowledge.rs). A path
 # dependency with `default-features = false`: the runner creates a base and resolves ids, it never
@@ -39,7 +39,7 @@ adi-knowledge = { path = "../adi-knowledge", default-features = false }
 # A run inherits its agent's resolved secrets (global + the agent's project) as env vars.
 adi-secrets = { workspace = true }
 # The `harness:adi` tool loop's Grep runs a real regular expression, and its Glob/Grep walk a tree.
-regex = "1"
+regex = { workspace = true }
 # Sessions, turns, and queued messages live in `<sessions>/sessions.db` rather than in a file per
 # session: the listing walked directories, and a profile of it under load put 5255 samples in
 # `stat` against 112 in JSON parsing. Bundled, so no system SQLite is required.
@@ -51,7 +51,10 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 # The `harness:adi` loop calls a model provider's chat API over HTTP. Blocking client: each turn runs
 # in a spawned `adi-mono harness-turn` child (a sync process), never inside the app server's runtime.
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "blocking"], default-features = false }
+reqwest = { workspace = true, features = ["blocking"] }
+# reqwest is built with `rustls-no-provider` (see the workspace manifest), so no crypto provider
+# is chosen for us; `ensure_provider` installs ring before the first client is built.
+rustls = { workspace = true }
 # `adi.agents.*` payloads derive their JSON Schema; this crate also assembles the full event
 # catalog (task events + agent events), the lowest crate that can see every producer's type.
 schemars = { workspace = true }

@@ -43,7 +43,7 @@ serde_json = { workspace = true }
 # `mesh join` dials out and awaits one handshake; every other subcommand is synchronous. So the
 # runtime is built inside that one arm rather than wrapping `main`, and only the drivers that
 # handshake needs are compiled in.
-tokio = { version = "1", features = ["rt-multi-thread", "net", "time"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time"] }
 
 [lints]
 workspace = true

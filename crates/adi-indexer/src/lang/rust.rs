@@ -85,7 +85,7 @@ fn extract_rust_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol
         // Unlike the other analyzers here, only a node that names nothing is descended into: an
         // item's own body is read by the parser that matched it, not walked again from here.
         _ => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i) {
                     extract_rust_symbols(child, source, symbols);
                 }
@@ -126,7 +126,7 @@ fn parse_rust_callable(node: Node, source: &str, kind: SymbolKind) -> Option<Par
 fn parse_rust_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
     let mut children = Vec::new();
     if let Some(body) = node.child_by_field_name("body") {
-        for i in 0..body.child_count() {
+        for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
                 && child.kind() == "field_declaration"
                     && let Some(field_name) = child.child_by_field_name("name") {
@@ -148,7 +148,7 @@ fn parse_rust_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
 fn parse_rust_trait(node: Node, source: &str) -> Option<ParsedSymbol> {
     let mut children = Vec::new();
     if let Some(body) = node.child_by_field_name("body") {
-        for i in 0..body.child_count() {
+        for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
                 && (child.kind() == "function_signature_item" || child.kind() == "function_item")
                     && let Some(method_name) = child.child_by_field_name("name") {
@@ -186,7 +186,7 @@ fn parse_rust_impl(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
     };
 
     if let Some(body) = node.child_by_field_name("body") {
-        for i in 0..body.child_count() {
+        for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
                 && child.kind() == "function_item"
                     && let Some(method_name) = child.child_by_field_name("name") {
@@ -284,7 +284,7 @@ fn collect_rust_references(node: Node, source: &str, refs: &mut Vec<ParsedRefere
         _ => {}
     }
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_rust_references(child, source, refs);
         }
@@ -316,7 +316,7 @@ fn extract_use_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
                 ));
             }
             "use_list" => {
-                for i in 0..node.child_count() {
+                for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i) {
                         collect_use_paths(child, source, prefix, refs);
                     }
@@ -344,7 +344,7 @@ fn extract_use_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
             }
             "use_wildcard" => {}
             _ => {
-                for i in 0..node.child_count() {
+                for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i) {
                         collect_use_paths(child, source, prefix, refs);
                     }

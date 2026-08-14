@@ -52,7 +52,7 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
 
 fn extract_visibility(node: Node, source: &str) -> Visibility {
     if let Some(modifiers) = node.child_by_field_name("modifiers") {
-        for i in 0..modifiers.child_count() {
+        for i in 0..modifiers.child_count() as u32 {
             if let Some(child) = modifiers.child(i) {
                 let text = node_text(child, source);
                 match text.as_str() {
@@ -95,7 +95,7 @@ fn extract_java_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol
     };
     symbols.extend(parsed);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             extract_java_symbols(child, source, symbols);
         }
@@ -137,7 +137,7 @@ fn parse_java_declarators(
     let visibility = extract_visibility(node, source);
     let doc_comment = extract_doc_comment(node, source);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "variable_declarator"
                 && let Some(name) = child.child_by_field_name("name") {
@@ -193,7 +193,7 @@ fn collect_java_references(node: Node, source: &str, refs: &mut Vec<ParsedRefere
             }
         }
         "import_declaration" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && child.kind() == "scoped_identifier" {
                         refs.push(ParsedReference::new(
@@ -205,7 +205,7 @@ fn collect_java_references(node: Node, source: &str, refs: &mut Vec<ParsedRefere
             }
         }
         "superclass" | "super_interfaces" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && (child.kind() == "type_identifier" || child.kind() == "generic_type") {
                         refs.push(ParsedReference::new(
@@ -219,7 +219,7 @@ fn collect_java_references(node: Node, source: &str, refs: &mut Vec<ParsedRefere
         _ => {}
     }
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_java_references(child, source, refs);
         }

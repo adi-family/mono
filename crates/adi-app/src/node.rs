@@ -169,6 +169,7 @@ async fn call_at(
     timeout: std::time::Duration,
 ) -> Result<String, CallError> {
     let host = format!("{APP_SERVICE}.{node}.{MESH_ZONE}");
+    crate::ensure_tls_provider();
     let client = reqwest::Client::builder()
         .timeout(timeout)
         .build()

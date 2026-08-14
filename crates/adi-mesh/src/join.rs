@@ -580,9 +580,11 @@ fn viewer_nickname(key: &EndpointId) -> String {
 /// pairing can meaningfully continue past.
 #[must_use]
 pub fn random_nonce() -> String {
-    use rand::RngCore as _;
+    use rand::TryRng as _;
     let mut bytes = [0u8; NONCE_BYTES];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    rand::rngs::SysRng
+        .try_fill_bytes(&mut bytes)
+        .expect("the OS random source is unavailable");
     ticket::to_hex(&bytes)
 }
 
@@ -592,10 +594,13 @@ pub fn random_nonce() -> String {
 /// Never in practice: only if the OS random source is unavailable.
 #[must_use]
 pub fn random_password() -> String {
-    use rand::Rng as _;
-    let mut rng = rand::rngs::OsRng;
+    use rand::RngExt as _;
+    // `SysRng` is fallible (it reads the OS on every call); `UnwrapErr` turns it into the
+    // infallible `Rng` that `random_range` needs, panicking on a source that isn't there —
+    // which is the behaviour documented above.
+    let mut rng = rand::rand_core::UnwrapErr(rand::rngs::SysRng);
     (0..PASSWORD_LEN)
-        .map(|_| char::from(PASSWORD_ALPHABET[rng.gen_range(0..PASSWORD_ALPHABET.len())]))
+        .map(|_| char::from(PASSWORD_ALPHABET[rng.random_range(0..PASSWORD_ALPHABET.len())]))
         .collect()
 }
 

@@ -66,7 +66,7 @@ fn extract_go_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
             }
         }
         "type_declaration" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && child.kind() == "type_spec"
                         && let Some(name) = child.child_by_field_name("name") {
@@ -81,7 +81,7 @@ fn extract_go_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
                             if let Some(type_def) = type_node {
                                 if type_def.kind() == "struct_type" {
                                     if let Some(fields) = type_def.child_by_field_name("fields") {
-                                        for j in 0..fields.child_count() {
+                                        for j in 0..fields.child_count() as u32 {
                                             if let Some(field) = fields.child(j)
                                                 && field.kind() == "field_declaration"
                                                     && let Some(field_name) =
@@ -96,7 +96,7 @@ fn extract_go_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
                                         }
                                     }
                                 } else if type_def.kind() == "interface_type" {
-                                    for j in 0..type_def.child_count() {
+                                    for j in 0..type_def.child_count() as u32 {
                                         if let Some(member) = type_def.child(j)
                                             && member.kind() == "method_spec"
                                                 && let Some(method_name) =
@@ -120,7 +120,7 @@ fn extract_go_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
             }
         }
         "const_declaration" | "var_declaration" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && (child.kind() == "const_spec" || child.kind() == "var_spec")
                         && let Some(name) = child.child_by_field_name("name") {
@@ -138,7 +138,7 @@ fn extract_go_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
             }
         }
         _ => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i) {
                     extract_go_symbols(child, source, symbols);
                 }
@@ -176,7 +176,7 @@ fn collect_go_references(node: Node, source: &str, refs: &mut Vec<ParsedReferenc
             }
         }
         "import_declaration" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i) {
                     if child.kind() == "import_spec" {
                         if let Some(path) = child.child_by_field_name("path") {
@@ -219,7 +219,7 @@ fn collect_go_references(node: Node, source: &str, refs: &mut Vec<ParsedReferenc
         }
         _ => {}
     }
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_go_references(child, source, refs);
         }

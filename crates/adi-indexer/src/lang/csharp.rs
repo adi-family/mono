@@ -52,7 +52,7 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
 }
 
 fn extract_visibility(node: Node, source: &str) -> Visibility {
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             let text = node_text(child, source);
             match text.as_str() {
@@ -99,7 +99,7 @@ fn extract_csharp_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymb
     };
     symbols.extend(parsed);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             extract_csharp_symbols(child, source, symbols);
         }
@@ -135,10 +135,10 @@ fn parse_csharp_fields(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
     let visibility = extract_visibility(node, source);
     let doc_comment = extract_doc_comment(node, source);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "variable_declaration" {
-                for j in 0..child.child_count() {
+                for j in 0..child.child_count() as u32 {
                     if let Some(declarator) = child.child(j)
                         && declarator.kind() == "variable_declarator"
                             && let Some(name) = declarator.child_by_field_name("name") {
@@ -213,7 +213,7 @@ fn collect_csharp_references(node: Node, source: &str, refs: &mut Vec<ParsedRefe
             }
         }
         "base_list" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && (child.kind() == "identifier" || child.kind() == "generic_name") {
                         refs.push(ParsedReference::new(
@@ -227,7 +227,7 @@ fn collect_csharp_references(node: Node, source: &str, refs: &mut Vec<ParsedRefe
         _ => {}
     }
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_csharp_references(child, source, refs);
         }

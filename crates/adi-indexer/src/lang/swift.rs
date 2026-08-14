@@ -61,10 +61,10 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
 }
 
 fn extract_visibility(node: Node, source: &str) -> Visibility {
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "modifiers" {
-                for j in 0..child.child_count() {
+                for j in 0..child.child_count() as u32 {
                     if let Some(modifier) = child.child(j) {
                         let text = node_text(modifier, source);
                         match text.as_str() {
@@ -107,7 +107,7 @@ fn extract_swift_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbo
     };
     symbols.extend(parsed);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             extract_swift_symbols(child, source, symbols);
         }
@@ -140,7 +140,7 @@ fn parse_swift_callable(node: Node, source: &str, kind: SymbolKind) -> Option<Pa
 }
 
 fn parse_swift_property(node: Node, source: &str) -> Option<ParsedSymbol> {
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "pattern" {
                 let name_text = node_text(child, source);
@@ -180,7 +180,7 @@ fn parse_swift_deinit(node: Node) -> ParsedSymbol {
 }
 
 fn parse_swift_extension(node: Node, source: &str) -> Option<ParsedSymbol> {
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && (child.kind() == "user_type" || child.kind() == "type_identifier") {
                 let name_text = format!("extension {}", node_text(child, source));
@@ -228,7 +228,7 @@ fn collect_swift_references(node: Node, source: &str, refs: &mut Vec<ParsedRefer
             }
         }
         "import_declaration" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && child.kind() == "identifier" {
                         refs.push(ParsedReference::new(
@@ -240,7 +240,7 @@ fn collect_swift_references(node: Node, source: &str, refs: &mut Vec<ParsedRefer
             }
         }
         "inheritance_specifier" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && (child.kind() == "user_type" || child.kind() == "type_identifier") {
                         refs.push(ParsedReference::new(
@@ -254,7 +254,7 @@ fn collect_swift_references(node: Node, source: &str, refs: &mut Vec<ParsedRefer
         _ => {}
     }
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_swift_references(child, source, refs);
         }

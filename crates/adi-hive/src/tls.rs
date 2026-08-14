@@ -23,10 +23,11 @@ use std::sync::Arc;
 
 use anyhow::Context as _;
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa,
+    BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
     KeyPair, KeyUsagePurpose,
 };
 use rustls::ServerConfig;
+use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use serde::{Deserialize, Serialize};
 use time::{Duration as TimeDuration, OffsetDateTime};
@@ -86,9 +87,9 @@ pub fn prepare(dir: &Path, hosts: &[String], mesh: Option<&[String]>) -> anyhow:
     std::fs::create_dir_all(dir)
         .with_context(|| format!("creating TLS directory {}", dir.display()))?;
 
-    let (ca, ca_key, ca_is_new) = load_or_create_ca(dir)?;
+    let (ca, ca_is_new) = load_or_create_ca(dir)?;
     let wanted = san_list(hosts, mesh);
-    let (chain, key) = load_or_create_leaf(dir, &wanted, &ca, &ca_key)?;
+    let (chain, key) = load_or_create_leaf(dir, &wanted, &ca)?;
 
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = ServerConfig::builder_with_provider(provider)
@@ -156,7 +157,12 @@ fn mesh_sans(nodes: &[String]) -> Vec<String> {
 }
 
 /// Read the CA from disk, or generate and persist one. Returns whether it was just created.
-fn load_or_create_ca(dir: &Path) -> anyhow::Result<(Certificate, KeyPair, bool)> {
+///
+/// The CA comes back as a [`CertifiedIssuer`] — rcgen 0.14 signs against an `Issuer` (the subject,
+/// key-id method, key usages and signing key bundled together) rather than a certificate plus a
+/// loose key pair, and `CertifiedIssuer` is the variant that also keeps the certificate itself, so
+/// `ca.pem` can still be written from it.
+fn load_or_create_ca(dir: &Path) -> anyhow::Result<(CertifiedIssuer<'static, KeyPair>, bool)> {
     let cert_path = dir.join("ca.pem");
     let key_path = dir.join("ca-key.pem");
 
@@ -167,20 +173,20 @@ fn load_or_create_ca(dir: &Path) -> anyhow::Result<(Certificate, KeyPair, bool)>
         // rcgen can't load a certificate back from PEM, so re-derive it from the same parameters
         // and key. Deterministic in everything that matters: the public key, and therefore the
         // subject key identifier and signature the leaf chains to, all come from `key`.
-        let cert = ca_params()?
-            .self_signed(&key)
+        let ca = CertifiedIssuer::self_signed(ca_params()?, key)
             .context("rebuilding the CA certificate from its key")?;
-        return Ok((cert, key, false));
+        return Ok((ca, false));
     }
 
     let key = KeyPair::generate().context("generating the CA key")?;
-    let cert = ca_params()?
-        .self_signed(&key)
-        .context("generating the CA certificate")?;
-    write_public(&cert_path, &cert.pem())?;
-    write_key(&key_path, &key.serialize_pem())?;
+    // Serialized before the key moves into the issuer below, which takes ownership of it.
+    let key_pem = key.serialize_pem();
+    let ca =
+        CertifiedIssuer::self_signed(ca_params()?, key).context("generating the CA certificate")?;
+    write_public(&cert_path, &ca.pem())?;
+    write_key(&key_path, &key_pem)?;
     info!(path = %cert_path.display(), "generated a local certificate authority");
-    Ok((cert, key, true))
+    Ok((ca, true))
 }
 
 /// The CA's parameters. Must stay byte-stable across releases: [`load_or_create_ca`] rebuilds the
@@ -212,8 +218,7 @@ fn ca_params() -> anyhow::Result<CertificateParams> {
 fn load_or_create_leaf(
     dir: &Path,
     wanted: &[String],
-    ca: &Certificate,
-    ca_key: &KeyPair,
+    ca: &CertifiedIssuer<'_, KeyPair>,
 ) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
@@ -237,7 +242,7 @@ fn load_or_create_leaf(
         params.not_before = now - TimeDuration::hours(1);
         params.not_after = now + TimeDuration::days(LEAF_DAYS);
         let cert = params
-            .signed_by(&key, ca, ca_key)
+            .signed_by(&key, ca)
             .context("signing the leaf certificate")?;
 
         write_public(&cert_path, &cert.pem())?;
@@ -287,7 +292,7 @@ fn reissue_reason(
 fn read_chain(path: &Path) -> anyhow::Result<Vec<CertificateDer<'static>>> {
     let pem = std::fs::read(path)
         .with_context(|| format!("reading certificate {}", path.display()))?;
-    let chain = rustls_pemfile::certs(&mut pem.as_slice())
+    let chain = CertificateDer::pem_slice_iter(&pem)
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| format!("parsing certificate {}", path.display()))?;
     anyhow::ensure!(!chain.is_empty(), "{} held no certificate", path.display());
@@ -296,9 +301,11 @@ fn read_chain(path: &Path) -> anyhow::Result<Vec<CertificateDer<'static>>> {
 
 fn read_leaf_key(path: &Path) -> anyhow::Result<PrivateKeyDer<'static>> {
     let pem = read_key(path)?;
-    rustls_pemfile::private_key(&mut pem.as_bytes())
-        .with_context(|| format!("parsing private key {}", path.display()))?
-        .with_context(|| format!("{} held no private key", path.display()))
+    // An empty file is not a distinct case here the way it is for the chain above: pki-types
+    // reports "no PEM section of the wanted kind" as a parse error, so one context covers both
+    // a malformed key and a file that held none.
+    PrivateKeyDer::from_pem_slice(pem.as_bytes())
+        .with_context(|| format!("parsing private key {}", path.display()))
 }
 
 /// Read a private key, naming the likely cause when the daemon simply isn't allowed to.

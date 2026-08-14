@@ -49,20 +49,23 @@ adi-css = { workspace = true }
 # the binary is self-contained — no runtime asset paths.
 include_dir = "0.7"
 
-tokio = { version = "1", features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util", "fs", "sync"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "signal", "time", "io-util", "fs", "sync"] }
 
 # Server-side OAuth-secret refresh: adi-app calls the OAuth router's /refresh/<provider> so
 # the refresh token never reaches the browser. rustls to avoid a system OpenSSL dependency.
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { workspace = true }
+# reqwest is built with `rustls-no-provider` (see the workspace manifest), so no crypto provider
+# is chosen for us; the ring provider is installed once at start-up in main.
+rustls = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
 # The websocket handshake's `Sec-WebSocket-Accept` (see src/ws.rs).
 base64 = { workspace = true }
 
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-anyhow = "1"
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
 
 [dev-dependencies]
 # The await worker's test points a real `Agents`/`Awaits` pair at a scratch store root, which is

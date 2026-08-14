@@ -40,7 +40,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
-serde_yaml_ng = "0.10"
+serde_yaml_ng = { workspace = true }
 
 # Tests only. The front-door hive.yaml rendered here is read by adi-hive, so the tests parse it
 # with adi-hive's own config type instead of a hand-written stand-in — a rename or a retyped field

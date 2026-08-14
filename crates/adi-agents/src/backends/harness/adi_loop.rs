@@ -1002,9 +1002,21 @@ fn usage(resp: &Value, path: &[&str]) -> Option<u64> {
     node.as_u64()
 }
 
+/// Install `ring` as the process-wide rustls provider, once.
+///
+/// reqwest is built with `rustls-no-provider` (see the workspace manifest), which means it picks
+/// no crypto provider of its own — building any client fails until one is installed. A turn runs
+/// in a freshly spawned `adi-mono harness-turn` child, so there is no earlier start-up path here
+/// to rely on; the install happens on the way to the first request instead. `install_default`
+/// errors only if a provider is already set, which is exactly the outcome wanted.
+fn ensure_provider() {
+    rustls::crypto::ring::default_provider().install_default().ok();
+}
+
 /// POST `body` as JSON with the given extra headers, returning the decoded JSON response. A non-2xx
 /// status surfaces the provider's own error body, which is what the caller needs to see.
 fn post_json(url: &str, headers: &[(&str, &str)], body: &Value) -> Result<Value> {
+    ensure_provider();
     let client = reqwest::blocking::Client::builder()
         .timeout(HTTP_TIMEOUT)
         .build()

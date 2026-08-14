@@ -50,7 +50,7 @@ fn extract_python_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymb
                 let name_text = node_text(name, source);
                 let mut children = Vec::new();
                 if let Some(body) = node.child_by_field_name("body") {
-                    for i in 0..body.child_count() {
+                    for i in 0..body.child_count() as u32 {
                         if let Some(child) = body.child(i)
                             && child.kind() == "function_definition"
                                 && let Some(method_name) = child.child_by_field_name("name") {
@@ -78,7 +78,7 @@ fn extract_python_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymb
             }
         }
         _ => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i) {
                     extract_python_symbols(child, source, symbols);
                 }
@@ -127,7 +127,7 @@ fn collect_python_references(node: Node, source: &str, refs: &mut Vec<ParsedRefe
         }
         "class_definition" => {
             if let Some(superclasses) = node.child_by_field_name("superclasses") {
-                for i in 0..superclasses.child_count() {
+                for i in 0..superclasses.child_count() as u32 {
                     if let Some(child) = superclasses.child(i)
                         && (child.kind() == "identifier" || child.kind() == "attribute") {
                             refs.push(ParsedReference::new(
@@ -150,7 +150,7 @@ fn collect_python_references(node: Node, source: &str, refs: &mut Vec<ParsedRefe
         }
         _ => {}
     }
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_python_references(child, source, refs);
         }

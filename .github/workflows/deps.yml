@@ -1,0 +1,48 @@
+name: Dependencies
+
+# What this gates: a live RUSTSEC advisory or a yanked crate sitting in Cargo.lock unnoticed.
+# It compiles nothing — it reads the lockfile — so it stays fast enough to run on every push.
+#
+# The schedule is the point of the job, not a nicety. An advisory is not a property of a commit:
+# a crate that was clean when it was added can be flagged tomorrow without a line of this repo
+# changing, and a push-only trigger means nobody hears about it until the next unrelated PR.
+# That is exactly how the tree arrived at a live `crossbeam-epoch` vulnerability and a yanked
+# `spin`, both of which a plain `cargo update` turned out to fix.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Mondays, 06:00 UTC.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      # `--deny warnings` promotes unmaintained/unsound/yanked from a note to a failure, which is
+      # the only setting that makes this job worth having — a vulnerability already fails without
+      # it. The two ignores below are advisories with no fix available to us: both are transitive
+      # through a direct dependency's own tree, so the only way out is upstream. They are listed
+      # individually rather than by category so that a *new* unmaintained crate still breaks the
+      # build; re-check them whenever candle or leptos moves.
+      #
+      #   RUSTSEC-2024-0436  paste (unmaintained)             ← candle → gemm/pulp, tokenizers
+      #   RUSTSEC-2026-0173  proc-macro-error2 (unmaintained) ← leptos_macro, wasm only
+      - name: cargo audit
+        run: |
+          cargo audit --deny warnings \
+            --ignore RUSTSEC-2024-0436 \
+            --ignore RUSTSEC-2026-0173

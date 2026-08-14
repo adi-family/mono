@@ -50,7 +50,7 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
 }
 
 fn extract_visibility(node: Node, source: &str) -> Visibility {
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "visibility_modifier" {
                 let text = node_text(child, source);
@@ -109,7 +109,7 @@ fn extract_php_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
     };
     symbols.extend(parsed);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             extract_php_symbols(child, source, symbols);
         }
@@ -158,7 +158,7 @@ fn parse_php_elements(
     let visibility = extract_visibility(node, source);
     let doc_comment = extract_doc_comment(node, source);
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == element
                 && let Some(name) = child.child_by_field_name("name") {
@@ -205,7 +205,7 @@ fn collect_php_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
             }
         }
         "object_creation_expression" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && (child.kind() == "name" || child.kind() == "qualified_name") {
                         refs.push(ParsedReference::new(
@@ -236,7 +236,7 @@ fn collect_php_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
             }
         }
         "namespace_use_declaration" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && child.kind() == "namespace_use_clause"
                         && let Some(name) = child.child_by_field_name("name") {
@@ -249,7 +249,7 @@ fn collect_php_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
             }
         }
         "base_clause" | "class_interface_clause" => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && (child.kind() == "name" || child.kind() == "qualified_name") {
                         refs.push(ParsedReference::new(
@@ -263,7 +263,7 @@ fn collect_php_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
         _ => {}
     }
 
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_php_references(child, source, refs);
         }

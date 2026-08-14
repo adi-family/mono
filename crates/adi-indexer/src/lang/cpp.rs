@@ -231,7 +231,7 @@ fn extract_cpp_symbols(node: Node, source: &str, symbols: &mut Vec<InternalSymbo
             }
         }
         _ => {
-            for i in 0..node.child_count() {
+            for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i) {
                     extract_cpp_symbols(child, source, symbols);
                 }
@@ -241,7 +241,7 @@ fn extract_cpp_symbols(node: Node, source: &str, symbols: &mut Vec<InternalSymbo
 }
 
 fn collect_class_members(body: Node, source: &str, children: &mut Vec<InternalSymbol>) {
-    for i in 0..body.child_count() {
+    for i in 0..body.child_count() as u32 {
         if let Some(child) = body.child(i) {
             match child.kind() {
                 "function_definition" | "declaration" => {
@@ -257,7 +257,7 @@ fn collect_class_members(body: Node, source: &str, children: &mut Vec<InternalSy
                         }
                 }
                 "field_declaration" => {
-                    for j in 0..child.child_count() {
+                    for j in 0..child.child_count() as u32 {
                         if let Some(field) = child.child(j)
                             && field.kind() == "field_identifier" {
                                 children.push(InternalSymbol {
@@ -364,7 +364,7 @@ fn collect_cpp_references(node: Node, source: &str, refs: &mut Vec<InternalRefer
         }
         "class_specifier" | "struct_specifier" => {
             if let Some(base) = node.child_by_field_name("base_clause") {
-                for i in 0..base.child_count() {
+                for i in 0..base.child_count() as u32 {
                     if let Some(child) = base.child(i)
                         && child.kind() == "base_class_clause"
                             && let Some(type_node) = child.child_by_field_name("type") {
@@ -379,7 +379,7 @@ fn collect_cpp_references(node: Node, source: &str, refs: &mut Vec<InternalRefer
         }
         _ => {}
     }
-    for i in 0..node.child_count() {
+    for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i) {
             collect_cpp_references(child, source, refs);
         }

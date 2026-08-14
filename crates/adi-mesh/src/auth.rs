@@ -86,9 +86,11 @@ impl Credential {
     /// scope — the on-disk shape already carries a salt, so it is a field, not a redesign.
     #[must_use]
     pub fn from_password(user: &str, password: &str) -> Self {
-        use rand::RngCore as _;
+        use rand::TryRng as _;
         let mut salt = [0u8; SALT_LEN];
-        rand::rngs::OsRng.fill_bytes(&mut salt);
+        rand::rngs::SysRng
+            .try_fill_bytes(&mut salt)
+            .expect("the OS random source is unavailable");
         let digest = hash(&salt, password);
         Self {
             user: user.to_string(),
