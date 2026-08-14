@@ -927,11 +927,18 @@ pub struct SaveAgent {
     pub backend: String,
     #[serde(default)]
     pub arguments: BTreeMap<String, serde_json::Value>,
+    /// **Omit to keep whatever the agent already has**, exactly as for `bin_tools` below; send an
+    /// empty list to actually clear. Only the full agent editor and onboarding offer the field,
+    /// and a save from a form that doesn't must not strip an agent's tags by saying nothing.
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub tags: Option<Vec<String>>,
+    /// Omitted means unchanged, for the same reason as `tags`.
     #[serde(default)]
-    pub starred: bool,
-    /// The project to file the agent under (its id); blank/omitted saves a global agent.
+    pub starred: Option<bool>,
+    /// The project to file the agent under (its id). **Omit to keep whatever the agent already
+    /// has**; send a blank string to make it global. A project is not a label — it decides which
+    /// database, secrets, and knowledge bases the agent's runs reach — so unfiling one has to be
+    /// something a request *said*, never something it failed to mention.
     #[serde(default)]
     pub project: Option<String>,
     /// The ids of the adi **tools** enabled for this agent (its per-tool checkboxes). Each becomes
@@ -953,8 +960,11 @@ pub struct SaveAgent {
     pub memory: Option<bool>,
     /// The secrets to attach to this agent (its per-secret checkboxes). Each is a `(scope, name)`
     /// reference; only these are decrypted and injected into the agent's runs — an allowlist.
+    /// **Omit to keep whatever the agent already has**, as for `bin_tools`; send an empty list to
+    /// detach them all. A save that silently detached them would leave the agent's runs missing
+    /// the credentials they were built around.
     #[serde(default)]
-    pub secrets: Vec<SecretRef>,
+    pub secrets: Option<Vec<SecretRef>>,
     /// Extra directories for the run's `PATH` (see [`AgentDto::path`]). **Omit to keep whatever the
     /// agent already has** — only the full agent editor sends these, so a form that doesn't offer
     /// them (the meta setup, the project panel) can save without silently clearing them. Send an

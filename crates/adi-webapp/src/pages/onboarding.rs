@@ -586,18 +586,21 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         name: m.name.clone(),
         backend,
         arguments,
-        tags: form
-            .agent
-            .tags
-            .get_untracked()
-            .split(',')
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect(),
-        starred: form.agent.starred.get_untracked(),
+        // Onboarding creates the agent, so it states its tags, star and secrets outright; `project`
+        // stays unstated because there is nothing to keep and an unfiled agent is a global one.
+        tags: Some(
+            form.agent
+                .tags
+                .get_untracked()
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+        ),
+        starred: Some(form.agent.starred.get_untracked()),
         project: None,
         bin_tools,
-        secrets: attached_secrets(state, form, &presets, secret.as_ref(), &key),
+        secrets: Some(attached_secrets(state, form, &presets, secret.as_ref(), &key)),
         // No form offers the knowledge bases or the memory toggle yet, so none of them
         // states one: `None` leaves whatever the agent already has. Set them with
         // `adi-mono agents save --knowledge … --memory` until the editor grows the

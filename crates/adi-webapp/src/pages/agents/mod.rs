@@ -131,16 +131,19 @@ pub(crate) fn agents_view(
                         pm_applies,
                         temp_applies,
                     ),
-                    tags: tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect(),
-                    starred: starred.get(),
-                    project: opt_str(project.get()),
+                    // This form owns the tags, the star, and the project, so it states all three
+                    // even when they are empty — `Some(empty)` clears, where the `None` the other
+                    // forms send means "leave as is". A blank project is how "global" is said.
+                    tags: Some(tags.get().split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()),
+                    starred: Some(starred.get()),
+                    project: Some(project.get()),
                     // The adi tools ticked on for this agent — its own `.bin` at launch. This is
                     // the form that owns the checkboxes, so it states the set even when empty.
                     bin_tools: Some(form.bin_tools.get().into_iter().collect()),
                     // The secrets ticked on for this agent — injected into its runs as env vars.
-                    secrets: form.secrets.get().into_iter()
+                    secrets: Some(form.secrets.get().into_iter()
                         .map(|(project, name)| SecretRef { project, name })
-                        .collect(),
+                        .collect()),
                     // The knowledge bases ticked on, and whether this agent keeps its own memory.
                     // This is the form that owns both checkboxes, so it states them even when
                     // empty — the other forms send `None`, which leaves them as they are.

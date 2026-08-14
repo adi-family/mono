@@ -835,14 +835,27 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
     let manifest = AgentManifest {
         backend: Backend::from(req.backend.trim()),
         arguments: clean_arguments(req.arguments),
-        tags: req
-            .tags
-            .into_iter()
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect(),
-        starred: req.starred,
-        project: clean(req.project),
+        // Tags, star, and project are omit-to-keep for the reason `bin_tools` and `path` are: the
+        // meta setup and the project panel don't offer them, and a save from a form that never
+        // showed a field must not be how that field gets taken away.
+        tags: match req.tags {
+            Some(tags) => tags
+                .into_iter()
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect(),
+            None => stored.as_ref().map(|m| m.tags.clone()).unwrap_or_default(),
+        },
+        starred: req
+            .starred
+            .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.starred)),
+        // A blank string still means global — what changed is that *saying nothing* no longer
+        // does. The project decides which database, secrets, and knowledge an agent's runs reach,
+        // so a save that dropped it did not lose a label, it moved the agent somewhere else.
+        project: match req.project {
+            Some(project) => clean(Some(project)),
+            None => stored.as_ref().and_then(|m| m.project.clone()),
+        },
         // The adi tools enabled for this agent (its per-tool checkboxes) — each becomes a shim in
         // the agent's own `.bin` at launch. Trimmed and de-blanked; order + dedup left to the store.
         // Omitted means unchanged, for the reason `path` and `env` below are: a save from a form
@@ -878,11 +891,12 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
             .unwrap_or_else(|| stored.as_ref().is_some_and(|m| m.memory)),
         // The secrets attached to this agent (its per-secret checkboxes). Only these are decrypted
         // and injected into the agent's runs. A blank scope is normalized to `None` (global).
-        secrets: req
-            .secrets
-            .into_iter()
-            .filter_map(secret_attachment)
-            .collect(),
+        // Omit-to-keep, as above: an agent stripped of its credentials by a save that never
+        // mentioned them fails at its next run, somewhere else entirely.
+        secrets: match req.secrets {
+            Some(secrets) => secrets.into_iter().filter_map(secret_attachment).collect(),
+            None => stored.as_ref().map(|m| m.secrets.clone()).unwrap_or_default(),
+        },
         // Extra `PATH` dirs and env vars: what the request states, else what the agent already had.
         // Blank entries are dropped here so an empty line left in a textarea can't put an empty dir
         // on the run's `PATH` or an unnamed variable in its environment.
@@ -2090,6 +2104,48 @@ mod tests {
         });
         assert_eq!(save_agent(&store, off.to_string().as_bytes()).status, 200);
         assert!(!saved(&store).unattended);
+    }
+
+    /// Tags, star, project and secrets are omit-to-keep for the same reason `unattended` is. The
+    /// meta setup and the project panel do not offer them, so they used to be cleared by every save
+    /// from those forms — and the project is not a label: it decides which database, secrets, and
+    /// knowledge bases an agent's runs reach, so losing it moved the agent somewhere else.
+    #[test]
+    fn a_save_that_omits_the_filing_fields_keeps_them() {
+        let store = scratch("filing");
+        let full = serde_json::json!({
+            "name": "solver", "backend": "pty:claude",
+            "tags": ["bugbounty", "v2"], "starred": true, "project": "bugbounty",
+            "secrets": [{ "project": null, "name": "VIRUSTOTAL_API" }],
+        });
+        assert_eq!(save_agent(&store, full.to_string().as_bytes()).status, 200);
+
+        // A body from a form that never offered any of them — the meta setup's shape.
+        let partial = serde_json::json!({ "name": "solver", "backend": "pty:claude" });
+        assert_eq!(
+            save_agent(&store, partial.to_string().as_bytes()).status,
+            200
+        );
+        let kept = saved(&store);
+        assert_eq!(kept.tags, vec!["bugbounty", "v2"]);
+        assert!(kept.starred);
+        assert_eq!(kept.project.as_deref(), Some("bugbounty"));
+        assert_eq!(kept.secrets.len(), 1, "its credentials survived the save");
+
+        // Stating them is still how they are cleared — a blank project is how "global" is said.
+        let cleared = serde_json::json!({
+            "name": "solver", "backend": "pty:claude",
+            "tags": [], "starred": false, "project": "", "secrets": [],
+        });
+        assert_eq!(
+            save_agent(&store, cleared.to_string().as_bytes()).status,
+            200
+        );
+        let now = saved(&store);
+        assert!(now.tags.is_empty());
+        assert!(!now.starred);
+        assert_eq!(now.project, None);
+        assert!(now.secrets.is_empty());
     }
 
     /// Answering into a conversation that is not there is a 404, not a turn: it is what a card

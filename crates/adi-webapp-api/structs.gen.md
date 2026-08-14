@@ -1185,9 +1185,9 @@ pub struct SaveAgent {
     #[serde(default)]
     pub arguments: BTreeMap<String, serde_json::Value>,
     #[serde(default)]
-    pub tags: Vec<String>,
+    pub tags: Option<Vec<String>>,
     #[serde(default)]
-    pub starred: bool,
+    pub starred: Option<bool>,
     #[serde(default)]
     pub project: Option<String>,
     #[serde(default)]
@@ -1197,7 +1197,7 @@ pub struct SaveAgent {
     #[serde(default)]
     pub memory: Option<bool>,
     #[serde(default)]
-    pub secrets: Vec<SecretRef>,
+    pub secrets: Option<Vec<SecretRef>>,
     #[serde(default)]
     pub path: Option<Vec<String>>,
     #[serde(default)]

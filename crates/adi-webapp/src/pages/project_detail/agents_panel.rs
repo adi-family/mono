@@ -83,11 +83,11 @@ pub(crate) fn agents_panel(
                     name: nm.clone(),
                     backend: be,
                     arguments,
-                    tags: Vec::new(),
-                    starred: false,
+                    tags: None,
+                    starred: None,
                     project: Some(id),
                     bin_tools: None,
-                    secrets: Vec::new(),
+                    secrets: None,
                     // This panel only creates; renaming lives on the Agents page.
                     // No form offers the knowledge bases or the memory toggle yet, so none of them
                     // states one: `None` leaves whatever the agent already has. Set them with

@@ -220,11 +220,11 @@ fn submit_setup(state: State, form: MetaForm) {
         name,
         backend,
         arguments,
-        tags: Vec::new(),
-        starred: false,
+        tags: None,
+        starred: None,
         project: None,
         bin_tools,
-        secrets: Vec::new(),
+        secrets: None,
         // No form offers the knowledge bases or the memory toggle yet, so none of them
         // states one: `None` leaves whatever the agent already has. Set them with
         // `adi-mono agents save --knowledge … --memory` until the editor grows the
