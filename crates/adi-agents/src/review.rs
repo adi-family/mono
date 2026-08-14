@@ -275,9 +275,10 @@ pub fn brief(evidence: &Evidence<'_>, path: &Path) -> String {
         path.display()
     );
 
+    let name = &evidence.agent.name;
     let _ = writeln!(
         out,
-        "Read that file first, then answer in four parts:\n\
+        "Read that file first, then answer in five parts:\n\
          \n\
          1. **Workflow** — what this conversation did the long way, and what would make it one step. \
          Cite the turns you mean.\n\
@@ -287,16 +288,79 @@ pub fn brief(evidence: &Evidence<'_>, path: &Path) -> String {
          would take as arguments, and give the `adi-tools add` that would create it. Say if an \
          existing tool it wasn't given already covers it.\n\
          4. **Context** — what got sent twice, and what would stop it.\n\
+         5. **Knowledge** — what this review worked out that the next run of `{name}` should not have \
+         to work out again.\n\
          \n\
          Rank by what it would actually save. Skip a part that has nothing real in it rather than \
          filling it — a review that finds three things worth doing beats one that finds twelve.\n\
          \n\
-         **Propose only. Change nothing yet** — no edits to the agent, its prompt, or the tool store \
-         until I say so. End with the shortest list of commands that would apply what you recommend, \
-         and I'll pick from it."
+         {}\n\
+         ## Everything else is a proposal\n\
+         \n\
+         **Change nothing else** — no edits to the agent, its prompt, its tools, or the tool store \
+         until I say so. Part 5 is the exception, and deliberately: a note records what you found, it \
+         does not change how anything runs, and a note left until after I close this chat is a note \
+         that was never written. End with the shortest list of commands that would apply the rest, \
+         and I'll pick from it.",
+        knowledge_instruction(name, evidence.agent.manifest.memory)
     );
 
     out
+}
+
+/// Part 5 of the brief: the one instruction a review carries out rather than proposes.
+///
+/// It is spelled out at this length because the obvious way to do it does not work. A reviewer told
+/// only to "record what it learned" reaches for the tool it has, and `adi-knowledge` cannot write to
+/// `agent:<somebody-else>/memory` — a memory is read-only to everyone but its owner. So the base,
+/// the tool, and the reason the ordinary one is refused all have to be here; a finding filed
+/// anywhere else is a finding the agent it is about will never look for.
+fn knowledge_instruction(name: &str, has_memory: bool) -> String {
+    // An agent with `memory = false` is never *told* it has a memory — `knowledge::block` names one
+    // only when the setting is on, and `$ADI_KNOWLEDGE` omits it. A note left there is not lost (a
+    // bare `adi-knowledge search` still sweeps every base the agent may read), but it is on a shelf
+    // the agent was never pointed at, so the note and the setting have to travel together.
+    let memory_note = if has_memory {
+        String::new()
+    } else {
+        format!(
+            "\n\n\
+             Note that `{name}` has **`memory = false`**, so it is never told it has a memory and \
+             `$ADI_KNOWLEDGE` will not name one. `--create` the base anyway if you have something \
+             worth leaving — a bare `adi-knowledge search` still reaches it — but put \
+             `adi-mono agents save {name} --memory` at the top of your command list, or you are \
+             writing into a room it has no reason to enter."
+        )
+    };
+
+    format!(
+        "## Part 5 is the one you carry out\n\
+         \n\
+         Leave what you found in `{name}`'s own memory, which is the shelf it reads first and the \
+         one that travels with it. Plain `adi-knowledge` cannot write there — a memory is read-only \
+         to everyone but its owner — so this is what `adi-knowledge-root` is for:\n\
+         \n\
+         ```\n\
+         adi-knowledge-root add agent:{name}/memory --create \\\n  \
+         --id <short-slug> --tag from-review \\\n  \
+         -t \"<one line>\" -b \"<what to do next time, and why it is true>\"\n\
+         ```\n\
+         \n\
+         If that shim isn't on your `PATH`, `adi-mono knowledge --root …` is the same command.\n\
+         \n\
+         Look before you write — `adi-knowledge-root list agent:{name}/memory` — and `edit` the note \
+         that already covers it instead of leaving a fourth copy beside three older ones. The `--id` \
+         is what makes the next review update this note rather than accumulate another.\n\
+         \n\
+         Worth a note: a tool that fails the same way in every session, a permission that is always \
+         refused, a step this workflow always takes the long way round, a fact about this environment \
+         that cost the run turns to establish. Not worth a note: what happened in this one \
+         conversation. The transcript already holds that, and a note that is only true of one run is \
+         noise in every search after it.\n\
+         \n\
+         Write into `{name}`'s memory and nowhere else — not into another agent's, and not into your \
+         own.{memory_note}\n"
+    )
 }
 
 /// Write the dossier itself.
@@ -345,6 +409,33 @@ fn configuration(out: &mut String, e: &Evidence<'_>) {
     if !m.tags.is_empty() {
         let _ = writeln!(out, "- tags: {}", m.tags.join(", "));
     }
+
+    // Always stated, both halves, even when off. "It has no memory" and "it has one and never
+    // wrote to it" want opposite recommendations, and a reviewer that cannot tell them apart makes
+    // the wrong one confidently — which is also why this is not folded into the arguments above,
+    // where an absent key reads as an absent feature.
+    let _ = writeln!(
+        out,
+        "- memory: {}",
+        if m.memory {
+            "yes — `agent:<its name>/memory`, which it alone writes and every agent may read"
+        } else {
+            "**no** — it keeps nothing between runs"
+        }
+    );
+    let _ = writeln!(
+        out,
+        "- knowledge bases it is pointed at: {}",
+        if m.knowledge.is_empty() {
+            "none".to_string()
+        } else {
+            m.knowledge
+                .iter()
+                .map(|b| format!("`{b}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    );
 
     // Arguments minus the system prompt, which gets its own block below: inlined here it would be a
     // wall of text in a bullet list, and it is the one setting most worth reading verbatim.
@@ -700,6 +791,18 @@ fn trace(turns: &[Turn], budget: usize) -> String {
         }
     }
 
+    // A turn is not the smallest unit there is, and the loop above cannot go below it. One agentic
+    // turn carries hundreds of tool calls — the shape of nearly every run in this tree — so a
+    // conversation whose weight sits inside a single turn reaches here untouched and blows the
+    // budget by whatever that turn weighs. Dropping it is not available: it *is* the conversation.
+    // So the survivors give up their middles as well, on the same rule, one level down.
+    if total > room {
+        let sizes: Vec<usize> = blocks.iter().map(String::len).collect();
+        for (block, cap) in blocks.iter_mut().zip(fair_shares(&sizes, room)) {
+            *block = fit_block(block, cap);
+        }
+    }
+
     let mut out = String::from(head);
     for (i, block) in blocks.iter().enumerate() {
         if dropped > 0 && i == blocks.len() / 2 {
@@ -710,6 +813,68 @@ fn trace(turns: &[Turn], budget: usize) -> String {
             );
         }
         out.push_str(block);
+    }
+    out
+}
+
+/// Split `room` over `sizes` so nothing is cut while something larger is left whole.
+///
+/// Smallest first, each taking at most an equal share of what is left and handing back whatever it
+/// did not need. A flat `room / n` would cut a short turn that already fit in order to leave budget
+/// for a long one that is going to be cut anyway — spending the cuts where they buy the least.
+fn fair_shares(sizes: &[usize], room: usize) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by_key(|&i| sizes[i]);
+
+    let mut caps = vec![0usize; sizes.len()];
+    let mut left = room;
+    let mut rest = sizes.len();
+    for i in order {
+        caps[i] = sizes[i].min(left / rest.max(1));
+        left -= caps[i];
+        rest -= 1;
+    }
+    caps
+}
+
+/// One turn block cut to `max` bytes by giving up its middle lines.
+///
+/// The trace's own rule, applied inside a turn: a block's lines are its tool calls in order, and the
+/// ones at either end say what the turn set out to do and what it settled on. The heading is never
+/// dropped — tool calls under no turn number are calls a reader cannot go and look at.
+///
+/// Every line is already bounded (`turn_block` clips each call to ~200 bytes), so this always
+/// converges rather than stalling on one enormous line.
+fn fit_block(block: &str, max: usize) -> String {
+    if block.len() <= max {
+        return block.to_string();
+    }
+    let mut lines: Vec<&str> = block.lines().collect();
+    let marker = "- *[0000 calls in the middle omitted to fit]*";
+    let room = max.saturating_sub(marker.len() + 1);
+
+    let mut total: usize = lines.iter().map(|l| l.len() + 1).sum();
+    let mut dropped = 0usize;
+    // Below three lines there is a heading and one line either side of the cut; there is nothing
+    // left to take that would not make the block unreadable.
+    while total > room && lines.len() > 3 {
+        let middle = 1 + (lines.len() - 1) / 2;
+        total -= lines[middle].len() + 1;
+        lines.remove(middle);
+        dropped += 1;
+    }
+    if dropped == 0 {
+        return block.to_string();
+    }
+
+    let cut = 1 + (lines.len() - 1) / 2;
+    let mut out = String::with_capacity(total + marker.len() + 2);
+    for (i, line) in lines.iter().enumerate() {
+        if i == cut {
+            let _ = writeln!(out, "- *[{dropped} calls in the middle omitted to fit]*");
+        }
+        out.push_str(line);
+        out.push('\n');
     }
     out
 }
@@ -1147,6 +1312,76 @@ mod tests {
         assert!(doc.contains("really_quite_a_long_test_name_599\n"), "{doc}");
     }
 
+    /// The budget has to hold when the weight is inside **one** turn, which is the shape of nearly
+    /// every agentic run here — one assistant turn, hundreds of tool calls. The whole-turn elision
+    /// cannot touch it (dropping that turn drops the conversation), and the 600-small-turns test
+    /// above passes without ever reaching the case. A real 2-turn session came out at 45,863 bytes
+    /// against a 28,000 budget before this held.
+    #[test]
+    fn one_enormous_turn_is_cut_down_rather_than_overflowing() {
+        let (agent, record) = (agent(), record());
+        let steps: Vec<Step> = (0..800)
+            .map(|i| {
+                tool(
+                    "Bash",
+                    &format!("cargo test --test a_really_quite_long_test_name_number_{i}"),
+                    ToolStatus::Ok,
+                    "",
+                )
+            })
+            .collect();
+        let turns = vec![
+            Turn {
+                role: "user".to_string(),
+                text: "go".to_string(),
+                at: 1_000,
+                pending: false,
+                queued: false,
+                steps: Vec::new(),
+                metrics: None,
+            },
+            Turn {
+                role: "assistant".to_string(),
+                text: "Done.".to_string(),
+                at: 2_000,
+                pending: false,
+                queued: false,
+                steps,
+                metrics: None,
+            },
+        ];
+
+        let doc = document(
+            &evidence(
+                &agent,
+                &record,
+                &turns,
+                &TokenReport::default(),
+                &History::default(),
+                &[],
+            ),
+            Options::default(),
+        );
+        assert!(doc.len() <= Options::default().budget, "{} bytes", doc.len());
+        assert!(doc.contains("calls in the middle omitted"), "{doc}");
+        // Both ends of the turn survive, and the heading with them — a cut that took the heading
+        // would leave tool calls belonging to no turn a reader could go and look at.
+        assert!(doc.contains("### Turn 2 — agent"), "{doc}");
+        assert!(doc.contains("test_name_number_0\n"), "{doc}");
+        assert!(doc.contains("test_name_number_799\n"), "{doc}");
+    }
+
+    /// Nothing is cut while something larger is left whole: a short turn that already fits keeps
+    /// all of it, and the surplus goes to the turn that is going to be cut anyway.
+    #[test]
+    fn the_room_goes_to_whoever_still_needs_it() {
+        assert_eq!(fair_shares(&[10, 10, 10], 30), vec![10, 10, 10]);
+        // 1000 wants far more than its third; the two small ones keep everything and hand back 80.
+        assert_eq!(fair_shares(&[10, 10, 1000], 300), vec![10, 10, 280]);
+        // Nothing to give: every block is cut, none is spared for another.
+        assert_eq!(fair_shares(&[100, 100], 50), vec![25, 25]);
+    }
+
     /// The brief is the reviewer's whole instruction, and the one thing it must always carry is
     /// where the evidence is.
     #[test]
@@ -1166,7 +1401,134 @@ mod tests {
         assert!(brief.contains("/tmp/sessions/solver/0000000000000-0001.review.md"), "{brief}");
         assert!(brief.contains("2 tool calls"), "{brief}");
         assert!(brief.contains("1 of them failed"), "{brief}");
-        assert!(brief.contains("Propose only"), "{brief}");
+        assert!(brief.contains("Change nothing else"), "{brief}");
+    }
+
+    /// Part 5 is the one instruction in the brief that is carried out rather than proposed, and it
+    /// names the reviewed agent's own memory — not the reviewer's, and not a base shared with every
+    /// other agent. Getting the base wrong files the finding where the agent it is about will never
+    /// look for it.
+    #[test]
+    fn the_brief_sends_the_finding_to_the_reviewed_agents_own_memory() {
+        let (agent, record, turns) = (agent(), record(), conversation());
+        let brief = brief(
+            &evidence(
+                &agent,
+                &record,
+                &turns,
+                &TokenReport::default(),
+                &History::default(),
+                &[],
+            ),
+            Path::new("/tmp/x.review.md"),
+        );
+        assert!(brief.contains("agent:solver/memory"), "{brief}");
+        assert!(brief.contains("adi-knowledge-root add"), "{brief}");
+        // The carve-out has to be explicit, or "change nothing" swallows part 5 whole.
+        assert!(brief.contains("Part 5 is the exception"), "{brief}");
+    }
+
+    /// An agent with `memory = false` is never told it has a memory, so a note left there sits on a
+    /// shelf it was never pointed at. The brief has to say so and carry the fix, or part 5 quietly
+    /// writes into a room nobody enters.
+    #[test]
+    fn a_memoryless_agent_gets_the_setting_with_the_note() {
+        let (mut agent, record, turns) = (agent(), record(), conversation());
+        agent.manifest.memory = false;
+        let without = brief(
+            &evidence(
+                &agent,
+                &record,
+                &turns,
+                &TokenReport::default(),
+                &History::default(),
+                &[],
+            ),
+            Path::new("/tmp/x.review.md"),
+        );
+        assert!(without.contains("agents save solver --memory"), "{without}");
+
+        agent.manifest.memory = true;
+        let with_memory = brief(
+            &evidence(
+                &agent,
+                &record,
+                &turns,
+                &TokenReport::default(),
+                &History::default(),
+                &[],
+            ),
+            Path::new("/tmp/x.review.md"),
+        );
+        assert!(
+            !with_memory.contains("agents save solver --memory"),
+            "an agent that already has one should not be told to turn it on: {with_memory}"
+        );
+    }
+
+    /// "It has no memory" and "it has one and never wrote to it" want opposite recommendations, so
+    /// both halves are stated even when off — an absent line would read as an absent feature.
+    #[test]
+    fn the_dossier_says_what_the_agent_knows_either_way() {
+        let (mut agent, record, turns) = (agent(), record(), conversation());
+        let off = document(
+            &evidence(
+                &agent,
+                &record,
+                &turns,
+                &TokenReport::default(),
+                &History::default(),
+                &[],
+            ),
+            Options::default(),
+        );
+        assert!(off.contains("- memory: **no**"), "{off}");
+        assert!(off.contains("knowledge bases it is pointed at: none"), "{off}");
+
+        agent.manifest.memory = true;
+        agent.manifest.knowledge = vec!["global/runbooks".to_string()];
+        let on = document(
+            &evidence(
+                &agent,
+                &record,
+                &turns,
+                &TokenReport::default(),
+                &History::default(),
+                &[],
+            ),
+            Options::default(),
+        );
+        assert!(on.contains("- memory: yes"), "{on}");
+        assert!(on.contains("`global/runbooks`"), "{on}");
+    }
+
+    /// Print the brief exactly as the reviewer receives it.
+    ///
+    /// Ignored by default; it asserts nothing. Every other test here pins one string, and a prompt
+    /// that passes each of them can still read badly as a whole — which is the only way this one
+    /// fails. Read it, don't assert on it:
+    ///
+    /// ```text
+    /// cargo test -p adi-agents --no-default-features -- --ignored --nocapture show_the_brief
+    /// ```
+    #[test]
+    #[ignore = "prints the brief for a human to read; asserts nothing"]
+    fn show_the_brief() {
+        let (agent, record, turns) = (agent(), record(), conversation());
+        println!(
+            "{}",
+            brief(
+                &evidence(
+                    &agent,
+                    &record,
+                    &turns,
+                    &TokenReport::default(),
+                    &History::default(),
+                    &[],
+                ),
+                Path::new("/tmp/sessions/solver/0000000000000-0001.review.md"),
+            )
+        );
     }
 
     /// One conversation cannot tell a bad run from a bad tool; the cross-session tally is where a
