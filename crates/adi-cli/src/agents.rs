@@ -47,14 +47,26 @@ pub(crate) enum AgentsCommand {
         temperature: Option<f64>,
         #[arg(long)]
         max_turns: Option<u32>,
-        /// Repeatable; comma-separated values are also accepted.
+        /// Repeatable; comma-separated values are also accepted. Omit every `--tag` to leave an
+        /// existing agent's tags alone; pass `--no-tag` to clear them.
         #[arg(long = "tag")]
         tags: Vec<String>,
+        /// Clear the agent's tags (see `--tag`).
+        #[arg(long, conflicts_with = "tags")]
+        no_tag: bool,
+        /// Star the agent. Omit both this and `--no-starred` to leave the setting as it was.
         #[arg(long)]
         starred: bool,
-        /// The project to file the agent under (its id); omit for a global agent.
+        /// Take the agent's star away (see `--starred`).
+        #[arg(long, conflicts_with = "starred")]
+        no_starred: bool,
+        /// The project to file the agent under (its id). Omit it to leave an existing agent's
+        /// project alone; pass `--no-project` to make it global.
         #[arg(long)]
         project: Option<String>,
+        /// Unfile the agent from its project, making it global (see `--project`).
+        #[arg(long, conflicts_with = "project")]
+        no_project: bool,
         /// An adi tool id to enable for this agent (its own `.bin`). Repeatable; comma-separated
         /// values are also accepted. Omit every `--tool` to leave an existing agent's tools as they
         /// are; pass `--no-tool` to take them all away. Distinct from `--command-scope` (the LLM's
@@ -67,9 +79,13 @@ pub(crate) enum AgentsCommand {
         /// A secret to attach to this agent (injected into its runs as an env var under its name).
         /// Give `NAME` for a global secret or `PROJECT/NAME` for a project-scoped one. Repeatable;
         /// comma-separated values are also accepted. Only attached secrets are injected — an
-        /// explicit allowlist.
+        /// explicit allowlist. Omit every `--secret` to leave an existing agent's attachments
+        /// alone; pass `--no-secret` to detach them all.
         #[arg(long = "secret")]
         secrets: Vec<String>,
+        /// Detach every secret from the agent (see `--secret`).
+        #[arg(long, conflicts_with = "secrets")]
+        no_secret: bool,
         /// A directory to put on this agent's run `PATH`, ahead of the machine's own — how an agent
         /// pins a toolchain the default `PATH` doesn't point at. `~` and `$HOME` are expanded at
         /// launch. Repeatable. Omit every `--path` to leave an existing agent's dirs as they are;
@@ -89,9 +105,13 @@ pub(crate) enum AgentsCommand {
         no_env: bool,
         /// This agent runs with nobody watching, so it may not stop to ask: the `Ask` tool refuses
         /// and tells the run to decide for itself and say what it assumed. For a trigger's agent, a
-        /// scheduled sweep — anything whose questions nobody would see.
+        /// scheduled sweep — anything whose questions nobody would see. Omit both this and
+        /// `--no-unattended` to leave the setting as it was.
         #[arg(long)]
         unattended: bool,
+        /// Let the agent stop and ask again (see `--unattended`).
+        #[arg(long, conflicts_with = "unattended")]
+        no_unattended: bool,
         /// A knowledge base this agent works with — `global/<name>`, `project:<id>/<name>`, or
         /// `agent:<name>/<base>`. Repeatable; comma-separated values are also accepted. Omit every
         /// `--knowledge` to leave an existing agent's bases alone; pass `--no-knowledge` to clear
@@ -103,8 +123,8 @@ pub(crate) enum AgentsCommand {
         no_knowledge: bool,
         /// Give this agent a memory of its own: the `agent:<name>/memory` base, which it alone
         /// writes and every other agent may read. Omit both this and `--no-memory` to leave the
-        /// setting as it was — unlike `--unattended`, so a save that never mentions memory cannot
-        /// quietly take an agent's away.
+        /// setting as it was, so a save that never mentions memory cannot quietly take an
+        /// agent's away.
         #[arg(long)]
         memory: bool,
         /// Take the agent's own memory away (see `--memory`).
@@ -256,16 +276,21 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             temperature,
             max_turns,
             tags,
+            no_tag,
             starred,
+            no_starred,
             project,
+            no_project,
             tools,
             no_tool,
             secrets,
+            no_secret,
             path,
             no_path,
             env,
             no_env,
             unattended,
+            no_unattended,
             knowledge,
             no_knowledge,
             memory,
@@ -313,62 +338,67 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             }
             // Everything below follows the same rule as the arguments above: stated wins, omitted
             // keeps, and each field has an explicit `--no-…` for actually taking it away.
+            //
+            // `tags`, `starred`, `project`, `secrets`, and `unattended` did not, and the comment
+            // above claimed they did. A save stating one field replaced all five with whatever the
+            // flags happened to default to — so `agents save <name> --backend … --memory`, the
+            // obvious way to turn a setting on, silently unfiled the agent from its project,
+            // dropped its tags and its star, and detached every secret. It cost 62 agents at once
+            // to find. A field that resets itself when unmentioned is not a default, it is a trap:
+            // the caller cannot state what they do not know the flag exists for.
+            // Each field is `kept`/`flag`, never a hand-rolled if/else. That uniformity is the
+            // actual fix: the five that were wrong were wrong *individually*, each written out
+            // longhand at its own call site, and nothing made the odd one out visible.
+            let old = stored.as_ref();
             let manifest = AgentManifest {
                 backend: backend.into(),
                 arguments,
-                tags: clean_tags(tags),
-                starred,
-                project: clean(project),
-                bin_tools: if no_tool {
-                    Vec::new()
-                } else if tools.is_empty() {
-                    stored
-                        .as_ref()
-                        .map(|m| m.bin_tools.clone())
-                        .unwrap_or_default()
-                } else {
-                    clean_tags(tools)
-                },
-                secrets: parse_secret_attachments(secrets),
-                path: if no_path {
-                    Vec::new()
-                } else if path.is_empty() {
-                    stored.as_ref().map(|m| m.path.clone()).unwrap_or_default()
-                } else {
-                    // Not `clean_tags`: a directory may legitimately contain a comma, so each
-                    // `--path` is one dir, never a comma-separated list.
-                    path.into_iter()
-                        .map(|dir| dir.trim().to_string())
-                        .filter(|dir| !dir.is_empty())
-                        .collect()
-                },
-                env: if no_env {
-                    BTreeMap::new()
-                } else if env.is_empty() {
-                    stored.as_ref().map(|m| m.env.clone()).unwrap_or_default()
-                } else {
-                    parse_env_vars(env)?
-                },
-                unattended,
-                knowledge: if no_knowledge {
-                    Vec::new()
-                } else if knowledge.is_empty() {
-                    stored
-                        .as_ref()
-                        .map(|m| m.knowledge.clone())
-                        .unwrap_or_default()
-                } else {
-                    clean_tags(knowledge)
-                },
-                // Stated wins; omitted keeps. A boolean that reset itself on every save would
-                // take an agent's memory away the first time somebody renamed a tag.
-                memory: if memory {
-                    true
-                } else if no_memory {
-                    false
-                } else {
-                    stored.as_ref().is_some_and(|m| m.memory)
-                },
+                tags: kept(no_tag, stated(tags, clean_tags), old.map(|m| m.tags.clone())),
+                starred: flag(starred, no_starred, old.is_some_and(|m| m.starred)),
+                // The costliest of the five to get wrong: an agent's project decides which
+                // database, secrets, and knowledge bases its runs reach, so a save that dropped it
+                // did not merely lose a label — it moved the agent somewhere else.
+                // Doubly wrapped on purpose: the outer `Option` is "was it mentioned", the inner is
+                // the agent's own "filed under a project, or global".
+                project: kept(
+                    no_project,
+                    clean(project).map(Some),
+                    old.map(|m| m.project.clone()),
+                ),
+                bin_tools: kept(no_tool, stated(tools, clean_tags), old.map(|m| m.bin_tools.clone())),
+                secrets: kept(
+                    no_secret,
+                    stated(secrets, parse_secret_attachments),
+                    old.map(|m| m.secrets.clone()),
+                ),
+                // Not `clean_tags`: a directory may legitimately contain a comma, so each `--path`
+                // is one dir, never a comma-separated list.
+                path: kept(
+                    no_path,
+                    stated(path, |dirs| {
+                        dirs.into_iter()
+                            .map(|dir| dir.trim().to_string())
+                            .filter(|dir| !dir.is_empty())
+                            .collect()
+                    }),
+                    old.map(|m| m.path.clone()),
+                ),
+                env: kept(
+                    no_env,
+                    if env.is_empty() {
+                        None
+                    } else {
+                        Some(parse_env_vars(env)?)
+                    },
+                    old.map(|m| m.env.clone()),
+                ),
+                unattended: flag(unattended, no_unattended, old.is_some_and(|m| m.unattended)),
+                knowledge: kept(
+                    no_knowledge,
+                    stated(knowledge, clean_tags),
+                    old.map(|m| m.knowledge.clone()),
+                ),
+                memory: flag(memory, no_memory, old.is_some_and(|m| m.memory)),
                 created_at: 0,
                 updated_at: 0,
             };
@@ -609,6 +639,35 @@ fn print_ask(ask: &adi_core::Ask) {
             .join(" ")
     );
     println!();
+}
+
+/// One field of a save: `--no-…` clears it, a stated value wins, and an unmentioned one keeps what
+/// the agent already had.
+///
+/// The whole rule, in one place, so no field can quietly disagree with it. Five of them did — every
+/// one written out longhand at its own call site, and the mistake was invisible because there was
+/// nothing to compare against. A save is a *patch*, not a whole new agent: the caller states what
+/// they came to change, and cannot be expected to restate settings they may not know exist.
+fn kept<T: Default>(clear: bool, stated: Option<T>, stored: Option<T>) -> T {
+    if clear {
+        return T::default();
+    }
+    stated.or(stored).unwrap_or_default()
+}
+
+/// The same rule for a boolean, which has no empty value to mean "unmentioned" — so the pair of
+/// flags carries it: `--x` on, `--no-x` off, neither leaves it alone.
+fn flag(on: bool, off: bool, stored: bool) -> bool {
+    on || (!off && stored)
+}
+
+/// A repeatable flag's value, or `None` when it was never passed.
+///
+/// The empty `Vec` clap hands back for an absent flag is indistinguishable from one the caller
+/// emptied on purpose, so it is turned into `None` *before* [`kept`] sees it — and `--no-…` is the
+/// only way to mean "empty".
+fn stated<T>(values: Vec<String>, parse: impl FnOnce(Vec<String>) -> T) -> Option<T> {
+    (!values.is_empty()).then(|| parse(values))
 }
 
 /// Parse `--secret` values into attachments. Each value is a comma-separated list of
@@ -870,5 +929,55 @@ fn await_run(store: &Agents, name: &str, run_id: &str) -> Result<(), String> {
             Ok(())
         }
         None => Err(format!("run {run_id} finished without answering")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rule, in the three shapes it comes in. A save is a patch: what the caller did not
+    /// mention must survive it.
+    #[test]
+    fn an_unmentioned_field_survives_the_save() {
+        let stored = || Some(vec!["bugbounty".to_string(), "v2".to_string()]);
+
+        // Unmentioned — clap hands back an empty Vec, which must not read as "empty it".
+        assert_eq!(kept(false, stated(vec![], clean_tags), stored()), vec!["bugbounty", "v2"]);
+        // Stated wins.
+        assert_eq!(
+            kept(false, stated(vec!["one".into()], clean_tags), stored()),
+            vec!["one"]
+        );
+        // `--no-…` is the only way to actually clear it.
+        assert!(kept::<Vec<String>>(true, stated(vec!["one".into()], clean_tags), stored()).is_empty());
+        // Nothing stated and nothing stored is empty, not a panic.
+        assert!(kept::<Vec<String>>(false, stated(vec![], clean_tags), None).is_empty());
+    }
+
+    /// A project decides which database, secrets, and knowledge an agent's runs reach. Dropping it
+    /// on an unrelated save moved 62 agents at once; the inner `Option` is the agent's own
+    /// "global", the outer is "was it mentioned".
+    #[test]
+    fn a_project_is_not_lost_by_a_save_that_never_mentions_it() {
+        let filed = || Some(Some("bugbounty".to_string()));
+        assert_eq!(kept(false, None, filed()), Some("bugbounty".to_string()));
+        assert_eq!(
+            kept(false, Some(Some("other".to_string())), filed()),
+            Some("other".to_string())
+        );
+        assert_eq!(kept::<Option<String>>(true, None, filed()), None, "--no-project makes it global");
+        // An agent that was already global stays global rather than becoming a phantom project.
+        assert_eq!(kept::<Option<String>>(false, None, Some(None)), None);
+    }
+
+    /// A bare `bool` has no "unmentioned" value of its own, so the pair of flags carries it. This
+    /// is what `--starred`, `--unattended`, and `--memory` all now share.
+    #[test]
+    fn a_boolean_needs_both_flags_to_mean_anything() {
+        assert!(flag(true, false, false), "--x turns it on");
+        assert!(!flag(false, true, true), "--no-x turns it off");
+        assert!(flag(false, false, true), "neither keeps it on");
+        assert!(!flag(false, false, false), "neither keeps it off");
     }
 }
