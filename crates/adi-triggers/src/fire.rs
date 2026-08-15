@@ -99,7 +99,7 @@ pub(crate) fn launch(
     // reserved vars pushed below (PATH, ADI_TRIGGER*) win if a secret is unwisely named after
     // one — the injection can never break a launch by shadowing `PATH`.
     let mut env: Vec<(String, String)> = run_env.to_vec();
-    env.push(("PATH".to_string(), augmented_path()));
+    env.push(("PATH".to_string(), adi_config::augmented_path()));
     env.push(("ADI_TRIGGER".to_string(), trigger.name.clone()));
     env.push((
         "ADI_TRIGGER_KIND".to_string(),
@@ -247,25 +247,6 @@ pub(crate) fn read_log(module_dir: &Path, name: &str) -> Option<String> {
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).ok()?;
     Some(String::from_utf8_lossy(&bytes).into_owned())
-}
-
-/// A `PATH` that includes the user's common tool directories, so a code block launched under a
-/// minimal launchd environment can still find `bun`, `node`, and Homebrew binaries (the same
-/// augmentation the hive runner uses). `bun` living here is what makes the `ts` runtime work.
-fn augmented_path() -> String {
-    let mut parts = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        parts.push(format!("{home}/.bun/bin"));
-        parts.push(format!("{home}/.local/bin"));
-    }
-    parts.push("/opt/homebrew/bin".to_string());
-    parts.push("/usr/local/bin".to_string());
-    parts.push("/usr/bin".to_string());
-    parts.push("/bin".to_string());
-    if let Ok(existing) = std::env::var("PATH") {
-        parts.push(existing);
-    }
-    parts.join(":")
 }
 
 #[cfg(test)]

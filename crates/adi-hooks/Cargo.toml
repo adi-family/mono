@@ -9,6 +9,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# For `augmented_path` only: a hook spawned under launchd inherits a bare `PATH`, and the one
+# place that compensates for it lives there. Adds no transitive weight — adi-config's own
+# dependencies are serde and toml, both already here.
+adi-config = { workspace = true }
 adi-osext = { workspace = true }
 # Each workspace terminal is an in-process pty session (the cross-platform replacement for the
 # external tmux server), observed and driven the same way agent sessions are.

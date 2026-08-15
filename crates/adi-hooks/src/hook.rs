@@ -247,7 +247,7 @@ impl Hooks {
             .arg(WRAPPER)
             .env("ADI_HOOK_CODE", &code)
             .env("ADI_HOOK", name)
-            .env("PATH", augmented_path())
+            .env("PATH", adi_config::augmented_path())
             .stdin(Stdio::null())
             .current_dir(cwd);
         // Detach so the hook outlives the spawner and its subtree stays killable.
@@ -387,26 +387,6 @@ pub(crate) fn validate_name(name: &str) -> Result<()> {
 #[must_use]
 pub(crate) fn pid_alive(pid: u32) -> bool {
     adi_osext::pid_alive(pid)
-}
-
-/// A `PATH` that includes the user's common tool directories, so a hook run under a minimal
-/// launchd environment can still find `git`, `bun`, and Homebrew binaries. A verbatim copy
-/// of the augmentation in adi-triggers' fire.rs and adi-webapp-api's `spawn_runner` — three
-/// call sites, deliberately not worth a shared crate yet.
-fn augmented_path() -> String {
-    let mut parts = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        parts.push(format!("{home}/.bun/bin"));
-        parts.push(format!("{home}/.local/bin"));
-    }
-    parts.push("/opt/homebrew/bin".to_string());
-    parts.push("/usr/local/bin".to_string());
-    parts.push("/usr/bin".to_string());
-    parts.push("/bin".to_string());
-    if let Ok(existing) = std::env::var("PATH") {
-        parts.push(existing);
-    }
-    parts.join(":")
 }
 
 /// A metadata mtime as Unix epoch seconds.

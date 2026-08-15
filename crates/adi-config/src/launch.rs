@@ -6,9 +6,15 @@
 //! even though it works in a normal shell.
 //!
 //! This is the one place that compensates for that — the "env parity" every launcher applies so a
-//! service resolves its tools the same way whoever starts it: adi-hive's supervisor
-//! ([`crate`] consumer `adi-hive`) and adi-app's start endpoint (`adi-webapp-api`) both call
-//! [`launch_env`]. Keep it here (not copied per crate) so the two never drift.
+//! service resolves its tools the same way whoever starts it. Everything that spawns something
+//! the user wrote comes through here: adi-hive's supervisor and adi-app's start endpoint take the
+//! whole [`launch_env`], while adi-hooks, adi-tools and adi-triggers take [`augmented_path`] on
+//! its own, having no `HOME` to restore.
+//!
+//! Keep it here rather than copied per crate. That instruction was already in this comment when
+//! three of those crates were each carrying a verbatim copy of [`augmented_path`], which is the
+//! argument for it: the copies were identical, and identical is what they stop being the first
+//! time a tool directory is added to one of them.
 
 /// A `PATH` with the user's common tool directories prepended to the inherited one, so a runner
 /// launched under launchd's bare environment can still find `bun`, `node`, Homebrew binaries, and

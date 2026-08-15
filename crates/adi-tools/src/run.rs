@@ -57,7 +57,7 @@ pub(crate) fn command(
     let mut cmd = Command::new(program);
     cmd.args(&argv)
         .current_dir(working_dir)
-        .env("PATH", augmented_path())
+        .env("PATH", adi_config::augmented_path())
         .env("ADI_TOOL_ID", &tool.id)
         .env("ADI_TOOL_NAME", tool.display_name());
     if let Some(project) = &tool.manifest.project {
@@ -103,25 +103,6 @@ pub(crate) fn run_capture(
         code: out.status.code(),
         output,
     })
-}
-
-/// A `PATH` that includes the user's common tool directories, so a tool launched under a minimal
-/// launchd environment can still find `bun`, `node`, and Homebrew binaries (the same augmentation
-/// the hive runner and triggers use). `bun` living here is what makes the `ts` runtime work.
-fn augmented_path() -> String {
-    let mut parts = Vec::new();
-    if let Ok(home) = std::env::var("HOME") {
-        parts.push(format!("{home}/.bun/bin"));
-        parts.push(format!("{home}/.local/bin"));
-    }
-    parts.push("/opt/homebrew/bin".to_string());
-    parts.push("/usr/local/bin".to_string());
-    parts.push("/usr/bin".to_string());
-    parts.push("/bin".to_string());
-    if let Ok(existing) = std::env::var("PATH") {
-        parts.push(existing);
-    }
-    parts.join(":")
 }
 
 #[cfg(test)]
