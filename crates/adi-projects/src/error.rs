@@ -28,7 +28,8 @@ impl fmt::Display for Error {
             Self::Config(e) => write!(f, "project store error: {e}"),
             Self::InvalidId(id) => write!(
                 f,
-                "invalid project id {id:?}: use a single path segment of letters, digits, '.', '-', or '_'"
+                "invalid project id {id:?}: {}",
+                adi_config::NAME_RULE
             ),
             Self::NotFound(id) => write!(f, "no such project: {id}"),
             Self::Exists(id) => write!(f, "project already exists: {id}"),

@@ -29,7 +29,8 @@ impl fmt::Display for Error {
             Self::Config(e) => write!(f, "db store error: {e}"),
             Self::InvalidProject(id) => write!(
                 f,
-                "invalid project id {id:?}: use a single path segment of letters, digits, '.', '-', or '_'"
+                "invalid project id {id:?}: {}",
+                adi_config::NAME_RULE
             ),
             Self::NotFound(path) => write!(f, "no database at {path}"),
             Self::Sqlite(e) => write!(f, "sqlite error: {e}"),

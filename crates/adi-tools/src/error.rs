@@ -34,7 +34,8 @@ impl fmt::Display for Error {
             Self::Config(e) => write!(f, "tool store error: {e}"),
             Self::InvalidId(id) => write!(
                 f,
-                "invalid tool id {id:?}: use a single path segment of letters, digits, '.', '-', or '_'"
+                "invalid tool id {id:?}: {}",
+                adi_config::NAME_RULE
             ),
             Self::NotFound(id) => write!(f, "no such tool: {id}"),
             Self::InvalidRuntime(r) => write!(f, "unknown tool runtime {r:?}: use 'sh' or 'ts'"),

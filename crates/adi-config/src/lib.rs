@@ -233,6 +233,13 @@ pub fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
+/// What [`valid_name`] accepts, phrased for the person who just failed it.
+///
+/// Every store rejects a name with a message ending in this sentence, and the sentence describes
+/// the rule immediately above it — so a change to what [`valid_name`] allows is a change to what
+/// the stores tell people to type, in one edit rather than four that have to be remembered.
+pub const NAME_RULE: &str = "use a single path segment of letters, digits, '.', '-', or '_'";
+
 /// Check `name` with [`valid_name`], mapping a rejection through `err` into the caller's own error
 /// type. Every store owns an `InvalidName(String)` variant but a distinct `Error` enum, so pass
 /// the variant itself as the constructor: `validate_name(name, Error::InvalidName)`.
