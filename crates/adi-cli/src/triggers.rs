@@ -1,7 +1,7 @@
 //! The `triggers` command group: the trigger-definition subcommand surface and its
 //! dispatch over the shared trigger-definition store.
 
-use adi_core::{Adi, RUNTIME_SH, Trigger, TriggerManifest, trigger_presets};
+use adi_core::{Adi, RUNTIME_SH, Trigger, TriggerManifest, clean_trigger_on, trigger_presets};
 use clap::Subcommand;
 
 use crate::format::{clean, clean_required, parse_extra, print_json};
@@ -274,19 +274,6 @@ fn preset_events(
             .unwrap_or_default();
     }
     events
-}
-
-/// The project allowlist to save: each id trimmed, blanks dropped, duplicates removed (order
-/// preserved). An empty result saves an unrestricted trigger — one that fires for every project.
-fn clean_trigger_on(trigger_on: Vec<String>) -> Vec<String> {
-    let mut cleaned: Vec<String> = Vec::new();
-    for id in trigger_on {
-        let id = id.trim().to_string();
-        if !id.is_empty() && !cleaned.contains(&id) {
-            cleaned.push(id);
-        }
-    }
-    cleaned
 }
 
 /// A preset as JSON, for `triggers presets --json`.

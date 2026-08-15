@@ -62,7 +62,7 @@ pub use dispatch::{EventDispatcher, EventObserver};
 pub use supervisor::Supervisor;
 pub use trigger::{
     KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, RUNTIME_SH, RUNTIME_TS, Trigger, TriggerManifest,
-    normalize_kind, normalize_runtime, payload_project,
+    clean_trigger_on, normalize_kind, normalize_runtime, payload_project,
 };
 
 use trigger::validate_name;

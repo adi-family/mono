@@ -70,6 +70,7 @@ pub use adi_events::{
 
 pub use adi_triggers::{
     Error as TriggersError, Firing, KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, RUNTIME_SH,
+    clean_trigger_on,
     RUNTIME_TS, RunState, Trigger, TriggerManifest, Triggers, presets as trigger_presets,
 };
 

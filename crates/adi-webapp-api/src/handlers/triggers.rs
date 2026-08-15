@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 use adi_triggers::Error as TriggerStoreError;
 use adi_triggers::RunState;
 use adi_triggers::Supervisor;
+use adi_triggers::clean_trigger_on;
 use adi_triggers::TriggerManifest;
 use adi_triggers::Triggers;
 
@@ -38,19 +39,6 @@ fn clean_events(events: Vec<String>) -> Vec<String> {
         .map(|e| e.trim().to_string())
         .filter(|e| !e.is_empty())
         .collect()
-}
-
-/// Trim, drop blanks, and dedupe a `trigger_on` project allowlist (preserving order). An empty
-/// result saves an unrestricted trigger.
-fn clean_trigger_on(projects: Vec<String>) -> Vec<String> {
-    let mut cleaned: Vec<String> = Vec::new();
-    for id in projects {
-        let id = id.trim().to_string();
-        if !id.is_empty() && !cleaned.contains(&id) {
-            cleaned.push(id);
-        }
-    }
-    cleaned
 }
 
 /// `GET /api/triggers` — every registered trigger plus the editor's vocabulary. Each mutation

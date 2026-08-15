@@ -168,6 +168,25 @@ impl TriggerManifest {
     }
 }
 
+/// A [`trigger_on`](Trigger::trigger_on) allowlist as it should be stored: each id trimmed, blanks
+/// dropped, duplicates removed, order preserved.
+///
+/// Every writer normalises the same way or the same trigger means different things depending on
+/// which door it was saved through — and the reading side is
+/// [`allows_project`](Trigger::allows_project), which compares ids verbatim, so an untrimmed entry
+/// simply never matches. An empty result is not a rejected allowlist but an unrestricted trigger.
+#[must_use]
+pub fn clean_trigger_on(trigger_on: Vec<String>) -> Vec<String> {
+    let mut cleaned: Vec<String> = Vec::new();
+    for id in trigger_on {
+        let id = id.trim().to_string();
+        if !id.is_empty() && !cleaned.contains(&id) {
+            cleaned.push(id);
+        }
+    }
+    cleaned
+}
+
 impl Default for TriggerManifest {
     /// An empty manifest that is nonetheless *enabled* — a freshly defined trigger should launch
     /// without an extra toggle step, matching the form/CLI defaults.
