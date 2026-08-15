@@ -21,7 +21,7 @@ use tracing::{info, warn};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    init_tracing();
+    adi_hive::logging::init_tracing();
 
     // A missing config is not fatal: fall back to built-in defaults so the daemon still runs.
     let path = std::env::args()
@@ -180,16 +180,6 @@ async fn main() -> anyhow::Result<()> {
     }
     status::remove(&status_path);
     Ok(())
-}
-
-/// Logs to stdout/stderr for the supervisor to capture, `info` unless `RUST_LOG` says otherwise.
-fn init_tracing() {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .init();
 }
 
 /// Every address this config declares, when **all** of them are already in use — the signature of

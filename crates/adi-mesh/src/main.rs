@@ -146,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
 
 /// Start the in-process daemon and run until a shutdown signal.
 async fn run() -> anyhow::Result<()> {
-    init_tracing();
+    adi_hive::logging::init_tracing();
     let daemon = Daemon::start().await?;
     adi_osext::shutdown_signal().await;
     info!("shutdown signal received; stopping");
@@ -209,14 +209,5 @@ fn list() -> anyhow::Result<()> {
 fn default_forward_name(peer_id: &str, port: u16) -> String {
     let prefix: String = peer_id.chars().take(8).collect();
     format!("{prefix}:{port}")
-}
-
-fn init_tracing() {
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        .with_target(false)
-        .init();
 }
 
