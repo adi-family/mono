@@ -4,7 +4,7 @@
 
 > The code indexer: tree-sitter parsing into a per-project SQLite index of files, symbols, and the call graph, searchable by name (FTS5), by path, or by meaning (jina code embeddings over a usearch vector index). Pure library — `adi-mono indexer` is its CLI.
 
-72 structs · 10 enums · 2 type aliases across 38 files.
+73 structs · 10 enums · 2 type aliases across 38 files.
 
 ## Index
 
@@ -22,7 +22,7 @@
 - [`src/embed/mod.rs`](#srcembedmodrs) — `NoEmbedder`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/graph.rs`](#srcgraphrs) — `SymbolMetrics`
-- [`src/indexer/mod.rs`](#srcindexermodrs) — `FileProcessResult`
+- [`src/indexer/mod.rs`](#srcindexermodrs) — `FileProcessResult`, `Walk`
 - [`src/lang/cpp.rs`](#srclangcpprs) — `InternalSymbolKind`, `InternalReferenceKind`, `InternalLocation`, `InternalSymbol`, `InternalReference`, `CppAnalyzer`
 - [`src/lang/csharp.rs`](#srclangcsharprs) — `CSharpAnalyzer`
 - [`src/lang/go.rs`](#srclanggors) — `GoAnalyzer`
@@ -513,6 +513,18 @@ struct FileProcessResult {
     symbols_count: usize,
     symbol_map: HashMap<String, SymbolId>,
     references: Vec<ParsedReference>,
+}
+```
+
+### struct `Walk`
+
+What a walk of the project found, and where it could not look.
+
+```rust
+struct Walk {
+    files: Vec<PathBuf>,
+    unreachable: Vec<PathBuf>,
+    blind: bool,
 }
 ```
 

@@ -59,8 +59,8 @@ pub async fn index_project(
         );
     }
 
-    let files = collect_files(project_path, config)?;
-    let total = files.len() as u64;
+    let walk = collect_files(project_path, config)?;
+    let total = walk.files.len() as u64;
 
     info!("Found {} files to index", total);
 
@@ -78,7 +78,7 @@ pub async fn index_project(
     let mut all_references: Vec<ParsedReference> = Vec::new();
     let mut global_symbol_map: HashMap<String, Vec<SymbolId>> = HashMap::new();
 
-    for file_path in &files {
+    for file_path in &walk.files {
         match process_file(
             project_path,
             file_path,
@@ -122,7 +122,7 @@ pub async fn index_project(
 
     storage.commit_transaction()?;
 
-    let pruned = prune_departed_files(project_path, &files, &storage, &index)?;
+    let pruned = prune_departed_files(project_path, &walk, &storage, &index)?;
     if pruned > 0 {
         info!("Pruned {pruned} file(s) that are no longer part of the tree");
     }
@@ -308,25 +308,59 @@ pub async fn reindex_paths(
 /// ([`crate::paths::index_dir`]): every row is therefore in scope, and a run of
 /// [`index_project`] can prune on the whole `files` table. The one path-limited entry point,
 /// [`reindex_paths`], deletes exactly the paths it was handed and prunes nothing.
+///
+/// Only what the walk could actually see counts as absent. A directory the walker failed to
+/// read yields no files, which reads exactly like a directory whose files were all deleted —
+/// so [`Walk::unreachable`] is subtracted first, and a walk that could not attribute its error
+/// to any path at all ([`Walk::blind`]) prunes nothing.
 fn prune_departed_files(
     project_path: &Path,
-    walked: &[PathBuf],
+    walk: &Walk,
     storage: &Arc<dyn Storage>,
     index: &Arc<dyn VectorIndex>,
 ) -> Result<usize> {
-    let in_scope: HashSet<&Path> = walked
+    if walk.blind {
+        warn!("Not pruning: the walk failed somewhere it could not name, so what it did not reach is no evidence that anything left the tree");
+        return Ok(0);
+    }
+
+    fn relative<'a>(path: &'a Path, root: &Path) -> &'a Path {
+        path.strip_prefix(root).unwrap_or(path)
+    }
+
+    let in_scope: HashSet<&Path> = walk
+        .files
         .iter()
-        .map(|path| path.strip_prefix(project_path).unwrap_or(path))
+        .map(|path| relative(path, project_path))
+        .collect();
+    let unreachable: Vec<&Path> = walk
+        .unreachable
+        .iter()
+        .map(|path| relative(path, project_path))
         .collect();
 
-    let departed: Vec<(FileId, PathBuf)> = storage
-        .indexed_files()?
+    let indexed = storage.indexed_files()?;
+    let held = indexed.len();
+
+    let departed: Vec<(FileId, PathBuf)> = indexed
         .into_iter()
         .filter(|(_, path)| !in_scope.contains(path.as_path()))
+        .filter(|(_, path)| !unreachable.iter().any(|dir| path.starts_with(dir)))
         .collect();
 
     if departed.is_empty() {
         return Ok(0);
+    }
+
+    // Loud rather than fatal: a branch switch or a big delete is allowed to empty the index,
+    // and refusing would leave the stale rows this function exists to remove. But the same
+    // shape is what a misconfigured ignore rule produces, and that is worth reading in a log
+    // rather than inferring from a reindex that suddenly takes four minutes.
+    if departed.len() * 2 > held {
+        warn!(
+            "Pruning {} of {held} indexed file(s) — more than half the index",
+            departed.len()
+        );
     }
 
     storage.begin_transaction()?;
@@ -348,8 +382,41 @@ fn prune_departed_files(
     Ok(departed.len())
 }
 
-fn collect_files(project_path: &Path, config: &Config) -> Result<Vec<PathBuf>> {
+/// What a walk of the project found, and where it could not look.
+///
+/// The second half is only interesting to [`prune_departed_files`], which treats absence from
+/// `files` as proof a file left the tree. That inference holds only over the part of the tree
+/// the walker actually read.
+struct Walk {
+    files: Vec<PathBuf>,
+    /// Paths the walker reported an error for, and so saw nothing under.
+    unreachable: Vec<PathBuf>,
+    /// Whether an error arrived with no path attached. There is no prefix to exclude for one
+    /// of those, so the walk stops being usable as evidence of absence at all.
+    blind: bool,
+}
+
+/// The path a walk error is about, if it names one.
+///
+/// `ignore` wraps its errors — a `WithDepth` around a `WithPath` around an `Io` — and offers no
+/// accessor for the path inside, so the chain is walked by hand. An error that names nothing
+/// leaves the walk with no prefix to distrust, which is what [`Walk::blind`] records.
+fn errored_path(error: &ignore::Error) -> Option<&Path> {
+    match error {
+        ignore::Error::WithPath { path, .. } => Some(path),
+        ignore::Error::WithDepth { err, .. } | ignore::Error::WithLineNumber { err, .. } => {
+            errored_path(err)
+        }
+        ignore::Error::Loop { child, .. } => Some(child),
+        ignore::Error::Partial(errors) => errors.iter().find_map(errored_path),
+        _ => None,
+    }
+}
+
+fn collect_files(project_path: &Path, config: &Config) -> Result<Walk> {
     let mut files = Vec::new();
+    let mut unreachable = Vec::new();
+    let mut blind = false;
 
     let mut builder = WalkBuilder::new(project_path);
     builder
@@ -387,12 +454,22 @@ fn collect_files(project_path: &Path, config: &Config) -> Result<Vec<PathBuf>> {
                 }
             }
             Err(e) => {
-                warn!("Error walking directory: {}", e);
+                if let Some(path) = errored_path(&e) {
+                    warn!("Error walking {}: {}", path.display(), e);
+                    unreachable.push(path.to_path_buf());
+                } else {
+                    warn!("Error walking directory: {}", e);
+                    blind = true;
+                }
             }
         }
     }
 
-    Ok(files)
+    Ok(Walk {
+        files,
+        unreachable,
+        blind,
+    })
 }
 
 fn should_ignore(path: &Path, project_path: &Path, config: &Config) -> bool {

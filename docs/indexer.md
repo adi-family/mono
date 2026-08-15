@@ -113,6 +113,13 @@ the index holds and the walk did not reach — deleted, newly ignored, grown pas
 goes, along with its symbols, the references at either end of them, its full-text rows and its
 embeddings. Scope is the walk's root, which is the project the index belongs to.
 
+Absence only counts where the walk could actually look. A directory it failed to read returns no
+files, which is indistinguishable from a directory whose files were all deleted — so anything
+under a path the walk reported an error for is left alone, and a walk whose error named no path
+at all prunes nothing. A prune that removes more than half the index is logged at `warn`: a
+branch switch legitimately looks like that, and so does an ignore rule that matched more than its
+author meant it to.
+
 ### Two version numbers, and why both exist
 
 Indexing is incremental twice over, and both layers key on file content — which means a change

@@ -265,4 +265,40 @@ mod tests {
         assert_eq!(before.indexed_symbols, after.indexed_symbols);
         assert_eq!(embedded, fixture.index.count());
     }
+
+    /// A directory the walk could not read looks exactly like a directory whose files were all
+    /// deleted, and the difference is the whole index.
+    #[cfg(unix)]
+    #[test]
+    fn a_directory_the_walk_could_not_read_keeps_its_rows() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = Fixture::new();
+        fixture.write("src/keep.rs", "pub fn kept_alive() {}\n");
+        fixture.write("locked/hidden.rs", "pub fn still_here() {}\n");
+
+        let config = Config::default();
+        fixture.run(&config);
+        assert!(fixture.indexed("locked/hidden.rs"));
+
+        let locked = fixture.project.path().join("locked");
+        let readable = std::fs::metadata(&locked).unwrap().permissions();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Running as root, the mode is advisory and the walk reads the directory anyway; there
+        // is no failed walk to assert about then.
+        let unreadable = std::fs::read_dir(&locked).is_err();
+        if unreadable {
+            fixture.run(&config);
+        }
+        std::fs::set_permissions(&locked, readable).unwrap();
+
+        if unreadable {
+            assert!(
+                fixture.indexed("locked/hidden.rs"),
+                "a file under an unreadable directory was pruned as though it had left the tree"
+            );
+            assert!(fixture.indexed("src/keep.rs"));
+        }
+    }
 }
