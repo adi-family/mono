@@ -2996,3 +2996,43 @@ pub struct KnowledgeReembed {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<String>,
 }
+
+/// One way of turning speech into text, as offered to the panel.
+///
+/// The list is fixed at compile time — these are the services the server knows how to call —
+/// but `ready` is not: an engine whose key is missing is still *listed*, because a picker that
+/// hides what it cannot do leaves the user with no way to find out what to configure.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceEngineDto {
+    /// Stable identifier, and the value `POST /api/voice/transcribe` takes as `?engine=`.
+    pub id: String,
+    /// What the picker shows.
+    pub label: String,
+    /// Whether choosing it right now would work. For the remote engines this means a key was
+    /// found; the browser engine is always ready, because the page either has the API or does
+    /// not and only the page can tell.
+    pub ready: bool,
+    /// The browser does the recognition itself and no audio leaves the machine. The panel needs
+    /// this to know it must *not* record and upload for this engine.
+    pub in_browser: bool,
+    /// Said in the picker under the label: the model used, or which secret is missing.
+    pub detail: String,
+}
+
+/// `GET /api/voice` — what the panel can dictate through.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct VoiceState {
+    pub engines: Vec<VoiceEngineDto>,
+    /// Which engine to start on when the user has expressed no preference: the first configured
+    /// remote one, else the browser. Only a default — the panel remembers its own choice.
+    pub default_engine: String,
+}
+
+/// `POST /api/voice/transcribe` — what the audio turned out to say.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct Transcript {
+    pub text: String,
+    /// The engine that produced it, echoed back so the panel can say where the words came from
+    /// even if the choice changed while the clip was in flight.
+    pub engine: String,
+}

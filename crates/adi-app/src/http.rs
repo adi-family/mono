@@ -43,6 +43,20 @@ impl Request {
         self.path.split('?').next().unwrap_or(&self.path)
     }
 
+    /// One query parameter's raw value, by exact name.
+    ///
+    /// Raw: nothing is percent-decoded, so this suits the short identifiers routing asks about
+    /// (`?engine=openai`) and not free text. A parameter repeated in the query yields its first
+    /// occurrence, and one given without `=` reads as empty rather than absent.
+    #[must_use]
+    pub fn query_param(&self, name: &str) -> Option<&str> {
+        let query = self.path.split_once('?').map(|(_, q)| q)?;
+        query.split('&').find_map(|pair| {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (key == name).then_some(value)
+        })
+    }
+
     /// One header's value, by lowercase name.
     #[must_use]
     pub fn header(&self, name: &str) -> Option<&str> {
@@ -243,6 +257,20 @@ mod tests {
     #[test]
     fn route_path_strips_query() {
         assert_eq!(bare("GET", "/api/ports?live=1").route_path(), "/api/ports");
+    }
+
+    #[test]
+    fn query_param_reads_one_value_out_of_the_query() {
+        let req = bare("POST", "/api/voice/transcribe?engine=openai&x=1");
+        assert_eq!(req.query_param("engine"), Some("openai"));
+        assert_eq!(req.query_param("x"), Some("1"));
+        // Absent, versus present-but-empty: the caller distinguishes them, so the type must.
+        assert_eq!(req.query_param("nope"), None);
+        assert_eq!(bare("GET", "/a?flag").query_param("flag"), Some(""));
+        // A path carrying no query at all is not a parse failure, just no parameters.
+        assert_eq!(bare("GET", "/a").query_param("engine"), None);
+        // A name that is only a prefix of a real one must not match it.
+        assert_eq!(bare("GET", "/a?engineer=1").query_param("engine"), None);
     }
 
     #[test]

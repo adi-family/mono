@@ -34,6 +34,7 @@ web-sys = { version = "0.3", features = [
     "Document",
     "Element",
     "Storage",
+    "DomRect",             # the engine menu is placed by measuring its button (see `voice`)
     "MediaQueryList",
     "Location",
     "History",           # push/replaceState for client-side routing
@@ -46,6 +47,19 @@ web-sys = { version = "0.3", features = [
     "HtmlTextAreaElement", # scrollHeight/value: the chat composers grow with the message typed
     "CssStyleDeclaration", # …by writing that measured height back as an inline style
     "UrlSearchParams",   # parse the OAuth token returned in the redirect URL fragment
+    # Dictation (see `voice`): open the microphone, record a clip, and hand its bytes to
+    # /api/voice/transcribe. `SpeechRecognition` is absent from this list on purpose — web-sys
+    # has it only behind `web_sys_unstable_apis`, and `voice` reaches it through Reflect instead.
+    "Navigator",
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamTrack",       # …released explicitly, or the recording indicator stays lit.
+    "MediaStreamConstraints",
+    "MediaRecorder",
+    "MediaRecorderOptions",
+    "BlobEvent",              # …its chunks…
+    "Blob",
+    "BlobPropertyBag",        # …joined into one clip carrying the recorder's own MIME type.
     # The live channel (see `live`): one socket per tab, in place of a poll per open view.
     "WebSocket",
     "MessageEvent",      # …its inbound messages…

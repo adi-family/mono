@@ -468,6 +468,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/tasks",
     "/api/tools",
     "/api/triggers",
+    "/api/voice",
 ];
 
 /// POST routes that are reads despite the method — the polled ones carry their subject (an agent
@@ -651,6 +652,17 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/secrets/set-oauth") => handlers::set_oauth_secret(secrets, &req.body),
         ("POST", "/api/secrets/remove") => handlers::remove_secret(secrets, &req.body),
         ("POST", "/api/secrets/reveal") => handlers::reveal_secret(secrets, &req.body),
+        // Dictation. The clip arrives as a raw body — it is already bytes with a content type
+        // from `MediaRecorder`, and wrapping it in JSON would cost a base64 third for nothing.
+        ("GET", "/api/voice") => handlers::voice(secrets),
+        ("POST", "/api/voice/transcribe") => handlers::transcribe(
+            secrets,
+            req.query_param("engine").unwrap_or(handlers::BROWSER_ENGINE),
+            // Chrome records WebM/Opus and Safari MP4; the fallback only matters for a caller
+            // that sent no type at all, and webm is the likelier guess.
+            req.header("content-type").unwrap_or("audio/webm"),
+            &req.body,
+        ),
         // The Meta page's state: the well-known `adi-agent` (if set up), the defaults to seed a
         // new one with (system prompt + every active tool), and the agent form schema. Reads the
         // same agents store; the tools store supplies the default tool set.

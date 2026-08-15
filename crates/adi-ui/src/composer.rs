@@ -58,6 +58,13 @@ pub fn Composer(
     /// because the ceiling is about the screen, not about the type.
     #[prop(default = 200)]
     max_height: u32,
+    /// A control to sit at the left of the button row — [`crate::MicButton`] in this tree.
+    ///
+    /// A slot rather than a `voice` flag because dictating needs a microphone, an engine and a
+    /// network call, and a component library that reached for those would be deciding for every
+    /// app that embeds it. The composer only lends the corner.
+    #[prop(optional, into)]
+    mic: Option<ViewFn>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let area = NodeRef::<html::Textarea>::new();
@@ -136,6 +143,10 @@ pub fn Composer(
                     }
                 }
             ></textarea>
+            // Furthest from send, because it is the control that is pressed *before* a message
+            // exists rather than after: putting it next to send would sit an "open the
+            // microphone" under the thumb that just went for "send it".
+            {mic.map(|mic| mic.run())}
             // Stop sits to the left of send, so send keeps the corner the hand already goes to
             // and the row does not shuffle under it when a turn starts.
             {move || on_stop.filter(|_| stoppable.get()).map(|on_stop| view! {

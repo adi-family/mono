@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-19 structs · 20 enums across 21 files.
+19 structs · 21 enums across 22 files.
 
 ## Index
 
@@ -29,6 +29,7 @@
 - [`src/toolform.rs`](#srctoolformrs) — `ParamKind`, `Param`
 - [`src/topbar.rs`](#srctopbarrs) — `Crumb`
 - [`src/tree.rs`](#srctreers) — `TreeNode`, `TreeState`
+- [`src/voice.rs`](#srcvoicers) — `MicState`
 
 ---
 
@@ -667,6 +668,25 @@ One tree's interaction state: what was last activated, and which branches are op
 pub struct TreeState {
     pub selected: RwSignal<Option<String>>,
     pub expanded: RwSignal<HashSet<String>>,
+}
+```
+
+---
+
+## `src/voice.rs`
+
+### enum `MicState`
+
+Where dictation has got to.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum MicState {
+    #[default]
+    Idle,
+    Listening,
+    Working,
+    Blocked(String),
 }
 ```
 

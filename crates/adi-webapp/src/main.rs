@@ -21,6 +21,7 @@ mod routing;
 mod state;
 mod store_browser;
 mod ui;
+mod voice;
 
 // The component library. The titlebar is the first thing on this page built from it; the
 // rest of the screen is still the `adi-*` layer, and the two share a page by load order

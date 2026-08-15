@@ -44,6 +44,10 @@ server = [
     "dep:serde_yaml_ng",
     "dep:toml",
     "dep:uuid",
+    # Dictation (`handlers::voice`) posts the recorded clip to a speech-to-text provider, so the
+    # API key stays on this side and never reaches the page.
+    "dep:reqwest",
+    "dep:rustls",
 ]
 
 [dependencies]
@@ -65,6 +69,13 @@ adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
+# `blocking` because every /api handler is a sync function run on tokio's blocking pool (see
+# adi-app's `blocking`), and `multipart` because that is how three of the four speech providers
+# take their audio.
+reqwest = { workspace = true, features = ["blocking", "multipart"], optional = true }
+# reqwest is built with `rustls-no-provider` (see the workspace manifest), so the provider is
+# installed by hand on the way to the first request.
+rustls = { workspace = true, optional = true }
 serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }

@@ -22,8 +22,10 @@ use adi_webapp_api::types::{
     SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
     TriggerFireResult, TriggerLog,
+    Transcript,
     TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UsedPorts, WorkspaceCreateResult,
     WorkspaceRef,
+    VoiceState,
     WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
     WriteToolScript,
 };
@@ -839,6 +841,30 @@ fn base_ref(base: String) -> KnowledgeBaseRef {
         tags: Vec::new(),
         limit: None,
     }
+}
+
+// Dictation. See `voice` for the capture that produces the clip.
+
+/// Which speech engines the server can reach, and which of them have a key.
+pub async fn voice() -> Result<VoiceState, String> {
+    get("/api/voice").await
+}
+
+/// Send a recorded clip to be transcribed.
+///
+/// Raw bytes with the recorder's own `Content-Type`, not JSON: the clip is already bytes, and
+/// base64 in a JSON field would add a third to a body that can run to megabytes for no gain.
+pub async fn transcribe(engine: &str, mime: &str, audio: &[u8]) -> Result<Transcript, String> {
+    let resp = Request::post(&format!("/api/voice/transcribe?engine={engine}"))
+        .header("content-type", mime)
+        // `Uint8Array::from` copies into the JS heap; the body must outlive this wasm frame and
+        // a view onto wasm memory would dangle the moment the allocator moves it.
+        .body(js_sys::Uint8Array::from(audio))
+        .map_err(stringify)?
+        .send()
+        .await
+        .map_err(stringify)?;
+    finish(resp).await
 }
 
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {

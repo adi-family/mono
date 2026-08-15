@@ -22,6 +22,7 @@ mod services;
 mod tasks;
 mod tools;
 mod triggers;
+mod voice;
 mod workspaces;
 
 pub use agents::*;
@@ -42,6 +43,7 @@ pub use services::*;
 pub use tasks::*;
 pub use tools::*;
 pub use triggers::*;
+pub use voice::*;
 pub use workspaces::*;
 
 #[cfg(test)]

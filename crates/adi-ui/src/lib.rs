@@ -60,6 +60,7 @@ mod tokens;
 mod toolform;
 mod topbar;
 mod tree;
+mod voice;
 
 pub use ask::{Ask, AskOption, AskQuestion};
 pub use badge::{Badge, BadgeTone};
@@ -88,6 +89,7 @@ pub use tokens::{PromptText, Token, TokenStream};
 pub use toolform::{Param, ParamKind, ToolForm};
 pub use topbar::{Crumb, Crumbs, TopBar};
 pub use tree::{Tree, TreeNode, TreeState};
+pub use voice::{MicButton, MicState};
 
 /// Join a component's own classes with whatever the call site passed in `class`.
 ///

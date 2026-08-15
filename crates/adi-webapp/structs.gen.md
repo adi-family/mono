@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-49 structs · 6 enums · 1 type alias across 16 files.
+49 structs · 7 enums · 1 type alias across 17 files.
 
 ## Index
 
@@ -24,6 +24,7 @@
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
 - [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
+- [`src/voice.rs`](#srcvoicers) — `Session`
 
 ---
 
@@ -1060,6 +1061,24 @@ A one-line status message under the form; `kind` drives its colour via `data-kin
 pub(crate) struct Flash {
     pub(crate) kind: &'static str,
     pub(crate) msg: String,
+}
+```
+
+---
+
+## `src/voice.rs`
+
+### enum `Session`
+
+A dictation in progress, and how to end it.
+
+```rust
+enum Session {
+    Browser {
+        recognition: JsValue,
+        _handlers: Vec<Closure<dyn FnMut(JsValue)>>,
+    },
+    Recording(Rc<RefCell<Option<MediaRecorder>>>),
 }
 ```
 

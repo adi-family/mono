@@ -1079,6 +1079,7 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 busy=false
                 placeholder=""
                 attr:title=COMPOSER_HINT
+                mic=move || crate::voice::mic(watch.reply)
                 on_send=Callback::new(move |message: String| {
                     watch.reply.set(String::new());
                     send_reply(state, watch, with_context(watch, message));
@@ -1394,6 +1395,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 busy=false
                 placeholder=placeholder
                 attr:title=COMPOSER_HINT
+                mic=move || crate::voice::mic(watch.input)
                 on_send=Callback::new(start)
             />
             <adi_ui::Input
