@@ -105,6 +105,14 @@ changing models invalidates exactly the vectors it should and keeps the parse re
 
 The index is derived state and is gitignored — rebuild it with `indexer index`.
 
+A run also takes out what it no longer finds. Incremental indexing compares the content hash of
+each file it walks, and a file deleted since the last run is never walked — so nothing in that
+comparison is in a position to notice it left, and without a separate pass its symbols answer
+searches and pair with live code in duplication reports forever. The walk is that pass: whatever
+the index holds and the walk did not reach — deleted, newly ignored, grown past the size limit —
+goes, along with its symbols, the references at either end of them, its full-text rows and its
+embeddings. Scope is the walk's root, which is the project the index belongs to.
+
 ### Two version numbers, and why both exist
 
 Indexing is incremental twice over, and both layers key on file content — which means a change

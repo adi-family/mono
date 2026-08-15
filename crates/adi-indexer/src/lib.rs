@@ -84,6 +84,8 @@ pub mod watcher;
 mod cache_tests;
 #[cfg(test)]
 mod config_tests;
+#[cfg(test)]
+mod indexer_tests;
 
 pub use analyzer::{
     AnalysisConfig, AnalysisMode, DeadCodeAnalyzer, DeadCodeFilter, DeadCodeReport,

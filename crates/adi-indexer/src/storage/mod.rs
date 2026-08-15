@@ -102,4 +102,18 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     fn begin_transaction(&self) -> Result<()>;
     fn commit_transaction(&self) -> Result<()>;
     fn rollback_transaction(&self) -> Result<()>;
+
+    /// Every file the index holds, by id and stored path.
+    ///
+    /// What an indexing run compares its walk against: a file the index knows and the walk did
+    /// not reach is one that left the tree, and nothing else in the pipeline is in a position
+    /// to notice.
+    fn indexed_files(&self) -> Result<Vec<(FileId, PathBuf)>>;
+
+    /// Remove a file and everything derived from it — its symbols, the references at either end
+    /// of them, its reachability verdicts, and its full-text rows.
+    ///
+    /// Returns the symbol ids that went, because their embeddings live outside SQLite and have
+    /// to be dropped from the vector index by the caller.
+    fn delete_file_cascade(&self, id: FileId) -> Result<Vec<SymbolId>>;
 }

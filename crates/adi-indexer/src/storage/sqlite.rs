@@ -809,4 +809,40 @@ impl Storage for SqliteStorage {
     fn rollback_transaction(&self) -> Result<()> {
         self.transaction_stmt("ROLLBACK")
     }
+
+    fn indexed_files(&self) -> Result<Vec<(FileId, PathBuf)>> {
+        let conn = self.lock()?;
+
+        rows(&conn, "SELECT id, path FROM files", [], |row| {
+            Ok((FileId(row.get(0)?), PathBuf::from(row.get::<_, String>(1)?)))
+        })
+    }
+
+    fn delete_file_cascade(&self, id: FileId) -> Result<Vec<SymbolId>> {
+        let conn = self.lock()?;
+
+        let symbols = rows(
+            &conn,
+            "SELECT id FROM symbols WHERE file_id = ?1",
+            params![id.0],
+            |row| Ok(SymbolId(row.get(0)?)),
+        )?;
+
+        // Nothing turns `PRAGMA foreign_keys` on, so the schema's ON DELETE CASCADE never runs
+        // and every dependent row has to be named here. The FTS tables are the exception — they
+        // are kept in step by triggers, which do fire on the deletes below.
+        conn.execute(
+            "DELETE FROM symbol_refs WHERE from_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1) \
+             OR to_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
+            params![id.0],
+        )?;
+        conn.execute(
+            "DELETE FROM reachability_cache WHERE symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
+            params![id.0],
+        )?;
+        conn.execute("DELETE FROM symbols WHERE file_id = ?1", params![id.0])?;
+        conn.execute("DELETE FROM files WHERE id = ?1", params![id.0])?;
+
+        Ok(symbols)
+    }
 }

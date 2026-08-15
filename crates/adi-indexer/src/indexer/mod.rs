@@ -12,7 +12,7 @@ use crate::types::{SymbolId, ParsedReference, IndexProgress, Location, Status, R
 use ignore::WalkBuilder;
 use crate::embed::Embedder;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -121,6 +121,11 @@ pub async fn index_project(
     }
 
     storage.commit_transaction()?;
+
+    let pruned = prune_departed_files(project_path, &files, &storage, &index)?;
+    if pruned > 0 {
+        info!("Pruned {pruned} file(s) that are no longer part of the tree");
+    }
 
     // Phase 2: Resolve and store references
     info!("Resolving {} references...", all_references.len());
@@ -289,6 +294,58 @@ pub async fn reindex_paths(
     index.save()?;
 
     Ok(())
+}
+
+/// Drop what the walk did not reach.
+///
+/// A run only ever visits files that are there, so a file deleted since the last one is never
+/// looked at and no comparison of content hashes can notice it left: its symbols keep answering
+/// searches and keep pairing with live code in a duplication report, forever. The walk is the
+/// authority on what belongs in the index, which makes anything beyond it stale — gone from
+/// disk, newly ignored, or grown past the size limit.
+///
+/// Scope is the walk's root, and the root of a walk is the project whose index this is
+/// ([`crate::paths::index_dir`]): every row is therefore in scope, and a run of
+/// [`index_project`] can prune on the whole `files` table. The one path-limited entry point,
+/// [`reindex_paths`], deletes exactly the paths it was handed and prunes nothing.
+fn prune_departed_files(
+    project_path: &Path,
+    walked: &[PathBuf],
+    storage: &Arc<dyn Storage>,
+    index: &Arc<dyn VectorIndex>,
+) -> Result<usize> {
+    let in_scope: HashSet<&Path> = walked
+        .iter()
+        .map(|path| path.strip_prefix(project_path).unwrap_or(path))
+        .collect();
+
+    let departed: Vec<(FileId, PathBuf)> = storage
+        .indexed_files()?
+        .into_iter()
+        .filter(|(_, path)| !in_scope.contains(path.as_path()))
+        .collect();
+
+    if departed.is_empty() {
+        return Ok(0);
+    }
+
+    storage.begin_transaction()?;
+    let mut orphaned: Vec<SymbolId> = Vec::new();
+    for (id, path) in &departed {
+        debug!("Pruning {}: no longer in the tree", path.display());
+        orphaned.extend(storage.delete_file_cascade(*id)?);
+    }
+    storage.commit_transaction()?;
+
+    // Only once the rows are committed: a vector removed for a symbol still in the index is a
+    // symbol that silently stops answering semantic search.
+    for symbol in orphaned {
+        if let Err(e) = index.remove(symbol.0) {
+            debug!("Could not remove embedding for symbol {}: {e}", symbol.0);
+        }
+    }
+
+    Ok(departed.len())
 }
 
 fn collect_files(project_path: &Path, config: &Config) -> Result<Vec<PathBuf>> {
