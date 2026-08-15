@@ -9,7 +9,7 @@ use crate::structure::Structure;
 use crate::types::{File, FileId, Language, Symbol, SymbolId, SymbolKind, Location, Visibility, FileInfo, Reference, ReferenceKind, SymbolUsage, Tree, SymbolNode, FileNode, Status};
 use rusqlite::{params, Connection, OptionalExtension};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Mutex, MutexGuard};
 
 /// The `symbols` columns [`SqliteStorage::row_to_symbol`] reads, in the order it indexes them.
 ///
@@ -51,6 +51,30 @@ fn row_to_structure(row: &rusqlite::Row, first: usize) -> rusqlite::Result<Optio
     })
 }
 
+/// Every row `sql` returns, decoded by `map`.
+///
+/// `map` reads its row positionally, so the indices it uses are the ones `sql` selects, in that
+/// order. A row `map` rejects is skipped: one undecodable row costs the caller that row, not the
+/// whole result.
+///
+/// The connection comes in already locked, because [`SqliteStorage::lock`] cannot be taken twice
+/// — a caller that needs two queries under one guard passes the same one to both.
+fn rows<T>(
+    conn: &Connection,
+    sql: &str,
+    params: impl rusqlite::Params,
+    map: impl FnMut(&rusqlite::Row) -> rusqlite::Result<T>,
+) -> Result<Vec<T>> {
+    let mut stmt = conn.prepare(sql)?;
+
+    let rows = stmt
+        .query_map(params, map)?
+        .filter_map(std::result::Result::ok)
+        .collect();
+
+    Ok(rows)
+}
+
 #[derive(Debug)]
 pub struct SqliteStorage {
     conn: Mutex<Connection>,
@@ -68,6 +92,14 @@ impl SqliteStorage {
         Ok(Self {
             conn: Mutex::new(conn),
         })
+    }
+
+    /// The connection, with a mutex poisoned by a panicking holder reported as [`Error::Storage`].
+    ///
+    /// A `std::sync::Mutex` is not reentrant, so this deadlocks against itself: a method that
+    /// already holds the guard passes it down rather than locking a second time.
+    fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.conn.lock().map_err(|e| Error::Storage(e.to_string()))
     }
 
     fn run_migrations(conn: &Connection) -> Result<()> {
@@ -121,6 +153,15 @@ impl SqliteStorage {
         })
     }
 
+    /// A symbol from a row that selected [`SYMBOL_COLUMNS`] and then the file's path.
+    ///
+    /// The path lands in the column after the last of [`SYMBOL_COLUMNS`], so the index below
+    /// moves whenever that list grows. It is spelled once here rather than in each query that
+    /// joins `files`, for the same reason the list itself is named once.
+    fn row_to_joined_symbol(&self, row: &rusqlite::Row) -> rusqlite::Result<Symbol> {
+        self.row_to_symbol(row, PathBuf::from(row.get::<_, String>(19)?))
+    }
+
     /// Find the innermost symbol whose `[start_line, end_line]` range
     /// covers `line` in `path`. Returns `(kind, name)` of the smallest
     /// match — so a `Method` inside a `Class` reports the method, an
@@ -130,10 +171,7 @@ impl SqliteStorage {
     /// `path` is matched verbatim against `files.path` — same form
     /// the indexer stored (relative to the indexed root).
     pub fn whois(&self, path: &str, line: u32) -> Result<Option<(SymbolKind, String)>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         // Innermost match: smallest `(end_line - start_line)` span.
         // Tie-break on `start_line DESC` so a same-line symbol beats
@@ -164,48 +202,38 @@ impl SqliteStorage {
     /// column `id` is looked up in, `joined` the one the symbol row is joined on. Callers pass
     /// `("to_symbol_id", "from_symbol_id")`, callees the swap.
     fn linked_symbols(&self, id: SymbolId, matched: &str, joined: &str) -> Result<Vec<Symbol>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut stmt = conn.prepare(&format!(
-            r"
+        rows(
+            &conn,
+            &format!(
+                r"
             SELECT DISTINCT {COLS}, f.path
             FROM symbols s
             JOIN symbol_refs r ON r.{joined} = s.id
             JOIN files f ON f.id = s.file_id
             WHERE r.{matched} = ?1
             ",
-            COLS = symbol_columns_as("s"),
-        ))?;
-
-        let symbols: Vec<Symbol> = stmt
-            .query_map(params![id.0], |row| {
-                let file_path = PathBuf::from(row.get::<_, String>(19)?);
-                self.row_to_symbol(row, file_path)
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(symbols)
+                COLS = symbol_columns_as("s"),
+            ),
+            params![id.0],
+            |row| self.row_to_joined_symbol(row),
+        )
     }
 
     /// The `symbol_refs` rows whose `matched` column is `id` — `to_symbol_id` for the
     /// references *to* a symbol, `from_symbol_id` for the ones *from* it.
     fn references_on(&self, id: SymbolId, matched: &str) -> Result<Vec<Reference>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut stmt = conn.prepare(&format!(
-            "SELECT from_symbol_id, to_symbol_id, kind, start_line, start_col, end_line, end_col, \
-             start_byte, end_byte FROM symbol_refs WHERE {matched} = ?1",
-        ))?;
-
-        let refs: Vec<Reference> = stmt
-            .query_map(params![id.0], |row| {
+        rows(
+            &conn,
+            &format!(
+                "SELECT from_symbol_id, to_symbol_id, kind, start_line, start_col, end_line, \
+                 end_col, start_byte, end_byte FROM symbol_refs WHERE {matched} = ?1",
+            ),
+            params![id.0],
+            |row| {
                 Ok(Reference {
                     from_symbol_id: SymbolId(row.get(0)?),
                     to_symbol_id: SymbolId(row.get(1)?),
@@ -219,19 +247,13 @@ impl SqliteStorage {
                         end_byte: row.get(8)?,
                     },
                 })
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(refs)
+            },
+        )
     }
 
     /// Run a bare transaction-control statement (`BEGIN TRANSACTION`, `COMMIT`, `ROLLBACK`).
     fn transaction_stmt(&self, sql: &str) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
         conn.execute(sql, [])?;
         Ok(())
     }
@@ -239,10 +261,7 @@ impl SqliteStorage {
 
 impl Storage for SqliteStorage {
     fn insert_file(&self, file: &File) -> Result<FileId> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute(
             "INSERT INTO files (path, language, hash, size, description) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -259,10 +278,7 @@ impl Storage for SqliteStorage {
     }
 
     fn update_file(&self, file: &File) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute(
             "UPDATE files SET language = ?1, hash = ?2, size = ?3, description = ?4 WHERE id = ?5",
@@ -279,10 +295,7 @@ impl Storage for SqliteStorage {
     }
 
     fn delete_file(&self, path: &Path) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute(
             "DELETE FROM files WHERE path = ?1",
@@ -293,10 +306,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_file(&self, path: &Path) -> Result<FileInfo> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         let file: File = conn
             .query_row(
@@ -309,25 +319,18 @@ impl Storage for SqliteStorage {
         let file_path = file.path.clone();
         let file_id = file.id;
 
-        let mut stmt = conn.prepare(
+        let symbols = rows(
+            &conn,
             &format!("SELECT {SYMBOL_COLUMNS} FROM symbols WHERE file_id = ?1"),
+            params![file_id.0],
+            |row| self.row_to_symbol(row, file_path.clone()),
         )?;
-
-        let symbols: Vec<Symbol> = stmt
-            .query_map(params![file_id.0], |row| {
-                self.row_to_symbol(row, file_path.clone())
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
 
         Ok(FileInfo { file, symbols })
     }
 
     fn get_file_by_id(&self, id: FileId) -> Result<File> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.query_row(
             "SELECT id, path, language, hash, size, description FROM files WHERE id = ?1",
@@ -338,10 +341,7 @@ impl Storage for SqliteStorage {
     }
 
     fn file_exists(&self, path: &Path) -> Result<bool> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM files WHERE path = ?1",
@@ -353,10 +353,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_file_hash(&self, path: &Path) -> Result<Option<String>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.query_row(
             "SELECT hash FROM files WHERE path = ?1",
@@ -368,10 +365,7 @@ impl Storage for SqliteStorage {
     }
 
     fn insert_symbol(&self, symbol: &Symbol) -> Result<SymbolId> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute(
             "INSERT INTO symbols (name, kind, file_id, parent_id, start_line, start_col, end_line, end_col, start_byte, end_byte, signature, description, doc_comment, visibility, is_entry_point, structure_hash, structure_simhash, structure_size) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
@@ -401,10 +395,7 @@ impl Storage for SqliteStorage {
     }
 
     fn update_symbol(&self, symbol: &Symbol) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute(
             "UPDATE symbols SET name = ?1, kind = ?2, start_line = ?3, start_col = ?4, end_line = ?5, end_col = ?6, start_byte = ?7, end_byte = ?8, signature = ?9, description = ?10, doc_comment = ?11, visibility = ?12, is_entry_point = ?13, structure_hash = ?14, structure_simhash = ?15, structure_size = ?16 WHERE id = ?17",
@@ -433,10 +424,7 @@ impl Storage for SqliteStorage {
     }
 
     fn delete_symbols_for_file(&self, file_id: FileId) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute("DELETE FROM symbols WHERE file_id = ?1", params![file_id.0])?;
 
@@ -444,10 +432,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_symbol(&self, id: SymbolId) -> Result<Symbol> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         // First get the file path
         let file_path: PathBuf = conn
@@ -467,10 +452,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_symbols_for_file(&self, file_id: FileId) -> Result<Vec<Symbol>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         let file_path: PathBuf = conn
             .query_row(
@@ -480,46 +462,27 @@ impl Storage for SqliteStorage {
             )
             .map_err(|_| Error::NotFound(format!("File not found: {file_id:?}")))?;
 
-        let mut stmt = conn.prepare(
+        rows(
+            &conn,
             &format!("SELECT {SYMBOL_COLUMNS} FROM symbols WHERE file_id = ?1"),
-        )?;
-
-        let symbols: Vec<Symbol> = stmt
-            .query_map(params![file_id.0], |row| {
-                self.row_to_symbol(row, file_path.clone())
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(symbols)
+            params![file_id.0],
+            |row| self.row_to_symbol(row, file_path.clone()),
+        )
     }
 
     fn get_all_symbols(&self) -> Result<Vec<Symbol>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut stmt = conn.prepare(
+        rows(
+            &conn,
             &format!("SELECT {}, f.path FROM symbols s JOIN files f ON s.file_id = f.id", symbol_columns_as("s")),
-        )?;
-
-        let symbols: Vec<Symbol> = stmt
-            .query_map([], |row| {
-                let file_path = PathBuf::from(row.get::<_, String>(19)?);
-                self.row_to_symbol(row, file_path)
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(symbols)
+            params![],
+            |row| self.row_to_joined_symbol(row),
+        )
     }
 
     fn insert_reference(&self, reference: &Reference) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute(
             "INSERT OR IGNORE INTO symbol_refs (from_symbol_id, to_symbol_id, kind, start_line, start_col, end_line, end_col, start_byte, end_byte) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -540,10 +503,7 @@ impl Storage for SqliteStorage {
     }
 
     fn insert_references_batch(&self, references: &[Reference]) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         let mut stmt = conn.prepare(
             "INSERT OR IGNORE INTO symbol_refs (from_symbol_id, to_symbol_id, kind, start_line, start_col, end_line, end_col, start_byte, end_byte) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
@@ -567,10 +527,7 @@ impl Storage for SqliteStorage {
     }
 
     fn delete_references_for_file(&self, file_id: FileId) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         // Delete references where the from_symbol belongs to this file
         conn.execute(
@@ -590,10 +547,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_reference_count(&self, id: SymbolId) -> Result<u64> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM symbol_refs WHERE to_symbol_id = ?1",
@@ -613,30 +567,22 @@ impl Storage for SqliteStorage {
     }
 
     fn find_symbols_by_name(&self, name: &str) -> Result<Vec<Symbol>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut stmt = conn.prepare(&format!(
-            r"
+        rows(
+            &conn,
+            &format!(
+                r"
             SELECT {COLS}, f.path
             FROM symbols s
             JOIN files f ON f.id = s.file_id
             WHERE s.name = ?1
             ",
-            COLS = symbol_columns_as("s"),
-        ))?;
-
-        let symbols: Vec<Symbol> = stmt
-            .query_map(params![name], |row| {
-                let file_path = PathBuf::from(row.get::<_, String>(19)?);
-                self.row_to_symbol(row, file_path)
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(symbols)
+                COLS = symbol_columns_as("s"),
+            ),
+            params![name],
+            |row| self.row_to_joined_symbol(row),
+        )
     }
 
     fn get_symbol_usage(&self, id: SymbolId) -> Result<SymbolUsage> {
@@ -654,13 +600,12 @@ impl Storage for SqliteStorage {
     }
 
     fn search_symbols_fts(&self, query: &str, limit: usize) -> Result<Vec<Symbol>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut stmt = conn.prepare(&format!(
-            r"
+        rows(
+            &conn,
+            &format!(
+                r"
             SELECT {COLS}, f.path
             FROM symbols s
             JOIN symbols_fts fts ON fts.rowid = s.id
@@ -669,27 +614,18 @@ impl Storage for SqliteStorage {
             ORDER BY rank
             LIMIT ?2
             ",
-            COLS = symbol_columns_as("s"),
-        ))?;
-
-        let symbols: Vec<Symbol> = stmt
-            .query_map(params![query, limit as i64], |row| {
-                let file_path = PathBuf::from(row.get::<_, String>(19)?);
-                self.row_to_symbol(row, file_path)
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(symbols)
+                COLS = symbol_columns_as("s"),
+            ),
+            params![query, limit as i64],
+            |row| self.row_to_joined_symbol(row),
+        )
     }
 
     fn search_files_fts(&self, query: &str, limit: usize) -> Result<Vec<File>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut stmt = conn.prepare(
+        rows(
+            &conn,
             r"
             SELECT f.id, f.path, f.language, f.hash, f.size, f.description
             FROM files f
@@ -698,23 +634,16 @@ impl Storage for SqliteStorage {
             ORDER BY rank
             LIMIT ?2
             ",
-        )?;
-
-        let files: Vec<File> = stmt
-            .query_map(params![query, limit as i64], |row| self.row_to_file(row))?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(files)
+            params![query, limit as i64],
+            |row| self.row_to_file(row),
+        )
     }
 
     fn structures(&self, min_nodes: u32) -> Result<Vec<StructureRow>> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut stmt = conn.prepare(
+        rows(
+            &conn,
             r"
             SELECT s.id, s.name, s.kind, f.path, s.start_line, s.end_line,
                    s.structure_hash, s.structure_simhash, s.structure_size
@@ -722,10 +651,8 @@ impl Storage for SqliteStorage {
             JOIN files f ON f.id = s.file_id
             WHERE s.structure_hash IS NOT NULL AND s.structure_size >= ?1
             ",
-        )?;
-
-        let rows: Vec<StructureRow> = stmt
-            .query_map(params![min_nodes], |row| {
+            params![min_nodes],
+            |row| {
                 let kind: String = row.get(2)?;
                 Ok(StructureRow {
                     id: SymbolId(row.get(0)?),
@@ -735,7 +662,7 @@ impl Storage for SqliteStorage {
                     start_line: row.get(4)?,
                     end_line: row.get(5)?,
                     // The WHERE clause guarantees the columns are present; a row that somehow
-                    // is not gets dropped below rather than faked into a zero fingerprint.
+                    // is not gets dropped by `rows` rather than faked into a zero fingerprint.
                     structure: row_to_structure(row, 6)?.ok_or(
                         rusqlite::Error::InvalidColumnType(
                             6,
@@ -744,48 +671,36 @@ impl Storage for SqliteStorage {
                         ),
                     )?,
                 })
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
-
-        Ok(rows)
+            },
+        )
     }
 
     fn get_tree(&self) -> Result<Tree> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
-        let mut file_stmt = conn.prepare(
+        let files: Vec<(FileId, PathBuf, Language)> = rows(
+            &conn,
             "SELECT id, path, language, hash, size, description FROM files ORDER BY path",
-        )?;
-
-        let files: Vec<(FileId, PathBuf, Language)> = file_stmt
-            .query_map([], |row| {
+            params![],
+            |row| {
                 let lang_str: String = row.get(2)?;
                 Ok((
                     FileId(row.get(0)?),
                     PathBuf::from(row.get::<_, String>(1)?),
                     Language::parse(&lang_str),
                 ))
-            })?
-            .filter_map(std::result::Result::ok)
-            .collect();
+            },
+        )?;
 
         let mut nodes = Vec::new();
 
         for (file_id, path, language) in files {
-            let mut symbol_stmt = conn.prepare(
+            let symbols: Vec<(i64, String, String, Option<i64>)> = rows(
+                &conn,
                 "SELECT id, name, kind, parent_id FROM symbols WHERE file_id = ?1 ORDER BY start_line",
+                params![file_id.0],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )?;
-
-            let symbols: Vec<(i64, String, String, Option<i64>)> = symbol_stmt
-                .query_map(params![file_id.0], |row| {
-                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-                })?
-                .filter_map(std::result::Result::ok)
-                .collect();
 
             // Build tree structure
             let symbol_nodes: Vec<SymbolNode> = symbols
@@ -810,10 +725,7 @@ impl Storage for SqliteStorage {
     }
 
     fn get_status(&self) -> Result<Status> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         let indexed_files: i64 =
             conn.query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
@@ -859,10 +771,7 @@ impl Storage for SqliteStorage {
     }
 
     fn update_status(&self, status: &Status) -> Result<()> {
-        let conn = self
-            .conn
-            .lock()
-            .map_err(|e| Error::Storage(e.to_string()))?;
+        let conn = self.lock()?;
 
         conn.execute(
             "INSERT OR REPLACE INTO status (key, value) VALUES ('embedding_dimensions', ?1)",
