@@ -20,6 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 adi-config = { workspace = true }
+adi-osext = { workspace = true, features = ["signals"] }
 
 # Allocate a stable port for any proxied/runner service that doesn't declare one, so
 # ports come from the platform's registry instead of being hand-picked in hive.yaml.

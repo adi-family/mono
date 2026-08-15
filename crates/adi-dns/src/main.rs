@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::select! {
         res = server.block_until_done() => res.context("DNS server terminated with error")?,
-        () = shutdown_signal() => info!("shutdown signal received; stopping"),
+        () = adi_osext::shutdown_signal() => info!("shutdown signal received; stopping"),
     }
 
     status::remove(&status_path);
@@ -132,22 +132,6 @@ fn install_os_routing(config: &Config, bound: SocketAddr) -> bool {
             );
             false
         }
-    }
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = term.recv() => {},
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
     }
 }
 

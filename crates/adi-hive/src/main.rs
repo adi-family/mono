@@ -133,7 +133,7 @@ async fn main() -> anyhow::Result<()> {
     let mut reload = tokio::time::interval(RELOAD_INTERVAL);
     reload.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     // Pinned outside the loop so a signal arriving between ticks is never missed.
-    let shutdown = shutdown_signal();
+    let shutdown = adi_osext::shutdown_signal();
     let replaced = binary_replaced();
     tokio::pin!(shutdown, replaced);
     loop {
@@ -437,18 +437,3 @@ fn ensure_loopback_alias(ip: IpAddr) {
     }
 }
 
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let mut term = signal(SignalKind::terminate()).expect("install SIGTERM handler");
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = term.recv() => {},
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}

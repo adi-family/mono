@@ -9,6 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+adi-osext = { workspace = true, features = ["signals"] }
 hickory-server = { version = "0.26", features = ["resolver"] }
 hickory-resolver = "0.26"
 hickory-proto = "0.26"

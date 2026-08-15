@@ -1,6 +1,6 @@
 [package]
 name = "adi-osext"
-description = "Tiny cross-platform OS primitives for the adi platform: detach a spawned child from the launcher's process group, and create symlinks, with Unix and Windows implementations behind one API. Pure std, no dependencies."
+description = "Tiny cross-platform OS primitives for the adi platform: detach a spawned child from the launcher's process group, create symlinks, and wait for a shutdown signal, with Unix and Windows implementations behind one API. Pure std unless the `signals` feature is on."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,6 +9,14 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+# Only for `signals`. Optional so the default build stays dependency-free: this crate is compiled
+# into hooks and tools that never need a runtime.
+tokio = { workspace = true, optional = true, features = ["signal", "macros"] }
+tracing = { workspace = true, optional = true }
+
+[features]
+# `shutdown_signal` — the one thing here that needs an async runtime.
+signals = ["dep:tokio", "dep:tracing"]
 
 [lints]
 workspace = true

@@ -38,6 +38,7 @@ dependencies = [
  "adi-events",
  "adi-knowledge",
  "adi-mesh",
+ "adi-osext",
  "adi-ports-manager",
  "adi-projects",
  "adi-secrets",
@@ -125,6 +126,7 @@ dependencies = [
 name = "adi-dns"
 version = "0.1.0"
 dependencies = [
+ "adi-osext",
  "anyhow",
  "async-trait",
  "hickory-proto",
@@ -164,6 +166,7 @@ name = "adi-hive"
 version = "0.1.0"
 dependencies = [
  "adi-config",
+ "adi-osext",
  "adi-ports-manager",
  "anyhow",
  "rcgen",
@@ -254,6 +257,7 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "adi-hive",
+ "adi-osext",
  "adi-ports-manager",
  "anyhow",
  "base64 0.22.1",
@@ -288,6 +292,10 @@ dependencies = [
 [[package]]
 name = "adi-osext"
 version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "adi-ports-manager"

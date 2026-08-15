@@ -325,7 +325,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 Err(e) => warn!(error = %e, "accept failed"),
             },
-            () = shutdown_signal() => {
+            () = adi_osext::shutdown_signal() => {
                 info!("shutdown signal received; stopping");
                 break;
             }
@@ -989,30 +989,6 @@ fn content_type(path: &str) -> &'static str {
         Some("woff2") => "font/woff2",
         _ => "application/octet-stream",
     }
-}
-
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        let Ok(mut term) = signal(SignalKind::terminate()) else {
-            return futures_pending().await;
-        };
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {},
-            _ = term.recv() => {},
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}
-
-/// Never resolves — keeps the accept loop alive if the SIGTERM handler can't be installed.
-#[cfg(unix)]
-async fn futures_pending() {
-    std::future::pending::<()>().await;
 }
 
 #[cfg(test)]

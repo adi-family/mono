@@ -5,6 +5,11 @@
 //! signature with per-OS implementations, instead of scattering `#[cfg(unix)]` / `#[cfg(windows)]`
 //! blocks through every crate that spawns a child or links a file.
 
+#[cfg(feature = "signals")]
+mod signals;
+#[cfg(feature = "signals")]
+pub use signals::shutdown_signal;
+
 use std::path::Path;
 use std::process::Command;
 

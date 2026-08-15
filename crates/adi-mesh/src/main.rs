@@ -148,7 +148,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run() -> anyhow::Result<()> {
     init_tracing();
     let daemon = Daemon::start().await?;
-    shutdown_signal().await;
+    adi_osext::shutdown_signal().await;
     info!("shutdown signal received; stopping");
     daemon.stop().await;
     Ok(())
@@ -220,25 +220,3 @@ fn init_tracing() {
         .init();
 }
 
-async fn shutdown_signal() {
-    #[cfg(unix)]
-    {
-        use tokio::signal::unix::{SignalKind, signal};
-        match signal(SignalKind::terminate()) {
-            Ok(mut term) => {
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {},
-                    _ = term.recv() => {},
-                }
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "could not install SIGTERM handler; using ctrl-c only");
-                let _ = tokio::signal::ctrl_c().await;
-            }
-        }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = tokio::signal::ctrl_c().await;
-    }
-}

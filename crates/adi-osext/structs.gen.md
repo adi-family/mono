@@ -2,6 +2,6 @@
 
 # `adi-osext` — types
 
-> Tiny cross-platform OS primitives for the adi platform: detach a spawned child from the launcher's process group, and create symlinks, with Unix and Windows implementations behind one API. Pure std, no dependencies.
+> Tiny cross-platform OS primitives for the adi platform: detach a spawned child from the launcher's process group, create symlinks, and wait for a shutdown signal, with Unix and Windows implementations behind one API. Pure std unless the `signals` feature is on.
 
 This crate declares no structs, enums or type aliases.

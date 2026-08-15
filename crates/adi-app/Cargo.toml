@@ -14,6 +14,7 @@ path = "src/main.rs"
 
 [dependencies]
 # The /api contract + server handlers; the `server` feature pulls in the port registry.
+adi-osext = { workspace = true, features = ["signals"] }
 adi-webapp-api = { workspace = true, features = ["server"] }
 
 adi-ports-manager = { workspace = true }
