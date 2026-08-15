@@ -4,7 +4,7 @@
 
 > The code indexer: tree-sitter parsing into a per-project SQLite index of files, symbols, and the call graph, searchable by name (FTS5), by path, or by meaning (jina code embeddings over a usearch vector index). Pure library — `adi-mono indexer` is its CLI.
 
-73 structs · 10 enums · 2 type aliases across 38 files.
+74 structs · 10 enums · 2 type aliases across 38 files.
 
 ## Index
 
@@ -41,7 +41,7 @@
 - [`src/parser/treesitter/mod.rs`](#srcparsertreesittermodrs) — `TreeSitterParser`
 - [`src/search/usearch.rs`](#srcsearchusearchrs) — `UsearchIndex`
 - [`src/storage/mmap.rs`](#srcstoragemmaprs) — `Header`, `EmbeddingStore`, `EmbeddingIterator`
-- [`src/storage/mod.rs`](#srcstoragemodrs) — `StructureRow`
+- [`src/storage/mod.rs`](#srcstoragemodrs) — `PendingRef`, `StructureRow`
 - [`src/storage/sqlite.rs`](#srcstoragesqliters) — `SqliteStorage`
 - [`src/structure.rs`](#srcstructurers) — `Structure`
 - [`src/types.rs`](#srctypesrs) — `SymbolId`, `FileId`, `Visibility`, `SymbolKind`, `Location`, `Symbol`, `File`, `FileInfo`, `SearchResult`, `Tree`, `FileNode`, `SymbolNode`, `Status`, `IndexProgress`, `Language`, `ReferenceKind`, `ParsedReference`, `Reference`, `SymbolUsage`, `ParsedSymbol`, `ParsedFile`
@@ -510,8 +510,8 @@ Result from processing a single file
 
 ```rust
 struct FileProcessResult {
+    file_id: Option<FileId>,
     symbols_count: usize,
-    symbol_map: HashMap<String, SymbolId>,
     references: Vec<ParsedReference>,
 }
 ```
@@ -861,6 +861,20 @@ pub struct EmbeddingIterator {
 ---
 
 ## `src/storage/mod.rs`
+
+### struct `PendingRef`
+
+A reference as the parser saw it: a symbol, a name it mentions, and where.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct PendingRef {
+    pub from_symbol_id: SymbolId,
+    pub target_name: String,
+    pub kind: ReferenceKind,
+    pub location: Location,
+}
+```
 
 ### struct `StructureRow`
 

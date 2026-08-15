@@ -266,6 +266,43 @@ mod tests {
         assert_eq!(embedded, fixture.index.count());
     }
 
+    /// Reprocessing a file gives its symbols new ids, and every edge pointing into it dies with
+    /// the old ones — including edges from files this run had no reason to reparse.
+    #[test]
+    fn an_edge_from_an_unchanged_file_survives_its_target_being_rewritten() {
+        let fixture = Fixture::new();
+        fixture.write(
+            "src/caller.rs",
+            "pub fn calls_out() {\n    the_callee();\n}\n",
+        );
+        fixture.write("src/callee.rs", "pub fn the_callee() {}\n");
+
+        let config = Config::default();
+        fixture.run(&config);
+
+        let target = fixture.symbol("the_callee").expect("indexed");
+        assert_eq!(
+            fixture.storage.get_references_to(target.id).unwrap().len(),
+            1,
+            "the call should resolve on the first run"
+        );
+
+        // Only the target changes. caller.rs is byte-identical, so the next run skips it and never
+        // sees the call again — the edge has to be rebuilt from what the index already holds.
+        fixture.write(
+            "src/callee.rs",
+            "pub fn the_callee() {\n    let _ = 1 + 1;\n}\n",
+        );
+        fixture.run(&config);
+
+        let target = fixture.symbol("the_callee").expect("still indexed");
+        assert_eq!(
+            fixture.storage.get_references_to(target.id).unwrap().len(),
+            1,
+            "the caller did not change, so the edge into the target should still be there"
+        );
+    }
+
     /// A directory the walk could not read looks exactly like a directory whose files were all
     /// deleted, and the difference is the whole index.
     #[cfg(unix)]

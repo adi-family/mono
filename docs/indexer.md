@@ -120,6 +120,27 @@ at all prunes nothing. A prune that removes more than half the index is logged a
 branch switch legitimately looks like that, and so does an ignore rule that matched more than its
 author meant it to.
 
+### References are stored twice, resolved and not
+
+`symbol_refs` holds edges between symbol ids. `pending_refs` holds what the parser actually saw —
+a symbol, a name it mentions, and where — and the resolved table is derived from it on every run.
+
+The second table exists because a resolved edge cannot outlive its target. Reprocessing a file
+deletes its symbols and inserts new ones, and `AUTOINCREMENT` never reuses an id, so every edge
+pointing *into* that file dies with the old ids. Rebuilding those edges needs the parse of the
+*referring* file — which an incremental run does not have, having skipped that file precisely
+because it had not changed. The graph therefore lost edges on every run and only a full rebuild
+restored them: measured on this tree, changing one file cost 982 edges, and an index grown across
+a working session had lost 41% of the graph.
+
+Keeping the unresolved form makes the graph a function of the symbol table as it stands rather
+than of which files a run happened to touch. Resolution reads every `pending_refs` row and
+rewrites `symbol_refs` whole; on this tree that is 92k rows in and 213k edges out, and it is why a
+run resolves the same graph whether one file changed or all of them did.
+
+The cost is disk: roughly 80% on top of the index, for rows that duplicate what the source already
+says. A code index that quietly forgets edges is worse.
+
 ### Two version numbers, and why both exist
 
 Indexing is incremental twice over, and both layers key on file content — which means a change

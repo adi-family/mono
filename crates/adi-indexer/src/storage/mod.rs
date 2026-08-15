@@ -12,8 +12,21 @@ mod tests;
 
 use crate::error::Result;
 use crate::structure::Structure;
-use crate::types::{File, FileId, FileInfo, Symbol, SymbolId, SymbolKind, Reference, SymbolUsage, Tree, Status};
+use crate::types::{File, FileId, FileInfo, Location, ReferenceKind, Symbol, SymbolId, SymbolKind, Reference, SymbolUsage, Tree, Status};
 use std::path::{Path, PathBuf};
+
+/// A reference as the parser saw it: a symbol, a name it mentions, and where.
+///
+/// The unresolved half of [`Reference`] — `target_name` is what the source wrote, not a symbol,
+/// because which symbol that name means is a question about the symbol table and the symbol table
+/// changes under it. Resolution turns a set of these into the whole of `symbol_refs`.
+#[derive(Debug, Clone)]
+pub struct PendingRef {
+    pub from_symbol_id: SymbolId,
+    pub target_name: String,
+    pub kind: ReferenceKind,
+    pub location: Location,
+}
 
 /// One symbol's structural fingerprint, with just enough alongside it to name the symbol in a
 /// report.
@@ -64,6 +77,22 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     fn insert_reference(&self, reference: &Reference) -> Result<()>;
     /// Insert multiple references in batch (more efficient)
     fn insert_references_batch(&self, references: &[Reference]) -> Result<()>;
+    /// Replace the unresolved references belonging to `file_id`'s symbols with `refs`.
+    ///
+    /// The parse of a file is the only place its references exist, and an incremental run reparses
+    /// nothing it has not seen change — so a run that wants to resolve the whole graph has to read
+    /// these back rather than re-derive them.
+    fn replace_pending_refs(&self, file_id: FileId, refs: &[PendingRef]) -> Result<()>;
+
+    /// Every unresolved reference in the index, whatever run parsed it.
+    fn all_pending_refs(&self) -> Result<Vec<PendingRef>>;
+
+    /// Discard the resolved graph and store `refs` as the whole of it.
+    ///
+    /// Resolution answers "which symbol is this name" against the symbol table as it stands, so
+    /// its output is only valid for that table — a partial update would mix answers from two.
+    fn replace_symbol_refs(&self, refs: &[Reference]) -> Result<()>;
+
     /// Delete every reference with a symbol from this file at either end of it.
     ///
     /// Both ends, because reprocessing a file gives its symbols new ids — `AUTOINCREMENT` never

@@ -10,7 +10,7 @@ pub use runner::{run, SqlMigration};
 
 /// Every migration, in order. The runner refuses a set whose versions are not 1..=n.
 pub fn migrations() -> Vec<SqlMigration> {
-    vec![migration_v1(), migration_v2(), migration_v3()]
+    vec![migration_v1(), migration_v2(), migration_v3(), migration_v4()]
 }
 
 /// V1: Initial schema - files, symbols, `symbol_refs`, status, FTS
@@ -168,6 +168,42 @@ fn migration_v3() -> SqlMigration {
         -- Exact-clone grouping is a GROUP BY over this column, filtered by size.
         CREATE INDEX IF NOT EXISTS idx_symbols_structure_hash
             ON symbols(structure_hash, structure_size);
+        ",
+    )
+}
+
+/// V4: `pending_refs` — every reference as it was parsed, before it was resolved to a target id.
+///
+/// `symbol_refs` holds resolved edges, and a resolved edge cannot outlive its target: reprocessing
+/// a file gives its symbols new ids, so every edge pointing into that file dies with the old ones.
+/// Rebuilding them needs the parse of the *referring* file, which an incremental run does not have
+/// — it skipped that file precisely because it had not changed. So the graph lost edges on every
+/// run and only a full rebuild restored them.
+///
+/// Keeping the unresolved form makes the resolved table derivable at any time from rows the index
+/// already holds. A reference survives as a fact — this symbol names `foo` here — and which symbol
+/// `foo` is becomes a question re-answered each run.
+fn migration_v4() -> SqlMigration {
+    SqlMigration::new(
+        4,
+        "keep_unresolved_references",
+        r"
+        CREATE TABLE IF NOT EXISTS pending_refs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            from_symbol_id INTEGER NOT NULL REFERENCES symbols(id) ON DELETE CASCADE,
+            target_name TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            start_line INTEGER NOT NULL,
+            start_col INTEGER NOT NULL,
+            end_line INTEGER NOT NULL,
+            end_col INTEGER NOT NULL,
+            start_byte INTEGER NOT NULL,
+            end_byte INTEGER NOT NULL,
+            UNIQUE(from_symbol_id, target_name, kind, start_line, start_col)
+        );
+
+        -- Replacing one file's rows deletes by the symbols it owns.
+        CREATE INDEX IF NOT EXISTS idx_pending_refs_from ON pending_refs(from_symbol_id);
         ",
     )
 }

@@ -7,7 +7,7 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::parser::Parser;
 use crate::search::VectorIndex;
-use crate::storage::Storage;
+use crate::storage::{PendingRef, Storage};
 use crate::types::{SymbolId, ParsedReference, IndexProgress, Location, Status, Reference, Language, File, FileId, ParsedSymbol, Symbol, SymbolKind};
 use ignore::WalkBuilder;
 use crate::embed::Embedder;
@@ -19,9 +19,11 @@ use tracing::{debug, info, warn};
 
 /// Result from processing a single file
 struct FileProcessResult {
+    /// The file's row, when this call actually (re)wrote it. `None` for a file skipped as
+    /// unchanged — whose references are already stored, and must not be replaced with the empty
+    /// set this call returns.
+    file_id: Option<FileId>,
     symbols_count: usize,
-    /// Map from symbol name to symbol ID (for reference resolution)
-    symbol_map: HashMap<String, SymbolId>,
     /// Unresolved references found in the file
     references: Vec<ParsedReference>,
 }
@@ -37,7 +39,10 @@ struct FileProcessResult {
 /// * 1 — symbols carry a structural fingerprint, and embeddings are built from a text that
 ///   includes the symbol's body.
 /// * 2 — the declaration is repeated after the body (see [`build_embed_text`]).
-pub const PIPELINE_VERSION: u32 = 2;
+/// * 3 — references are stored unresolved as well as resolved, so the graph can be rebuilt
+///   without reparsing. An index built by 2 has no `pending_refs` rows, and resolving from them
+///   would empty its graph rather than restore it.
+pub const PIPELINE_VERSION: u32 = 3;
 
 pub async fn index_project(
     project_path: &Path,
@@ -74,9 +79,6 @@ pub async fn index_project(
     // Phase 1: Index all symbols
     storage.begin_transaction()?;
 
-    // Collect all unresolved references and build global symbol map
-    let mut all_references: Vec<ParsedReference> = Vec::new();
-    let mut global_symbol_map: HashMap<String, Vec<SymbolId>> = HashMap::new();
 
     for file_path in &walk.files {
         match process_file(
@@ -94,13 +96,11 @@ pub async fn index_project(
             Ok(result) => {
                 progress.symbols_indexed += result.symbols_count as u64;
 
-                // Add to global symbol map
-                for (name, id) in result.symbol_map {
-                    global_symbol_map.entry(name).or_default().push(id);
+                // Only for a file this run rewrote: a skipped file's references are already
+                // stored, and `result.references` is empty for it.
+                if let Some(file_id) = result.file_id {
+                    storage.replace_pending_refs(file_id, &pending_refs(&result.references))?;
                 }
-
-                // Collect references for phase 2
-                all_references.extend(result.references);
             }
             Err(e) => {
                 warn!("Error processing {}: {}", file_path.display(), e);
@@ -127,17 +127,23 @@ pub async fn index_project(
         info!("Pruned {pruned} file(s) that are no longer part of the tree");
     }
 
-    // Phase 2: Resolve and store references
-    info!("Resolving {} references...", all_references.len());
+    // Phase 2: resolve the whole graph, not this run's share of it.
+    //
+    // Reprocessing a file gives its symbols new ids, which kills every edge pointing into it —
+    // including edges from files this run never looked at, whose parses it therefore does not
+    // have. Resolving from the stored unresolved references instead makes the graph a function of
+    // the symbol table as it now stands, so it comes out the same whether one file changed or all
+    // of them did.
+    let pending = storage.all_pending_refs()?;
+    let symbol_map = symbols_by_name(&storage)?;
+    info!("Resolving {} references...", pending.len());
 
-    let resolved_refs = resolve_references(&all_references, &global_symbol_map, &storage)?;
+    let resolved_refs = resolve_references(&pending, &symbol_map);
 
-    if !resolved_refs.is_empty() {
-        info!("Storing {} resolved references...", resolved_refs.len());
-        storage.begin_transaction()?;
-        storage.insert_references_batch(&resolved_refs)?;
-        storage.commit_transaction()?;
-    }
+    info!("Storing {} resolved references...", resolved_refs.len());
+    storage.begin_transaction()?;
+    storage.replace_symbol_refs(&resolved_refs)?;
+    storage.commit_transaction()?;
 
     index.save()?;
 
@@ -163,85 +169,100 @@ pub async fn index_project(
     Ok(progress)
 }
 
-/// Resolve unresolved references to symbol IDs
+/// The references a file's parse produced, as rows to store against it.
+///
+/// A reference outside every symbol has no source to hang off and is dropped here rather than
+/// stored unresolvable.
+fn pending_refs(references: &[ParsedReference]) -> Vec<PendingRef> {
+    references
+        .iter()
+        .filter_map(|parsed| {
+            Some(PendingRef {
+                from_symbol_id: SymbolId(parsed.containing_symbol_index? as i64),
+                target_name: parsed.name.clone(),
+                kind: parsed.kind,
+                location: parsed.location.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Every indexed symbol, by name — the table resolution answers against.
+///
+/// Built from storage rather than from what this run parsed, because a name is resolved against
+/// the whole index and an incremental run parses almost none of it.
+///
+/// One candidate per name *per file*, later declaration winning, which is not an obvious rule and
+/// is kept because it is the one the index already used: resolution built its map by inserting
+/// each parsed symbol under its name, so a file declaring the name twice kept only the last. Every
+/// same-named symbol being a candidate instead is a defensible graph and a different one — it
+/// linked 58% more edges here — and changing what an edge means is not this pass's business.
+fn symbols_by_name(storage: &Arc<dyn Storage>) -> Result<HashMap<String, Vec<SymbolId>>> {
+    let mut per_file: HashMap<(String, FileId), SymbolId> = HashMap::new();
+    for symbol in storage.get_all_symbols()? {
+        per_file.insert((symbol.name, symbol.file_id), symbol.id);
+    }
+
+    let mut map: HashMap<String, Vec<SymbolId>> = HashMap::new();
+    for ((name, _), id) in per_file {
+        map.entry(name).or_default().push(id);
+    }
+    Ok(map)
+}
+
+/// Turn stored references into edges, against the symbol table as it now stands.
 fn resolve_references(
-    references: &[ParsedReference],
+    references: &[PendingRef],
     symbol_map: &HashMap<String, Vec<SymbolId>>,
-    storage: &Arc<dyn Storage>,
-) -> Result<Vec<Reference>> {
+) -> Vec<Reference> {
     let mut resolved = Vec::new();
 
-    for parsed_ref in references {
-        // We need a source symbol (the symbol that contains this reference)
-        let source_id = match parsed_ref.containing_symbol_index {
-            Some(id) => SymbolId(id as i64),
-            None => {
-                // Reference not within any symbol, skip
-                continue;
-            }
-        };
-
-        // Try to find the target symbol
-        let target_ids = find_target_symbol(&parsed_ref.name, symbol_map, storage)?;
+    for pending in references {
+        let target_ids = find_target_symbol(&pending.target_name, symbol_map);
 
         if target_ids.is_empty() {
-            // Could not resolve this reference
-            debug!("Could not resolve reference: {}", parsed_ref.name);
+            debug!("Could not resolve reference: {}", pending.target_name);
             continue;
         }
 
-        // Create references for each potential target
-        // In most cases there's only one, but for overloaded names there could be multiple
+        // Overloads and same-named symbols in different modules both land here; an edge to each is
+        // the existing behaviour, and a caller reading the graph filters by what it knows.
         for target_id in target_ids {
-            // Don't create self-references
-            if source_id == target_id {
+            if pending.from_symbol_id == *target_id {
                 continue;
             }
 
             resolved.push(Reference {
-                from_symbol_id: source_id,
-                to_symbol_id: target_id,
-                kind: parsed_ref.kind,
-                location: parsed_ref.location.clone(),
+                from_symbol_id: pending.from_symbol_id,
+                to_symbol_id: *target_id,
+                kind: pending.kind,
+                location: pending.location.clone(),
             });
         }
     }
 
-    Ok(resolved)
+    resolved
 }
 
-/// Find target symbol(s) by name
-fn find_target_symbol(
+/// The symbols a written name could mean.
+///
+/// A qualified name (`foo::bar`) falls back to its last component, which is how a reference
+/// written through a module path still finds the item it names.
+fn find_target_symbol<'a>(
     name: &str,
-    symbol_map: &HashMap<String, Vec<SymbolId>>,
-    storage: &Arc<dyn Storage>,
-) -> Result<Vec<SymbolId>> {
-    // First, try exact match in our collected symbols
+    symbol_map: &'a HashMap<String, Vec<SymbolId>>,
+) -> &'a [SymbolId] {
     if let Some(ids) = symbol_map.get(name) {
-        return Ok(ids.clone());
+        return ids;
     }
 
-    // Try matching just the last component (for qualified names like foo::bar)
     let short_name = name.rsplit("::").next().unwrap_or(name);
     if short_name != name
         && let Some(ids) = symbol_map.get(short_name) {
-            return Ok(ids.clone());
+            return ids;
         }
 
-    // Try database lookup for previously indexed symbols
-    if let Ok(symbols) = storage.find_symbols_by_name(name)
-        && !symbols.is_empty() {
-            return Ok(symbols.into_iter().map(|s| s.id).collect());
-        }
-
-    // Try short name in database
-    if short_name != name
-        && let Ok(symbols) = storage.find_symbols_by_name(short_name)
-            && !symbols.is_empty() {
-                return Ok(symbols.into_iter().map(|s| s.id).collect());
-            }
-
-    Ok(vec![])
+    &[]
 }
 
 pub async fn reindex_paths(
@@ -516,8 +537,8 @@ async fn process_file(
         && existing_hash == hash {
             debug!("File unchanged, skipping: {}", relative_path.display());
             return Ok(FileProcessResult {
+                file_id: None,
                 symbols_count: 0,
-                symbol_map: HashMap::new(),
                 references: Vec::new(),
             });
         }
@@ -544,8 +565,8 @@ async fn process_file(
         // Cache miss — parse from scratch
         if !parser.supports(language) {
             return Ok(FileProcessResult {
+                file_id: None,
                 symbols_count: 0,
-                symbol_map: HashMap::new(),
                 references: Vec::new(),
             });
         }
@@ -582,10 +603,8 @@ async fn process_file(
 
     let file_id = storage.insert_file(&file)?;
 
-    // Process symbols and collect name -> id mapping
     let mut symbols_count = 0;
     let mut texts_to_embed: Vec<(SymbolId, String)> = Vec::new();
-    let mut symbol_map: HashMap<String, SymbolId> = HashMap::new();
     let mut symbol_ranges: Vec<(SymbolId, u32, u32)> = Vec::new();
 
     #[allow(clippy::too_many_arguments)]
@@ -597,7 +616,6 @@ async fn process_file(
         parent_id: Option<SymbolId>,
         storage: &Arc<dyn Storage>,
         texts_to_embed: &mut Vec<(SymbolId, String)>,
-        symbol_map: &mut HashMap<String, SymbolId>,
         symbol_ranges: &mut Vec<(SymbolId, u32, u32)>,
         count: &mut usize,
     ) -> Result<()> {
@@ -621,7 +639,6 @@ async fn process_file(
             let symbol_id = storage.insert_symbol(&symbol)?;
             *count += 1;
 
-            symbol_map.insert(parsed.name.clone(), symbol_id);
             symbol_ranges.push((
                 symbol_id,
                 parsed.location.start_byte,
@@ -645,7 +662,6 @@ async fn process_file(
                 Some(symbol_id),
                 storage,
                 texts_to_embed,
-                symbol_map,
                 symbol_ranges,
                 count,
             )?;
@@ -661,7 +677,6 @@ async fn process_file(
         None,
         storage,
         &mut texts_to_embed,
-        &mut symbol_map,
         &mut symbol_ranges,
         &mut symbols_count,
     )?;
@@ -739,8 +754,8 @@ async fn process_file(
     }
 
     Ok(FileProcessResult {
+        file_id: Some(file_id),
         symbols_count,
-        symbol_map,
         references: references_with_context,
     })
 }

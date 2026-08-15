@@ -4,7 +4,7 @@
 
 use crate::error::{Error, Result};
 use crate::migrations::migrations;
-use crate::storage::{StructureRow, Storage};
+use crate::storage::{PendingRef, StructureRow, Storage};
 use crate::structure::Structure;
 use crate::types::{File, FileId, Language, Symbol, SymbolId, SymbolKind, Location, Visibility, FileInfo, Reference, ReferenceKind, SymbolUsage, Tree, SymbolNode, FileNode, Status};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -524,6 +524,69 @@ impl Storage for SqliteStorage {
         }
 
         Ok(())
+    }
+
+    fn replace_pending_refs(&self, file_id: FileId, refs: &[PendingRef]) -> Result<()> {
+        let conn = self.lock()?;
+
+        conn.execute(
+            "DELETE FROM pending_refs WHERE from_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
+            params![file_id.0],
+        )?;
+
+        let mut stmt = conn.prepare(
+            "INSERT OR IGNORE INTO pending_refs (from_symbol_id, target_name, kind, start_line, start_col, end_line, end_col, start_byte, end_byte) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        )?;
+
+        for reference in refs {
+            stmt.execute(params![
+                reference.from_symbol_id.0,
+                reference.target_name,
+                reference.kind.as_str(),
+                reference.location.start_line,
+                reference.location.start_col,
+                reference.location.end_line,
+                reference.location.end_col,
+                reference.location.start_byte,
+                reference.location.end_byte,
+            ])?;
+        }
+
+        Ok(())
+    }
+
+    fn all_pending_refs(&self) -> Result<Vec<PendingRef>> {
+        let conn = self.lock()?;
+
+        rows(
+            &conn,
+            "SELECT from_symbol_id, target_name, kind, start_line, start_col, end_line, end_col, \
+             start_byte, end_byte FROM pending_refs",
+            [],
+            |row| {
+                Ok(PendingRef {
+                    from_symbol_id: SymbolId(row.get(0)?),
+                    target_name: row.get(1)?,
+                    kind: ReferenceKind::parse(&row.get::<_, String>(2)?),
+                    location: Location {
+                        start_line: row.get(3)?,
+                        start_col: row.get(4)?,
+                        end_line: row.get(5)?,
+                        end_col: row.get(6)?,
+                        start_byte: row.get(7)?,
+                        end_byte: row.get(8)?,
+                    },
+                })
+            },
+        )
+    }
+
+    fn replace_symbol_refs(&self, refs: &[Reference]) -> Result<()> {
+        let conn = self.lock()?;
+        conn.execute("DELETE FROM symbol_refs", [])?;
+        drop(conn);
+
+        self.insert_references_batch(refs)
     }
 
     fn delete_references_for_file(&self, file_id: FileId) -> Result<()> {
