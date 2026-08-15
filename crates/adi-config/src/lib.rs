@@ -247,6 +247,23 @@ pub fn validate_name<E>(name: &str, err: impl FnOnce(String) -> E) -> std::resul
     }
 }
 
+/// Trim `value` and drop it entirely when nothing is left, so an optional field submitted empty
+/// clears rather than storing whitespace.
+///
+/// That rule is what every store's editing surface means by "blank", and it has to be the same
+/// rule at each of them: a field cleared through the CLI and the same field cleared through the
+/// API must both come out `None`, or the record says something different depending on which door
+/// it was written through.
+///
+/// Generic over the string type because callers hold both an owned `Option<String>` — a form
+/// field taken by value — and an `Option<&str>` borrowed from a manifest already in hand.
+#[must_use]
+pub fn clean<S: AsRef<str>>(value: Option<S>) -> Option<String> {
+    value
+        .map(|v| v.as_ref().trim().to_string())
+        .filter(|v| !v.is_empty())
+}
+
 /// Seconds since the Unix epoch, saturating to 0 if the clock is somehow before it. Stores stamp
 /// this onto their manifests (`created_at` / `updated_at`).
 #[must_use]

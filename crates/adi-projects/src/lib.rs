@@ -25,6 +25,7 @@
 mod error;
 mod project;
 
+use adi_config::clean;
 use std::path::PathBuf;
 
 use adi_config::{Config, ConfigFile, now_unix};
@@ -283,23 +284,6 @@ impl Projects {
     }
 }
 
-/// Fold a "not found" I/O error into `Ok(None)`, propagating any other failure as [`Error::Io`].
-/// Lets a missing `projects/` dir or project dir read as a normal absent outcome rather than an error.
-fn optional<T>(result: std::io::Result<T>) -> Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Error::Io(e)),
-    }
-}
-
-/// Trim a string, dropping it entirely when blank.
-fn clean(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +489,14 @@ mod tests {
         let all = store.list().expect("list");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].id, "real");
+    }
+}
+
+/// Fold a "not found" I/O error into `Ok(None)`, propagating any other failure as [`Error::Io`].
+fn optional<T>(result: std::io::Result<T>) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::Io(e)),
     }
 }

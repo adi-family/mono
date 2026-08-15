@@ -12,12 +12,7 @@ pub(crate) fn parse_body<T: DeserializeOwned>(body: &[u8]) -> Option<T> {
     serde_json::from_slice(body).ok()
 }
 
-/// Trim a string, dropping it entirely when blank (so an empty optional field clears).
-pub(crate) fn clean(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
+pub(crate) use adi_config::clean;
 
 /// An HTTP response: a status paired with its (JSON) body. Handlers build one exclusively
 /// through [`error`], [`ok_json`], and the `From<&…Error>` impls.

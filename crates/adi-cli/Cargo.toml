@@ -15,6 +15,7 @@ name = "adi-mono"
 path = "src/main.rs"
 
 [dependencies]
+adi-config = { workspace = true }
 adi-core = { workspace = true }
 
 # The `mesh` command group (docs/fleet.md E3). This is what pulls iroh into `adi-mono`, and it is

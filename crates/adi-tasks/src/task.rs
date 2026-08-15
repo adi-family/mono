@@ -3,6 +3,7 @@
 //! task's effective status and validate tree edits. None of this touches disk; the [`Tasks`]
 //! store in [`crate`] owns I/O.
 
+pub(crate) use adi_config::clean;
 use std::collections::BTreeMap;
 
 use schemars::JsonSchema;
@@ -306,10 +307,4 @@ pub(crate) fn max_num_for_key(tasks: &[Task], key: &str) -> u64 {
         .max()
         .unwrap_or(0)
 }
-
-/// Trim a string, dropping it entirely when blank (so `""` clears an optional field).
-pub(crate) fn clean(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
+ 

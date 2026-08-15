@@ -70,11 +70,7 @@ fn parse_effective_status(value: &str) -> Result<EffectiveStatus, String> {
     }
 }
 
-pub(crate) fn clean(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
+pub(crate) use adi_config::clean;
 
 pub(crate) fn clean_required(name: &str, value: String) -> Result<String, String> {
     clean(Some(value)).ok_or_else(|| format!("{name} is required"))

@@ -37,6 +37,7 @@ mod run;
 mod system;
 mod tool;
 
+use adi_config::clean;
 use std::path::{Path, PathBuf};
 
 use adi_config::{Config, ConfigFile, now_unix};
@@ -640,22 +641,6 @@ fn write_executable(path: &std::path::Path, content: &str) -> Result<()> {
     Ok(())
 }
 
-/// Fold a "not found" I/O error into `Ok(None)`, propagating any other failure as [`Error::Io`].
-fn optional<T>(result: std::io::Result<T>) -> Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Error::Io(e)),
-    }
-}
-
-/// Trim a string, dropping it entirely when blank.
-fn clean(value: Option<String>) -> Option<String> {
-    value
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -970,5 +955,14 @@ mod tests {
         let all = store.list().expect("list");
         assert_eq!(all.len(), 1, "only the real tool is listed");
         assert_eq!(all[0].manifest.name, "real");
+    }
+}
+
+/// Fold a "not found" I/O error into `Ok(None)`, propagating any other failure as [`Error::Io`].
+fn optional<T>(result: std::io::Result<T>) -> Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::Io(e)),
     }
 }
