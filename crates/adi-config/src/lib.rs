@@ -264,6 +264,27 @@ pub fn clean<S: AsRef<str>>(value: Option<S>) -> Option<String> {
         .filter(|v| !v.is_empty())
 }
 
+/// Fold a "not found" I/O error into `Ok(None)`, leaving every other failure to propagate.
+///
+/// A store reading a file that is not there has found an absent value, not hit a failure: no
+/// `projects/` directory yet simply means no projects. Only `NotFound` is folded — a permission
+/// error still propagates, because "absent" and "there but unreadable" must not answer alike.
+///
+/// The result stays in [`std::io`] rather than being generic over the caller's error, so `?` at
+/// the call site performs the conversion through the `From<std::io::Error>` every store already
+/// implements. Returning a generic `E` instead makes the type unsolvable: `?` would convert a
+/// second time, and nothing pins what the first conversion produced.
+///
+/// # Errors
+/// Any I/O failure other than [`NotFound`](std::io::ErrorKind::NotFound), unchanged.
+pub fn optional<T>(result: std::io::Result<T>) -> std::io::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
 /// Seconds since the Unix epoch, saturating to 0 if the clock is somehow before it. Stores stamp
 /// this onto their manifests (`created_at` / `updated_at`).
 #[must_use]

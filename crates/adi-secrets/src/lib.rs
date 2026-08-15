@@ -34,7 +34,7 @@ mod crypto;
 mod error;
 mod secret;
 
-use adi_config::clean;
+use adi_config::{clean, optional};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -701,14 +701,5 @@ mod tests {
         let to = store.dir().join("projects/proj/K.toml");
         std::fs::copy(&from, &to).expect("copy");
         assert!(matches!(store.reveal(Some("proj"), "K"), Err(Error::Decrypt)));
-    }
-}
-
-/// Fold a "not found" I/O error into `Ok(None)`, propagating any other failure as [`Error::Io`].
-fn optional<T>(result: std::io::Result<T>) -> Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Error::Io(e)),
     }
 }

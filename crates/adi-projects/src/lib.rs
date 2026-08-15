@@ -25,7 +25,7 @@
 mod error;
 mod project;
 
-use adi_config::clean;
+use adi_config::{clean, optional};
 use std::path::PathBuf;
 
 use adi_config::{Config, ConfigFile, now_unix};
@@ -489,14 +489,5 @@ mod tests {
         let all = store.list().expect("list");
         assert_eq!(all.len(), 1);
         assert_eq!(all[0].id, "real");
-    }
-}
-
-/// Fold a "not found" I/O error into `Ok(None)`, propagating any other failure as [`Error::Io`].
-fn optional<T>(result: std::io::Result<T>) -> Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(Error::Io(e)),
     }
 }
