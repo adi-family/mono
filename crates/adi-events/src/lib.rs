@@ -181,6 +181,20 @@ impl Events {
         self.config.module(MODULE).dir().to_path_buf()
     }
 
+    /// Publish `payload` as JSON, discarding both the encoding failure and the publish failure.
+    ///
+    /// The stores emit as a side effect of a mutation that has already been written to disk. The
+    /// record is the fact; the event is a notification about it, and a notification that could
+    /// fail the operation it describes would mean a project half-created because a spool file
+    /// could not be written. So every store swallows both errors — and each of them was
+    /// implementing that same swallow privately, which is a decision worth making once and being
+    /// able to find.
+    pub fn emit_json(&self, name: &str, payload: &impl serde::Serialize) {
+        if let Ok(json) = serde_json::to_string(payload) {
+            let _ = self.emit(name, json);
+        }
+    }
+
     /// Publish an event: write one record file into the spool, then prune the spool back under
     /// [`MAX_SPOOL`]. The write is atomic (temp-then-rename), so a draining consumer never reads
     /// a half-written record.

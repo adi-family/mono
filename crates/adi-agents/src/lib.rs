@@ -275,9 +275,7 @@ impl Agents {
     /// never fail the lifecycle action that caused it. Emitted against **this store's** [`Config`],
     /// so a scratch store stays isolated.
     fn emit(&self, event: &str, payload: &impl serde::Serialize) {
-        if let Ok(json) = serde_json::to_string(payload) {
-            let _ = adi_events::Events::with_config(self.config.clone()).emit(event, json);
-        }
+        adi_events::Events::with_config(self.config.clone()).emit_json(event, payload);
     }
 
     /// Renames an agent's manifest, keeping its contents and `created_at` intact.

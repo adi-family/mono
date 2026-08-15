@@ -125,9 +125,7 @@ impl Tasks {
     /// whether anything subscribes, and a spool failure must never fail the mutation that caused
     /// it. Emitted against **this store's** [`Config`], so a scratch store stays isolated.
     fn emit(&self, event: &str, payload: &impl serde::Serialize) {
-        if let Ok(json) = serde_json::to_string(payload) {
-            let _ = adi_events::Events::with_config(self.config.clone()).emit(event, json);
-        }
+        adi_events::Events::with_config(self.config.clone()).emit_json(event, payload);
     }
 
     /// Create a new `open` task. If `parent` is given (and non-blank) it must already exist.
