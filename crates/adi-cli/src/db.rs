@@ -201,7 +201,7 @@ pub(crate) fn run_db(adi: Adi, command: DbCommand) -> Result<(), String> {
                         "{} — {} table(s), {} — {}",
                         scope_label(db.project.as_deref()),
                         db.tables,
-                        human_bytes(db.bytes),
+                        adi_config::human_bytes(db.bytes),
                         db.path
                     );
                 }
@@ -373,21 +373,6 @@ fn print_table_info(table: &TableInfo) {
     }
 }
 
-/// A byte count in the largest unit that keeps it readable.
-fn human_bytes(bytes: u64) -> String {
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "display only; a database size never needs full precision"
-    )]
-    let value = bytes as f64;
-    for (unit, scale) in [("GB", 1e9), ("MB", 1e6), ("kB", 1e3)] {
-        if value >= scale {
-            return format!("{:.1} {unit}", value / scale);
-        }
-    }
-    format!("{bytes} B")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,8 +418,8 @@ mod tests {
 
     #[test]
     fn byte_sizes_pick_a_readable_unit() {
-        assert_eq!(human_bytes(512), "512 B");
-        assert_eq!(human_bytes(4096), "4.1 kB");
-        assert_eq!(human_bytes(5_500_000), "5.5 MB");
+        assert_eq!(adi_config::human_bytes(512), "512 B");
+        assert_eq!(adi_config::human_bytes(4096), "4.1 kB");
+        assert_eq!(adi_config::human_bytes(5_500_000), "5.5 MB");
     }
 }

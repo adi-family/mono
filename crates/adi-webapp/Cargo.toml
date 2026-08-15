@@ -15,6 +15,7 @@ adi-webapp-api = { workspace = true }
 
 # The component library. It brings its own tokens and its own utilities; see
 # `styles/tailwind.css` for how the two design systems share one page.
+adi-config = { workspace = true }
 adi-ui = { workspace = true }
 
 leptos = { version = "0.8", features = ["csr"] }

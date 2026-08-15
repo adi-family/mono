@@ -401,6 +401,7 @@ dependencies = [
 name = "adi-webapp"
 version = "0.1.0"
 dependencies = [
+ "adi-config",
  "adi-ui",
  "adi-webapp-api",
  "console_error_panic_hook",

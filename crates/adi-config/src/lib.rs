@@ -233,6 +233,27 @@ pub fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
 }
 
+/// A byte count as a person reads it — `1.4 GB`, `812.0 kB`, `37 B`.
+///
+/// Decimal units, not binary: this is what a stored size is reported as, and the number beside it
+/// on a disk-usage panel is decimal too. Shared because the CLI and the control panel show the
+/// same database the same way, and a size that reads differently depending on where you looked
+/// invites a bug report about the size.
+#[must_use]
+pub fn human_bytes(bytes: u64) -> String {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "display only; a database size never needs full precision"
+    )]
+    let value = bytes as f64;
+    for (unit, scale) in [("GB", 1e9), ("MB", 1e6), ("kB", 1e3)] {
+        if value >= scale {
+            return format!("{:.1} {unit}", value / scale);
+        }
+    }
+    format!("{bytes} B")
+}
+
 /// What [`valid_name`] accepts, phrased for the person who just failed it.
 ///
 /// Every store rejects a name with a message ending in this sentence, and the sentence describes

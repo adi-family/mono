@@ -180,7 +180,7 @@ fn scope_cell(col: &str, d: &DbInfoDto, console: DbConsole) -> AnyView {
     match col {
         "Tables" => view! { <span class="font-mono">{d.tables.to_string()}</span> }.into_any(),
         "Size" => {
-            view! { <span class="font-mono text-meta">{human_bytes(d.bytes)}</span> }.into_any()
+            view! { <span class="font-mono text-meta">{adi_config::human_bytes(d.bytes)}</span> }.into_any()
         }
         "Path" => view! { <span class="font-mono text-meta">{d.path.clone()}</span> }.into_any(),
         // "Scope", and anything the layout offers that this match doesn't name.
@@ -426,17 +426,3 @@ fn flash_or_nothing(flash: RwSignal<Option<Flash>>) -> AnyView {
     .into_any()
 }
 
-/// A byte count in the largest unit that keeps it readable.
-fn human_bytes(bytes: u64) -> String {
-    #[allow(
-        clippy::cast_precision_loss,
-        reason = "display only; a database size never needs full precision"
-    )]
-    let value = bytes as f64;
-    for (unit, scale) in [("GB", 1e9), ("MB", 1e6), ("kB", 1e3)] {
-        if value >= scale {
-            return format!("{:.1} {unit}", value / scale);
-        }
-    }
-    format!("{bytes} B")
-}
