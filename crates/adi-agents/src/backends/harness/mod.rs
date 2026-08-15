@@ -4,7 +4,9 @@
 //! A harness run is a *conversation* you can answer, not a fire-and-forget `--print` run: the first
 //! turn is the initial task, and each reply spawns another detached child that continues the same
 //! thread and prints its answer. One turn runs at a time, so a message sent mid-answer waits in the
-//! conversation's queue and starts when the current turn lands. The conversation machinery
+//! conversation's queue — until the turn lands for `claude-sdk`, whose CLI owns its own loop and
+//! cannot be told anything once it has started, and only until the next round for `adi`, which
+//! drives its loop here and takes what is waiting between rounds. The conversation machinery
 //! (transcript, queue, turn spawning, settling) lives in [`conversation`]; each engine only supplies
 //! the per-turn command and how it continues.
 //!

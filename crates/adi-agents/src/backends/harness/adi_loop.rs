@@ -29,6 +29,13 @@
 //! how a call comes back, how a result is handed over, and how they are taken away again; [`Wire`]
 //! is where those disagreements live, so the loop itself is written once and reads the same for
 //! all of them.
+//!
+//! **And a turn that is running can still be spoken to.** Because the loop is here rather than
+//! inside a vendor CLI, a message typed while the model is working does not have to wait for the
+//! answer: [`tool_loop`] takes whatever the conversation's queue is holding at the top of every
+//! round, so the longest anyone waits is one model call and the tools it asked for. That is what
+//! makes correcting a turn possible at all — a wrong direction spotted at round three is worth
+//! saying at round three, not once sixty rounds of it have been paid for.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -203,11 +210,25 @@ fn tool_loop(
     ctx: &tools::Ctx<'_>,
     sink: Sink<'_>,
 ) -> Result<String> {
-    let max_rounds = args.max_turns.filter(|n| *n > 0).unwrap_or(MAX_ROUNDS);
+    let allowance = args.max_turns.filter(|n| *n > 0).unwrap_or(MAX_ROUNDS);
+    let mut max_rounds = allowance;
     let mut messages = wire.seed(turns);
     let mut metrics = TurnMetrics::default();
 
-    for round in 1..=max_rounds {
+    let mut round = 0;
+    while round < max_rounds {
+        round += 1;
+        // Whatever was said since the last round joins the conversation here, before the model is
+        // asked anything. This is the only boundary at which it can: a round is one blocking call
+        // and then the tools it asked for, and a message injected into the middle of either would
+        // not be read until this point anyway.
+        if take_queued(ctx, |text| wire.interject(&mut messages, text)) {
+            // A new instruction with no rounds left to carry it out is a message answered by "out
+            // of tool calls" — so the person who interrupted buys the turn a fresh allowance. The
+            // ceiling is there to bound a model stuck in a rut, and a human typing is not one.
+            max_rounds = round.saturating_sub(1).saturating_add(allowance);
+        }
+
         let reply = wire.round(&messages, Calls::Allowed)?;
         metrics.num_turns = Some(round);
         add(&mut metrics.input_tokens, reply.input_tokens);
@@ -263,7 +284,7 @@ fn tool_loop(
              max turns if the work genuinely needs more."
         ),
     );
-    wire.nudge(&mut messages, WRAP_UP);
+    wire.interject(&mut messages, WRAP_UP);
     let reply = wire.round(&messages, Calls::Withheld)?;
     metrics.num_turns = Some(max_rounds + 1);
     add(&mut metrics.input_tokens, reply.input_tokens);
@@ -287,6 +308,27 @@ fn add(total: &mut Option<u64>, more: Option<u64>) {
     if let Some(n) = more {
         *total = Some(total.unwrap_or(0) + n);
     }
+}
+
+/// Hear everything said to this conversation since the last round, oldest first, handing each
+/// message to `hear`. Reports whether anything was there.
+///
+/// Draining rather than taking one per round: three things typed in a row are three parts of one
+/// thought, and spreading them over three model calls would have it act on the first before reading
+/// the third.
+///
+/// Each message is recorded as a question as it is taken, so a reader watching the chat sees it move
+/// from the queue into the transcript at the moment the turn actually hears it — and so a turn that
+/// dies here leaves the message asked rather than silently swallowed. A store that will not give it
+/// up simply ends the drain: what is still in the queue is offered again next round, and failing the
+/// turn over it would throw away work the model has already done.
+fn take_queued(ctx: &tools::Ctx<'_>, mut hear: impl FnMut(&str)) -> bool {
+    let mut heard = false;
+    while let Ok(Some(message)) = ctx.sessions.take_queued_as_turn(ctx.agent, ctx.conv) {
+        hear(&message);
+        heard = true;
+    }
+    heard
 }
 
 // ---- the four wire formats ---------------------------------------------------------
@@ -364,17 +406,14 @@ impl<'a> Wire<'a> {
 
     /// The transcript as this provider's opening message list.
     fn seed(&self, turns: &[Turn]) -> Vec<Value> {
-        let plain: Vec<&Turn> = turns
-            .iter()
-            .filter(|t| !t.text.trim().is_empty())
-            .collect();
+        let plain = merged(turns);
         match self {
             // Gemini names the assistant `model` and carries the system prompt outside the list.
             Self::Gemini { .. } => plain
                 .iter()
-                .map(|t| {
-                    let role = if t.role == "assistant" { "model" } else { "user" };
-                    json!({ "role": role, "parts": [{ "text": t.text }] })
+                .map(|(role, text)| {
+                    let role = if *role == "assistant" { "model" } else { "user" };
+                    json!({ "role": role, "parts": [{ "text": text }] })
                 })
                 .collect(),
             // Everyone else takes `{role, content}` with the system prompt as the first message —
@@ -382,12 +421,12 @@ impl<'a> Wire<'a> {
             // current models, but the dedicated field is what the API documents, so it goes there.
             Self::Anthropic { .. } => plain
                 .iter()
-                .map(|t| json!({ "role": t.role, "content": t.text }))
+                .map(|(role, text)| json!({ "role": role, "content": text }))
                 .collect(),
             Self::OpenAi { args, .. } | Self::Ollama { args, .. } => {
                 let mut messages: Vec<Value> = plain
                     .iter()
-                    .map(|t| json!({ "role": t.role, "content": t.text }))
+                    .map(|(role, text)| json!({ "role": role, "content": text }))
                     .collect();
                 if let Some(system) = system_prompt(args) {
                     messages.insert(0, json!({ "role": "system", "content": system }));
@@ -411,31 +450,52 @@ impl<'a> Wire<'a> {
         }
     }
 
-    /// Add one more instruction from the user's side — how the wrap-up round is asked for.
+    /// Add one more thing from the user's side, mid-conversation: the wrap-up instruction, and a
+    /// message somebody typed while the turn was still working.
     ///
-    /// Where the last message is already the user's (the block-shaped providers answer tool calls
-    /// in a user turn), this rides *inside* it as one more part rather than following it: both
-    /// Anthropic and Gemini want the two roles to alternate, and a second user turn in a row is
-    /// the one shape that would make the wrap-up round fail outright.
-    fn nudge(&self, messages: &mut Vec<Value>, text: &str) {
+    /// Where the last message is already the user's, this rides *inside* it rather than following
+    /// it: both Anthropic and Gemini want the two roles to alternate, and a second user turn in a
+    /// row is the one shape that would make the request fail outright. Which of the two shapes that
+    /// turn holds depends on where in the loop we are — a list of blocks when it is answering tool
+    /// calls, a bare string when it is the opening question the transcript seeded — so both are
+    /// joined rather than only the one the wrap-up round used to meet.
+    fn interject(&self, messages: &mut Vec<Value>, text: &str) {
+        let field = self.user_field();
+        if let Some(last) = messages.last_mut()
+            && last.get("role").and_then(Value::as_str) == Some("user")
+        {
+            match last.get_mut(field) {
+                Some(Value::Array(list)) => {
+                    list.push(self.text_part(text));
+                    return;
+                }
+                Some(slot @ Value::String(_)) => {
+                    let joined = format!("{}\n\n{text}", slot.as_str().unwrap_or_default());
+                    *slot = Value::String(joined);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        messages.push(match self {
+            Self::Gemini { .. } => json!({ "role": "user", "parts": [{ "text": text }] }),
+            _ => json!({ "role": "user", "content": text }),
+        });
+    }
+
+    /// What this provider calls the list a message's content lives in.
+    fn user_field(&self) -> &'static str {
         match self {
-            Self::Anthropic { .. } => {
-                if let Some(blocks) = last_user_list(messages, "content") {
-                    blocks.push(json!({ "type": "text", "text": text }));
-                } else {
-                    messages.push(json!({ "role": "user", "content": text }));
-                }
-            }
-            Self::Gemini { .. } => {
-                if let Some(parts) = last_user_list(messages, "parts") {
-                    parts.push(json!({ "text": text }));
-                } else {
-                    messages.push(json!({ "role": "user", "parts": [{ "text": text }] }));
-                }
-            }
-            Self::OpenAi { .. } | Self::Ollama { .. } => {
-                messages.push(json!({ "role": "user", "content": text }));
-            }
+            Self::Gemini { .. } => "parts",
+            _ => "content",
+        }
+    }
+
+    /// One piece of plain text, in the shape this provider's content lists take.
+    fn text_part(&self, text: &str) -> Value {
+        match self {
+            Self::Gemini { .. } => json!({ "text": text }),
+            _ => json!({ "type": "text", "text": text }),
         }
     }
 
@@ -487,14 +547,25 @@ impl<'a> Wire<'a> {
     }
 }
 
-/// The content list of the trailing message when it is the user's and holds a list — the place a
-/// further instruction belongs on the providers that want alternating roles.
-fn last_user_list<'m>(messages: &'m mut [Value], field: &str) -> Option<&'m mut Vec<Value>> {
-    let last = messages.last_mut()?;
-    if last.get("role").and_then(Value::as_str) != Some("user") {
-        return None;
+/// The transcript as (role, text), blank turns dropped and neighbours of the same role joined into
+/// one message.
+///
+/// Joining is not tidiness. A turn that heard a message while it was working records that message as
+/// its own question, so a conversation's history genuinely holds two questions in a row — and
+/// replaying them as two messages is the shape Anthropic and Gemini reject outright. What the model
+/// is owed is both texts in the order they were said, which is what one message carrying both is.
+fn merged(turns: &[Turn]) -> Vec<(&str, String)> {
+    let mut out: Vec<(&str, String)> = Vec::with_capacity(turns.len());
+    for turn in turns.iter().filter(|t| !t.text.trim().is_empty()) {
+        match out.last_mut() {
+            Some((role, text)) if *role == turn.role => {
+                text.push_str("\n\n");
+                text.push_str(&turn.text);
+            }
+            _ => out.push((turn.role.as_str(), turn.text.clone())),
+        }
     }
-    last.get_mut(field).and_then(Value::as_array_mut)
+    out
 }
 
 /// The tool set as JSON Schema function declarations — the shape `OpenAI`, Ollama and (nested one
@@ -1243,9 +1314,12 @@ mod tests {
         args.system_prompt = Some("be terse".into());
         let wire = Wire::of(&args, "kimi-k3").expect("wire");
         let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "  "), turn("user", "again")]);
-        assert_eq!(seeded.len(), 3, "the blank turn is dropped: {seeded:?}");
+        // Two, not three: the empty answer goes, and the questions it stood between are then
+        // neighbours of the same role, which replay as one message rather than as the pair
+        // Anthropic and Gemini reject.
+        assert_eq!(seeded.len(), 2, "the blank turn is dropped: {seeded:?}");
         assert_eq!(seeded[0]["role"], "system");
-        assert_eq!(seeded[2]["content"], "again");
+        assert_eq!(seeded[1]["content"], "hi\n\nagain");
     }
 
     #[test]
@@ -1306,7 +1380,7 @@ mod tests {
         ];
         Wire::of(&anthropic, "m")
             .expect("wire")
-            .nudge(&mut messages, "stop now");
+            .interject(&mut messages, "stop now");
         assert_eq!(messages.len(), 2, "it joined the turn: {messages:?}");
         assert_eq!(messages[1]["content"][1]["type"], "text");
         assert_eq!(messages[1]["content"][1]["text"], "stop now");
@@ -1315,14 +1389,14 @@ mod tests {
         let mut messages = vec![json!({ "role": "user", "parts": [{ "functionResponse": {} }] })];
         Wire::of(&gemini, "m")
             .expect("wire")
-            .nudge(&mut messages, "stop now");
+            .interject(&mut messages, "stop now");
         assert_eq!(messages.len(), 1, "it joined the turn: {messages:?}");
         assert_eq!(messages[0]["parts"][1]["text"], "stop now");
 
         let mut messages = vec![json!({ "role": "model", "parts": [] })];
         Wire::of(&gemini, "m")
             .expect("wire")
-            .nudge(&mut messages, "stop now");
+            .interject(&mut messages, "stop now");
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1]["role"], "user");
 
@@ -1330,9 +1404,64 @@ mod tests {
         let mut messages = vec![json!({ "role": "tool", "tool_call_id": "c1", "content": "out" })];
         Wire::of(&openai, "m")
             .expect("wire")
-            .nudge(&mut messages, "stop now");
+            .interject(&mut messages, "stop now");
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1], json!({ "role": "user", "content": "stop now" }));
+    }
+
+    /// The round-1 shape, which the wrap-up round never met: the trailing user message is the
+    /// opening question as a bare string, and a message that arrived a second after the launch has
+    /// to join it. Pushing a second user turn there is what Anthropic rejects.
+    #[test]
+    fn a_message_heard_mid_turn_joins_the_question_whatever_shape_it_is_in() {
+        let anthropic = args_for(HarnessProvider::Anthropic);
+        let wire = Wire::of(&anthropic, "m").expect("wire");
+        let mut messages = wire.seed(&[turn("user", "fix the parser")]);
+        wire.interject(&mut messages, "and handle CRLF");
+        assert_eq!(messages.len(), 1, "it joined the question: {messages:?}");
+        assert_eq!(messages[0]["content"], "fix the parser\n\nand handle CRLF");
+
+        let gemini = args_for(HarnessProvider::Gemini);
+        let wire = Wire::of(&gemini, "m").expect("wire");
+        let mut messages = wire.seed(&[turn("user", "fix the parser")]);
+        wire.interject(&mut messages, "and handle CRLF");
+        assert_eq!(messages.len(), 1, "it joined the question: {messages:?}");
+        assert_eq!(messages[0]["parts"][0]["text"], "fix the parser");
+        assert_eq!(messages[0]["parts"][1]["text"], "and handle CRLF");
+
+        // Mid-loop, where the trailing turn is the one answering tool calls, it rides in as one
+        // more block — the wrap-up round's path, now shared.
+        let wire = Wire::of(&anthropic, "m").expect("wire");
+        let mut messages = vec![
+            json!({ "role": "assistant", "content": [] }),
+            json!({ "role": "user", "content": [{ "type": "tool_result", "content": "out" }] }),
+        ];
+        wire.interject(&mut messages, "actually, skip the tests");
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1]["content"][1]["text"], "actually, skip the tests");
+    }
+
+    /// A turn that heard a message recorded it as a question, so the transcript it replays next time
+    /// really does hold two in a row. Both texts have to reach the model, and as one message.
+    #[test]
+    fn two_questions_in_a_row_replay_as_one_message() {
+        let anthropic = args_for(HarnessProvider::Anthropic);
+        let history = [
+            turn("user", "fix the parser"),
+            turn("user", "and handle CRLF"),
+            turn("assistant", "done"),
+        ];
+        let seeded = Wire::of(&anthropic, "m").expect("wire").seed(&history);
+        assert_eq!(seeded.len(), 2, "the two questions merged: {seeded:?}");
+        assert_eq!(seeded[0]["role"], "user");
+        assert_eq!(seeded[0]["content"], "fix the parser\n\nand handle CRLF");
+        assert_eq!(seeded[1]["role"], "assistant");
+
+        let gemini = args_for(HarnessProvider::Gemini);
+        let seeded = Wire::of(&gemini, "m").expect("wire").seed(&history);
+        assert_eq!(seeded.len(), 2, "the two questions merged: {seeded:?}");
+        assert_eq!(seeded[0]["parts"][0]["text"], "fix the parser\n\nand handle CRLF");
+        assert_eq!(seeded[1]["role"], "model");
     }
 
     #[test]

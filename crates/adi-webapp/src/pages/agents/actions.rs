@@ -1064,9 +1064,10 @@ fn fmt_duration(ms: u64) -> String {
 const COMPOSER_HINT: &str = "Enter sends · Shift-Enter for a new line";
 
 /// The reply box: says the next thing into the selected conversation. It never locks you out while
-/// the agent is working — one turn runs at a time, so a message sent mid-answer is *queued* and
-/// starts when the current turn lands (the button says so). Beside it, while an answer is streaming,
-/// a Stop that cuts the turn short and drops anything lined up behind it.
+/// the agent is working — one turn runs at a time, so a message sent mid-answer is *queued* (the
+/// button says so), and is picked up either by the turn in flight, at its next round, or by the one
+/// that starts when this answer lands. Beside it, while an answer is streaming, a Stop that cuts the
+/// turn short and drops anything lined up behind it.
 fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let answering = move || watch.peek.get().is_some_and(|p| p.running);
     view! {

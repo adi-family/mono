@@ -92,8 +92,8 @@ fn report(woken: &[awaits::Woken]) {
 
 /// Say what a lapsed question decided on the run's behalf.
 ///
-/// Louder than a wake, and deliberately: a default taken is a decision nobody made, and the whole
-/// reason it is allowed is that it is visible afterwards. A fleet whose log is full of these is a
+/// Louder than a wake and deliberate: a default taken is a decision nobody made, and the whole
+/// reason it is allowed is that it is visible afterward. A fleet whose log is full of these is a
 /// fleet asking questions nobody is there to answer.
 fn report_settled(settled: &[questions::Settled]) {
     for s in settled {

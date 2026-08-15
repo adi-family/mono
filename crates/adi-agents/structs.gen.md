@@ -1442,7 +1442,7 @@ pub enum Launch {
 
 ### enum `Sent`
 
-What became of a message said into a conversation. One turn runs at a time, so a message sent while the agent is still answering is not refused — it takes its place in the queue and starts when the current answer lands.
+What became of a message said into a conversation. One turn runs at a time, so a message sent while the agent is still answering is not refused — it takes its place in the queue, and is asked either by the turn in flight (an engine whose loop ADI drives can take it between rounds) or by the turn that starts when the current answer lands.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]

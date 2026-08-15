@@ -460,6 +460,21 @@ impl SessionStore {
         queue::dequeue(&conn, agent, id)
     }
 
+    /// Take the head of the queue **and record it as a question**, or `None` when nothing is
+    /// waiting — how a turn that is still running hears something said to it since it began.
+    ///
+    /// The difference from [`dequeue`](Self::dequeue) is who writes the message down. A dequeued
+    /// message is written down by the launch that follows it; there is no launch here, so this
+    /// writes it itself, in the same transaction as the removal.
+    ///
+    /// # Errors
+    /// Returns database errors and [`Error::NotFound`] for a session deleted mid-turn. The message
+    /// stays queued in either case.
+    pub fn take_queued_as_turn(&self, agent: &str, id: &str) -> Result<Option<String>> {
+        let conn = self.conn()?;
+        queue::take_as_turn(&conn, agent, id)
+    }
+
     /// How many messages are waiting.
     #[must_use]
     pub fn queue_len(&self, agent: &str, id: &str) -> usize {
@@ -1082,6 +1097,59 @@ mod tests {
             ["elsewhere"],
             "clearing one queue leaves the other",
         );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A turn that hears something mid-answer has no launch to write the message down for it, so
+    /// taking it *is* asking it: the message leaves the queue and enters the transcript together, or
+    /// neither happens and it is offered again.
+    #[test]
+    fn a_message_taken_by_a_running_turn_is_asked_in_the_same_breath() {
+        let store = scratch("take-queued");
+        let session = store
+            .create("chat", Backend::HarnessAdi, "/tmp", "start on the parser")
+            .expect("create");
+        let id = &session.id;
+        store
+            .append_turn("chat", id, user_turn("start on the parser"))
+            .expect("the opening question");
+
+        assert!(
+            store.take_queued_as_turn("chat", id).expect("empty").is_none(),
+            "nothing waiting is not an error",
+        );
+
+        store.enqueue("chat", id, "also handle CRLF").expect("enqueue");
+        store.enqueue("chat", id, "and add a test").expect("enqueue");
+        assert_eq!(
+            store
+                .take_queued_as_turn("chat", id)
+                .expect("take")
+                .as_deref(),
+            Some("also handle CRLF"),
+        );
+
+        let turns = store.turns("chat", id);
+        assert_eq!(
+            turns.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
+            ["start on the parser", "also handle CRLF"],
+            "the message it heard is a question it was asked",
+        );
+        assert!(turns.iter().all(|t| t.role == "user" && !t.queued));
+        assert_eq!(
+            store.queued("chat", id),
+            ["and add a test"],
+            "only the head was taken; the rest is still waiting",
+        );
+
+        // A session deleted out from under a running turn takes the message with it rather than
+        // recording a turn nothing lists — and says so, instead of losing it silently.
+        store.delete("chat", id).expect("delete");
+        assert!(matches!(
+            store.take_queued_as_turn("chat", id),
+            Err(Error::NotFound(_)) | Ok(None)
+        ));
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

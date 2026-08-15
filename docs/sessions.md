@@ -155,6 +155,16 @@ idle (`lib.rs:861-870` → `advance_queue`, `lib.rs:622`), and re-lists if anyth
 *listing a chat is what keeps queues moving* while you are reading some other chat. Any refactor
 that makes the listing "pure" silently stalls every queue.
 
+**A running turn is the other thing that drains a queue.** Only the reader above can start a *new*
+turn, but a `harness:adi` turn takes what is waiting between its own rounds
+(`backends/harness/adi_loop.rs`, `take_queued` → `SessionStore::take_queued_as_turn`), so a message
+typed mid-answer reaches the model within one round instead of waiting for the answer. It is a
+different verb from `dequeue` because it also records the message as a user turn, in the same
+transaction: there is no launch behind it to write it down. Two consequences worth knowing — a
+conversation's `turns` really can hold two `user` rows in a row, and something the transcript replay
+in `Wire::seed` has to merge; and the parent must never take from a queue whose turn is alive
+(`advance_queue` checks `is_alive` first), or the same conversation is answered twice at once.
+
 `Agents::sessions()` (`lib.rs:295`) only constructs the store — a `PathBuf` and nothing else. Keep
 it that way: it is built once per agent *and* again per idle run inside `advance_queue`, so
 anything with a cost in it is paid a few hundred times per `/api/agents/runs/all`.

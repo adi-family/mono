@@ -126,7 +126,25 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
 ///
 /// # Errors
 /// Returns [`Error::NotFound`] when the session is gone, and database errors.
-pub(super) fn append(conn: &Connection, agent: &str, id: &str, mut turn: Turn) -> Result<()> {
+pub(super) fn append(conn: &Connection, agent: &str, id: &str, turn: Turn) -> Result<()> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| sql_err("record a turn in", e))?;
+    insert(&tx, agent, id, turn)?;
+    tx.commit().map_err(|e| sql_err("record a turn in", e))?;
+    Ok(())
+}
+
+/// The body of [`append`], inside a transaction the caller owns and commits.
+///
+/// Split out for the one caller that must record a turn and do something else in the *same* commit:
+/// [`super::queue::take_as_turn`], which moves a message from the queue into the transcript. Two
+/// transactions there would leave a window where a crash loses the message from both.
+///
+/// # Errors
+/// Returns [`Error::NotFound`] when the session is gone, and database errors. The caller's
+/// transaction is left uncommitted, so an error here records nothing.
+pub(super) fn insert(tx: &Connection, agent: &str, id: &str, mut turn: Turn) -> Result<()> {
     turn.pending = false;
     turn.queued = false;
     close_open_calls(&mut turn.steps);
@@ -136,9 +154,6 @@ pub(super) fn append(conn: &Connection, agent: &str, id: &str, mut turn: Turn) -
     let json = serde_json::to_string(&turn)
         .map_err(|e| Error::Session(format!("couldn't encode a turn of session {id}: {e}")))?;
 
-    let tx = conn
-        .unchecked_transaction()
-        .map_err(|e| sql_err("record a turn in", e))?;
     let known: Option<i64> = tx
         .query_row(
             "SELECT 1 FROM sessions WHERE agent = ?1 AND id = ?2",
@@ -168,7 +183,6 @@ pub(super) fn append(conn: &Connection, agent: &str, id: &str, mut turn: Turn) -
         rusqlite::params![agent, id, turn.at],
     )
     .map_err(|e| sql_err("record a turn in", e))?;
-    tx.commit().map_err(|e| sql_err("record a turn in", e))?;
     Ok(())
 }
 

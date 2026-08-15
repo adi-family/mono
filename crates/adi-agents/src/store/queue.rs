@@ -7,6 +7,13 @@
 //! Nothing here knows whether a turn is running — that is the runner's question. The store only
 //! keeps the line and hands out its head when asked.
 //!
+//! # Two things ask for the head, and one of them is a live turn
+//!
+//! Waiting for the answer to land is the floor, not the rule. An engine that drives its own loop
+//! can take the next message *while it is still working* — [`take_as_turn`] is that door, and it is
+//! why the pop and the transcript write share one transaction: a message that has left the queue
+//! but never reached the transcript is a message nobody will ever answer.
+//!
 //! # The lock is the database's now
 //!
 //! Every edit below is a read-modify-write, and the callers are concurrent by construction: an app
@@ -69,6 +76,42 @@ pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("take from the queue of", e))?;
+    let Some(message) = take_head(&tx, agent, id)? else {
+        return Ok(None);
+    };
+    tx.commit()
+        .map_err(|e| sql_err("take from the queue of", e))?;
+    Ok(Some(message))
+}
+
+/// Take the head of the line **and record it as a question in the same breath**, returning what was
+/// taken. `None` when nothing is waiting.
+///
+/// For an engine that can hear a new message mid-answer: it is already inside a turn, so there is no
+/// launch to hang the message on and nothing else will write it down. Pop and append therefore
+/// commit together — either the message is out of the queue *and* in the transcript, or it is still
+/// in the queue and gets offered again on the next round.
+///
+/// # Errors
+/// Returns the database error, and [`Error::NotFound`](crate::error::Error::NotFound) when the
+/// session has been deleted out from under the turn. Nothing is committed in either case, so the
+/// message stays where it was.
+pub(super) fn take_as_turn(conn: &Connection, agent: &str, id: &str) -> Result<Option<String>> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| sql_err("take from the queue of", e))?;
+    let Some(message) = take_head(&tx, agent, id)? else {
+        return Ok(None);
+    };
+    super::transcript::insert(&tx, agent, id, super::transcript::user_turn(&message))?;
+    tx.commit()
+        .map_err(|e| sql_err("take from the queue of", e))?;
+    Ok(Some(message))
+}
+
+/// Remove the oldest message and hand it back, inside a transaction the caller owns and commits —
+/// what both ways of taking one are built from. `None` when the line is empty.
+fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<String>> {
     let head: Option<(i64, String)> = tx
         .query_row(
             "SELECT seq, message FROM queue WHERE agent = ?1 AND session = ?2
@@ -86,8 +129,6 @@ pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option
         rusqlite::params![agent, id, seq],
     )
     .map_err(|e| sql_err("take from the queue of", e))?;
-    tx.commit()
-        .map_err(|e| sql_err("take from the queue of", e))?;
     Ok(Some(message))
 }
 
