@@ -96,8 +96,15 @@ pub fn mic(value: RwSignal<String>) -> impl IntoView {
 
     let press = Callback::new(move |()| {
         if state.get_untracked() == MicState::Listening {
-            if let Some(live) = session.try_update_value(Option::take).flatten() {
-                live.stop();
+            match session.try_update_value(Option::take).flatten() {
+                Some(live) => {
+                    if let Some(settled) = live.stop() {
+                        state.set(settled);
+                    }
+                }
+                // No session behind a listening button. Nothing is running, so the button must
+                // come back rather than stay lit over something that is not there.
+                None => state.set(MicState::Idle),
             }
             return;
         }
@@ -267,12 +274,9 @@ fn viewport(name: &str) -> f64 {
 
 /// A dictation in progress, and how to end it.
 enum Session {
-    /// The browser's recogniser. The closures it calls are owned here so they outlive this frame
-    /// and are dropped with the session rather than leaked per press.
-    Browser {
-        recognition: JsValue,
-        _handlers: Vec<Closure<dyn FnMut(JsValue)>>,
-    },
+    /// The browser's recogniser. Its event handlers are deliberately **not** held here — see
+    /// `start_browser`, where they are leaked on purpose.
+    Browser { recognition: JsValue },
     /// A recording bound for the server. Stopping fires `onstop`, which is what actually uploads.
     ///
     /// The recorder is behind an `Option` because the microphone permission prompt is answered
@@ -282,19 +286,31 @@ enum Session {
 }
 
 impl Session {
-    fn stop(self) {
+    /// End it, answering with the state to show **at once**, or `None` to leave the button where
+    /// it is because this session's own events will move it.
+    fn stop(self) -> Option<MicState> {
         match self {
-            Self::Browser { recognition, .. } => {
+            Self::Browser { recognition } => {
                 // `stop` finalises what has been heard; `abort` would throw it away. A user who
                 // pressed the button expects the last sentence to survive the press.
                 call_method(&recognition, "stop");
+                // Idle now, rather than waiting for `onend`. The recogniser's own end event is the
+                // wrong thing to hang the button on: it arrives a task later at best, and a
+                // recogniser that has already stopped for its own reasons may never send it at
+                // all — which leaves a button that says it is listening and cannot be pressed off.
+                Some(MicState::Idle)
             }
             // Empty when stop beat the permission prompt. Nothing was ever recorded, so there is
             // nothing to stop and nothing to upload.
+            //
+            // `None`: stopping a recorder is the *start* of the work, not the end of it. `onstop`
+            // moves the button to Working and the upload returns it to Idle.
             Self::Recording(recorder) => {
                 if let Some(recorder) = recorder.borrow().as_ref() {
                     let _ = recorder.stop();
+                    return None;
                 }
+                Some(MicState::Idle)
             }
         }
     }
@@ -420,12 +436,23 @@ fn start_browser(value: RwSignal<String>, state: RwSignal<MicState>) -> Result<S
     set(&recognition, "onerror", on_error.as_ref());
     set(&recognition, "onend", on_end.as_ref());
 
+    // Leaked on purpose, and this is the load-bearing line.
+    //
+    // Every one of these events arrives *after* the press that ends dictation: `stop()` is
+    // asynchronous, and the recogniser still owes a final `onresult` and an `onend`. Holding the
+    // closures in the `Session` meant they were dropped the moment the session was taken to be
+    // stopped — and a dropped `Closure` throws when JavaScript calls it. So `onend` never ran, the
+    // button never left Listening, and with the session already taken there was nothing left for a
+    // second press to stop: dictation could be started and then never stopped.
+    //
+    // Three small closures per dictation is the price, and it is the right one to pay.
+    on_result.forget();
+    on_error.forget();
+    on_end.forget();
+
     call_method(&recognition, "start");
 
-    Ok(Session::Browser {
-        recognition,
-        _handlers: vec![on_result, on_error, on_end],
-    })
+    Ok(Session::Browser { recognition })
 }
 
 /// Record a clip and, on stop, send it to the server to be transcribed.

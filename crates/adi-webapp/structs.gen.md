@@ -1076,7 +1076,6 @@ A dictation in progress, and how to end it.
 enum Session {
     Browser {
         recognition: JsValue,
-        _handlers: Vec<Closure<dyn FnMut(JsValue)>>,
     },
     Recording(Rc<RefCell<Option<MediaRecorder>>>),
 }
