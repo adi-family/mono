@@ -34,6 +34,14 @@ default-members = [
 ]
 
 # Shared metadata inherited by member crates via `field.workspace = true`.
+# Where `cargo dylint` looks for this tree's lints. Without it the command every doc
+# gives — `cargo dylint --lib adi_clone_lint --workspace` — fails with "Could not find
+# `--lib adi_clone_lint`", because dylint has no other way to learn the library exists.
+# The path is a workspace of its own (a `rustc_private` crate can never join this one),
+# which is why it is named here rather than in `members`.
+[workspace.metadata.dylint]
+libraries = [{ path = "lints/adi-clone-lint" }]
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"

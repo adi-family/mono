@@ -124,8 +124,14 @@ own workspace root — a `rustc_private` crate must never be pulled into the tre
 workspace. `cargo test` runs unit tests over the grouping plus a `ui/` test whose expected output
 is `ui/main.stderr`.
 
-Three things that are easy to get wrong and cost real time:
+Four things that are easy to get wrong and cost real time:
 
+- **`cargo dylint` only knows this library because the root `Cargo.toml` names it.** The tree is
+  not this crate's workspace, so nothing links the two implicitly; `[workspace.metadata.dylint]`
+  there points at `lints/adi-clone-lint`. Take that entry out and every command above fails with
+  `Could not find `--lib adi_clone_lint``, which reads like a build failure and is not one — the
+  alternative spelling, if you ever need it, is `DYLINT_LIBRARY_PATH` pointed at the built
+  `target/debug`.
 - **`Span::from_expansion` is not "came from a macro".** It is also true of desugarings, and HIR
   is what the compiler produces *after* desugaring, so every `for`, `?` and `.await` carries a
   desugaring context. Filtering on it skips most of the control flow in the crate. `tree::from_macro`
