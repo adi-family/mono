@@ -3,9 +3,10 @@
 use crate::arguments::{CodexApproval, CodexSandbox, ProcessCodexArguments};
 use crate::backends::push_option;
 
-/// `workspace` is the run's resolved directory (see `super::engine_run`), passed as `--cd` because
-/// it scopes Codex's sandbox, not just where the process starts. The manifest's own `working_dir`
-/// already fed into that resolution, so it is not read again here.
+/// `workspace` is the run's resolved directory (`crate::workspace::resolve`, by way of
+/// [`RunSpec::cwd`](crate::runner::RunSpec)), passed as `--cd` because it scopes Codex's sandbox,
+/// not just where the process starts. The manifest's own `working_dir` already fed into that
+/// resolution, so it is not read again here.
 pub(crate) fn argv(
     config: &ProcessCodexArguments,
     message: &str,

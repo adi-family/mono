@@ -170,8 +170,6 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
     let kinds = runner.emits();
     BackendCapabilities {
         interactive,
-        // A pane is the run: it keeps nothing to page through afterwards, while everything else
-        // spools a log the store files as history.
         history: !interactive,
         // Continuing a thread you *type* into is not a reply box, so a terminal never claims it
         // however resumable its session is.
@@ -184,13 +182,14 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
     }
 }
 
-/// Parse a run/turn's captured log into its [`TurnContent`], per the backend's engine format. An
-/// unrecognised or plain-text log (old logs, non-streaming output) yields text-only content, so this
-/// A best-effort UTF-8 view of a log, trimmed — the plain-text fallback answer.
+/// A best-effort UTF-8 view of a log, trimmed — the answer for a backend with no structured stream,
+/// and for a log written by something that died before it could say anything.
 pub(crate) fn text_of(log: &[u8]) -> String {
     String::from_utf8_lossy(log).trim().to_string()
 }
 
+/// Taking `&bool` is what serde's `skip_serializing_if` requires — it hands the predicate a
+/// reference to the field, so the by-value form clippy asks for cannot be named there.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
@@ -226,7 +225,6 @@ mod tests {
                 "harness:adi",
                 [false, true, true, true, true, false, true],
             ),
-            // A plugin backend nothing here runs can surface nothing at all.
             (
                 "cloud:worker",
                 [false, false, false, false, false, false, false],

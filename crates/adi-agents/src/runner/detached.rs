@@ -168,7 +168,16 @@ impl DetachedRunner {
         match self.backend {
             Backend::ProcessClaude | Backend::HarnessClaudeSdk => claude_stream::parse(log),
             Backend::HarnessAdi => adi_events::parse(log),
-            // Codex's `--json` stream is wired later; until then its logs read as plain text.
+            // UNIMPLEMENTED: `process:codex`. Codex emits a structured stream under `--json` and
+            // nothing here reads it, so a Codex run's log arrives as plain text: the answer is
+            // whole, the turn has no tool steps and no metrics. What it wants is a
+            // `codex_stream::parse` beside `claude_stream::parse` and an arm above; the rest of
+            // the runner is complete for that backend.
+            //
+            // Note what this does *not* line up with: `emits` below already claims `tool_call` and
+            // `metrics` for `ProcessCodex`, so `crate::progress::capabilities` advertises steps a
+            // reader will never be shown. The claim is about the engine, the gap is here — fixing
+            // it is writing the parser, not lowering the flags.
             _ => TurnContent {
                 text: progress::text_of(log),
                 steps: Vec::new(),
@@ -190,8 +199,6 @@ impl Runner for DetachedRunner {
             Backend::HarnessClaudeSdk => {
                 decode::<HarnessClaudeSdkArguments>(&spec.arguments).map(drop)
             }
-            // Every provider the adi loop can name is implemented, so the only thing left to reject
-            // is an agent that has not picked one — not-yet-configured rather than broken.
             Backend::HarnessAdi => harness::adi_loop::validate(&decode(&spec.arguments)?),
             other => Err(Error::NotRunnable(other.to_string())),
         }
@@ -366,9 +373,6 @@ impl Runner for DetachedRunner {
         cursor.offset = offset;
 
         let content = self.parse(&bytes);
-        // The engine's own verdict on the turn, where it reports one. A batch that did not contain
-        // the closing event simply has no metrics, and the run reads as having ended fine — the
-        // honest answer from a runner whose only evidence is "the child is gone".
         let failed = content.metrics.as_ref().is_some_and(|m| m.is_error);
         let error = failed
             .then(|| content.text.trim().to_string())
@@ -743,12 +747,10 @@ mod tests {
     fn check_parses_each_engines_own_arguments() {
         let claude = DetachedRunner::new(Backend::HarnessClaudeSdk);
         assert!(claude.check(&spec(json!({ "model": "opus" }))).is_ok());
-        // A knob that belongs to a different engine is a save-time mistake, caught here.
         assert!(matches!(
             claude.check(&spec(json!({ "temperature": 0.2 }))),
             Err(Error::Arguments(_))
         ));
-        // No arguments at all is the engine's defaults, not a failure.
         assert!(claude.check(&spec(Value::Null)).is_ok());
 
         let adi = DetachedRunner::new(Backend::HarnessAdi);
@@ -797,7 +799,6 @@ mod tests {
         let minted = runner.engine_session_id(&State::read(&fresh));
         assert_eq!(minted.len(), 36, "a v4 uuid: {minted}");
 
-        // Engines with nothing to resume carry no id at all.
         let adi = DetachedRunner::new(Backend::HarnessAdi);
         assert!(adi.engine_session_id(&State::read(&fresh)).is_empty());
     }
@@ -848,12 +849,9 @@ mod tests {
         let prompt = &claude[at + 1];
         let note = prompt.find("# Where you are").expect("the location is stated");
         let tools = prompt.find("# Your tools").expect("the tools are listed");
-        // Location first: it is the shorter block, and it governs every path named around it.
         assert!(note < tools, "{prompt}");
         assert!(prompt.starts_with("You are a planner."), "{prompt}");
 
-        // Codex is left alone for the same reason it gets no tool help — its `system_prompt` is
-        // pushed as the opening *user* turn, so this would arrive as something to answer.
         let codex = argv_of(
             Backend::ProcessCodex,
             &located,
@@ -893,21 +891,16 @@ mod tests {
             assert_eq!(spawn_args[0], "mcp");
             assert!(spawn_args.contains(&"solver"), "{spawn_args:?}");
             assert!(spawn_args.contains(&"conv-1"), "{spawn_args:?}");
-            // The run's directory travels explicitly: this server is a grandchild, so the working
-            // directory it inherits is the engine CLI's business and not ours to resolve against.
             let dir = spawn_args
                 .iter()
                 .position(|a| *a == "--dir")
                 .expect("the run directory is passed");
             assert_eq!(spawn_args[dir + 1], std::env::temp_dir().to_string_lossy());
 
-            // Ours and *only* ours: without this the machine's own MCP configuration also loads,
-            // and an agent's tool surface would depend on what this keyboard happens to have.
             assert!(
                 argv.iter().any(|arg| arg == "--strict-mcp-config"),
                 "{argv:?}"
             );
-            // Same terminator rule the settings flag lives under: after `--` it is prompt text.
             let terminator = argv
                 .iter()
                 .position(|arg| arg == "--")
@@ -947,17 +940,11 @@ mod tests {
                 &FakeSession::new("scoped"),
                 "go",
             );
-            // The server-level grant covers every tool the server serves, so adding one later needs
-            // no change here.
             let allowed = flag(&argv, "--allowed-tools");
             assert!(allowed.split(',').any(|t| t == "mcp__adi"), "{allowed}");
-            // An agent that asked for nothing gets nothing of the engine's own — and the flag is
-            // present-and-empty rather than absent, which is what makes that true.
             assert_eq!(flag(&argv, "--tools"), "", "{argv:?}");
         }
 
-        // An agent's own list is a decision somebody made about that agent: it is what switches the
-        // engine's built-ins on, and it is not duplicated where it already names our server.
         let opinionated = spec(json!({ "allowed_tools": "Read,mcp__adi,Bash" }));
         let argv = argv_of(
             Backend::ProcessClaude,
@@ -973,7 +960,6 @@ mod tests {
             1,
             "a grant already present is not repeated: {allowed}"
         );
-        // The engine's shell is the one thing an agent cannot ask its way back into.
         for engine_tool in crate::backends::mcp::ENGINE_SHELL_TOOLS {
             assert!(
                 !flag(&argv, "--tools").split(',').any(|t| t == *engine_tool),
@@ -1015,7 +1001,6 @@ mod tests {
             codex.iter().all(|arg| !arg.contains("adi-tasks")),
             "codex must not be handed tool help: {codex:?}"
         );
-        // Its prompt is still the opening user turn, with the run's message behind it.
         assert_eq!(
             codex.last().map(String::as_str),
             Some("You are a planner.\n\nfix the tests")
@@ -1033,8 +1018,6 @@ mod tests {
         spec.system_prompt = Some("You are an operator.".to_string());
 
         let argv = runner.argv(&spec, &session, "hi", "").expect("argv");
-        // Resolved beside the running executable when it is there, else the bare name — either
-        // way it names `adi-mono` (see `adi_loop::adi_mono_program`).
         assert_eq!(
             std::path::Path::new(&argv[0])
                 .file_name()
@@ -1054,7 +1037,6 @@ mod tests {
         assert!(prompt.starts_with("You are an operator."), "{prompt}");
         assert!(prompt.contains("## adi-db"), "{prompt}");
 
-        // A Claude engine puts it on the command line instead, so nothing is exported.
         let claude = DetachedRunner::new(Backend::HarnessClaudeSdk);
         assert!(claude.run_env(&spec).iter().all(|(key, _)| key != SYSTEM_PROMPT_ENV));
     }
@@ -1088,8 +1070,6 @@ mod tests {
         assert!(matches!(&batch.events[2], RunEvent::Answer { text } if text == "done"));
         assert!(matches!(&batch.events[3], RunEvent::Metrics(m) if m.input_tokens == Some(12)));
 
-        // Nothing was left un-read, so resuming from the cursor yields an empty batch — and the
-        // ending is announced once, not on every poll.
         assert_eq!(batch.events.len(), 5, "{:?}", batch.events);
         assert!(matches!(
             batch.events[4],
@@ -1127,7 +1107,6 @@ mod tests {
             "a running turn has not finished",
         );
 
-        // The rest of that line arrives; the second read starts where the first stopped.
         session.write_log(&format!(
             "{}\n{}\n",
             json!({"kind": "tool", "id": "c1", "name": "Grep", "input": "{}", "status": "running"}),
@@ -1160,7 +1139,6 @@ mod tests {
     fn what_each_engine_can_ever_report() {
         let claude = DetachedRunner::new(Backend::ProcessClaude).emits();
         assert!(claude.message && claude.tool_call && claude.thinking && claude.metrics);
-        // Codex and the adi loop surface no reasoning blocks.
         for backend in [Backend::ProcessCodex, Backend::HarnessAdi] {
             let emits = DetachedRunner::new(backend).emits();
             assert!(emits.message && emits.tool_call && emits.metrics);
@@ -1210,21 +1188,18 @@ mod tests {
         );
         assert!(!runner.is_alive(&deaf));
 
-        // A cooperative child exits on TERM, well inside the grace, and is not forced.
         let polite = FakeSession::new("polite");
         spawn_probe(&polite, "sleep 30");
         let stopped = runner.stop(&polite, Duration::from_secs(5)).expect("stop");
         assert_eq!(stopped, Stopped { was_running: true, forced: false });
         assert!(!runner.is_alive(&polite));
 
-        // Zero grace skips the asking entirely.
         let now = FakeSession::new("now");
         spawn_probe(&now, "trap '' TERM; sleep 30");
         let stopped = runner.stop(&now, Duration::ZERO).expect("stop");
         assert_eq!(stopped, Stopped { was_running: true, forced: true });
         assert!(!runner.is_alive(&now));
 
-        // Stopping again finds nothing running, and says so rather than reporting a second kill.
         assert_eq!(runner.stop(&now, Duration::ZERO).expect("stop"), Stopped::default());
     }
 
@@ -1284,7 +1259,6 @@ mod tests {
             "a process that started after the log went quiet never wrote it"
         );
 
-        // And a pid with no log at all cannot be confirmed as anything.
         let bare = FakeSession::new("legacy-bare").with_state(json!({ "pid": pid }));
         assert!(!runner.is_alive(&bare));
     }

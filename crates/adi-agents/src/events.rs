@@ -300,9 +300,6 @@ mod tests {
                 "{} is not a valid event name",
                 e.name
             );
-            // The schema must be a real JSON Schema object, and the example a real (non-null) body
-            // — both reflected/serialized from the emitted type, so this also proves the type wired
-            // up. `deleted`/`stopped` bodies are objects too, never bare scalars.
             assert!(e.schema.is_object(), "{} has a non-object schema", e.name);
             assert!(e.example.is_object(), "{} has a non-object example", e.name);
         }
@@ -310,7 +307,6 @@ mod tests {
 
     #[test]
     fn run_started_matches_launch_variants() {
-        // The typed payload must serialize to exactly the expected wire shapes.
         let pty = serde_json::to_value(AgentRunStarted::Pty {
             agent: "a".into(),
             message: "run".into(),

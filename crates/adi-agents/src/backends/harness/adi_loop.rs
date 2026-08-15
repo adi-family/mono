@@ -12,6 +12,15 @@
 //! `generateContent`, and a local **Ollama**. The only thing [`validate`] rejects is an agent that
 //! has not picked one.
 //!
+//! Each round below is a request written against one of these, and the field names are theirs. When
+//! a provider moves a knob or renames a field, the page to open is:
+//!
+//! - Anthropic — <https://platform.claude.com/docs/en/api/messages>
+//! - `OpenAI` — <https://platform.openai.com/docs/api-reference/chat/create>
+//! - Monshoot (Moonshot / Kimi) — <https://platform.kimi.ai/docs/api/chat>
+//! - Gemini — <https://ai.google.dev/api/generate-content>
+//! - Ollama — <https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion>
+//!
 //! **A turn is a loop, not a call.** The model is offered the [`tools`](super::tools) every coding
 //! agent has — `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep` — and while it asks for them, this
 //! runs them and asks again, up to [`MAX_ROUNDS`]. Running out of rounds is not a failure: the
@@ -140,16 +149,8 @@ pub(crate) fn run_turn(
         ));
     }
 
-    // The child was spawned into the run's own directory, so this is the directory the agent's
-    // work is about — the one its relative paths resolve against.
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    // `Awaits::open()` here rather than deeper down: this child shares the app's store through the
-    // same `$ADI_DIR` every other process here does, and holds no `Agents` of its own.
     let agent_dir = store.agent_dir(&agent.name);
-    // The shell inside is the conversation's, not this turn's: its files sit beside the transcript
-    // in the same session directory, so a path exported in an earlier turn is still exported here.
-    // The store is the same one this child read its transcript from — a question outlives this turn
-    // by being a row in it.
     let ctx = tools::Ctx::for_conversation(
         &agent.name,
         agent.manifest.unattended,
@@ -226,8 +227,6 @@ fn tool_loop(
             return Ok(reply.text);
         }
 
-        // Anything said before the calls is commentary — it belongs on the timeline, not in the
-        // answer, which is whatever the model writes once it stops reaching for tools.
         adi_events::message(sink, &reply.text);
 
         let mut results = Vec::with_capacity(reply.calls.len());
@@ -434,7 +433,6 @@ impl<'a> Wire<'a> {
                     messages.push(json!({ "role": "user", "parts": [{ "text": text }] }));
                 }
             }
-            // Both take a plain user message after the tool results, and neither minds it.
             Self::OpenAi { .. } | Self::Ollama { .. } => {
                 messages.push(json!({ "role": "user", "content": text }));
             }
@@ -555,7 +553,8 @@ fn anthropic_round(
     }
     // Extended thinking is a mode, not a token budget: current models take `adaptive` (Claude
     // decides how much to think) or `disabled`, and reject the `budget_tokens` the older API
-    // wanted. Left unset, the model's own default stands.
+    // wanted. Left unset, the model's own default stands. Which models take which, and what
+    // `budget_tokens` used to mean: <https://platform.claude.com/docs/en/build-with-claude/thinking>.
     if let Some(thinking) = args.thinking {
         let mode = match thinking {
             HarnessThinking::Adaptive => "adaptive",
@@ -1181,7 +1180,6 @@ mod tests {
     #[test]
     fn every_provider_runs_and_only_an_unconfigured_agent_does_not() {
         let mut args = HarnessAdiArguments::default();
-        // No provider → not-yet-configured, which reads as not runnable.
         assert!(matches!(validate(&args), Err(Error::NotRunnable(b)) if b == "harness:adi"));
         for provider in [
             HarnessProvider::Anthropic,
@@ -1271,7 +1269,6 @@ mod tests {
             ok: true,
         }];
 
-        // Anthropic: every result in one user message, each block naming the tool_use it answers.
         let args = args_for(HarnessProvider::Anthropic);
         let mut messages = Vec::new();
         Wire::of(&args, "m")
@@ -1281,7 +1278,6 @@ mod tests {
         assert_eq!(messages[1]["content"][0]["type"], "tool_result");
         assert_eq!(messages[1]["content"][0]["tool_use_id"], "c1");
 
-        // OpenAI dialect: one `tool` message per call, keyed by call id.
         let args = args_for(HarnessProvider::Openai);
         let mut messages = Vec::new();
         Wire::of(&args, "m")
@@ -1290,7 +1286,6 @@ mod tests {
         assert_eq!(messages[1]["role"], "tool");
         assert_eq!(messages[1]["tool_call_id"], "c1");
 
-        // Gemini: a functionResponse part, answered by name because a call has no id.
         let args = args_for(HarnessProvider::Gemini);
         let mut messages = Vec::new();
         Wire::of(&args, "m")
@@ -1324,7 +1319,6 @@ mod tests {
         assert_eq!(messages.len(), 1, "it joined the turn: {messages:?}");
         assert_eq!(messages[0]["parts"][1]["text"], "stop now");
 
-        // With an assistant turn last — a round that called nothing — it is a turn of its own.
         let mut messages = vec![json!({ "role": "model", "parts": [] })];
         Wire::of(&gemini, "m")
             .expect("wire")
@@ -1332,7 +1326,6 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1]["role"], "user");
 
-        // The chat dialects answer tool calls in `tool` messages, so the nudge is its own message.
         let openai = args_for(HarnessProvider::Openai);
         let mut messages = vec![json!({ "role": "tool", "tool_call_id": "c1", "content": "out" })];
         Wire::of(&openai, "m")
@@ -1344,13 +1337,11 @@ mod tests {
 
     #[test]
     fn tool_arguments_are_read_whichever_way_the_provider_sends_them() {
-        // OpenAI and Monshoot send a JSON string; Ollama and Gemini send the object itself.
         assert_eq!(
             parse_arguments(Some(&json!("{\"path\":\"a.rs\"}")))["path"],
             "a.rs"
         );
         assert_eq!(parse_arguments(Some(&json!({"path": "a.rs"})))["path"], "a.rs");
-        // Malformed JSON degrades to an empty object, so the tool's own error teaches the model.
         assert_eq!(parse_arguments(Some(&json!("{not json"))), json!({}));
         assert_eq!(parse_arguments(None), json!({}));
     }

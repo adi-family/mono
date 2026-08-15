@@ -4,7 +4,7 @@
 
 use crate::arguments::{ClaudeEffort, ClaudePermissionMode, HarnessClaudeSdkArguments};
 use crate::backends::mcp::ToolScope;
-use crate::backends::{push_option, push_tool_scope};
+use crate::backends::{push_mcp_config, push_option, push_tool_scope};
 
 /// Which continuation flag a turn's command carries.
 ///
@@ -35,8 +35,6 @@ pub(crate) fn argv(
         "stream-json".to_string(),
         "--verbose".to_string(),
     ]);
-    // Continuation: the first turn establishes an explicit session id; a reply resumes it, so the
-    // CLI reconstructs the whole conversation. Both are turned into a single scalar flag.
     match cont {
         Continuation::First { session_id } => {
             push_option(&mut argv, "--session-id", Some(session_id));
@@ -56,15 +54,12 @@ pub(crate) fn argv(
         "--effort",
         config.effort.map(ClaudeEffort::as_str),
     );
-    // The run's tool surface, deny-by-default: `--tools` is what exists (nothing, unless the agent
-    // asked), `--allowed-tools` is what needs no permission. See `crate::backends::mcp`.
     push_tool_scope(&mut argv, tools);
     push_option(
         &mut argv,
         "--fallback-model",
         config.fallback_model.as_deref(),
     );
-    // The harness cap on agent turns per run — the knob that distinguishes this from process:claude.
     if let Some(max_turns) = config.max_turns {
         push_option(&mut argv, "--max-turns", Some(&max_turns.to_string()));
     }
@@ -72,14 +67,7 @@ pub(crate) fn argv(
     if let Some(prompt) = append_system_prompt(config) {
         argv.extend(["--append-system-prompt".into(), prompt]);
     }
-    // ADI's own tools, over MCP (see `crate::backends::mcp`). `--strict-mcp-config` rides with it so
-    // the run gets *this* server and nothing else: without it the machine's own MCP configuration
-    // also loads, and an agent's tool surface would quietly depend on whatever the person at this
-    // keyboard happens to have installed.
-    if let Some(mcp) = mcp {
-        argv.extend(["--mcp-config".to_string(), mcp.to_string()]);
-        argv.push("--strict-mcp-config".to_string());
-    }
+    push_mcp_config(&mut argv, mcp);
     // `--tools` / `--allowed-tools` are variadic (`<tools...>`), so a bare positional prompt right
     // after them would be swallowed as another tool. `--` ends option parsing, so the prompt is
     // always taken as the prompt regardless of which flags precede it.

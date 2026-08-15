@@ -59,7 +59,6 @@ impl fmt::Display for Error {
             ),
             Self::Session(msg) => write!(f, "session error: {msg}"),
             Self::Process(msg) => write!(f, "process error: {msg}"),
-            // Both carry a ready-to-show sentence, so no prefix is added.
             Self::Busy(msg) | Self::Unsupported(msg) => write!(f, "{msg}"),
             Self::TooManyRunning {
                 project: None,

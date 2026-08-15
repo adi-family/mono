@@ -699,7 +699,6 @@ mod tests {
             "the model is told to batch its questions: {err}"
         );
 
-        // Answering it clears the way for the next turn to ask something new.
         store
             .resolve_question("chat", &conv, None, &human(&["ok"]))
             .expect("resolve");
@@ -739,7 +738,6 @@ mod tests {
         assert_eq!(default.by, AnsweredBy::Default);
         assert_eq!(default.replies, ["no — wait for a human"]);
 
-        // And the sweep settles it exactly as a person would.
         store
             .resolve_question("chat", &conv, Some(&overdue.id), default)
             .expect("resolve")

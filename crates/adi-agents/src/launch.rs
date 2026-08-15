@@ -115,7 +115,6 @@ mod tests {
             expand_home("/opt/node22/bin"),
             Some("/opt/node22/bin".into())
         );
-        // Not a home prefix — `~someone` is a path in its own right, not this process's `HOME`.
         assert_eq!(expand_home("~someone/bin"), Some("~someone/bin".into()));
     }
 

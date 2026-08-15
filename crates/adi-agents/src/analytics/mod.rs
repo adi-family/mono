@@ -1,6 +1,6 @@
 //! What a conversation spent its context on, and what it spent twice.
 //!
-//! A turn's [`TurnMetrics`] says how many tokens it cost. That is the bill, not the itemization: it
+//! A turn's [`TurnMetrics`](crate::progress::TurnMetrics) says how many tokens it cost. That is the bill, not the itemization: it
 //! cannot say that the same forty-line file arrived six times, or that one absolute path was spelled
 //! out in ninety separate tool calls. This module does the itemization — it re-reads the transcript,
 //! tokenizes it, and reports the runs of tokens that were sent more than once.
@@ -284,8 +284,6 @@ pub fn analyze(turns: &[Turn], opts: Options) -> TokenReport {
     let mut segments = segments_of(turns, bpe);
     let total: usize = segments.iter().map(|s| s.tokens.len()).sum();
 
-    // A conversation past the cap keeps its most recent end: the tail is the part still in the
-    // model's context and the part a reader can still do something about.
     let mut truncated = false;
     let mut kept = 0usize;
     let mut first = 0usize;
@@ -432,7 +430,6 @@ fn find_repeats(segments: &[Segment], bpe: &CoreBPE, opts: Options) -> Vec<Repea
         + TOKEN_BASE;
 
     let mut stream: Vec<u32> = Vec::new();
-    // Where each segment begins in `stream`, so an offset can be traced back to what it was part of.
     let mut bounds: Vec<usize> = Vec::with_capacity(segments.len());
     for (i, seg) in segments.iter().enumerate() {
         bounds.push(stream.len());
@@ -515,7 +512,6 @@ fn find_near_duplicates(segments: &[Segment]) -> Vec<NearDuplicates> {
         .map(|g| {
             let sizes: Vec<usize> = g.iter().map(|&i| segments[i].tokens.len()).collect();
             let largest = sizes.iter().copied().max().unwrap_or(0);
-            // One copy was going to be sent regardless; the rest is what near-repeating cost.
             let wasted = sizes.iter().sum::<usize>() - largest;
             NearDuplicates {
                 preview: preview(&segments[g[0]].text),
@@ -533,10 +529,15 @@ fn find_near_duplicates(segments: &[Segment]) -> Vec<NearDuplicates> {
 /// A 64-bit simhash over the token stream's shingles: each shingle votes on every bit, and the sign of
 /// each column becomes the fingerprint. Two texts that share most of their shingles agree on most
 /// bits, however far apart the shared parts sit.
+///
+/// The scheme is Charikar's (<https://doi.org/10.1145/509907.509965>, §3), as used for near-duplicate
+/// web pages — the same construction the code index fingerprints symbol shapes with.
 fn simhash(tokens: &[u32]) -> u64 {
     let mut acc = [0i32; 64];
     for window in tokens.windows(SHINGLE.min(tokens.len().max(1))) {
-        // FNV-1a over the shingle's ids — cheap, and well-mixed enough for a vote per bit.
+        // FNV-1a over the shingle's ids — cheap, and well-mixed enough for a vote per bit. The two
+        // constants are FNV's own 64-bit offset basis and prime
+        // (<https://datatracker.ietf.org/doc/html/draft-eastlake-fnv>, tables 1 and 2), not knobs.
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for &t in window {
             for byte in t.to_le_bytes() {
@@ -793,13 +794,11 @@ mod tests {
     #[test]
     fn shapes_are_classified() {
         assert_eq!(shape_of("/usr/local/share/thing/file.rs"), Shape::Path);
-        // The finding as it actually arrives: the path with its surroundings still attached.
         assert_eq!(shape_of("--manifest-path /repo/crates/api/Cargo.toml --release"), Shape::Path);
         assert_eq!(shape_of("https://example.com/a/b"), Shape::Url);
         assert_eq!(shape_of("a\nb"), Shape::Block);
         assert_eq!(shape_of("run the tests again"), Shape::Phrase);
         assert_eq!(shape_of("token 9f2c4b8e1d7a0365"), Shape::Literal);
-        // A long name somebody chose to read is not an opaque literal.
         assert_eq!(shape_of("call deploy_worker_pool now"), Shape::Phrase);
     }
 }

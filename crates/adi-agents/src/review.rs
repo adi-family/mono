@@ -390,8 +390,6 @@ pub fn document(evidence: &Evidence<'_>, opts: Options) -> String {
     across_sessions(&mut out, evidence);
     unused_tools(&mut out, evidence);
 
-    // The trace last and sized to what is left: every other section has a natural end, and this one
-    // does not. Written into its own buffer so the elision is decided against the real remainder.
     let room = opts.budget.saturating_sub(out.len());
     out.push_str(&trace(evidence.turns, room));
     out
@@ -437,8 +435,6 @@ fn configuration(out: &mut String, e: &Evidence<'_>) {
         }
     );
 
-    // Arguments minus the system prompt, which gets its own block below: inlined here it would be a
-    // wall of text in a bullet list, and it is the one setting most worth reading verbatim.
     let args: Vec<String> = m
         .arguments
         .iter()
@@ -1265,8 +1261,6 @@ mod tests {
             .lines()
             .find(|l| l.starts_with("````"))
             .expect("a fence longer than the prompt's own");
-        // Everything between the opening fence and its match is the prompt, so the heading it
-        // contains cannot be read as one of this document's.
         let body = doc.split(opening).nth(1).expect("a closed fence");
         assert!(body.contains("## Not a section of the dossier"), "{doc}");
         assert!(body.contains("```sh"), "{doc}");
@@ -1307,7 +1301,6 @@ mod tests {
         );
         assert!(doc.len() <= Options::default().budget, "{} bytes", doc.len());
         assert!(doc.contains("turns in the middle omitted"), "{doc}");
-        // The two ends survive: the ask and what it settled on are what the middle explains.
         assert!(doc.contains("really_quite_a_long_test_name_0\n"), "{doc}");
         assert!(doc.contains("really_quite_a_long_test_name_599\n"), "{doc}");
     }
@@ -1364,8 +1357,6 @@ mod tests {
         );
         assert!(doc.len() <= Options::default().budget, "{} bytes", doc.len());
         assert!(doc.contains("calls in the middle omitted"), "{doc}");
-        // Both ends of the turn survive, and the heading with them — a cut that took the heading
-        // would leave tool calls belonging to no turn a reader could go and look at.
         assert!(doc.contains("### Turn 2 — agent"), "{doc}");
         assert!(doc.contains("test_name_number_0\n"), "{doc}");
         assert!(doc.contains("test_name_number_799\n"), "{doc}");
@@ -1424,7 +1415,6 @@ mod tests {
         );
         assert!(brief.contains("agent:solver/memory"), "{brief}");
         assert!(brief.contains("adi-knowledge-root add"), "{brief}");
-        // The carve-out has to be explicit, or "change nothing" swallows part 5 whole.
         assert!(brief.contains("Part 5 is the exception"), "{brief}");
     }
 

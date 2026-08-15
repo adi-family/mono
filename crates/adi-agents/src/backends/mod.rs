@@ -30,3 +30,18 @@ pub(crate) fn push_tool_scope(argv: &mut Vec<String>, scope: &mcp::ToolScope) {
     argv.extend(["--tools".to_string(), scope.builtins.clone()]);
     push_option(argv, "--allowed-tools", Some(&scope.allowed));
 }
+
+/// Point a Claude CLI command at this run's own MCP server — ADI's tools, served by [`mcp`].
+///
+/// `--strict-mcp-config` always rides with it: without that flag the machine's own MCP
+/// configuration loads too, and an agent's tool surface would quietly depend on whatever the person
+/// at this keyboard happens to have installed.
+pub(crate) fn push_mcp_config(argv: &mut Vec<String>, mcp: Option<&str>) {
+    if let Some(mcp) = mcp {
+        argv.extend([
+            "--mcp-config".to_string(),
+            mcp.to_string(),
+            "--strict-mcp-config".to_string(),
+        ]);
+    }
+}

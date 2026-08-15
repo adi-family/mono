@@ -268,7 +268,6 @@ mod tests {
             ("solver".to_string(), Some("bugbounty".to_string())),
             ("triager".to_string(), Some("bugbounty".to_string())),
             ("loose".to_string(), None),
-            // An idle agent contributes nothing, and never invents a project row.
             ("idle".to_string(), Some("mono".to_string())),
         ];
 

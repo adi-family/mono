@@ -475,13 +475,9 @@ fn bash(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     }
     let (cwd, shell) = (ctx.cwd, &ctx.shell);
     let timeout = arg_u64(input, "timeout_ms").unwrap_or(DEFAULT_TIMEOUT_MS);
-    // Where the conversation's shell was left, which is where this command continues from — the
-    // run's own directory until something moves it. See [`super::shell`].
     let start = shell.start_dir(cwd);
     let script = shell.script(command);
 
-    // The shell is the platform's own: `sh -c` where there is one, `cmd /C` on Windows, matching
-    // what the process backends hand their CLIs.
     let mut cmd = if cfg!(windows) {
         let mut c = Command::new("cmd");
         c.arg("/C").arg(&script);
@@ -494,9 +490,6 @@ fn bash(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     cmd.current_dir(&start);
 
     let output = wait_with_timeout(cmd, timeout)?;
-    // A move is reported, and only a move: the shell's directory is now something the next command
-    // inherits, and the file tools still resolve against the run's directory — so a run that walks
-    // somewhere is told, rather than finding out from a path that landed oddly.
     let moved = shell
         .moved_from(&start)
         .map(|ended| format!("\n(the shell is now in {})", ended.display()));
@@ -593,7 +586,6 @@ fn glob(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
     if hits.is_empty() {
         return Ok(format!("no files match {pattern} under {}", root.display()));
     }
-    // Newest first: when a pattern matches broadly, what changed recently is what is being worked on.
     hits.sort_by(|a, b| b.0.cmp(&a.0));
     let listed: Vec<String> = hits
         .iter()
@@ -669,8 +661,6 @@ fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, Strin
             .and_then(Value::as_str)
             .map(str::to_string),
         expires_in_seconds: arg_u64(input, "expires_in_seconds"),
-        // The child was spawned into the run's own directory, so a check written with a relative
-        // path means what it meant while the model was looking at these files.
         cwd: ctx.cwd.display().to_string(),
     };
     let registered =
@@ -1172,9 +1162,7 @@ mod tests {
         assert!(glob_match("*.rs", "src/deep/lib.rs"));
         assert!(glob_match("**/*.rs", "src/deep/lib.rs"));
         assert!(glob_match("src/**/*.rs", "src/deep/lib.rs"));
-        // `**/` also matches nothing at all, so a file at the root is still found.
         assert!(glob_match("**/lib.rs", "lib.rs"));
-        // A single `*` stays inside its segment.
         assert!(!glob_match("src/*.rs", "src/deep/lib.rs"));
         assert!(!glob_match("*.toml", "src/lib.rs"));
     }
@@ -1188,7 +1176,6 @@ mod tests {
         let err = edit(&input, &dir).expect_err("ambiguous edit must fail");
         assert!(err.contains("appears 2 times"), "{err}");
 
-        // …and takes them all when told to.
         let all = json!({"path": "f.txt", "old_string": "a", "new_string": "b", "replace_all": true});
         edit(&all, &dir).expect("replace_all");
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "b\nb\n");
@@ -1230,7 +1217,6 @@ mod tests {
         assert!(said.contains("in the background"), "{said}");
         assert!(said.contains("job-"), "the model is told the id: {said}");
         assert!(said.contains(".log"), "and where the output goes: {said}");
-        // The instruction that makes the whole thing work: stop, don't poll.
         assert!(said.contains("woken"), "{said}");
 
         let pending = ctx.awaits.for_conversation("watcher", "conv-1");
@@ -1244,7 +1230,6 @@ mod tests {
             wake.note.contains("echo from-the-job"),
             "and reminds the run what it started: {wake:?}"
         );
-        // A job has no deadline of its own, so the wake is a poll rather than a one-shot timer.
         assert_eq!(wake.every, Some(jobs::LOOK_EVERY_SECONDS));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1309,7 +1294,6 @@ mod tests {
             "the call returns with its child, not with the orphan: {:?}",
             began.elapsed()
         );
-        // …and abandoning the reader still returns what the command actually said.
         assert!(
             String::from_utf8_lossy(&out.stdout).contains("parent-done"),
             "{:?}",
@@ -1348,7 +1332,6 @@ mod tests {
 
         let moved = bash(&json!({"command": "cd workspaces"}), &ctx_in(&dir, "bash")).expect("run");
         assert!(moved.contains(inner), "the move is reported: {moved}");
-        // …and the next command really does continue from there.
         let after = bash(&json!({"command": "pwd -P"}), &ctx_in(&dir, "bash")).expect("run");
         assert!(after.contains(inner), "{after}");
 
@@ -1388,14 +1371,11 @@ mod tests {
         assert!(ok.contains("adi.tasks.*"), "{ok}");
         assert!(ok.contains("if the check passes"), "{ok}");
 
-        // Nothing to wake on: the model is told what is missing.
         let err = await_wake(&json!({ "note": "waiting" }), &ctx).expect_err("must be refused");
         assert!(err.contains("something to wake on"), "{err}");
-        // …and a missing note is the tool's own complaint, in the same voice as every other tool.
         let err = await_wake(&json!({ "events": ["adi.tasks.*"] }), &ctx).expect_err("no note");
         assert!(err.contains("`note`"), "{err}");
 
-        // …and what was registered is really in the store, keyed to this conversation.
         let pending = ctx.awaits.for_conversation("watcher", "conv-1");
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].note, "check the deploy");
@@ -1428,8 +1408,6 @@ mod tests {
         assert_eq!(pending.note, "two ways to do the migration");
         assert_eq!(pending.questions.len(), 1);
         assert_eq!(pending.questions[0].options.len(), 2);
-        // A bare string where an object was asked for is the commonest way a model spells a list of
-        // choices, and it is read rather than refused.
         assert_eq!(pending.questions[0].options[1].label, "no");
         assert!(pending.deadline.is_none(), "no deadline was named");
     }

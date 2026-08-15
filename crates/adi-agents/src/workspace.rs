@@ -249,7 +249,6 @@ mod tests {
     fn a_project_that_is_not_registered_falls_through() {
         let (config, root) = store();
         assert_eq!(resolve(&config, &manifest(Some("gone"), None), None), root);
-        // Nor is a traversal attempt ever joined onto the store path.
         assert_eq!(resolve(&config, &manifest(Some("../.."), None), None), root);
     }
 
@@ -345,12 +344,8 @@ mod tests {
         let block = block(&config, &agent, Path::new("/targets/crescendo-ai"));
         assert!(block.contains("/targets/crescendo-ai"), "{block}");
         assert!(block.contains("do not `cd`"), "{block}");
-        // Stepping outside is allowed — what is ruled out is paying for the same move on every
-        // command, which is the habit that actually burns a run's tokens.
         assert!(block.contains("move there **once**"), "{block}");
         assert!(block.contains(WORKDIR_ENV), "{block}");
-        // The projects root is stated for every run; the *scope* clause belongs only to an agent
-        // that has one.
         assert!(block.contains(PROJECTS_DIR_ENV), "{block}");
         assert!(!block.contains("You are scoped to"), "{block}");
     }
@@ -373,8 +368,6 @@ mod tests {
             assert!(kept.contains("export FE="), "how to name a path once: {kept}");
         }
 
-        // A backend with no session shell of its own is told to trust nothing between commands —
-        // never that a `cd` or an `export` will still be there.
         let bare = block_for("pty:codex");
         assert!(bare.contains("survives into your next call"), "{bare}");
         assert!(!bare.contains("export FE="), "{bare}");

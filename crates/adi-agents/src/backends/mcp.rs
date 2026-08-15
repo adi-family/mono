@@ -30,6 +30,14 @@
 //! not with an error. Anything this server writes to stdout that is not a JSON-RPC message corrupts
 //! the stream, which is why nothing here prints and why a tool's own output can only ever travel
 //! inside a result.
+//!
+//! The two specifications this file is written against, for when a method or a field below needs
+//! checking against something other than this comment:
+//!
+//! - MCP, revision [`DEFAULT_PROTOCOL`] — <https://modelcontextprotocol.io/specification/2025-11-25>
+//!   (`initialize`, `tools/list`, `tools/call`, and the stdio transport's framing rules).
+//! - JSON-RPC 2.0 — <https://www.jsonrpc.org/specification> (request vs. notification, and the
+//!   error codes).
 
 use std::io::{BufRead, Write};
 use std::path::Path;
@@ -269,7 +277,6 @@ fn answer(request: &Value, ctx: &Ctx<'_>) -> Option<String> {
 
     let result = match method {
         "initialize" => Ok(initialize(request)),
-        // A ping exists to prove the pipe is alive; an empty result is the whole of it.
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": served_tools() })),
         "tools/call" => call(request, ctx),
@@ -278,8 +285,9 @@ fn answer(request: &Value, ctx: &Ctx<'_>) -> Option<String> {
 
     Some(match result {
         Ok(result) => json!({ "jsonrpc": "2.0", "id": id, "result": result }).to_string(),
-        // -32601 is JSON-RPC's "method not found", the only protocol-level error this server can
-        // raise: a *tool* that fails is a successful call carrying `isError`, not a failed request.
+        // -32601 is JSON-RPC's "method not found" (<https://www.jsonrpc.org/specification#error_object>),
+        // the only protocol-level error this server can raise: a *tool* that fails is a successful
+        // call carrying `isError`, not a failed request.
         Err(message) => json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -409,14 +417,10 @@ mod tests {
         assert_eq!(available, ["Read", "Edit", "Workflow"], "named, so present");
         assert!(scope.allowed.split(',').any(|t| t == "Read"), "{}", scope.allowed);
         assert!(scope.allowed.split(',').any(|t| t == "mcp__adi"), "{}", scope.allowed);
-        // Nothing it did not name comes along for the ride.
         for off in ["CronCreate", "Skill", "WebFetch", "Task", "ToolSearch"] {
             assert!(!available.contains(&off), "{off} was not asked for: {}", scope.builtins);
         }
 
-        // The shell is not a preference. An agent that names `Bash` — as one written before ours
-        // existed well might — still gets ours, because a second shell is a second conversation
-        // state and the whole arrangement exists to guarantee there is one.
         let scope = scope_tools(Some("Read Edit Write Bash Glob"));
         for shell in ENGINE_SHELL_TOOLS {
             assert!(
@@ -425,7 +429,6 @@ mod tests {
                 scope.builtins
             );
         }
-        // ...and the space-separated spelling is read as five names, not one.
         assert_eq!(scope.builtins, "Read,Edit,Write,Glob");
     }
 
@@ -443,7 +446,6 @@ mod tests {
             scope.allowed
         );
 
-        // A rule against the engine's shell goes the way of the shell itself.
         let scope = scope_tools(Some("Bash(git *),Read"));
         assert_eq!(scope.builtins, "Read");
         assert!(!scope.allowed.contains("Bash"), "{}", scope.allowed);
@@ -471,7 +473,6 @@ mod tests {
         assert!(replies[0]["result"]["capabilities"]["tools"].is_object());
         assert_eq!(replies[0]["result"]["serverInfo"]["name"], SERVER);
 
-        // A client that names no version still gets a usable answer.
         let bare = talk(r#"{"jsonrpc":"2.0","id":0,"method":"initialize","params":{}}"#);
         assert_eq!(bare[0]["result"]["protocolVersion"], DEFAULT_PROTOCOL);
     }
@@ -517,7 +518,6 @@ mod tests {
             .collect();
         assert_eq!(names, SERVED, "the file tools stay the CLI's own");
 
-        // Description and schema come from `tools::TOOLS` verbatim.
         let bash = tools::TOOLS
             .iter()
             .find(|t| t.name == "Bash")
@@ -554,7 +554,6 @@ mod tests {
         let result = &replies[0]["result"];
         assert!(result["content"][0]["text"].is_string());
 
-        // A tool we do not serve is a different thing: the request named something that isn't here.
         let unknown = talk(
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"Write","arguments":{}}}"#,
         );

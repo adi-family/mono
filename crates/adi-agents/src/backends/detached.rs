@@ -78,9 +78,6 @@ pub(crate) fn spawn_child(
     // Detach the run from the launcher's process group so a Ctrl-C / signal to the parent
     // doesn't tear down the agent. Unix: new process group; Windows: the equivalent flag.
     adi_osext::detach_process_group(&mut command);
-    // `base_dir` is the run's directory, already resolved by `workspace::resolve` — the launch's
-    // own choice, else the manifest's, else the agent's project, else the store root. Not the
-    // launching daemon's cwd, and not re-decided here: one directory, decided once.
     command.current_dir(base_dir);
 
     let mut child = command
@@ -116,8 +113,11 @@ pub(crate) fn spawn_child(
     Ok(spawned)
 }
 
-/// The tail of a log at a known path — the same read as [`tail_log`], for a caller that already
-/// holds the path (the store keeps its own layout, and asking it beats rebuilding one here).
+/// The last `max_bytes` of a log, as much of it as is whole lines: a cut lands mid-line, so the
+/// first partial one is dropped rather than shown as a sentence that starts nowhere.
+///
+/// Takes the path rather than a session, so the store stays the only thing that knows where a run's
+/// files live — this would otherwise be a second place that had to agree with it about the layout.
 pub(crate) fn tail_of(path: &Path, max_bytes: u64) -> Option<String> {
     let mut file = File::open(path).ok()?;
     let len = file.metadata().ok()?.len();
@@ -249,7 +249,6 @@ mod tests {
         let dir = scratch_dir("basedir-run");
         let base = scratch_dir("basedir-cwd");
 
-        // The child writes its own cwd, so the assertion is on where it actually ran.
         let child = spawn_child(
             &dir,
             "run-1",
@@ -378,13 +377,11 @@ mod tests {
     #[test]
     fn a_tail_reads_the_end_and_drops_a_partial_first_line() {
         let dir = scratch_dir("tail");
-        // No such log → None, not an empty string.
         assert!(tail_of(&dir.join("missing.log"), 1024).is_none());
 
         let log = dir.join("run-1.log");
         std::fs::write(&log, "line one\nline two\n").unwrap();
         assert_eq!(tail_of(&log, 1024).as_deref(), Some("line one\nline two"));
-        // A tail that starts mid-file (inside "line one") drops that partial line.
         assert_eq!(tail_of(&log, 13).as_deref(), Some("line two"));
 
         let _ = std::fs::remove_dir_all(&dir);

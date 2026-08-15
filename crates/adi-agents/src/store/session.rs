@@ -182,7 +182,6 @@ mod tests {
         assert!(!view.has_started(), "nothing has run in it yet");
         assert!(view.state().is_none(), "no runner has been here");
 
-        // Another writer — a runner in another process, as far as the view is concerned.
         let elsewhere = store.session("solver", &record.id);
         elsewhere
             .set_state(serde_json::json!({ "pid": 4711 }))
@@ -195,7 +194,6 @@ mod tests {
             Some(serde_json::json!({ "pid": 4711 })),
             "and it reads the other writer's state slot, not a stale copy",
         );
-        // Replacing the slot replaces it whole; nothing else in the record moves with it.
         view.set_state(serde_json::json!({ "session": "adi-agent-solver" }))
             .expect("replace state");
         let after = view.record().expect("still there");

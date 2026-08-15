@@ -132,3 +132,27 @@ If you change *what* gets indexed or *how* the embedded text is built, bump
 `cache::SCHEMA_VERSION` **and** `indexer::PIPELINE_VERSION`. Both incremental layers key on file
 content, so a change to the crate is invisible to them: skip the bump and a full reindex returns
 in seconds with the old data and no error at all.
+
+## Comments: `docs/comments.md`
+
+The standard every comment in this tree is held to — nine rules, worked through on
+`crates/adi-agents`, which was audited against all of them.
+
+The one-line version: **a comment earns its place by saying what the code cannot.** Not what
+the line does (the line says that, and never goes stale) — the reason, the alternative that
+was tried, the constraint somebody else's API imposes, the bug the line exists to prevent.
+
+For inline `//` comments the bar is higher still: keep one only where a reader would
+otherwise get the line **wrong** — another system's behaviour, a past bug, an ordering or
+concurrency hazard, a deliberate non-idiom, a magic value. Explanation that merely helps
+belongs in the module header or the item's own doc. In `crates/adi-agents` that works out
+at one inline comment per ~36 lines of code.
+
+Two checks worth running after any refactor, because a comment left behind by a moved
+function is a trap no compiler catches:
+
+```bash
+cargo doc -p <crate> --no-deps      # unresolved intra-doc links = dead references
+```
+
+and a grep for backticked identifiers in comments that match no definition in the tree.

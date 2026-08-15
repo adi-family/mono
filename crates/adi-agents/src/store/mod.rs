@@ -741,7 +741,6 @@ mod tests {
             "the first writer records it"
         );
 
-        // A second watcher, arriving with a different story, changes nothing and is told so.
         let later = RunOutcome {
             terminal_reason: Some("api_error".into()),
             is_error: true,
@@ -757,7 +756,6 @@ mod tests {
         let stored = store.get("solver", &run.id).expect("get").outcome;
         assert_eq!(stored, Some(finished), "the first outcome is the one kept");
 
-        // And it survives the listing, which is where a reader actually meets it.
         let listed = store.list("solver");
         assert_eq!(
             listed[0].outcome.as_ref().and_then(|o| o.terminal_reason.as_deref()),
@@ -795,7 +793,6 @@ mod tests {
         assert_eq!(listed[1].id, first.id);
         assert_eq!(listed[0].message, "second task");
 
-        // Sessions of another agent are another agent's.
         assert!(store.list("other").is_empty());
         assert!(store.get("other", &first.id).is_none());
         assert_eq!(store.agents(), ["solver"]);
@@ -827,7 +824,6 @@ mod tests {
             Some(Backend::ProcessCodex),
         );
 
-        // And the layout: one database, one directory per agent for the logs, no executor segment.
         assert!(store.db_path().is_file());
         assert!(!store.dir().join("harness").exists());
         assert!(!store.dir().join("process").exists());
@@ -870,7 +866,6 @@ mod tests {
         );
         assert_eq!(store.list("talker").len(), 1, "and it is still listed");
 
-        // Unhiding is the same write in reverse, and an unknown session is a quiet no-op.
         assert!(store.set_hidden("talker", &id, false).expect("unhide"));
         assert!(!store.get("talker", &id).expect("listed").hidden);
         assert!(
@@ -932,7 +927,6 @@ mod tests {
             .append_turn("talker", &id, Turn { at: answered, ..user_turn("what is it") })
             .expect("append");
 
-        // Everything but a turn, all written just now.
         std::fs::write(record::log_path(&dir, &id), "the engine spooling").unwrap();
         std::fs::write(dir.join(format!("{id}.invented-later")), "a runner's own").unwrap();
         store.enqueue("talker", &id, "waiting").expect("enqueue");
@@ -947,7 +941,6 @@ mod tests {
             "none of that is the conversation saying anything",
         );
 
-        // And a turn does move it.
         store
             .append_turn("talker", &id, Turn { at: now, ..user_turn("still there?") })
             .expect("append");
@@ -990,14 +983,12 @@ mod tests {
             "its messages cascade off the row",
         );
 
-        // …and only its own.
         let left = store.list("chat");
         assert_eq!(left.len(), 1);
         assert_eq!(left[0].id, keeper.id);
         assert!(dir.join(format!("{}.invented-later", keeper.id)).exists());
         assert_eq!(store.turns("chat", &keeper.id).len(), 1);
 
-        // Deleting what is already gone is quiet, so a second click is not an error.
         assert!(!store.delete("chat", &doomed.id).expect("delete again"));
 
         let _ = std::fs::remove_dir_all(store.dir());
@@ -1020,13 +1011,11 @@ mod tests {
             .collect();
         assert_eq!(store.list("busy").len(), MAX_SESSIONS + 5);
 
-        // Nothing over the cap sweeps nothing.
         let store_small = scratch("prune-small");
         seed(&store_small, "busy", "0000000000001-0000", "task");
         assert_eq!(store_small.prune_old("busy", |_| false), 0);
         let _ = std::fs::remove_dir_all(store_small.dir());
 
-        // The oldest of the excess is still running, so it stays and one fewer is swept.
         let oldest = ids[0].clone();
         let removed = store.prune_old("busy", |s| s.id == oldest);
         assert_eq!(removed, 4, "five over the cap, one of them alive");
@@ -1045,7 +1034,6 @@ mod tests {
             assert!(!record::log_path(&dir, id).exists());
         }
 
-        // Once it finishes, the next prune takes it too.
         assert_eq!(store.prune_old("busy", |_| false), 1);
         assert_eq!(store.list("busy").len(), MAX_SESSIONS);
 
@@ -1113,7 +1101,6 @@ mod tests {
         store
             .append_turn("chat", id, user_turn("set the port"))
             .expect("append");
-        // Mid-turn: the answer streams into the view, and two more messages wait behind it.
         let live = TurnContent {
             text: "looking".into(),
             steps: vec![crate::progress::Step::Message {
@@ -1135,8 +1122,6 @@ mod tests {
         assert!(view[2..].iter().all(|t| t.queued));
         assert_eq!(store.turns("chat", id).len(), 1, "none of that is recorded");
 
-        // The turn lands: committing it is what makes it durable, and the same live content handed
-        // in afterwards is no longer spliced on top of it.
         store
             .append_turn("chat", id, assistant_turn(&live))
             .expect("append");
@@ -1148,7 +1133,6 @@ mod tests {
         assert_eq!(turns[0].role, ROLE_USER, "oldest first");
         assert_eq!(turns[1].steps.len(), 1, "the timeline round-trips");
 
-        // One session's transcript is not another's, and a session that is gone cannot be written to.
         let other = store
             .create("chat", Backend::HarnessAdi, "/tmp", "elsewhere")
             .expect("create");
@@ -1192,11 +1176,9 @@ mod tests {
         );
         assert!(store.sessions_with_queue("elsewhere").is_empty());
 
-        // Emptying it takes it back out of the set.
         store.clear_queue("chat", &busy.id).expect("clear");
         assert!(store.sessions_with_queue("chat").is_empty());
 
-        // A listed view answers from the record it was listed with...
         store
             .set_runner_state("chat", &quiet.id, serde_json::json!({ "pid": 4711 }))
             .expect("park state");

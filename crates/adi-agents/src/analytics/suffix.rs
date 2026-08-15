@@ -11,6 +11,22 @@
 //! because the alternative (hash every window of every length) is the same answer computed worse.
 //! Everything here is generic over `&[u32]`: it never learns that the ids came from a tokenizer, and
 //! the caller never learns that a suffix array was involved.
+//!
+//! Where the textbook is, for anyone reading a line and wondering why it is written that way:
+//!
+//! - Suffix array by prefix doubling with a counting sort, and the LCP array —
+//!   <https://cp-algorithms.com/string/suffix-array.html>. [`sort_cyclic_shifts`] is that article's
+//!   construction transcribed into Rust, variable names and all.
+//! - The LCP array in linear time — Kasai, Lee, Arimura, Arikawa, Park, *Linear-Time
+//!   Longest-Common-Prefix Computation in Suffix Arrays and Its Applications*, CPM 2001,
+//!   <https://doi.org/10.1007/3-540-48194-X_17>.
+//! - Reading maximal repeats off LCP intervals with a stack — Abouelhoda, Kurtz, Ohlebusch,
+//!   *Replacing suffix trees with enhanced suffix arrays*, J. Discrete Algorithms 2(1), 2004,
+//!   <https://doi.org/10.1016/S1570-8667(03)00065-0>.
+//!
+//! What is *not* from the textbook is everything after the walk — non-overlapping occurrences,
+//! dropping a repeat that lies inside one already reported, the site cap. Those are about what makes
+//! a readable finding rather than about what makes a correct repeat, and each says so where it sits.
 
 /// The most occurrence offsets kept for one repeat. A repeat that shows up four thousand times is a
 /// finding at ten occurrences and the same finding at four thousand; the count is reported in full,
@@ -51,9 +67,10 @@ pub(super) fn maximal_repeats(s: &[u32], min_len: usize, keep: usize) -> Vec<Raw
     let lcp = lcp_array(s, &sa);
 
     // Every LCP-interval is a candidate: the suffixes it spans share a prefix, and that shared prefix
-    // is a repeat. Collected as (wasted, len, lo, hi) rather than materialized, because materializing
-    // every interval's occurrence list is quadratic and all but `keep` of them are about to be
-    // thrown away.
+    // is a repeat. The stack walk that enumerates the intervals in one pass is Abouelhoda–Kurtz–
+    // Ohlebusch's (see the module docs). Collected as (wasted, len, lo, hi) rather than materialized,
+    // because materializing every interval's occurrence list is quadratic and all but `keep` of them
+    // are about to be thrown away.
     let mut found: Vec<(usize, usize, usize, usize)> = Vec::new();
     let mut stack: Vec<(usize, usize)> = Vec::new();
     for i in 0..=lcp.len() {
@@ -198,6 +215,10 @@ fn compress(s: &mut [u32]) {
 }
 
 /// Sort every cyclic shift of `s`, returning their start offsets in order.
+///
+/// Transcribed from <https://cp-algorithms.com/string/suffix-array.html>, whose names (`p` for the
+/// permutation, `c` for equivalence classes, `pn`/`cn` for the next round) are kept so the two can be
+/// read side by side. The `u32` narrowing and the dense-alphabet requirement are the only departures.
 fn sort_cyclic_shifts(s: &[u32]) -> Vec<u32> {
     let n = s.len();
     let alphabet = s.iter().copied().max().unwrap_or(0) as usize + 1;
@@ -227,8 +248,6 @@ fn sort_cyclic_shifts(s: &[u32]) -> Vec<u32> {
     let mut cn = vec![0u32; n];
     let mut shift = 1usize;
     while shift < n {
-        // Sorting by the second half is free: the previous round already left `p` in that order, so
-        // shifting it back by `shift` yields the pairs pre-sorted on their tail.
         for i in 0..n {
             let moved = (p[i] as usize + n - shift) % n;
             pn[i] = u32::try_from(moved).unwrap_or(u32::MAX);
@@ -271,7 +290,9 @@ fn sort_cyclic_shifts(s: &[u32]) -> Vec<u32> {
 ///
 /// Linear because it walks the suffixes in *stream* order rather than sorted order: dropping the
 /// first token of a suffix can shorten its overlap with its neighbour by at most one, so the match
-/// length carries over between steps instead of being recomputed.
+/// length carries over between steps instead of being recomputed. That is the whole trick of
+/// <https://doi.org/10.1007/3-540-48194-X_17>, and `k = k.saturating_sub(1)` at the bottom of the
+/// loop is where it is spent.
 fn lcp_array(s: &[u32], sa: &[u32]) -> Vec<u32> {
     let n = sa.len();
     if n == 0 {

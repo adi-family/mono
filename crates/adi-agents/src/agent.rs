@@ -307,7 +307,6 @@ mod tests {
         assert_eq!(typed.arguments.max_turns, 12);
         assert_eq!(typed.arguments.provider, "anthropic");
 
-        // The stored shape keeps every backend param under `arguments`, never at the top level.
         let serialized = serde_json::to_value(&manifest).expect("serialize");
         assert_eq!(serialized["arguments"]["system_prompt"], "Solve it");
         for top_level in ["system_prompt", "tools", "model", "max_turns"] {

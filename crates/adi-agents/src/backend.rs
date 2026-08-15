@@ -77,14 +77,12 @@ impl From<String> for Backend {
         match value.as_str() {
             "pty:claude" => Self::PtyClaude,
             "pty:codex" => Self::PtyCodex,
-            // Back-compat with the legacy tmux wire strings (see the `&str` impl above).
             "tmux:claude" => Self::PtyClaude,
             "tmux:codex" => Self::PtyCodex,
             "process:claude" => Self::ProcessClaude,
             "process:codex" => Self::ProcessCodex,
             "harness:claude-sdk" => Self::HarnessClaudeSdk,
             "harness:adi" => Self::HarnessAdi,
-            // Reuse the already-owned string instead of re-allocating.
             _ => Self::Other(value),
         }
     }
@@ -136,9 +134,6 @@ mod tests {
 
     #[test]
     fn legacy_tmux_wire_strings_map_to_pty() {
-        // Manifests stored before the tmux→pty rename must keep working: the legacy strings decode
-        // onto the pty backends (and re-serialize as the new `pty:*` names), while an unknown
-        // `tmux:*` engine is still kept verbatim as `Other`.
         assert_eq!(Backend::from("tmux:claude"), Backend::PtyClaude);
         assert_eq!(Backend::from("tmux:claude").as_str(), "pty:claude");
         assert_eq!(Backend::from("tmux:codex"), Backend::PtyCodex);

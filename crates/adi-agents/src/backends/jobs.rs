@@ -273,7 +273,6 @@ mod tests {
     fn a_job_inherits_the_conversations_shell_without_moving_it() {
         let dir = scratch("inherit");
         let shell = Shell::new(&dir, "conv-1");
-        // Put the conversation somewhere and give it a variable, the way an earlier `Bash` would.
         let home = dir.join("home");
         let elsewhere = dir.join("elsewhere");
         std::fs::create_dir_all(&home).expect("home");

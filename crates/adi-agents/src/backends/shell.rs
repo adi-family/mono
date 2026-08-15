@@ -254,8 +254,6 @@ mod tests {
             Some(PathBuf::from(there)),
             "the recorded directory is where the command ended"
         );
-        // A command that stays put is not reported as a move, even when the run directory reaches
-        // through a symlink.
         assert!(shell.moved_from(&shell.start_dir(&home)).is_none());
 
         let _ = std::fs::remove_dir_all(&home);
@@ -298,7 +296,6 @@ mod tests {
             .expect("sh");
         assert_eq!(status.code(), Some(3));
 
-        // Even when the command exits by hand, the trap still recorded where it was.
         assert!(shell.ended_in().is_some());
 
         let _ = std::fs::remove_dir_all(&home);

@@ -111,7 +111,6 @@ mod tests {
             "detached",
         );
 
-        // And a backend nobody runs still has no runner, however it is asked for.
         record.backend = Backend::from("cloud:worker");
         assert!(runner_of(&record).is_none());
     }

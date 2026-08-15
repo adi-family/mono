@@ -92,8 +92,6 @@ pub(crate) fn resolve(config: &Config, agent: &StoredAgent) -> RunKnowledge {
         &agent.name,
         project,
         &manifest.knowledge,
-        // Only claim the memory when it actually exists — `resolve_agent_bases` would otherwise
-        // list a base the run cannot use.
         memory.is_some(),
     ) {
         Ok(ids) => ids.iter().map(ToString::to_string).collect(),
@@ -219,14 +217,12 @@ mod tests {
         let k = resolve(&config, &agent("solver", true, &[], None));
         assert_eq!(k.memory.as_deref(), Some("agent:solver/memory"));
 
-        // It is really there — a second store opened on the same root finds it.
         let store = KnowledgeStore::with_config(config.clone());
         let id: adi_knowledge::BaseId = "agent:solver/memory".parse().expect("id");
         assert!(store.get_base(&id).expect("get").is_some());
 
         let env = k.env();
         assert!(env.contains(&(MEMORY_ENV.into(), "agent:solver/memory".into())));
-        // The memory is in the readable list too — an agent can search what it wrote.
         assert!(
             env.iter()
                 .any(|(key, v)| key == KNOWLEDGE_ENV && v.contains("agent:solver/memory"))
@@ -301,7 +297,6 @@ mod tests {
         assert!(text.contains("$ADI_MEMORY"));
         assert!(text.contains("global/runbooks"));
         assert!(text.contains("adi-knowledge search"));
-        // The memory is described as a memory, not repeated as one more readable base.
         assert_eq!(
             text.matches("global/runbooks").count(),
             1,

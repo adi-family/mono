@@ -4,9 +4,9 @@ use crate::arguments::{CodexApproval, CodexSandbox, PtyCodexArguments};
 use crate::backends::push_option;
 
 /// Build the Codex CLI command run by the shared pty executor. `workspace` is the session's
-/// resolved directory (see `super::engine_argv`) — passed as `--cd` because it scopes Codex's
-/// sandbox, not just where the process starts. The manifest's own `working_dir` already fed into
-/// that resolution, so it is not read again here.
+/// resolved directory (`crate::workspace::resolve`, by way of [`RunSpec::cwd`](crate::runner::RunSpec))
+/// — passed as `--cd` because it scopes Codex's sandbox, not just where the process starts. The
+/// manifest's own `working_dir` already fed into that resolution, so it is not read again here.
 pub(crate) fn argv(config: &PtyCodexArguments, workspace: Option<&str>) -> Vec<String> {
     let mut argv = vec!["codex".to_string()];
     push_option(&mut argv, "--model", config.model.as_deref());

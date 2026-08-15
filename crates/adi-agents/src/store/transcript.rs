@@ -66,6 +66,8 @@ pub struct Turn {
     pub metrics: Option<TurnMetrics>,
 }
 
+/// Taking `&bool` is what serde's `skip_serializing_if` requires — it hands the predicate a
+/// reference to the field, so the by-value form clippy asks for cannot be named there.
 #[allow(clippy::trivially_copy_pass_by_ref)]
 fn is_false(b: &bool) -> bool {
     !*b
@@ -291,7 +293,6 @@ mod tests {
         assert!(!turns[0].pending, "a recorded turn is settled");
         assert!(!turns[0].queued, "and it has been asked");
         assert!(turns[0].at > 0, "and it says when it landed");
-        // The moment is also what the session now reads as active at.
         assert_eq!(
             store.get("chat", &s.id).expect("listed").last_activity,
             turns[0].at,

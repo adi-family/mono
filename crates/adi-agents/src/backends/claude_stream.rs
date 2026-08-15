@@ -17,6 +17,10 @@
 //! yet stays [`ToolStatus::Running`], with no `result` event the answer is the latest text block so
 //! far, and metrics are absent. A log that is *not* this stream (plain text, an old log) falls back
 //! to text-only content, so this is safe to run on any claude-backend log.
+//!
+//! The format is the CLI's, not ours, and it grows event kinds we ignore:
+//! <https://code.claude.com/docs/en/headless>. Anything unrecognised is skipped rather than
+//! rejected, so a newer CLI's extra events cost a turn nothing.
 
 use std::collections::HashMap;
 
@@ -27,12 +31,9 @@ use crate::progress::{Step, ToolStatus, TurnContent, TurnMetrics, text_of};
 pub(crate) fn parse(log: &[u8]) -> TurnContent {
     let text = String::from_utf8_lossy(log);
     let mut steps: Vec<Step> = Vec::new();
-    // tool_use id → index into `steps`, so its later `tool_result` attaches to the right tool.
     let mut tool_index: HashMap<String, usize> = HashMap::new();
     let mut metrics: Option<TurnMetrics> = None;
     let mut saw_event = false;
-    // The authoritative final answer, from the terminal `result` event. Absent while streaming, in
-    // which case the turn's last `Message` step stands in as the answer so far.
     let mut result_text: Option<String> = None;
 
     for line in text.lines() {
@@ -63,7 +64,6 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
     }
 
     if !saw_event {
-        // Not a stream-json log (plain text / old log): the whole thing is the answer.
         return TurnContent {
             text: text_of(log),
             steps: Vec::new(),
@@ -71,9 +71,6 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
         };
     }
 
-    // The turn's *final* message is its answer and is rendered as the turn's message, so it is
-    // lifted out of the timeline — leaving only the commentary that came before it as steps. The
-    // `result` event wins when present; otherwise the last message written so far stands in.
     let text = match result_text {
         Some(final_text) => {
             pop_trailing_message_if(&mut steps, |last| last == final_text);
@@ -238,6 +235,9 @@ fn parse_metrics(event: &Value) -> TurnMetrics {
     TurnMetrics {
         input_tokens: usage.and_then(|u| u.get("input_tokens")).and_then(Value::as_u64),
         output_tokens: usage.and_then(|u| u.get("output_tokens")).and_then(Value::as_u64),
+        // Dollars as reported, kept as whole micro-dollars: [`TurnMetrics`] is `Eq`, and a float
+        // there would make every poll-change comparison a float comparison. Rounding at the sixth
+        // decimal loses nothing that was ever billed.
         cost_micro_usd: event
             .get("total_cost_usd")
             .and_then(Value::as_f64)
@@ -310,7 +310,6 @@ mod tests {
 
     #[test]
     fn an_in_flight_tool_has_no_result_yet_and_stays_running() {
-        // Up to the tool_use, before its result or the terminal event.
         let partial: Vec<&str> = TOOL_TURN.lines().take(3).collect();
         let c = parse(partial.join("\n").as_bytes());
         assert!(c.metrics.is_none());

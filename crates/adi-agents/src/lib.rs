@@ -254,10 +254,6 @@ impl Agents {
         })
     }
 
-    /// Publish an `adi.agents.*` event onto the shared bus. Best-effort and fire-and-forget: this
-    /// registry neither knows nor cares whether anything subscribes, and a spool failure must
-    /// never fail the lifecycle action that caused it. Emitted against **this store's** [`Config`],
-    /// so a scratch store stays isolated.
     /// Announce that a question is settled, so whatever told a person about it can say so too.
     pub(crate) fn emit_answered(&self, ask: &Ask, by: AnsweredBy) {
         self.emit(
@@ -274,6 +270,10 @@ impl Agents {
         );
     }
 
+    /// Publish an `adi.agents.*` event onto the shared bus. Best-effort and fire-and-forget: this
+    /// registry neither knows nor cares whether anything subscribes, and a spool failure must
+    /// never fail the lifecycle action that caused it. Emitted against **this store's** [`Config`],
+    /// so a scratch store stays isolated.
     fn emit(&self, event: &str, payload: &impl serde::Serialize) {
         if let Ok(json) = serde_json::to_string(payload) {
             let _ = adi_events::Events::with_config(self.config.clone()).emit(event, json);
@@ -510,8 +510,6 @@ impl Agents {
             return Err(full);
         }
         let runner = Self::runner_of_agent(&agent)?;
-        // One pane per agent, so a second Run is not a launch — it would type this task into the
-        // session already open. Say so instead.
         if runner.as_terminal().is_some() && self.is_running(&agent) {
             return Err(Error::AlreadyRunning(name.to_string()));
         }
@@ -526,7 +524,6 @@ impl Agents {
             &spec.cwd,
             message,
         )?;
-        // What this conversation's prompt says about its tools, settled here and not asked again.
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
         let session = store.session(&agent.name, &record.id);
         // The opening question, recorded as a turn so the run reads as a conversation from its
@@ -562,14 +559,6 @@ impl Agents {
     /// Returns [`Error::NotFound`] or backend launch errors — including [`Error::NotRunnable`] for a
     /// backend that keeps no conversation.
     pub fn reply(&self, name: &str, conv_id: &str, message: &str) -> Result<Sent> {
-        // A person typing into a conversation that is waiting on them is answering it, whether or
-        // not they used the card. Settled first, so the message that actually goes in carries the
-        // marker naming the ask it closes — otherwise the model reads an unattached sentence and
-        // the card sits there, answered and still asking.
-        //
-        // But only once this conversation is known to be one that can take a message at all: a
-        // settled question cannot be unsettled, so consuming one to then refuse the message would
-        // lose the answer and the question together.
         self.check_deliverable(name, conv_id)?;
         let settled = self
             .sessions()
@@ -678,9 +667,6 @@ impl Agents {
         // engine the agent is pointed at — and answering the wrong one would refuse a reply the
         // conversation can plainly take.
         let Some(record) = self.sessions().get(name, conv_id) else {
-            // No such conversation. Which of the two things is wrong is worth getting right: an
-            // agent whose backend keeps no thread never had one to find, and saying so is more use
-            // than reporting the id missing.
             return Err(if answerable(Self::runner_of_agent(&agent)?.as_ref()) {
                 Error::NotFound(format!("{name}: no conversation {conv_id}"))
             } else {
@@ -723,8 +709,6 @@ impl Agents {
 
         let _gate = turn_gate();
         let session = store.session(name, conv_id);
-        // Still answering, or no slot free: the message keeps its place and is asked when one of
-        // those changes. Nothing typed into a chat is ever refused.
         if !may_start || runner.is_alive(&session) {
             let place = store.enqueue(name, conv_id, message)?;
             return Ok(Sent::Queued { place });
@@ -767,8 +751,6 @@ impl Agents {
         let session = store.session(&agent.name, conv_id);
         let running = runner.is_alive(&session);
         let live = live_content(runner.as_ref(), &session, running);
-        // Commit the answer before showing it, so what a reader sees settle is the same text that
-        // is on disk a moment later. A no-op while a turn is in flight, or once it has landed.
         if !running {
             settle(&store, &agent.name, conv_id, &live);
         }
@@ -808,8 +790,6 @@ impl Agents {
             return Err(Error::NotFound(format!("{}/{conv_id}", agent.name)));
         };
         let turns = self.transcript(agent, conv_id);
-        // Queued messages have been typed, not asked. A conversation that is only a queue has cost
-        // nothing and done nothing, so there is no workflow in it to review.
         if turns.iter().all(|t| t.queued) {
             return Err(Error::Unsupported(
                 "This conversation hasn't said anything yet — there's nothing to review.".to_string(),
@@ -965,8 +945,6 @@ impl Agents {
         );
 
         let mut spec = self.spec_in(agent, session_dir(&self.config, record));
-        // The tool section this conversation opened with, re-used rather than re-derived — see
-        // [`RunSpec::tool_help`] for what re-deriving it every turn used to cost.
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
@@ -1001,9 +979,6 @@ impl Agents {
         let agent = self
             .get(agent_name)?
             .ok_or_else(|| Error::NotFound(agent_name.to_string()))?;
-        // The one verb no runner has: every other engine answers a turn in a child process the
-        // runner spawned, while the `adi` loop *is* that child. So it stays a direct call, and the
-        // backend check that used to be a dispatch match is now the two lines it always was.
         if agent.manifest.backend != Backend::HarnessAdi {
             return Err(Error::Unsupported(format!(
                 "backend {} has no adi loop to run",
@@ -1075,14 +1050,7 @@ impl Agents {
     /// that knows it.
     fn spec_in(&self, agent: &StoredAgent, cwd: PathBuf) -> RunSpec {
         let tools = adi_tools::Tools::with_config(self.config.clone());
-        // The agent's knowledge, made real: `memory = true` creates the base, and the configured
-        // list is filtered down to what the isolation levels actually allow. Best-effort — a
-        // knowledge store that cannot be opened never blocks a launch (see [`knowledge`]).
         let knowledge = knowledge::resolve(&self.config, agent);
-        // The tools it runs, plus the knowledge CLI when it has knowledge to reach. Adding that
-        // one shim is the exception to "nothing is auto-added": the memory toggle and the base
-        // checkboxes *are* the request, and honouring them with a tool the agent cannot run would
-        // make both settings do nothing.
         let bin_tools = with_knowledge_tool(&agent.manifest.bin_tools, &knowledge);
         // Best-effort: a sync failure (or no tools) just means no extra bin on PATH, never a blocked run.
         let bin_dir = tools.sync_agent_bin(&agent.name, &bin_tools).ok();
@@ -1094,11 +1062,7 @@ impl Agents {
         // the agent being told where the file is. Secrets are listed first, so a secret named
         // `ADI_DB` would be overridden here rather than silently redirecting the run's database.
         env.extend(self.config.db_env(agent.manifest.project.as_deref()));
-        // Where the run starts, what it is called, and what it is scoped to. A run that has to be
-        // *told* its directory in prose gets it wrong; a script it writes can't be told at all.
         env.extend(workspace::env(&self.config, agent, &cwd));
-        // `$ADI_MEMORY` and `$ADI_KNOWLEDGE`, so a script the agent writes finds its bases without
-        // being told them — the same reason the database and the working directory are exported.
         env.extend(knowledge.env());
         // The agent's own declared vars last, so an explicit `[env]` entry wins over a secret or
         // the database pointer it collides with — it is the most specific statement about this
@@ -1112,29 +1076,19 @@ impl Agents {
                 .filter(|(key, _)| key.as_str() != "PATH")
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
-        // Stated, not merely exported: `ADI_WORKDIR` is there for scripts, but the agent itself
-        // reads prose, and one that has to infer its directory infers it wrong.
         let workspace_note =
             Some(workspace::block(&self.config, agent, &cwd)).filter(|note| !note.trim().is_empty());
-        // …and the same for knowledge: exported for scripts, stated for the agent. An agent that
-        // has to infer it has a memory does not use it.
         let knowledge_note = Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
         RunSpec {
             cwd,
             path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
             env,
             arguments: agent.manifest.arguments_value(),
-            // Asked once per launch: enabling a tool, editing its help, or upgrading the CLI
-            // underneath it shows up on the next run without anyone rewriting a prompt. What is
-            // rendered from this is then pinned to the conversation (see [`pin_tool_help`]), so
-            // "the next run" is exactly what it says and not "the next turn".
             tools: if bin_tools.is_empty() {
                 Vec::new()
             } else {
                 tools.help_for(&bin_tools)
             },
-            // Filled in against the session once there is one; a spec built to answer a question
-            // about an agent has no conversation to inherit from.
             tool_help: None,
             system_prompt: agent.manifest.system_prompt(),
             workspace_note,
@@ -1156,9 +1110,6 @@ impl Agents {
     #[must_use]
     pub fn peek(&self, agent: &StoredAgent) -> Peek {
         let store = self.sessions();
-        // Newest first, so this is the run somebody watching the agent means. A terminal has no run
-        // list at all — its pane is the agent's, whichever session opened it — so `peek_run` finds
-        // it from the name and the id it is handed does not matter.
         let latest = store
             .list(&agent.name)
             .first()
@@ -1178,7 +1129,6 @@ impl Agents {
         let Some(runner) = runner_for(&agent.manifest.backend) else {
             return Vec::new();
         };
-        // An interactive backend's live pane *is* its run: there is no history to page through.
         if runner.as_terminal().is_some() {
             return Vec::new();
         }
@@ -1199,8 +1149,6 @@ impl Agents {
         let advanced = idle.iter().fold(false, |any, conv_id| {
             self.advance_queue(agent, conv_id) || any
         });
-        // Only re-read when something actually started — the answer must not report a conversation
-        // as idle in the very breath it started its next turn.
         if advanced {
             return Self::list_runs(&store, agent, runner.as_ref());
         }
@@ -1295,7 +1243,6 @@ impl Agents {
             return Peek {
                 running,
                 output: terminal.capture(&session).unwrap_or_default(),
-                // A pane has no external attach command; it is viewed only in the control panel.
                 attach: String::new(),
                 interactive: true,
             };
@@ -1355,8 +1302,7 @@ impl Agents {
     /// history, or lifecycle errors from stopping a live run.
     pub fn delete_run(&self, name: &str, run_id: &str) -> Result<bool> {
         validate_name(name)?;
-        // Gated on the agent existing, but the runner comes from the run's own record — see
-        // `stop_run`.
+        // The runner comes from the run's own record, not this agent's backend — see `stop_run`.
         if self.get(name)?.is_none() {
             return Ok(false);
         }
@@ -1371,9 +1317,6 @@ impl Agents {
         }
         let deleted = store.delete(name, run_id)?;
         if deleted {
-            // A wake registered against a conversation that no longer exists has nowhere to land, so
-            // it goes with it rather than firing into a `NotFound` a week from now. How many there
-            // were is the caller's business elsewhere; here it is tidying.
             let _ = awaits::Awaits::with_config(self.config.clone())
                 .forget_conversation(name, run_id);
             self.emit(
@@ -1450,7 +1393,6 @@ impl Agents {
         validate_name(name)?;
         let removed = self.config.module(AGENTS_MODULE).remove_manifest(name)?;
         if removed {
-            // Nothing left to wake: every await this agent's conversations registered goes too.
             let _ = awaits::Awaits::with_config(self.config.clone()).forget_agent(name);
             // And nothing left to answer. Its transcripts outlive the definition on purpose, so a
             // *settled* question stays where the conversation that explains it is — but a pending
@@ -1492,9 +1434,6 @@ impl Agents {
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
         let runner = HumanRunner::new();
-        // The same spec a real launch builds: the resolved cwd, the synced `.bin`, the assembled
-        // PATH, the secrets, the workspace and knowledge notes. This is what makes the tools the
-        // person calls be the agent's own tools rather than a copy of them.
         let mut spec = self.launch_spec(&agent, None);
         let store = self.sessions();
         let record = store.create_as(
@@ -1580,8 +1519,6 @@ impl Agents {
             .append(true)
             .open(session.log_path())?;
 
-        // Where the run is, which is what every relative path in a call resolves against — the
-        // directory pinned to this session at creation, the same one a real turn re-enters.
         let cwd = session_dir(&self.config, &record);
         let agent_dir = store.agent_dir(name);
         let ctx = backends::harness::tools::Ctx::for_conversation(
@@ -1598,8 +1535,6 @@ impl Agents {
         for (i, block) in blocks.iter().enumerate() {
             match block {
                 SimBlock::Text(text) => {
-                    // Commentary while calls follow, the answer when none do — the same rule the
-                    // adi loop applies to what a model writes before reaching for a tool.
                     turn_events::message(&mut log, text);
                     answer = text.clone();
                 }
@@ -1625,17 +1560,12 @@ impl Agents {
 
         let called = blocks.iter().any(|b| matches!(b, SimBlock::Call { .. }));
         if called {
-            // The loop goes round: results are in the log, the seat stays occupied, and the person
-            // is asked again as the model.
             return Ok(SimTurn {
                 stop_reason: STOP_TOOL_USE.to_string(),
                 results,
             });
         }
 
-        // Nothing was called, so the turn is the answer. Written as the answer event and closed
-        // with telemetry, which is what turns it into a committed transcript turn and an outcome
-        // the next listing publishes — none of which is simulator-specific code.
         turn_events::answer(&mut log, &answer);
         turn_events::metrics(
             &mut log,
@@ -1646,7 +1576,6 @@ impl Agents {
             },
         );
         drop(log);
-        // Vacating the seat is what says the turn ended, and it is the runner's to say.
         let runner = HumanRunner::new();
         runner.stop(&session, Duration::ZERO)?;
         Ok(SimTurn {
@@ -1979,17 +1908,13 @@ mod tests {
             bases: vec!["agent:solver/memory".into()],
         };
 
-        // No knowledge, no shim — an agent that asked for none is left exactly as configured.
         assert_eq!(with_knowledge_tool(&["sys-tasks".into()], &nothing), vec!["sys-tasks"]);
 
-        // With knowledge, the shim is there.
         assert_eq!(
             with_knowledge_tool(&["sys-tasks".into()], &some),
             vec!["sys-tasks", adi_tools::SYS_KNOWLEDGE]
         );
 
-        // Idempotent, and order-preserving: an agent that already ticked it does not get it
-        // twice, and its `.bin` does not churn between launches.
         let already = vec![adi_tools::SYS_KNOWLEDGE.to_string(), "sys-tasks".to_string()];
         assert_eq!(with_knowledge_tool(&already, &some), already);
     }
@@ -2046,15 +1971,11 @@ mod tests {
         let opened_with = opening.tool_help.clone().expect("a section was rendered");
         assert!(opened_with.contains("adi-tasks"), "{opened_with}");
 
-        // A later turn whose own derivation came back with less — the budget ran out, or a script
-        // was touched and its cached help thrown away — still runs the section it opened with.
         let mut later = store.launch_spec(&agent, None);
         later.tools.clear();
         pin_tool_help(&sessions, "solver", &record.id, &mut later);
         assert_eq!(later.tool_help.as_deref(), Some(opened_with.as_str()));
 
-        // …and the next *run* is where a changed tool set is supposed to show up, so a fresh
-        // session renders fresh.
         let next = sessions
             .create("solver", Backend::ProcessClaude, "/tmp/work", "again")
             .expect("create");
@@ -2220,8 +2141,6 @@ mod tests {
             store.get(name).expect("get").expect("present").manifest
         };
 
-        // A provider plus its knobs: stored through the raw UI path, typed on the way back, and
-        // runnable — every provider the manifest can name is implemented.
         let mut arguments = RawAgentArguments::new();
         arguments.insert("provider".into(), "gemini".into());
         arguments.insert("temperature".into(), serde_json::json!(0.7));
@@ -2230,7 +2149,6 @@ mod tests {
         assert_eq!(stored.backend, Backend::HarnessAdi);
         assert!(is_runnable(&stored), "a configured adi agent is runnable");
 
-        // No provider is the not-yet-configured case, and stays unrunnable.
         let blank = save("adi-agent-blank", RawAgentArguments::new());
         assert!(
             !is_runnable(&blank),
@@ -2285,7 +2203,6 @@ mod tests {
             .expect("renamed agent exists");
         assert_eq!(moved.manifest.arguments.model.as_deref(), Some("opus"));
         assert_eq!(moved.manifest.tags, vec!["athz".to_string()]);
-        // A move, so the agent keeps its original age.
         assert_eq!(moved.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
     }
@@ -2328,8 +2245,6 @@ mod tests {
         assert_eq!(got.secrets[1].project.as_deref(), Some("proj"));
         assert_eq!(got.secrets[1].name, "DB_URL");
 
-        // The attachment list is stored as a valid TOML array-of-tables (proven to round-trip by
-        // the load above, since `toml::from_str` parsed it back into the two attachments).
         let raw = std::fs::read_to_string(store.dir().join("a.toml")).expect("stored manifest");
         assert!(
             raw.contains("[[secrets]]"),
@@ -2381,7 +2296,6 @@ mod tests {
         let store = scratch("no-secret-attach");
         store.save("a", spec("process:claude")).expect("save");
         let raw = std::fs::read_to_string(store.dir().join("a.toml")).expect("stored manifest");
-        // The empty allowlist is skipped on serialization, so pre-secrets manifests are unchanged.
         assert!(!raw.contains("[[secrets]]"));
     }
 
@@ -2412,7 +2326,6 @@ mod tests {
                 project: Some("proj".into()),
                 name: "PROJ_ONLY".into(),
             },
-            // The same key exists in both scopes; the project one must win.
             SecretAttachment {
                 project: None,
                 name: "SHARED".into(),
@@ -2421,7 +2334,6 @@ mod tests {
                 project: Some("proj".into()),
                 name: "SHARED".into(),
             },
-            // A dangling reference is skipped, not fatal.
             SecretAttachment {
                 project: None,
                 name: "MISSING".into(),
@@ -2436,7 +2348,6 @@ mod tests {
         assert_eq!(env.get("PROJ_ONLY").map(String::as_str), Some("p"));
         assert_eq!(env.get("SHARED").map(String::as_str), Some("project"));
         assert!(!env.contains_key("MISSING"));
-        // The allowlist is exclusive: a secret that exists but isn't attached is never injected.
         assert!(!env.contains_key("NOT_ATTACHED"));
     }
 
@@ -2454,9 +2365,7 @@ mod tests {
         m.path = vec!["/opt/node22/bin".into()];
         m.env = [
             ("NODE_ENV".to_string(), "development".to_string()),
-            // A declared value outranks an attached secret of the same name.
             ("SHARED".to_string(), "from-env".to_string()),
-            // ...but PATH is never taken from here: it is assembled below.
             ("PATH".to_string(), "/nowhere".to_string()),
         ]
         .into_iter()
@@ -2555,7 +2464,6 @@ mod tests {
             .seed_system()
             .expect("seed");
 
-        // Two bases the agent may read, and one it may not.
         let kb = adi_knowledge::KnowledgeStore::with_config(store.config.clone());
         for id in ["global/runbooks", "project:acme/notes", "project:other/notes"] {
             kb.ensure_base(&id.parse().expect("id")).expect("base");
@@ -2575,7 +2483,6 @@ mod tests {
 
         let spec = store.spec_in(&agent, store.config.root().to_path_buf());
 
-        // The memory exists on disk, not merely as an intention.
         let memory: adi_knowledge::BaseId = "agent:solver/memory".parse().expect("id");
         assert!(
             kb.get_base(&memory).expect("get").is_some(),
@@ -2597,7 +2504,6 @@ mod tests {
             "another project's base reached the run: {readable}"
         );
 
-        // The CLI it reaches all of that with is on its PATH …
         assert!(
             spec.tools
                 .iter()
@@ -2610,12 +2516,10 @@ mod tests {
             spec.path
         );
 
-        // … and it is told, in prose, that it has a memory and what else it can read.
         let note = spec.knowledge_note.as_deref().expect("a knowledge note");
         assert!(note.contains("agent:solver/memory"), "{note}");
         assert!(note.contains("global/runbooks"), "{note}");
         assert!(note.contains("adi-knowledge search"), "{note}");
-        // The agent's own instructions are still its own.
         assert_eq!(
             spec.system_prompt.as_deref(),
             Some("You are a careful operator.")
@@ -2675,7 +2579,6 @@ mod tests {
             "{help:?}"
         );
 
-        // Derived, never stored: the manifest on disk still holds only what the user wrote.
         let stored = store.get("helper").expect("read back").expect("the agent");
         assert_eq!(
             stored.manifest.arguments["system_prompt"].as_str(),
@@ -2743,14 +2646,11 @@ mod tests {
             Some("Usage: greet <name>"),
             "the tool's own help travels with it",
         );
-        // The engine's configuration goes down whole and uninterpreted, so each runner can decode
-        // its own typed arguments out of it.
         assert_eq!(
             spec.arguments["system_prompt"].as_str(),
             Some("You are a careful operator."),
         );
 
-        // An agent with no tools asks the registry for nothing.
         let bare = agent_with_tools(&store, "bare", "harness:claude-sdk", Vec::new());
         assert!(store.launch_spec(&bare, None).tools.is_empty());
     }
@@ -2805,7 +2705,6 @@ mod tests {
         seed_live_run(&store, "harness:claude-sdk", "chatty");
         assert_eq!(store.running_count(), 3);
 
-        // A run whose child has exited doesn't count: its recorded pid names nothing alive.
         let sessions = store.sessions();
         let done = sessions
             .create("recon", Backend::ProcessClaude, "/tmp", "finished")
@@ -2860,7 +2759,6 @@ mod tests {
             "force is the human's way past the cap"
         );
 
-        // Lifting the limit lets it through again.
         store
             .set_limits(RunLimits {
                 max_concurrent_runs: 0,
@@ -2898,7 +2796,6 @@ mod tests {
             .set_project_limit("bugbounty", 1)
             .expect("set the project cap");
 
-        // One live run of the project fills its cap…
         seed_live_run(&store, "harness:claude-sdk", "solver");
         assert_eq!(store.run_load().in_project("bugbounty"), 1);
         assert!(
@@ -2908,7 +2805,6 @@ mod tests {
             ),
             "the refusal names the project whose cap is full"
         );
-        // …and nobody else's: another project and an unfiled agent are only bound by the global cap.
         for name in ["builder", "loose"] {
             assert!(
                 !matches!(
@@ -2918,7 +2814,6 @@ mod tests {
                 "{name} is outside the capped project"
             );
         }
-        // Force still gets through, and clearing the project's cap leaves only the global one.
         assert!(!matches!(
             store.force_run_in("solver", "go", None),
             Err(Error::TooManyRunning { .. })
@@ -2987,8 +2882,6 @@ mod tests {
             Sent::Queued { place: 1 },
             "a full cap queues the message rather than refusing it"
         );
-        // And the platform does not start it by itself while the cap is still full, even though the
-        // conversation is idle and the message is waiting.
         assert_eq!(
             store.sessions().queued("chatty", &conv),
             ["and then?"],
@@ -3155,15 +3048,12 @@ mod tests {
             2,
             "and reading again does not fold a second one",
         );
-        // The run list speaks of the same session, with the task it was opened with.
         let runs = store.runs(&agent);
         assert_eq!(runs.len(), 1);
         assert_eq!(runs[0].run_id, conv);
         assert_eq!(runs[0].message, "set the port");
         assert!(!runs[0].running);
 
-        // Now a turn *is* in flight: anything said joins the queue rather than starting a second
-        // child into the same slot.
         sessions
             .session("chatty", &conv)
             .set_state(live_state())
@@ -3209,7 +3099,6 @@ mod tests {
             "stopping an answer forgets what was queued behind it",
         );
 
-        // A backend that keeps no thread has nothing to reply into.
         store.save("solo", spec("process:claude")).expect("save");
         assert!(matches!(
             store.reply("solo", &conv, "hi"),
@@ -3247,7 +3136,6 @@ mod tests {
         assert!(!peek.running);
         assert_eq!(peek.output, "line one\nline two");
         assert!(peek.attach.starts_with("tail -f "), "{}", peek.attach);
-        // With no run named, the newest is what a watcher means.
         assert_eq!(store.peek(&agent).output, peek.output);
 
         assert!(
@@ -3263,7 +3151,6 @@ mod tests {
             "a run that isn't there is nothing to flag",
         );
 
-        // Stopping an answer forgets what was written expecting it.
         sessions
             .enqueue("recon", &second, "and then diff them")
             .expect("enqueue");
@@ -3301,7 +3188,6 @@ mod tests {
             session_dir(&store.config, &record),
             std::path::Path::new("/targets/crescendo-ai"),
         );
-        // …and it is the agent's own resolve that is *not* consulted a second time.
         assert_ne!(
             workspace::resolve(&store.config, &agent.manifest, None),
             record.cwd
@@ -3385,7 +3271,6 @@ mod tests {
             )
             .expect("ask");
 
-        // An unknown conversation of a real agent: refused, and the real one is untouched.
         let err = store
             .answer("solver", "no-such-conversation", None, &["a".to_string()])
             .expect_err("refused");
@@ -3395,7 +3280,6 @@ mod tests {
             "the question this call never named is still waiting"
         );
 
-        // And an unknown agent, which cannot even be looked up.
         assert!(matches!(
             store.answer("ghost", &conv, None, &["a".to_string()]),
             Err(Error::NotFound(_))
@@ -3495,8 +3379,6 @@ mod tests {
             .simulated_prompt("reviewer", &run_id)
             .expect("the prompt it opened with");
 
-        // What a real launch of the same agent, in the same directory, would compose. Through
-        // `runner::prompt::compose`, which is the function the runners call — not a copy of it.
         let sessions = store.sessions();
         let record = sessions.get("reviewer", &run_id).expect("the record");
         let mut real = store.launch_spec(&agent, None);
@@ -3544,16 +3426,12 @@ mod tests {
             )
             .expect("the turn runs");
 
-        // Two calls, two results, in the order they were written — and the turn is not over,
-        // because a turn that called something is asked again.
         assert_eq!(turn.stop_reason, STOP_TOOL_USE);
         assert_eq!(turn.results.len(), 2);
         assert_eq!(turn.results[0].name, "Read");
         assert!(turn.results[0].ok);
         assert_eq!(turn.results[0].output, "two\nlines");
 
-        // A failed call is an *answer*, not an error of the request that ran it, and it is the same
-        // sentence `tools::execute` gives the loop.
         assert_eq!(turn.results[1].name, "Frobnicate");
         assert!(!turn.results[1].ok);
         assert!(
@@ -3562,7 +3440,6 @@ mod tests {
             turn.results[1].output,
         );
 
-        // The run is still open: the loop came back round to the seat rather than yielding.
         assert!(
             store.runs(&store.get("hands").expect("get").expect("present"))
                 .iter()
@@ -3602,7 +3479,6 @@ mod tests {
             run.outcome,
         );
 
-        // And what was said is in the transcript, as the answer to the message it opened with.
         let turns = store.transcript(&agent, run_id);
         assert_eq!(turns.first().map(|t| t.text.as_str()), Some("say something"));
         assert_eq!(turns.last().map(|t| t.text.as_str()), Some("Nothing to change."));
@@ -3629,7 +3505,6 @@ mod tests {
             .expect("the run survives its agent being re-pointed");
         assert!(run.running, "and it is still the person's seat, not the new engine's");
 
-        // Still answerable, too: `process:claude` keeps no thread, but this run was never its.
         assert!(
             store.simulated_prompt("drifter", run_id).is_ok(),
             "the prompt it opened with is still readable",

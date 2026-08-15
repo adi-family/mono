@@ -469,8 +469,6 @@ pub fn tick(agents: &Agents) -> Vec<Woken> {
     let mut woken = Vec::new();
     for a in store.list() {
         if a.expires_at.is_some_and(|deadline| now >= deadline) {
-            // Out of time. A run that named its own deadline hears that it lapsed; one that named
-            // none is simply tidied away — see `DEFAULT_LIFETIME_SECS`.
             if !a.expiry_wakes {
                 let _ = store.claim(&a.id);
                 continue;
@@ -499,12 +497,9 @@ fn consider(agents: &Agents, store: &Awaits, a: &Await, cause: Cause<'_>) -> Opt
         .as_deref()
         .map(|check| run_check(a, check, cause, CHECK_TIMEOUT_MS));
     match checked {
-        // No check: the candidate is the answer.
         None => wake(agents, store, a, cause, None),
         Some(outcome) if outcome.passed => wake(agents, store, a, cause, Some(&outcome.output)),
         Some(_) => {
-            // Not yet. A poll looks again after `every`; anything else just keeps waiting for the
-            // next candidate.
             if let (Cause::Timer, Some(every)) = (cause, a.every) {
                 let mut rearmed = a.clone();
                 rearmed.at = Some(now_unix().saturating_add(every.max(1)));
@@ -551,9 +546,6 @@ fn wake(
 fn wake_message(a: &Await, cause: Cause<'_>, check_output: Option<&str>) -> String {
     let mut text = String::new();
     let id = &a.id;
-    // Name what actually decided. A clock that only said *look now* must not be reported as the
-    // reason — with a check, the check is the reason, and a run that reads "the time you asked for"
-    // after a poll will think its script had nothing to do with waking it.
     let checked = a.check.is_some();
     match cause {
         Cause::Event { name, .. } if checked => {
@@ -702,7 +694,6 @@ mod tests {
         assert_eq!(listed, vec![saved.clone()]);
         assert!(store.for_conversation("watcher", "other").is_empty());
 
-        // Claiming is the race guard: the first caller takes it, the second gets nothing.
         assert!(store.claim(&saved.id));
         assert!(!store.claim(&saved.id));
         assert!(store.list().is_empty());
@@ -737,7 +728,6 @@ mod tests {
         let err = register(&store, "watcher", "conv-1", &request("one too many"))
             .expect_err("the cap must bite");
         assert!(matches!(&err, Error::Arguments(m) if m.contains("limit")), "{err}");
-        // …and it is per conversation, not per agent.
         register(&store, "watcher", "conv-2", &request("elsewhere")).expect("other conversation");
 
         let _ = std::fs::remove_dir_all(store.dir());
@@ -802,9 +792,6 @@ mod tests {
         assert_eq!(saved.every, Some(60));
         assert!(saved.describe().contains("then every 60s"), "{}", saved.describe());
 
-        // A plain `after_seconds` guarded by a check is the same thing said differently: it has to
-        // look again after its own interval, or a check that says "not yet" would leave the
-        // deadline in the past to be re-asked on every one-second sweep.
         let guarded = register(
             &store,
             "watcher",
@@ -819,7 +806,6 @@ mod tests {
         .expect("register");
         assert_eq!(guarded.every, Some(600));
 
-        // …and without a check there is nothing to re-arm for: the deadline simply wakes the run.
         let once = register(
             &store,
             "watcher",
@@ -864,7 +850,6 @@ mod tests {
         assert!(outcome.passed);
         assert!(outcome.output.contains("the-build-is-green"), "{}", outcome.output);
 
-        // A non-zero exit is "not yet", not a failure of the await.
         assert!(!run_check(&a, "exit 1", Cause::Timer, CHECK_TIMEOUT_MS).passed);
 
         let _ = std::fs::remove_dir_all(store.dir());
@@ -949,23 +934,18 @@ mod tests {
             },
             Some("build green"),
         );
-        // The check is what decided, so the header says so rather than crediting the event alone.
         assert!(text.contains("adi.tasks.created fired and your check passed"), "{text}");
         assert!(text.contains("check whether the deploy landed"), "{text}");
         assert!(text.contains(r#"{"id":"t1"}"#), "{text}");
         assert!(text.contains("build green"), "{text}");
         assert!(text.contains("spent"), "the run must know it has to re-register: {text}");
 
-        // An expired await says so plainly rather than pretending something happened.
         let expired = wake_message(&a, Cause::Expired, None);
         assert!(expired.contains("expired"), "{expired}");
 
-        // A poll's clock only chose *when to look* — reporting it as the reason would tell the run
-        // its script had nothing to do with waking it.
         let polled = wake_message(&a, Cause::Timer, Some("build green"));
         assert!(polled.contains("your check passed"), "{polled}");
         assert!(!polled.contains("the time you asked for"), "{polled}");
-        // …and a bare timer, with nothing to consult, still says it was the clock.
         let bare = Await {
             check: None,
             ..a.clone()

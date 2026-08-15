@@ -163,11 +163,7 @@ impl Runner for HumanRunner {
         EventKinds {
             message: true,
             tool_call: true,
-            // A person does not think in tokens the way a model streams them, and there is no
-            // separate channel for it: what would be thinking is just something said.
             thinking: false,
-            // Reported, and worth reporting: the prompt has a real token count and the turn has a
-            // real count of rounds. Cost is the honest zero.
             metrics: true,
         }
     }
@@ -271,7 +267,6 @@ mod tests {
         assert!(!stopped.forced, "there is nothing to be rude to");
         assert!(!runner.is_alive(&session));
 
-        // Stopping again finds nothing, which is not an error and not a force either.
         let again = runner.stop(&session, Duration::ZERO).expect("stop");
         assert!(!again.was_running);
         assert!(!again.forced);

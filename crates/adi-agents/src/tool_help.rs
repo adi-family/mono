@@ -104,7 +104,6 @@ mod tests {
     fn a_tool_with_nothing_to_say_is_still_named() {
         let block = block(&[help("mystery", None, None)]).expect("a block");
         assert!(block.contains("## mystery"), "{block}");
-        // Nothing to quote, so no empty fence is left behind.
         assert!(!block.contains("```"), "{block}");
     }
 

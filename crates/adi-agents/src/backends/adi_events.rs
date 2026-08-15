@@ -89,7 +89,6 @@ fn render_input(input: &Value) -> String {
 pub(crate) fn parse(log: &[u8]) -> TurnContent {
     let text = String::from_utf8_lossy(log);
     let mut steps: Vec<Step> = Vec::new();
-    // Tool call id → index into `steps`, so a finished call updates the row its start created.
     let mut tool_index: HashMap<String, usize> = HashMap::new();
     let mut metrics: Option<TurnMetrics> = None;
     let mut answer: Option<String> = None;
@@ -101,7 +100,6 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
             continue;
         }
         let Ok(event) = serde_json::from_str::<Value>(line) else {
-            // Not one of ours: a panic, a stray print, or a log from before this format existed.
             plain.push_str(line);
             plain.push('\n');
             continue;
@@ -231,8 +229,6 @@ mod tests {
 
     #[test]
     fn a_log_that_is_not_ours_is_read_as_the_answer() {
-        // The error path prints a plain line, and logs written before this format existed are all
-        // plain — both must still read as the turn's text rather than as nothing.
         let content = parse(b"\xe2\x9a\xa0 adi loop error: no API key\n");
         assert_eq!(content.text, "⚠ adi loop error: no API key");
         assert!(content.steps.is_empty());

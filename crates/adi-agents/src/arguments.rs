@@ -465,7 +465,12 @@ where
     match Option::<U64ish>::deserialize(deserializer)? {
         None => Ok(None),
         Some(U64ish::Number(value)) => Ok(Some(value)),
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "the guard admits only whole, non-negative floats; a value past u64::MAX \
+                      saturates, which is a cap nothing here is anywhere near"
+        )]
         Some(U64ish::Float(value)) if value.fract() == 0.0 && value >= 0.0 => {
             Ok(Some(value as u64))
         }
@@ -536,7 +541,6 @@ mod tests {
 
     #[test]
     fn harness_backends_reject_unknown_fields() {
-        // `deny_unknown_fields` is what turns a mis-scoped or misspelled knob into a save error.
         assert!(
             serde_json::from_value::<HarnessClaudeSdkArguments>(serde_json::json!({
                 "temperature": 0.2,

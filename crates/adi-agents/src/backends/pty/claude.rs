@@ -2,7 +2,7 @@
 
 use crate::arguments::{ClaudeEffort, ClaudePermissionMode, PtyClaudeArguments};
 use crate::backends::mcp::ToolScope;
-use crate::backends::{push_option, push_tool_scope};
+use crate::backends::{push_mcp_config, push_option, push_tool_scope};
 
 /// Build the Claude CLI command run by the shared pty executor.
 pub(crate) fn argv(
@@ -22,16 +22,9 @@ pub(crate) fn argv(
         "--effort",
         config.effort.map(ClaudeEffort::as_str),
     );
-    // The run's tool surface, deny-by-default: `--tools` is what exists (nothing, unless the agent
-    // asked), `--allowed-tools` is what needs no permission. See `crate::backends::mcp`.
     push_tool_scope(&mut argv, tools);
     push_option(&mut argv, "--add-dir", config.add_dir.as_deref());
-    // ADI's own tools, over MCP (see `crate::backends::mcp`). `--strict-mcp-config` rides with it so
-    // the run gets *this* server and nothing else.
-    if let Some(mcp) = mcp {
-        argv.extend(["--mcp-config".to_string(), mcp.to_string()]);
-        argv.push("--strict-mcp-config".to_string());
-    }
+    push_mcp_config(&mut argv, mcp);
 
     let prompt = [
         config.system_prompt.as_deref(),

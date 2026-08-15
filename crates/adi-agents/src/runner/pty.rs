@@ -69,8 +69,6 @@ impl PtyRunner {
                 // instead of context.
                 let mut config = decode::<PtyCodexArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
-                // `--cd` is the run's directory told to Codex, because that directory scopes its
-                // sandbox rather than merely being where the process starts.
                 Ok(pty::codex::argv(&config, spec.cwd.to_str()))
             }
             other => Err(Error::NotRunnable(other.to_string())),
@@ -340,7 +338,6 @@ mod tests {
         let session = FakeSession::new("solver");
         let batch = runner.events(&session, None).expect("events");
         assert!(batch.events.is_empty());
-        // The cursor is handed back untouched — there is nothing to be after.
         let batch = runner
             .events(&session, Some(&json!({ "offset": 7 })))
             .expect("events");
@@ -352,7 +349,6 @@ mod tests {
         let claude = PtyRunner::new(Backend::PtyClaude);
         assert!(claude.check(&spec(json!({ "model": "opus" }))).is_ok());
         assert!(claude.check(&spec(Value::Null)).is_ok());
-        // `output_format` is a process-only knob; a pty agent carrying one is a save-time mistake.
         assert!(matches!(
             claude.check(&spec(json!({ "output_format": "json" }))),
             Err(Error::Arguments(_))
@@ -390,7 +386,6 @@ mod tests {
             .expect("argv");
         assert!(codex.iter().all(|arg| !arg.contains("adi-db")), "{codex:?}");
         assert_eq!(codex.last().map(String::as_str), Some("You are a solver."));
-        // Codex is told the run's directory, because it is what scopes its sandbox.
         let cd = codex.iter().position(|arg| arg == "--cd").expect("--cd");
         assert_eq!(codex[cd + 1], spec.cwd.display().to_string());
     }
@@ -425,7 +420,6 @@ mod tests {
             claude[at + 1].clone()
         };
         assert!(flag("--allowed-tools").split(',').any(|t| t == "mcp__adi"));
-        // Deny-by-default: this agent named no tools, so the engine's own built-in set is empty.
         assert_eq!(flag("--tools"), "");
 
         let codex = PtyRunner::new(Backend::PtyCodex)
@@ -441,7 +435,6 @@ mod tests {
     /// fallback for one that has never been launched.
     #[test]
     fn the_pty_session_name_is_derived_then_remembered() {
-        // A name with a dot in it is still one flat token on the pty side.
         let session = FakeSession::new("a.b");
         assert_eq!(session_name(&session), "adi-agent-a-b");
 
@@ -460,7 +453,6 @@ mod tests {
             runner.stop(&session, Duration::ZERO).expect("stop"),
             Stopped::default()
         );
-        // With no pane there is nothing to type into, and saying so beats dropping the keystrokes.
         assert!(matches!(
             runner.as_terminal().expect("a terminal").send_keys(&session, "hi", "Enter"),
             Err(Error::NotRunning(_))
@@ -502,7 +494,6 @@ mod tests {
         }
         assert!(screen.contains("hello pane"), "{screen:?}");
 
-        // C-c reaches `cat`, so the stop is cooperative and never escalates.
         let stopped = runner
             .stop(&session, Duration::from_secs(5))
             .expect("stop");
@@ -514,7 +505,6 @@ mod tests {
             }
         );
         assert!(!runner.is_alive(&session));
-        // The pane it left behind is still readable — that is the point of not clearing it.
         assert!(terminal.capture(&session).is_some());
 
         let _ = adi_pty::stop(&name);

@@ -83,7 +83,7 @@ impl<T> Memo<T> {
         self.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The same, filed under `key` rather than under the file it was read from.
+    /// A parse of `path`, remembered — but filed under `key` rather than under the file itself.
     ///
     /// For a reader whose answer depends on something besides the bytes — whether the writer has
     /// exited, say, which decides if a trailing half-line may be taken. Those are two different
@@ -140,9 +140,9 @@ static EVENTS: LazyLock<Memo<TurnContent>> = LazyLock::new(|| Memo::new(CAPACITY
 
 /// A turn's events, folded into content by the caller — memoized on the log they were read from.
 ///
-/// Same bargain as [`parsed_log`], for the runner-driven path: a runner turns bytes into events on
-/// every call, and an open chat asks twice a second. The log is the thing that changes, so it is the
-/// thing keyed on; `fold` runs only when it has.
+/// The bargain the module docs describe, for the runner-driven path: a runner turns bytes into
+/// events on every call, and an open chat asks twice a second. The log is the thing that changes, so
+/// it is the thing keyed on; `fold` runs only when it has.
 ///
 /// `complete` is part of the key rather than a hint. A runner reads only whole lines while the
 /// writer is still going and takes the remainder once it has exited, so the same unchanged bytes
@@ -192,7 +192,6 @@ mod tests {
         assert_eq!(*read(), "one");
         assert_eq!(parses.get(), 1, "the second read is served from the memo");
 
-        // Appending moves the length, so the stamp no longer matches.
         std::fs::write(&path, "one two").unwrap();
         assert_eq!(*read(), "one two");
         assert_eq!(parses.get(), 2, "a changed file is parsed again");
