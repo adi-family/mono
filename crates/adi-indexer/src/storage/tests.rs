@@ -491,4 +491,93 @@ mod tests {
         let status = storage.get_status().unwrap();
         assert_eq!(status.indexed_files, 5);
     }
+
+    /// A caller in one file, a callee in another, and the edge between them.
+    ///
+    /// Two files rather than one because the graph reads are the queries that join `files`, and
+    /// a single-file fixture cannot tell a correct join from one that returns the only path
+    /// there is.
+    fn two_linked_files(storage: &SqliteStorage) -> (SymbolId, SymbolId) {
+        let caller_file = storage.insert_file(&create_test_file()).unwrap();
+        let callee_file = storage
+            .insert_file(&File {
+                id: FileId(0),
+                path: PathBuf::from("src/util.rs"),
+                language: Language::Rust,
+                hash: "def456".to_string(),
+                size: 512,
+                description: None,
+            })
+            .unwrap();
+
+        let caller = storage
+            .insert_symbol(&create_test_symbol(caller_file, "caller", SymbolKind::Function))
+            .unwrap();
+        let mut callee_symbol = create_test_symbol(callee_file, "callee", SymbolKind::Function);
+        callee_symbol.file_path = PathBuf::from("src/util.rs");
+        callee_symbol.visibility = Visibility::Private;
+        let callee = storage.insert_symbol(&callee_symbol).unwrap();
+
+        storage
+            .insert_reference(&Reference {
+                from_symbol_id: caller,
+                to_symbol_id: callee,
+                kind: ReferenceKind::Call,
+                location: Location {
+                    start_line: 5,
+                    start_col: 4,
+                    end_line: 5,
+                    end_col: 14,
+                    start_byte: 40,
+                    end_byte: 50,
+                },
+            })
+            .unwrap();
+
+        (caller, callee)
+    }
+
+    #[test]
+    fn the_graph_reads_carry_the_joined_file_path() {
+        let (storage, _dir) = create_test_storage();
+        let (caller, callee) = two_linked_files(&storage);
+
+        let callers = storage.get_callers(callee).unwrap();
+        assert_eq!(callers.len(), 1);
+        assert_eq!(callers[0].id, caller);
+        assert_eq!(callers[0].name, "caller");
+        // The `f.path` column trails SYMBOL_COLUMNS, so its index moves whenever that list
+        // grows and a stale one reads a neighbouring column without failing.
+        assert_eq!(callers[0].file_path, PathBuf::from("src/main.rs"));
+        assert_eq!(callers[0].signature.as_deref(), Some("fn caller()"));
+        assert_eq!(callers[0].visibility, Visibility::Public);
+
+        let callees = storage.get_callees(caller).unwrap();
+        assert_eq!(callees.len(), 1);
+        assert_eq!(callees[0].id, callee);
+        assert_eq!(callees[0].file_path, PathBuf::from("src/util.rs"));
+        assert_eq!(callees[0].visibility, Visibility::Private);
+
+        assert!(storage.get_callers(caller).unwrap().is_empty());
+        assert!(storage.get_callees(callee).unwrap().is_empty());
+    }
+
+    #[test]
+    fn get_all_symbols_spans_every_file() {
+        let (storage, _dir) = create_test_storage();
+        let (caller, callee) = two_linked_files(&storage);
+
+        let all = storage.get_all_symbols().unwrap();
+        assert_eq!(all.len(), 2);
+
+        let mut by_id: Vec<_> = all.iter().map(|s| (s.id, s.file_path.clone())).collect();
+        by_id.sort_by_key(|(id, _)| id.0);
+        assert_eq!(
+            by_id,
+            vec![
+                (caller, PathBuf::from("src/main.rs")),
+                (callee, PathBuf::from("src/util.rs")),
+            ]
+        );
+    }
 }
