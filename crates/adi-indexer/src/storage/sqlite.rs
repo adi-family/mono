@@ -529,9 +529,9 @@ impl Storage for SqliteStorage {
     fn delete_references_for_file(&self, file_id: FileId) -> Result<()> {
         let conn = self.lock()?;
 
-        // Delete references where the from_symbol belongs to this file
         conn.execute(
-            "DELETE FROM symbol_refs WHERE from_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
+            "DELETE FROM symbol_refs WHERE from_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1) \
+             OR to_symbol_id IN (SELECT id FROM symbols WHERE file_id = ?1)",
             params![file_id.0],
         )?;
 

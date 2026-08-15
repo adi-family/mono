@@ -64,7 +64,16 @@ pub trait Storage: std::fmt::Debug + Send + Sync {
     fn insert_reference(&self, reference: &Reference) -> Result<()>;
     /// Insert multiple references in batch (more efficient)
     fn insert_references_batch(&self, references: &[Reference]) -> Result<()>;
-    /// Delete all references originating from symbols in a file
+    /// Delete every reference with a symbol from this file at either end of it.
+    ///
+    /// Both ends, because reprocessing a file gives its symbols new ids — `AUTOINCREMENT` never
+    /// reuses one — so an edge pointing *into* the old ids can never join a live symbol again.
+    /// It stopped being an edge the moment the file was reprocessed; leaving it in the table
+    /// only hides that.
+    ///
+    /// Rebuilding those inbound edges is a separate matter and does not happen here: a run
+    /// resolves references parsed *this* run, and an unchanged file parses none, so an edge from
+    /// a file that did not change is restored only when that file is itself reprocessed.
     fn delete_references_for_file(&self, file_id: FileId) -> Result<()>;
     /// Get symbols that call/reference this symbol (callers/inbound references)
     fn get_callers(&self, id: SymbolId) -> Result<Vec<Symbol>>;

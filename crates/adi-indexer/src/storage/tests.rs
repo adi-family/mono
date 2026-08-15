@@ -580,4 +580,25 @@ mod tests {
             ]
         );
     }
+
+    #[test]
+    fn deleting_a_files_references_takes_the_inbound_ones_too() {
+        let (storage, _dir) = create_test_storage();
+        let (caller, callee) = two_linked_files(&storage);
+
+        // The edge runs *into* this file, not out of it: deleting only outbound edges would
+        // leave a row that can never join a live symbol again, since the file's symbols get new
+        // ids when it is reprocessed.
+        let callee_file = storage
+            .get_file(&PathBuf::from("src/util.rs"))
+            .unwrap()
+            .file
+            .id;
+        storage.delete_references_for_file(callee_file).unwrap();
+
+        assert!(storage.get_callers(callee).unwrap().is_empty());
+        assert!(storage.get_callees(caller).unwrap().is_empty());
+        assert!(storage.get_references_to(callee).unwrap().is_empty());
+        assert_eq!(storage.get_reference_count(callee).unwrap(), 0);
+    }
 }
