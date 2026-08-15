@@ -1455,6 +1455,10 @@ fn truncate_task(task: &str) -> String {
 /// `state.agents` feeds the picker, `state.all_chats` the sessions rail, and `state.dashboards` the
 /// right one.
 pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
+    // Here rather than in the rail, which is rebuilt on every poll: this screen is built once (the
+    // caller reads only `meta` and `reconfiguring`), so the listener is installed once and torn
+    // down when the wizard takes the screen.
+    install_session_hotkeys(state, watch);
     view! {
         <div class="adi-chome">
             // Narrow viewports only (the stylesheet hides it above the breakpoint): the two rails
@@ -2349,9 +2353,41 @@ struct SessionRow {
     /// Unix millis this session last moved; what the rail sorts on.
     when: u64,
     running: bool,
+    /// Which number opens this row, counted down the whole rail rather than within its band —
+    /// `None` past the ninth. Filled in by [`session_bands`] once the bands are settled, because
+    /// until then there is no "third row" to be.
+    hotkey: Option<usize>,
 }
 
-/// Every visible session, whichever agent it belongs to, newest activity first.
+/// How many rows of the rail answer to a number.
+///
+/// Nine, because ⌘0 is not a tenth on any keyboard, and a row you have to count ten deep to reach
+/// is one to search for rather than to number.
+const HOTKEYS: usize = 9;
+
+/// Which modifier a row prints, which is not always the one you would expect.
+///
+/// ⌘ only in the installed app. In a browser tab ⌘1…⌘8 belongs to the tab switcher and never
+/// reaches the page at all, so printing ⌘ there would advertise a shortcut that cannot work — the
+/// row says ⌃ instead, which does. [`install_session_hotkeys`] answers to both either way; this
+/// only decides which one is worth the row's space. `display_override` puts `minimal-ui` behind
+/// `standalone`, so both count as installed.
+fn hotkey_glyph() -> &'static str {
+    let installed = ["(display-mode: standalone)", "(display-mode: minimal-ui)"]
+        .iter()
+        .any(|q| {
+            window()
+                .match_media(q)
+                .ok()
+                .flatten()
+                .is_some_and(|m| m.matches())
+        });
+    if installed { "\u{2318}" } else { "\u{2303}" }
+}
+
+/// Every visible session, whichever agent it belongs to, in the three bands the rail reads them in:
+/// blocked on you, then running, then the rest — each newest activity first. The `bool` says
+/// whether the ★ filter is on, which is the difference between the rail's two emptinesses.
 ///
 /// The watched agent's conversations come from `watch.runs` when it has any — that list is updated
 /// the moment a chat is deleted or hidden, so the rail doesn't go on showing a row that has just
@@ -2359,7 +2395,11 @@ struct SessionRow {
 /// contributes one row for its live session, sorted as though it moved just now: it is active by
 /// definition and has no older timestamp to be placed by. That row shows while the session runs, or
 /// while its agent is the one on screen — otherwise there is nothing there to open.
-fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
+///
+/// Split out of the view because [`install_session_hotkeys`] needs the same list, and needs it at
+/// the moment a key is struck rather than the moment the rail was last drawn. One function, so the
+/// number printed on a row and the row that number opens cannot drift apart.
+fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], bool) {
     let all = state.all_chats.get();
     let watched = watch.name.get().unwrap_or_default();
     // A pty agent's run history is empty either way; the agents list is what says it's live now.
@@ -2394,6 +2434,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                     run: None,
                     when: now,
                     running,
+                    hotkey: None,
                 });
             }
             continue;
@@ -2409,6 +2450,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
             when: last_touch(&r),
             running: r.running,
             run: Some(r),
+            hotkey: None,
         }));
     }
     // The cross-agent index hasn't arrived yet (or doesn't carry this agent): the watch alone still
@@ -2420,6 +2462,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                 run: None,
                 when: now,
                 running: watch.peek.get().is_some_and(|p| p.running),
+                hotkey: None,
             });
         } else {
             rows.extend(watch.runs.get().into_iter().filter(|r| !r.hidden).map(|r| {
@@ -2428,19 +2471,10 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
                     when: last_touch(&r),
                     running: r.running,
                     run: Some(r),
+                    hotkey: None,
                 }
             }));
         }
-    }
-    if rows.is_empty() {
-        // Which of the two emptinesses this is: nothing to show, or nothing left after the filter —
-        // said apart, so the ★ never reads as "you have no chats".
-        let msg = if keep.is_some() {
-            "No chats from starred agents — star one on the Agents page, or turn ★ off."
-        } else {
-            "No chats yet — press New to start one."
-        };
-        return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
     }
     // Most recently updated first. A stable sort, so sessions that last moved at the same instant —
     // the live pty rows, all stamped "now" — keep the order the index listed them in.
@@ -2453,11 +2487,40 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     // merely in progress. This is the whole of the "needs you" inbox: the rail is already the
     // cross-agent index, and a second surface fed by a second request would only be a copy of it
     // that could disagree.
-    let (waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
+    let (mut waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
         .into_iter()
         .partition(|r| r.run.as_ref().is_some_and(|run| run.pending_question.is_some()));
-    let (running, rest): (Vec<SessionRow>, Vec<SessionRow>) =
+    let (mut running, mut rest): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.running);
+    // Numbered straight down the rail and across the band headings, not restarted per band: ⌘1 is
+    // the row at the very top of the list whatever band it happens to be in today, which is the
+    // only rule a hand can learn. Numbering within bands would move ⌘1 to a different session
+    // every time the last question got answered.
+    for (i, row) in waiting
+        .iter_mut()
+        .chain(running.iter_mut())
+        .chain(rest.iter_mut())
+        .take(HOTKEYS)
+        .enumerate()
+    {
+        row.hotkey = Some(i + 1);
+    }
+    ([waiting, running, rest], keep.is_some())
+}
+
+/// The rail's session list: the three bands, or the one line that says why there are none.
+fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
+    let ([waiting, running, rest], starred) = session_bands(state, watch);
+    if waiting.is_empty() && running.is_empty() && rest.is_empty() {
+        // Which of the two emptinesses this is: nothing to show, or nothing left after the filter —
+        // said apart, so the ★ never reads as "you have no chats".
+        let msg = if starred {
+            "No chats from starred agents — star one on the Agents page, or turn ★ off."
+        } else {
+            "No chats yet — press New to start one."
+        };
+        return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
+    }
     // Keyed, and that is not tidiness: a row's click handler is bound when the row is
     // *built*, so a plain list that is rebuilt with a different shape — which is exactly what
     // the ★ does — leaves handlers patched onto rows they no longer belong to, and a click
@@ -2505,9 +2568,9 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 /// opens it — repointing the whole screen when it belongs to another agent, and only selecting the
 /// conversation when it is already the picked one, so a click on a chat of the agent on screen
 /// doesn't tear the centre pane down and rebuild it. Right-clicking offers to hide it, and a delete
-/// rides the row's right edge.
+/// rides the row's right edge. The first nine rows also carry the number that opens them.
 fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
-    let SessionRow { agent, run, when, running } = item;
+    let SessionRow { agent, run, when, running, hotkey } = item;
     let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
     let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
     let (title, sub, run_id) = match run {
@@ -2526,7 +2589,12 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     let is_sel = on_this_agent
         && (run_id.is_empty() && watch.interactive.get()
             || !run_id.is_empty() && watch.run_id.get().as_deref() == Some(run_id.as_str()));
-    let hint = format!("open this session with {agent}");
+    // The tooltip names both, whatever the row prints: whichever of the two the browser keeps for
+    // itself, the other one is the way in, and here there is room to say so.
+    let hint = match hotkey {
+        Some(n) => format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}"),
+        None => format!("open this session with {agent}"),
+    };
     let menu = SessionRef::of(&agent, &run_id, &title, false);
     // Only a conversation can be deleted: a pty agent's live session is started and stopped from the
     // centre pane, and keeps no transcript to take with it.
@@ -2554,6 +2622,19 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
         adi_ui::SessionState::Done
     };
     let sub = sub.clone();
+    // A shortcut nobody can see is a shortcut nobody uses, so the number rides the row it opens.
+    // One modifier and one digit, never "⌘1 or Ctrl+1": the row has to stay readable at a glance,
+    // and the long form is already in the tooltip.
+    //
+    // It fades out under the cursor because the delete control lands in the same corner — and a
+    // hand already on the mouse has no use for a keyboard shortcut anyway.
+    let cap = hotkey.map(|n| {
+        view! {
+            <span class="ml-auto transition-opacity group-hover:opacity-0">
+                <adi_ui::Kbd>{format!("{}{n}", hotkey_glyph())}</adi_ui::Kbd>
+            </span>
+        }
+    });
     view! {
         // Right-click still offers the row's menu, and it is on the wrapper so it covers
         // the whole row including the delete control's corner.
@@ -2581,7 +2662,9 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
                     // it from. Inert on a wide viewport, where nothing is ever open.
                     state.chat_drawer.set(None);
                 }
-            />
+            >
+                {cap}
+            </adi_ui::SessionItem>
             <div class="absolute top-1 right-1 opacity-0 transition-opacity \
                         group-hover:opacity-100 focus-within:opacity-100">
                 {del}
@@ -2696,6 +2779,51 @@ fn set_session_hidden(
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
     });
+}
+
+/// Bind ⌘1…⌘9 to the first nine rows of the sessions rail, in the order the rail reads them.
+///
+/// The row is looked up when the key is struck, not when the rail was drawn. The rail redraws
+/// whenever anything moves, and a list captured at draw time would go on opening whatever *used* to
+/// be third after a run finished and the bands resorted under it — the same trap the keyed `For` in
+/// [`chat_all_sessions`] exists to avoid, arrived at from the other side.
+///
+/// Ctrl as well as ⌘, and not for symmetry with other platforms: Chrome and Safari spend ⌘1…⌘8 on
+/// "switch to tab N" and never hand them to the page in an ordinary tab. ⌘ is the shortcut in the
+/// installed app, where there are no tabs to switch to; Ctrl is the way in from a browser tab, where
+/// there are. Only one of the two ever needs to work on a given screen.
+fn install_session_hotkeys(state: State, watch: AgentsWatch) {
+    let handle = window_event_listener(leptos::ev::keydown, move |ev| {
+        if !(ev.meta_key() || ev.ctrl_key()) || ev.alt_key() || ev.shift_key() {
+            return;
+        }
+        // `code`, not `key`: with a modifier held, layouts that put a symbol on the number row
+        // report *that* — and which chat opens must not depend on the keyboard.
+        let code = ev.code();
+        let Some(n) = code
+            .strip_prefix("Digit")
+            .or_else(|| code.strip_prefix("Numpad"))
+            .and_then(|d| d.parse::<usize>().ok())
+            .filter(|n| (1..=HOTKEYS).contains(n))
+        else {
+            return;
+        };
+        // Nothing is claimed unless there really is a row there, so ⌘4 on a three-chat rail stays
+        // the browser's to handle rather than being swallowed into a no-op.
+        let Some(row) = session_bands(state, watch).0.into_iter().flatten().nth(n - 1) else {
+            return;
+        };
+        ev.prevent_default();
+        match row.run {
+            Some(run) => open_session(watch, &row.agent, &run.run_id),
+            // A pty agent's row *is* the agent — there is no run to select, only a screen to point.
+            None => point_watch(watch, row.agent, true),
+        }
+        // As with a click: on a narrow viewport the rail is a drawer laid over the chat, and the
+        // chat you just picked would open behind the list you picked it from.
+        state.chat_drawer.set(None);
+    });
+    on_cleanup(move || handle.remove());
 }
 
 /// Open one session from anywhere in the rail: repoint the whole screen when it belongs to another

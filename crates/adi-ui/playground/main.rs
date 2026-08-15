@@ -22,7 +22,7 @@ use adi_ui::{
     AppItem, AppState, Ask, AskOption, AskQuestion, Badge, BadgeTone, Chat, Button, ButtonSize,
     ButtonVariant, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
-    Form, Hint, Input, InputWidth, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
+    Form, Hint, Input, InputWidth, Kbd, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
     Block, Flag, FlagList, FlagMark, Param, ParamKind, PromptText, Queued, Rail, RailCard,
     RailGroup, Role, Select, SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table,
     TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar,
@@ -1744,6 +1744,23 @@ fn Playground() -> impl IntoView {
                     <Row label="mono">
                         <Badge mono=true>":8000"</Badge>
                         <Badge mono=true tone=BadgeTone::Accent>"a1b2c3d"</Badge>
+                    </Row>
+                </div>
+            </Panel>
+
+            <Panel title="Kbd" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "A shortcut, printed as a key cap. Quieter than a badge on purpose: it \
+                     rides a row that already does the thing, and a list wearing forty of \
+                     them is a list nobody scans. It renders the text it is handed — which \
+                     platform's spelling that is belongs to the call site."
+                </div>
+                <div class="px-4">
+                    <Row label="a key">
+                        <Kbd>"\u{2318}1"</Kbd>
+                        <Kbd>"\u{2318}K"</Kbd>
+                        <Kbd>"Esc"</Kbd>
+                        <Kbd>"Ctrl+9"</Kbd>
                     </Row>
                 </div>
             </Panel>

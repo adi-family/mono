@@ -168,6 +168,7 @@ struct SessionRow {
     run: Option<AgentRunInfo>,
     when: u64,
     running: bool,
+    hotkey: Option<usize>,
 }
 ```
 
