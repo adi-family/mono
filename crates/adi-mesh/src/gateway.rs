@@ -52,6 +52,7 @@ use std::sync::{Mutex as SyncMutex, PoisonError, RwLock};
 use std::time::Duration;
 
 use adi_hive::config::Hive;
+use adi_hive::notfound::escape;
 use adi_hive::proxy::{
     Decision, Router as HiveRouter, force_connection_close, is_upgrade_request,
 };
@@ -1163,23 +1164,6 @@ fn page(host: &str, reason: &str, message: &str, rows: &[(&str, &str)]) -> Strin
 </html>
 "#
     )
-}
-
-/// Escape the five characters that could break out of the markup. Local and small on purpose —
-/// the same choice [`adi_hive::notfound`] makes, and for the same reason.
-fn escape(raw: &str) -> String {
-    let mut out = String::with_capacity(raw.len());
-    for c in raw.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&#39;"),
-            _ => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

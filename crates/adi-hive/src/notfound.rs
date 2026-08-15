@@ -278,9 +278,13 @@ pub fn mesh_unavailable(host: &str, node: Option<&str>) -> String {
 }
 
 /// Escape the five characters that could break out of the markup. Small and local on purpose:
-/// pulling in an HTML-escaping crate for two interpolations would be a dependency the front door
-/// pays for on every build.
-fn escape(raw: &str) -> String {
+/// pulling in an HTML-escaping crate for a handful of interpolations would be a dependency the
+/// front door pays for on every build.
+///
+/// Public because the mesh gateway interpolates into the same page shell, and an escaper that
+/// exists twice is one that gets fixed once.
+#[must_use]
+pub fn escape(raw: &str) -> String {
     let mut out = String::with_capacity(raw.len());
     for c in raw.chars() {
         match c {
