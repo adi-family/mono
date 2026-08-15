@@ -128,6 +128,33 @@ judgment is still yours.
 189. Two named entry points into one implementation is the floor, not a finding. Read the node
 count, not just the group.
 
+### The Rust-only counterpart: `adi-clone-lint`
+
+`lints/adi-clone-lint` (full docs in `docs/clone-lint.md`) asks the same question as a **rustc
+lint**, over HIR instead of tree-sitter. Warn-only, never denies.
+
+```bash
+cargo dylint --lib adi_clone_lint --workspace
+cargo dylint --lib adi_clone_lint -- -p adi-indexer
+```
+
+Use it, rather than the indexer, when you want the *extent* of a duplication and a list of what
+differs between the copies. It reports runs of statements rather than whole symbols — so the
+shared stretch of two otherwise-different functions is findable — and because rustc has already
+resolved every identifier, the renaming it reports is proved from `Res::Local` rather than
+guessed: `sum` stands where `acc` stands, `100` becomes `200`.
+
+Use the indexer instead when you need the whole tree at once or a language other than Rust: a
+rustc lint runs per crate, so duplication whose halves live in two crates is invisible to it.
+
+It is pinned to `nightly-2025-12-04` and is **its own workspace root** — never add it to
+`members`, and never run it expecting the tree's stable toolchain. Tune it in `dylint.toml` at
+the repo root (`min_nodes` is the knob that matters); `ADI_CLONE_LINT_DEBUG=1` dumps every
+candidate fragment and group, which is the only way to tell a finding that was suppressed from
+one that was never a candidate. As of this writing the tree reports **339 findings** — 113
+identical, 53 renamed, 173 near — a third of them in `adi-webapp`, where Leptos `view!` shape is
+duplication the lint is right about and you should leave alone.
+
 If you change *what* gets indexed or *how* the embedded text is built, bump
 `cache::SCHEMA_VERSION` **and** `indexer::PIPELINE_VERSION`. Both incremental layers key on file
 content, so a change to the crate is invisible to them: skip the bump and a full reindex returns

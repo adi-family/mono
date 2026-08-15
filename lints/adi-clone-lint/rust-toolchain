@@ -1,0 +1,5 @@
+[toolchain]
+# `dylint_linting`'s build script asserts this list matches its own exactly — an extra entry
+# here fails the build with a bare `assert_eq!`, so leave it as the two components it wants.
+channel = "nightly-2025-12-04"
+components = ["llvm-tools-preview", "rustc-dev"]

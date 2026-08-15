@@ -1,0 +1,51 @@
+warning: duplicated logic: 12 lines, the same as `total` with the variables renamed
+  --> $DIR/main.rs:36:5
+   |
+LL | /     let mut acc = 0;
+LL | |     for item in items {
+LL | |         if item.enabled {
+LL | |             acc += item.weight * item.count;
+...  |
+LL | |     acc
+   | |_______^
+   |
+note: first written here
+  --> $DIR/main.rs:21:5
+   |
+LL | /     let mut sum = 0;
+LL | |     for row in rows {
+LL | |         if row.enabled {
+LL | |             sum += row.weight * row.count;
+...  |
+LL | |     sum
+   | |_______^
+   = note: variables renamed: `acc` stands where `sum` does, `items` stands where `rows` does, `item` stands where `row` does
+   = note: literals that differ: `100` becomes `200`, `100` becomes `200`
+   = help: extract the shared part into a function, or say why the copies must stay apart
+   = note: `#[warn(adi_duplicate_code)]` on by default
+
+warning: duplicated logic: 6 lines, identical to `report_widths`
+  --> $DIR/main.rs:69:5
+   |
+LL | /     let mut widest = 0;
+LL | |     for row in rows {
+LL | |         if row.weight > widest {
+LL | |             widest = row.weight;
+LL | |         }
+LL | |     }
+   | |_____^
+   |
+note: first written here
+  --> $DIR/main.rs:57:5
+   |
+LL | /     let mut widest = 0;
+LL | |     for row in rows {
+LL | |         if row.weight > widest {
+LL | |             widest = row.weight;
+LL | |         }
+LL | |     }
+   | |_____^
+   = help: extract the shared part into a function, or say why the copies must stay apart
+
+warning: 2 warnings emitted
+

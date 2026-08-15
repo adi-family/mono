@@ -1,0 +1,2 @@
+# This crate is its own workspace root, so the tree's root-anchored `/target` does not cover it.
+/target

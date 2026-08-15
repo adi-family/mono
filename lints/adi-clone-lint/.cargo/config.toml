@@ -1,0 +1,5 @@
+# `dylint-link` wraps the real linker and renames the output to
+# `libadi_clone_lint@<toolchain>.dylib`. Both `cargo dylint` and the ui tests look the library up
+# by that exact name, so without this the crate builds fine and then cannot be loaded at all.
+[target.'cfg(all())']
+linker = "dylint-link"

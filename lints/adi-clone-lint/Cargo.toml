@@ -1,0 +1,26 @@
+[package]
+name = "adi-clone-lint"
+version = "0.1.0"
+# 2021, not the workspace's 2024: `dylint_linting`'s macros expand to a bare
+# `#[no_mangle]`, which 2024 rejects in favour of `#[unsafe(no_mangle)]`.
+edition = "2021"
+publish = false
+license = "BUSL-1.1"
+description = "Finds duplicated logic by comparing AST paths through rustc's HIR"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+dylint_linting = "6.0.4"
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+dylint_testing = "6.0.4"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+# Its own workspace root. The tree's workspace is `members = ["crates/*"]` on stable,
+# and a `rustc_private` crate pinned to nightly must never be pulled into it.
+[workspace]

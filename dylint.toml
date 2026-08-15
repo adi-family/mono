@@ -1,0 +1,8 @@
+# Configuration for the workspace's dylint libraries. See lints/adi-clone-lint.
+[adi-clone-lint]
+# These are the defaults, written out because they are the knobs worth reaching for.
+# Raise the floors to cut noise; lower them to find smaller shared stretches.
+min_nodes = 25
+min_lines = 5
+min_similarity = 0.85
+report_near = true
