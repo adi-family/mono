@@ -33,8 +33,6 @@ pub(crate) enum Icon {
     Book,
     /// An arrow into a tray — "install this as an app".
     Download,
-    /// A question mark in a ring — the way to the FAQ.
-    Question,
     /// Bars rising inside an axis — a reading of what has happened, which is what the
     /// analytics page is. Deliberately unlike `Dashboard`'s four tiles: one is a chart, the
     /// other a grid of panels, and at 13px only the bars tell them apart.
@@ -136,11 +134,6 @@ impl Icon {
             Icon::Download => {
                 r#"<path d="M8 2.25v7"/><path d="M5 6.5l3 3 3-3"/>
                    <path d="M2.75 11.25v2.5h10.5v-2.5"/>"#
-            }
-            Icon::Question => {
-                r#"<circle cx="8" cy="8" r="6.25"/>
-                   <path d="M6.15 6.05a1.9 1.9 0 1 1 2.6 1.75c-.5.2-.75.6-.75 1.1v.35"/>
-                   <path d="M8 11.75h.01"/>"#
             }
             Icon::Chart => {
                 r#"<path d="M2.25 2v11.75H14"/>

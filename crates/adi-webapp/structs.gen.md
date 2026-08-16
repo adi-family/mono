@@ -59,7 +59,6 @@ pub(crate) enum Icon {
     Database,
     Book,
     Download,
-    Question,
     Chart,
     Contrast,
 }

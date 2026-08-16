@@ -27,10 +27,7 @@ mod voice;
 // The component library. The titlebar is the first thing on this page built from it; the
 // rest of the screen is still the `adi-*` layer, and the two share a page by load order
 // (see `styles/tailwind.css`).
-use adi_ui::{
-    Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Faq, Modal, Qna, TopBar, Tree, TreeNode,
-    TreeState,
-};
+use adi_ui::{Button, ButtonSize, ButtonVariant, Crumb, Crumbs, TopBar, Tree, TreeNode, TreeState};
 use adi_webapp_api::types::{
     AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
     MeshState, MetaState,
@@ -128,9 +125,6 @@ fn Home() -> impl IntoView {
     let onb = OnboardingForm::new();
     // True once the browser will let us offer "install as an app" (see [`pwa`]).
     let can_install = pwa::installable();
-    // The FAQ dialog. It lives here rather than in the bar so both shapes of this page —
-    // the chat and the wizard — open the same one.
-    let faq_open = RwSignal::new(false);
 
     // Load the meta state once, seeding the wizard from the server's defaults (or from the agent
     // itself, when there already is one).
@@ -323,15 +317,11 @@ fn Home() -> impl IntoView {
                                     "reconfigure agent"
                                 </Button>
                                 {analytics_link()}
-                                {faq_button(faq_open)}
                                 {extended_link()}
                             }
                             .into_any()
                         }
                     />
-                    <Modal open=faq_open title="Questions" width="max-w-3xl">
-                        <Faq items=faq()/>
-                    </Modal>
                     {chat_home_view(state, watch)}
                 </div>
             }
@@ -346,15 +336,11 @@ fn Home() -> impl IntoView {
                             view! {
                                 {install_pill(can_install)}
                                 {analytics_link()}
-                                {faq_button(faq_open)}
                                 {extended_link()}
                             }
                             .into_any()
                         }
                     />
-                    <Modal open=faq_open title="Questions" width="max-w-3xl">
-                        <Faq items=faq()/>
-                    </Modal>
                     <main class="adi-onb__body">
                         <div class="adi-onb__panel">{onboarding_view(state, onb, m)}</div>
                     </main>
@@ -396,21 +382,6 @@ fn analytics_link() -> impl IntoView {
     }
 }
 
-/// The way into the FAQ, to the left of the way out to the control panel: the two things
-/// this bar offers are "explain this" and "show me more of it", in that order.
-fn faq_button(open: RwSignal<bool>) -> impl IntoView {
-    view! {
-        <Button
-            size=ButtonSize::Small
-            variant=ButtonVariant::Ghost
-            icon=icons::Icon::Question.path()
-            on:click=move |_| open.set(true)
-        >
-            "FAQ"
-        </Button>
-    }
-}
-
 /// The way through to the control panel. A plain link, not a route: `/extended` is a
 /// different document, and the wasm bundle decides which of the two it is at boot.
 fn extended_link() -> impl IntoView {
@@ -424,51 +395,6 @@ fn extended_link() -> impl IntoView {
             <span aria-hidden="true">"\u{2192}"</span>
         </a>
     }
-}
-
-/// What people ask before they have used this for an hour. Answers are Markdown, so a path
-/// or a command can be one — see [`adi_ui::Qna`].
-///
-/// A few for now; this list is meant to grow, and it costs one entry per question.
-fn faq() -> Vec<Qna> {
-    vec![
-        Qna::new(
-            "What is adi?",
-            "A place to run agents on your own machine. It keeps their sessions, their tools \
-             and their credentials in one store, and gives every one of them a front door on \
-             your network — so an agent is something you can come back to rather than a tab \
-             you left open.",
-        ),
-        Qna::new(
-            "What is the difference between this page and *extended*?",
-            "This page is the chat: one agent, one conversation, the things it produced. \
-             **Extended** is the control panel behind it — projects, tasks, tools, secrets, \
-             the database, the mesh. Same stack, more surface.",
-        ),
-        Qna::new(
-            "Where does my data live?",
-            "On this machine, under `~/.adi`. Sessions, transcripts and caches all sit in \
-             that one directory, and nothing leaves it except the calls an agent's own \
-             provider needs.",
-        ),
-        Qna::new(
-            "Can I install it as an app?",
-            "Yes — the **Install** button appears in this bar when your browser has an \
-             install to offer. It runs in its own window, keeps its own icon, and works \
-             offline for everything that does not need the backend.",
-        ),
-        Qna::new(
-            "How do I add another agent?",
-            "In **extended → agents**. Every agent gets a runtime (a CLI in a live terminal, \
-             or a headless SDK loop), a prompt, and whatever tools you give it.",
-        ),
-        Qna::new(
-            "Something is stuck. What do I look at first?",
-            "The run's own log — every agent run keeps one, and it is the first place a \
-             failure says what it was. After that, **extended → hive** shows what is \
-             actually running on this machine and on what port.",
-        ),
-    ]
 }
 
 /// The root bar's "install app" pill, styled like its `extended →` neighbour. Rendered only
