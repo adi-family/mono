@@ -1701,6 +1701,8 @@ pub struct AgentRuns {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllAgentRuns {
     pub agents: Vec<AgentRuns>,
+    #[serde(default)]
+    pub total: usize,
 }
 ```
 

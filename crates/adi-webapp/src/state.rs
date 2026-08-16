@@ -29,6 +29,15 @@ use crate::ui::TableState;
 /// chat home's agent picker.
 pub(crate) const ROOT_AGENT: &str = "adi-agent";
 
+/// How many sessions the chat rail asks for at a time — the first page, and what **Load more**
+/// adds each press.
+///
+/// A hundred, because it is more than anyone scrolls and far less than a fleet accumulates: the
+/// index reached four hundred sessions on this machine alone, and the rail is watched over the
+/// live channel, so the whole of it was re-sent to every open panel each time any one of them
+/// moved.
+pub(crate) const SESSION_PAGE: usize = 100;
+
 /// Signals a data refresh writes to; `Copy` (each field is an arena handle) so it threads
 /// cheaply through async tasks and event handlers.
 #[derive(Clone, Copy)]
@@ -111,6 +120,18 @@ pub(crate) struct State {
     /// The agent currently on screen is exempt while it is on, the same escape hatch the agent
     /// picker gives itself: a filter must never hide what the centre pane is showing.
     pub(crate) starred_only: RwSignal<bool>,
+    /// How many sessions the chat rail has asked the backend for — [`SESSION_PAGE`] to begin with,
+    /// another page each time its **Load more** is pressed.
+    ///
+    /// The rail is the one place the whole index is expensive: it is watched over the live channel,
+    /// so every agent's every session used to be re-sent to every open panel whenever any one of
+    /// them moved. A page is what the rail reads anyway — nobody scrolls four hundred chats — and
+    /// the pages that genuinely need all of it (Analytics, the Agents index) still ask without a
+    /// limit.
+    ///
+    /// Page state rather than a stored preference, like the rail's other two: a reload comes back
+    /// to the first page.
+    pub(crate) rail_limit: RwSignal<usize>,
     /// Which side rail is open as a drawer, on a viewport too narrow to seat both beside the chat.
     /// `None` on a wide one, where the rails are always in the layout and this is never read.
     ///
@@ -288,6 +309,7 @@ impl State {
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
             starred_only: RwSignal::new(false),
+            rail_limit: RwSignal::new(SESSION_PAGE),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
         }
@@ -1749,7 +1771,7 @@ pub(crate) async fn load(s: State) {
             set_if_changed(s.agents, a);
         }
         // The cross-agent "All chats" index above the project's Agents panel.
-        if let Ok(c) = fetch::all_agent_runs().await {
+        if let Ok(c) = fetch::all_agent_runs(None).await {
             set_if_changed(s.all_chats, c);
         }
         // The project's Tools panel lists the tools filed under it (from the shared list).
@@ -1775,7 +1797,7 @@ pub(crate) async fn load(s: State) {
         if let Ok(a) = fetch::agents().await {
             set_if_changed(s.agents, a);
         }
-        if let Ok(c) = fetch::all_agent_runs().await {
+        if let Ok(c) = fetch::all_agent_runs(None).await {
             set_if_changed(s.all_chats, c);
         }
     }
@@ -1789,7 +1811,7 @@ pub(crate) async fn load(s: State) {
             set_if_changed(s.agents, a);
         }
         // The cross-agent "All chats" index at the top of the Agents page.
-        if let Ok(c) = fetch::all_agent_runs().await {
+        if let Ok(c) = fetch::all_agent_runs(None).await {
             set_if_changed(s.all_chats, c);
         }
         // The agent form's per-tool checkboxes are populated from the tools list.

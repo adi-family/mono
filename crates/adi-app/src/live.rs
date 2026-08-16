@@ -70,7 +70,12 @@ const STALE: Duration = Duration::from_secs(60);
 /// the same routing an HTTP request uses, so anything reachable here would be callable over the
 /// socket. Every entry is a read, and reads are all that belongs on a channel whose whole purpose
 /// is to repeat itself.
+///
+/// Matched on the route alone, as the HTTP side matches it: a read that takes a query parameter
+/// (`/api/agents/runs/all?limit=100`) is the same read either way. The *topic* is still keyed by
+/// the full path, so two pages watching different pages of it get an answer each.
 fn watchable(method: &str, path: &str) -> Option<Duration> {
+    let path = path.split('?').next().unwrap_or(path);
     match method {
         "GET" => match path {
             "/api/health" => Some(IDLE),
@@ -446,11 +451,26 @@ mod tests {
         assert_eq!(watchable("POST", "/api/agents/peek"), Some(FAST));
         assert_eq!(watchable("GET", "/api/projects/acme"), Some(SLOW));
         assert_eq!(watchable("GET", "/api/fleet"), Some(SLOW));
+        // A query parameter is part of the read, not a different one: the rail's page of the
+        // session index is watchable exactly as the whole index is.
+        assert_eq!(watchable("GET", "/api/agents/runs/all?limit=100"), Some(SLOW));
         // Mutations are not on the list, whatever they look like.
         assert_eq!(watchable("POST", "/api/fleet/unpair"), None);
         assert_eq!(watchable("POST", "/api/projects/remove"), None);
         assert_eq!(watchable("POST", "/api/agents/run"), None);
         assert_eq!(watchable("DELETE", "/api/health"), None);
+        // …and a query cannot smuggle one on: the route is what is matched, still.
+        assert_eq!(watchable("POST", "/api/agents/run?limit=1"), None);
+    }
+
+    /// Two pages of the same read are two topics: the path they are keyed by carries the query, so
+    /// a rail showing a hundred sessions and one showing two hundred each get their own answer.
+    #[test]
+    fn a_page_of_a_read_is_its_own_topic() {
+        assert_ne!(
+            watch("GET", "/api/agents/runs/all?limit=100", "").key(),
+            watch("GET", "/api/agents/runs/all?limit=200", "").key()
+        );
     }
 
     #[test]

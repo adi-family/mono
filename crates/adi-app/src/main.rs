@@ -508,9 +508,13 @@ fn shared_read_key(req: &http::Request) -> Option<String> {
     if !shared || req.body.len() > MAX_SHARED_KEY_BODY {
         return None;
     }
+    // Keyed on the *full* path, query and all: the allowlist is matched without one, but
+    // `?limit=100` and `?limit=200` are different answers to the same route, and sharing would
+    // hand one asker the other's page.
     Some(format!(
-        "{} {path}\n{}",
+        "{} {}\n{}",
         req.method,
+        req.path,
         String::from_utf8_lossy(&req.body)
     ))
 }
@@ -682,7 +686,13 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/run") => handlers::run_agent(agents, &req.body),
         ("POST", "/api/agents/limit") => handlers::set_run_limit(agents, &req.body),
         ("POST", "/api/agents/runs") => handlers::agent_runs(agents, &req.body),
-        ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(agents),
+        // `?limit=N` is the chat rail's page — the newest N sessions across every agent. Absent
+        // (or unparseable) means the whole index, which is what the pages that read all of it ask
+        // for.
+        ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(
+            agents,
+            req.query_param("limit").and_then(|n| n.parse().ok()),
+        ),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
         ("POST", "/api/agents/run/reply") => handlers::reply_run(agents, &req.body),
         // An image on its way into a message. Raw bytes with their type in the header, like the
@@ -1088,11 +1098,19 @@ mod tests {
         let other = shared_read_key(&request("POST", "/api/agents/runs", r#"{"name":"b"}"#));
         assert!(one.is_some() && one != other, "different agents, different keys");
 
-        let query = shared_read_key(&request("GET", "/api/agents?x=1", ""));
-        assert_eq!(
-            query,
-            shared_read_key(&request("GET", "/api/agents", "")),
-            "the key is the route, so a query string does not split it"
+        // A query is part of the subject, not decoration on the route: `?limit=100` and
+        // `?limit=200` are two different pages of the session index, and sharing them would hand
+        // one page's asker the other's answer.
+        let page = shared_read_key(&request("GET", "/api/agents/runs/all?limit=100", ""));
+        assert!(page.is_some(), "the route is still the one on the allowlist");
+        assert_ne!(
+            page,
+            shared_read_key(&request("GET", "/api/agents/runs/all?limit=200", "")),
+        );
+        assert_ne!(
+            page,
+            shared_read_key(&request("GET", "/api/agents/runs/all", "")),
+            "a page and the whole index are not the same answer"
         );
 
         let huge = "x".repeat(MAX_SHARED_KEY_BODY + 1);

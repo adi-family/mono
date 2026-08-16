@@ -1430,9 +1430,20 @@ pub struct AgentRuns {
 /// `GET /api/agents/runs/all` — the run history of **every** agent, in one round-trip, for the
 /// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), so the
 /// client can flatten them into a single "all chats" list and open any conversation.
+///
+/// `?limit=N` asks for only the newest N sessions *across every agent* — the page the chat rail
+/// opens on — plus every session that is running or blocked on a person, which is kept whatever
+/// its age because those are inboxes rather than history. Every agent is still listed either way,
+/// because an agent with no session left in the window is still one the client has to know the
+/// shape of; it is the runs that are cut.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AllAgentRuns {
     pub agents: Vec<AgentRuns>,
+    /// How many sessions exist in all, before any `?limit=` cut — what tells a paged client
+    /// whether asking for more would bring anything back. Equal to the number carried when the
+    /// answer is whole.
+    #[serde(default)]
+    pub total: usize,
 }
 
 /// A zero capability profile — the `serde` default when an older/absent response omits `caps`.

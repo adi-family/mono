@@ -36,11 +36,12 @@ Agents::runs(agent) -> Vec<RunInfo>                      lib.rs:851
         ▼
 runs_response() -> AgentRuns                             handlers/agents.rs:468
         │                          ╲
-POST /api/agents/runs   (one agent)  GET /api/agents/runs/all  (every agent)
-        │                            ╲
+POST /api/agents/runs   (one agent)  GET /api/agents/runs/all[?limit=N]  (every agent)
+        │                            ╲   newest N across agents + every live/asking one
         ▼                              ▼
    watch.runs: Vec<AgentRunInfo>     state.all_chats: AllAgentRuns     state.rs:51, 979
-        │                              │
+        │  paged() cuts it to           │  already cut; `total` says what was left behind
+        │  state.rail_limit             │
         ╰──────────────╮   ╭───────────╯
                        ▼   ▼
         chat_all_sessions() -> Vec<SessionRow>           actions.rs:2338
@@ -223,8 +224,8 @@ Handlers: `crates/adi-webapp-api/src/handlers/agents.rs`. Routing: `crates/adi-a
 
 | Route | Handler | Answer |
 |---|---|---|
-| `POST /api/agents/runs` | `agent_runs` :190 | `AgentRuns` — one agent's history |
-| `GET /api/agents/runs/all` | `all_agent_runs` :457 | `AllAgentRuns` — every agent, one round-trip |
+| `POST /api/agents/runs` | `agent_runs` :190 | `AgentRuns` — one agent's history, whole |
+| `GET /api/agents/runs/all[?limit=N]` | `all_agent_runs` :457 | `AllAgentRuns` — every agent, one round-trip; `?limit` pages it |
 | `POST /api/agents/run/peek` | `peek_run` :205 | one run's transcript/log snapshot |
 | `POST /api/agents/run/hide` | `hide_run` :439 | flips `hidden`, replies with fresh history |
 | `POST /api/agents/run/delete` | `delete_run` :419 | deletes, replies with fresh history |
@@ -244,7 +245,27 @@ and the client must fall back to `started_at`.
 
 `GET /api/agents/runs/all` is O(agents × sessions) directory walks per call. It is in
 `SHARED_GETS` (`adi-app/src/main.rs:434`), so concurrent identical requests are collapsed into
-one computation.
+one computation — keyed on the **full path**, query included, so two pages of it are two answers
+rather than one shared by mistake.
+
+### Paging (`?limit=N`)
+
+The rail asks for a page; every other reader asks for all of it.
+
+- **The cut** (`newest`, `agents.rs`) is the newest `N` sessions **across every agent**, by
+  `max(last_activity, started_at)` — one flat list, as the rail reads it. A per-agent cut would
+  spend the budget on agents nobody has touched in months.
+- **Two kinds ride free**: a session that is *running* or *blocked on a person* is kept whatever
+  its age and without spending the budget. Those are the rail's other two bands, and they are
+  inboxes rather than history — a question asked months ago and never answered is exactly the row
+  paging must not swallow.
+- **Every agent is still listed**, runs or none: an interactive agent has no runs to begin with
+  and still contributes a rail row, and the client reads `caps` off this same listing.
+- **`total`** counts what exists, not what was sent. `total − Σruns` is what the rail's
+  **Load more** prints, and a zero there is what removes the button.
+
+`POST /api/agents/runs` is *not* paged — the open conversation has to be findable in it — so the
+client cuts the watched agent's copy itself (`paged`, `actions.rs`) by the same rule.
 
 ## Layer 4 — transport
 
@@ -253,9 +274,14 @@ Two paths, same shape:
 - **Live channel (default).** `/api/ws` re-dispatches watched reads server-side on a timer and
   pushes only when the answer changed. The allowlist *is* the security boundary
   (`adi-app/src/live.rs:74`): `/api/agents/runs/all` is `SLOW` (3s), `/api/agents/runs` and
-  `/api/agents/run/peek` are `FAST` (1s).
+  `/api/agents/run/peek` are `FAST` (1s). The allowlist matches the **route** (query stripped);
+  the *topic* is keyed by the full path, so each page of the index is its own topic.
 - **Polling fallback**, when the socket is down: `adi-webapp/src/main.rs:203-250` (`refresh`),
-  a 4s tick calling `fetch::all_agent_runs()` (`fetch.rs:398`).
+  a 4s tick calling `fetch::all_agent_runs(limit)` (`fetch.rs:398`).
+
+Pressing **Load more** widens `state.rail_limit`, which is read *tracked* where the subscription
+is built — so the effect re-runs, re-subscribes at the wider path, and the next page arrives at
+once rather than at the socket's next tick.
 
 Client subscriptions are declared in `state::chat_subscriptions` (`state.rs:1419`) and
 `state::subscriptions` (`state.rs:1284`, `:1318`) and installed via `live::watch`
@@ -276,8 +302,13 @@ mutations (hide/delete reply with fresh history), so the row of a chat you just 
 immediately instead of at the next 3s tick. `chat_all_sessions` prefers `watch.runs` for the
 watched agent and falls back to `all_chats` (`actions.rs:2377-2384`).
 
-Other state that shapes the list: `state.starred_only`, `state.show_hidden`, `state.session_menu`,
-`state.chat_drawer`.
+That preference is why paging is done twice. `all_chats` arrives already cut; `watch.runs` is the
+watched agent's *whole* history, so `paged` cuts it client-side — otherwise the agent you are
+actually on would be the one agent paging did nothing for, which on this machine is the one with
+nearly every session.
+
+Other state that shapes the list: `state.rail_limit` (the page, `SESSION_PAGE` = 100 to start),
+`state.starred_only`, `state.show_hidden`, `state.session_menu`, `state.chat_drawer`.
 
 ## Layer 6 — render
 
@@ -288,9 +319,11 @@ chat_rail                       :2307   the whole left rail
 ├─ chat_all_sessions            :2338   visible rows
 │   ├─ starred_agents           :2279   ★ filter (watched agent always kept)
 │   ├─ per agent: pty ⇒ one synthetic row (when: now); else runs.filter(!hidden)
+│   │   └─ paged                        the watched agent's own list, cut to state.rail_limit
 │   ├─ sort by last_touch desc  :2423   last_touch = max(last_activity, started_at)  :2243
 │   ├─ partition(running)       :2428   two bands
 │   └─ For(keyed "agent:run_id") -> chat_session_row  :2473
+├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
 └─ chat_hidden_sessions         :2674   the collapsed Hidden band (all_chats only)
 ```
 

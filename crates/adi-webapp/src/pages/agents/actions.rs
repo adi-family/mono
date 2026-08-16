@@ -19,7 +19,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{
-    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SessionMenu, State, refresh_fleet_dashboards,
+    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionMenu, State,
+    refresh_fleet_dashboards,
 };
 use crate::ui::{
     Key, Sort, TableState, apply_mutation, sort_rows,
@@ -2622,6 +2623,29 @@ fn last_touch(r: &AgentRunInfo) -> u64 {
     r.last_activity.max(r.started_at)
 }
 
+/// Cut the *watched* agent's own run list to the page the rail is showing, by the rule the backend
+/// pages the cross-agent index with: the newest [`State::rail_limit`], plus every session that is
+/// running or blocked on a person whatever its age.
+///
+/// The rail takes the watched agent's conversations from `/api/agents/runs` rather than from the
+/// index, because that list moves the instant a chat is deleted or hidden — and that endpoint
+/// answers with the agent's *whole* history. Without this the agent you are actually on would be
+/// the one agent paging did nothing for, which on this machine is the one with nearly every
+/// session. `Load more` widens both, because it widens `rail_limit`.
+///
+/// Nothing is re-sorted: the endpoint answers newest first, so position is age.
+fn paged(runs: Vec<AgentRunInfo>, state: State) -> Vec<AgentRunInfo> {
+    let limit = state.rail_limit.get();
+    if runs.len() <= limit {
+        return runs;
+    }
+    runs.into_iter()
+        .enumerate()
+        .filter(|(i, r)| *i < limit || r.running || r.pending_question.is_some())
+        .map(|(_, r)| r)
+        .collect()
+}
+
 /// The rail's **starred only** toggle, in the Sessions head beside "+ New".
 ///
 /// A fleet grows a long tail of one-off and machine-made agents, and their chats land in the same
@@ -2686,9 +2710,45 @@ fn starred_agents(state: State, watched: &str) -> Option<std::collections::HashS
 fn chat_rail(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         {chat_all_sessions(state, watch)}
+        {chat_load_more(state)}
         {chat_hidden_sessions(state, watch)}
     }
     .into_any()
+}
+
+/// The rail's **Load more**, under the last session and above the Hidden band: another
+/// [`SESSION_PAGE`] sessions from the backend, and how many are left behind it.
+///
+/// `None` — no button at all — once the index says everything is here, which on a fresh machine is
+/// from the first load. A control that does nothing is worse than no control, and "you have seen
+/// them all" is what its absence says.
+///
+/// It widens the *request*, not a slice of something already in hand: [`State::rail_limit`] is what
+/// the subscription's path is built from, so pressing this re-subscribes and the next page arrives
+/// on its own. That is also why there is no spinner — the rail keeps every row it had and grows
+/// when the answer lands, rather than emptying while it waits.
+fn chat_load_more(state: State) -> Option<AnyView> {
+    let all = state.all_chats.get()?;
+    let shown: usize = all.agents.iter().map(|a| a.runs.len()).sum();
+    let more = all.total.saturating_sub(shown);
+    if more == 0 {
+        return None;
+    }
+    // The last press says how many are left rather than repeating the page size back — "load 30
+    // more · 30 older" is the same number twice, and the end of the list is worth saying plainly.
+    let label = if more <= SESSION_PAGE {
+        format!("Load the last {more}")
+    } else {
+        format!("Load {SESSION_PAGE} more \u{00b7} {more} older")
+    };
+    Some(
+        view! {
+            <button class="adi-chome__divider adi-chome__divider--toggle" type="button"
+                title="ask the backend for the next page of sessions"
+                on:click=move |_| state.rail_limit.update(|n| *n += SESSION_PAGE)>{label}</button>
+        }
+        .into_any(),
+    )
 }
 
 /// One row of the rail. The list spans every agent, so a row has to carry which agent it belongs to
@@ -2792,7 +2852,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
         }
         let runs = if is_watched {
             let own = watch.runs.get();
-            if own.is_empty() { ar.runs.clone() } else { own }
+            if own.is_empty() { ar.runs.clone() } else { paged(own, state) }
         } else {
             ar.runs.clone()
         };
@@ -2816,14 +2876,13 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
                 hotkey: None,
             });
         } else {
-            rows.extend(watch.runs.get().into_iter().filter(|r| !r.hidden).map(|r| {
-                SessionRow {
-                    agent: watched.clone(),
-                    when: last_touch(&r),
-                    running: r.running,
-                    run: Some(r),
-                    hotkey: None,
-                }
+            let own = paged(watch.runs.get(), state);
+            rows.extend(own.into_iter().filter(|r| !r.hidden).map(|r| SessionRow {
+                agent: watched.clone(),
+                when: last_touch(&r),
+                running: r.running,
+                run: Some(r),
+                hotkey: None,
             }));
         }
     }
@@ -3123,7 +3182,10 @@ fn set_session_hidden(
                 if watch.name.get_untracked().as_deref() == Some(agent.as_str()) {
                     watch.runs.set(runs.runs);
                 }
-                if let Ok(all) = fetch::all_agent_runs().await {
+                // Same page the rail is showing — refetching without a limit here would widen the
+                // rail to the whole index until the socket's next answer narrowed it again.
+                let limit = Some(state.rail_limit.get_untracked());
+                if let Ok(all) = fetch::all_agent_runs(limit).await {
                     state.all_chats.set(Some(all));
                 }
             }

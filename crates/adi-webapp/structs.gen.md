@@ -535,6 +535,7 @@ pub(crate) struct State {
     pub(crate) session_menu: RwSignal<Option<SessionMenu>>,
     pub(crate) show_hidden: RwSignal<bool>,
     pub(crate) starred_only: RwSignal<bool>,
+    pub(crate) rail_limit: RwSignal<usize>,
     pub(crate) chat_drawer: RwSignal<Option<ChatDrawer>>,
     pub(crate) tables: Tables,
 }

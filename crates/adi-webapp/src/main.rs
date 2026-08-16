@@ -174,8 +174,12 @@ fn Home() -> impl IntoView {
                     state.agents.set(Some(a));
                 }
             }
-            // Every agent's sessions in one round-trip — what the rail lists under "Other agents".
-            if let Ok(c) = fetch::all_agent_runs().await
+            // Every agent's sessions in one round-trip — what the rail lists under "Other agents"
+            // — cut to the page the rail is currently showing. Read untracked because this runs
+            // inside a task rather than an effect: what re-reads it when Load more moves is the
+            // subscription below, which is what asks in the ordinary case anyway.
+            let limit = Some(state.rail_limit.get_untracked());
+            if let Ok(c) = fetch::all_agent_runs(limit).await
                 && state.all_chats.get_untracked().as_ref() != Some(&c)
             {
                 state.all_chats.set(Some(c));
@@ -237,8 +241,12 @@ fn Home() -> impl IntoView {
         }));
         // Every agent's sessions — what the rail lists under "Other agents" — and the dashboards
         // rail, which groups by project and so needs the project names.
+        //
+        // Only the rail's current page of sessions, and `rail_limit` is read *tracked*: pressing
+        // Load more re-runs this effect, which re-subscribes at the wider path and so asks for the
+        // next page immediately rather than at whatever the socket's next tick would have been.
         subs.push(live::Sub::get(
-            "/api/agents/runs/all",
+            fetch::all_runs_path(Some(state.rail_limit.get())),
             move |c: adi_webapp_api::types::AllAgentRuns| {
                 if state.all_chats.get_untracked().as_ref() != Some(&c) {
                     state.all_chats.set(Some(c));
@@ -636,6 +644,9 @@ fn App() -> impl IntoView {
         session_menu: RwSignal::new(None),
         show_hidden: RwSignal::new(false),
         starred_only: RwSignal::new(false),
+        // No sessions rail on the workbench shell either — its "All chats" table reads the whole
+        // index, so nothing here pages. The field exists because `State` is one shape.
+        rail_limit: RwSignal::new(state::SESSION_PAGE),
         chat_drawer: RwSignal::new(None),
         // Each table restores the arrangement its user last left, else its declared columns.
         tables: state::Tables::new(),

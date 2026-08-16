@@ -405,8 +405,22 @@ pub async fn agent_runs(name: String) -> Result<AgentRuns, String> {
 }
 
 /// Every agent's run history in one call — the data behind the cross-agent "All chats" index.
-pub async fn all_agent_runs() -> Result<AllAgentRuns, String> {
-    get("/api/agents/runs/all").await
+///
+/// `limit` asks for only the newest N sessions across every agent, the page the chat rail opens
+/// on; `None` is the whole history, which is what Analytics and the Agents index read. The answer
+/// carries `total` either way, so a paged caller knows whether there is more behind it.
+pub async fn all_agent_runs(limit: Option<usize>) -> Result<AllAgentRuns, String> {
+    get(&all_runs_path(limit)).await
+}
+
+/// The `/api/agents/runs/all` request for a given page size — one function, because the live
+/// channel watches this path by string and a subscription that spelled it differently would be a
+/// second topic answering the same question.
+pub fn all_runs_path(limit: Option<usize>) -> String {
+    match limit {
+        Some(n) => format!("/api/agents/runs/all?limit={n}"),
+        None => "/api/agents/runs/all".to_string(),
+    }
 }
 
 /// A snapshot of one specific run's log (plus the conversation transcript, for harness runs).

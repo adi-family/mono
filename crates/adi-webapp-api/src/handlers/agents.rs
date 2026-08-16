@@ -789,22 +789,89 @@ pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
 /// `GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the
 /// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), in the
 /// store's list order; the client flattens and sorts them.
+///
+/// `limit` is the chat rail's page: the newest N sessions across every agent — plus every one that
+/// is running or blocked on a person, whatever its age — with `total` saying how many there were to
+/// choose from. `None` answers with all of them, which is what the pages that read the whole
+/// history — Analytics, the Agents index — ask for.
 #[must_use]
-pub fn all_agent_runs(store: &Agents) -> Response {
+pub fn all_agent_runs(store: &Agents, limit: Option<usize>) -> Response {
     match store.list() {
         Ok(agents) => {
             // One question query for the whole answer rather than one per agent: the index is
             // partial and the usual row count is zero, but this endpoint is the chat rail's poll
             // and everything on its path is paid for on every tick.
             let waiting = Waiting::of(store);
-            let agents = agents
+            let mut agents: Vec<AgentRuns> = agents
                 .iter()
                 .map(|a| runs_response_with(store, a, &waiting))
                 .collect();
-            ok_json(&AllAgentRuns { agents })
+            let total = agents.iter().map(|a| a.runs.len()).sum();
+            if let Some(limit) = limit {
+                agents = newest(agents, limit);
+            }
+            ok_json(&AllAgentRuns { agents, total })
         }
         Err(e) => Response::from(&e),
     }
+}
+
+/// Cut the whole index down to its newest `limit` sessions, counted across agents rather than
+/// within each one — "the last hundred chats" is one list in the rail, and a per-agent cut would
+/// spend the budget on agents nobody has touched in months.
+///
+/// A session that is **running**, or **blocked on a person**, is kept whatever its age and without
+/// spending the budget. Those two are the rail's other two bands, and they are inboxes rather than
+/// history: a question asked three months ago and never answered is exactly the row a person needs
+/// to still be shown, and it is the paging that would have quietly swallowed it. There are only
+/// ever a handful of them — a machine with a hundred live runs has a different problem.
+///
+/// Every agent survives the cut, runs or none: an interactive agent has no runs to begin with and
+/// still contributes a row, and the client reads `caps` off this same listing.
+fn newest(agents: Vec<AgentRuns>, limit: usize) -> Vec<AgentRuns> {
+    let held = |r: &AgentRunInfo| r.running || r.pending_question.is_some();
+    let mut index: Vec<(u64, usize, usize)> = agents
+        .iter()
+        .enumerate()
+        .flat_map(|(ai, a)| {
+            a.runs
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| !held(r))
+                .map(move |(ri, r)| (last_touch(r), ai, ri))
+        })
+        .collect();
+    if index.len() <= limit {
+        return agents;
+    }
+    // Newest first, ties settled by position — which is the store's own newest-first order, so an
+    // agent whose sessions all share a timestamp is cut from its own tail rather than at random.
+    index.sort_unstable_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)).then(a.2.cmp(&b.2)));
+    index.truncate(limit);
+    let mut keep: Vec<std::collections::HashSet<usize>> =
+        vec![std::collections::HashSet::new(); agents.len()];
+    for (_, ai, ri) in index {
+        keep[ai].insert(ri);
+    }
+    agents
+        .into_iter()
+        .zip(keep)
+        .map(|(mut a, keep)| {
+            let mut i = 0;
+            a.runs.retain(|r| {
+                let wanted = keep.contains(&i) || held(r);
+                i += 1;
+                wanted
+            });
+            a
+        })
+        .collect()
+}
+
+/// When a session last moved — its own last activity, or its start for a run old enough to predate
+/// the field. The rail sorts on this, so the cut has to agree with it.
+fn last_touch(r: &AgentRunInfo) -> u64 {
+    r.last_activity.max(r.started_at)
 }
 
 /// Every conversation that is blocked on a person, keyed by the pair that names one.
@@ -2487,6 +2554,141 @@ mod tests {
         let key = kimi.secret.expect("an API key is required");
         assert_eq!(key.env, "MOONSHOT_API_KEY");
         assert!(key.required, "there is no login for this one");
+    }
+
+    /// One agent's listing, with its sessions' timestamps stated — enough of an [`AgentRuns`] for
+    /// the cut, which reads nothing else.
+    fn listing(name: &str, when: &[u64]) -> AgentRuns {
+        AgentRuns {
+            name: name.to_string(),
+            interactive: false,
+            answerable: true,
+            // The cut never reads these; a conversational backend's profile is stated so the
+            // fixture is a listing the client would actually be sent.
+            caps: AgentCapabilities {
+                interactive: false,
+                history: true,
+                answerable: true,
+                live_text: false,
+                tool_steps: true,
+                thinking: true,
+                metrics: true,
+                asks: true,
+                images: true,
+            },
+            runs: when
+                .iter()
+                .map(|&at| AgentRunInfo {
+                    run_id: format!("{name}-{at}"),
+                    started_at: at,
+                    last_activity: at,
+                    message: String::new(),
+                    running: false,
+                    hidden: false,
+                    pending_question: None,
+                    outcome: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn kept(agents: &[AgentRuns]) -> Vec<&str> {
+        agents
+            .iter()
+            .flat_map(|a| a.runs.iter().map(|r| r.run_id.as_str()))
+            .collect()
+    }
+
+    /// The page is the newest N sessions *of the whole fleet*, not N of each agent's — which is
+    /// what the rail shows, one flat list newest first.
+    #[test]
+    fn the_page_is_the_newest_sessions_across_every_agent() {
+        let agents = vec![listing("busy", &[90, 80, 70]), listing("quiet", &[100, 10])];
+
+        let page = newest(agents, 3);
+
+        assert_eq!(kept(&page), ["busy-90", "busy-80", "quiet-100"]);
+    }
+
+    /// Every agent survives the cut even when none of its sessions did: the client reads each
+    /// agent's `caps` off this same listing, and an interactive one contributes a rail row while
+    /// having no runs at all.
+    #[test]
+    fn an_agent_cut_down_to_nothing_is_still_listed() {
+        let agents = vec![listing("old", &[1, 2]), listing("new", &[900])];
+
+        let page = newest(agents, 1);
+
+        assert_eq!(
+            page.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(),
+            ["old", "new"]
+        );
+        assert_eq!(kept(&page), ["new-900"]);
+    }
+
+    /// The two bands that are inboxes rather than history survive any page. A question asked
+    /// months ago and never answered is precisely the row a person still needs to see, and paging
+    /// is the one thing that would have taken it away without saying so.
+    #[test]
+    fn a_waiting_or_running_session_outlives_the_page() {
+        let mut agents = vec![listing("solver", &[500, 400, 3, 2, 1])];
+        agents[0].runs[4].pending_question = Some(AgentAsk {
+            id: "q1".to_string(),
+            asked_at: 1,
+            note: String::new(),
+            questions: Vec::new(),
+            deadline: None,
+            headline: "which branch?".to_string(),
+        });
+        agents[0].runs[3].running = true;
+
+        let page = newest(agents, 2);
+
+        assert_eq!(
+            kept(&page),
+            ["solver-500", "solver-400", "solver-2", "solver-1"],
+            "the page is the newest two; the live and the asking ride free"
+        );
+    }
+
+    /// A limit no smaller than the index is not a cut — the whole thing comes back untouched,
+    /// which is what a rail that has loaded everything keeps asking for.
+    #[test]
+    fn a_limit_wider_than_the_index_keeps_all_of_it() {
+        let agents = vec![listing("a", &[3, 2]), listing("b", &[1])];
+
+        assert_eq!(kept(&newest(agents.clone(), 3)), ["a-3", "a-2", "b-1"]);
+        assert_eq!(kept(&newest(agents, 500)), ["a-3", "a-2", "b-1"]);
+    }
+
+    /// The answer says how many there were to choose from, not how many it carries — that
+    /// difference is the whole of what tells the rail there is another page behind this one.
+    #[test]
+    fn the_total_counts_past_the_limit() {
+        let store = scratch("page");
+        for name in ["solver", "looper"] {
+            let save = serde_json::json!({ "name": name, "backend": "harness:adi" });
+            assert_eq!(save_agent(&store, save.to_string().as_bytes()).status, 200);
+        }
+        let sessions = adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
+        for i in 0..5 {
+            let agent = if i % 2 == 0 { "solver" } else { "looper" };
+            sessions
+                .create(agent, adi_agents::Backend::from("harness:adi"), "/tmp", "go")
+                .expect("open a session");
+        }
+
+        let Response { status, body } = all_agent_runs(&store, Some(2));
+        assert_eq!(status, 200);
+        let page: AllAgentRuns = serde_json::from_str(&body).expect("an index");
+        assert_eq!(page.total, 5, "what exists, not what was sent");
+        assert_eq!(page.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 2);
+
+        // And no limit is the whole history, for the pages that read all of it.
+        let Response { body, .. } = all_agent_runs(&store, None);
+        let all: AllAgentRuns = serde_json::from_str(&body).expect("an index");
+        assert_eq!(all.total, 5);
+        assert_eq!(all.agents.iter().map(|a| a.runs.len()).sum::<usize>(), 5);
     }
 }
 
