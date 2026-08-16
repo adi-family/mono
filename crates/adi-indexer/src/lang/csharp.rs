@@ -3,7 +3,8 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+    declaration, node_location, node_text, signature_before, tree_walking_analyzer,
+    WithDocCommentOpt,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -67,15 +68,10 @@ fn extract_visibility(node: Node, source: &str) -> Visibility {
     Visibility::Private
 }
 
+/// A brace opens a block body; a fat arrow opens an expression-bodied member. The brace is tried
+/// first, so `int P { get => f; }` cuts at the property's block rather than the accessor's arrow.
 fn extract_method_signature(node: Node, source: &str) -> String {
-    let text = node_text(node, source);
-    if let Some(brace_pos) = text.find('{') {
-        text[..brace_pos].trim().to_string()
-    } else if let Some(arrow_pos) = text.find("=>") {
-        text[..arrow_pos].trim().to_string()
-    } else {
-        text.lines().next().unwrap_or("").to_string()
-    }
+    signature_before(node, source, &["{", "=>"])
 }
 
 fn extract_csharp_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {

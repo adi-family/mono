@@ -3,7 +3,8 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+    declaration, node_location, node_text, signature_before, tree_walking_analyzer,
+    WithDocCommentOpt,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -67,13 +68,10 @@ fn extract_visibility(node: Node, source: &str) -> Visibility {
     Visibility::Internal // package-private
 }
 
+/// Only a brace: an abstract or interface method has no body to cut off, and falls back to its
+/// declaration line — semicolon included.
 fn extract_method_signature(node: Node, source: &str) -> String {
-    let text = node_text(node, source);
-    if let Some(brace_pos) = text.find('{') {
-        text[..brace_pos].trim().to_string()
-    } else {
-        text.lines().next().unwrap_or("").to_string()
-    }
+    signature_before(node, source, &["{"])
 }
 
 fn extract_java_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {

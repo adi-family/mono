@@ -76,18 +76,6 @@ impl AnalyzerBase {
     }
 
     #[must_use]
-    pub fn extract_function_signature(&self, node: Node, source: &str) -> String {
-        let text = self.node_text(node, source);
-        if let Some(brace_pos) = text.find('{') {
-            text[..brace_pos].trim().to_string()
-        } else if let Some(semi_pos) = text.find(';') {
-            text[..semi_pos].trim().to_string()
-        } else {
-            text.lines().next().unwrap_or("").to_string()
-        }
-    }
-
-    #[must_use]
     pub fn is_node_or_descendant(&self, ancestor: Node, target: Node) -> bool {
         Self::is_node_or_descendant_helper(ancestor, target)
     }

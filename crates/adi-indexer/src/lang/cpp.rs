@@ -2,7 +2,7 @@
 
 use tree_sitter::{Node, Tree};
 
-use super::common::node_text;
+use super::common::{node_text, signature_before};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{
     Location, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility,
@@ -301,20 +301,11 @@ fn extract_function_name(declarator: Node, source: &str) -> Option<String> {
     None
 }
 
+/// A brace opens a definition; a semicolon ends a prototype. Only `function_definition` nodes
+/// reach this, so in practice the brace always hits — this used to fall back to the first three
+/// lines joined, which no well-formed input ever reached.
 fn extract_signature(node: Node, source: &str) -> String {
-    let text = node_text(node, source);
-    if let Some(brace) = text.find('{') {
-        text[..brace].trim().to_string()
-    } else if let Some(semi) = text.find(';') {
-        text[..semi].trim().to_string()
-    } else {
-        text.lines()
-            .take(3)
-            .collect::<Vec<_>>()
-            .join(" ")
-            .trim()
-            .to_string()
-    }
+    signature_before(node, source, &["{", ";"])
 }
 
 fn collect_cpp_references(node: Node, source: &str, refs: &mut Vec<InternalReference>) {
