@@ -58,7 +58,12 @@ const PRAGMAS: &str = "\
 /// `goals_by_id` is what lets a goal be found by its id alone rather than by the full key — the id
 /// is quoted back to a run in every nudge, and typed by a shell that may not know which
 /// conversation it is standing in. Unique because that lookup has to be unambiguous.
-const SCHEMA: &str = "\
+///
+/// `attachments` is the one table that cascades off nothing, and cannot: an image is uploaded
+/// before the message that carries it exists, so a newly stored row has no session to point at. It
+/// is cleaned up by [`attachments`](super::attachments) instead — claimed when a turn records it,
+/// swept when nobody ever did.
+pub(super) const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS sessions (
     agent         TEXT    NOT NULL,
     id            TEXT    NOT NULL,
@@ -91,6 +96,7 @@ CREATE TABLE IF NOT EXISTS queue (
     session TEXT    NOT NULL,
     seq     INTEGER NOT NULL,
     message TEXT    NOT NULL,
+    images  TEXT,
     PRIMARY KEY (agent, session, seq),
     FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
 );
@@ -124,6 +130,16 @@ CREATE TABLE IF NOT EXISTS goals (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS goals_by_id ON goals (id);
 CREATE INDEX IF NOT EXISTS goals_open ON goals (created_at, id) WHERE state = 'open';
+CREATE TABLE IF NOT EXISTS attachments (
+    id         TEXT    NOT NULL PRIMARY KEY,
+    agent      TEXT    NOT NULL DEFAULT '',
+    session    TEXT    NOT NULL DEFAULT '',
+    name       TEXT    NOT NULL DEFAULT '',
+    media_type TEXT    NOT NULL DEFAULT '',
+    size       INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS attachments_of_session ON attachments (agent, session);
 ";
 
 /// Columns added to a table that already exists, applied after [`SCHEMA`].
@@ -138,6 +154,9 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE sessions ADD COLUMN outcome TEXT",
     "ALTER TABLE sessions ADD COLUMN tool_help TEXT",
     "ALTER TABLE sessions ADD COLUMN runner TEXT",
+    // A queued message can carry images now. JSON rather than a join table: the queue is read whole
+    // or not at all, and a message waiting in line is not something anything queries *by* image.
+    "ALTER TABLE queue ADD COLUMN images TEXT",
 ];
 
 // One connection per thread per database.

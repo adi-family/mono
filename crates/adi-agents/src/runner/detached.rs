@@ -33,7 +33,8 @@ use crate::error::{Error, Result};
 use crate::progress::{self, MAX_PARSE_BYTES, TurnContent};
 use crate::runner::prompt::{compose, own_prompt, with_knowledge, with_tool_help, with_workspace};
 use crate::runner::{
-    EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, StateWriter, Stopped,
+    EventBatch, EventKinds, ImageDelivery, RunEvent, RunSpec, Runner, RunnerKind, Session,
+    StateWriter, Stopped,
 };
 
 /// How often a stopping run is re-probed while its grace period runs down. Short enough that a
@@ -328,6 +329,24 @@ impl Runner for DetachedRunner {
             self.backend,
             Backend::HarnessClaudeSdk | Backend::HarnessAdi
         )
+    }
+
+    /// The adi loop puts the bytes in the request body, because it is the one engine here whose
+    /// request body this crate writes. The other three are handed their message as a command-line
+    /// argument (`claude --print -- <text>`, `codex exec <text>`) where a picture has no
+    /// representation — so they are told **where the file is** instead, and open it themselves.
+    ///
+    /// That works because all three are coding agents with a file-reading tool that decodes images:
+    /// what arrives is the same picture, one tool call later. See
+    /// [`ImageDelivery`](crate::runner::ImageDelivery) for what each costs.
+    fn image_delivery(&self) -> ImageDelivery {
+        match self.backend {
+            Backend::HarnessAdi => ImageDelivery::Inline,
+            Backend::ProcessClaude | Backend::ProcessCodex | Backend::HarnessClaudeSdk => {
+                ImageDelivery::Path
+            }
+            _ => ImageDelivery::None,
+        }
     }
 
     fn emits(&self) -> EventKinds {

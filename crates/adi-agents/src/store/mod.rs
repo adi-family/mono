@@ -30,6 +30,7 @@
 //! undeletable, because the listing looked under the new executor's directory while the files sat
 //! under the old one's. As a column it is a label on a row that stays exactly where it was filed.
 
+mod attachments;
 mod db;
 mod goals;
 mod queue;
@@ -44,14 +45,16 @@ use crate::Backend;
 use crate::error::{Error, Result};
 use crate::progress::TurnContent;
 
+pub use attachments::{Attachment, MAX_BYTES as MAX_ATTACHMENT_BYTES, MEDIA_TYPES, is_supported};
 pub use db::now_ms;
 pub use goals::{Closed as GoalClosed, Goal, GoalState, SetBy};
+pub use queue::QueuedMessage;
 pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
 pub use record::{RunOutcome, SessionRecord};
 pub use session::SessionRef;
-pub use transcript::{Turn, assistant_turn, user_turn};
+pub use transcript::{Turn, assistant_turn, user_turn, user_turn_with};
 
 /// The role a question carries — what the agent layer reads to tell an unanswered turn from a
 /// settled one before it commits an answer behind it.
@@ -404,9 +407,13 @@ impl SessionStore {
     /// # Errors
     /// Returns database errors. The file sweep is best-effort per file.
     pub fn delete(&self, agent: &str, id: &str) -> Result<bool> {
+        let conn = self.conn()?;
+        // Its images first, while the rows that name them are still readable. They do *not* cascade:
+        // an attachment has no foreign key to a session, because it is stored before the session it
+        // ends up in exists (see [`attachments`]).
+        attachments::delete_for_session(&conn, &self.dir, agent, id);
         // The turns and the queue go with it: they cascade off this row.
-        let gone = self
-            .conn()?
+        let gone = conn
             .execute(
                 "DELETE FROM sessions WHERE agent = ?1 AND id = ?2",
                 [agent, id],
@@ -414,6 +421,63 @@ impl SessionStore {
             .map_err(|e| db::sql_err("delete a session from", e))?;
         remove_session_files(&self.agent_dir(agent), id);
         Ok(gone > 0)
+    }
+
+    // ---- attachments ---------------------------------------------------------------
+
+    /// Store an image and hand back the reference a message carries it by.
+    ///
+    /// Unclaimed until a turn records it: what is uploaded from a composer may never be sent, so the
+    /// same call sweeps whatever was abandoned a day ago. That is the only thing that ever creates
+    /// an orphan, so it is the cheapest place to notice one.
+    ///
+    /// # Errors
+    /// Returns [`Error::Arguments`] for an unsupported media type or an oversized body, plus I/O and
+    /// database errors.
+    pub fn put_attachment(
+        &self,
+        name: &str,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<Attachment> {
+        let conn = self.conn()?;
+        attachments::sweep_unclaimed(&conn, &self.dir, db::now_ms());
+        attachments::put(&conn, &self.dir, name, media_type, bytes)
+    }
+
+    /// One attachment's record, or `None` when there is no such id.
+    #[must_use]
+    pub fn attachment(&self, id: &str) -> Option<Attachment> {
+        self.conn().ok().and_then(|conn| attachments::get(&conn, id))
+    }
+
+    /// One attachment's bytes, straight off disk.
+    ///
+    /// # Errors
+    /// Returns the I/O error — including a file that is no longer there, which is what a swept or
+    /// half-deleted attachment looks like.
+    pub fn attachment_bytes(&self, attachment: &Attachment) -> Result<Vec<u8>> {
+        Ok(std::fs::read(attachments::path(&self.dir, attachment))?)
+    }
+
+    /// Where one attachment's file is, as an absolute path.
+    ///
+    /// For the engines that cannot be handed a picture in a request body and are told where to find
+    /// it instead. The file is real and stays put for as long as the conversation does, which is
+    /// what makes naming it in a prompt honest rather than a race.
+    #[must_use]
+    pub fn attachment_path(&self, attachment: &Attachment) -> PathBuf {
+        attachments::path(&self.dir, attachment)
+    }
+
+    /// The records for these ids, in the order asked, dropping any that are gone — how a request
+    /// carrying attachment ids is turned into the attachments a turn records.
+    #[must_use]
+    pub fn resolve_attachments(&self, ids: &[String]) -> Vec<Attachment> {
+        self.conn()
+            .ok()
+            .map(|conn| attachments::resolve(&conn, ids))
+            .unwrap_or_default()
     }
 
     /// Keep only the newest [`MAX_SESSIONS`] sessions of `agent`, deleting older ones.
@@ -447,9 +511,15 @@ impl SessionStore {
     ///
     /// # Errors
     /// Returns database errors — a message that was not written down was not queued.
-    pub fn enqueue(&self, agent: &str, id: &str, message: &str) -> Result<usize> {
+    pub fn enqueue(
+        &self,
+        agent: &str,
+        id: &str,
+        message: &str,
+        images: &[Attachment],
+    ) -> Result<usize> {
         let conn = self.conn()?;
-        queue::enqueue(&conn, agent, id, message)
+        queue::enqueue(&conn, agent, id, message, images)
     }
 
     /// Take the head of the queue, or `None` when nothing is waiting. The removal is committed
@@ -457,7 +527,7 @@ impl SessionStore {
     ///
     /// # Errors
     /// Returns database errors, with the queue left as it was.
-    pub fn dequeue(&self, agent: &str, id: &str) -> Result<Option<String>> {
+    pub fn dequeue(&self, agent: &str, id: &str) -> Result<Option<QueuedMessage>> {
         let conn = self.conn()?;
         queue::dequeue(&conn, agent, id)
     }
@@ -472,7 +542,7 @@ impl SessionStore {
     /// # Errors
     /// Returns database errors and [`Error::NotFound`] for a session deleted mid-turn. The message
     /// stays queued in either case.
-    pub fn take_queued_as_turn(&self, agent: &str, id: &str) -> Result<Option<String>> {
+    pub fn take_queued_as_turn(&self, agent: &str, id: &str) -> Result<Option<QueuedMessage>> {
         let conn = self.conn()?;
         queue::take_as_turn(&conn, agent, id)
     }
@@ -511,7 +581,7 @@ impl SessionStore {
 
     /// The messages waiting, oldest first — the order they will be asked in.
     #[must_use]
-    pub fn queued(&self, agent: &str, id: &str) -> Vec<String> {
+    pub fn queued(&self, agent: &str, id: &str) -> Vec<QueuedMessage> {
         self.conn()
             .ok()
             .map(|conn| queue::load(&conn, agent, id))
@@ -775,6 +845,12 @@ mod tests {
     use super::*;
     use crate::runner::Session;
 
+    /// Just what was typed. Most cases here are about the order of the line rather than about what
+    /// rode along with a message, and comparing whole [`QueuedMessage`]s would say so in every one.
+    fn texts(queued: Vec<QueuedMessage>) -> Vec<String> {
+        queued.into_iter().map(|m| m.text).collect()
+    }
+
     fn scratch(tag: &str) -> SessionStore {
         let dir = std::env::temp_dir().join(format!(
             "adi-store-{tag}-{}-{:?}",
@@ -1029,7 +1105,7 @@ mod tests {
 
         std::fs::write(record::log_path(&dir, &id), "the engine spooling").unwrap();
         std::fs::write(dir.join(format!("{id}.invented-later")), "a runner's own").unwrap();
-        store.enqueue("talker", &id, "waiting").expect("enqueue");
+        store.enqueue("talker", &id, "waiting", &[]).expect("enqueue");
         store.set_hidden("talker", &id, true).expect("hide");
         store
             .set_runner_state("talker", &id, serde_json::json!({ "pid": 4711 }))
@@ -1068,7 +1144,7 @@ mod tests {
             std::fs::write(dir.join(format!("{id}.invented-later")), "{}\n").unwrap();
             store.append_turn("chat", id, user_turn("said")).expect("append");
         }
-        store.enqueue("chat", &doomed.id, "waiting").expect("enqueue");
+        store.enqueue("chat", &doomed.id, "waiting", &[]).expect("enqueue");
 
         assert!(store.delete("chat", &doomed.id).expect("delete"));
         for path in [
@@ -1153,32 +1229,32 @@ mod tests {
         assert_eq!(store.queue_len("chat", &a.id), 0);
         assert!(store.dequeue("chat", &a.id).expect("dequeue").is_none());
 
-        assert_eq!(store.enqueue("chat", &a.id, "one").expect("enqueue"), 1);
-        assert_eq!(store.enqueue("chat", &a.id, "two").expect("enqueue"), 2);
-        assert_eq!(store.enqueue("chat", &b.id, "elsewhere").expect("enqueue"), 1);
+        assert_eq!(store.enqueue("chat", &a.id, "one", &[]).expect("enqueue"), 1);
+        assert_eq!(store.enqueue("chat", &a.id, "two", &[]).expect("enqueue"), 2);
+        assert_eq!(store.enqueue("chat", &b.id, "elsewhere", &[]).expect("enqueue"), 1);
         assert_eq!(store.queue_len("chat", &a.id), 2);
-        assert_eq!(store.queued("chat", &a.id), ["one", "two"]);
+        assert_eq!(texts(store.queued("chat", &a.id)), ["one", "two"]);
         assert_eq!(
-            store.queued("chat", &b.id),
+            texts(store.queued("chat", &b.id)),
             ["elsewhere"],
             "one session's queue is not another's",
         );
 
         assert_eq!(
-            store.dequeue("chat", &a.id).expect("dequeue").as_deref(),
+            store.dequeue("chat", &a.id).expect("dequeue").map(|m| m.text).as_deref(),
             Some("one"),
         );
-        assert_eq!(store.queued("chat", &a.id), ["two"]);
+        assert_eq!(texts(store.queued("chat", &a.id)), ["two"]);
 
-        assert_eq!(store.enqueue("chat", &a.id, "three").expect("enqueue"), 2);
+        assert_eq!(store.enqueue("chat", &a.id, "three", &[]).expect("enqueue"), 2);
         assert!(store.unqueue("chat", &a.id, 0).expect("unqueue"));
-        assert_eq!(store.queued("chat", &a.id), ["three"]);
+        assert_eq!(texts(store.queued("chat", &a.id)), ["three"]);
         assert!(!store.unqueue("chat", &a.id, 9).expect("past the end"));
 
         store.clear_queue("chat", &a.id).expect("clear");
         assert_eq!(store.queue_len("chat", &a.id), 0);
         assert_eq!(
-            store.queued("chat", &b.id),
+            texts(store.queued("chat", &b.id)),
             ["elsewhere"],
             "clearing one queue leaves the other",
         );
@@ -1205,12 +1281,13 @@ mod tests {
             "nothing waiting is not an error",
         );
 
-        store.enqueue("chat", id, "also handle CRLF").expect("enqueue");
-        store.enqueue("chat", id, "and add a test").expect("enqueue");
+        store.enqueue("chat", id, "also handle CRLF", &[]).expect("enqueue");
+        store.enqueue("chat", id, "and add a test", &[]).expect("enqueue");
         assert_eq!(
             store
                 .take_queued_as_turn("chat", id)
                 .expect("take")
+                .map(|m| m.text)
                 .as_deref(),
             Some("also handle CRLF"),
         );
@@ -1223,7 +1300,7 @@ mod tests {
         );
         assert!(turns.iter().all(|t| t.role == "user" && !t.queued));
         assert_eq!(
-            store.queued("chat", id),
+            texts(store.queued("chat", id)),
             ["and add a test"],
             "only the head was taken; the rest is still waiting",
         );
@@ -1261,8 +1338,8 @@ mod tests {
             }],
             metrics: None,
         };
-        store.enqueue("chat", id, "and restart it").expect("enqueue");
-        store.enqueue("chat", id, "then tell me").expect("enqueue");
+        store.enqueue("chat", id, "and restart it", &[]).expect("enqueue");
+        store.enqueue("chat", id, "then tell me", &[]).expect("enqueue");
 
         let view = store.transcript("chat", id, Some(live.clone()), true);
         assert_eq!(view.len(), 4);
@@ -1320,8 +1397,8 @@ mod tests {
             store.sessions_with_queue("chat").is_empty(),
             "no queues anywhere is the common answer, and it costs one query",
         );
-        store.enqueue("chat", &busy.id, "one").expect("enqueue");
-        store.enqueue("chat", &busy.id, "two").expect("enqueue");
+        store.enqueue("chat", &busy.id, "one", &[]).expect("enqueue");
+        store.enqueue("chat", &busy.id, "two", &[]).expect("enqueue");
         assert_eq!(
             store.sessions_with_queue("chat"),
             std::collections::HashSet::from([busy.id.clone()]),

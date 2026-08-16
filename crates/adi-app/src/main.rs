@@ -373,6 +373,15 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
         return live::serve(stream, &req, app).await;
     }
 
+    // An image somebody attached to a message, served back to the page drawing the transcript. It
+    // is handled here rather than in the JSON router because it is the one `/api` route whose answer
+    // is bytes: the router's `Response` is a status and a JSON string by construction.
+    if req.method == "GET"
+        && let Some(id) = req.route_path().strip_prefix("/api/agents/attachment/")
+    {
+        return serve_attachment(&mut stream, &app.agents, id).await;
+    }
+
     // Any GET outside `/api` is a webapp asset, streamed straight back from memory or disk.
     // Inside `/api` an unknown path is a 404 from the router, not the app shell.
     if req.method == "GET" && !req.route_path().starts_with("/api") {
@@ -676,6 +685,16 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/agents/runs/all") => handlers::all_agent_runs(agents),
         ("POST", "/api/agents/run/peek") => handlers::peek_run(agents, &req.body),
         ("POST", "/api/agents/run/reply") => handlers::reply_run(agents, &req.body),
+        // An image on its way into a message. Raw bytes with their type in the header, like the
+        // dictation clip above — the page already holds both, and JSON would cost a base64 third.
+        // The bytes are read back out at `GET /api/agents/attachment/<id>`, which is not routed
+        // here: it answers with bytes rather than JSON, so it is handled before this dispatch.
+        ("POST", "/api/agents/attachment") => handlers::store_attachment(
+            agents,
+            req.header("content-type").unwrap_or_default(),
+            req.header("x-adi-filename").unwrap_or_default(),
+            &req.body,
+        ),
         // Settle the question a conversation stopped to ask. Distinct from a reply because it
         // names the ask it answers, so a card left open in another tab cannot answer the question
         // that replaced it.
@@ -907,6 +926,22 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
         Ok(_) => handlers::secrets(secrets),
         Err(e) => Response::from(&e),
     }
+}
+
+/// Serve one attached image's bytes, or a 404 when the id names nothing.
+///
+/// Cached hard: an attachment is immutable and its id is minted from random bytes, so the page that
+/// draws a chat every second must not re-fetch every screenshot in it. The id changing *is* the
+/// invalidation.
+async fn serve_attachment(
+    stream: &mut TcpStream,
+    agents: &Agents,
+    id: &str,
+) -> anyhow::Result<()> {
+    let Some((media_type, bytes)) = handlers::attachment_bytes(agents, id) else {
+        return http::write_json(stream, 404, r#"{"ok":false,"error":"no such attachment"}"#).await;
+    };
+    http::write_cached(stream, &media_type, &bytes).await
 }
 
 /// Serve a webapp asset. With a disk override ([`DIST_ENV`]) set, files come from that

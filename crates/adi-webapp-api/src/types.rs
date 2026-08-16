@@ -873,6 +873,11 @@ pub struct AgentDto {
     /// project's is. The client uses it to offer "Run anyway" instead of walking into a 429.
     #[serde(default)]
     pub at_run_limit: bool,
+    /// What this agent's backend can do. Carried by the *listing* and not only by an open run,
+    /// because some of it has to be known before a run exists: whether the composer that starts a
+    /// conversation offers to attach an image is decided while the box is still empty.
+    #[serde(default = "default_caps")]
+    pub caps: AgentCapabilities,
 }
 
 /// `GET /api/agents` — every registered agent definition, sorted by name. Each mutation endpoint
@@ -1002,6 +1007,14 @@ pub struct RunAgent {
     pub name: String,
     #[serde(default)]
     pub message: String,
+    /// Images to attach to the opening message, by the ids `POST /api/agents/attachment` minted.
+    ///
+    /// Ids rather than bytes because the bytes are already on the server: a composer uploads a
+    /// screenshot the moment it is pasted, so that a slow upload happens while the message is still
+    /// being typed rather than after Send is pressed. An id that no longer resolves is one fewer
+    /// image, not a refused launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
     /// Where *this* run starts, overriding the directory its manifest implies. For a caller that
     /// points one agent definition at a different target each launch — a recon pass, a per-repo
     /// reviewer — where no stored field can hold the answer. Absent/blank leaves the manifest and
@@ -1040,6 +1053,30 @@ pub struct ReplyToRun {
     pub name: String,
     pub run_id: String,
     pub message: String,
+    /// Images attached to this reply, by the ids `POST /api/agents/attachment` minted — see
+    /// [`RunAgent::attachments`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
+}
+
+/// One image attached to a message: enough to draw it, not the bytes themselves.
+///
+/// The bytes are fetched once from `GET /api/agents/attachment/<id>`. A transcript is polled every
+/// second, and one that inlined its images would re-send every screenshot in the conversation on
+/// every tick.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentAttachment {
+    /// What to fetch the bytes by, and what to name it in a send.
+    pub id: String,
+    /// The original filename, for the reader — a pasted screenshot is named by whoever pasted it.
+    #[serde(default)]
+    pub name: String,
+    /// `image/png`, `image/jpeg`, `image/webp` or `image/gif`.
+    #[serde(default)]
+    pub media_type: String,
+    /// Bytes on disk, so a client can show the size without asking for the file.
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// `POST /api/agents/run/answer` request — settle the question a conversation is waiting on, with
@@ -1218,6 +1255,10 @@ pub struct AgentTurn {
     /// queue, which is what `/api/agents/run/unqueue` takes.
     #[serde(default)]
     pub queued: bool,
+    /// The images this message carries, in the order they were attached. Only ever on a user turn —
+    /// pictures travel from the person to the model, never back.
+    #[serde(default)]
+    pub images: Vec<AgentAttachment>,
     /// The assistant turn's activity — tool calls and thinking — parsed from the engine's output.
     /// Empty for user turns and engines that emit no structured progress.
     #[serde(default)]
@@ -1295,6 +1336,11 @@ pub struct AgentCapabilities {
     /// has nowhere to deliver an answer into.
     #[serde(default)]
     pub asks: bool,
+    /// Whether a message to this backend may carry images — what decides whether the composer offers
+    /// to attach one at all. False for engines handed their message as a command-line argument,
+    /// where a picture has no representation.
+    #[serde(default)]
+    pub images: bool,
 }
 
 /// One entry in a headless agent's run history: an independent run spawned from the agent's settings.
@@ -1400,6 +1446,7 @@ fn default_caps() -> AgentCapabilities {
         thinking: false,
         metrics: false,
         asks: false,
+        images: false,
     }
 }
 

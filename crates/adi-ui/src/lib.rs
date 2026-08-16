@@ -34,6 +34,7 @@
 #![allow(non_snake_case)]
 
 mod ask;
+mod attach;
 mod badge;
 mod button;
 mod app;
@@ -64,10 +65,11 @@ mod tree;
 mod voice;
 
 pub use ask::{Ask, AskOption, AskQuestion};
+pub use attach::{AttachState, Attached, Attaching, files_of};
 pub use badge::{Badge, BadgeTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use app::{AppItem, AppState};
-pub use chat::{Chat, Queued, Role, ToolCall, ToolState, Turn};
+pub use chat::{Chat, Image, Queued, Role, ToolCall, ToolState, Turn};
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
 pub use faq::{Faq, Qna};

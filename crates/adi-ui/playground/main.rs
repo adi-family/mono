@@ -19,7 +19,8 @@
 use std::time::Duration;
 
 use adi_ui::{
-    AppItem, AppState, Ask, AskOption, AskQuestion, Badge, BadgeTone, Chat, Button, ButtonSize,
+    AppItem, AppState, Ask, AskOption, AskQuestion, AttachState, Attached, Attaching, Badge,
+    BadgeTone, Chat, Button, ButtonSize,
     ButtonVariant, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
     Form, Hint, Input, InputWidth, Kbd, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
@@ -1017,6 +1018,7 @@ fn ChatDemo() -> impl IntoView {
         Turn::Said {
             role: Role::User,
             body: "Walk the linear board and tell me what is actually blocked.".into(),
+            images: Vec::new(),
         },
         Turn::Did(vec![
             ToolCall::new("Bash")
@@ -1037,6 +1039,7 @@ fn ChatDemo() -> impl IntoView {
 
 The first two                    are the same bug. I will read the pairing path before saying more."
                 .into(),
+            images: Vec::new(),
         },
         Turn::Did(vec![
             ToolCall::new("Grep")
@@ -1058,6 +1061,7 @@ The first two                    are the same bug. I will read the pairing path 
         Turn::Said {
             role: Role::User,
             body: "Stopped that — just the pairing tests.".into(),
+            images: Vec::new(),
         },
         Turn::Did(vec![
             ToolCall::new("Bash")
@@ -1077,6 +1081,30 @@ The first two                    are the same bug. I will read the pairing path 
     let answering = RwSignal::new(true);
     // One message already said but not yet asked, so the hollow bubble has something to be.
     let queued = RwSignal::new(true);
+    // The attachment tray, with no server behind it: a file picked here goes straight to Ready on
+    // its own object URL. That is enough to develop every part of this that is not the upload —
+    // the paste, the drop, the picker, the ✕, and a send button that lights up for a message with
+    // a picture and no words.
+    let files = RwSignal::new(Vec::<Attached>::new());
+    let attach = Attaching {
+        files,
+        on_files: Callback::new(move |picked: Vec<web_sys::File>| {
+            for (n, file) in picked.into_iter().enumerate() {
+                let url = web_sys::Url::create_object_url_with_blob(file.as_ref())
+                    .unwrap_or_default();
+                files.update(|list| {
+                    list.push(Attached {
+                        key: format!("demo-{}-{n}", list.len()),
+                        name: file.name(),
+                        preview: url.clone(),
+                        state: AttachState::Ready(url),
+                    });
+                });
+            }
+        }),
+        can_attach: Signal::derive(|| true),
+        refusal: Signal::derive(String::new),
+    };
 
     view! {
         <div class="flex flex-col gap-3">
@@ -1085,9 +1113,11 @@ The first two                    are the same bug. I will read the pairing path 
             <Composer
                 value=draft
                 busy=false
+                attach=attach
                 on_send=Callback::new(move |text: String| {
                     sent.set(text);
                     draft.set(String::new());
+                    files.set(Vec::new());
                 })
                 stoppable=answering
                 on_stop=Callback::new(move |()| answering.set(false))

@@ -27,7 +27,31 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::error::Result;
 
+use super::attachments::Attachment;
 use super::db::sql_err;
+
+/// A message waiting its turn: what was typed, and whatever was attached to it.
+///
+/// A pair rather than a bare string because the images have to wait *with* the message. Queue the
+/// text alone and a screenshot pasted alongside it either arrives on the wrong turn or does not
+/// arrive at all — and the person who attached it has already watched it appear in their own
+/// bubble.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct QueuedMessage {
+    pub text: String,
+    pub images: Vec<Attachment>,
+}
+
+impl QueuedMessage {
+    /// A message with nothing attached — what almost every queued message is.
+    #[must_use]
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            images: Vec::new(),
+        }
+    }
+}
 
 /// Put `message` at the back of the line, returning its **1-based** place in it.
 ///
@@ -37,7 +61,13 @@ use super::db::sql_err;
 /// # Errors
 /// Returns the database error. A message that could not be written down was not queued, and the
 /// sender has to hear that rather than wait for an answer that will never come.
-pub(super) fn enqueue(conn: &Connection, agent: &str, id: &str, message: &str) -> Result<usize> {
+pub(super) fn enqueue(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+    message: &str,
+    images: &[Attachment],
+) -> Result<usize> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("queue a message in", e))?;
@@ -49,8 +79,8 @@ pub(super) fn enqueue(conn: &Connection, agent: &str, id: &str, message: &str) -
         )
         .map_err(|e| sql_err("queue a message in", e))?;
     tx.execute(
-        "INSERT INTO queue (agent, session, seq, message) VALUES (?1, ?2, ?3, ?4)",
-        rusqlite::params![agent, id, seq, message],
+        "INSERT INTO queue (agent, session, seq, message, images) VALUES (?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![agent, id, seq, message, encode(images)],
     )
     .map_err(|e| sql_err("queue a message in", e))?;
     let place: i64 = tx
@@ -72,7 +102,11 @@ pub(super) fn enqueue(conn: &Connection, agent: &str, id: &str, message: &str) -
 /// # Errors
 /// Returns the database error, with the queue left as it was — the caller must not start a turn
 /// whose removal was not recorded, or the same thing is asked twice.
-pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option<String>> {
+pub(super) fn dequeue(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+) -> Result<Option<QueuedMessage>> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("take from the queue of", e))?;
@@ -96,14 +130,23 @@ pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option
 /// Returns the database error, and [`Error::NotFound`](crate::error::Error::NotFound) when the
 /// session has been deleted out from under the turn. Nothing is committed in either case, so the
 /// message stays where it was.
-pub(super) fn take_as_turn(conn: &Connection, agent: &str, id: &str) -> Result<Option<String>> {
+pub(super) fn take_as_turn(
+    conn: &Connection,
+    agent: &str,
+    id: &str,
+) -> Result<Option<QueuedMessage>> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("take from the queue of", e))?;
     let Some(message) = take_head(&tx, agent, id)? else {
         return Ok(None);
     };
-    super::transcript::insert(&tx, agent, id, super::transcript::user_turn(&message))?;
+    super::transcript::insert(
+        &tx,
+        agent,
+        id,
+        super::transcript::user_turn_with(&message.text, message.images.clone()),
+    )?;
     tx.commit()
         .map_err(|e| sql_err("take from the queue of", e))?;
     Ok(Some(message))
@@ -111,17 +154,17 @@ pub(super) fn take_as_turn(conn: &Connection, agent: &str, id: &str) -> Result<O
 
 /// Remove the oldest message and hand it back, inside a transaction the caller owns and commits —
 /// what both ways of taking one are built from. `None` when the line is empty.
-fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<String>> {
-    let head: Option<(i64, String)> = tx
+fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<QueuedMessage>> {
+    let head: Option<(i64, String, Option<String>)> = tx
         .query_row(
-            "SELECT seq, message FROM queue WHERE agent = ?1 AND session = ?2
+            "SELECT seq, message, images FROM queue WHERE agent = ?1 AND session = ?2
              ORDER BY seq LIMIT 1",
             [agent, id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()
         .map_err(|e| sql_err("take from the queue of", e))?;
-    let Some((seq, message)) = head else {
+    let Some((seq, text, images)) = head else {
         return Ok(None);
     };
     tx.execute(
@@ -129,7 +172,10 @@ fn take_head(tx: &Connection, agent: &str, id: &str) -> Result<Option<String>> {
         rusqlite::params![agent, id, seq],
     )
     .map_err(|e| sql_err("take from the queue of", e))?;
-    Ok(Some(message))
+    Ok(Some(QueuedMessage {
+        text,
+        images: decode(images.as_deref()),
+    }))
 }
 
 /// How many messages are waiting.
@@ -144,16 +190,35 @@ pub(super) fn len(conn: &Connection, agent: &str, id: &str) -> usize {
 }
 
 /// The messages waiting their turn, oldest first.
-pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<String> {
+pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<QueuedMessage> {
     let Ok(mut stmt) = conn.prepare_cached(
-        "SELECT message FROM queue WHERE agent = ?1 AND session = ?2 ORDER BY seq",
+        "SELECT message, images FROM queue WHERE agent = ?1 AND session = ?2 ORDER BY seq",
     ) else {
         return Vec::new();
     };
-    stmt.query_map([agent, id], |row| row.get::<_, String>(0))
-        .map(|rows| rows.flatten().collect())
+    stmt.query_map([agent, id], |row| {
+        Ok(QueuedMessage {
+            text: row.get(0)?,
+            images: decode(row.get::<_, Option<String>>(1)?.as_deref()),
+        })
+    })
+    .map(|rows| rows.flatten().collect())
+    .unwrap_or_default()
+}
+
+/// The attachments column, as it is written. `NULL` for a message with none — the column was added
+/// to a table that already had rows in it, and every one of those predates images.
+fn encode(images: &[Attachment]) -> Option<String> {
+    (!images.is_empty()).then(|| serde_json::to_string(images).unwrap_or_default())
+}
+
+/// The attachments column, as it is read. Unparseable is the same as absent: the queue's job is to
+/// deliver the message, and a row whose images cannot be decoded still has words worth asking.
+fn decode(json: Option<&str>) -> Vec<Attachment> {
+    json.and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default()
 }
+
 
 /// Drop the message at `index` (0-based, in the order they will be asked), for something you have
 /// thought better of. Returns whether there was one there to drop — an index past the end is a

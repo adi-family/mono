@@ -4,15 +4,16 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-19 structs · 21 enums across 22 files.
+22 structs · 22 enums across 23 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `AppState`
 - [`src/ask.rs`](#srcaskrs) — `AskQuestion`, `AskOption`, `Picked`
+- [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `Attaching`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
-- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Turn`
+- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Image`, `Turn`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/faq.rs`](#srcfaqrs) — `Qna`
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
@@ -88,6 +89,51 @@ What one question has been answered with so far.
 struct Picked {
     chosen: RwSignal<BTreeSet<usize>>,
     typed: RwSignal<String>,
+}
+```
+
+---
+
+## `src/attach.rs`
+
+### enum `AttachState`
+
+Where one attachment has got to.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachState {
+    Uploading,
+    Ready(String),
+    Failed(String),
+}
+```
+
+### struct `Attached`
+
+One image in the composer's tray.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Attached {
+    pub key: String,
+    pub name: String,
+    pub preview: String,
+    pub state: AttachState,
+}
+```
+
+### struct `Attaching`
+
+Everything the composer needs in order to take images, in one prop.
+
+```rust
+#[derive(Debug, Clone, Copy)]
+pub struct Attaching {
+    pub files: RwSignal<Vec<Attached>>,
+    pub on_files: Callback<Vec<web_sys::File>>,
+    pub can_attach: Signal<bool>,
+    pub refusal: Signal<String>,
 }
 ```
 
@@ -190,6 +236,18 @@ pub struct ToolCall {
 }
 ```
 
+### struct `Image`
+
+A picture that was part of a message: where to fetch it, and what to call it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Image {
+    pub url: String,
+    pub name: String,
+}
+```
+
 ### enum `Turn`
 
 One entry in a transcript.
@@ -200,6 +258,7 @@ pub enum Turn {
     Said {
         role: Role,
         body: String,
+        images: Vec<Image>,
     },
     Did(Vec<ToolCall>),
 }

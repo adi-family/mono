@@ -9,7 +9,8 @@ use adi_agents::StoredAgent;
 use adi_agents::contains_json_null;
 
 use crate::types::{
-    AgentAsk, AgentBackendOption, AgentCapabilities, AgentChoice, AgentDto, AgentFormField,
+    AgentAsk, AgentAttachment, AgentBackendOption, AgentCapabilities, AgentChoice, AgentDto,
+    AgentFormField,
     AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek,
     AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo,
     AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
@@ -154,11 +155,7 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
         .filter(|d| !d.is_empty());
     // `force` is the human's "run it anyway" after a refusal — the only way past the concurrency
     // limit, and never something an automatic launch sends.
-    let launch = if req.force {
-        store.force_run_in(name, message, working_dir)
-    } else {
-        store.run_in(name, message, working_dir)
-    };
+    let launch = store.run_in_with(name, message, working_dir, req.force, &req.attachments);
     let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return Response::from(&e),
@@ -440,10 +437,73 @@ pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
         Err(e) => return Response::from(&e),
     };
     let run_id = req.run_id.trim();
-    if let Err(e) = store.reply(&agent.name, run_id, req.message.trim()) {
+    if let Err(e) = store.reply_with(&agent.name, run_id, req.message.trim(), &req.attachments) {
         return Response::from(&e);
     }
     conversation_snapshot(store, &agent, run_id)
+}
+
+/// `POST /api/agents/attachment` — store one image and answer with the reference a message carries
+/// it by.
+///
+/// The bytes arrive as the **raw body**, with their type in `Content-Type` and their name in
+/// `X-Adi-Filename` — the same shape dictation uses, and for the same reason: the page already holds
+/// bytes and a type, and wrapping them in JSON would cost a base64 third for nothing.
+///
+/// Uploading is deliberately separate from sending. A screenshot is pasted into the composer long
+/// before Send is pressed, so this is what lets the upload happen while the message is still being
+/// typed. What it stores belongs to nobody until a message actually carries it; an upload that is
+/// never sent is swept a day later.
+#[must_use]
+pub fn store_attachment(
+    store: &Agents,
+    media_type: &str,
+    filename: &str,
+    body: &[u8],
+) -> Response {
+    // The header arrives as `image/png` or `image/png; charset=…`; only the type is ours to keep.
+    let media_type = media_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_lowercase();
+    if !adi_agents::store::is_supported(&media_type) {
+        return error(
+            415,
+            &format!(
+                "“{media_type}” isn't an image type a message can carry — {} are",
+                adi_agents::store::MEDIA_TYPES.join(", ")
+            ),
+        );
+    }
+    if body.len() > adi_agents::store::MAX_ATTACHMENT_BYTES {
+        return error(
+            413,
+            &format!(
+                "that image is {} bytes, over the {}-byte limit",
+                body.len(),
+                adi_agents::store::MAX_ATTACHMENT_BYTES
+            ),
+        );
+    }
+    // A pasted screenshot arrives with no name of its own, and a name is only ever shown back to
+    // the person who attached it — so an unnamed one is called what it is rather than refused.
+    let name = clean(Some(filename.to_string())).unwrap_or_else(|| "image".to_string());
+    match store.store_image(&name, &media_type, body) {
+        Ok(stored) => ok_json(&agent_attachment(stored)),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `GET /api/agents/attachment/<id>` — one stored image's bytes, with its own content type.
+///
+/// Not a [`Response`], which is JSON by construction: this is the one agents route that answers with
+/// something that is not text. The server writes what this returns straight to the socket.
+#[must_use]
+pub fn attachment_bytes(store: &Agents, id: &str) -> Option<(String, Vec<u8>)> {
+    let (attachment, bytes) = store.image(id)?;
+    Some((attachment.media_type, bytes))
 }
 
 /// `POST /api/agents/run/unqueue` — drop one message from a conversation's queue before it is asked,
@@ -482,7 +542,14 @@ fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> R
         interactive: peek.interactive,
         run_id: run_id.to_string(),
         answerable: true,
-        caps: agent_caps(agent),
+        // The one capability asked of *this run* rather than of the agent's backend: a simulated
+        // conversation is a person in the model's seat and has nowhere to show a picture, however
+        // capable the engine behind the agent is. Deciding it from the backend would offer a
+        // paperclip that the send then refuses.
+        caps: AgentCapabilities {
+            images: store.run_takes_images(&agent.name, run_id),
+            ..agent_caps(agent)
+        },
         pending_question: store
             .pending_question(&agent.name, run_id)
             .as_ref()
@@ -825,6 +892,7 @@ fn agent_caps(agent: &StoredAgent) -> AgentCapabilities {
         // Asking is answering in reverse: a backend with no thread to continue has nowhere to
         // deliver an answer into, so there is nothing to derive separately.
         asks: c.answerable,
+        images: c.images,
     }
 }
 
@@ -877,8 +945,19 @@ fn agent_turn(t: adi_agents::Turn) -> AgentTurn {
         at: t.at,
         pending: t.pending,
         queued: t.queued,
+        images: t.images.into_iter().map(agent_attachment).collect(),
         steps: t.steps.into_iter().map(agent_step).collect(),
         metrics: t.metrics.map(agent_metrics),
+    }
+}
+
+/// Map a stored [`adi_agents::store::Attachment`] onto its wire shape.
+fn agent_attachment(a: adi_agents::store::Attachment) -> AgentAttachment {
+    AgentAttachment {
+        id: a.id,
+        name: a.name,
+        media_type: a.media_type,
+        size: a.size,
     }
 }
 
@@ -1156,6 +1235,7 @@ fn agent_dto(
     // Whether *this* agent is the one that would be refused: the global cap binds everybody, a
     // project cap only that project's agents.
     let at_run_limit = caps.blocks(agent.manifest.project.as_deref());
+    let backend_caps = agent_caps(&agent);
     let m = agent.manifest;
     AgentDto {
         name: agent.name,
@@ -1184,6 +1264,7 @@ fn agent_dto(
         runnable,
         running,
         at_run_limit,
+        caps: backend_caps,
     }
 }
 

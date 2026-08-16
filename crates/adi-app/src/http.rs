@@ -185,6 +185,36 @@ pub async fn write_response(
     Ok(())
 }
 
+/// Write a body that may be cached for a year — for content whose address *is* its version.
+///
+/// Every other answer this server writes carries `no-store`, which is right for state that is polled
+/// and can change under the reader. An attachment cannot: its id is minted from random bytes when
+/// the bytes are stored, and nothing ever writes different bytes under the same id. Without this the
+/// page redraws a chat every second and re-fetches every screenshot in it every time.
+///
+/// # Errors
+/// Fails if the socket write fails.
+pub async fn write_cached(
+    stream: &mut TcpStream,
+    content_type: &str,
+    body: &[u8],
+) -> anyhow::Result<()> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\n\
+         Content-Type: {content_type}\r\n\
+         Content-Length: {len}\r\n\
+         Cache-Control: private, max-age=31536000, immutable\r\n\
+         Connection: close\r\n\
+         \r\n",
+        len = body.len(),
+    );
+    stream.write_all(head.as_bytes()).await?;
+    stream.write_all(body).await?;
+    stream.flush().await?;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
 /// Write a JSON response with the given status.
 ///
 /// # Errors

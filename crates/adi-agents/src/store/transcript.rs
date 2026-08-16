@@ -34,6 +34,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::progress::{Step, TurnContent, TurnMetrics, close_open_calls};
 
+use super::attachments::Attachment;
 use super::db::{now_ms, sql_err};
 
 /// One message in a session's transcript.
@@ -57,6 +58,11 @@ pub struct Turn {
     /// Synthesized on read; it becomes a real transcript turn when its turn starts.
     #[serde(default, skip_serializing_if = "is_false")]
     pub queued: bool,
+    /// The images this message carries — a user turn's attachments, in the order they were
+    /// attached. References rather than bytes (see [`Attachment`]), so a transcript polled once a
+    /// second stays the size of its text.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Attachment>,
     /// The assistant turn's activity — tool calls and thinking — parsed from the engine's output.
     /// Empty for user turns and for engines that emit no structured progress.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -82,12 +88,23 @@ pub(crate) const ROLE_ASSISTANT: &str = "assistant";
 /// not when it was typed, which is what the queue is for.
 #[must_use]
 pub fn user_turn(text: impl Into<String>) -> Turn {
+    user_turn_with(text, Vec::new())
+}
+
+/// The same question, carrying the images that were attached to it.
+///
+/// Separate from [`user_turn`] rather than replacing it because most questions have none, and a
+/// caller that has to pass an empty vec to say "no pictures" is a caller that will pass one by
+/// mistake somewhere it mattered.
+#[must_use]
+pub fn user_turn_with(text: impl Into<String>, images: Vec<Attachment>) -> Turn {
     Turn {
         role: ROLE_USER.to_string(),
         text: text.into(),
         at: now_ms(),
         pending: false,
         queued: false,
+        images,
         steps: Vec::new(),
         metrics: None,
     }
@@ -103,6 +120,9 @@ pub fn assistant_turn(content: &TurnContent) -> Turn {
         at: now_ms(),
         pending: false,
         queued: false,
+        // An answer carries none: what a model sends back is text and the steps it took to write
+        // it. Images travel one way, from the person to the model.
+        images: Vec::new(),
         steps: content.steps.clone(),
         metrics: content.metrics.clone(),
     }
@@ -183,6 +203,11 @@ pub(super) fn insert(tx: &Connection, agent: &str, id: &str, mut turn: Turn) -> 
         rusqlite::params![agent, id, turn.at],
     )
     .map_err(|e| sql_err("record a turn in", e))?;
+    // Recording the turn is what makes its images this conversation's — in the same commit, so an
+    // attachment is never claimed by a turn that was not written. Until now they were nobody's, and
+    // the unclaimed sweep was free to take them.
+    let ids: Vec<String> = turn.images.iter().map(|image| image.id.clone()).collect();
+    super::attachments::claim(tx, agent, id, &ids);
     Ok(())
 }
 
@@ -228,7 +253,7 @@ pub(super) fn view(
     mut turns: Vec<Turn>,
     live: Option<TurnContent>,
     running: bool,
-    queued: Vec<String>,
+    queued: Vec<super::queue::QueuedMessage>,
 ) -> Vec<Turn> {
     if let Some(content) = live
         && turns.last().map(|t| t.role.as_str()) == Some(ROLE_USER)
@@ -244,16 +269,18 @@ pub(super) fn view(
             at: 0,
             pending: running,
             queued: false,
+            images: Vec::new(),
             steps,
             metrics: content.metrics,
         });
     }
-    turns.extend(queued.into_iter().map(|text| Turn {
+    turns.extend(queued.into_iter().map(|message| Turn {
         role: ROLE_USER.to_string(),
-        text,
+        text: message.text,
         at: 0,
         pending: false,
         queued: true,
+        images: message.images,
         steps: Vec::new(),
         metrics: None,
     }));

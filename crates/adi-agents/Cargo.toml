@@ -30,6 +30,9 @@ adi-tasks = { workspace = true }
 # without the thing its definition says it has, and nobody would be told. Already in the
 # workspace graph, so it costs nothing to build.
 tracing = { workspace = true }
+# An image attached to a message is stored as bytes and sent to a model provider as base64 — all
+# four providers the adi loop speaks take it that way, and three of them inside a data: URL.
+base64 = { workspace = true }
 
 # An agent's memory and its readable bases, made real at launch (see src/knowledge.rs). A path
 # dependency with `default-features = false`: the runner creates a base and resolves ids, it never

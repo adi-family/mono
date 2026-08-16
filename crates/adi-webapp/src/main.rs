@@ -12,6 +12,7 @@
 
 use std::collections::BTreeMap;
 
+mod attach;
 mod fetch;
 mod icons;
 mod live;

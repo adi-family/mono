@@ -68,6 +68,32 @@ impl std::fmt::Display for RunnerKind {
     }
 }
 
+/// How a message's images get to an engine.
+///
+/// Two ways, and the difference is where the picture ends up rather than whether the model sees it.
+///
+/// [`Inline`](Self::Inline) is for an engine whose request body this crate writes: the bytes go into
+/// that body as base64, in the provider's own shape, and the model has them in the same message as
+/// the words.
+///
+/// [`Path`](Self::Path) is for an engine handed its message on a command line. There is no argument
+/// that means "and this screenshot" — but every one of them can *read a file*, and reads it with a
+/// tool that decodes images. So the bytes are written to disk and the message names where they are.
+/// The model still sees the picture; it fetches it itself, one tool call in.
+///
+/// The distinction is not cosmetic and callers do act on it: an inline turn costs nothing extra,
+/// while a path turn spends a tool call per image and needs the file to still be there when the
+/// engine gets round to opening it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageDelivery {
+    /// This engine cannot be given a picture in any form we know of.
+    None,
+    /// In the request body, as base64 — for an engine this crate calls itself.
+    Inline,
+    /// As a path in the prompt, for the engine to read off disk.
+    Path,
+}
+
 /// What a [`Runner::stop`] found and did. `forced` says the grace period ran out and the runner had
 /// to be rude about it — worth recording, since a run that never exits cooperatively is a fact about
 /// the engine rather than about the click that stopped it.
@@ -129,6 +155,24 @@ pub trait Runner: Send + Sync {
     /// than not offering.
     fn resumes(&self) -> bool {
         false
+    }
+
+    /// How a message's images reach this engine.
+    ///
+    /// Data for the same reason [`resumes`](Runner::resumes) is: a composer has to decide whether to
+    /// offer a paperclip *before* anybody pastes into it, and accepting a screenshot that the engine
+    /// will silently drop is worse than refusing it where the refusal can say why.
+    ///
+    /// [`None`](ImageDelivery::None) is the honest default — an engine nothing here knows how to
+    /// hand a picture to.
+    fn image_delivery(&self) -> ImageDelivery {
+        ImageDelivery::None
+    }
+
+    /// Whether a message to this runner may carry images at all. Derived, so a runner answers the
+    /// *how* once and nothing has to keep a second list of the *whether*.
+    fn takes_images(&self) -> bool {
+        self.image_delivery() != ImageDelivery::None
     }
 
     /// This session's normalized events after `cursor`, plus the cursor to resume from.

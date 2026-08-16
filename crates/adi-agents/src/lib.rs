@@ -50,6 +50,7 @@ mod tool_help;
 mod workspace;
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
@@ -81,7 +82,9 @@ pub use run::{
 use agent::validate_name;
 use workspace::CONV_ENV;
 use backends::adi_events as turn_events;
-use runner::{RunEvent, RunSpec, Runner, Session, human::HumanRunner, runner_for, runner_of};
+use runner::{
+    ImageDelivery, RunEvent, RunSpec, Runner, Session, human::HumanRunner, runner_for, runner_of,
+};
 use store::{
     Answer, AnsweredBy, Ask, SessionRecord, SessionRef, SessionStore, assistant_turn, now_ms,
     user_turn,
@@ -475,7 +478,46 @@ impl Agents {
     /// # Errors
     /// Returns [`Error::NotFound`], [`Error::TooManyRunning`], or backend launch errors.
     pub fn run_in(&self, name: &str, message: &str, working_dir: Option<&str>) -> Result<Launch> {
-        self.launch_run(name, message, working_dir, false)
+        self.launch_run(name, message, working_dir, false, &[])
+    }
+
+    /// A launch whose opening message carries images — a conversation started from a screenshot.
+    ///
+    /// `force` is the same override [`force_run_in`](Self::force_run_in) is, taken as a flag here
+    /// because the one caller that needs images is the one that already decides it: a person at a
+    /// composer, who may have read a refusal and asked again.
+    ///
+    /// # Errors
+    /// As [`run_in`](Self::run_in).
+    pub fn run_in_with(
+        &self,
+        name: &str,
+        message: &str,
+        working_dir: Option<&str>,
+        force: bool,
+        image_ids: &[String],
+    ) -> Result<Launch> {
+        // As in [`reply_with`](Self::reply_with): an engine that cannot carry a picture says so,
+        // rather than starting a conversation whose first message is missing half of itself.
+        if !image_ids.is_empty()
+            && !crate::progress::capabilities(&self.backend_of(name)?).images
+        {
+            return Err(images_unsupported());
+        }
+        let images = self.sessions().resolve_attachments(image_ids);
+        self.launch_run(name, message, working_dir, force, &images)
+    }
+
+    /// The backend an agent is currently defined to run on.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`] for an unknown agent.
+    fn backend_of(&self, name: &str) -> Result<Backend> {
+        Ok(self
+            .get(name)?
+            .ok_or_else(|| Error::NotFound(name.to_string()))?
+            .manifest
+            .backend)
     }
 
     /// Launch a run whatever else is running — the deliberate override of the [run cap](RunLimits),
@@ -490,7 +532,7 @@ impl Agents {
         message: &str,
         working_dir: Option<&str>,
     ) -> Result<Launch> {
-        self.launch_run(name, message, working_dir, true)
+        self.launch_run(name, message, working_dir, true, &[])
     }
 
     /// The one launch path: resolve the agent, weigh the cap unless `force`, open a session, send,
@@ -501,6 +543,7 @@ impl Agents {
         message: &str,
         working_dir: Option<&str>,
         force: bool,
+        images: &[store::Attachment],
     ) -> Result<Launch> {
         let agent = self
             .get(name)?
@@ -532,8 +575,13 @@ impl Agents {
         // first line. Not for a terminal: its launch message is deliberately never typed (the TUI
         // is still drawing its first frame), so recording it as asked would be a lie.
         if runner.as_terminal().is_none() {
-            store.append_turn(&agent.name, &record.id, user_turn(message))?;
+            store.append_turn(
+                &agent.name,
+                &record.id,
+                store::user_turn_with(message, images.to_vec()),
+            )?;
         }
+        let message = &for_engine(runner.as_ref(), &store, message, images);
         runner.send(&spec, &session, message)?;
         // Only now, with this run's own files in place: pruning first would count it as one of the
         // old ones. A run somebody else is still watching is never swept.
@@ -561,7 +609,41 @@ impl Agents {
     /// Returns [`Error::NotFound`] or backend launch errors — including [`Error::NotRunnable`] for a
     /// backend that keeps no conversation.
     pub fn reply(&self, name: &str, conv_id: &str, message: &str) -> Result<Sent> {
+        self.reply_with(name, conv_id, message, &[])
+    }
+
+    /// [`reply`](Self::reply), with images attached — what a message composed with a screenshot
+    /// pasted into it sends.
+    ///
+    /// Attachments a person has already uploaded, named by the ids the store minted. An id that no
+    /// longer resolves (swept, or from another machine) is one fewer image rather than a refusal:
+    /// the words were typed and are worth asking either way.
+    ///
+    /// # Errors
+    /// As [`reply`](Self::reply).
+    pub fn reply_with(
+        &self,
+        name: &str,
+        conv_id: &str,
+        message: &str,
+        image_ids: &[String],
+    ) -> Result<Sent> {
         self.check_deliverable(name, conv_id)?;
+        // Refused rather than recorded-and-ignored. The images would sit in the transcript looking
+        // sent while an engine that has no way to receive them never saw them, and the person who
+        // attached them would have no way to tell.
+        if !image_ids.is_empty() {
+            let takes = self
+                .sessions()
+                .get(name, conv_id)
+                .as_ref()
+                .and_then(runner_of)
+                .is_some_and(|runner| runner.takes_images());
+            if !takes {
+                return Err(images_unsupported());
+            }
+        }
+        let images = self.sessions().resolve_attachments(image_ids);
         let settled = self
             .sessions()
             .resolve_question(
@@ -579,12 +661,56 @@ impl Agents {
         match settled {
             Some(ask) => {
                 let text = ask.render_reply(message);
-                let sent = self.deliver(name, conv_id, &text)?;
+                let sent = self.deliver_with(name, conv_id, &text, &images)?;
                 self.emit_answered(&ask, AnsweredBy::Human);
                 Ok(sent)
             }
-            None => self.deliver(name, conv_id, message),
+            None => self.deliver_with(name, conv_id, message, &images),
         }
+    }
+
+    /// Store an image a message may later carry, and return the reference it is carried by.
+    ///
+    /// Uploading is its own act, before any message exists: a screenshot pasted into a composer is
+    /// stored while the message is still being typed, and belongs to no conversation until a turn
+    /// records it. One that never is gets swept a day later.
+    ///
+    /// # Errors
+    /// Returns [`Error::Arguments`] for a type no provider takes or a body over
+    /// [`store::MAX_ATTACHMENT_BYTES`], plus I/O and database errors.
+    pub fn store_image(
+        &self,
+        name: &str,
+        media_type: &str,
+        bytes: &[u8],
+    ) -> Result<store::Attachment> {
+        self.sessions().put_attachment(name, media_type, bytes)
+    }
+
+    /// Whether **this run** can be shown an image.
+    ///
+    /// Asked of the runner that started it rather than of the agent's current backend, because those
+    /// disagree exactly where it matters: a simulated run is a person in the model's seat — no model
+    /// to show a picture to — whatever engine the agent is pointed at. An unknown run answers
+    /// `false`, which is the safe direction: it withholds an offer rather than making one that the
+    /// send would refuse.
+    #[must_use]
+    pub fn run_takes_images(&self, agent: &str, run_id: &str) -> bool {
+        self.sessions()
+            .get(agent, run_id)
+            .as_ref()
+            .and_then(runner_of)
+            .is_some_and(|runner| runner.takes_images())
+    }
+
+    /// One stored image: what it is, and its bytes. `None` when the id names nothing, or when the
+    /// row is there and the file is not.
+    #[must_use]
+    pub fn image(&self, id: &str) -> Option<(store::Attachment, Vec<u8>)> {
+        let sessions = self.sessions();
+        let attachment = sessions.attachment(id)?;
+        let bytes = sessions.attachment_bytes(&attachment).ok()?;
+        Some((attachment, bytes))
     }
 
     /// Answer a conversation's pending question with one reply per question — what the card in the
@@ -690,6 +816,21 @@ impl Agents {
     /// own default (which has settled it already, by a different route). Both are the platform
     /// speaking, and a person's question stays open until a person answers it.
     pub(crate) fn deliver(&self, name: &str, conv_id: &str, message: &str) -> Result<Sent> {
+        self.deliver_with(name, conv_id, message, &[])
+    }
+
+    /// [`deliver`](Self::deliver), with images attached to the message.
+    ///
+    /// The pictures travel with the words wherever the words go — into the turn that starts now, or
+    /// into the queue behind the answer still being written. Anything else and a screenshot pasted
+    /// mid-answer arrives attached to a message that is not the one it was pasted into.
+    pub(crate) fn deliver_with(
+        &self,
+        name: &str,
+        conv_id: &str,
+        message: &str,
+        images: &[store::Attachment],
+    ) -> Result<Sent> {
         let agent = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
@@ -712,24 +853,30 @@ impl Agents {
         let _gate = turn_gate();
         let session = store.session(name, conv_id);
         if !may_start || runner.is_alive(&session) {
-            let place = store.enqueue(name, conv_id, message)?;
+            let place = store.enqueue(name, conv_id, message, images)?;
             return Ok(Sent::Queued { place });
         }
         // Idle, but with a queue no read has drained yet: join the back of the line and start its
         // head instead, so messages are always answered in the order they were typed.
         let next = if store.queue_len(name, conv_id) > 0 {
-            store.enqueue(name, conv_id, message)?;
+            store.enqueue(name, conv_id, message, images)?;
             store
                 .dequeue(name, conv_id)?
-                .unwrap_or_else(|| message.to_string())
+                .unwrap_or_else(|| store::QueuedMessage {
+                    text: message.to_string(),
+                    images: images.to_vec(),
+                })
         } else {
-            message.to_string()
+            store::QueuedMessage {
+                text: message.to_string(),
+                images: images.to_vec(),
+            }
         };
 
         let launch = self.start_turn(&agent, &store, runner.as_ref(), &record, &next)?;
         self.emit(
             "adi.agents.run.started",
-            &AgentRunStarted::of(name, &next, &launch),
+            &AgentRunStarted::of(name, &next.text, &launch),
         );
         Ok(Sent::Started(launch))
     }
@@ -915,7 +1062,7 @@ impl Agents {
         };
         self.emit(
             "adi.agents.run.started",
-            &AgentRunStarted::of(&agent.name, &message, &launch),
+            &AgentRunStarted::of(&agent.name, &message.text, &launch),
         );
         true
     }
@@ -932,7 +1079,7 @@ impl Agents {
         store: &SessionStore,
         runner: &dyn Runner,
         record: &SessionRecord,
-        message: &str,
+        message: &store::QueuedMessage,
     ) -> Result<Launch> {
         let session = store.session(&agent.name, &record.id);
         // Commit the previous turn's answer before the next question goes in, so the transcript
@@ -952,8 +1099,13 @@ impl Agents {
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
         runner.check(&spec)?;
-        store.append_turn(&agent.name, &record.id, user_turn(message))?;
-        runner.send(&spec, &session, message)?;
+        store.append_turn(
+            &agent.name,
+            &record.id,
+            store::user_turn_with(&message.text, message.images.clone()),
+        )?;
+        let sent = for_engine(runner, store, &message.text, &message.images);
+        runner.send(&spec, &session, &sent)?;
         Ok(launch_of(agent, runner, &session))
     }
 
@@ -1708,6 +1860,70 @@ fn answerable(runner: &dyn Runner) -> bool {
     runner.resumes() && runner.as_terminal().is_none()
 }
 
+/// The message as *this engine* has to receive it.
+///
+/// For everything but a path-delivery engine this is the words, unchanged — which is every message
+/// ever sent before images existed, and the overwhelming majority since. An engine that reads its
+/// images off disk gets the words with a block appended naming the files.
+///
+/// # Why the transcript does not get this
+///
+/// What is recorded is the message a person wrote plus the images they attached — see
+/// [`start_turn`](Agents::start_turn), which appends the turn *before* calling this. The paths are
+/// an instruction to one engine about how to see them, not part of what was said: put them in the
+/// transcript and every reader would show a wall of `/Users/…/attachments/…` under a screenshot it
+/// is already displaying, and a later turn replayed to a *different* engine would carry directions
+/// that mean nothing to it.
+fn for_engine(
+    runner: &dyn Runner,
+    store: &SessionStore,
+    text: &str,
+    images: &[store::Attachment],
+) -> String {
+    if images.is_empty() || runner.image_delivery() != ImageDelivery::Path {
+        return text.to_string();
+    }
+    let mut out = text.trim().to_string();
+    if !out.is_empty() {
+        out.push_str("\n\n");
+    }
+    out.push_str(IMAGE_PREAMBLE);
+    for image in images {
+        // The original name in brackets after the path: the path is what the tool call needs, the
+        // name is what makes the model's reply readable ("in screenshot.png the button is…").
+        // Writing into a `String` cannot fail, so the result is dropped rather than unwrapped.
+        let _ = write!(
+            out,
+            "\n- {} ({})",
+            store.attachment_path(image).display(),
+            image.name,
+        );
+    }
+    out
+}
+
+/// What a path-delivery engine is told about the files above its list.
+///
+/// Phrased as an instruction rather than a note, because a coding agent that merely *notices* a path
+/// tends to reason about the filename instead of opening it. It says images, and it says read,
+/// because both of those are what make the model reach for the tool that decodes pictures.
+const IMAGE_PREAMBLE: &str =
+    "Images are attached to this message. Read each of these files with your file-reading tool \
+     before answering — they are part of what is being asked, not a reference:";
+
+/// The refusal a message with images meets when the engine cannot carry one.
+///
+/// Named rather than written twice, because the two places that raise it — a reply and a launch —
+/// are the same refusal, and a person who reads it in one place should not meet different words for
+/// it in the other.
+fn images_unsupported() -> Error {
+    Error::Unsupported(
+        "this engine takes text only — a message with images needs a harness:adi agent, whose \
+         request this crate writes itself"
+            .to_string(),
+    )
+}
+
 /// Where a turn of this session runs: the directory it was opened in, re-entered by every later
 /// turn so a thread stays in one place for its whole life.
 ///
@@ -1898,6 +2114,12 @@ mod tests {
         system_prompt: String,
         max_turns: u64,
         provider: String,
+    }
+
+    /// Just what was typed — the cases below are about which message is where in the line, not about
+    /// what was attached to it.
+    fn texts(queued: Vec<store::QueuedMessage>) -> Vec<String> {
+        queued.into_iter().map(|m| m.text).collect()
     }
 
     fn scratch(tag: &str) -> Agents {
@@ -2879,6 +3101,158 @@ mod tests {
         );
     }
 
+    /// An image's whole life: stored before any message exists, carried by the reply that names it,
+    /// kept by the conversation from then on, and gone when the conversation is.
+    ///
+    /// The queue is where this is easiest to get wrong, so that is the path it takes: the cap is
+    /// full, so the reply waits in line with its picture and only becomes a turn later.
+    #[test]
+    fn an_attached_image_waits_with_its_message_and_dies_with_the_conversation() {
+        let store = scratch("attached");
+        store.save("chatty", spec("harness:adi")).expect("save");
+        let conv = seed_conversation(&store, "chatty", "harness:adi", "/tmp");
+        store
+            .set_limits(RunLimits {
+                max_concurrent_runs: 1,
+                ..RunLimits::default()
+            })
+            .expect("set the limit");
+        seed_live_run(&store, "process:claude", "other");
+
+        let image = store
+            .store_image("shot.png", "image/png", b"\x89PNG")
+            .expect("store the image");
+
+        assert_eq!(
+            store
+                .reply_with("chatty", &conv, "what is wrong here?", &[image.id.clone()])
+                .expect("reply"),
+            Sent::Queued { place: 1 },
+        );
+
+        // The picture waits *with* the words. Queued apart, it would arrive attached to whichever
+        // message happened to start next.
+        let queued = store.sessions().queued("chatty", &conv);
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].images, [image.clone()]);
+
+        // Taken as a turn, it is recorded as one — and only then does it belong to this
+        // conversation, which is what stops the unclaimed sweep from taking it.
+        let taken = store
+            .sessions()
+            .take_queued_as_turn("chatty", &conv)
+            .expect("take")
+            .expect("something was waiting");
+        assert_eq!(taken.images, [image.clone()]);
+        let turns = store.sessions().turns("chatty", &conv);
+        assert_eq!(turns.last().expect("a turn").images, [image.clone()]);
+        assert!(store.image(&image.id).is_some(), "the bytes are still there");
+
+        store.delete_run("chatty", &conv).expect("delete");
+        assert!(
+            store.image(&image.id).is_none(),
+            "a deleted conversation takes its images with it",
+        );
+    }
+
+    /// Something that cannot be shown a picture says so, rather than recording one that looks sent
+    /// and was never seen.
+    ///
+    /// Two of them, and they are the only two left: a **simulated** conversation, which is a person
+    /// in the model's seat reading a form that has nowhere to put an image, and a **live terminal**,
+    /// whose launch message is never typed at all. Every real engine can be shown one — three of
+    /// them by being told where the file is.
+    #[test]
+    fn a_message_with_images_is_refused_by_what_cannot_be_shown_one() {
+        let store = scratch("no-images");
+        store.save("printer", spec("harness:adi")).expect("save");
+        store.save("pane", spec("pty:claude")).expect("save");
+        let image = store
+            .store_image("shot.png", "image/png", b"\x89PNG")
+            .expect("store the image");
+
+        let simulated = match store.simulate("printer", "let's begin").expect("simulate") {
+            Launch::Process { run_id, .. } => run_id,
+            Launch::Pty { .. } => unreachable!("a simulated run is not a pane"),
+        };
+        assert!(matches!(
+            store.reply_with("printer", &simulated, "look", &[image.id.clone()]),
+            Err(Error::Unsupported(_)),
+        ));
+        // …and the same message without pictures is delivered as it always was.
+        assert!(store.reply("printer", &simulated, "look").is_ok());
+
+        assert!(matches!(
+            store.run_in_with("pane", "look", None, false, &[image.id]),
+            Err(Error::Unsupported(_)),
+        ));
+    }
+
+    /// What a path-delivery engine actually receives: the words, then the files, as an instruction
+    /// to open them.
+    ///
+    /// The transcript is checked in the same breath, because the two must differ — the paths are
+    /// directions for one engine, and a reader shown them under a thumbnail it is already drawing
+    /// would be reading plumbing.
+    #[test]
+    fn a_cli_engine_is_told_where_its_images_are_and_the_transcript_is_not() {
+        let store = scratch("by-path");
+        store
+            .save("printer", spec("harness:claude-sdk"))
+            .expect("save");
+        let conv = seed_conversation(&store, "printer", "harness:claude-sdk", "/tmp");
+        let image = store
+            .store_image("screenshot.png", "image/png", b"\x89PNG")
+            .expect("store the image");
+
+        store
+            .reply_with("printer", &conv, "what is wrong here?", &[image.id.clone()])
+            .expect("reply");
+
+        let sessions = store.sessions();
+        // All three CLI engines, because they are one rule and not three: whatever is handed its
+        // message on a command line is told where the file is.
+        for backend in [
+            Backend::HarnessClaudeSdk,
+            Backend::ProcessClaude,
+            Backend::ProcessCodex,
+        ] {
+            let sent = for_engine(
+                runner_for(&backend).expect("a runner").as_ref(),
+                &sessions,
+                "what is wrong here?",
+                std::slice::from_ref(&image),
+            );
+            assert!(sent.starts_with("what is wrong here?\n\n"), "{backend}: {sent}");
+            assert!(sent.contains("Read each of these files"), "{backend}: {sent}");
+            assert!(
+                sent.contains(&sessions.attachment_path(&image).display().to_string()),
+                "{backend}: {sent}",
+            );
+            assert!(sent.contains("(screenshot.png)"), "{backend}: {sent}");
+            // A path that does not name the file as a picture is a path a reading tool decodes as
+            // text — the extension is the only thing telling it otherwise.
+            assert!(sent.contains(".png"), "{backend}: {sent}");
+        }
+
+        let turn = sessions
+            .turns("printer", &conv)
+            .pop()
+            .expect("the recorded question");
+        assert_eq!(turn.text, "what is wrong here?", "no paths in the transcript");
+        assert_eq!(turn.images, [image]);
+
+        // The engine that gets its images inline is told nothing extra: its bytes go in the request
+        // body, and a list of paths there would be noise the model has to explain away.
+        let inline = for_engine(
+            runner_for(&Backend::HarnessAdi).expect("a runner").as_ref(),
+            &sessions,
+            "what is wrong here?",
+            &turn.images,
+        );
+        assert_eq!(inline, "what is wrong here?");
+    }
+
     /// Nothing typed into a chat is lost to the cap: a message to an idle conversation queues
     /// instead of being refused, and starts when a slot frees.
     #[test]
@@ -2903,7 +3277,7 @@ mod tests {
             "a full cap queues the message rather than refusing it"
         );
         assert_eq!(
-            store.sessions().queued("chatty", &conv),
+            texts(store.sessions().queued("chatty", &conv)),
             ["and then?"],
             "the queued message is otherwise ready to start"
         );
@@ -2912,7 +3286,7 @@ mod tests {
             "an automatic start waits for a free slot"
         );
         assert_eq!(
-            store.sessions().queued("chatty", &conv),
+            texts(store.sessions().queued("chatty", &conv)),
             ["and then?"],
             "and it keeps its place rather than being dropped"
         );
@@ -3100,7 +3474,7 @@ mod tests {
             store.unqueue("chatty", &conv, 0).expect("unqueue"),
             "a message can be taken back before it is ever asked",
         );
-        assert_eq!(sessions.queued("chatty", &conv), ["then tell me"]);
+        assert_eq!(texts(sessions.queued("chatty", &conv)), ["then tell me"]);
 
         // Stopping drops the whole line. What was queued was written expecting the answer that is
         // being cut short, so marching on into a conversation the human just interrupted would
@@ -3172,7 +3546,7 @@ mod tests {
         );
 
         sessions
-            .enqueue("recon", &second, "and then diff them")
+            .enqueue("recon", &second, "and then diff them", &[])
             .expect("enqueue");
         assert!(
             !store.stop_run("recon", &second).expect("stop"),

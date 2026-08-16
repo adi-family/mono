@@ -2,6 +2,7 @@
 
 use leptos::{ev, html, prelude::*};
 
+use crate::attach::{AttachButton, AttachRefusal, AttachTray, Attaching};
 use crate::merge;
 
 /// The composer.
@@ -17,6 +18,11 @@ use crate::merge;
 /// - **It says whether it can send.** Empty or busy, the button is out; both are states you
 ///   can be in for a while, and a control that looks live and does nothing is worse than one
 ///   that is visibly out.
+///
+/// Given [`Attaching`] it also takes **images** — pasted, dropped onto it, or picked through the
+/// paperclip — and shows what is attached above what you are typing. A message that is only a
+/// picture sends; a message whose picture is still uploading does not, because that send would
+/// arrive without it.
 ///
 /// Sending is the caller's: `on_send` gets the text, and clearing the box is the caller's
 /// call too — a send that fails should not have thrown the message away.
@@ -65,6 +71,14 @@ pub fn Composer(
     /// app that embeds it. The composer only lends the corner.
     #[prop(optional, into)]
     mic: Option<ViewFn>,
+    /// Images this message may carry — the tray, the paperclip, and the paste/drop handling. Absent
+    /// (the default) the composer takes text and nothing else, and pasting a picture into it does
+    /// what it did before: nothing.
+    ///
+    /// The caller keeps the list and does the uploading, for the same reason [`mic`](Self) is a
+    /// slot: where an image is stored is a question about the app.
+    #[prop(optional)]
+    attach: Option<Attaching>,
     #[prop(optional, into)] class: String,
 ) -> impl IntoView {
     let area = NodeRef::<html::Textarea>::new();
@@ -87,9 +101,25 @@ pub fn Composer(
         }
     };
 
+    // Whether a send would carry anything. Words are the usual answer; an attached picture is the
+    // other one, and a message that is only a screenshot is a whole message rather than an empty
+    // one. Untracked because `send` is called from an event, not from a render.
+    let has_content = move || {
+        !value.get_untracked().trim().is_empty()
+            || attach.is_some_and(|a| {
+                a.files
+                    .get_untracked()
+                    .iter()
+                    .any(crate::Attached::sendable)
+            })
+    };
+    // A picture still on its way is the one thing that holds a send back without the box looking
+    // busy: sending now would deliver the words without the image they are about.
+    let waiting = move || attach.is_some_and(|a| Attaching::uploading(&a));
+
     let send = move || {
         let text = value.get_untracked();
-        if text.trim().is_empty() || busy.get_untracked() {
+        if !has_content() || busy.get_untracked() {
             return;
         }
         on_send.run(text);
@@ -105,15 +135,45 @@ pub fn Composer(
         fit();
     };
 
-    let ready = Signal::derive(move || !value.get().trim().is_empty() && !busy.get());
+    let ready = Signal::derive(move || {
+        let typed = !value.get().trim().is_empty();
+        let attached = attach.is_some_and(|a| a.has_sendable());
+        (typed || attached) && !waiting() && !busy.get()
+    });
+
+    // The three doors a file comes in by are all wired to one handler. `dragover` has to be
+    // cancelled or the browser navigates to the dropped file instead of handing it over — the one
+    // default in this component whose absence loses the page you are typing on.
+    let take = attach.map(|a| a.on_files);
+    let can_attach = attach.map_or(Signal::derive(|| false), |a| a.can_attach);
 
     view! {
-        <div class=merge(
-            "island flex items-end gap-2 bg-card p-2 focus-within:border-accent \
-             focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)] \
-             transition-[border-color,box-shadow] duration-100",
-            class,
-        )>
+        <div
+            class=merge(
+                "island flex flex-col gap-1 bg-card p-2 focus-within:border-accent \
+                 focus-within:shadow-[0_0_0_3px_color-mix(in_srgb,var(--accent)_16%,transparent)] \
+                 transition-[border-color,box-shadow] duration-100",
+                class,
+            )
+            on:dragover=move |ev: ev::DragEvent| {
+                if take.is_some() && can_attach.get_untracked() {
+                    ev.prevent_default();
+                }
+            }
+            on:drop=move |ev: ev::DragEvent| {
+                let Some(take) = take else { return };
+                if !can_attach.get_untracked() {
+                    return;
+                }
+                let files = crate::attach::dropped(&ev);
+                if !files.is_empty() {
+                    ev.prevent_default();
+                    take.run(files);
+                }
+            }
+        >
+            {attach.map(|attach| view! { <AttachTray attach=attach/> })}
+        <div class="flex items-end gap-2">
             <textarea
                 class="min-h-8 w-full flex-1 resize-none self-center border-0 bg-transparent \
                        px-1 py-1 text-msg text-body outline-none \
@@ -142,10 +202,33 @@ pub fn Composer(
                         send();
                     }
                 }
+                on:paste=move |ev: ev::ClipboardEvent| {
+                    // Cmd-V with a screenshot on the clipboard. Text pastes carry no files and fall
+                    // straight through to the browser's own handling, which is what puts the words
+                    // in the box.
+                    let Some(take) = take else { return };
+                    if !can_attach.get_untracked() {
+                        return;
+                    }
+                    let files = crate::attach::pasted(&ev);
+                    if !files.is_empty() {
+                        ev.prevent_default();
+                        take.run(files);
+                    }
+                }
             ></textarea>
             // Furthest from send, because it is the control that is pressed *before* a message
             // exists rather than after: putting it next to send would sit an "open the
             // microphone" under the thumb that just went for "send it".
+            // Reactive, and it has to be: whether the conversation takes images is an answer that
+            // arrives *after* this box is on screen — the chat is drawn as soon as it is opened and
+            // its snapshot lands a poll later. Read once at render, every freshly opened chat would
+            // sit there refusing images the engine can plainly take.
+            {move || {
+                attach
+                    .filter(|a| a.can_attach.get())
+                    .map(|attach| view! { <AttachButton attach=attach/> })
+            }}
             {mic.map(|mic| mic.run())}
             // Stop sits to the left of send, so send keeps the corner the hand already goes to
             // and the row does not shuffle under it when a turn starts.
@@ -191,6 +274,17 @@ pub fn Composer(
                     <path d="M3.5 7.5 8 3l4.5 4.5"></path>
                 </svg>
             </button>
+        </div>
+            // Said before anything is pasted, not after: a picture the send would have dropped is
+            // one you have already decided to send. Reactive for the reason the paperclip is.
+            {move || {
+                attach
+                    .filter(|a| !a.can_attach.get())
+                    .map(|a| view! { <AttachRefusal reason=a.refusal/> })
+            }}
+            {move || waiting().then(|| view! {
+                <div class="px-1 text-mini text-meta">"attaching…"</div>
+            })}
         </div>
     }
 }

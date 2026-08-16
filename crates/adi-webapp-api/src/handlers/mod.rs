@@ -649,6 +649,7 @@ mod tests {
                     at: 1,
                     pending: false,
                     queued: false,
+                    images: Vec::new(),
                     steps: Vec::new(),
                     metrics: None,
                 },
@@ -1438,6 +1439,48 @@ mod tests {
         assert_eq!(
             project_hook_log(&store, br#"{"id":"demo","name":"ghost"}"#).status,
             404
+        );
+    }
+
+    /// The upload's whole contract in one pass: what comes back names the bytes, the bytes come back
+    /// by that name with their own type, and the two refusals a person can actually hit — a file
+    /// that is not an image, and one that is too big — are answered here rather than by a model
+    /// provider three steps later.
+    #[test]
+    fn an_uploaded_image_comes_back_by_its_id() {
+        let store = temp_agents();
+        let png = b"\x89PNG\r\n\x1a\n and some pixels";
+
+        let Response { status, body } = store_attachment(&store, "image/png", "shot.png", png);
+        assert_eq!(status, 200, "{body}");
+        let v: Value = serde_json::from_str(&body).unwrap();
+        let id = v["id"].as_str().expect("an id").to_string();
+        assert_eq!(v["name"], "shot.png");
+        assert_eq!(v["media_type"], "image/png");
+        assert_eq!(v["size"], png.len());
+
+        let (media_type, bytes) = attachment_bytes(&store, &id).expect("the bytes");
+        assert_eq!(media_type, "image/png");
+        assert_eq!(bytes, png);
+        assert!(attachment_bytes(&store, "not-an-id").is_none());
+
+        // A charset the browser tacked on must not make a known type unknown.
+        assert_eq!(
+            store_attachment(&store, "image/png; charset=binary", "shot.png", png).status,
+            200,
+        );
+        // And a picture with no name of its own — every pasted screenshot — is still stored.
+        let Response { status, body } = store_attachment(&store, "image/png", "", png);
+        assert_eq!(status, 200, "{body}");
+
+        assert_eq!(
+            store_attachment(&store, "application/pdf", "report.pdf", b"%PDF").status,
+            415,
+        );
+        let huge = vec![0u8; adi_agents::store::MAX_ATTACHMENT_BYTES + 1];
+        assert_eq!(
+            store_attachment(&store, "image/png", "huge.png", &huge).status,
+            413,
         );
     }
 }

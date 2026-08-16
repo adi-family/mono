@@ -1174,6 +1174,14 @@ pub(crate) struct AgentsWatch {
     pub(crate) goal_editor: RwSignal<bool>,
     /// The goal the open editor is rewording, or `None` when it is writing a new one.
     pub(crate) goal_editing: RwSignal<Option<String>>,
+    /// Images attached to the message the *new-conversation* composer is holding.
+    ///
+    /// Two trays for the same reason there are two text buffers: the box that starts a conversation
+    /// and the box that answers in one are different messages, and a screenshot pasted into one must
+    /// not turn up attached to the other.
+    pub(crate) input_files: RwSignal<Vec<adi_ui::Attached>>,
+    /// Images attached to the reply being typed into the open conversation.
+    pub(crate) reply_files: RwSignal<Vec<adi_ui::Attached>>,
 }
 
 impl AgentsWatch {
@@ -1202,6 +1210,8 @@ impl AgentsWatch {
             goal_busy: RwSignal::new(false),
             goal_editor: RwSignal::new(false),
             goal_editing: RwSignal::new(None),
+            input_files: RwSignal::new(Vec::new()),
+            reply_files: RwSignal::new(Vec::new()),
         }
     }
 
@@ -1228,6 +1238,8 @@ impl AgentsWatch {
         self.goal_busy.set(false);
         self.goal_editor.set(false);
         self.goal_editing.set(None);
+        self.input_files.set(Vec::new());
+        self.reply_files.set(Vec::new());
     }
 }
 

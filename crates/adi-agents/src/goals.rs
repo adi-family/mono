@@ -445,7 +445,7 @@ mod tests {
 
         let queued = quiet_conversation(&agents, "queued");
         create(&agents, "queued", &queued, "finish", SetBy::Human).expect("create");
-        store.enqueue("queued", &queued, "one more thing").expect("enqueue");
+        store.enqueue("queued", &queued, "one more thing", &[]).expect("enqueue");
 
         let asking = quiet_conversation(&agents, "asking");
         create(&agents, "asking", &asking, "finish", SetBy::Human).expect("create");

@@ -40,6 +40,8 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 
 use crate::StoredAgent;
@@ -50,7 +52,7 @@ use crate::backends::adi_events::{self, Sink};
 use crate::error::{Error, Result};
 use crate::progress::TurnMetrics;
 
-use crate::store::Turn;
+use crate::store::{Attachment, Turn};
 use super::tools;
 
 /// Anthropic requires an explicit output cap, so default one when the agent sets none.
@@ -167,7 +169,8 @@ pub(crate) fn run_turn(
         store.clone(),
     );
     let wire = Wire::of(&args, model)?;
-    tool_loop(&wire, &args, &turns, &ctx, sink)
+    let images = ImageStore::new(&store);
+    tool_loop(&wire, &args, &turns, &ctx, &images, sink)
 }
 
 // ---- the loop ----------------------------------------------------------------------
@@ -208,11 +211,12 @@ fn tool_loop(
     args: &HarnessAdiArguments,
     turns: &[Turn],
     ctx: &tools::Ctx<'_>,
+    images: &ImageStore<'_>,
     sink: Sink<'_>,
 ) -> Result<String> {
     let allowance = args.max_turns.filter(|n| *n > 0).unwrap_or(MAX_ROUNDS);
     let mut max_rounds = allowance;
-    let mut messages = wire.seed(turns);
+    let mut messages = wire.seed(turns, images);
     let mut metrics = TurnMetrics::default();
 
     let mut round = 0;
@@ -222,7 +226,7 @@ fn tool_loop(
         // asked anything. This is the only boundary at which it can: a round is one blocking call
         // and then the tools it asked for, and a message injected into the middle of either would
         // not be read until this point anyway.
-        if take_queued(ctx, |text| wire.interject(&mut messages, text)) {
+        if take_queued(ctx, |said| wire.interject_said(&mut messages, said, images)) {
             // A new instruction with no rounds left to carry it out is a message answered by "out
             // of tool calls" — so the person who interrupted buys the turn a fresh allowance. The
             // ceiling is there to bound a model stuck in a rut, and a human typing is not one.
@@ -322,7 +326,7 @@ fn add(total: &mut Option<u64>, more: Option<u64>) {
 /// dies here leaves the message asked rather than silently swallowed. A store that will not give it
 /// up simply ends the drain: what is still in the queue is offered again next round, and failing the
 /// turn over it would throw away work the model has already done.
-fn take_queued(ctx: &tools::Ctx<'_>, mut hear: impl FnMut(&str)) -> bool {
+fn take_queued(ctx: &tools::Ctx<'_>, mut hear: impl FnMut(&crate::store::QueuedMessage)) -> bool {
     let mut heard = false;
     while let Ok(Some(message)) = ctx.sessions.take_queued_as_turn(ctx.agent, ctx.conv) {
         hear(&message);
@@ -405,15 +409,15 @@ impl<'a> Wire<'a> {
     }
 
     /// The transcript as this provider's opening message list.
-    fn seed(&self, turns: &[Turn]) -> Vec<Value> {
+    fn seed(&self, turns: &[Turn], images: &ImageStore<'_>) -> Vec<Value> {
         let plain = merged(turns);
         match self {
             // Gemini names the assistant `model` and carries the system prompt outside the list.
             Self::Gemini { .. } => plain
                 .iter()
-                .map(|(role, text)| {
-                    let role = if *role == "assistant" { "model" } else { "user" };
-                    json!({ "role": role, "parts": [{ "text": text }] })
+                .map(|said| {
+                    let role = if said.role == "assistant" { "model" } else { "user" };
+                    json!({ "role": role, "parts": self.parts(&said.text, said, images) })
                 })
                 .collect(),
             // Everyone else takes `{role, content}` with the system prompt as the first message —
@@ -421,18 +425,81 @@ impl<'a> Wire<'a> {
             // current models, but the dedicated field is what the API documents, so it goes there.
             Self::Anthropic { .. } => plain
                 .iter()
-                .map(|(role, text)| json!({ "role": role, "content": text }))
+                .map(|said| self.said(said, images))
                 .collect(),
             Self::OpenAi { args, .. } | Self::Ollama { args, .. } => {
-                let mut messages: Vec<Value> = plain
-                    .iter()
-                    .map(|(role, text)| json!({ "role": role, "content": text }))
-                    .collect();
+                let mut messages: Vec<Value> =
+                    plain.iter().map(|said| self.said(said, images)).collect();
                 if let Some(system) = system_prompt(args) {
                     messages.insert(0, json!({ "role": "system", "content": system }));
                 }
                 messages
             }
+        }
+    }
+
+    /// One `{role, content}` message, in the shape this provider takes.
+    ///
+    /// Text alone stays a **string**, which is what every one of these APIs took before images
+    /// existed and what three quarters of a transcript still is. Only a message that actually
+    /// carries a picture becomes a list of parts — so the ordinary request on the wire is byte for
+    /// byte the one this loop has always sent.
+    fn said(&self, said: &Said<'_>, images: &ImageStore<'_>) -> Value {
+        let encoded = images.encode(&said.images);
+        if encoded.is_empty() {
+            return json!({ "role": said.role, "content": said.text });
+        }
+        match self {
+            // Ollama is the odd one: the message keeps its plain string content and the pictures
+            // ride beside it in their own field, as bare base64 with no type and no wrapper.
+            Self::Ollama { .. } => json!({
+                "role": said.role,
+                "content": said.text,
+                "images": encoded.iter().map(|i| Value::String(i.data.clone())).collect::<Vec<_>>(),
+            }),
+            _ => json!({ "role": said.role, "content": self.parts(&said.text, said, images) }),
+        }
+    }
+
+    /// A message's content as a list of parts: its images first, then its words.
+    ///
+    /// Images lead because Anthropic documents that ordering as the one that answers better, and
+    /// nothing else here minds it. A blank text part is left out rather than sent empty — a message
+    /// that is only a screenshot is a real thing to send, and an empty string beside it is a
+    /// rejected request on at least one of these APIs.
+    fn parts(&self, text: &str, said: &Said<'_>, images: &ImageStore<'_>) -> Vec<Value> {
+        let mut parts: Vec<Value> = images
+            .encode(&said.images)
+            .iter()
+            .map(|image| self.image_part(image))
+            .collect();
+        if !text.trim().is_empty() {
+            parts.push(self.text_part(text));
+        }
+        parts
+    }
+
+    /// One image, in the shape this provider's content lists take. Four APIs, four spellings of the
+    /// same three facts — these bytes, this type, inline rather than by URL.
+    fn image_part(&self, image: &Encoded) -> Value {
+        match self {
+            Self::Anthropic { .. } => json!({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image.media_type,
+                    "data": image.data,
+                },
+            }),
+            // The chat-completions dialects take an image the same way they take a remote one: as a
+            // URL, which for inline bytes is a `data:` URL.
+            Self::OpenAi { .. } | Self::Ollama { .. } => json!({
+                "type": "image_url",
+                "image_url": { "url": format!("data:{};base64,{}", image.media_type, image.data) },
+            }),
+            Self::Gemini { .. } => json!({
+                "inlineData": { "mimeType": image.media_type, "data": image.data },
+            }),
         }
     }
 
@@ -481,6 +548,65 @@ impl<'a> Wire<'a> {
             Self::Gemini { .. } => json!({ "role": "user", "parts": [{ "text": text }] }),
             _ => json!({ "role": "user", "content": text }),
         });
+    }
+
+    /// Mid-turn, a whole message somebody typed while the model was working — its images with it.
+    ///
+    /// The plain [`interject`](Self::interject) is still what the wrap-up nudge uses, because a
+    /// nudge is words and nothing else. This is the door a *person's* message comes through, and a
+    /// person can paste a screenshot into the box at round three exactly as easily as at round one.
+    ///
+    /// A message with no images takes that same door, so the shape a running turn sees is unchanged
+    /// for every conversation that never attaches one.
+    fn interject_said(
+        &self,
+        messages: &mut Vec<Value>,
+        said: &crate::store::QueuedMessage,
+        images: &ImageStore<'_>,
+    ) {
+        if said.images.is_empty() {
+            self.interject(messages, &said.text);
+            return;
+        }
+        let said = Said {
+            role: "user",
+            text: said.text.clone(),
+            images: said.images.clone(),
+        };
+        // Ollama keeps its pictures beside the message rather than inside it, so there is nothing to
+        // fold into a previous turn — and it is the one provider here with no alternation rule to
+        // break by appending.
+        if matches!(self, Self::Ollama { .. }) {
+            messages.push(self.said(&said, images));
+            return;
+        }
+        let parts = self.parts(&said.text, &said, images);
+        // Same rule as [`interject`]: two user messages in a row is the one shape Anthropic and
+        // Gemini reject, so where the last message is already the user's this rides inside it. A
+        // string content is *promoted* to a list on the way — the transcript seeds plain strings, so
+        // that is the shape a first-round interjection actually meets.
+        if let Some(last) = messages.last_mut()
+            && last.get("role").and_then(Value::as_str) == Some("user")
+        {
+            match last.get_mut(self.user_field()) {
+                Some(Value::Array(list)) => {
+                    list.extend(parts);
+                    return;
+                }
+                Some(slot @ Value::String(_)) => {
+                    let existing = slot.as_str().unwrap_or_default().to_string();
+                    let mut list = Vec::new();
+                    if !existing.trim().is_empty() {
+                        list.push(self.text_part(&existing));
+                    }
+                    list.extend(parts);
+                    *slot = Value::Array(list);
+                    return;
+                }
+                _ => {}
+            }
+        }
+        messages.push(self.said(&said, images));
     }
 
     /// What this provider calls the list a message's content lives in.
@@ -547,25 +673,96 @@ impl<'a> Wire<'a> {
     }
 }
 
-/// The transcript as (role, text), blank turns dropped and neighbours of the same role joined into
-/// one message.
+/// One message on its way to a provider: who said it, what they said, and what they attached.
+struct Said<'a> {
+    role: &'a str,
+    text: String,
+    images: Vec<Attachment>,
+}
+
+/// The transcript as messages, blank turns dropped and neighbours of the same role joined into one.
 ///
 /// Joining is not tidiness. A turn that heard a message while it was working records that message as
 /// its own question, so a conversation's history genuinely holds two questions in a row — and
 /// replaying them as two messages is the shape Anthropic and Gemini reject outright. What the model
 /// is owed is both texts in the order they were said, which is what one message carrying both is.
-fn merged(turns: &[Turn]) -> Vec<(&str, String)> {
-    let mut out: Vec<(&str, String)> = Vec::with_capacity(turns.len());
-    for turn in turns.iter().filter(|t| !t.text.trim().is_empty()) {
+///
+/// A turn with images but no words is **not** blank, whatever its text says: a pasted screenshot on
+/// its own is the whole message, and dropping it would send a request that answers a picture nobody
+/// attached.
+fn merged(turns: &[Turn]) -> Vec<Said<'_>> {
+    let said = |turn: &Turn| !turn.text.trim().is_empty() || !turn.images.is_empty();
+    let mut out: Vec<Said<'_>> = Vec::with_capacity(turns.len());
+    for turn in turns.iter().filter(|t| said(t)) {
         match out.last_mut() {
-            Some((role, text)) if *role == turn.role => {
-                text.push_str("\n\n");
-                text.push_str(&turn.text);
+            Some(prev) if prev.role == turn.role => {
+                if !turn.text.trim().is_empty() {
+                    if !prev.text.is_empty() {
+                        prev.text.push_str("\n\n");
+                    }
+                    prev.text.push_str(&turn.text);
+                }
+                prev.images.extend(turn.images.iter().cloned());
             }
-            _ => out.push((turn.role.as_str(), turn.text.clone())),
+            _ => out.push(Said {
+                role: turn.role.as_str(),
+                text: turn.text.clone(),
+                images: turn.images.clone(),
+            }),
         }
     }
     out
+}
+
+/// One image, ready to go into a request body.
+struct Encoded {
+    media_type: String,
+    data: String,
+}
+
+/// Where an attached image's bytes are read from, on the way into a request.
+///
+/// A thin thing on purpose: the transcript carries *references* so that a chat polled once a second
+/// stays small, and this is the one place in the turn that turns a reference back into bytes. Once,
+/// at the top of the turn — the same picture is in every round's message list, and re-reading and
+/// re-encoding it per round would be the file read and the base64 pass repeated sixty times.
+struct ImageStore<'a> {
+    store: &'a crate::store::SessionStore,
+    /// `id -> encoded`, filled as images are met. Interior mutability because encoding happens while
+    /// the message list is being built, which is behind a `&self`.
+    seen: std::cell::RefCell<std::collections::HashMap<String, Option<std::rc::Rc<Encoded>>>>,
+}
+
+impl<'a> ImageStore<'a> {
+    fn new(store: &'a crate::store::SessionStore) -> Self {
+        Self {
+            store,
+            seen: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// These attachments as base64, dropping any whose bytes are gone.
+    ///
+    /// Dropping rather than failing the turn: an image deleted from under a recorded transcript is a
+    /// message with one fewer picture, and refusing to answer a two-week-old conversation because a
+    /// file was swept would be the worse of the two failures.
+    fn encode(&self, images: &[Attachment]) -> Vec<std::rc::Rc<Encoded>> {
+        images
+            .iter()
+            .filter_map(|image| {
+                let mut seen = self.seen.borrow_mut();
+                seen.entry(image.id.clone())
+                    .or_insert_with(|| {
+                        let bytes = self.store.attachment_bytes(image).ok()?;
+                        Some(std::rc::Rc::new(Encoded {
+                            media_type: image.media_type.clone(),
+                            data: BASE64.encode(bytes),
+                        }))
+                    })
+                    .clone()
+            })
+            .collect()
+    }
 }
 
 /// The tool set as JSON Schema function declarations — the shape `OpenAI`, Ollama and (nested one
@@ -1243,9 +1440,22 @@ mod tests {
             at: 1,
             pending: false,
             queued: false,
+            images: Vec::new(),
             steps: Vec::new(),
             metrics: None,
         }
+    }
+
+    /// A scratch session store under a per-test directory. Seeding needs one because that is where
+    /// an image's bytes are read from; nothing but the image cases ever puts a file in it.
+    fn scratch(tag: &str) -> crate::store::SessionStore {
+        let dir = std::env::temp_dir().join(format!(
+            "adi-loop-{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id(),
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        crate::store::SessionStore::new(dir)
     }
 
     #[test]
@@ -1300,9 +1510,11 @@ mod tests {
 
     #[test]
     fn gemini_seeds_the_assistant_turn_under_its_own_role_name() {
+        let store = scratch("gemini-roles");
+        let images = ImageStore::new(&store);
         let args = args_for(HarnessProvider::Gemini);
         let wire = Wire::of(&args, "gemini-2.5-pro").expect("wire");
-        let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "hello")]);
+        let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "hello")], &images);
         assert_eq!(seeded[0]["role"], "user");
         assert_eq!(seeded[1]["role"], "model");
         assert_eq!(seeded[1]["parts"][0]["text"], "hello");
@@ -1310,10 +1522,12 @@ mod tests {
 
     #[test]
     fn blank_turns_are_dropped_and_a_system_prompt_leads_the_chat_dialects() {
+        let store = scratch("blank-turns");
+        let images = ImageStore::new(&store);
         let mut args = args_for(HarnessProvider::Monshoot);
         args.system_prompt = Some("be terse".into());
         let wire = Wire::of(&args, "kimi-k3").expect("wire");
-        let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "  "), turn("user", "again")]);
+        let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "  "), turn("user", "again")], &images);
         // Two, not three: the empty answer goes, and the questions it stood between are then
         // neighbours of the same role, which replay as one message rather than as the pair
         // Anthropic and Gemini reject.
@@ -1414,16 +1628,18 @@ mod tests {
     /// to join it. Pushing a second user turn there is what Anthropic rejects.
     #[test]
     fn a_message_heard_mid_turn_joins_the_question_whatever_shape_it_is_in() {
+        let store = scratch("mid-turn");
+        let images = ImageStore::new(&store);
         let anthropic = args_for(HarnessProvider::Anthropic);
         let wire = Wire::of(&anthropic, "m").expect("wire");
-        let mut messages = wire.seed(&[turn("user", "fix the parser")]);
+        let mut messages = wire.seed(&[turn("user", "fix the parser")], &images);
         wire.interject(&mut messages, "and handle CRLF");
         assert_eq!(messages.len(), 1, "it joined the question: {messages:?}");
         assert_eq!(messages[0]["content"], "fix the parser\n\nand handle CRLF");
 
         let gemini = args_for(HarnessProvider::Gemini);
         let wire = Wire::of(&gemini, "m").expect("wire");
-        let mut messages = wire.seed(&[turn("user", "fix the parser")]);
+        let mut messages = wire.seed(&[turn("user", "fix the parser")], &images);
         wire.interject(&mut messages, "and handle CRLF");
         assert_eq!(messages.len(), 1, "it joined the question: {messages:?}");
         assert_eq!(messages[0]["parts"][0]["text"], "fix the parser");
@@ -1441,24 +1657,133 @@ mod tests {
         assert_eq!(messages[1]["content"][1]["text"], "actually, skip the tests");
     }
 
+    /// Four providers, four spellings of "here is a picture". This is the check that each one is
+    /// spelled the way *its* API documents rather than the way the last one did — a wrong shape here
+    /// is a 400 from the provider, at the one moment somebody has just pasted a screenshot.
+    #[test]
+    fn an_attached_image_goes_out_in_each_providers_own_shape() {
+        let store = scratch("images");
+        let image = store
+            .put_attachment("shot.png", "image/png", b"\x89PNG")
+            .expect("store the image");
+        let asked = Turn {
+            images: vec![image],
+            ..turn("user", "what is wrong here?")
+        };
+        let images = ImageStore::new(&store);
+        // The bytes, exactly as every provider takes them: base64 of what was stored.
+        let data = BASE64.encode(b"\x89PNG");
+
+        let anthropic = args_for(HarnessProvider::Anthropic);
+        let seeded = Wire::of(&anthropic, "m")
+            .expect("wire")
+            .seed(std::slice::from_ref(&asked), &images);
+        assert_eq!(seeded[0]["content"][0]["type"], "image");
+        assert_eq!(seeded[0]["content"][0]["source"]["media_type"], "image/png");
+        assert_eq!(seeded[0]["content"][0]["source"]["data"], data);
+        // Images lead and the words follow — the order Anthropic documents as the better one.
+        assert_eq!(seeded[0]["content"][1]["text"], "what is wrong here?");
+
+        let openai = args_for(HarnessProvider::Openai);
+        let seeded = Wire::of(&openai, "m")
+            .expect("wire")
+            .seed(std::slice::from_ref(&asked), &images);
+        assert_eq!(
+            seeded[0]["content"][0]["image_url"]["url"],
+            format!("data:image/png;base64,{data}"),
+        );
+
+        let gemini = args_for(HarnessProvider::Gemini);
+        let seeded = Wire::of(&gemini, "m")
+            .expect("wire")
+            .seed(std::slice::from_ref(&asked), &images);
+        assert_eq!(seeded[0]["parts"][0]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(seeded[0]["parts"][0]["inlineData"]["data"], data);
+
+        // Ollama is the odd one: the message keeps plain string content and the pictures sit beside
+        // it, as bare base64 with no type and no wrapper.
+        let ollama = args_for(HarnessProvider::Ollama);
+        let seeded = Wire::of(&ollama, "m")
+            .expect("wire")
+            .seed(std::slice::from_ref(&asked), &images);
+        assert_eq!(seeded[0]["content"], "what is wrong here?");
+        assert_eq!(seeded[0]["images"][0], data);
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A message that is only a screenshot is a real message. The blank-turn filter drops turns with
+    /// nothing in them, and "nothing" has to mean no words *and* no pictures — otherwise the request
+    /// that goes out answers an image nobody sent.
+    #[test]
+    fn a_turn_with_a_picture_and_no_words_is_not_a_blank_turn() {
+        let store = scratch("wordless");
+        let image = store
+            .put_attachment("shot.png", "image/png", b"\x89PNG")
+            .expect("store the image");
+        let images = ImageStore::new(&store);
+        let asked = Turn {
+            images: vec![image],
+            ..turn("user", "  ")
+        };
+        let args = args_for(HarnessProvider::Anthropic);
+        let seeded = Wire::of(&args, "m")
+            .expect("wire")
+            .seed(&[asked], &images);
+        assert_eq!(seeded.len(), 1, "the wordless turn survived: {seeded:?}");
+        // And the empty text is left out rather than sent as an empty part.
+        assert_eq!(seeded[0]["content"].as_array().map(Vec::len), Some(1));
+        assert_eq!(seeded[0]["content"][0]["type"], "image");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// An image whose bytes are gone — swept, or deleted from under an old transcript — costs the
+    /// message a picture, not the turn an answer. The alternative is a two-week-old conversation
+    /// that can never be replied to again because one file went missing.
+    #[test]
+    fn an_image_whose_bytes_are_gone_is_dropped_rather_than_failing_the_turn() {
+        let store = scratch("missing");
+        let images = ImageStore::new(&store);
+        let asked = Turn {
+            images: vec![Attachment {
+                id: "nothing-here".into(),
+                name: "gone.png".into(),
+                media_type: "image/png".into(),
+                size: 4,
+            }],
+            ..turn("user", "still worth answering")
+        };
+        let args = args_for(HarnessProvider::Anthropic);
+        let seeded = Wire::of(&args, "m")
+            .expect("wire")
+            .seed(&[asked], &images);
+        assert_eq!(seeded.len(), 1);
+        assert_eq!(seeded[0]["content"], "still worth answering");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
     /// A turn that heard a message recorded it as a question, so the transcript it replays next time
     /// really does hold two in a row. Both texts have to reach the model, and as one message.
     #[test]
     fn two_questions_in_a_row_replay_as_one_message() {
+        let store = scratch("two-questions");
+        let images = ImageStore::new(&store);
         let anthropic = args_for(HarnessProvider::Anthropic);
         let history = [
             turn("user", "fix the parser"),
             turn("user", "and handle CRLF"),
             turn("assistant", "done"),
         ];
-        let seeded = Wire::of(&anthropic, "m").expect("wire").seed(&history);
+        let seeded = Wire::of(&anthropic, "m").expect("wire").seed(&history, &images);
         assert_eq!(seeded.len(), 2, "the two questions merged: {seeded:?}");
         assert_eq!(seeded[0]["role"], "user");
         assert_eq!(seeded[0]["content"], "fix the parser\n\nand handle CRLF");
         assert_eq!(seeded[1]["role"], "assistant");
 
         let gemini = args_for(HarnessProvider::Gemini);
-        let seeded = Wire::of(&gemini, "m").expect("wire").seed(&history);
+        let seeded = Wire::of(&gemini, "m").expect("wire").seed(&history, &images);
         assert_eq!(seeded.len(), 2, "the two questions merged: {seeded:?}");
         assert_eq!(seeded[0]["parts"][0]["text"], "fix the parser\n\nand handle CRLF");
         assert_eq!(seeded[1]["role"], "model");

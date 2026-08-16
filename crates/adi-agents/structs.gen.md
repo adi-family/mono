@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-92 structs · 23 enums · 5 type aliases across 38 files.
+97 structs · 24 enums · 5 type aliases across 40 files.
 
 ## Index
 
@@ -16,7 +16,7 @@
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
-- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `Wire`, `OpenAiDialect`
+- [`src/backends/harness/adi_loop.rs`](#srcbackendsharnessadi_looprs) — `ToolCall`, `ToolResult`, `Reply`, `Calls`, `Wire`, `Said`, `Encoded`, `ImageStore`, `OpenAiDialect`
 - [`src/backends/harness/claude_sdk.rs`](#srcbackendsharnessclaude_sdkrs) — `Continuation`
 - [`src/backends/harness/tools.rs`](#srcbackendsharnesstoolsrs) — `ToolSpec`, `Ctx`, `ToolDeclaration`, `Drain`
 - [`src/backends/jobs.rs`](#srcbackendsjobsrs) — `Job`
@@ -36,13 +36,15 @@
 - [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `Cursor`
 - [`src/runner/event.rs`](#srcrunnereventrs) — `RunEvent`, `EventKinds`, `EventBatch`
 - [`src/runner/human.rs`](#srcrunnerhumanrs) — `State`, `HumanRunner`
-- [`src/runner/mod.rs`](#srcrunnermodrs) — `RunnerKind`, `Stopped`
+- [`src/runner/mod.rs`](#srcrunnermodrs) — `RunnerKind`, `ImageDelivery`, `Stopped`
 - [`src/runner/prompt.rs`](#srcrunnerpromptrs) — `Section`
 - [`src/runner/pty.rs`](#srcrunnerptyrs) — `PtyRunner`, `State`
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
+- [`src/store/attachments.rs`](#srcstoreattachmentsrs) — `Attachment`
 - [`src/store/goals.rs`](#srcstoregoalsrs) — `GoalState`, `SetBy`, `Goal`, `Closed`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
 - [`src/store/questions.rs`](#srcstorequestionsrs) — `Question`, `Choice`, `AnsweredBy`, `Answer`, `Ask`, `Request`
+- [`src/store/queue.rs`](#srcstorequeuers) — `QueuedMessage`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`, `RunOutcome`
 - [`src/store/session.rs`](#srcstoresessionrs) — `SessionRef`, `StateSource`, `StoredState`
 - [`src/store/transcript.rs`](#srcstoretranscriptrs) — `Turn`
@@ -771,6 +773,40 @@ enum Wire<'a> {
 }
 ```
 
+### struct `Said`
+
+One message on its way to a provider: who said it, what they said, and what they attached.
+
+```rust
+struct Said<'a> {
+    role: &'a str,
+    text: String,
+    images: Vec<Attachment>,
+}
+```
+
+### struct `Encoded`
+
+One image, ready to go into a request body.
+
+```rust
+struct Encoded {
+    media_type: String,
+    data: String,
+}
+```
+
+### struct `ImageStore`
+
+Where an attached image's bytes are read from, on the way into a request.
+
+```rust
+struct ImageStore<'a> {
+    store: &'a crate::store::SessionStore,
+    seen: std::cell::RefCell<std::collections::HashMap<String, Option<std::rc::Rc<Encoded>>>>,
+}
+```
+
 ### struct `OpenAiDialect`
 
 The two providers that speak `OpenAI`'s `/v1/chat/completions`. They agree on the whole request body but disagree on where they live, which variable holds the key, and — the one that bites — what the output cap is called.
@@ -1372,6 +1408,8 @@ pub struct BackendCapabilities {
     pub tool_steps: bool,
     pub thinking: bool,
     pub metrics: bool,
+    #[serde(default)]
+    pub images: bool,
 }
 ```
 
@@ -1697,6 +1735,19 @@ Which runner this is — for labels, telemetry, and the session record.
 pub struct RunnerKind(pub String);
 ```
 
+### enum `ImageDelivery`
+
+How a message's images get to an engine.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageDelivery {
+    None,
+    Inline,
+    Path,
+}
+```
+
 ### struct `Stopped`
 
 What a `Runner::stop` found and did. `forced` says the grace period ran out and the runner had to be rude about it — worth recording, since a run that never exits cooperatively is a fact about the engine rather than about the click that stopped it.
@@ -1772,6 +1823,27 @@ pub struct RunSpec {
     pub system_prompt: Option<String>,
     pub workspace_note: Option<String>,
     pub knowledge_note: Option<String>,
+}
+```
+
+---
+
+## `src/store/attachments.rs`
+
+### struct `Attachment`
+
+One attached image, as a message carries it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub media_type: String,
+    #[serde(default)]
+    pub size: u64,
 }
 ```
 
@@ -1955,6 +2027,22 @@ pub struct Request {
 
 ---
 
+## `src/store/queue.rs`
+
+### struct `QueuedMessage`
+
+A message waiting its turn: what was typed, and whatever was attached to it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct QueuedMessage {
+    pub text: String,
+    pub images: Vec<Attachment>,
+}
+```
+
+---
+
 ## `src/store/record.rs`
 
 ### struct `SessionRecord`
@@ -2065,6 +2153,8 @@ pub struct Turn {
     pub pending: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub queued: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Attachment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub steps: Vec<Step>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

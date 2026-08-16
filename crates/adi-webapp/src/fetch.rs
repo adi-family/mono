@@ -1,7 +1,7 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
+    AgentAttachment, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
     AgentSimBlock, AgentSimState, AgentSimTurn, AgentTokens,
     AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard, DashboardRef,
     DashboardTransferred,
@@ -364,6 +364,7 @@ pub async fn run_agent(
     message: String,
     working_dir: Option<String>,
     force: bool,
+    attachments: Vec<String>,
 ) -> Result<AgentRunResult, String> {
     post(
         "/api/agents/run",
@@ -372,6 +373,7 @@ pub async fn run_agent(
             message,
             working_dir,
             force,
+            attachments,
         },
     )
     .await
@@ -460,6 +462,9 @@ pub async fn simulate_reply(
             name,
             run_id,
             message,
+            // A simulated turn is a person in the model's seat, typing into a form. There is no
+            // composer there and so nothing to attach.
+            attachments: Vec::new(),
         },
     )
     .await
@@ -487,6 +492,7 @@ pub async fn reply_to_run(
     name: String,
     run_id: String,
     message: String,
+    attachments: Vec<String>,
 ) -> Result<AgentPeek, String> {
     post(
         "/api/agents/run/reply",
@@ -494,6 +500,7 @@ pub async fn reply_to_run(
             name,
             run_id,
             message,
+            attachments,
         },
     )
     .await
@@ -905,6 +912,45 @@ pub async fn transcribe(engine: &str, mime: &str, audio: &[u8]) -> Result<Transc
         .await
         .map_err(stringify)?;
     finish(resp).await
+}
+
+/// Store one image for a message to carry, and get back the reference it is carried by.
+///
+/// Raw bytes for the same reason a dictated clip is raw bytes, plus one of its own: this is the
+/// upload that happens while the message is still being typed, so it has to be as cheap as the
+/// picture itself and not a third larger.
+pub async fn upload_attachment(
+    name: &str,
+    mime: &str,
+    bytes: &[u8],
+) -> Result<AgentAttachment, String> {
+    let resp = Request::post("/api/agents/attachment")
+        .header("content-type", mime)
+        // The filename travels in a header because the body is the file. Percent-encoded: a
+        // header is Latin-1 by the spec and a screenshot's name is routinely not.
+        .header("x-adi-filename", &encode_header(name))
+        .body(js_sys::Uint8Array::from(bytes))
+        .map_err(stringify)?
+        .send()
+        .await
+        .map_err(stringify)?;
+    finish(resp).await
+}
+
+/// A filename reduced to what a header can carry: anything outside printable ASCII becomes `_`.
+///
+/// Not an encoding a server has to undo — the name is only ever shown back to the person who
+/// attached it, so a mangled character costs nothing, while a raw one throws on the way out.
+fn encode_header(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_graphic() || c == ' ' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {

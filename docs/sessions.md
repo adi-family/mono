@@ -57,8 +57,9 @@ Root: `~/.adi/mono/sessions/` (`Config::open()` → `adi-config/src/lib.rs:112`;
 is `SESSIONS_MODULE = "sessions"`, `adi-agents/src/lib.rs:79`). Override the root with `$ADI_DIR`.
 
 ```
-<sessions_dir>/sessions.db              sessions, turns, queue
+<sessions_dir>/sessions.db              sessions, turns, queue, attachments
 <sessions_dir>/settings.toml            the run cap (RunLimits)
+<sessions_dir>/attachments/<id>         one attached image's bytes, exactly as uploaded
 <sessions_dir>/<agent>/<id>.log         the raw output a runner spools into
 <sessions_dir>/<agent>/<id>.review.md   the dossier Analyze writes for a reviewing agent
 <sessions_dir>/<agent>/<id>.<whatever>  sidecars a runner invents
@@ -74,15 +75,57 @@ stdout and stderr into, which is not a thing a row can be. Everything else is a 
 everything else is *listed* — see [db.rs](../crates/adi-agents/src/store/db.rs) for the profile
 that settled it.
 
-Four tables, all keyed `(agent, id)`; `turns`, `queue` and `goals` cascade off `sessions`
-(`goals` is its own subject — see [goals.md](goals.md)):
+Five tables. The first four are keyed `(agent, id)`, and `turns`, `queue` and `goals` cascade off
+`sessions` (`goals` is its own subject — see [goals.md](goals.md)):
 
 | table | holds | ordered by |
 |---|---|---|
 | `sessions` | the record: backend, cwd, message, `started_at`, `last_activity`, `hidden`, `runner_state`, `outcome`, `tool_help` | index `sessions_newest (agent, started_at DESC, id DESC)` |
 | `turns` | one row per turn; the whole `Turn` as JSON plus `at` and `role` | `seq` |
-| `queue` | what is waiting to be said next | `seq` |
+| `queue` | what is waiting to be said next, and the images waiting with it | `seq` |
 | `goals` | what the conversation is *for*: text, state, who set it, how often it has been asked | `created_at` (partial index on the open ones) |
+| `attachments` | one row per uploaded image: name, media type, size, and whose message it ended up on | — |
+
+### `attachments` is the one table that cascades off nothing
+
+It cannot. An image is uploaded from a composer **before** the message that carries it exists —
+often before the conversation does — so a new row has no session to point at, and a foreign key
+would have to invent one. Its life instead runs:
+
+1. **stored, unclaimed** — `POST /api/agents/attachment` writes the bytes to
+   `<sessions_dir>/attachments/<id>` and a row with empty `agent`/`session`. The id is minted by
+   SQLite (`hex(randomblob(12))`), so two processes uploading in the same instant cannot agree on
+   one.
+2. **claimed** — recording the turn that carries it stamps the row with that conversation, *in the
+   same transaction as the turn* (`transcript::insert`). Until then it is nobody's.
+3. **swept, or deleted with its conversation** — an upload nobody ever sent goes after 24 hours
+   (`attachments::sweep_unclaimed`, run on the way into the next upload, which is the only thing
+   that creates orphans); a claimed one goes when the session does (`SessionStore::delete`).
+
+A turn carries **references**, never bytes: `Turn::images` is `Vec<Attachment>` (id, name, media
+type, size), and the page fetches each once from `GET /api/agents/attachment/<id>`, which answers
+`immutable, max-age=1y` because the id *is* the version. A transcript is polled once a second, and
+one that inlined its screenshots would re-send every one of them on every tick.
+
+### Two ways an image reaches a model
+
+`Runner::image_delivery` answers *how*, and the difference is where the picture ends up rather than
+whether the model sees it:
+
+| delivery | engines | what happens |
+|---|---|---|
+| `Inline` | `harness:adi` | the bytes go into the request body this tree writes, as base64 in each provider's own shape |
+| `Path` | `harness:claude-sdk`, `process:claude`, `process:codex` | the message gets a block naming the files, and the engine opens them with its own file-reading tool |
+| `None` | `pty:*`, a simulated run | nothing to send to — a pane is typed into, and a simulation has a person in the model's seat |
+
+Path delivery is why the stored file carries its media type's **extension**: a file-reading tool
+decides whether it is looking at a picture by the name, and `<id>` alone reads as text with
+unprintable bytes in it. The block is appended by `for_engine` (`lib.rs`) at the moment of sending
+and is deliberately **not** what the transcript records — the paths are directions for one engine,
+so a reader would see plumbing under a thumbnail it is already drawing, and a turn replayed later to
+a different engine would carry instructions that mean nothing to it.
+
+A message with images to a `None` engine is **refused** (400) rather than recorded looking sent.
 
 The id is `{unix_millis:013}-{seq:04}` (`store/record.rs`), so it carries its own start time and
 sorts by it.

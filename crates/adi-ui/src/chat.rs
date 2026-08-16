@@ -142,11 +142,29 @@ impl ToolCall {
     }
 }
 
+/// A picture that was part of a message: where to fetch it, and what to call it.
+///
+/// A URL rather than bytes. A transcript is re-rendered on every poll, and the browser is already
+/// the thing that caches an image by its address — handing it one is how a chat with a dozen
+/// screenshots in it stays a chat rather than a download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Image {
+    pub url: String,
+    /// The alt text, and what a reader sees on hover — the file's own name in this tree.
+    pub name: String,
+}
+
 /// One entry in a transcript.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Turn {
-    /// Something said, in Markdown.
-    Said { role: Role, body: String },
+    /// Something said, in Markdown, with whatever was attached to it.
+    Said {
+        role: Role,
+        body: String,
+        /// Attached images, drawn above the words. Only ever on a [`Role::User`] turn in this
+        /// tree — pictures travel from the person to the model, not back.
+        images: Vec<Image>,
+    },
     /// A run of tool calls with no words between them. **Text is the divider**: everything
     /// the agent did between one thing it said and the next folds into a single run, which
     /// is exactly the unit you want to open or ignore.
@@ -193,8 +211,9 @@ pub fn Chat(
                 turns
                     .into_iter()
                     .map(|turn| match turn {
-                        Turn::Said { role, body } => view! { <Said role=role body=body/> }
-                            .into_any(),
+                        Turn::Said { role, body, images } => {
+                            view! { <Said role=role body=body images=images/> }.into_any()
+                        }
                         Turn::Did(calls) => view! { <Did calls=calls/> }.into_any(),
                     })
                     .collect::<Vec<_>>()
@@ -218,16 +237,60 @@ const LAZY: &str = "shrink-0 [content-visibility:auto] [contain-intrinsic-size:a
 
 /// One thing said.
 #[component]
-fn Said(role: Role, body: String) -> impl IntoView {
+fn Said(role: Role, body: String, #[prop(optional)] images: Vec<Image>) -> impl IntoView {
     let own = match role {
         // The user's own words are a bubble, because they are the short thing you scan for
         // to find where a stretch of work began.
         Role::User => "island ml-8 bg-bubble px-3 py-2",
         Role::Agent => "px-1",
     };
+    let said = !body.trim().is_empty();
     view! {
         <div class=format!("{LAZY} {own}")>
-            <Markdown source=body/>
+            {(!images.is_empty()).then(|| view! { <Pictures images=images said=said/> })}
+            {said.then(|| view! { <Markdown source=body/> })}
+        </div>
+    }
+}
+
+/// The pictures attached to a message, above its words.
+///
+/// Capped in height rather than shown whole: a screenshot of a full window is taller than the
+/// transcript pane, and a message you have to scroll past to reach the reply is a message that has
+/// taken over the conversation. The whole image is one click away — each opens in its own tab,
+/// which is the browser's own zoom, pan and save rather than a lightbox that reimplements all
+/// three.
+#[component]
+fn Pictures(images: Vec<Image>, said: bool) -> impl IntoView {
+    let gap = if said { "mb-2" } else { "" };
+    view! {
+        <div class=format!("flex flex-wrap gap-2 {gap}")>
+            {images
+                .into_iter()
+                .map(|image| {
+                    let Image { url, name } = image;
+                    let title = format!("{name} — open full size");
+                    let href = url.clone();
+                    view! {
+                        <a
+                            class="block max-w-full overflow-hidden rounded-sm border border-dim \
+                                   focus-visible:outline-2 focus-visible:outline-offset-2 \
+                                   focus-visible:outline-accent"
+                            href=href
+                            target="_blank"
+                            rel="noreferrer"
+                            title=title
+                        >
+                            <img
+                                class="max-h-64 max-w-full object-contain"
+                                src=url
+                                alt=name
+                                loading="lazy"
+                            />
+                        </a>
+                    }
+                })
+                .collect::<Vec<_>>()}
         </div>
     }
 }
@@ -251,6 +314,11 @@ pub fn Queued(
     /// Markdown, the same as anything else said.
     #[prop(into)]
     body: String,
+    /// What was attached to it. A picture pasted while the agent was still answering waits in the
+    /// queue with its message, and showing the words without it would misdescribe what is about to
+    /// be sent.
+    #[prop(optional)]
+    images: Vec<Image>,
     /// Take it back before the agent ever sees it. With no handler the × is not drawn, which
     /// is the honest rendering of a queue you cannot edit.
     #[prop(optional, into)]
@@ -278,6 +346,8 @@ pub fn Queued(
                     </button>
                 })}
             </div>
+            {(!images.is_empty())
+                .then(|| view! { <Pictures images=images said=!body.trim().is_empty()/> })}
             <Markdown source=body class="text-meta"/>
         </div>
     }

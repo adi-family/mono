@@ -247,7 +247,9 @@ where
 /// human's "run it anyway" past a full concurrency limit.
 fn run_now(state: State, name: String, force: bool) {
     spawn_local(async move {
-        match fetch::run_agent(name, String::new(), None, force).await {
+        // No task and no attachments: a pty session is typed into after it starts, so there is no
+        // message here for a picture to belong to.
+        match fetch::run_agent(name, String::new(), None, force, Vec::new()).await {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -262,9 +264,17 @@ fn run_now(state: State, name: String, force: bool) {
 /// `working_dir` is the composer's optional "run here"; `None` starts the agent where it is defined.
 /// `force` launches past a full concurrency limit — the composer sends it once the cap is reached,
 /// where the button already reads "Run anyway".
-fn launch_agent(state: State, watch: AgentsWatch, name: String, message: String, working_dir: Option<String>, force: bool) {
+fn launch_agent(
+    state: State,
+    watch: AgentsWatch,
+    name: String,
+    message: String,
+    working_dir: Option<String>,
+    force: bool,
+    images: Vec<String>,
+) {
     spawn_local(async move {
-        match fetch::run_agent(name.clone(), message, working_dir, force).await {
+        match fetch::run_agent(name.clone(), message, working_dir, force, images).await {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -940,7 +950,11 @@ fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
     use adi_ui::{Role, ToolCall, ToolState, Turn as T};
 
     if turn.role == "user" {
-        return vec![T::Said { role: Role::User, body: turn.text.clone() }];
+        return vec![T::Said {
+            role: Role::User,
+            body: turn.text.clone(),
+            images: pictures(turn),
+        }];
     }
 
     let mut out: Vec<T> = Vec::new();
@@ -954,7 +968,11 @@ fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
                     out.push(T::Did(std::mem::take(&mut run)));
                 }
                 if !text.trim().is_empty() {
-                    out.push(T::Said { role: Role::Agent, body: text.clone() });
+                    out.push(T::Said {
+                        role: Role::Agent,
+                        body: text.clone(),
+                        images: Vec::new(),
+                    });
                 }
             }
             // Thinking is the agent's private work, which is exactly what folds. It joins the
@@ -985,9 +1003,28 @@ fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
     }
     // The turn's final message is not a step; it is what the turn came back with.
     if !turn.text.trim().is_empty() {
-        out.push(T::Said { role: Role::Agent, body: turn.text.clone() });
+        out.push(T::Said {
+            role: Role::Agent,
+            body: turn.text.clone(),
+            images: Vec::new(),
+        });
     }
     out
+}
+
+/// A turn's attached images, as the transcript draws them: a URL to fetch each by, and its name.
+///
+/// The bytes are never in the snapshot — a chat is polled once a second, and one that inlined its
+/// screenshots would re-send every one of them every tick. The address is stable and the content
+/// behind it never changes, so the browser fetches each exactly once.
+fn pictures(turn: &AgentTurn) -> Vec<adi_ui::Image> {
+    turn.images
+        .iter()
+        .map(|image| adi_ui::Image {
+            url: crate::attach::url_of(&image.id),
+            name: image.name.clone(),
+        })
+        .collect()
 }
 
 /// A message still waiting its turn: your own bubble, dashed and dimmed — said, but not yet asked —
@@ -997,6 +1034,7 @@ fn queued_bubble(state: State, watch: AgentsWatch, turn: AgentTurn, place: usize
     view! {
         <adi_ui::Queued
             body=turn.text.clone()
+            images=pictures(&turn)
             on_unqueue=Callback::new(move |()| unqueue_message(state, watch, place))
         />
     }
@@ -1072,6 +1110,16 @@ fn fmt_duration(ms: u64) -> String {
 /// modifier is how you earn a newline instead.
 const COMPOSER_HINT: &str = "Enter sends · Shift-Enter for a new line";
 
+/// What a composer says instead of offering a paperclip, when this conversation cannot be shown an
+/// image. Said before anything is pasted, because a picture the send would have dropped is one
+/// somebody has already decided to send.
+///
+/// Rare, now that every real engine can be shown one — either in the request body or by being told
+/// where the file is. What is left is a live terminal, which is typed into rather than sent to, and
+/// a simulated run, which has a person in the model's seat and nothing to show a picture to.
+const IMAGES_REFUSED: &str = "this one can't be shown an image — a terminal session takes typing, \
+                              and a simulated run has no model to show it to";
+
 /// The reply box: says the next thing into the selected conversation. It never locks you out while
 /// the agent is working — one turn runs at a time, so a message sent mid-answer is *queued* (the
 /// button says so), and is picked up either by the turn in flight, at its next round, or by the one
@@ -1079,6 +1127,16 @@ const COMPOSER_HINT: &str = "Enter sends · Shift-Enter for a new line";
 /// turn short and drops anything lined up behind it.
 fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let answering = move || watch.peek.get().is_some_and(|p| p.running);
+    // What the open conversation's own backend can take — the snapshot's capability profile, not
+    // the agent's current settings, because a conversation is answered by whatever started it.
+    let takes_images =
+        Signal::derive(move || watch.peek.get().is_some_and(|p| p.caps.images));
+    let attach = crate::attach::attaching(
+        state,
+        watch.reply_files,
+        takes_images,
+        Signal::derive(|| IMAGES_REFUSED.to_string()),
+    );
     view! {
         <div class="adi-ui-type p-3 pb-0">
             <adi_ui::Composer
@@ -1089,9 +1147,12 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 placeholder=""
                 attr:title=COMPOSER_HINT
                 mic=move || crate::voice::mic(watch.reply)
+                attach=attach
                 on_send=Callback::new(move |message: String| {
+                    let images = crate::attach::ready_ids(watch.reply_files);
                     watch.reply.set(String::new());
-                    send_reply(state, watch, with_context(watch, message));
+                    crate::attach::clear(watch.reply_files);
+                    send_reply(state, watch, with_context(watch, message), images);
                 })
                 // Only while a turn is actually in flight: between turns there is nothing to cut
                 // short, and the conversation itself is not a thing you stop — you just stop
@@ -1463,7 +1524,7 @@ fn short_duration(ms: u64) -> String {
 /// Say the reply box's message into the conversation, applying the returned snapshot at once (so the
 /// message — asked or queued — and any streaming answer appear immediately) and resuming the poll.
 /// Errors go to flash.
-fn send_reply(state: State, watch: AgentsWatch, message: String) {
+fn send_reply(state: State, watch: AgentsWatch, message: String, images: Vec<String>) {
     let Some(name) = watch.name.get_untracked() else {
         return;
     };
@@ -1471,7 +1532,7 @@ fn send_reply(state: State, watch: AgentsWatch, message: String) {
         return;
     };
     spawn_local(async move {
-        match fetch::reply_to_run(name.clone(), run_id.clone(), message).await {
+        match fetch::reply_to_run(name.clone(), run_id.clone(), message, images).await {
             Ok(peek) => {
                 // Only apply if the view is still on this same conversation.
                 if watch.name.get_untracked().as_deref() == Some(name.as_str())
@@ -1644,9 +1705,39 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
         let dir = dir.trim();
         let working_dir = (!dir.is_empty()).then(|| dir.to_string());
         let force = at_run_limit(state.agents.get_untracked().as_ref(), &name);
+        let images = crate::attach::ready_ids(watch.input_files);
         watch.input.set(String::new());
-        launch_agent(state, watch, name, with_context(watch, message), working_dir, force);
+        crate::attach::clear(watch.input_files);
+        launch_agent(
+            state,
+            watch,
+            name,
+            with_context(watch, message),
+            working_dir,
+            force,
+            images,
+        );
     };
+    // Asked of the agent this composer is pointed at, before any conversation exists — which is
+    // the only thing that can answer here, and the reason the capability rides on the listing as
+    // well as on a snapshot.
+    let takes_images = Signal::derive(move || {
+        let Some(name) = watch.name.get() else {
+            return false;
+        };
+        state.agents.get().is_some_and(|s| {
+            s.agents
+                .iter()
+                .find(|a| a.name == name)
+                .is_some_and(|a| a.caps.images)
+        })
+    });
+    let attach = crate::attach::attaching(
+        state,
+        watch.input_files,
+        takes_images,
+        Signal::derive(|| IMAGES_REFUSED.to_string()),
+    );
     view! {
         <div class="adi-runbar adi-ui-type">
             <adi_ui::Composer
@@ -1655,6 +1746,7 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
                 placeholder=placeholder
                 attr:title=COMPOSER_HINT
                 mic=move || crate::voice::mic(watch.input)
+                attach=attach
                 on_send=Callback::new(start)
             />
             <adi_ui::Input

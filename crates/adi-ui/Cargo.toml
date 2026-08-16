@@ -33,6 +33,14 @@ web-sys = { version = "0.3", features = [
     "Selection",
     "Storage",
     "Window",
+    # Attaching an image to a message (see `composer`): the three ways files arrive — pasted,
+    # dropped, or picked — and the hidden `<input type=file>` the paperclip opens.
+    "ClipboardEvent",
+    "DataTransfer",
+    "DragEvent",
+    "File",
+    "FileList",
+    "HtmlInputElement",
 ] }
 
 # Playground-only: routes a wasm panic to the browser console instead of an opaque

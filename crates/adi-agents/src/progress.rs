@@ -141,6 +141,9 @@ pub struct BackendCapabilities {
     pub thinking: bool,
     /// Reports per-turn metrics (tokens / cost / duration).
     pub metrics: bool,
+    /// A message to it may carry images — what decides whether a composer offers to attach one.
+    #[serde(default)]
+    pub images: bool,
 }
 
 /// What a backend can surface, **asked of the runner that runs it** rather than kept as a matrix
@@ -162,6 +165,7 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
         tool_steps: false,
         thinking: false,
         metrics: false,
+        images: false,
     };
     let Some(runner) = crate::runner::runner_for(backend) else {
         return base;
@@ -179,6 +183,7 @@ pub fn capabilities(backend: &Backend) -> BackendCapabilities {
         tool_steps: kinds.tool_call,
         thinking: kinds.thinking,
         metrics: kinds.metrics,
+        images: runner.takes_images(),
     }
 }
 
@@ -203,31 +208,42 @@ mod tests {
     /// this is the check that deriving it did not quietly change what a reader renders: every flag
     /// below is the value the hand-maintained table returned before the runners existed.
     ///
-    /// Read as (interactive, history, answerable, live_text, tool_steps, thinking, metrics).
+    /// Read as (interactive, history, answerable, live_text, tool_steps, thinking, metrics, images).
+    ///
+    /// `images` is the newest column, and true for every engine that can be shown a picture *by any
+    /// route* — the adi loop puts the bytes in the request body it writes, and the three CLI engines
+    /// are told where the file is and open it themselves. Only a live terminal cannot: its launch
+    /// message is never typed at all.
     #[test]
     fn the_derived_matrix_is_the_one_the_ui_has_always_rendered() {
         for (wire, want) in [
-            ("pty:claude", [true, false, false, true, false, false, false]),
-            ("pty:codex", [true, false, false, true, false, false, false]),
+            (
+                "pty:claude",
+                [true, false, false, true, false, false, false, false],
+            ),
+            (
+                "pty:codex",
+                [true, false, false, true, false, false, false, false],
+            ),
             (
                 "process:claude",
-                [false, true, false, true, true, true, true],
+                [false, true, false, true, true, true, true, true],
             ),
             (
                 "process:codex",
-                [false, true, false, true, true, false, true],
+                [false, true, false, true, true, false, true, true],
             ),
             (
                 "harness:claude-sdk",
-                [false, true, true, true, true, true, true],
+                [false, true, true, true, true, true, true, true],
             ),
             (
                 "harness:adi",
-                [false, true, true, true, true, false, true],
+                [false, true, true, true, true, false, true, true],
             ),
             (
                 "cloud:worker",
-                [false, false, false, false, false, false, false],
+                [false, false, false, false, false, false, false, false],
             ),
         ] {
             let got = capabilities(&Backend::from(wire));
@@ -240,6 +256,7 @@ mod tests {
                     got.tool_steps,
                     got.thinking,
                     got.metrics,
+                    got.images,
                 ],
                 want,
                 "{wire} renders differently than it used to",
