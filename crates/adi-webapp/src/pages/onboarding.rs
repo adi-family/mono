@@ -72,7 +72,7 @@ const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
         options: &[("harness:adi", "the ADI agent loop, on the Anthropic provider")],
     },
     RuntimeGuide {
-        question: "I have another provider's API key (OpenAI, Gemini, Kimi, …)",
+        question: "I have another provider's API key (OpenAI, Gemini, Kimi, GLM, …)",
         note: "ADI's built-in agent loop speaks to many providers with your key.",
         options: &[("harness:adi", "the ADI agent loop")],
     },

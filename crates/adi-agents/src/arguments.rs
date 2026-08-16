@@ -95,12 +95,14 @@ string_enum! {
         Openai => "openai",
         Gemini => "gemini",
         Monshoot => "monshoot",
+        Zai => "zai",
         Ollama => "ollama",
     }
 }
 
 string_enum! {
-    /// Anthropic extended-thinking mode for the `harness:adi` loop.
+    /// Extended-thinking mode for the `harness:adi` loop: Anthropic's `thinking` modes, and z.ai's
+    /// spelling of "turn it off".
     HarnessThinking {
         Adaptive => "adaptive",
         Disabled => "disabled",
@@ -337,7 +339,7 @@ pub struct HarnessAdiArguments {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
-    // ---- Anthropic ----
+    // ---- Anthropic / z.ai ----
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<HarnessThinking>,
 

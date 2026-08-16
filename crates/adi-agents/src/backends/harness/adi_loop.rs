@@ -7,10 +7,10 @@
 //! [`super::conversation`] folds into the transcript, exactly like a Claude turn. So continuation
 //! here is transcript replay rather than a resumable session id.
 //!
-//! It speaks every provider the manifest can name: **Anthropic**'s Messages API, **`OpenAI`** and
-//! **Monshoot** (Moonshot's Kimi) over the shared chat-completions dialect, **Gemini**'s
-//! `generateContent`, and a local **Ollama**. The only thing [`validate`] rejects is an agent that
-//! has not picked one.
+//! It speaks every provider the manifest can name: **Anthropic**'s Messages API, **`OpenAI`**,
+//! **Monshoot** (Moonshot's Kimi) and **z.ai** (Zhipu's GLM) over the shared chat-completions
+//! dialect, **Gemini**'s `generateContent`, and a local **Ollama**. The only thing [`validate`]
+//! rejects is an agent that has not picked one.
 //!
 //! Each round below is a request written against one of these, and the field names are theirs. When
 //! a provider moves a knob or renames a field, the page to open is:
@@ -18,6 +18,7 @@
 //! - Anthropic — <https://platform.claude.com/docs/en/api/messages>
 //! - `OpenAI` — <https://platform.openai.com/docs/api-reference/chat/create>
 //! - Monshoot (Moonshot / Kimi) — <https://platform.kimi.ai/docs/api/chat>
+//! - z.ai (Zhipu / GLM) — <https://docs.z.ai/api-reference/llm/chat-completion>
 //! - Gemini — <https://ai.google.dev/api/generate-content>
 //! - Ollama — <https://github.com/ollama/ollama/blob/main/docs/api.md#generate-a-chat-completion>
 //!
@@ -57,10 +58,10 @@ use super::tools;
 
 /// Anthropic requires an explicit output cap, so default one when the agent sets none.
 const DEFAULT_MAX_TOKENS: u64 = 4096;
-/// Kimi's models think before they answer, and every reasoning token comes out of the same output
-/// budget as the reply — a 4k cap routinely ends the turn mid-thought with an empty answer. So the
-/// Monshoot default is roomier; an agent that sets `max_tokens` still wins.
-const MONSHOOT_DEFAULT_MAX_TOKENS: u64 = 16_384;
+/// The thinking chat-completions models — Kimi's, and z.ai's GLM — reason out of the same output
+/// budget as the reply, so a 4k cap routinely ends the turn mid-thought with an empty answer. The
+/// chat-completions dialects' default is roomier; an agent that sets `max_tokens` still wins.
+const OPENAI_DIALECT_DEFAULT_MAX_TOKENS: u64 = 16_384;
 /// A generous per-round ceiling — a local model can be slow, and a round is one blocking call.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(600);
 /// How many model round-trips one turn may spend *calling tools* before it is asked to wrap up.
@@ -392,6 +393,11 @@ impl<'a> Wire<'a> {
                 args,
                 model,
                 dialect: &MONSHOOT,
+            },
+            Some(HarnessProvider::Zai) => Self::OpenAi {
+                args,
+                model,
+                dialect: &ZAI,
             },
             Some(HarnessProvider::Gemini) => Self::Gemini { args, model },
             Some(HarnessProvider::Ollama) => Self::Ollama { args, model },
@@ -889,49 +895,80 @@ fn anthropic_round(
     })
 }
 
-// ---- OpenAI dialect (OpenAI, and Monshoot's Kimi) ----------------------------------
+// ---- OpenAI dialect (OpenAI, Monshoot's Kimi, and z.ai's GLM) ----------------------
 
-/// The two providers that speak `OpenAI`'s `/v1/chat/completions`. They agree on the whole request
-/// body but disagree on where they live, which variable holds the key, and — the one that bites —
-/// what the output cap is called.
+/// The providers that speak `OpenAI`'s `/chat/completions`. They agree on the whole request body
+/// but disagree on where they live, which variable holds the key, what the path before the endpoint
+/// is, and — the one that bites — what the output cap is called.
 struct OpenAiDialect {
     /// Name used in error messages; also the manifest's `provider` value.
     provider: &'static str,
     default_base: &'static str,
     default_key_env: &'static str,
+    /// What sits between the host and `chat/completions`: `v1` for the `OpenAI`-born, z.ai's
+    /// `api/paas/v4` for GLM (its coding-plan base ends `api/coding/paas/v4`, which an override
+    /// `base_url` reaches; only the version's last segment is deduplicated against the base).
+    version: &'static str,
     /// `OpenAI`'s reasoning models **reject** `max_tokens` and want `max_completion_tokens`;
-    /// Moonshot only knows `max_tokens`. An `OpenAI`-compatible third party that predates the
-    /// rename is reachable through the `monshoot` provider with a `base_url` override.
+    /// Moonshot and z.ai only know `max_tokens`. An `OpenAI`-compatible third party that predates
+    /// the rename is reachable through the `monshoot` provider with a `base_url` override.
     max_tokens_field: &'static str,
-    /// The cap to send when the agent sets none — see [`MONSHOOT_DEFAULT_MAX_TOKENS`].
+    /// The cap to send when the agent sets none — see [`OPENAI_DIALECT_DEFAULT_MAX_TOKENS`].
     default_max_tokens: u64,
+    /// Whether `tool_choice: "none"` closes the tools on the wrap-up round. z.ai documents
+    /// `tool_choice` as `auto`-only, so GLM instead withholds by declaring no tools at all — a
+    /// shape every chat-completions endpoint accepts, where Anthropic's objection to it is
+    /// Anthropic's alone.
+    tool_choice_none: bool,
+    /// Whether the provider takes `{"thinking": {"type": …}}`. z.ai does, and its GLM-4.5+ models
+    /// think by default; `disabled` is the one mode worth sending, and *not* sending it means the
+    /// model's own default stands.
+    takes_thinking: bool,
 }
 
 const OPENAI: OpenAiDialect = OpenAiDialect {
     provider: "openai",
     default_base: "https://api.openai.com",
     default_key_env: "OPENAI_API_KEY",
+    version: "v1",
     max_tokens_field: "max_completion_tokens",
-    default_max_tokens: MONSHOOT_DEFAULT_MAX_TOKENS,
+    default_max_tokens: OPENAI_DIALECT_DEFAULT_MAX_TOKENS,
+    tool_choice_none: true,
+    takes_thinking: false,
 };
 
 const MONSHOOT: OpenAiDialect = OpenAiDialect {
     provider: "monshoot",
     default_base: "https://api.moonshot.ai",
     default_key_env: "MOONSHOT_API_KEY",
+    version: "v1",
     max_tokens_field: "max_tokens",
-    default_max_tokens: MONSHOOT_DEFAULT_MAX_TOKENS,
+    default_max_tokens: OPENAI_DIALECT_DEFAULT_MAX_TOKENS,
+    tool_choice_none: true,
+    takes_thinking: false,
+};
+
+const ZAI: OpenAiDialect = OpenAiDialect {
+    provider: "zai",
+    default_base: "https://api.z.ai",
+    default_key_env: "Z_AI_API_KEY",
+    version: "api/paas/v4",
+    max_tokens_field: "max_tokens",
+    default_max_tokens: OPENAI_DIALECT_DEFAULT_MAX_TOKENS,
+    tool_choice_none: false,
+    takes_thinking: true,
 };
 
 /// One round against an `OpenAI`-dialect chat-completions endpoint.
 ///
-/// Two things about the reasoning models on both providers are worth knowing before reading the
+/// Two things about the reasoning models on these providers are worth knowing before reading the
 /// parse below. They think first, and the scratchpad comes back *beside* the answer (`reasoning`
-/// on `OpenAI`, `reasoning_content` on Kimi) while `content` holds the reply — so a round that runs
-/// out of budget mid-thought returns an **empty** `content` with `finish_reason: "length"`. That
-/// case gets its own error, because "raise max output tokens" is the fix and nothing else says so.
-/// And several of them (`kimi-k2.6`, `OpenAI`'s o-series and gpt-5) accept only the default
-/// temperature, which is why nothing is sent unless the agent asked for it explicitly.
+/// on `OpenAI`, `reasoning_content` on Kimi and GLM) while `content` holds the reply — so a round
+/// that runs out of budget mid-thought returns an **empty** `content` with
+/// `finish_reason: "length"`. That case gets its own error, because "raise max output tokens" is
+/// the fix and nothing else says so. And several of them (`kimi-k2.6`, `OpenAI`'s o-series and
+/// gpt-5) accept only the default temperature, which is why nothing is sent unless the agent asked
+/// for it explicitly.
 fn openai_round(
     args: &HarnessAdiArguments,
     model: &str,
@@ -946,14 +983,21 @@ fn openai_round(
         "model": model,
         "messages": messages,
         "stream": false,
-        "tools": function_declarations()
-            .into_iter()
-            .map(|f| json!({ "type": "function", "function": f }))
-            .collect::<Vec<_>>(),
     });
+    if !calls.withheld() || dialect.tool_choice_none {
+        body["tools"] = json!(
+            function_declarations()
+                .into_iter()
+                .map(|f| json!({ "type": "function", "function": f }))
+                .collect::<Vec<_>>()
+        );
+        if calls.withheld() {
+            body["tool_choice"] = json!("none");
+        }
+    }
     body[dialect.max_tokens_field] = json!(max_tokens);
-    if calls.withheld() {
-        body["tool_choice"] = json!("none");
+    if dialect.takes_thinking && args.thinking == Some(HarnessThinking::Disabled) {
+        body["thinking"] = json!({ "type": "disabled" });
     }
     if let Some(t) = args.temperature {
         body["temperature"] = json!(t);
@@ -978,7 +1022,7 @@ fn openai_round(
     }
 
     let base = base_url(args, dialect.default_base);
-    let url = versioned_url(&base, "v1", "chat/completions");
+    let url = versioned_url(&base, dialect.version, "chat/completions");
     let bearer = format!("Bearer {key}");
     let resp = post_json(&url, &[("authorization", bearer.as_str())], &body)?;
 
@@ -1355,10 +1399,13 @@ fn base_url(args: &HarnessAdiArguments, default: &str) -> String {
 
 /// `<base>/<version>/<path>`, tolerating a base that already ends in the version segment — the
 /// panel's own hint for this field reads `https://api.moonshot.ai/v1`, and pasting exactly that
-/// must not produce `/v1/v1/chat/completions`.
+/// must not produce `/v1/v1/chat/completions`. Only the version's *last* segment is matched,
+/// because a version can carry more than itself: z.ai's is `api/paas/v4`, and its coding-plan base
+/// ends `api/coding/paas/v4` — both must land on the same URL as the bare host.
 fn versioned_url(base: &str, version: &str, path: &str) -> String {
     let base = base.trim_end_matches('/');
-    if base.ends_with(&format!("/{version}")) {
+    let last = version.rsplit('/').next().unwrap_or(version);
+    if base.ends_with(&format!("/{last}")) {
         format!("{base}/{path}")
     } else {
         format!("{base}/{version}/{path}")
@@ -1467,6 +1514,7 @@ mod tests {
             HarnessProvider::Openai,
             HarnessProvider::Gemini,
             HarnessProvider::Monshoot,
+            HarnessProvider::Zai,
             HarnessProvider::Ollama,
         ] {
             args.provider = Some(provider);
@@ -1490,6 +1538,24 @@ mod tests {
             versioned_url("https://api.moonshot.ai/v1/", "v1", "chat/completions"),
             "https://api.moonshot.ai/v1/chat/completions"
         );
+        // z.ai's version carries its `api/paas` prefix with it, and the coding-plan host carries a
+        // different one — three spellings, one endpoint.
+        assert_eq!(
+            versioned_url("https://api.z.ai", "api/paas/v4", "chat/completions"),
+            "https://api.z.ai/api/paas/v4/chat/completions"
+        );
+        assert_eq!(
+            versioned_url("https://api.z.ai/api/paas/v4", "api/paas/v4", "chat/completions"),
+            "https://api.z.ai/api/paas/v4/chat/completions"
+        );
+        assert_eq!(
+            versioned_url(
+                "https://api.z.ai/api/coding/paas/v4",
+                "api/paas/v4",
+                "chat/completions"
+            ),
+            "https://api.z.ai/api/coding/paas/v4/chat/completions"
+        );
         assert_eq!(
             versioned_url(
                 "https://generativelanguage.googleapis.com",
@@ -1501,11 +1567,19 @@ mod tests {
     }
 
     #[test]
-    fn the_two_openai_dialects_differ_only_where_the_providers_do() {
+    fn the_openai_dialects_differ_only_where_the_providers_do() {
         // The rename is the whole reason the dialect struct exists: sending Moonshot's field name
         // to an OpenAI reasoning model is a 400, and vice versa.
         assert_eq!(OPENAI.max_tokens_field, "max_completion_tokens");
         assert_eq!(MONSHOOT.max_tokens_field, "max_tokens");
+        assert_eq!(ZAI.max_tokens_field, "max_tokens");
+
+        // z.ai is the one dialect that is not a `/v1` clone and not closable by `tool_choice`.
+        assert_eq!(ZAI.version, "api/paas/v4");
+        assert!(!ZAI.tool_choice_none);
+        assert!(OPENAI.tool_choice_none && MONSHOOT.tool_choice_none);
+        assert!(ZAI.takes_thinking);
+        assert!(!OPENAI.takes_thinking && !MONSHOOT.takes_thinking);
     }
 
     #[test]

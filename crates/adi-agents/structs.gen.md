@@ -809,15 +809,18 @@ struct ImageStore<'a> {
 
 ### struct `OpenAiDialect`
 
-The two providers that speak `OpenAI`'s `/v1/chat/completions`. They agree on the whole request body but disagree on where they live, which variable holds the key, and — the one that bites — what the output cap is called.
+The providers that speak `OpenAI`'s `/chat/completions`. They agree on the whole request body but disagree on where they live, which variable holds the key, what the path before the endpoint is, and — the one that bites — what the output cap is called.
 
 ```rust
 struct OpenAiDialect {
     provider: &'static str,
     default_base: &'static str,
     default_key_env: &'static str,
+    version: &'static str,
     max_tokens_field: &'static str,
     default_max_tokens: u64,
+    tool_choice_none: bool,
+    takes_thinking: bool,
 }
 ```
 

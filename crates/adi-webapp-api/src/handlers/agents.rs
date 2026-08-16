@@ -1392,7 +1392,7 @@ const CLAUDE_TOOLS: &[&str] = &[
 const CLAUDE_CLI_MODELS: &[&str] = &["opus", "sonnet", "haiku", "fable"];
 const CLAUDE_SDK_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"];
 const CODEX_MODELS: &[&str] = &["gpt-5-codex"];
-const ADI_MODELS: &[&str] = &["kimi-k3", "kimi-k2.6", "gemini-2.5-pro"];
+const ADI_MODELS: &[&str] = &["kimi-k3", "kimi-k2.6", "glm-5.2", "glm-4.7", "gemini-2.5-pro"];
 
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
 /// both the selectable backends and the field shape the client renders. Backends are
@@ -1434,6 +1434,7 @@ fn agent_form_spec() -> AgentFormSpec {
         ("openai", "OpenAI"),
         ("gemini", "Gemini"),
         ("monshoot", "Monshoot"),
+        ("zai", "GLM (Z.ai)"),
         ("ollama", "Ollama (local)"),
     ]);
     provider.hint = "model provider the adi loop calls".into();
@@ -1615,7 +1616,7 @@ fn agent_form_spec() -> AgentFormSpec {
             ]),
             "extended-thinking mode",
         ),
-        &["anthropic"],
+        &["anthropic", "zai"],
     ));
 
     fields.push(for_providers(
@@ -1651,7 +1652,7 @@ fn agent_form_spec() -> AgentFormSpec {
             ]),
             "structured output",
         ),
-        &["openai", "monshoot"],
+        &["openai", "monshoot", "zai"],
     ));
 
     fields.push(for_providers(
@@ -1710,7 +1711,8 @@ fn agent_form_spec() -> AgentFormSpec {
 
     // ---- harness:adi sampling (provider-scoped) ----
     // temperature is left OFF the providers where a non-default value 400s: Anthropic current
-    // models, OpenAI o-series/gpt-5, and Monshoot kimi-k2.6 (verified). It stays only where it's
+    // models, OpenAI o-series/gpt-5, and Monshoot kimi-k2.6 (verified). z.ai takes it but tells
+    // thinking-model users not to touch it, so it is off there too. It stays only where it's
     // a normal knob — Gemini and Ollama.
     fields.push(for_providers(
         num_field("temperature", "Temperature", &[], "0.0 – 2.0", ""),
@@ -1718,7 +1720,7 @@ fn agent_form_spec() -> AgentFormSpec {
     ));
     fields.push(for_providers(
         num_field("top_p", "Top-p", &[], "0.0 – 1.0", ""),
-        &["openai", "gemini", "monshoot", "ollama"],
+        &["openai", "gemini", "monshoot", "zai", "ollama"],
     ));
     fields.push(for_providers(
         num_field("top_k", "Top-k", &[], "e.g. 40", ""),
@@ -1871,7 +1873,7 @@ fn agent_form_spec() -> AgentFormSpec {
                 ADI_HARNESS,
                 "harness · ADI loop",
                 "harness",
-                "provider model, e.g. kimi-k2.6 / gemini-2.5-pro",
+                "provider model, e.g. kimi-k2.6 / glm-5.2 / gemini-2.5-pro",
                 ADI_MODELS,
             ),
         ],
@@ -1935,6 +1937,31 @@ fn setup_presets() -> Vec<AgentSetupPreset> {
                        agent's runs only."
                     .into(),
                 placeholder: "sk-…".into(),
+                required: true,
+            }),
+            manual: false,
+        },
+        AgentSetupPreset {
+            id: "glm".into(),
+            label: "GLM API key".into(),
+            blurb: "ADI's own agent loop, talking to Z.ai's API with your key. No CLI, no \
+                    subscription."
+                .into(),
+            backend: ADI_HARNESS.into(),
+            arguments: [
+                ("provider".to_string(), "zai".to_string()),
+                ("model".to_string(), "glm-5.2".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            fields: strings(&["model"]),
+            secret: Some(AgentSetupSecret {
+                env: "Z_AI_API_KEY".into(),
+                label: "GLM (Z.ai) API key".into(),
+                hint: "From z.ai/model-api — stored encrypted and injected into this agent's \
+                       runs only."
+                    .into(),
+                placeholder: "1a2b3c….x9y8z7".into(),
                 required: true,
             }),
             manual: false,
@@ -2553,6 +2580,16 @@ mod tests {
         assert!(kimi.fields.iter().any(|f| f == "model"), "{:?}", kimi.fields);
         let key = kimi.secret.expect("an API key is required");
         assert_eq!(key.env, "MOONSHOT_API_KEY");
+        assert!(key.required, "there is no login for this one");
+
+        // The GLM route is the Kimi route with a different provider behind it.
+        let glm = preset("glm");
+        assert_eq!(glm.backend, ADI_HARNESS);
+        assert_eq!(glm.arguments.get("provider").map(String::as_str), Some("zai"));
+        assert!(glm.arguments.contains_key("model"), "{:?}", glm.arguments);
+        assert!(glm.fields.iter().any(|f| f == "model"), "{:?}", glm.fields);
+        let key = glm.secret.expect("an API key is required");
+        assert_eq!(key.env, "Z_AI_API_KEY");
         assert!(key.required, "there is no login for this one");
     }
 
