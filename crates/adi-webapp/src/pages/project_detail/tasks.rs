@@ -115,34 +115,25 @@ pub(crate) fn tasks_panel(state: State, route: RwSignal<Route>, form: TaskForm) 
     .into_any()
 }
 
-/// This project's tasks, filtered from the shared tree and flattened into depth-annotated tree
-/// order (so subtasks nest under their parent, at any depth). With `include_subs`, tasks filed
-/// under this project's nested sub-projects are folded in too — each sub-project's tasks form
-/// their own subtree, since their `parent` links point within the same sub-project. Off for the
-/// parent picker (a task created here files under *this* project, so it should nest only under
-/// this project's own tasks); on for the display table.
+/// The tasks in `scope`, filtered from the shared tree and flattened into depth-annotated tree
+/// order (so subtasks nest under their parent, at any depth). A scope carrying sub-projects folds
+/// their tasks in too — each sub-project's tasks form their own subtree, since their `parent`
+/// links point within the same sub-project.
 /// `sort` orders the flat list before flattening, so it reorders siblings and the tree survives.
 /// The parent picker passes the panel's declared default, since an `<option>` list has no headers
 /// to sort by.
 fn project_task_tree(
     state: State,
-    include_subs: bool,
+    scope: &super::ProjectScope,
     sort: Sort,
 ) -> Vec<(usize, adi_webapp_api::types::TaskRow)> {
-    let id = state.current_project.get();
-    let subs = include_subs
-        .then(|| super::descendant_projects(state, &id))
-        .unwrap_or_default();
     let Some(tasks) = state.tasks.get() else {
         return Vec::new();
     };
     let mut mine: Vec<_> = tasks
         .tasks
         .into_iter()
-        .filter(|t| {
-            let p = t.project.as_deref();
-            p == Some(id.as_str()) || p.is_some_and(|p| subs.contains_key(p))
-        })
+        .filter(|t| scope.contains(t.project.as_deref()))
         .collect();
     sort_rows(&mut mine, sort, task_key, |t| Key::text(&t.title));
     task_tree_rows(mine)
@@ -157,9 +148,8 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
     if state.tasks.get().is_none() {
         return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
     }
-    let id = state.current_project.get();
-    let subs = super::descendant_projects(state, &id);
-    let tree = project_task_tree(state, true, table.sort.get());
+    let scope = super::ProjectScope::open(state, true);
+    let tree = project_task_tree(state, &scope, table.sort.get());
     if tree.is_empty() {
         return view! { <EmptyRow state=table>"No tasks in this project yet — add one below."</EmptyRow> }.into_any();
     }
@@ -168,11 +158,7 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
             // A task belonging to a sub-project is marked with a chip opening that sub-project's
             // Tasks section. Kept as its ids, not a built view: the cell builder is called per
             // column, so it has to be able to render the marker rather than consume one.
-            let owner = t
-                .project
-                .as_deref()
-                .filter(|p| *p != id.as_str())
-                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())));
+            let owner = scope.owner(t.project.as_deref());
             let action = {
                 let id = t.id.clone();
                 let store = |s: State, ts: TasksState| s.tasks.set(Some(ts));
@@ -221,7 +207,7 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
 /// subtask can be nested under any node at any level. Sub-project tasks are deliberately excluded
 /// — a task added here files under this project, so it should only nest under this project's own.
 fn project_task_options(state: State) -> AnyView {
-    project_task_tree(state, false, Sort::new("Task"))
+    project_task_tree(state, &super::ProjectScope::open(state, false), Sort::new("Task"))
         .into_iter()
         .map(|(depth, t)| {
             // Non-breaking spaces so the depth indent survives inside <option> text.

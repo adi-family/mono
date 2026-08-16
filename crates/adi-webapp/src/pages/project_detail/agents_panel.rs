@@ -146,9 +146,9 @@ fn project_agent_rows(
     edit_form: AgentsForm,
     route: RwSignal<Route>,
 ) -> AnyView {
-    let id = state.current_project.get();
-    // The sub-projects nested under this one — their agents fold into this panel, marked as such.
-    let subs = super::descendant_projects(state, &id);
+    // The open project and the sub-projects nested under it — their agents fold into this panel,
+    // marked as such.
+    let scope = super::ProjectScope::open(state, true);
     let table = state.tables.project_agents;
     let Some(st) = state.agents.get() else {
         return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
@@ -156,10 +156,7 @@ fn project_agent_rows(
     let mut mine: Vec<_> = st
         .agents
         .into_iter()
-        .filter(|a| {
-            let p = a.project.as_deref();
-            p == Some(id.as_str()) || p.is_some_and(|p| subs.contains_key(p))
-        })
+        .filter(|a| scope.contains(a.project.as_deref()))
         .collect();
     if mine.is_empty() {
         return view! { <EmptyRow state=table>"No agents in this project yet — add one below."</EmptyRow> }.into_any();
@@ -180,11 +177,7 @@ fn project_agent_rows(
             // that opens that sub-project's Agents section. Kept as its ids, not a built view:
             // the cell builder is called per column, so it renders the marker rather than
             // consuming one.
-            let owner = a
-                .project
-                .as_deref()
-                .filter(|p| *p != id.as_str())
-                .and_then(|p| subs.get(p).map(|name| (p.to_string(), name.clone())));
+            let owner = scope.owner(a.project.as_deref());
             // The full 49-field form lives on the Agents page; Edit loads this agent into it and
             // takes you there, rather than duplicating the schema-driven form in this panel.
             let a_edit = a.clone();

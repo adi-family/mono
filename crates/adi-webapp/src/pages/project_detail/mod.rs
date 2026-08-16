@@ -153,7 +153,7 @@ pub(crate) fn project_detail_view(
                 }
                 .into_any(),
                 ProjectSection::Agents => view! {
-                    {all_chats_view(state, agents_watch, Some(project_agent_scope(state)))}
+                    {all_chats_view(state, agents_watch, Some(ProjectScope::open(state, true).ids()))}
                     {move || agent_live_view(state, agents_watch)}
                     {agents_panel(state, agent_form, agents_watch, agents_form, route)}
                 }
@@ -324,46 +324,71 @@ fn detail_body(
     .into_any()
 }
 
-/// Every transitive sub-project of `root`, as a map from project id to its display name, read
-/// from the loaded project list. The Agents and Tasks panels fold these projects' items into the
-/// parent's view — so opening "NY" also surfaces the agents and tasks filed under its nested
-/// projects, each marked with its owning sub-project. Empty when the list hasn't loaded yet or
-/// `root` has no sub-projects. Walks the `parent` links breadth-first, guarding against a
-/// malformed cycle so a bad link can't spin forever.
-pub(super) fn descendant_projects(
-    state: State,
-    root: &str,
-) -> std::collections::HashMap<String, String> {
-    let mut out = std::collections::HashMap::new();
-    let Some(ps) = state.projects.get() else {
-        return out;
-    };
-    let mut stack = vec![root.to_string()];
-    while let Some(cur) = stack.pop() {
-        for p in &ps.projects {
-            if p.parent.as_deref() != Some(cur.as_str()) || out.contains_key(&p.id) {
-                continue;
-            }
-            let display = if p.name.trim().is_empty() {
-                p.id.clone()
-            } else {
-                p.name.clone()
-            };
-            out.insert(p.id.clone(), display);
-            stack.push(p.id.clone());
-        }
-    }
-    out
+/// Which projects' items a panel on this page shows: the open project, plus every transitive
+/// sub-project as id → display name. The Agents and Tasks panels fold those projects' items into
+/// the parent's view — so opening "NY" also surfaces the agents and tasks filed under its nested
+/// projects, each marked with its owning sub-project.
+///
+/// Both panels ask the same two questions of it — *is this row mine?* ([`contains`](Self::contains))
+/// and *which sub-project does it belong to?* ([`owner`](Self::owner)) — which is why the id and
+/// the descendant map travel together rather than as two locals per panel.
+pub(super) struct ProjectScope {
+    id: String,
+    subs: std::collections::HashMap<String, String>,
 }
 
-/// The project ids whose agents count as "visible on this page": the open project plus every
-/// nested sub-project — the same set the Agents panel lists. Passed to the All-chats index so it
-/// shows only conversations from agents filed under this project's tree.
-pub(super) fn project_agent_scope(state: State) -> Vec<String> {
-    let id = state.current_project.get();
-    let mut ids: Vec<String> = descendant_projects(state, &id).into_keys().collect();
-    ids.push(id);
-    ids
+impl ProjectScope {
+    /// The scope of the currently open project. `include_subs` off narrows it to that project
+    /// alone — what the task parent picker wants, since a task created there files under *this*
+    /// project and so should only nest under this project's own tasks.
+    ///
+    /// The descendants are walked over the `parent` links breadth-first, guarding against a
+    /// malformed cycle so a bad link can't spin forever; they come out empty when the project list
+    /// hasn't loaded yet. `include_subs` gates the read of `state.projects` rather than filtering
+    /// afterwards, so a scope that doesn't want them doesn't subscribe to that signal either.
+    pub(super) fn open(state: State, include_subs: bool) -> Self {
+        let id = state.current_project.get();
+        let mut subs = std::collections::HashMap::new();
+        let Some(ps) = include_subs.then(|| state.projects.get()).flatten() else {
+            return Self { id, subs };
+        };
+        let mut stack = vec![id.clone()];
+        while let Some(cur) = stack.pop() {
+            for p in &ps.projects {
+                if p.parent.as_deref() != Some(cur.as_str()) || subs.contains_key(&p.id) {
+                    continue;
+                }
+                let display = if p.name.trim().is_empty() {
+                    p.id.clone()
+                } else {
+                    p.name.clone()
+                };
+                subs.insert(p.id.clone(), display);
+                stack.push(p.id.clone());
+            }
+        }
+        Self { id, subs }
+    }
+
+    /// Whether an item filed under `project` belongs in this panel.
+    pub(super) fn contains(&self, project: Option<&str>) -> bool {
+        project == Some(self.id.as_str()) || project.is_some_and(|p| self.subs.contains_key(p))
+    }
+
+    /// The sub-project an item belongs to, as `(id, display name)` for [`sub_marker`] — `None`
+    /// for the open project's own items, which need no marker.
+    pub(super) fn owner(&self, project: Option<&str>) -> Option<(String, String)> {
+        let p = project.filter(|p| *p != self.id.as_str())?;
+        Some((p.to_string(), self.subs.get(p)?.clone()))
+    }
+
+    /// Every id in scope: the open project plus every nested sub-project. Passed to the All-chats
+    /// index so it shows only conversations from agents filed under this project's tree.
+    pub(super) fn ids(self) -> Vec<String> {
+        let mut ids: Vec<String> = self.subs.into_keys().collect();
+        ids.push(self.id);
+        ids
+    }
 }
 
 /// A "belongs to a nested sub-project" marker chip for an item surfaced in a parent project's

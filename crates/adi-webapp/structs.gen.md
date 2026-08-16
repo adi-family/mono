@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-51 structs · 7 enums · 1 type alias across 18 files.
+52 structs · 7 enums · 1 type alias across 19 files.
 
 ## Index
 
@@ -17,6 +17,7 @@
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
 - [`src/pages/project_detail/agents_panel.rs`](#srcpagesproject_detailagents_panelrs) — `QuickAgentForm`
+- [`src/pages/project_detail/mod.rs`](#srcpagesproject_detailmodrs) — `ProjectScope`
 - [`src/pages/project_detail/services.rs`](#srcpagesproject_detailservicesrs) — `QuickServiceForm`
 - [`src/pages/project_detail/subprojects.rs`](#srcpagesproject_detailsubprojectsrs) — `QuickSubprojectForm`
 - [`src/pages/project_detail/tasks.rs`](#srcpagesproject_detailtasksrs) — `TaskForm`
@@ -308,6 +309,21 @@ pub(crate) struct QuickAgentForm {
     pub(crate) backend: RwSignal<String>,
     pub(crate) system_prompt: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+}
+```
+
+---
+
+## `src/pages/project_detail/mod.rs`
+
+### struct `ProjectScope`
+
+Which projects' items a panel on this page shows: the open project, plus every transitive sub-project as id → display name. The Agents and Tasks panels fold those projects' items into the parent's view — so opening "NY" also surfaces the agents and tasks filed under its nested projects, each marked with its owning sub-project.
+
+```rust
+pub(super) struct ProjectScope {
+    id: String,
+    subs: std::collections::HashMap<String, String>,
 }
 ```
 
