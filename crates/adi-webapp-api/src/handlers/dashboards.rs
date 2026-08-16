@@ -532,57 +532,57 @@ fn parse_hive(dir: &Path) -> Option<(PathBuf, HiveFile)> {
     Some((path, parsed))
 }
 
-// MARK: migration — dashboards written before the one-origin rule
+// MARK: migration — replacing generated files with the current templates
 
-/// What a pre-one-origin frontend entry point still carries: the injected `backendPort`, read out
-/// of the ports registry and handed to the browser so it could dial `127.0.0.1:<port>` itself.
-/// Both `frontend/index.ts` and the shell it renders spell it, and neither template does now.
-const LEGACY_BACKEND_PORT: &str = "backendPort";
-
-/// What a pre-one-origin backend entry point still carries: wildcard CORS, which only ever
-/// existed because the page called it from a different origin. Under one origin it is not merely
-/// unnecessary — it lets any page you visit read this dashboard's API.
-const LEGACY_CORS: &str = "access-control-allow-origin";
-
-/// Bring a dashboard written before the one-origin rule (`docs/fleet.md` §4) up to it, in place,
-/// the next time it is read or listed. There is no separate migration command: a dashboard is a
-/// directory, and the listing is the only thing guaranteed to visit every one of them.
+/// The generation stamp each generated entry point carries, near the top of its own file. Bump one
+/// when you change the template beside it, and every dashboard picks the change up on the next
+/// listing.
 ///
-/// Idempotent by construction — every step tests what is on disk and writes only when the old
-/// shape is still there, so the panel's few-second poll writes nothing once a dashboard is
-/// current, and the supervisor sees no spurious config change.
+/// A stamp names what the **current** template has, and [`restamp_entry_point`] migrates on its
+/// *absence*. That inversion is the whole mechanism. The alternative — a marker naming what the
+/// old file had — needs a fresh constant and a fresh migration call per change, and worse, cannot
+/// catch a file that a *previous* migration wrote, so the second change in a row never lands
+/// anywhere. One stamp covers every generation there has ever been, including the ones migration
+/// itself produced, and including files written before stamps existed at all.
+const SHELL_STAMP: &str = "<!-- adi-shell: 2";
+const FRONTEND_ENTRY_STAMP: &str = "// adi-frontend-entry: 1";
+const BACKEND_ENTRY_STAMP: &str = "// adi-backend-entry: 1";
+
+/// Bring a dashboard's generated files up to the current templates, in place, the next time it is
+/// read or listed. There is no separate migration command: a dashboard is a directory, and the
+/// listing is the only thing guaranteed to visit every one of them.
 ///
-/// It rewrites **generated** files only: the hive file and the three fixed entry points. The
-/// panels and routes under `frontend/modules/` and `backend/routes/` are what a user or an agent
-/// authored, and are never read here, let alone written.
+/// Idempotent by construction — every step tests what is on disk and writes only when it is behind,
+/// so the panel's few-second poll writes nothing once a dashboard is current, and the supervisor
+/// sees no spurious config change.
+///
+/// It rewrites **generated** files only: the hive file and the three fixed entry points. The panels
+/// and routes under `frontend/modules/` and `backend/routes/` are what a user or an agent authored,
+/// and are never read here, let alone written.
 fn migrate(dir: &Path, name: &str) {
     migrate_hive(dir, name);
     let frontend = dir.join("frontend");
-    migrate_entry_point(
-        &frontend.join("index.ts"),
-        LEGACY_BACKEND_PORT,
-        FRONTEND_INDEX_TS,
-    );
-    migrate_entry_point(
-        &frontend.join("index.html"),
-        LEGACY_BACKEND_PORT,
-        FRONTEND_INDEX_HTML,
-    );
-    migrate_entry_point(
+    restamp_entry_point(&frontend.join("index.ts"), FRONTEND_ENTRY_STAMP, FRONTEND_INDEX_TS);
+    restamp_entry_point(&frontend.join("index.html"), SHELL_STAMP, FRONTEND_INDEX_HTML);
+    restamp_entry_point(
         &dir.join("backend").join("index.ts"),
-        LEGACY_CORS,
+        BACKEND_ENTRY_STAMP,
         BACKEND_INDEX_TS,
     );
 }
 
-/// Rewrite one fixed entry point with the current template, but only while it still spells
-/// `marker` — the one string the old file has and the new one does not. That test is what makes
-/// this both idempotent (the marker is gone after the first pass) and safe to run on every read.
-fn migrate_entry_point(path: &Path, marker: &str, template: &str) {
+/// Replace one generated entry point with the current template while it does not spell `stamp`.
+/// Idempotent: the stamp is there once the first pass has run.
+///
+/// It replaces a hand-edited entry point rather than leaving it be, which is the documented
+/// contract for these three files — the scaffold README marks each "do not edit", and everything a
+/// dashboard actually does lives in `frontend/modules/` and `backend/routes/`, which migration
+/// never reads.
+fn restamp_entry_point(path: &Path, stamp: &str, template: &str) {
     let Ok(current) = std::fs::read_to_string(path) else {
         return;
     };
-    if !current.contains(marker) {
+    if current.contains(stamp) {
         return;
     }
     let _ = std::fs::write(path, template);
@@ -1393,8 +1393,9 @@ mod tests {
     #[test]
     fn the_backend_serves_the_prefix_it_claims() {
         assert!(BACKEND_INDEX_TS.contains(r#"const API_PREFIX = "/api""#));
-        // Wildcard CORS existed only because the page used to call a different origin.
-        assert!(!BACKEND_INDEX_TS.contains(LEGACY_CORS));
+        // Wildcard CORS existed only because the page used to call a different origin. Under one
+        // origin it is not merely unnecessary — it would let any page you visit read this API.
+        assert!(!BACKEND_INDEX_TS.contains("access-control-allow-origin"));
     }
 
     // MARK: migration
@@ -1443,23 +1444,79 @@ mod tests {
             hive
         );
 
-        // And an entry point that no longer carries the marker is left alone, whatever it says.
+        // A hand-edited entry point is *replaced*, not preserved — the deliberate cost of
+        // migrating on the current template's stamp rather than on the old file's shape. These
+        // three files are generated ("do not edit" in the scaffold README); what a dashboard
+        // actually does lives in modules/ and routes/, which the test below covers.
         let entry = dir.join("frontend").join("index.ts");
         std::fs::write(&entry, "// mine now\n").expect("hand edit");
         migrate(&dir, "Nosh");
         assert_eq!(
             std::fs::read_to_string(&entry).expect("entry point"),
-            "// mine now\n"
+            FRONTEND_INDEX_TS
         );
     }
 
     #[test]
-    fn no_current_template_still_spells_its_own_migration_marker() {
-        // A marker left in the file it migrates *to* would make migration rewrite that entry
-        // point on every read — a write per poll, forever.
-        assert!(!FRONTEND_INDEX_TS.contains(LEGACY_BACKEND_PORT));
-        assert!(!FRONTEND_INDEX_HTML.contains(LEGACY_BACKEND_PORT));
-        assert!(!BACKEND_INDEX_TS.contains(LEGACY_CORS));
+    fn every_template_spells_its_own_stamp() {
+        // Migration keys on the stamp being *present*, so a template that failed to carry its own
+        // would be rewritten on every read — a write per poll, forever, and a bun restart with it.
+        assert!(FRONTEND_INDEX_TS.contains(FRONTEND_ENTRY_STAMP));
+        assert!(FRONTEND_INDEX_HTML.contains(SHELL_STAMP));
+        assert!(BACKEND_INDEX_TS.contains(BACKEND_ENTRY_STAMP));
+    }
+
+    #[test]
+    fn each_generated_entry_point_migrates_on_its_own_stamp() {
+        let root = scratch("stamps");
+        let dir = legacy_dashboard(&root, "dddd", "Nosh");
+        // Three unrelated files, so a stamp that matched the wrong one would show up as a file
+        // left behind rather than as a passing test.
+        for (path, template) in [
+            (dir.join("frontend").join("index.ts"), FRONTEND_INDEX_TS),
+            (dir.join("frontend").join("index.html"), FRONTEND_INDEX_HTML),
+            (dir.join("backend").join("index.ts"), BACKEND_INDEX_TS),
+        ] {
+            std::fs::write(&path, "// some earlier generation\n").expect("stale entry point");
+            migrate(&dir, "Nosh");
+            assert_eq!(
+                std::fs::read_to_string(&path).expect("entry point"),
+                template,
+                "{} was not brought up to its template",
+                path.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_shell_of_any_earlier_generation_is_restamped() {
+        let root = scratch("shell-stamp");
+        let dir = legacy_dashboard(&root, "cccc", "Nosh");
+        let shell = dir.join("frontend").join("index.html");
+        // A shell that is current in every *other* respect — one origin already, so the
+        // pre-one-origin marker would never have fired on it — and behind only on the shell's
+        // own generation. This is the case a legacy-marker migration cannot express.
+        std::fs::write(&shell, "<!doctype html><html><head></head></html>\n").expect("old shell");
+
+        migrate(&dir, "Nosh");
+
+        let read = || std::fs::read_to_string(&shell).expect("shell");
+        assert_eq!(read(), FRONTEND_INDEX_HTML);
+        assert!(read().contains("adi-editor__frame"), "no iframe drawer");
+        assert!(read().contains("adi-pick"), "no element picker");
+
+        // And the poll behind this must not rewrite it a second time.
+        migrate(&dir, "Nosh");
+        assert_eq!(read(), FRONTEND_INDEX_HTML);
+    }
+
+    #[test]
+    fn the_shell_attributes_a_panel_to_the_module_that_drew_it() {
+        // The element picker resolves a pick to a source file through this attribute alone, so
+        // the shell has to be the thing that writes it — no module sets it, and nothing else
+        // knows which module drew which card.
+        assert!(FRONTEND_INDEX_HTML.contains("el.dataset.adiModule = id;"));
+        assert!(FRONTEND_INDEX_HTML.contains("data-adi-module"));
     }
 
     #[test]

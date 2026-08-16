@@ -532,6 +532,7 @@ fn EmbedDashboardAgent() -> impl IntoView {
                 ));
             }
         });
+        receive_picks(watch, dashboard.clone());
     }
 
     // Learn whether adi-agent is interactive (pty) vs headless, point the live view at it, and poll.
@@ -572,6 +573,91 @@ fn EmbedDashboardAgent() -> impl IntoView {
                 {move || live_view(state, watch)}
             </div>
         </div>
+    }
+}
+
+/// The message a dashboard's element picker posts into this frame.
+const PICK_MESSAGE: &str = "adi.dashboard.pick";
+
+/// What this frame posts back once it is listening, so the dashboard knows when a pick will
+/// actually arrive. See [`receive_picks`].
+const READY_MESSAGE: &str = "adi.dashboard.ready";
+
+/// Take elements picked in the dashboard that frames this embed and drop them into whichever
+/// composer is on screen.
+///
+/// Prefilled, never sent. A pick is a *reference* — this element, in this file — and what to do
+/// about it is still typed underneath by hand. That is also what keeps the listener modest about
+/// where messages come from: the worst an unexpected one achieves is text in a box a person is
+/// already reading. It must still carry the right message type and name the dashboard this embed
+/// was opened for. The sender's origin is deliberately not pinned, because there isn't one to name:
+/// the same panel is framed from `nosh.adi` on this machine and from `nosh.laptop-b.n.adi` when the
+/// dashboard is viewed over the mesh.
+fn receive_picks(watch: AgentsWatch, dashboard: String) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let announce = dashboard.clone();
+    let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(
+        move |ev: web_sys::MessageEvent| {
+            let data = ev.data();
+            let field = |key: &str| {
+                js_sys::Reflect::get(&data, &wasm_bindgen::JsValue::from_str(key))
+                    .ok()
+                    .and_then(|v| v.as_string())
+            };
+            if field("type").as_deref() != Some(PICK_MESSAGE)
+                || field("dashboard").as_deref() != Some(dashboard.as_str())
+            {
+                return;
+            }
+            let Some(text) = field("text") else {
+                return;
+            };
+            // The reply box exists only under an open answerable conversation; anywhere else the
+            // composer on screen is the one that starts a new one.
+            let composer = if watch.run_id.get_untracked().is_some()
+                && watch.answerable.get_untracked()
+            {
+                watch.reply
+            } else {
+                watch.input
+            };
+            // Appended, so picking a second element adds to the request being written rather than
+            // throwing away the first — pointing at two things and asking to align them is the
+            // ordinary case, not an edge one.
+            composer.update(|held| {
+                if !held.is_empty() && !held.ends_with('\n') {
+                    held.push('\n');
+                }
+                held.push_str(&text);
+            });
+        },
+    );
+    let _ = window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref());
+    on_message.forget();
+
+    // Now tell the page that framed this embed that picks will be received, because it cannot
+    // work that out for itself. The frame's `load` fires when its *document* is done, which is
+    // well before the wasm behind it has booted and run the line above — and a pick posted into
+    // that gap is delivered to nobody and never redelivered. The dashboard holds its picks until
+    // this lands.
+    //
+    // Sent to any origin: it carries nothing that isn't already known to the page it is going to
+    // (which dashboard it framed), and this embed cannot name that page's origin — the same panel
+    // is framed from `nosh.adi` here and from `nosh.laptop-b.n.adi` over the mesh.
+    if let Ok(Some(parent)) = window.parent() {
+        let ready = js_sys::Object::new();
+        let set = |key: &str, value: &str| {
+            let _ = js_sys::Reflect::set(
+                &ready,
+                &wasm_bindgen::JsValue::from_str(key),
+                &wasm_bindgen::JsValue::from_str(value),
+            );
+        };
+        set("type", READY_MESSAGE);
+        set("dashboard", &announce);
+        let _ = parent.post_message(&ready, "*");
     }
 }
 

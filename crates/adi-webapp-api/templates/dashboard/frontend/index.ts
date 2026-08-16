@@ -1,3 +1,8 @@
+// adi-frontend-entry: 1 — this file's generation. The control panel replaces any copy that does
+// not spell the current one (`handlers/dashboards.rs`); bump it whenever this file changes. It is
+// generated, so a hand-edited one is replaced — panels belong in `modules/`, which is never read
+// by migration.
+//
 // Dashboard frontend — a dependency-free Bun server for agent-authored UI modules.
 //
 // Everything under `modules/` is discovered at request time, transpiled TS -> browser JS on

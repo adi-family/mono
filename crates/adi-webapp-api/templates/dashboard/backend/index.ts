@@ -1,3 +1,8 @@
+// adi-backend-entry: 1 — this file's generation. The control panel replaces any copy that does
+// not spell the current one (`handlers/dashboards.rs`); bump it whenever this file changes. It is
+// generated, so a hand-edited one is replaced — endpoints belong in `routes/`, which is never
+// read by migration.
+//
 // Dashboard backend — a dependency-free Bun server for agent-authored routes.
 //
 // Every `routes/*.ts` becomes an endpoint. A route file default-exports a handler and may

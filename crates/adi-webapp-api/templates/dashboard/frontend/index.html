@@ -1,6 +1,11 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <!-- adi-shell: 2 — this file's generation. The control panel rewrites the shell of any
+         dashboard that does not spell the current one (`handlers/dashboards.rs`), which is how a
+         change here reaches dashboards that already exist; bump it whenever this file changes.
+         The shell is generated, so a hand-edited one is replaced — a dashboard's own UI belongs
+         in `frontend/modules/*.ts`, which migration never reads. -->
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>ADI Dashboard</title>
@@ -90,6 +95,66 @@
       .empty { padding: 20px; color: var(--muted); font-size: 12px; }
       code { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; }
       a { color: var(--accent); }
+
+      /* The adi-agent editor: a floating toolbar and the drawer it opens. The drawer is docked
+         to the right and the page reflows beside it — the script sets body's padding, because a
+         fixed drawer is out of flow and would otherwise cover the panels you are editing. */
+      .adi-edit {
+        position: fixed; right: 14px; bottom: 14px; z-index: 2147483646;
+        display: flex; gap: 2px; padding: 3px; border-radius: 999px;
+        border: 1px solid var(--line); background: var(--panel);
+        box-shadow: 0 2px 8px rgba(0, 0, 0, .18);
+      }
+      .adi-edit__btn {
+        border: 0; border-radius: 999px; padding: 5px 10px; cursor: pointer;
+        background: none; color: var(--ink);
+        font: 600 12px/1.2 ui-sans-serif, system-ui, sans-serif;
+      }
+      .adi-edit__btn:hover { background: var(--bg); }
+      .adi-edit__btn[aria-pressed="true"], .adi-edit__btn[aria-expanded="true"] {
+        background: var(--accent); color: var(--panel);
+      }
+
+      .adi-editor {
+        position: fixed; inset: 0 0 0 auto; z-index: 2147483647;
+        display: flex; flex-direction: column;
+        width: var(--editor-w, 480px); max-width: 100vw;
+        background: var(--panel); border-left: 1px solid var(--line);
+        box-shadow: -8px 0 24px rgba(0, 0, 0, .12);
+      }
+      /* `display: flex` above outranks the UA's `[hidden] { display: none }`, so restate it. */
+      .adi-editor[hidden] { display: none; }
+      /* Controls only — the embedded page brands itself, so a title here would say it twice. */
+      .adi-editor__head {
+        display: flex; align-items: center; justify-content: flex-end; gap: 2px;
+        padding: 5px 8px; border-bottom: 1px solid var(--line);
+      }
+      .adi-editor__btn {
+        border: 0; background: none; color: var(--muted); cursor: pointer;
+        font-size: 13px; line-height: 1; padding: 4px 6px; border-radius: 5px;
+      }
+      .adi-editor__btn:hover { background: var(--bg); color: var(--ink); }
+      .adi-editor__frame { flex: 1; width: 100%; border: 0; }
+      .adi-editor__grip { position: absolute; inset: 0 auto 0 0; width: 6px; cursor: ew-resize; }
+
+      /* The picker's highlight: one box moved around the page, rather than an outline drawn on
+         the hovered element itself — which would change that element's own metrics, and so move
+         the thing being measured. It never takes the pointer, so the hit test underneath it
+         keeps returning the page. */
+      .adi-pick {
+        position: fixed; z-index: 2147483645; pointer-events: none;
+        border: 1px solid var(--accent); border-radius: 3px;
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+      }
+      .adi-pick__tag {
+        position: absolute; left: 0; bottom: 100%; margin-bottom: 3px; white-space: nowrap;
+        padding: 2px 6px; border-radius: 4px;
+        background: var(--accent); color: var(--panel);
+        font: 600 10.5px/1.3 ui-monospace, SFMono-Regular, monospace;
+      }
+      /* Against the top of the viewport the label has nowhere above to go, so it drops inside. */
+      .adi-pick--low .adi-pick__tag { bottom: auto; top: 100%; margin: 3px 0 0; }
+      body.adi-picking, body.adi-picking * { cursor: crosshair !important; }
     </style>
   </head>
   <body>
@@ -112,8 +177,14 @@
       // those, and a loopback address would pin it to whichever machine the *browser* is on.
       const api = "/api";
 
-      // adi-agent editor launcher — a floating button that opens the control panel's embedded
-      // adi-agent chat, scoped to this dashboard, so you can edit its .ts files by chatting with it.
+      // adi-agent editor launcher — a floating button that docks the control panel's embedded
+      // adi-agent chat beside this page, scoped to this dashboard, so you can edit its .ts files
+      // by chatting with it and watch the panels hot-reload as it goes.
+      //
+      // An iframe drawer rather than the popup window this used to open: a popup is blocked by
+      // default in most browsers, opens behind the page when it isn't, and takes the conversation
+      // with it when it is closed. The drawer keeps both halves of the loop — the dashboard and
+      // the agent editing it — on one screen, which is the point of editing it from here at all.
       //
       // The panel that can edit these files is the one on the machine this dashboard runs on, so
       // the host is derived from where the page came from rather than hardcoded: on `nosh.adi`
@@ -124,21 +195,254 @@
         const host = location.hostname.endsWith(".adi")
           ? location.hostname.replace(/^[^.]+/, "app")
           : "app.adi";
-        const btn = document.createElement("button");
-        btn.textContent = "✎ edit";
-        btn.title = "Edit this dashboard with adi-agent";
-        btn.style.cssText =
-          "position:fixed;right:14px;bottom:14px;z-index:2147483647;padding:7px 12px;" +
-          "border-radius:999px;border:1px solid var(--line);background:var(--panel);" +
-          "color:var(--ink);font:600 12px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;" +
-          "box-shadow:0 2px 8px rgba(0,0,0,.18);";
-        btn.addEventListener("click", () => {
-          const url =
-            "//" + host + "/embed/dashboard-agent?dashboard=" +
-            encodeURIComponent(config.dashboard);
-          window.open(url, "adi-dashboard-agent", "width=480,height=760");
+        const src =
+          "//" + host + "/embed/dashboard-agent?dashboard=" +
+          encodeURIComponent(config.dashboard);
+
+        const WIDTH_KEY = "adi.editor.width";
+        const MIN_WIDTH = 320;
+        // How much page has to survive beside the drawer for reflowing to be worth it. Below
+        // this the dashboard is an unreadable sliver, so the drawer covers it instead.
+        const MIN_PAGE = 360;
+        let width = Math.max(MIN_WIDTH, Number(localStorage.getItem(WIDTH_KEY)) || 480);
+        let open = false;
+
+        const bar = document.createElement("div");
+        bar.className = "adi-edit";
+        bar.innerHTML =
+          `<button class="adi-edit__btn" type="button" data-pick aria-pressed="false"` +
+          ` title="Point at something and tell the agent about it">⌖ pick</button>` +
+          `<button class="adi-edit__btn" type="button" data-open aria-expanded="false"` +
+          ` title="Edit this dashboard with adi-agent">✎ edit</button>`;
+        const pickBtn = bar.querySelector("[data-pick]");
+        const openBtn = bar.querySelector("[data-open]");
+
+        const drawer = document.createElement("aside");
+        drawer.className = "adi-editor";
+        drawer.hidden = true;
+        drawer.setAttribute("aria-label", "adi-agent editor");
+        drawer.innerHTML =
+          `<div class="adi-editor__grip" title="Drag to resize"></div>` +
+          `<header class="adi-editor__head">` +
+            `<button class="adi-editor__btn" type="button" data-pop` +
+            ` title="Open in a separate window" aria-label="Open in a separate window">↗</button>` +
+            `<button class="adi-editor__btn" type="button" data-close` +
+            ` title="Close" aria-label="Close the editor">✕</button>` +
+          `</header>` +
+          `<iframe class="adi-editor__frame" title="adi-agent"></iframe>`;
+
+        const frame = drawer.querySelector("iframe");
+        const grip = drawer.querySelector(".adi-editor__grip");
+
+        function layout() {
+          const w = Math.min(width, window.innerWidth);
+          const beside = open && window.innerWidth - w >= MIN_PAGE;
+          drawer.style.setProperty("--editor-w", w + "px");
+          document.body.style.paddingRight = beside ? w + "px" : "";
+          // The toolbar is fixed, so body's padding does not move it — walk it left past the
+          // drawer by hand, and take it away entirely when the drawer covers the page it acts on.
+          bar.style.right = (beside ? w + 14 : 14) + "px";
+          bar.hidden = open && !beside;
+        }
+
+        function toggle(next) {
+          open = next;
+          // Loaded on first open, then left mounted: closing the drawer must not throw away the
+          // conversation in it, and a dashboard nobody edits should never load the panel at all.
+          if (open && !frame.src) frame.src = src;
+          drawer.hidden = !open;
+          openBtn.setAttribute("aria-expanded", String(open));
+          layout();
+        }
+
+        openBtn.addEventListener("click", () => toggle(!open));
+        drawer.querySelector("[data-close]").addEventListener("click", () => toggle(false));
+        // The escape hatch for a second monitor — the old behaviour, now on request rather than
+        // by default.
+        drawer.querySelector("[data-pop]").addEventListener("click", () => {
+          window.open(src, "adi-dashboard-agent", "width=480,height=760");
+          toggle(false);
         });
-        document.body.append(btn);
+        addEventListener("resize", layout);
+
+        grip.addEventListener("pointerdown", (ev) => {
+          ev.preventDefault();
+          grip.setPointerCapture(ev.pointerId);
+          const fromX = ev.clientX;
+          const fromWidth = width;
+          // A cross-origin iframe swallows every pointer event over its own document, so without
+          // this the drag stops dead the moment the cursor crosses into the chat.
+          frame.style.pointerEvents = "none";
+          const move = (e) => {
+            width = Math.min(
+              window.innerWidth,
+              Math.max(MIN_WIDTH, fromWidth + fromX - e.clientX),
+            );
+            layout();
+          };
+          const done = () => {
+            grip.removeEventListener("pointermove", move);
+            grip.removeEventListener("pointerup", done);
+            frame.style.pointerEvents = "";
+            localStorage.setItem(WIDTH_KEY, String(width));
+          };
+          grip.addEventListener("pointermove", move);
+          grip.addEventListener("pointerup", done);
+        });
+
+        // The element picker. Chrome's own inspector is not on offer here: "inspect element" is
+        // `Overlay.setInspectMode` over the DevTools protocol, which only a DevTools frontend or an
+        // extension holding the `debugger` permission may call. So a picker in a page is always
+        // this — hit-test the pointer, draw a box at the element's own rect, swallow the click —
+        // and that is all v0, Lovable and the rest are doing too.
+        //
+        // What differs here is which side of the iframe the page is on. Those tools put the app in
+        // the frame and the chat around it, so the picker has to be injected into the child and
+        // dies if the child is another origin. This drawer is the other way round: the dashboard
+        // is the top frame and the chat is the frame *inside* it. The elements being picked are in
+        // this very document, so nothing is injected and no origin is crossed until the pick is
+        // reported — which is one postMessage into the drawer, the only step that needs an origin.
+        let picking = false;
+        let hovered = null;
+
+        const box = document.createElement("div");
+        box.className = "adi-pick";
+        box.hidden = true;
+        box.innerHTML = `<span class="adi-pick__tag"></span>`;
+        const label = box.querySelector(".adi-pick__tag");
+
+        /**
+         * Which module drew `el`, from the panel it sits in — null for the shell's own chrome.
+         * The shell tags each panel as it hands it out (see `context`), so a pick resolves to a
+         * source file outright rather than being guessed at from a class name.
+         */
+        function owner(el) {
+          const panel = el.closest("[data-adi-module]");
+          return panel && { id: panel.dataset.adiModule, title: panel.dataset.adiTitle, panel };
+        }
+
+        /** The element under the pointer, or null while the pointer is over the editor's own UI. */
+        function under(ev) {
+          const el = document.elementFromPoint(ev.clientX, ev.clientY);
+          return el && !el.closest(".adi-editor, .adi-edit") ? el : null;
+        }
+
+        function highlight(el) {
+          hovered = el;
+          box.hidden = !el;
+          if (!el) return;
+          const r = el.getBoundingClientRect();
+          box.style.left = r.left + "px";
+          box.style.top = r.top + "px";
+          box.style.width = r.width + "px";
+          box.style.height = r.height + "px";
+          box.classList.toggle("adi-pick--low", r.top < 22);
+          const own = owner(el);
+          label.textContent =
+            (own ? own.id + ".ts · " : "") + "<" + el.tagName.toLowerCase() + ">";
+        }
+
+        function setPicking(on) {
+          picking = on;
+          document.body.classList.toggle("adi-picking", on);
+          pickBtn.setAttribute("aria-pressed", String(on));
+          if (!on) highlight(null);
+        }
+
+        /**
+         * A structural path from the panel down to the picked element. Deliberately not sold as a
+         * stable selector — it is a description of where in the module's own output the thing sits,
+         * which is what someone reading that module needs in order to find the line that draws it.
+         */
+        function pathTo(root, el) {
+          const parts = [];
+          for (let n = el; n && n !== root; n = n.parentElement) {
+            const tag = n.tagName.toLowerCase();
+            const twins = [...(n.parentElement?.children ?? [])]
+              .filter((c) => c.tagName === n.tagName);
+            parts.unshift(
+              twins.length > 1 ? `${tag}:nth-of-type(${twins.indexOf(n) + 1})` : tag,
+            );
+          }
+          return parts.join(" > ");
+        }
+
+        /** What the agent is told about a pick: the file to edit first, then how to find the spot. */
+        function describe(el) {
+          const own = owner(el);
+          // `className` is an SVGAnimatedString on SVG elements, so only trust it on HTML ones.
+          const classes = typeof el.className === "string" ? el.className.trim() : "";
+          const text = (el.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, 140);
+          const lines = [
+            own
+              ? `- file: frontend/modules/${own.id}.ts`
+              : "- file: frontend/index.html (the shell itself — not a module)",
+          ];
+          if (own?.title) lines.push(`- panel: ${JSON.stringify(own.title)}`);
+          lines.push(
+            `- element: <${el.tagName.toLowerCase()}>` +
+              (classes ? ` class="${classes}"` : ""),
+          );
+          const path = pathTo(own ? own.panel : document.body, el);
+          if (path) lines.push(`- where: ${path}`);
+          if (text) lines.push(`- text: ${JSON.stringify(text)}`);
+          return "I picked this element in the dashboard UI:\n" + lines.join("\n") + "\n\n";
+        }
+
+        /**
+         * Hand a pick to the chat, holding it until the chat is listening.
+         *
+         * The frame's `load` event is not that moment and cannot be used as it: it fires when the
+         * embed's document is done, while the listener belongs to the wasm app that boots after —
+         * so a pick sent on `load` is delivered to nobody, silently, and a first pick is exactly
+         * the one that races. The embed says when it is ready instead, and picks queue until it
+         * does. Which is nearly always: the drawer is usually already open by the time anyone
+         * picks anything, and then this is a plain postMessage.
+         */
+        let listening = false;
+        const queued = [];
+
+        function post(message) {
+          frame.contentWindow.postMessage(message, location.protocol + "//" + host);
+        }
+
+        function report(text) {
+          const message = { type: "adi.dashboard.pick", dashboard: config.dashboard, text };
+          if (listening) post(message);
+          else queued.push(message);
+        }
+
+        addEventListener("message", (ev) => {
+          if (ev.source !== frame.contentWindow || ev.data?.type !== "adi.dashboard.ready") {
+            return;
+          }
+          listening = true;
+          queued.splice(0).forEach(post);
+        });
+
+        pickBtn.addEventListener("click", () => setPicking(!picking));
+        addEventListener("pointermove", (ev) => picking && highlight(under(ev)), true);
+        // A hovered rect is viewport-relative, so it goes stale the moment anything scrolls.
+        addEventListener("scroll", () => picking && hovered && highlight(hovered), true);
+        addEventListener("click", (ev) => {
+          if (!picking) return;
+          const el = under(ev);
+          // Capture phase, and both stops: picking a button must not also press it.
+          ev.preventDefault();
+          ev.stopPropagation();
+          setPicking(false);
+          if (!el) return;
+          toggle(true);
+          report(describe(el));
+        }, true);
+        addEventListener("keydown", (ev) => {
+          if (ev.key !== "Escape") return;
+          if (picking) setPicking(false);
+          else if (open) toggle(false);
+        });
+
+        document.body.append(bar, drawer, box);
+        layout();
       })();
 
       const app = document.getElementById("app");
@@ -172,6 +476,11 @@
           panel(title) {
             const el = document.createElement("section");
             el.className = "panel";
+            // What the element picker attributes a pick to. The shell is the only thing that
+            // knows which module drew which card, and it knows it for free right here — without
+            // this the picker would be back to inferring a source file from a class name.
+            el.dataset.adiModule = id;
+            if (title) el.dataset.adiTitle = title;
             el.innerHTML = `<h2></h2>`;
             el.querySelector("h2").textContent = title ?? id;
             app.append(el);
@@ -214,6 +523,9 @@
           } catch (err) {
             const el = document.createElement("section");
             el.className = "panel panel--failed";
+            // Tagged like a live panel, so the module that would not mount is the one thing on
+            // the page you can still point the agent at.
+            el.dataset.adiModule = id;
             el.innerHTML = `<h2></h2><code></code>`;
             el.querySelector("h2").textContent = `${id} — failed`;
             el.querySelector("code").textContent = String(err);
