@@ -159,7 +159,7 @@
 /* A small caps label: mono, tracked out, uppercase. It sets no colour, so it composes with
  * whichever of `text-faint` / `text-meta` the context calls for. */
 @utility caps {
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
   font-size: var(--text-caps);
   font-weight: 500;
   letter-spacing: 0.12em;
@@ -231,7 +231,7 @@
 /* A metric's number. Tabular figures so a counter ticking upward never shifts the layout
  * under it. */
 @utility metric {
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
   font-size: var(--text-metric);
   font-weight: 500;
   line-height: 1.1;
@@ -254,7 +254,7 @@
   body {
     background: var(--canvas);
     color: var(--body);
-    font-family: var(--font-sans);
+    font-family: var(--font-sans), sans-serif;
     font-size: var(--text-row);
     line-height: 1.45;
     -webkit-font-smoothing: antialiased;

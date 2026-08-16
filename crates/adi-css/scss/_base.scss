@@ -17,7 +17,7 @@ body {
 body {
   background: var(--bg);
   color: var(--ink);
-  font-family: var(--font-sans);
+  font-family: var(--font-sans), sans-serif;
   font-size: var(--text-base);
   line-height: 1.45;
   letter-spacing: -.006em; // takes the slack out of system sans at small sizes

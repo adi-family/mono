@@ -436,7 +436,7 @@ $runlog-dim: #8b93a1;
 }
 
 .adi-logo {
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
   font-weight: 600;
   font-size: var(--text-lg);
   letter-spacing: -.03em;
@@ -475,7 +475,7 @@ $runlog-dim: #8b93a1;
   &__uptime {
     padding-left: var(--space-2);
     border-left: 1px solid var(--border);
-    font-family: var(--font-mono);
+    font-family: var(--font-mono), monospace;
     font-variant-numeric: tabular-nums;
     font-weight: 400;
     color: var(--muted);
@@ -882,7 +882,7 @@ $runlog-dim: #8b93a1;
   overflow: auto;
   background: #101215; // the dark theme's surface — a terminal, not a void
   color: #d5dae2;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
   font-size: 11.5px;
   line-height: 1.5;
   white-space: pre-wrap;
@@ -976,7 +976,7 @@ $runlog-dim: #8b93a1;
   color: var(--muted);
   background: var(--surface-2);
 
-  code { font-family: var(--font-mono); }
+  code { font-family: var(--font-mono), monospace; }
 }
 
 // A labelled control. Grid rather than a column flex so a hint can sit *beside* the label
@@ -1065,7 +1065,7 @@ $runlog-dim: #8b93a1;
     visibility: hidden;
     transition: opacity var(--transition), visibility var(--transition);
 
-    code { font-family: var(--font-mono); }
+    code { font-family: var(--font-mono), monospace; }
   }
 
   &__hint:hover &__hint-text,
@@ -1080,7 +1080,7 @@ $runlog-dim: #8b93a1;
     font-size: var(--text-sm);
     color: var(--muted);
 
-    code { font-family: var(--font-mono); }
+    code { font-family: var(--font-mono), monospace; }
   }
 }
 
@@ -1096,7 +1096,7 @@ $runlog-dim: #8b93a1;
 
 .adi-input {
   font: inherit;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
   font-size: var(--text-sm);
   padding: 5px 8px;
   width: 140px;
@@ -1172,7 +1172,7 @@ textarea.adi-input--composer {
 }
 
 .adi-textarea {
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
   font-size: var(--text-sm);
   line-height: 1.55;
   width: 100%;
@@ -1196,7 +1196,7 @@ textarea.adi-input--composer {
   align-items: center;
   flex-wrap: wrap;
   gap: 2px;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
   font-size: var(--text-md);
 
   &__sep {
@@ -1211,7 +1211,7 @@ textarea.adi-input--composer {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-family: var(--font-mono);
+  font-family: var(--font-mono), monospace;
 
   &__icon { color: var(--muted); width: 1em; text-align: center; }
   &--dir &__icon { color: var(--accent); }
