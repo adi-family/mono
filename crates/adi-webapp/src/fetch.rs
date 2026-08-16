@@ -1,9 +1,10 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
+    AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
     AgentSimBlock, AgentSimState, AgentSimTurn, AgentTokens,
-    AgentsState, AllAgentRuns, AnswerRun, ApiError, Dashboard, DashboardRef, DashboardTransferred,
+    AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard, DashboardRef,
+    DashboardTransferred,
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
     FilesRef, FleetDashboards, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent,
@@ -15,11 +16,11 @@ use adi_webapp_api::types::{
     NewTask, NewTool, NewWorkspace,
     NodeServiceRef,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
-    ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun,
+    GoalsOf, ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun,
     SimulateAgent, SimulateTurn,
     RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
-    SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
+    SetGoal, SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
     TriggerFireResult, TriggerLog,
     Transcript,
@@ -517,6 +518,45 @@ pub async fn answer_run(
         },
     )
     .await
+}
+
+/// One conversation's goals, open and closed alike — what it is for, and what it already settled.
+pub async fn agent_goals(name: String, run_id: String) -> Result<AgentGoals, String> {
+    post("/api/agents/goals", &GoalsOf { name, run_id }).await
+}
+
+/// Write a goal onto a conversation, or reword one that is open (`goal` names which).
+///
+/// A goal set here is always recorded as set by a person: a run setting its own goes through the
+/// CLI from inside its turn, and the two are worth telling apart afterward.
+pub async fn set_agent_goal(
+    name: String,
+    run_id: String,
+    text: String,
+    goal: Option<String>,
+) -> Result<AgentGoals, String> {
+    post(
+        "/api/agents/goal/set",
+        &SetGoal {
+            name,
+            run_id,
+            text,
+            goal,
+        },
+    )
+    .await
+}
+
+/// Close a goal — `met` as done, anything else as given up on, with the evidence or the reason.
+///
+/// A goal somebody already closed comes back with the ending that happened rather than an error;
+/// only an id naming no goal at all is a 404.
+pub async fn close_agent_goal(
+    goal: String,
+    as_: String,
+    note: String,
+) -> Result<AgentGoals, String> {
+    post("/api/agents/goal/close", &CloseGoal { goal, as_, note }).await
 }
 
 /// Drop the message at `index` from a conversation's queue, returning the fresh snapshot.

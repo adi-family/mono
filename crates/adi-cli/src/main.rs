@@ -6,6 +6,7 @@ mod agents;
 mod db;
 mod dns;
 mod format;
+mod goals;
 mod indexer;
 mod knowledge;
 mod mesh;
@@ -24,6 +25,7 @@ use crate::agents::{AgentsCommand, run_agents};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
+use crate::goals::{GoalsCommand, run_goals};
 use crate::indexer::{IndexerCommand, run_indexer};
 use crate::knowledge::{KnowledgeCommand, run_knowledge};
 use crate::mesh::{MeshCommand, run_mesh};
@@ -93,6 +95,11 @@ enum Command {
     Agents {
         #[command(subcommand)]
         command: AgentsCommand,
+    },
+    /// Goal commands: what a conversation is for, and the two ways it ends.
+    Goals {
+        #[command(subcommand)]
+        command: GoalsCommand,
     },
     /// Trigger commands (background code blocks fired by webhooks & co.).
     Triggers {
@@ -210,6 +217,12 @@ fn main() {
         }
         Command::Agents { command } => {
             if let Err(e) = run_agents(adi, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Command::Goals { command } => {
+            if let Err(e) = run_goals(adi, command) {
                 eprintln!("error: {e}");
                 std::process::exit(1);
             }

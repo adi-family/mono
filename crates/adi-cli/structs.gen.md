@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-4 structs · 17 enums across 14 files.
+4 structs · 18 enums across 15 files.
 
 ## Index
 
@@ -12,6 +12,7 @@
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
+- [`src/goals.rs`](#srcgoalsrs) — `GoalsCommand`
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
@@ -302,6 +303,59 @@ pub(crate) enum EventsCommand {
 
 ---
 
+## `src/goals.rs`
+
+### enum `GoalsCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum GoalsCommand {
+    Create {
+        text: String,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Edit {
+        id: String,
+        #[arg(long)]
+        text: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        id: Option<String>,
+        #[arg(long)]
+        all: bool,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Met {
+        id: String,
+        #[arg(long)]
+        evidence: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    KnowinglyGiveUp {
+        id: String,
+        #[arg(long)]
+        why: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+}
+```
+
+---
+
 ## `src/indexer.rs`
 
 ### enum `IndexerCommand`
@@ -577,6 +631,10 @@ enum Command {
     Agents {
         #[command(subcommand)]
         command: AgentsCommand,
+    },
+    Goals {
+        #[command(subcommand)]
+        command: GoalsCommand,
     },
     Triggers {
         #[command(subcommand)]

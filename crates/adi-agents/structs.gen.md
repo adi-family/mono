@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-87 structs · 20 enums · 5 type aliases across 36 files.
+92 structs · 23 enums · 5 type aliases across 38 files.
 
 ## Index
 
@@ -23,7 +23,8 @@
 - [`src/backends/mcp.rs`](#srcbackendsmcprs) — `ToolScope`
 - [`src/backends/shell.rs`](#srcbackendsshellrs) — `Shell`
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`
+- [`src/events.rs`](#srceventsrs) — `AgentSaved`, `AgentDeleted`, `AgentRunStarted`, `AgentRunStopped`, `AgentRunFinished`, `AgentRunDeleted`, `AgentQuestionAsked`, `AgentQuestionAnswered`, `AgentGoalSet`, `AgentGoalNudged`, `AgentGoalClosed`
+- [`src/goals.rs`](#srcgoalsrs) — `Nudged`
 - [`src/knowledge.rs`](#srcknowledgers) — `RunKnowledge`
 - [`src/lib.rs`](#srclibrs) — `Agents`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
@@ -39,6 +40,7 @@
 - [`src/runner/prompt.rs`](#srcrunnerpromptrs) — `Section`
 - [`src/runner/pty.rs`](#srcrunnerptyrs) — `PtyRunner`, `State`
 - [`src/runner/spec.rs`](#srcrunnerspecrs) — `RunSpec`
+- [`src/store/goals.rs`](#srcstoregoalsrs) — `GoalState`, `SetBy`, `Goal`, `Closed`
 - [`src/store/mod.rs`](#srcstoremodrs) — `SessionStore`
 - [`src/store/questions.rs`](#srcstorequestionsrs) — `Question`, `Choice`, `AnsweredBy`, `Answer`, `Ask`, `Request`
 - [`src/store/record.rs`](#srcstorerecordrs) — `SessionRecord`, `RunOutcome`
@@ -1067,6 +1069,69 @@ pub struct AgentQuestionAnswered {
 }
 ```
 
+### struct `AgentGoalSet`
+
+The payload of `GOAL_SET`.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentGoalSet {
+    pub agent: String,
+    pub conv: String,
+    pub goal: String,
+    pub text: String,
+    pub set_by: String,
+}
+```
+
+### struct `AgentGoalNudged`
+
+The payload of `GOAL_NUDGED`.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentGoalNudged {
+    pub agent: String,
+    pub conv: String,
+    pub goals: Vec<String>,
+    pub nudges: u64,
+}
+```
+
+### struct `AgentGoalClosed`
+
+The payload of `GOAL_MET` and `GOAL_GIVEN_UP` alike — the same facts either way, and the event name carries which happened.
+
+```rust
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentGoalClosed {
+    pub agent: String,
+    pub conv: String,
+    pub goal: String,
+    pub text: String,
+    pub note: String,
+    pub nudges: u64,
+}
+```
+
+---
+
+## `src/goals.rs`
+
+### struct `Nudged`
+
+One conversation that was asked about its goals.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Nudged {
+    pub agent: String,
+    pub conv: String,
+    pub goals: Vec<String>,
+    pub error: Option<String>,
+}
+```
+
 ---
 
 ## `src/knowledge.rs`
@@ -1707,6 +1772,72 @@ pub struct RunSpec {
     pub system_prompt: Option<String>,
     pub workspace_note: Option<String>,
     pub knowledge_note: Option<String>,
+}
+```
+
+---
+
+## `src/store/goals.rs`
+
+### enum `GoalState`
+
+Where a goal is in its life. `Open` is the only state that is nudged.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GoalState {
+    Open,
+    Met,
+    GivenUp,
+}
+```
+
+### enum `SetBy`
+
+Who set the goal. Not bookkeeping: a goal a run wrote for itself is a run that has decided what it is doing, and reading the two apart afterward is how you tell a plan that came from a person from one the machine talked itself into.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SetBy {
+    Human,
+    Agent,
+}
+```
+
+### struct `Goal`
+
+One goal, open or closed.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Goal {
+    pub id: String,
+    pub agent: String,
+    pub conv: String,
+    pub text: String,
+    pub state: GoalState,
+    pub set_by: SetBy,
+    pub created_at: u64,
+    pub last_nudge_at: u64,
+    pub nudges: u64,
+    pub closed_at: Option<u64>,
+    #[serde(default)]
+    pub note: String,
+}
+```
+
+### enum `Closed`
+
+What `close_goal` did, so the caller can say so without asking again.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Closed {
+    Now(Goal),
+    Already(Goal),
+    Unknown,
 }
 ```
 

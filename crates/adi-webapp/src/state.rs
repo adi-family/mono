@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
-    AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState, AgentTokens, AgentsState,
+    AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState, AgentTokens, AgentsState,
     AllAgentRuns,
     DashboardsState,
     DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards,
@@ -1156,6 +1156,24 @@ pub(crate) struct AgentsWatch {
     /// report: a review produces no state to leave on screen — the reply is a place to go, and the
     /// screen has gone there by the time it matters.
     pub(crate) review_busy: RwSignal<bool>,
+    /// The open conversation's goals — what it is for, open and closed alike.
+    ///
+    /// Fetched when a conversation is opened and after every write, not on the poll: a goal changes
+    /// when somebody changes it, and the once-a-second snapshot has no reason to carry a list that
+    /// is nearly always the same three rows.
+    pub(crate) goals: RwSignal<Vec<AgentGoal>>,
+    /// Which conversation the list in `goals` is *of*, for the reason `tokens_of` exists: opening
+    /// another chat must not leave the last one's goals on screen under a new title.
+    pub(crate) goals_of: RwSignal<Option<String>>,
+    /// The goal input, and whether a goal write is in flight.
+    pub(crate) goal_input: RwSignal<String>,
+    pub(crate) goal_busy: RwSignal<bool>,
+    /// Whether the goal editor is open. Closed is the normal state and it costs one line — most
+    /// conversations never have a goal, and a permanently open text box for something rarely used
+    /// takes more of the screen than the composer it sits above.
+    pub(crate) goal_editor: RwSignal<bool>,
+    /// The goal the open editor is rewording, or `None` when it is writing a new one.
+    pub(crate) goal_editing: RwSignal<Option<String>>,
 }
 
 impl AgentsWatch {
@@ -1178,6 +1196,12 @@ impl AgentsWatch {
             tokens_busy: RwSignal::new(false),
             tokens_error: RwSignal::new(String::new()),
             review_busy: RwSignal::new(false),
+            goals: RwSignal::new(Vec::new()),
+            goals_of: RwSignal::new(None),
+            goal_input: RwSignal::new(String::new()),
+            goal_busy: RwSignal::new(false),
+            goal_editor: RwSignal::new(false),
+            goal_editing: RwSignal::new(None),
         }
     }
 
@@ -1198,6 +1222,12 @@ impl AgentsWatch {
         self.tokens_busy.set(false);
         self.tokens_error.set(String::new());
         self.review_busy.set(false);
+        self.goals.set(Vec::new());
+        self.goals_of.set(None);
+        self.goal_input.set(String::new());
+        self.goal_busy.set(false);
+        self.goal_editor.set(false);
+        self.goal_editing.set(None);
     }
 }
 

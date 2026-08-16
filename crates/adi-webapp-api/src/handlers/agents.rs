@@ -15,9 +15,10 @@ use crate::types::{
     AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
     AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
     AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult, AgentSimSection,
-    AgentSimState, AgentSimTool, AgentSimTurn, AgentToken, AgentsState, AllAgentRuns, AnswerRun,
-    HideRun, PendingAsk, PendingAsks, ProjectRunLimit, ReplyToRun, ReviewRun, RunAgent, RunRef,
-    SaveAgent, SecretRef, SetRunLimit, SimulateAgent, SimulateTurn, UnqueueFromRun,
+    AgentSimState, AgentSimTool, AgentSimTurn, AgentToken, AgentsState, AgentGoal, AgentGoals,
+    AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun, PendingAsk, PendingAsks, ProjectRunLimit,
+    ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit,
+    SimulateAgent, SimulateTurn, UnqueueFromRun,
 };
 
 use super::response::{Response, clean, error, ok_json, parse_body};
@@ -546,6 +547,119 @@ pub fn pending_questions(store: &Agents) -> Response {
         })
         .collect();
     ok_json(&PendingAsks { asks })
+}
+
+/// `POST /api/agents/goals` — one conversation's goals, or every open goal on the machine when the
+/// body names neither an agent nor a run.
+///
+/// The conversation form answers open *and* closed goals, because what was already met is the
+/// context for what is being asked now; the machine-wide form answers only what is still open,
+/// which is what a "still going" panel wants.
+#[must_use]
+pub fn agent_goals(store: &Agents, body: &[u8]) -> Response {
+    let req = parse_body::<GoalsOf>(body).unwrap_or_default();
+    let (name, run_id) = (req.name.trim(), req.run_id.trim());
+    let goals = if name.is_empty() && run_id.is_empty() {
+        adi_agents::goals::all_open(store)
+    } else {
+        adi_agents::goals::of_conversation(store, name, run_id)
+    };
+    ok_json(&goals_response(&goals))
+}
+
+/// `POST /api/agents/goal/set` — write a goal onto a conversation, or reword one that is open.
+///
+/// Always `human`: this endpoint is the UI, and a run setting its own goal does it through the CLI
+/// with its own environment (see [`adi_agents::goals`]). Nothing distinguishes the two afterward
+/// except that field, so it must not be taken from the request body.
+#[must_use]
+pub fn set_agent_goal(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_body::<SetGoal>(body) else {
+        return error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"text\": \"…\", \"goal\"?: \"…\" }",
+        );
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    let run_id = req.run_id.trim();
+    let result = match clean(req.goal) {
+        Some(goal_id) => adi_agents::goals::edit(store, &goal_id, &req.text).and_then(|edited| {
+            edited.ok_or_else(|| {
+                adi_agents::Error::NotFound(format!("no goal “{goal_id}” to reword"))
+            })
+        }),
+        None => adi_agents::goals::create(
+            store,
+            &agent.name,
+            run_id,
+            &req.text,
+            adi_agents::store::SetBy::Human,
+        ),
+    };
+    match result {
+        Ok(_) => ok_json(&goals_response(&adi_agents::goals::of_conversation(
+            store,
+            &agent.name,
+            run_id,
+        ))),
+        Err(e) => Response::from(&e),
+    }
+}
+
+/// `POST /api/agents/goal/close` — close a goal as met or as given up on.
+///
+/// A goal somebody else already closed is **not** an error here, exactly as it is not one at the
+/// CLI: two people looking at the same chat is the ordinary case, and the second click should show
+/// the ending that happened rather than a red box. Only an id that names no goal at all is a 404.
+#[must_use]
+pub fn close_agent_goal(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_body::<CloseGoal>(body).filter(|r| !r.goal.trim().is_empty()) else {
+        return error(
+            400,
+            "expected JSON body { \"goal\": \"…\", \"as\": \"met\" | \"given_up\", \"note\"?: \"…\" }",
+        );
+    };
+    let goal_id = req.goal.trim();
+    let closed = if req.as_.trim() == "met" {
+        adi_agents::goals::met(store, goal_id, &req.note)
+    } else {
+        adi_agents::goals::give_up(store, goal_id, &req.note)
+    };
+    match closed {
+        Ok(adi_agents::store::GoalClosed::Unknown) => {
+            error(404, &format!("No goal “{goal_id}”."))
+        }
+        Ok(adi_agents::store::GoalClosed::Now(goal) | adi_agents::store::GoalClosed::Already(goal)) => {
+            ok_json(&goals_response(&adi_agents::goals::of_conversation(
+                store, &goal.agent, &goal.conv,
+            )))
+        }
+        Err(e) => Response::from(&e),
+    }
+}
+
+fn goals_response(goals: &[adi_agents::store::Goal]) -> AgentGoals {
+    AgentGoals {
+        goals: goals.iter().map(agent_goal).collect(),
+    }
+}
+
+fn agent_goal(goal: &adi_agents::store::Goal) -> AgentGoal {
+    AgentGoal {
+        id: goal.id.clone(),
+        agent: goal.agent.clone(),
+        run_id: goal.conv.clone(),
+        text: goal.text.clone(),
+        state: goal.state.as_str().to_string(),
+        set_by: goal.set_by.as_str().to_string(),
+        created_at: goal.created_at,
+        nudges: goal.nudges,
+        closed_at: goal.closed_at,
+        note: goal.note.clone(),
+    }
 }
 
 /// `POST /api/agents/run/stop` — stop one specific run, then report the fresh run history. For a

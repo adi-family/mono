@@ -172,6 +172,66 @@ pub struct AgentQuestionAnswered {
     pub by: String,
 }
 
+/// `adi.agents.goal.set` — a goal was written onto a conversation, by a person or by the run
+/// itself.
+///
+/// Named by constants for the same reason the question events are: a run sets and closes its own
+/// goals from a *child process* — the CLI it runs from inside a turn — so the spelling has to agree
+/// across two binaries.
+pub const GOAL_SET: &str = "adi.agents.goal.set";
+
+/// `adi.agents.goal.nudged` — a conversation fell quiet with a goal still open, and was asked about
+/// it.
+pub const GOAL_NUDGED: &str = "adi.agents.goal.nudged";
+
+/// `adi.agents.goal.met` — somebody judged the goal done.
+pub const GOAL_MET: &str = "adi.agents.goal.met";
+
+/// `adi.agents.goal.given_up` — somebody judged it not going to be done, and said why.
+pub const GOAL_GIVEN_UP: &str = "adi.agents.goal.given_up";
+
+/// The payload of [`GOAL_SET`].
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentGoalSet {
+    pub agent: String,
+    /// The conversation the goal is nudged into.
+    pub conv: String,
+    /// The goal's id — what closes it.
+    pub goal: String,
+    /// What done means, in the words it was set in.
+    pub text: String,
+    /// `human` or `agent`. A run that set its own goal has decided what it is doing, which reads
+    /// differently from one that was told — and a fleet full of the latter is worth noticing.
+    pub set_by: String,
+}
+
+/// The payload of [`GOAL_NUDGED`].
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentGoalNudged {
+    pub agent: String,
+    pub conv: String,
+    /// The ids put to the conversation — all of its open goals travel in one message.
+    pub goals: Vec<String>,
+    /// How many times this conversation's oldest open goal has now been put. Published because a
+    /// number that keeps climbing is the signal that a run is circling rather than converging, and
+    /// nothing in the platform will stop it: only `met` and `knowingly-give-up` close a goal.
+    pub nudges: u64,
+}
+
+/// The payload of [`GOAL_MET`] and [`GOAL_GIVEN_UP`] alike — the same facts either way, and the
+/// event name carries which happened.
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub struct AgentGoalClosed {
+    pub agent: String,
+    pub conv: String,
+    pub goal: String,
+    pub text: String,
+    /// The evidence a `met` carried, or the reason a give-up did.
+    pub note: String,
+    /// How many times it had been put to the conversation before it closed.
+    pub nudges: u64,
+}
+
 /// The JSON Schema of `T` as a plain `serde_json::Value` for a catalog entry — `to_value` of the
 /// reflected schema, so nothing in the catalog is hand-written.
 fn schema<T: JsonSchema>() -> Value {
@@ -262,6 +322,56 @@ pub fn event_types() -> Vec<EventType> {
                 conv: "1750000000000-0001".into(),
                 ask: "q-1750000000000-0001".into(),
                 by: "human".into(),
+            },
+        ),
+        EventType::of(
+            GOAL_SET,
+            "A goal was written onto a conversation — what would make it done.",
+            schema::<AgentGoalSet>(),
+            &AgentGoalSet {
+                agent: "my-agent".into(),
+                conv: "1750000000000-0001".into(),
+                goal: "g-1750000000000-0001".into(),
+                text: "every flaky test in the suite is either fixed or quarantined".into(),
+                set_by: "human".into(),
+            },
+        ),
+        EventType::of(
+            GOAL_NUDGED,
+            "A conversation fell quiet with a goal still open, and was asked whether it is met.",
+            schema::<AgentGoalNudged>(),
+            &AgentGoalNudged {
+                agent: "my-agent".into(),
+                conv: "1750000000000-0001".into(),
+                goals: vec!["g-1750000000000-0001".into()],
+                nudges: 3,
+            },
+        ),
+        EventType::of(
+            GOAL_MET,
+            "A goal was judged done, with whatever evidence was offered for it.",
+            schema::<AgentGoalClosed>(),
+            &AgentGoalClosed {
+                agent: "my-agent".into(),
+                conv: "1750000000000-0001".into(),
+                goal: "g-1750000000000-0001".into(),
+                text: "every flaky test in the suite is either fixed or quarantined".into(),
+                note: "12 fixed, 2 quarantined; three green runs in a row".into(),
+                nudges: 4,
+            },
+        ),
+        EventType::of(
+            GOAL_GIVEN_UP,
+            "A goal was given up on, with the reason it could not be met.",
+            schema::<AgentGoalClosed>(),
+            &AgentGoalClosed {
+                agent: "my-agent".into(),
+                conv: "1750000000000-0001".into(),
+                goal: "g-1750000000000-0001".into(),
+                text: "every flaky test in the suite is either fixed or quarantined".into(),
+                note: "two of them need the staging database, which I cannot reach from here"
+                    .into(),
+                nudges: 9,
             },
         ),
     ]

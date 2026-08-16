@@ -1123,6 +1123,74 @@ pub struct PendingAsks {
     pub asks: Vec<PendingAsk>,
 }
 
+/// One goal on a conversation: what would make it done, and where it got to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentGoal {
+    pub id: String,
+    pub agent: String,
+    /// The conversation it is nudged into — the `run_id` every other agent endpoint takes.
+    pub run_id: String,
+    pub text: String,
+    /// `open`, `met`, or `given_up`.
+    pub state: String,
+    /// `human` or `agent` — whether somebody set this or the run set it for itself.
+    #[serde(default)]
+    pub set_by: String,
+    #[serde(default)]
+    pub created_at: u64,
+    /// How many times the conversation has been asked about it. Shown because nothing closes a goal
+    /// on the run's behalf, so a number that keeps climbing is the only sign of a run circling one.
+    #[serde(default)]
+    pub nudges: u64,
+    #[serde(default)]
+    pub closed_at: Option<u64>,
+    /// The evidence a `met` carried, or the reason a give-up did.
+    #[serde(default)]
+    pub note: String,
+}
+
+/// `POST /api/agents/goals` request — one conversation's goals, or (with neither field) every open
+/// goal on the machine.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct GoalsOf {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub run_id: String,
+}
+
+/// `POST /api/agents/goal/set` request — write a goal onto a conversation, or reword one.
+///
+/// `goal` names an existing goal to reword; without it this creates a new one. A conversation may
+/// carry several, so creating never replaces.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct SetGoal {
+    pub name: String,
+    pub run_id: String,
+    pub text: String,
+    #[serde(default)]
+    pub goal: Option<String>,
+}
+
+/// `POST /api/agents/goal/close` request — close a goal, one way or the other.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct CloseGoal {
+    pub goal: String,
+    /// `met` closes it as done; anything else closes it as given up on. Two spellings rather than a
+    /// boolean because the caller is naming an action, and `met: false` is not what giving up means.
+    #[serde(default)]
+    pub as_: String,
+    /// The evidence, or the reason.
+    #[serde(default)]
+    pub note: String,
+}
+
+/// The answer to every goal endpoint: the goals in question, newest state included.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentGoals {
+    pub goals: Vec<AgentGoal>,
+}
+
 /// `POST /api/agents/run/unqueue` request — drop the message at `index` from a conversation's queue,
 /// before it is ever asked. Out-of-range is a no-op, not an error: a queued message that started its
 /// turn between the click and the request is simply gone.

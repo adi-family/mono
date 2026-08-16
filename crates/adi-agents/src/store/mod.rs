@@ -31,6 +31,7 @@
 //! under the old one's. As a column it is a label on a row that stays exactly where it was filed.
 
 mod db;
+mod goals;
 mod queue;
 mod questions;
 mod record;
@@ -44,6 +45,7 @@ use crate::error::{Error, Result};
 use crate::progress::TurnContent;
 
 pub use db::now_ms;
+pub use goals::{Closed as GoalClosed, Goal, GoalState, SetBy};
 pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
@@ -602,6 +604,89 @@ impl SessionStore {
             .ok()
             .map(|conn| questions::overdue(&conn, now_ms))
             .unwrap_or_default()
+    }
+
+    // ---- goals ---------------------------------------------------------------------
+
+    /// Write down what this conversation is for, returning the stored goal.
+    ///
+    /// # Errors
+    /// [`Error::Arguments`] for empty or oversized text; database errors otherwise. See
+    /// [`goals`](self::goals) for why nothing else here can fail.
+    pub fn create_goal(&self, agent: &str, id: &str, text: &str, set_by: SetBy) -> Result<Goal> {
+        let conn = self.conn()?;
+        goals::create(&conn, agent, id, text, set_by)
+    }
+
+    /// Reword an open goal, returning it as it now reads. `None` when no goal has that id.
+    ///
+    /// # Errors
+    /// [`Error::Arguments`] for empty or oversized text; database errors otherwise.
+    pub fn edit_goal(&self, goal_id: &str, text: &str) -> Result<Option<Goal>> {
+        let conn = self.conn()?;
+        goals::edit(&conn, goal_id, text)
+    }
+
+    /// Close a goal as met or given up. Never refused: a goal already closed answers
+    /// [`GoalClosed::Already`], an id nobody minted answers [`GoalClosed::Unknown`].
+    ///
+    /// # Errors
+    /// Returns database errors only.
+    pub fn close_goal(&self, goal_id: &str, state: GoalState, note: &str) -> Result<GoalClosed> {
+        let conn = self.conn()?;
+        goals::close(&conn, goal_id, state, note)
+    }
+
+    /// Stamp every open goal of a conversation as just put to it, and count the nudge.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn mark_goals_nudged(&self, agent: &str, id: &str, at: u64) -> Result<()> {
+        let conn = self.conn()?;
+        goals::mark_nudged(&conn, agent, id, at)
+    }
+
+    /// One goal by id, wherever it lives.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn goal(&self, goal_id: &str) -> Result<Option<Goal>> {
+        let conn = self.conn()?;
+        goals::by_id(&conn, goal_id)
+    }
+
+    /// Every goal of one conversation, oldest first — open and closed alike.
+    #[must_use]
+    pub fn goals(&self, agent: &str, id: &str) -> Vec<Goal> {
+        self.conn()
+            .ok()
+            .map(|conn| goals::for_conversation(&conn, agent, id))
+            .unwrap_or_default()
+    }
+
+    /// The goals of one conversation still being worked toward, oldest first.
+    #[must_use]
+    pub fn open_goals(&self, agent: &str, id: &str) -> Vec<Goal> {
+        let mut open = self.goals(agent, id);
+        open.retain(Goal::open);
+        open
+    }
+
+    /// Every open goal in the whole store, oldest first — the sweep's one query.
+    #[must_use]
+    pub fn all_open_goals(&self) -> Vec<Goal> {
+        self.conn()
+            .ok()
+            .map(|conn| goals::all_open(&conn))
+            .unwrap_or_default()
+    }
+
+    /// Drop every open goal of an agent, returning how many went. Closed ones stay with the
+    /// transcript that explains them.
+    pub fn forget_goals(&self, agent: &str) -> usize {
+        self.conn()
+            .ok()
+            .map_or(0, |conn| goals::forget_agent(&conn, agent))
     }
 
     // ---- the transcript ------------------------------------------------------------

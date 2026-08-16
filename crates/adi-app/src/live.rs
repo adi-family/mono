@@ -97,6 +97,7 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
         // Reads that are POSTs because they carry a subject — an agent name, a run id — in a body.
         "POST" => match path {
             "/api/agents/peek"
+            | "/api/agents/goals"
             | "/api/agents/run/peek"
             | "/api/agents/runs"
             | "/api/projects/hook/log"

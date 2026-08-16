@@ -12,6 +12,13 @@
 //! a burst. So the dispatcher's observer only *posts* the event here, the worker takes them one at a
 //! time, and the same worker runs the second-by-second sweep for deadlines while it waits.
 //!
+//! The second-by-second sweep now carries three riders, in the order a conversation would want
+//! them: [awaits](adi_agents::awaits) firing, [questions](adi_agents::questions) whose deadline
+//! passed taking their default, and [goals](adi_agents::goals) asking a conversation that has
+//! fallen quiet whether it is done. Goals go last for a reason — the first two can each *un*-quiet
+//! a conversation, and a goal check that ran before them would ask a run about its goal in the same
+//! second something else woke it.
+//!
 //! The worker outlives nothing in particular: it holds a store handle and a channel, and it ends
 //! when the dispatcher that feeds it is dropped.
 
@@ -19,7 +26,7 @@ use std::sync::Arc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
 use std::time::{Duration, Instant};
 
-use adi_agents::{Agents, awaits, questions};
+use adi_agents::{Agents, awaits, goals, questions};
 use adi_events::EventRecord;
 use adi_triggers::EventObserver;
 use tracing::{info, warn};
@@ -67,6 +74,7 @@ fn run(agents: &Agents, rx: &Receiver<Posted>) {
         if Instant::now() >= next_tick {
             report(&awaits::tick(agents));
             report_settled(&questions::tick(agents));
+            report_nudged(&goals::tick(agents));
             next_tick = Instant::now() + TICK;
         }
     }
@@ -106,6 +114,27 @@ fn report_settled(settled: &[questions::Settled]) {
             Some(error) => warn!(
                 ask = %s.id, agent = %s.agent, conversation = %s.conv, question = %s.question, %error,
                 "a question's deadline passed but its default could not be delivered"
+            ),
+        }
+    }
+}
+
+/// Say which conversations were asked about their goals.
+///
+/// Quieter than either of the above, because a nudge is the system working rather than something
+/// going unattended — but worth having, since a goal is the one thing here nothing will ever close
+/// on the run's behalf. A conversation whose id keeps appearing is a run circling a goal it will
+/// neither meet nor give up on, and this log line is where that becomes visible.
+fn report_nudged(nudged: &[goals::Nudged]) {
+    for n in nudged {
+        match n.error.as_deref() {
+            None => info!(
+                agent = %n.agent, conversation = %n.conv, goals = n.goals.len(),
+                "asked a quiet conversation whether its goal is met"
+            ),
+            Some(error) => warn!(
+                agent = %n.agent, conversation = %n.conv, goals = n.goals.len(), %error,
+                "a goal check could not be delivered"
             ),
         }
     }

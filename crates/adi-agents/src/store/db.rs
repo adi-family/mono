@@ -47,13 +47,17 @@ const PRAGMAS: &str = "\
 
 /// The schema. `IF NOT EXISTS` throughout, so any process may be the one that creates it.
 ///
-/// `turns`, `queue` and `questions` all cascade off `sessions`: deleting a session takes its
-/// messages and anything it was waiting to be told with it, in one statement rather than four that
-/// could half-fail. The index on `sessions` is the listing's own order — newest first, id as
-/// tiebreak — so the query that replaced the directory walk reads it straight off the index without
-/// a sort, and `questions_open` is partial for the same reason in reverse: the inbox and the
-/// deadline sweep both ask only about unanswered rows, which are a handful among every question
-/// ever asked.
+/// `turns`, `queue`, `questions` and `goals` all cascade off `sessions`: deleting a session takes
+/// its messages, anything it was waiting to be told, and what it was for, in one statement rather
+/// than five that could half-fail. The index on `sessions` is the listing's own order — newest
+/// first, id as tiebreak — so the query that replaced the directory walk reads it straight off the
+/// index without a sort, and `questions_open` / `goals_open` are partial for the same reason in
+/// reverse: the inbox, the deadline sweep and the goal sweep ask only about the handful of rows
+/// still outstanding among every one ever written.
+///
+/// `goals_by_id` is what lets a goal be found by its id alone rather than by the full key — the id
+/// is quoted back to a run in every nudge, and typed by a shell that may not know which
+/// conversation it is standing in. Unique because that lookup has to be unambiguous.
 const SCHEMA: &str = "\
 CREATE TABLE IF NOT EXISTS sessions (
     agent         TEXT    NOT NULL,
@@ -103,6 +107,23 @@ CREATE TABLE IF NOT EXISTS questions (
 );
 CREATE INDEX IF NOT EXISTS questions_open
     ON questions (asked_at, id) WHERE answer IS NULL;
+CREATE TABLE IF NOT EXISTS goals (
+    agent         TEXT    NOT NULL,
+    session       TEXT    NOT NULL,
+    id            TEXT    NOT NULL,
+    text          TEXT    NOT NULL DEFAULT '',
+    state         TEXT    NOT NULL DEFAULT 'open',
+    set_by        TEXT    NOT NULL DEFAULT 'human',
+    created_at    INTEGER NOT NULL DEFAULT 0,
+    last_nudge_at INTEGER NOT NULL DEFAULT 0,
+    nudges        INTEGER NOT NULL DEFAULT 0,
+    closed_at     INTEGER,
+    note          TEXT    NOT NULL DEFAULT '',
+    PRIMARY KEY (agent, session, id),
+    FOREIGN KEY (agent, session) REFERENCES sessions (agent, id) ON DELETE CASCADE
+);
+CREATE UNIQUE INDEX IF NOT EXISTS goals_by_id ON goals (id);
+CREATE INDEX IF NOT EXISTS goals_open ON goals (created_at, id) WHERE state = 'open';
 ";
 
 /// Columns added to a table that already exists, applied after [`SCHEMA`].

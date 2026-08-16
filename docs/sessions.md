@@ -74,13 +74,15 @@ stdout and stderr into, which is not a thing a row can be. Everything else is a 
 everything else is *listed* — see [db.rs](../crates/adi-agents/src/store/db.rs) for the profile
 that settled it.
 
-Three tables, all keyed `(agent, id)`; `turns` and `queue` cascade off `sessions`:
+Four tables, all keyed `(agent, id)`; `turns`, `queue` and `goals` cascade off `sessions`
+(`goals` is its own subject — see [goals.md](goals.md)):
 
 | table | holds | ordered by |
 |---|---|---|
 | `sessions` | the record: backend, cwd, message, `started_at`, `last_activity`, `hidden`, `runner_state`, `outcome`, `tool_help` | index `sessions_newest (agent, started_at DESC, id DESC)` |
 | `turns` | one row per turn; the whole `Turn` as JSON plus `at` and `role` | `seq` |
 | `queue` | what is waiting to be said next | `seq` |
+| `goals` | what the conversation is *for*: text, state, who set it, how often it has been asked | `created_at` (partial index on the open ones) |
 
 The id is `{unix_millis:013}-{seq:04}` (`store/record.rs`), so it carries its own start time and
 sorts by it.

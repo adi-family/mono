@@ -962,6 +962,12 @@ pub(crate) struct AgentsWatch {
     pub(crate) tokens_busy: RwSignal<bool>,
     pub(crate) tokens_error: RwSignal<String>,
     pub(crate) review_busy: RwSignal<bool>,
+    pub(crate) goals: RwSignal<Vec<AgentGoal>>,
+    pub(crate) goals_of: RwSignal<Option<String>>,
+    pub(crate) goal_input: RwSignal<String>,
+    pub(crate) goal_busy: RwSignal<bool>,
+    pub(crate) goal_editor: RwSignal<bool>,
+    pub(crate) goal_editing: RwSignal<Option<String>>,
 }
 ```
 

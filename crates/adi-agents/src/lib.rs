@@ -35,6 +35,7 @@ mod backend;
 mod backends;
 mod error;
 mod events;
+pub mod goals;
 mod knowledge;
 mod launch;
 mod limits;
@@ -64,8 +65,9 @@ pub use backend::Backend;
 pub use backends::harness::tools::ToolDeclaration;
 pub use error::{Error, Result};
 pub use events::{
-    AgentDeleted, AgentQuestionAnswered, AgentQuestionAsked, AgentRunDeleted, AgentRunFinished,
-    AgentRunStarted, AgentRunStopped, AgentSaved, event_catalog, event_types,
+    AgentDeleted, AgentGoalClosed, AgentGoalNudged, AgentGoalSet, AgentQuestionAnswered,
+    AgentQuestionAsked, AgentRunDeleted, AgentRunFinished, AgentRunStarted, AgentRunStopped,
+    AgentSaved, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
 pub use progress::{
@@ -77,6 +79,7 @@ pub use run::{
 };
 
 use agent::validate_name;
+use workspace::CONV_ENV;
 use backends::adi_events as turn_events;
 use runner::{RunEvent, RunSpec, Runner, Session, human::HumanRunner, runner_for, runner_of};
 use store::{
@@ -523,6 +526,7 @@ impl Agents {
             message,
         )?;
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
+        name_conversation(&mut spec, &record.id);
         let session = store.session(&agent.name, &record.id);
         // The opening question, recorded as a turn so the run reads as a conversation from its
         // first line. Not for a terminal: its launch message is deliberately never typed (the TUI
@@ -944,6 +948,7 @@ impl Agents {
 
         let mut spec = self.spec_in(agent, session_dir(&self.config, record));
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
+        name_conversation(&mut spec, &record.id);
         // Checked before the question is written down, so a spec this engine cannot run leaves no
         // dangling unanswered turn in the transcript.
         runner.check(&spec)?;
@@ -1396,6 +1401,10 @@ impl Agents {
             // *settled* question stays where the conversation that explains it is — but a pending
             // one is a thing to do, and there is no longer anything that could read the answer.
             let _ = self.sessions().forget_questions(name);
+            // Same rule, same reason: an open goal is a standing instruction to keep asking a
+            // conversation something, and there is nothing left to ask. Closed ones stay as
+            // history, beside the transcript that shows how they were met.
+            let _ = self.sessions().forget_goals(name);
             self.emit(
                 "adi.agents.deleted",
                 &AgentDeleted {
@@ -1442,6 +1451,7 @@ impl Agents {
             message,
         )?;
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
+        name_conversation(&mut spec, &record.id);
         let session = store.session(&agent.name, &record.id);
         store.append_turn(&agent.name, &record.id, user_turn(message))?;
         // Composes the prompt and opens the seat. No child is spawned.
@@ -1678,6 +1688,18 @@ fn pin_tool_help(store: &SessionStore, agent: &str, id: &str, spec: &mut RunSpec
     };
     let _ = store.freeze_tool_help(agent, id, &block);
     spec.tool_help = store.tool_help(agent, id).or(Some(block));
+}
+
+/// Tell the run which conversation it is, by exporting [`CONV_ENV`].
+///
+/// Applied after the record is minted, alongside [`pin_tool_help`], because until then there is no
+/// id to export: a spec is assembled before `store.create` chooses one.
+///
+/// The agent's own `[env]` still wins — it is applied inside [`Agents::spec_in`] and this pushes
+/// after it — which is the same precedence every other platform var has. Nobody sensible overrides
+/// this one; the rule is uniform rather than special-cased.
+fn name_conversation(spec: &mut RunSpec, conv: &str) {
+    spec.env.push((CONV_ENV.to_string(), conv.to_string()));
 }
 
 /// Whether this runner keeps a thread a reply can continue — a live pane is typed into, not replied

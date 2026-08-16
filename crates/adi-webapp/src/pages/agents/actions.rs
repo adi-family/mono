@@ -7,7 +7,8 @@
 //! composer — never a shared, overwritten slot.
 
 use adi_webapp_api::types::{
-    AgentDto, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo, AgentStep, AgentTokenSource,
+    AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo, AgentStep,
+    AgentTokenSource,
     AgentTokens, AgentToolStatus, AgentTurn, AgentsState, Dashboard,
     FleetDashboards, NodeDashboard, NodeDashboards,
 };
@@ -274,6 +275,8 @@ fn launch_agent(state: State, watch: AgentsWatch, name: String, message: String,
                 }
                 watch.name.set(Some(name));
                 poll_watch(watch);
+                // A new conversation has none, so this is what clears the last one's off screen.
+                load_goals(watch);
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -399,6 +402,7 @@ fn select_run(watch: AgentsWatch, run_id: String) {
     watch.reply.set(String::new());
     watch.run_id.set(Some(run_id));
     poll_watch(watch);
+    load_goals(watch);
 }
 
 /// Prepend the watch's context prefix (if any) to a message before it is sent — how the
@@ -421,6 +425,7 @@ fn point_conversation(watch: AgentsWatch, name: String, run_id: String, interact
     if !run_id.is_empty() {
         watch.run_id.set(Some(run_id));
         poll_watch(watch);
+        load_goals(watch);
     }
 }
 
@@ -845,6 +850,10 @@ fn run_detail_row(
 /// the very top: what you have already said is nearest the box you said it in.
 fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
     view! {
+        // Above the composer, because a goal is a standing condition on the conversation rather
+        // than a thing said in it — and only where there is a conversation to hold one.
+        {answerable.then(|| goal_bar(state, watch))}
+
         // The composer sits above the transcript, because the transcript reads newest-first:
         // what you type appears at the top, next to the box you typed it in.
         {answerable.then(|| reply_bar(state, watch))}
@@ -1098,6 +1107,256 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
             </div>
         </div>
     }
+}
+
+/// What this conversation is *for*: its open goals, each with the two ways out, and a box to set
+/// one.
+///
+/// Sits above the composer rather than in the transcript, because a goal is not something that was
+/// said — it is a standing condition on the whole conversation, and it outlives every turn under
+/// it. Closed goals are not drawn: what a chat already met is history, and the transcript carries
+/// the turn that met it.
+fn goal_bar(state: State, watch: AgentsWatch) -> AnyView {
+    view! {
+        <div class="adi-ui-type px-3 pt-2">
+            {move || {
+                if watch.goal_editor.get() {
+                    return goal_editor(state, watch);
+                }
+                let open: Vec<AgentGoal> = watch
+                    .goals
+                    .get()
+                    .into_iter()
+                    .filter(|g| g.state == "open")
+                    .collect();
+                // Nothing set — and nothing set is the normal case, so it costs one quiet line.
+                if open.is_empty() {
+                    return goal_link(watch);
+                }
+                open.into_iter().map(|goal| goal_row(state, watch, goal)).collect::<Vec<_>>()
+                    .into_any()
+            }}
+        </div>
+    }
+    .into_any()
+}
+
+/// The closed state: one text link, and no more of the screen than that.
+///
+/// Most conversations never have a goal. A permanently open text box for something rarely used
+/// takes more room than the composer it sits above, and reads as a field somebody forgot to fill in
+/// rather than an option they can take.
+fn goal_link(watch: AgentsWatch) -> AnyView {
+    view! {
+        <adi_ui::Button
+            variant=adi_ui::ButtonVariant::Link
+            size=adi_ui::ButtonSize::Small
+            class="px-0"
+            attr:title="Set what would make this chat done. It is put back to the agent every time \
+                        the chat falls quiet, until it is met or given up on."
+            on:click=move |_| open_goal_editor(watch, None)
+        >
+            "+ Set a goal"
+        </adi_ui::Button>
+    }
+    .into_any()
+}
+
+/// The open editor: the box, Save, Cancel, and the one line explaining what a goal does.
+///
+/// The explanation lives here rather than in the collapsed bar because this is the moment somebody
+/// is deciding what to type — the rest of the time it is a sentence taking up a row to tell you
+/// about a feature you are not using.
+fn goal_editor(state: State, watch: AgentsWatch) -> AnyView {
+    let save = move || {
+        let text = watch.goal_input.get_untracked();
+        if text.trim().is_empty() {
+            return;
+        }
+        set_goal(state, watch, text, watch.goal_editing.get_untracked());
+    };
+    view! {
+        <div class="mb-1 flex items-center gap-2">
+            <adi_ui::Input
+                value=watch.goal_input
+                width=adi_ui::InputWidth::Wide
+                placeholder="what would make this chat done"
+                disabled=Signal::derive(move || watch.goal_busy.get())
+                // Enter saves and Escape closes, because this opened under the cursor and asking
+                // for the mouse back to dismiss a one-line box is the annoying half of a popover.
+                on:keydown=move |ev: leptos::ev::KeyboardEvent| {
+                    match ev.key().as_str() {
+                        "Enter" => save(),
+                        "Escape" => close_goal_editor(watch),
+                        _ => {}
+                    }
+                }
+            />
+            <adi_ui::Button
+                size=adi_ui::ButtonSize::Small
+                disabled=Signal::derive(move || {
+                    watch.goal_busy.get() || watch.goal_input.get().trim().is_empty()
+                })
+                on:click=move |_| save()
+            >
+                "Save"
+            </adi_ui::Button>
+            <adi_ui::Button
+                variant=adi_ui::ButtonVariant::Ghost
+                size=adi_ui::ButtonSize::Small
+                on:click=move |_| close_goal_editor(watch)
+            >
+                "Cancel"
+            </adi_ui::Button>
+        </div>
+        <div class="mb-1 text-mini text-meta">
+            "Put back to the agent every time this chat falls quiet, until it is met or given up on."
+        </div>
+    }
+    .into_any()
+}
+
+/// One open goal, on one line: what it says, and the two ways it ends.
+///
+/// The text itself is the edit control — a goal is a sentence somebody wrote, and the obvious thing
+/// to do with a sentence you disagree with is click it. That also keeps the row down to its two
+/// real actions.
+///
+/// The nudge count appears from the second one on. It is the only visible sign of a run circling a
+/// goal — nothing closes one on its behalf — and "asked 1×" on every goal would make the number
+/// furniture rather than a signal.
+fn goal_row(state: State, watch: AgentsWatch, goal: AgentGoal) -> AnyView {
+    let (met_id, gave_id, edit_id) = (goal.id.clone(), goal.id.clone(), goal.id.clone());
+    let text = goal.text.clone();
+    view! {
+        <div class="mb-1 flex items-center gap-2 text-mini">
+            <span class="shrink-0 text-meta" title="This chat has a goal">"Goal"</span>
+            <adi_ui::Button
+                variant=adi_ui::ButtonVariant::Link
+                size=adi_ui::ButtonSize::Small
+                class="min-w-0 flex-1 justify-start truncate px-0 text-left"
+                attr:title=format!(
+                    "{text} — click to reword{}",
+                    if goal.set_by == "agent" { " (the agent set this itself)" } else { "" },
+                )
+                on:click=move |_| open_goal_editor(watch, Some((edit_id.clone(), text.clone())))
+            >
+                {goal.text.clone()}
+            </adi_ui::Button>
+            {(goal.set_by == "agent").then(|| view! {
+                <span class="shrink-0 text-meta" title="The agent set this goal for itself">"self-set"</span>
+            })}
+            {(goal.nudges > 1).then(|| view! {
+                <span class="shrink-0 text-meta">{format!("asked {}×", goal.nudges)}</span>
+            })}
+            <adi_ui::Button
+                variant=adi_ui::ButtonVariant::Ghost
+                size=adi_ui::ButtonSize::Small
+                disabled=Signal::derive(move || watch.goal_busy.get())
+                attr:title="Close this goal as met"
+                on:click=move |_| close_goal(state, watch, met_id.clone(), "met")
+            >
+                "Met"
+            </adi_ui::Button>
+            <adi_ui::Button
+                variant=adi_ui::ButtonVariant::Danger
+                size=adi_ui::ButtonSize::Small
+                disabled=Signal::derive(move || watch.goal_busy.get())
+                attr:title="Stop working toward this goal, and stop being asked about it"
+                on:click=move |_| close_goal(state, watch, gave_id.clone(), "given_up")
+            >
+                "Give up"
+            </adi_ui::Button>
+        </div>
+    }
+    .into_any()
+}
+
+/// Open the editor on a new goal (`None`) or on one being reworded, seeded with its current text.
+fn open_goal_editor(watch: AgentsWatch, editing: Option<(String, String)>) {
+    match editing {
+        Some((id, text)) => {
+            watch.goal_editing.set(Some(id));
+            watch.goal_input.set(text);
+        }
+        None => {
+            watch.goal_editing.set(None);
+            watch.goal_input.set(String::new());
+        }
+    }
+    watch.goal_editor.set(true);
+}
+
+/// Close the editor and drop the draft — Cancel, Escape, and a successful save all end here.
+fn close_goal_editor(watch: AgentsWatch) {
+    watch.goal_editor.set(false);
+    watch.goal_editing.set(None);
+    watch.goal_input.set(String::new());
+}
+
+/// Load the open conversation's goals. Called when a conversation is opened and after each write —
+/// not from the poll, which has no reason to carry a list that only changes when somebody changes
+/// it.
+fn load_goals(watch: AgentsWatch) {
+    let (Some(name), Some(run_id)) = (watch.name.get_untracked(), watch.run_id.get_untracked())
+    else {
+        return;
+    };
+    // Cleared up front when the conversation changed, so the previous chat's goals are never on
+    // screen under this one's title while the fetch is in flight.
+    if watch.goals_of.get_untracked().as_deref() != Some(run_id.as_str()) {
+        watch.goals.set(Vec::new());
+        watch.goal_input.set(String::new());
+    }
+    spawn_local(async move {
+        let Ok(goals) = fetch::agent_goals(name.clone(), run_id.clone()).await else {
+            return;
+        };
+        // Only if the view is still on this conversation — the same guard every other fetch here
+        // takes, because a slow answer must not land under a chat somebody has since opened.
+        if watch.run_id.get_untracked().as_deref() != Some(run_id.as_str()) {
+            return;
+        }
+        watch.goals.set(goals.goals);
+        watch.goals_of.set(Some(run_id));
+    });
+}
+
+/// Write the editor's text — a new goal, or a rewording when `editing` names one.
+///
+/// The editor is closed only on success. A goal the server refused is still in the box, which is
+/// where somebody can fix it.
+fn set_goal(state: State, watch: AgentsWatch, text: String, editing: Option<String>) {
+    let (Some(name), Some(run_id)) = (watch.name.get_untracked(), watch.run_id.get_untracked())
+    else {
+        return;
+    };
+    watch.goal_busy.set(true);
+    spawn_local(async move {
+        let saved = fetch::set_agent_goal(name, run_id, text, editing).await;
+        watch.goal_busy.set(false);
+        match saved {
+            Ok(goals) => {
+                close_goal_editor(watch);
+                watch.goals.set(goals.goals);
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
+}
+
+/// Close a goal from the chat. `as_` is `met` or anything else, which the endpoint reads as giving
+/// up — the two are named rather than a boolean, because "not met" is not what giving up means.
+fn close_goal(state: State, watch: AgentsWatch, goal: String, as_: &'static str) {
+    watch.goal_busy.set(true);
+    spawn_local(async move {
+        let closed = fetch::close_agent_goal(goal, as_.to_string(), String::new()).await;
+        watch.goal_busy.set(false);
+        match closed {
+            Ok(goals) => watch.goals.set(goals.goals),
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
 }
 
 /// The open conversation's question, if it is waiting on one — [`adi_ui::Ask`] wired to the answer

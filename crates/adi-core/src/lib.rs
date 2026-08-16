@@ -27,7 +27,8 @@ pub use adi_update::{Check as UpdateCheck, Error as UpdateError, State as Update
 pub use adi_update::BUILT_VERSION as VERSION;
 
 pub use adi_agents::arguments::AgentSummaryArguments;
-pub use adi_agents::store::Ask;
+pub use adi_agents::goals;
+pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
     Launch, RawAgentArguments, RunInfo, RunLimits, SecretAttachment, Sent, StoredAgent,

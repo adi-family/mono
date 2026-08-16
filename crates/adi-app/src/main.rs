@@ -682,6 +682,11 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/run/answer") => handlers::answer_run(agents, &req.body),
         // Every conversation waiting on a person, across every agent — the "needs you" inbox.
         ("GET", "/api/agents/questions") => handlers::pending_questions(agents),
+        // What a conversation is for. `goals` reads (a conversation's, or every open one when the
+        // body names nothing); the two writes are set-or-reword and the two ways of closing.
+        ("POST", "/api/agents/goals") => handlers::agent_goals(agents, &req.body),
+        ("POST", "/api/agents/goal/set") => handlers::set_agent_goal(agents, &req.body),
+        ("POST", "/api/agents/goal/close") => handlers::close_agent_goal(agents, &req.body),
         // What a conversation spent its context on. Its own endpoint, not part of the peek: it
         // re-tokenizes the whole transcript, and the peek is polled once a second.
         ("POST", "/api/agents/run/tokens") => handlers::run_tokens(agents, &req.body),

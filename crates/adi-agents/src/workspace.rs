@@ -32,6 +32,12 @@ const WORKING_DIR: &str = "working_dir";
 const WORKDIR_ENV: &str = "ADI_WORKDIR";
 /// The agent's own name — the run had no way to know what it was called.
 const AGENT_ENV: &str = "ADI_AGENT";
+/// This conversation's id, so a run can address the very session it is speaking in — what lets
+/// `adi-mono goals create` with no arguments set a goal on *itself*.
+///
+/// Exported by [`name_conversation`](crate::name_conversation) rather than from [`env`] below,
+/// because a spec is assembled before the record that owns the id exists.
+pub(crate) const CONV_ENV: &str = "ADI_RUN_ID";
 /// The agent's project scope, and that project's directory, when it has one.
 const PROJECT_ENV: &str = "ADI_PROJECT";
 const PROJECT_DIR_ENV: &str = "ADI_PROJECT_DIR";
@@ -155,10 +161,11 @@ pub(crate) fn block(config: &Config, agent: &StoredAgent, workdir: &Path) -> Str
          to step outside this directory on purpose.\n\n\
          {} Prefixing `cd <path> &&` onto each command re-pays for the same move every time and \
          buys nothing.\n\n\
-         It is also `${WORKDIR_ENV}` in your environment, and your own name is `${AGENT_ENV}`, so \
-         a script you write can find both without being told. Every project on this machine sits \
-         under `${PROJECTS_DIR_ENV}` — start from that when you need one of them, rather than \
-         writing a long path to it out again on command after command.",
+         It is also `${WORKDIR_ENV}` in your environment, your own name is `${AGENT_ENV}`, and this \
+         conversation is `${CONV_ENV}` — so a script you write can find all three without being \
+         told. Every project on this machine sits under `${PROJECTS_DIR_ENV}` — start from that \
+         when you need one of them, rather than writing a long path to it out again on command \
+         after command.",
         workdir.display(),
         shell_note(&agent.manifest.backend),
     );
