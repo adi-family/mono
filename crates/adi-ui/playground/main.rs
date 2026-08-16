@@ -1141,7 +1141,9 @@ The first two                    are the same bug. I will read the pairing path 
                     />
                 </div>
             </Show>
-            <Chat turns=turns.clone() class="max-h-140 p-1"/>
+            // Keyed by position, which is only ever right for a transcript like this one:
+            // fixed, and never added to while it is on screen.
+            <Chat turns=adi_ui::by_position(turns.clone()) class="max-h-140 p-1"/>
         </div>
     }
 }

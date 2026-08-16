@@ -69,7 +69,7 @@ pub use attach::{AttachState, Attached, Attaching, files_of};
 pub use badge::{Badge, BadgeTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
 pub use app::{AppItem, AppState};
-pub use chat::{Chat, Image, Queued, Role, ToolCall, ToolState, Turn};
+pub use chat::{Chat, Entry, Image, Queued, Role, ToolCall, ToolState, Turn, by_position};
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
 pub use faq::{Faq, Qna};

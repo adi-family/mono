@@ -17,14 +17,21 @@
 //!
 //! # Cheap at any length
 //!
-//! Two properties do the work, and neither is a virtual list:
+//! Three properties do the work, and none of them is a virtual list:
 //!
+//! - **A keyed list.** Turns arrive as [`Entry`]s carrying an identity, and are rendered
+//!   through `<For>`. A key that has not changed is not re-rendered *at all* — Leptos'
+//!   keyed diff only ever calls the view function for keys it has not seen — so a settled
+//!   turn's DOM is untouched by the poll that lands the next one. This is the load-bearing
+//!   one: see [`Entry`] for what goes wrong without it.
 //! - **`content-visibility: auto`** on every said turn. The browser skips layout, paint and
 //!   style for anything off screen — virtualisation done by the engine, with no windowing,
 //!   no scroll maths, and no rows that pop in wrong.
 //! - **`contain-intrinsic-size`** beside it, so a skipped turn still reserves a plausible
 //!   height. That is what keeps the scrollbar honest and stops the page shuddering as turns
-//!   enter and leave.
+//!   enter and leave. It only tells the truth because the list is keyed: the size the
+//!   browser remembers is remembered *per element*, so an element that keeps its identity
+//!   keeps a size that still describes what is inside it.
 //!
 //! Every turn also carries `shrink-0`, and that one is not an optimisation — see [`LAZY`].
 //!
@@ -86,6 +93,10 @@ pub struct ToolCall {
     pub state: ToolState,
     /// What came back, if anything has. Shown as the result block the model is handed next.
     pub result: Option<String>,
+    /// A DOM id for this one call, so something outside the transcript can send the reader to
+    /// it. A failed call forty turns down a folded run is otherwise unreachable except by
+    /// scrolling — the id is what makes a summary that counts failures able to point at one.
+    pub anchor: Option<String>,
 }
 
 impl ToolCall {
@@ -96,6 +107,7 @@ impl ToolCall {
             params: Vec::new(),
             state: ToolState::default(),
             result: None,
+            anchor: None,
         }
     }
 
@@ -115,6 +127,13 @@ impl ToolCall {
     #[must_use]
     pub fn result(mut self, result: impl Into<String>) -> Self {
         self.result = Some(result.into());
+        self
+    }
+
+    /// Name this call in the DOM, so a link elsewhere can jump to it.
+    #[must_use]
+    pub fn anchor(mut self, anchor: impl Into<String>) -> Self {
+        self.anchor = Some(anchor.into());
         self
     }
 
@@ -171,20 +190,80 @@ pub enum Turn {
     Did(Vec<ToolCall>),
 }
 
+/// A turn with the identity that keeps it still.
+///
+/// The key is why this type exists. A transcript is re-derived from a snapshot on every poll,
+/// and the list is drawn newest-first — so **every** arriving turn shifts the position of
+/// every turn already on screen. Diffed by position, that means each slot is rebuilt against
+/// a different turn than it held a moment ago: markdown re-parsed and re-highlighted from
+/// scratch for the whole transcript once a second, a `<details>` you had opened now standing
+/// over somebody else's tool run, and the height the browser remembered for a skipped turn
+/// now describing the wrong one. Diffed by key, none of that happens — an unchanged key is
+/// not rendered again at all.
+///
+/// The key is also the entry's **DOM id**, so whatever names an entry can also link to it.
+/// It therefore has to be unique within the transcript and valid as an id; the caller picks
+/// it, because only the caller knows what an entry *is*.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    /// Stable across polls, unique in the transcript, and used verbatim as the DOM id.
+    pub key: String,
+    pub turn: Turn,
+}
+
+impl Entry {
+    #[must_use]
+    pub fn new(key: impl Into<String>, turn: Turn) -> Self {
+        Self {
+            key: key.into(),
+            turn,
+        }
+    }
+}
+
+/// Key a list by position — for a transcript that is not going to change, which is what a
+/// fixture and a finished run both are.
+///
+/// **Never for a live one.** A position is not an identity the moment anything is prepended,
+/// and newest-first prepends every time: use it there and every key shifts onto the wrong
+/// turn, which is the exact failure keying exists to prevent.
+#[must_use]
+pub fn by_position(turns: Vec<Turn>) -> Vec<Entry> {
+    turns
+        .into_iter()
+        .enumerate()
+        .map(|(i, turn)| Entry::new(format!("turn-{i}"), turn))
+        .collect()
+}
+
 /// The transcript.
 ///
-/// Hand it turns oldest-first — the order they happened, which is the order a store keeps
+/// Hand it entries oldest-first — the order they happened, which is the order a store keeps
 /// them — and it reverses them for the screen. Nothing else in the app has to think
 /// backwards.
 ///
 /// ```ignore
-/// <Chat turns=Signal::derive(move || store.get())/>
+/// <Chat turns=settled live=streaming/>
 /// ```
 #[component]
 pub fn Chat(
-    /// Oldest first. The component flips it.
+    /// The settled transcript, oldest first. The component flips it.
+    ///
+    /// Settled is the point: these are keyed, and a key that stays is a turn that is never
+    /// re-rendered. Anything still being written belongs in `live` instead — left in here it
+    /// would keep its key while its content changed, and a keyed list would simply never
+    /// show the change.
     #[prop(into)]
-    turns: Signal<Vec<Turn>>,
+    turns: Signal<Vec<Entry>>,
+    /// The turn still being written, if there is one — the only part of a transcript whose
+    /// content changes between polls.
+    ///
+    /// It is drawn outside the keyed list, in a reactive closure of its own, so a streaming
+    /// answer costs one card's worth of work per poll instead of the whole transcript's. Its
+    /// entries are keyed too, so the moment it settles and moves into `turns` the list
+    /// recognises it rather than treating it as new.
+    #[prop(optional, into)]
+    live: Signal<Vec<Entry>>,
     /// What sits at the head of the transcript — **inside** its scroll, above the newest turn.
     ///
     /// This exists because the alternative does not work. A card pinned *outside* the scroll (a
@@ -205,20 +284,46 @@ pub fn Chat(
             {lead.map(|lead| view! {
                 <div class="flex shrink-0 flex-col gap-3">{lead.run()}</div>
             })}
+            // Above the settled list, because it is the newest thing there is. Rebuilt in
+            // place on every poll — which is affordable precisely because it is one turn.
+            //
+            // Reversed in CSS rather than in Rust, and that is the same argument as the keys
+            // below, in miniature. A turn's parts are append-only, so in document order a new
+            // one lands at the end and disturbs nothing before it, and the unkeyed diff here
+            // rebuilds only what actually changed. Reverse the vector instead and every part
+            // shifts by one — which would leave a tool run you had opened standing over a
+            // different run's calls, once a second, for as long as the answer takes.
             {move || {
-                let mut turns = turns.get();
-                turns.reverse();
-                turns
-                    .into_iter()
-                    .map(|turn| match turn {
-                        Turn::Said { role, body, images } => {
-                            view! { <Said role=role body=body images=images/> }.into_any()
-                        }
-                        Turn::Did(calls) => view! { <Did calls=calls/> }.into_any(),
-                    })
-                    .collect::<Vec<_>>()
+                let parts = live.get();
+                (!parts.is_empty()).then(|| view! {
+                    <div class="flex shrink-0 flex-col-reverse gap-3">
+                        {parts.into_iter().map(entry).collect::<Vec<_>>()}
+                    </div>
+                })
             }}
+            <For
+                each=move || {
+                    let mut turns = turns.get();
+                    turns.reverse();
+                    turns
+                }
+                key=|entry: &Entry| entry.key.clone()
+                let:settled
+            >
+                {entry(settled)}
+            </For>
         </div>
+    }
+}
+
+/// One entry, drawn under its own key as its own DOM id.
+fn entry(entry: Entry) -> AnyView {
+    let Entry { key, turn } = entry;
+    match turn {
+        Turn::Said { role, body, images } => {
+            view! { <Said id=key role=role body=body images=images/> }.into_any()
+        }
+        Turn::Did(calls) => view! { <Did id=key calls=calls/> }.into_any(),
     }
 }
 
@@ -237,7 +342,12 @@ const LAZY: &str = "shrink-0 [content-visibility:auto] [contain-intrinsic-size:a
 
 /// One thing said.
 #[component]
-fn Said(role: Role, body: String, #[prop(optional)] images: Vec<Image>) -> impl IntoView {
+fn Said(
+    id: String,
+    role: Role,
+    body: String,
+    #[prop(optional)] images: Vec<Image>,
+) -> impl IntoView {
     let own = match role {
         // The user's own words are a bubble, because they are the short thing you scan for
         // to find where a stretch of work began.
@@ -246,7 +356,7 @@ fn Said(role: Role, body: String, #[prop(optional)] images: Vec<Image>) -> impl 
     };
     let said = !body.trim().is_empty();
     view! {
-        <div class=format!("{LAZY} {own}")>
+        <div id=id class=format!("{LAZY} {own}")>
             {(!images.is_empty()).then(|| view! { <Pictures images=images said=said/> })}
             {said.then(|| view! { <Markdown source=body/> })}
         </div>
@@ -362,7 +472,7 @@ pub fn Queued(
 /// The summary line carries the one call worth seeing without opening: whatever is running
 /// now, or the last one that ran.
 #[component]
-fn Did(calls: Vec<ToolCall>) -> impl IntoView {
+fn Did(id: String, calls: Vec<ToolCall>) -> impl IntoView {
     let n = calls.len();
     // What the closed run shows: the live call if there is one, else the last to have run.
     let head = calls
@@ -380,7 +490,7 @@ fn Did(calls: Vec<ToolCall>) -> impl IntoView {
     };
 
     view! {
-        <details class=format!("{LAZY} group island overflow-hidden bg-card")>
+        <details id=id class=format!("{LAZY} group island overflow-hidden bg-card")>
             <summary class="flex cursor-pointer list-none items-center gap-2 px-3 py-2 \
                             select-none hover:bg-bubble focus-visible:outline-2 \
                             focus-visible:outline-offset-[-2px] focus-visible:outline-accent \
@@ -427,7 +537,7 @@ fn Did(calls: Vec<ToolCall>) -> impl IntoView {
 fn Call(call: ToolCall) -> impl IntoView {
     let dot = call.state.dot_classes();
     view! {
-        <div class="flex flex-col gap-1">
+        <div id=call.anchor.clone() class="flex flex-col gap-1">
             <div class="flex items-center gap-2">
                 <span class=format!("size-1.5 shrink-0 rounded-full {dot}") aria-hidden="true">
                 </span>

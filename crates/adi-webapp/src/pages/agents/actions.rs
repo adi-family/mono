@@ -7,8 +7,8 @@
 //! composer — never a shared, overwritten slot.
 
 use adi_webapp_api::types::{
-    AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo, AgentStep,
-    AgentTokenSource,
+    AgentAsk, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo,
+    AgentStep, AgentTokenSource,
     AgentTokens, AgentToolStatus, AgentTurn, AgentsState, Dashboard,
     FleetDashboards, NodeDashboard, NodeDashboards,
 };
@@ -860,6 +860,28 @@ fn run_detail_row(
 /// Messages still waiting in the queue trail the transcript, so in a newest-first feed they sit at
 /// the very top: what you have already said is nearest the box you said it in.
 fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
+    // Memos, not derived signals, and that is the whole optimisation on this side: a poll writes a
+    // fresh snapshot whenever *anything* in it moved, and a plain derive would hand that on as
+    // "the transcript changed" every time. A memo compares what it produced, so the settled list
+    // notifies only when a turn is genuinely added or finalised — which, for a conversation being
+    // watched, is a handful of times rather than once a second.
+    let settled = Memo::new(move |_| feed_entries(watch, false));
+    let live = Memo::new(move |_| feed_entries(watch, true));
+    // Narrowed for the same reason: the question card owns the selections you are making in it,
+    // and rebuilding it re-creates them empty. Bound to the whole snapshot it was thrown away and
+    // rebuilt on every poll, so a tool call finishing behind an open question cleared the answer
+    // half-typed. It now only rebuilds when the question itself changes.
+    let question = Memo::new(move |_| {
+        watch.peek.with(|p| p.as_ref().and_then(|p| p.pending_question.clone()))
+    });
+    // Likewise: the queue changes when you queue or unqueue something, not when the agent works.
+    let queued = Memo::new(move |_| {
+        watch.peek.with(|p| {
+            p.as_ref()
+                .map(|p| p.turns.iter().filter(|t| t.queued).cloned().collect::<Vec<_>>())
+                .unwrap_or_default()
+        })
+    });
     view! {
         // Above the composer, because a goal is a standing condition on the conversation rather
         // than a thing said in it — and only where there is a conversation to hold one.
@@ -876,34 +898,31 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
                     // First in the feed while it is up: the conversation is not going anywhere
                     // until it is answered, and it is what the eye should land on when the pane
                     // opens.
-                    {move || question_card(state, watch)}
+                    {move || question_card(state, watch, question.get())}
 
                     // Queued messages are said but not yet asked, so they belong above everything
                     // that has happened — as [`adi_ui::Queued`], the hollowed-out twin of the
                     // bubbles below, each carrying the × that takes one back before the agent ever
                     // sees it.
                     {move || {
-                        let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
-                        let mut queued: Vec<AnyView> = turns
-                            .iter()
-                            .filter(|t| t.queued)
+                        let mut bubbles: Vec<AnyView> = queued
+                            .get()
+                            .into_iter()
                             .enumerate()
-                            .map(|(place, t)| queued_bubble(state, watch, t.clone(), place))
+                            .map(|(place, t)| queued_bubble(state, watch, t, place))
                             .collect();
-                        if queued.is_empty() {
+                        if bubbles.is_empty() {
                             return None;
                         }
                         // Newest first, like everything below them.
-                        queued.reverse();
-                        Some(view! { <div class="flex flex-col gap-3">{queued}</div> })
+                        bubbles.reverse();
+                        Some(view! { <div class="flex flex-col gap-3">{bubbles}</div> })
                     }}
                 }
                 .into_any()
             }
-            turns=Signal::derive(move || {
-                let turns = watch.peek.get().map(|p| p.turns).unwrap_or_default();
-                turns.iter().filter(|t| !t.queued).flat_map(feed_turn).collect::<Vec<_>>()
-            })
+            turns=settled
+            live=live
         />
         {move || chat_placeholder(watch)}
     }
@@ -941,26 +960,51 @@ fn tool_params(input: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// One wire turn, as the transcript's own turns.
+/// One wire turn, as the transcript's own entries.
 ///
 /// A user turn is one thing said. An assistant turn is a *sequence*: what it did, what it
 /// said in the middle, what it did next — and its final message, which the wire keeps apart
 /// from the steps. Text is the divider, so every run of tool calls between two things it
 /// said becomes one foldable run.
-fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
-    use adi_ui::{Role, ToolCall, ToolState, Turn as T};
+///
+/// `at` is the turn's index in the whole snapshot — **including queued turns**, which the feed
+/// draws elsewhere but which still occupy an index. It is what every key and anchor here is built
+/// from, and [`collect_stats`] counts the same way, so the rail's links address the elements this
+/// actually renders.
+///
+/// The keys are the point of the split ([`adi_ui::Entry`] explains what they buy). A settled
+/// turn's parts are a fixed sequence, so `{turn}-{part}` names the same bubble for as long as the
+/// conversation lives, and the keyed list leaves it alone. The parts of a turn still being
+/// written are *not* fixed — a run splits in two the moment the agent says something mid-turn —
+/// which is exactly why that turn is drawn outside the keyed list.
+fn feed_turn(at: usize, turn: &AgentTurn) -> Vec<adi_ui::Entry> {
+    use adi_ui::{Entry, Role, ToolCall, ToolState, Turn as T};
+
+    // The first part carries the turn's own anchor, unadorned: that is the id the rail hands out
+    // for a turn the engine reported as failed, and the first bubble is where a reader sent to
+    // "this turn" should land.
+    let key = |part: usize| {
+        if part == 0 {
+            turn_anchor(at)
+        } else {
+            format!("{}-{part}", turn_anchor(at))
+        }
+    };
 
     if turn.role == "user" {
-        return vec![T::Said {
-            role: Role::User,
-            body: turn.text.clone(),
-            images: pictures(turn),
-        }];
+        return vec![Entry::new(
+            key(0),
+            T::Said {
+                role: Role::User,
+                body: turn.text.clone(),
+                images: pictures(turn),
+            },
+        )];
     }
 
     let mut out: Vec<T> = Vec::new();
     let mut run: Vec<ToolCall> = Vec::new();
-    for step in &turn.steps {
+    for (i, step) in turn.steps.iter().enumerate() {
         match step {
             // Something said mid-turn closes the run before it: that is what makes text the
             // divider rather than one more thing in the list.
@@ -988,7 +1032,11 @@ fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
                         AgentToolStatus::Ok => ToolState::Ok,
                         AgentToolStatus::Error => ToolState::Failed,
                         AgentToolStatus::Unanswered => ToolState::Unanswered,
-                    });
+                    })
+                    // A call is addressed by its place in `turn.steps`, not by its place in the
+                    // run it ended up in: the run is a rendering decision that a mid-turn message
+                    // can change, while the step index is what the snapshot itself agrees to.
+                    .anchor(step_anchor(at, i));
                 for (key, value) in tool_params(input) {
                     call = call.param(key, value);
                 }
@@ -1010,7 +1058,41 @@ fn feed_turn(turn: &AgentTurn) -> Vec<adi_ui::Turn> {
             images: Vec::new(),
         });
     }
-    out
+    out.into_iter()
+        .enumerate()
+        .map(|(part, t)| Entry::new(key(part), t))
+        .collect()
+}
+
+/// Split a snapshot's turns into the settled transcript and the one turn still being written.
+///
+/// Everything that changes between two polls of a live run is confined to the last turn: a step
+/// appended, a tool call answered, the streaming text grown, the metrics landing when it ends.
+/// Drawing that one turn apart is what lets the rest be keyed and left alone — see
+/// [`adi_ui::Entry`] for what that saves, and [`Chat`](adi_ui::Chat)'s `live` prop for the other
+/// half of the arrangement.
+///
+/// Queued messages are in the snapshot but not in either list: they are drawn as the feed's lead,
+/// because they have been typed rather than said. They still consume a turn index, which is why
+/// this enumerates before it filters.
+fn feed_entries(watch: AgentsWatch, live: bool) -> Vec<adi_ui::Entry> {
+    // `with` rather than `get`: a snapshot holds every turn, every step and every tool result, and
+    // this runs once per subscriber per poll. Cloning the transcript to look at it is the kind of
+    // cost that does not show up anywhere except the profile.
+    watch.peek.with(|peek| {
+        let Some(turns) = peek.as_ref().map(|p| p.turns.as_slice()) else {
+            return Vec::new();
+        };
+        // The still-being-written turn is the last one actually said. A finished run has one too;
+        // it simply never changes again, and a card that is rebuilt but identical costs nothing.
+        let last = turns.iter().rposition(|t| !t.queued);
+        turns
+            .iter()
+            .enumerate()
+            .filter(|(at, t)| !t.queued && (Some(*at) == last) == live)
+            .flat_map(|(at, t)| feed_turn(at, t))
+            .collect()
+    })
 }
 
 /// A turn's attached images, as the transcript draws them: a URL to fetch each by, and its name.
@@ -1046,15 +1128,14 @@ fn queued_bubble(state: State, watch: AgentsWatch, turn: AgentTurn, place: usize
 /// before the first turn lands, or for a finished run that produced nothing. Renders nothing once any
 /// turn exists, so it never sits among the bubbles.
 fn chat_placeholder(watch: AgentsWatch) -> Option<AnyView> {
-    let peek = watch.peek.get();
-    if peek.as_ref().is_some_and(|p| !p.turns.is_empty()) {
-        return None;
-    }
-    let msg = match peek {
-        None => "Loading…",
-        Some(p) if p.running => "Working…",
-        Some(_) => "No output.",
-    };
+    // `with`, because the two facts this needs are a length and a flag, and `get` would copy the
+    // whole transcript once a second to read them.
+    let msg = watch.peek.with(|peek| match peek {
+        Some(p) if !p.turns.is_empty() => None,
+        None => Some("Loading…"),
+        Some(p) if p.running => Some("Working…"),
+        Some(_) => Some("No output."),
+    })?;
     Some(view! { <adi_ui::Empty class="adi-ui-type">{msg}</adi_ui::Empty> }.into_any())
 }
 
@@ -1427,8 +1508,13 @@ fn close_goal(state: State, watch: AgentsWatch, goal: String, as_: &'static str)
 /// Drawn from the poll's own snapshot, so it appears within a second of the run asking and vanishes
 /// within a second of anybody answering, wherever they answered from: the card is a view of a
 /// stored question, never a thing this tab owns.
-fn question_card(state: State, watch: AgentsWatch) -> Option<AnyView> {
-    let ask = watch.peek.get()?.pending_question?;
+///
+/// `ask` is passed in rather than read from the snapshot here, and that is not a style point: the
+/// card holds the selections being made in it, so it must be rebuilt only when the *question*
+/// changes. Reading the whole snapshot rebuilt it on every poll, which threw those selections away
+/// once a second while the run behind the question kept working.
+fn question_card(state: State, watch: AgentsWatch, ask: Option<AgentAsk>) -> Option<AnyView> {
+    let ask = ask?;
     let ask_id = ask.id.clone();
     let questions: Vec<adi_ui::AskQuestion> = ask
         .questions
@@ -1450,12 +1536,18 @@ fn question_card(state: State, watch: AgentsWatch) -> Option<AnyView> {
     // Recomputed on every poll rather than on a timer of its own: the snapshot already arrives
     // about once a second, which is finer than a countdown in minutes can show.
     let deadline = ask.deadline;
-    let deadline_note = Signal::derive(move || match deadline {
-        None => String::new(),
-        Some(at) => match at.saturating_sub(js_sys::Date::now() as u64) {
-            0 => "taking its own default now".to_string(),
-            left => format!("takes its own default in {}", short_duration(left)),
-        },
+    let deadline_note = Signal::derive(move || {
+        // Tracked for its cadence alone — nothing here reads the snapshot. It is what keeps this
+        // ticking now that the card around it is rebuilt only when the question changes, and it
+        // costs one text node per poll rather than the card and the answers held in it.
+        watch.peek.track();
+        match deadline {
+            None => String::new(),
+            Some(at) => match at.saturating_sub(js_sys::Date::now() as u64) {
+                0 => "taking its own default now".to_string(),
+                left => format!("takes its own default in {}", short_duration(left)),
+            },
+        }
     });
     // No wrapper of its own: this is the transcript's `lead`, so the padding, the type scale and
     // the gap between it and the turn below it all come from the `Chat` it sits inside.
@@ -1963,6 +2055,11 @@ struct ChatStats {
     running: Vec<StepRef>,
     /// Turns the engine reported as failed outright, as anchors into the feed.
     errored: Vec<String>,
+    /// Turns that failed and left *nothing* behind — no step, no text — so the transcript draws
+    /// no bubble for them and there is nowhere to send a reader. Counted rather than linked,
+    /// because the alternative is a jump that lands on nothing, which is what the rail used to
+    /// offer. They are still failures and still belong in the total.
+    errored_silent: usize,
     /// Tools blocked by permission, worst first.
     blocked: Vec<(String, usize)>,
     /// Every tool used: name, calls, and how many of those failed. Most-used first.
@@ -1978,8 +2075,10 @@ struct ChatStats {
 
 /// Add up a transcript.
 ///
-/// Turn indices are the enumeration order of `turns` — exactly what [`feed_view`]'s `For` uses to
-/// name each bubble — so every anchor built here addresses the element that is actually on screen.
+/// Turn indices are the enumeration order of `turns`, queued messages included — exactly what
+/// [`feed_turn`] keys and anchors each bubble by — so every anchor built here addresses an element
+/// that is actually on screen. The two must be counted the same way or the rail's links land
+/// nowhere, which is what they did while the transcript emitted no ids at all.
 /// Queued messages are counted apart from the totals: they have been typed, not asked, and folding
 /// them in would report a conversation longer than the one the agent has actually had.
 fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
@@ -2015,7 +2114,14 @@ fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
             s.cost_micro += m.cost_micro_usd.unwrap_or(0);
             s.work_ms += m.duration_ms.unwrap_or(0);
             if m.is_error {
-                s.errored.push(turn_anchor(t));
+                // Asked of `feed_turn` itself rather than re-derived here: the question is
+                // literally "does this turn draw anything", and a second opinion on it would be
+                // a link that goes dead the day the two answers drift apart.
+                if feed_turn(t, turn).is_empty() {
+                    s.errored_silent += 1;
+                } else {
+                    s.errored.push(turn_anchor(t));
+                }
             }
             for name in &m.permission_denials {
                 bump(&mut blocked, name);
@@ -2135,7 +2241,8 @@ fn chat_analytics(state: State, watch: AgentsWatch) -> AnyView {
         {spend}
         {(!s.failed.is_empty()).then(|| jump_list("Failed", "\u{2717}", "error", s.failed.clone()))}
         {(!s.running.is_empty()).then(|| jump_list("Running", "\u{27F3}", "running", s.running.clone()))}
-        {(!s.errored.is_empty()).then(|| errored_list(s.errored.clone()))}
+        {(!s.errored.is_empty() || s.errored_silent > 0)
+            .then(|| errored_list(s.errored.clone(), s.errored_silent))}
         {(!s.blocked.is_empty()).then(|| blocked_list(&s.blocked))}
         {(!s.by_tool.is_empty()).then(|| tool_breakdown(&s.by_tool))}
         {chat_token_report(state, watch)}
@@ -2260,8 +2367,13 @@ fn jump_list(label: &'static str, badge: &'static str, status: &'static str, ste
 /// Turns the engine gave up on. Distinct from a failed tool call, and worth its own line: a tool that
 /// failed is something the agent saw and could work around, a turn that errored is one it never
 /// finished.
-fn errored_list(anchors: Vec<String>) -> AnyView {
-    let n = anchors.len();
+///
+/// `silent` are the ones that finished with nothing at all — no step and no word — which the
+/// transcript therefore draws no bubble for. They are counted in the head and named on a line that
+/// is deliberately not a button: there is nothing to jump to, and a link that scrolls nowhere reads
+/// as the app being broken rather than as the turn being empty.
+fn errored_list(anchors: Vec<String>, silent: usize) -> AnyView {
+    let n = anchors.len() + silent;
     view! {
         <div class="adi-chome__group" data-status="error">
             <div class="adi-chome__group-head">{format!("Failed turns ({n})")}</div>
@@ -2273,6 +2385,19 @@ fn errored_list(anchors: Vec<String>) -> AnyView {
                     <span class="adi-chome__jump-name">{format!("turn {}", i + 1)}</span>
                 </button>
             }).collect_view()}
+            {(silent > 0).then(|| view! {
+                <div class="adi-chome__jump adi-chome__jump--flat"
+                    title="this turn produced no output to show">
+                    <span class="adi-chome__jump-badge">"\u{26A0}"</span>
+                    <span class="adi-chome__jump-name">
+                        {if silent == 1 {
+                            "1 turn, no output".to_string()
+                        } else {
+                            format!("{silent} turns, no output")
+                        }}
+                    </span>
+                </div>
+            })}
         </div>
     }
     .into_any()
@@ -2512,9 +2637,14 @@ fn load_token_report(state: State, watch: AgentsWatch) {
 
 /// Scroll the transcript to the element the rail is pointing at.
 ///
-/// A step is a `<details>`, so it is opened on the way: arriving at a collapsed summary would make
-/// the link a gesture that appears to do nothing. Silent when the element is gone — a run that has
-/// moved on between render and click is a race, not an error to report.
+/// A step is one call *inside* a folded run, so the `<details>` around it is opened on the way:
+/// arriving at a collapsed summary would make the link a gesture that appears to do nothing. It is
+/// the ancestor that is opened rather than the target itself, because a run holds several calls
+/// and only one of them is the one being pointed at. A turn anchor has no run above it, finds
+/// nothing, and is simply scrolled to.
+///
+/// Silent when the element is gone — a run that has moved on between render and click is a race,
+/// not an error to report.
 fn jump_to(anchor: &str) {
     let Some(el) = web_sys::window()
         .and_then(|w| w.document())
@@ -2522,7 +2652,9 @@ fn jump_to(anchor: &str) {
     else {
         return;
     };
-    let _ = el.set_attribute("open", "");
+    if let Ok(Some(run)) = el.closest("details") {
+        let _ = run.set_attribute("open", "");
+    }
     el.scroll_into_view();
 }
 

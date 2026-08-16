@@ -149,6 +149,7 @@ struct ChatStats {
     failed: Vec<StepRef>,
     running: Vec<StepRef>,
     errored: Vec<String>,
+    errored_silent: usize,
     blocked: Vec<(String, usize)>,
     by_tool: Vec<(String, usize, usize)>,
     tokens: u64,

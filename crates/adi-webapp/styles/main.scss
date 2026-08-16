@@ -971,6 +971,15 @@
 
     &:hover { background: var(--surface-2); }
   }
+  // The same row with nowhere to go: a failure the transcript draws no bubble for, so there is no
+  // element to scroll to. It keeps the badge and the alignment of its neighbours — it belongs in
+  // the same count — and gives up the two things that promise a click.
+  &__jump--flat {
+    color: var(--muted);
+    cursor: default;
+
+    &:hover { background: transparent; }
+  }
   &__jump-badge { flex: none; }
   &__group[data-status="error"] &__jump-badge { color: var(--danger); }
   &__group[data-status="running"] &__jump-badge { color: var(--accent); }

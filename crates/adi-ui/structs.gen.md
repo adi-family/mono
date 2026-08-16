@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-22 structs · 22 enums across 23 files.
+23 structs · 22 enums across 23 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/attach.rs`](#srcattachrs) — `AttachState`, `Attached`, `Attaching`
 - [`src/badge.rs`](#srcbadgers) — `BadgeTone`
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
-- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Image`, `Turn`
+- [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Image`, `Turn`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
 - [`src/faq.rs`](#srcfaqrs) — `Qna`
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
@@ -233,6 +233,7 @@ pub struct ToolCall {
     pub params: Vec<(String, String)>,
     pub state: ToolState,
     pub result: Option<String>,
+    pub anchor: Option<String>,
 }
 ```
 
@@ -261,6 +262,18 @@ pub enum Turn {
         images: Vec<Image>,
     },
     Did(Vec<ToolCall>),
+}
+```
+
+### struct `Entry`
+
+A turn with the identity that keeps it still.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub key: String,
+    pub turn: Turn,
 }
 ```
 
