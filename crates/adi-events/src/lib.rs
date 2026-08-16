@@ -248,16 +248,10 @@ impl Events {
 
     /// The record files currently in the spool (full paths, unsorted). A missing dir is empty.
     fn spool_files(&self) -> Result<Vec<PathBuf>> {
-        let entries = match std::fs::read_dir(self.dir()) {
-            Ok(entries) => entries,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(e) => return Err(Error::Io(e)),
-        };
-        Ok(entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some(RECORD_EXT))
-            .collect())
+        Ok(self
+            .config
+            .module(MODULE)
+            .raw_paths_with_ext(RECORD_EXT)?)
     }
 
     /// Delete the oldest records until at most [`MAX_SPOOL`] remain. Best-effort: this guards a

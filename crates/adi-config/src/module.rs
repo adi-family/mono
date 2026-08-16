@@ -94,6 +94,24 @@ impl Module {
         Ok(())
     }
 
+    /// Every raw file in this module directory whose extension is `ext`, in filesystem order.
+    /// A missing module directory is an empty list — a store nothing has written to yet is not an
+    /// error. The listing half of [`raw_path`](Self::raw_path), for a module that keeps a
+    /// *directory* of same-format records rather than a handful of named files.
+    ///
+    /// # Errors
+    /// [`Error::Io`](crate::Error::Io) on a directory read failure other than not-found.
+    pub fn raw_paths_with_ext(&self, ext: &str) -> Result<Vec<PathBuf>> {
+        let Some(entries) = crate::optional(std::fs::read_dir(&self.dir))? else {
+            return Ok(Vec::new());
+        };
+        Ok(entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().and_then(std::ffi::OsStr::to_str) == Some(ext))
+            .collect())
+    }
+
     /// Remove a raw file; a missing file is `Ok(false)`.
     ///
     /// # Errors
@@ -149,6 +167,37 @@ mod tests {
         );
         assert!(module.remove_raw("blob.bin").expect("remove"));
         assert_eq!(module.read_raw("blob.bin").expect("read again"), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn raw_paths_with_ext_lists_only_that_extension() {
+        let dir = scratch("listing");
+        let _ = std::fs::remove_dir_all(&dir);
+        let module = Module::new(dir.clone());
+
+        // A store nothing has written to yet lists empty rather than failing.
+        assert!(
+            module
+                .raw_paths_with_ext("json")
+                .expect("list missing dir")
+                .is_empty()
+        );
+
+        module.write_raw("a.json", b"{}").expect("write a");
+        module.write_raw("b.json", b"{}").expect("write b");
+        module.write_raw("c.toml", b"").expect("write c");
+        module.write_raw("noext", b"").expect("write noext");
+
+        let mut found: Vec<String> = module
+            .raw_paths_with_ext("json")
+            .expect("list")
+            .iter()
+            .filter_map(|p| p.file_name()?.to_str().map(ToString::to_string))
+            .collect();
+        found.sort();
+        assert_eq!(found, ["a.json", "b.json"]);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 

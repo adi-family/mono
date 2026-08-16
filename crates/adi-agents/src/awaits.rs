@@ -252,13 +252,12 @@ impl Awaits {
     /// than failing the read: one bad file must not stop every other run from waking.
     #[must_use]
     pub fn list(&self) -> Vec<Await> {
-        let Ok(entries) = std::fs::read_dir(self.dir()) else {
-            return Vec::new();
-        };
-        let mut records: Vec<Await> = entries
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().and_then(|e| e.to_str()) == Some(RECORD_EXT))
+        let mut records: Vec<Await> = self
+            .config
+            .module(MODULE)
+            .raw_paths_with_ext(RECORD_EXT)
+            .unwrap_or_default()
+            .into_iter()
             .filter_map(|p| serde_json::from_slice(&std::fs::read(p).ok()?).ok())
             .collect();
         records.sort_by(|a, b| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
