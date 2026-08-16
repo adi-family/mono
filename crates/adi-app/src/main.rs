@@ -177,12 +177,7 @@ async fn blocking<F>(work: F) -> Response
 where
     F: FnOnce() -> Response + Send + 'static,
 {
-    match tokio::task::spawn_blocking(work).await {
-        Ok(response) => response,
-        // The handler panicked. Answering 500 keeps the failure to this one request (and, when it
-        // was a shared read, hands the same 500 to everyone waiting on it).
-        Err(e) => handlers::error(500, &format!("the request handler failed: {e}")),
-    }
+    tokio::task::spawn_blocking(work).await.unwrap_or_else(|e| handlers::error(500, &format!("the request handler failed: {e}")))
 }
 
 /// The webapp's Trunk build output, embedded so the binary is self-contained. Empty until
