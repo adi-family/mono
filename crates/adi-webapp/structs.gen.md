@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-49 structs · 7 enums · 1 type alias across 17 files.
+50 structs · 7 enums · 1 type alias across 18 files.
 
 ## Index
 
@@ -12,6 +12,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
+- [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `AgentStats`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
@@ -58,6 +59,7 @@ pub(crate) enum Icon {
     Book,
     Download,
     Question,
+    Chart,
     Contrast,
 }
 ```
@@ -183,6 +185,33 @@ struct SessionRef {
     run_id: String,
     title: String,
     hidden: bool,
+}
+```
+
+---
+
+## `src/pages/analytics.rs`
+
+### struct `AgentStats`
+
+Everything one agent's history adds up to, beside what its definition says it is.
+
+```rust
+#[derive(Clone)]
+struct AgentStats {
+    name: String,
+    backend: String,
+    project: String,
+    defined: bool,
+    interactive: bool,
+    live_session: bool,
+    runs: usize,
+    running: usize,
+    failed: usize,
+    waiting: usize,
+    turns: u64,
+    cost_micro: u64,
+    last: u64,
 }
 ```
 
@@ -412,6 +441,7 @@ The pages the sidebar navigates between, each mapped to a URL path.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Route {
     Meta,
+    Analytics,
     Projects,
     ProjectDetail,
     Tasks,
@@ -506,6 +536,7 @@ One `TableState` per table in the control panel: how each is sorted, which colum
 #[derive(Clone, Copy)]
 pub(crate) struct Tables {
     pub(crate) agents: TableState,
+    pub(crate) analytics_agents: TableState,
     pub(crate) chats: TableState,
     pub(crate) chat_runs: TableState,
     pub(crate) runs: TableState,

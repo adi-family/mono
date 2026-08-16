@@ -141,6 +141,8 @@ pub(crate) struct State {
 #[derive(Clone, Copy)]
 pub(crate) struct Tables {
     pub(crate) agents: TableState,
+    /// The Global Analytics page's per-agent breakdown.
+    pub(crate) analytics_agents: TableState,
     /// The cross-agent "All chats" index.
     pub(crate) chats: TableState,
     /// One agent's run history, for a backend whose runs read as a conversation…
@@ -197,6 +199,11 @@ impl Tables {
 
         Self {
             agents: TableState::new("agents", c::AGENT_COLS),
+            analytics_agents: TableState::sorted(
+                "analytics-agents",
+                c::ANALYTICS_AGENT_COLS,
+                c::BUSIEST_FIRST,
+            ),
             chats: TableState::sorted("chats", c::CHAT_COLS, c::NEWEST_FIRST),
             chat_runs: TableState::sorted("chat-runs", c::CHAT_RUN_COLS, c::NEWEST_FIRST),
             runs: TableState::sorted("runs", c::RUN_COLS, c::NEWEST_FIRST),
@@ -1536,6 +1543,15 @@ pub(crate) fn subscriptions(
             set_if_changed(s.meta, m);
         }));
     }
+    if route == Route::Analytics {
+        // The whole page is these two listings joined: what is defined, and what it has run.
+        subs.push(Sub::get("/api/agents", move |a: AgentsState| {
+            set_if_changed(s.agents, a);
+        }));
+        subs.push(Sub::get("/api/agents/runs/all", move |c: AllAgentRuns| {
+            set_if_changed(s.all_chats, c);
+        }));
+    }
     if route == Route::Agents {
         subs.push(Sub::get("/api/agents", move |a: AgentsState| {
             set_if_changed(s.agents, a);
@@ -1752,6 +1768,15 @@ pub(crate) async fn load(s: State) {
     if path == Route::Tasks.path() {
         if let Ok(t) = fetch::tasks().await {
             set_if_changed(s.tasks, t);
+        }
+    }
+    if path == Route::Analytics.path() {
+        // The whole page is these two listings joined: what is defined, and what it has run.
+        if let Ok(a) = fetch::agents().await {
+            set_if_changed(s.agents, a);
+        }
+        if let Ok(c) = fetch::all_agent_runs().await {
+            set_if_changed(s.all_chats, c);
         }
     }
     if path == Route::Meta.path()

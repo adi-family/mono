@@ -35,6 +35,10 @@ pub(crate) enum Icon {
     Download,
     /// A question mark in a ring — the way to the FAQ.
     Question,
+    /// Bars rising inside an axis — a reading of what has happened, which is what the
+    /// analytics page is. Deliberately unlike `Dashboard`'s four tiles: one is a chart, the
+    /// other a grid of panels, and at 13px only the bars tell them apart.
+    Chart,
     /// A disc filled on one side — the theme toggle. It says "two of these" without
     /// naming either, which is what a toggle between light and dark is.
     Contrast,
@@ -138,6 +142,10 @@ impl Icon {
                    <path d="M6.15 6.05a1.9 1.9 0 1 1 2.6 1.75c-.5.2-.75.6-.75 1.1v.35"/>
                    <path d="M8 11.75h.01"/>"#
             }
+            Icon::Chart => {
+                r#"<path d="M2.25 2v11.75H14"/>
+                   <path d="M5 11.5V7.25M8 11.5V4.25M11 11.5V8.75"/>"#
+            }
             Icon::Contrast => {
                 r#"<circle cx="8" cy="8" r="6.25"/>
                    <path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor" stroke="none"/>"#
@@ -162,6 +170,7 @@ impl Icon {
 pub(crate) fn route_icon(route: Route) -> Icon {
     match route {
         Route::Meta => Icon::Spark,
+        Route::Analytics => Icon::Chart,
         Route::Projects | Route::ProjectDetail => Icon::List,
         Route::Tasks => Icon::Tasks,
         Route::Agents => Icon::Agent,

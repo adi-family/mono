@@ -44,7 +44,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    OnboardingForm, agents_view, chat_home_view, dashboards_view, database_view, fleet_view,
+    OnboardingForm, agents_view, analytics_view, chat_home_view, dashboards_view, database_view,
+    fleet_view,
     hive_view, knowledge_view, live_view, load_dir, load_store_file,
     mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
@@ -313,6 +314,7 @@ fn Home() -> impl IntoView {
                                 >
                                     "reconfigure agent"
                                 </Button>
+                                {analytics_link()}
                                 {faq_button(faq_open)}
                                 {extended_link()}
                             }
@@ -335,6 +337,7 @@ fn Home() -> impl IntoView {
                         actions=move || {
                             view! {
                                 {install_pill(can_install)}
+                                {analytics_link()}
                                 {faq_button(faq_open)}
                                 {extended_link()}
                             }
@@ -351,6 +354,37 @@ fn Home() -> impl IntoView {
             }
             .into_any()
         }
+    }
+}
+
+/// The way to the [`Route::Analytics`] page: what every agent on this machine has actually run,
+/// which of them are working, and which have never been launched at all.
+///
+/// A plain link rather than a modal like the FAQ beside it, because it is a *page* — it lives in
+/// the control panel's own explorer too, and a screen that answers a question about forty agents
+/// wants the width. Same document as `extended →`, so this is the one dialog-free control here
+/// that navigates.
+fn analytics_link() -> impl IntoView {
+    view! {
+        <a
+            class="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-mini font-medium \
+                   text-meta no-underline hover:bg-card hover:text-ink hover:no-underline"
+            href=Route::Analytics.path()
+            title="What every agent has run — and which have never been launched"
+        >
+            <svg
+                class="size-3 shrink-0"
+                viewBox="0 0 16 16"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+                inner_html=icons::Icon::Chart.path()
+            ></svg>
+            <span>"Global Analytics"</span>
+        </a>
     }
 }
 
@@ -828,6 +862,7 @@ fn App() -> impl IntoView {
         if matches!(
             route.get(),
             Route::Meta
+                | Route::Analytics
                 | Route::Projects
                 | Route::ProjectDetail
                 | Route::Tasks
@@ -1018,6 +1053,7 @@ fn App() -> impl IntoView {
 
                     {move || match route.get() {
                         Route::Meta => meta_view(state, route, meta_form, agents_watch),
+                        Route::Analytics => analytics_view(state),
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run, knowledge),
                         Route::StoreFile => store_file_view(state),
@@ -1069,6 +1105,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
         "Global",
         &[
             Route::Meta,
+            Route::Analytics,
             Route::Projects,
             Route::Tasks,
             Route::Agents,

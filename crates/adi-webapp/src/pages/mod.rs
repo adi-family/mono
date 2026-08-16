@@ -2,6 +2,7 @@
 //! point the [`App`](crate::App) shell routes to; page-local helpers stay private to their module.
 
 mod agents;
+mod analytics;
 mod dashboards;
 mod db;
 mod fleet;
@@ -27,6 +28,9 @@ mod workspaces;
 pub(crate) mod columns {
     pub(crate) use super::agents::COLS as AGENT_COLS;
     pub(crate) use super::agents::{CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS};
+    pub(crate) use super::analytics::{
+        AGENT_COLS as ANALYTICS_AGENT_COLS, BUSIEST_FIRST,
+    };
     pub(crate) use super::dashboards::COLS as DASHBOARD_COLS;
     pub(crate) use super::db::{SCOPE_COLS as DB_SCOPE_COLS, TABLE_COLS as DB_TABLE_COLS};
     pub(crate) use super::fleet::COLS as FLEET_COLS;
@@ -54,6 +58,7 @@ pub(crate) mod columns {
 }
 
 pub(crate) use agents::{agents_view, chat_home_view, live_view, poll_watch, reset_chat_home};
+pub(crate) use analytics::analytics_view;
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
 pub(crate) use fleet::fleet_view;
@@ -82,6 +87,7 @@ mod tests {
     /// adding it here, so the rules below cover it too.
     const ALL: &[(&str, &[&str])] = &[
         ("agents", c::AGENT_COLS),
+        ("analytics-agents", c::ANALYTICS_AGENT_COLS),
         ("chats", c::CHAT_COLS),
         ("chat-runs", c::CHAT_RUN_COLS),
         ("runs", c::RUN_COLS),
@@ -176,5 +182,11 @@ mod tests {
                 c::NEWEST_FIRST.col
             );
         }
+        assert!(
+            c::ANALYTICS_AGENT_COLS.contains(&c::BUSIEST_FIRST.col),
+            "{:?} is not a column of {:?}",
+            c::BUSIEST_FIRST.col,
+            c::ANALYTICS_AGENT_COLS
+        );
     }
 }

@@ -1470,3 +1470,144 @@
   border-top: 1px solid var(--border);
   background: var(--surface-2);
 }
+
+
+// ---- global analytics (`/extended/analytics`) ---------------------------------------
+// Three shapes, all page-local: a row of stat tiles, a fortnight of daily bars, and the
+// "how runs ended" breakdown. None of them is a component — each exists once, on one page,
+// and a component library earns its place by being used twice.
+
+// The tiles. The 1px gap over a border-coloured ground draws the rules between them, so a
+// tile needs no border of its own and the row can reflow to any count without ever doubling
+// one up.
+//
+// Flex rather than a grid, and the reason is the last row: a grid's trailing cells stay
+// empty, and with the ground showing through, "empty" is a slab of border colour the width
+// of the panel. Flex lets the last row's tiles grow into the space instead, so a wrap is
+// invisible.
+.adi-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  background: var(--border);
+}
+
+.adi-stat {
+  flex: 1 1 148px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  background: var(--surface);
+
+  &__value {
+    font-size: var(--text-xl);
+    font-weight: 600;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+    color: var(--ink);
+  }
+
+  &__label {
+    font-size: var(--text-sm);
+    font-weight: 550;
+    color: var(--ink);
+  }
+
+  &__note {
+    font-size: var(--text-sm);
+    color: var(--muted);
+  }
+
+  // Colour is spent only on a number that is asking for something. A machine with nothing
+  // running, nothing waiting and nothing failed shows no colour at all — which is what makes
+  // the one tile that does light up worth looking at.
+  &--live &__value { color: var(--online); }
+  &--warn &__value { color: var(--warn); }
+  &--down &__value { color: var(--down); }
+}
+
+// Runs started per day, as bars. `align-items: end` seats every column on the baseline, so
+// the bar heights are read against each other rather than against their own boxes.
+.adi-spark {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  padding: 14px;
+
+  &__col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: stretch;
+    gap: 5px;
+    height: 104px;
+    min-width: 0;
+  }
+
+  &__bar {
+    display: block;
+    border-radius: 3px 3px 0 0;
+    background: color-mix(in srgb, var(--accent) 55%, transparent);
+    transition: background var(--transition);
+
+    &--today { background: var(--accent); }
+  }
+
+  &__col:hover &__bar { background: var(--accent); }
+
+  &__day {
+    font-family: var(--font-mono);
+    font-size: var(--text-xs);
+    color: var(--muted);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+}
+
+// The endings breakdown: a name, a proportional bar, a count.
+.adi-endrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+
+  &__name {
+    flex: 0 0 auto;
+    min-width: 140px;
+    font-size: var(--text-sm);
+    color: var(--ink);
+  }
+
+  &__track {
+    flex: 1;
+    height: 8px;
+    border-radius: var(--radius-pill);
+    background: var(--surface-2);
+    overflow: hidden;
+  }
+
+  &__fill {
+    display: block;
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+
+    &--err { background: var(--down); }
+  }
+
+  &__n {
+    flex: 0 0 auto;
+    font-size: var(--text-sm);
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+// A wrapped row of chips — the never-run agents.
+.adi-chiprow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}

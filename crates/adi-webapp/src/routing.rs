@@ -16,6 +16,8 @@ pub(crate) const BASE: &str = "/extended";
 pub(crate) enum Route {
     /// The default ADI agent — set up and run `adi-agent` (`/meta`).
     Meta,
+    /// What every agent on this machine has actually run (`/analytics`).
+    Analytics,
     Projects,
     /// A single project's detail page (`/projects/<id>`); the id lives in `State::current_project`.
     ProjectDetail,
@@ -58,6 +60,7 @@ impl Route {
         // canonical names. A path without the prefix falls through to Projects.
         match path.strip_prefix(BASE).unwrap_or(path) {
             "/meta" => Route::Meta,
+            "/analytics" => Route::Analytics,
             "/tasks" => Route::Tasks,
             "/agents" => Route::Agents,
             "/tools" => Route::Tools,
@@ -81,6 +84,7 @@ impl Route {
         // [`Route::from_path`] match these with the prefix stripped back off.
         match self {
             Route::Meta => "/extended/meta",
+            Route::Analytics => "/extended/analytics",
             Route::Projects | Route::ProjectDetail => "/extended/projects",
             Route::Tasks => "/extended/tasks",
             Route::Agents => "/extended/agents",
@@ -103,6 +107,7 @@ impl Route {
     pub(crate) fn title(self) -> &'static str {
         match self {
             Route::Meta => "Meta",
+            Route::Analytics => "Global Analytics",
             Route::Projects => "Projects",
             Route::ProjectDetail => "Project",
             Route::Tasks => "Tasks",
