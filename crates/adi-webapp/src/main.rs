@@ -744,6 +744,11 @@ fn App() -> impl IntoView {
 
     let managed_only = RwSignal::new(true);
 
+    // What the Global Analytics chart's bars measure: false counts runs, true adds up what they
+    // cost. Here rather than in the page for the reason every other view signal is — a page
+    // function re-runs on each route render, and a signal made inside one forgets on every redraw.
+    let analytics_spend = RwSignal::new(false);
+
     // The active page, derived from the URL path. Unknown paths (including `/`) resolve to
     // Projects; canonicalize the address bar so a refresh lands on the same page.
     let route = RwSignal::new(Route::from_path(&current_path()));
@@ -1053,7 +1058,7 @@ fn App() -> impl IntoView {
 
                     {move || match route.get() {
                         Route::Meta => meta_view(state, route, meta_form, agents_watch),
-                        Route::Analytics => analytics_view(state),
+                        Route::Analytics => analytics_view(state, analytics_spend),
                         Route::Projects => projects_view(state, projects_form, route),
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run, knowledge),
                         Route::StoreFile => store_file_view(state),

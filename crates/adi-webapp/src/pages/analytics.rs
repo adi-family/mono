@@ -16,7 +16,7 @@ use adi_webapp_api::types::AgentRunInfo;
 use leptos::prelude::*;
 
 use crate::state::State;
-use crate::ui::{Key, Sort, fmt_date, sort_rows, updated_text};
+use crate::ui::{Key, Sort, fmt_date, segmented, sort_rows, updated_text};
 
 /// The per-agent table's columns. No trailing blank: this page is a reading surface — every
 /// control that acts on an agent lives on the Agents page, and offering half of them here would
@@ -40,10 +40,14 @@ const ACTIVITY_DAYS: i64 = 14;
 
 /// The Global Analytics page: the totals across every agent, the last fortnight of activity, a
 /// per-agent breakdown, the agents nothing has ever run, and how the runs that finished ended.
-pub(crate) fn analytics_view(state: State) -> AnyView {
+///
+/// `spend` is the daily chart's mode — false counts runs, true adds up what they cost. It is owned
+/// by the shell rather than made here, like every other page's view state: this function re-runs on
+/// a route change, and a signal made inside it would put the chart back on runs each time.
+pub(crate) fn analytics_view(state: State, spend: RwSignal<bool>) -> AnyView {
     view! {
         {move || overview_view(state)}
-        {move || activity_view(state)}
+        {move || activity_view(state, spend)}
         {agents_panel(state)}
         {move || idle_view(state)}
         {move || outcomes_view(state)}
@@ -266,6 +270,15 @@ fn overview_view(state: State) -> AnyView {
         .iter()
         .filter(|r| today - local_day(r.started_at, offset) < 7)
         .count();
+    // The same two windows over the money. A run's whole cost books to the day it *started*, which
+    // is what the chart below does too — see [`activity_view`].
+    let day_cost = |window: i64| -> u64 {
+        runs.iter()
+            .filter(|r| today - local_day(r.started_at, offset) < window)
+            .filter_map(|r| r.outcome.as_ref()?.cost_micro_usd)
+            .sum()
+    };
+    let (today_cost, week_cost) = (day_cost(1), day_cost(7));
 
     view! {
         <section class="adi-panel">
@@ -294,7 +307,9 @@ fn overview_view(state: State) -> AnyView {
                 {stat(failed.to_string(), "Ended in error",
                     "the engine's own verdict".to_string(),
                     if failed > 0 { "adi-stat--down" } else { "" })}
-                {stat(fmt_cost(cost), "Spend", "what the engines reported".to_string(), "")}
+                {stat(fmt_cost(cost), "Spend",
+                    format!("{} today · {} this week", fmt_money(today_cost), fmt_money(week_cost)),
+                    "")}
             </div>
         </section>
     }
@@ -317,42 +332,68 @@ fn stat(value: String, label: &'static str, note: String, tone: &'static str) ->
 
 // ---- the activity chart ------------------------------------------------------------------------
 
-/// Runs started per day over the last fortnight — the shape of the machine's week, which no
-/// single total says. Bars are drawn from divs rather than an SVG or a chart library: fourteen
-/// rectangles are not worth a dependency in a wasm bundle.
-fn activity_view(state: State) -> AnyView {
+/// The last fortnight, a bar per day — the shape of the machine's week, which no single total
+/// says. `spend` picks what the bars measure: how many runs started that day, or what they cost.
+///
+/// Bars are drawn from divs rather than an SVG or a chart library: fourteen rectangles are not
+/// worth a dependency in a wasm bundle.
+///
+/// **A run books its whole cost to the day it started.** A run that opens before midnight and
+/// finishes after it is one number, and the engine reports it once, at the end — so the choice is
+/// which day gets it, not how to divide it. The start is the day the work was *asked for*, which
+/// is the day a reader is thinking of when they ask what a Tuesday cost.
+fn activity_view(state: State, spend: RwSignal<bool>) -> AnyView {
     if state.all_chats.get().is_none() {
         return ().into_any();
     }
     let runs = all_runs(state);
     let offset = tz_offset_ms();
     let today = local_day(now_ms(), offset);
-    // One bucket per day, oldest first, so the chart reads left-to-right into today.
-    let mut days = vec![0usize; ACTIVITY_DAYS as usize];
+    // One bucket per day, oldest first, so the chart reads left-to-right into today. Both series
+    // are counted in one pass and both ride in every bar's hover text, whichever one is drawn —
+    // the question "and what did that day cost?" is one the chart should answer without a click.
+    let mut days = vec![Day::default(); ACTIVITY_DAYS as usize];
     for r in &runs {
         let age = today - local_day(r.started_at, offset);
-        if (0..ACTIVITY_DAYS).contains(&age) {
-            days[(ACTIVITY_DAYS - 1 - age) as usize] += 1;
+        if !(0..ACTIVITY_DAYS).contains(&age) {
+            continue;
         }
+        let day = &mut days[(ACTIVITY_DAYS - 1 - age) as usize];
+        day.runs += 1;
+        day.cost_micro += r
+            .outcome
+            .as_ref()
+            .and_then(|o| o.cost_micro_usd)
+            .unwrap_or(0);
     }
-    let peak = days.iter().copied().max().unwrap_or(0);
-    let total: usize = days.iter().sum();
+
+    let showing_spend = spend.get();
+    // Every bar is a percentage of the tallest one, so the two series each get the full height
+    // rather than the money series being invisible next to a run count.
+    let value = move |d: &Day| if showing_spend { d.cost_micro } else { d.runs as u64 };
+    let peak = days.iter().map(value).max().unwrap_or(0);
+    let total: u64 = days.iter().map(value).sum();
 
     let bars = days
         .iter()
         .enumerate()
-        .map(|(i, n)| {
+        .map(|(i, d)| {
             let day = today - (ACTIVITY_DAYS - 1 - i as i64);
             let date = fmt_date((day * 86_400) as u64);
-            // Percent of the tallest bar, floored at a sliver so a day with one run is still
-            // visibly a day with one run rather than an empty column.
-            let height = match (peak, *n) {
+            // Floored at a sliver, so a day with one run is visibly a day with one run rather
+            // than an empty column.
+            let height = match (peak, value(d)) {
                 (0, _) | (_, 0) => "0".to_string(),
                 (peak, n) => format!("{}%", (n * 100 / peak).max(6)),
             };
             let is_today = day == today;
+            let hover = format!(
+                "{date} — {} run(s) · {}",
+                d.runs,
+                fmt_money(d.cost_micro)
+            );
             view! {
-                <div class="adi-spark__col" title=format!("{date} — {n} run(s)")>
+                <div class="adi-spark__col" title=hover>
                     <span class="adi-spark__bar" class:adi-spark__bar--today=is_today
                         style=format!("height:{height}")></span>
                     <span class="adi-spark__day">{if is_today {
@@ -369,16 +410,26 @@ fn activity_view(state: State) -> AnyView {
         <section class="adi-panel">
             <div class="adi-panel__head">
                 <h2 class="adi-panel__title">"Activity"</h2>
-                <span class="adi-chip adi-mono" title="runs started in the last 14 days">
-                    {total.to_string()}
+                <span class="adi-chip adi-mono" title="the last 14 days, added up">
+                    {if showing_spend { fmt_money(total) } else { total.to_string() }}
                 </span>
                 <span class="adi-spacer"></span>
-                <span class="adi-updated">"runs started, per day"</span>
+                <span class="adi-updated">
+                    {if showing_spend { "spend, per day" } else { "runs started, per day" }}
+                </span>
+                {segmented("What the bars measure", spend, "Runs", "Spend")}
             </div>
             <div class="adi-spark">{bars}</div>
         </section>
     }
     .into_any()
+}
+
+/// One day's two totals: how many runs started, and what they came to.
+#[derive(Clone, Copy, Default)]
+struct Day {
+    runs: usize,
+    cost_micro: u64,
 }
 
 // ---- the per-agent table -----------------------------------------------------------------------
@@ -655,11 +706,20 @@ fn ago(ms: u64) -> String {
     }
 }
 
-/// Micro-dollars as money. Anything under a cent reads as `<$0.01` rather than `$0.00`, which
-/// would say "free" about a run that wasn't.
+/// Micro-dollars as money, for a cell that may have nothing to report. Anything under a cent reads
+/// as `<$0.01` rather than `$0.00`, which would say "free" about a run that wasn't.
 fn fmt_cost(micro: u64) -> String {
     match micro {
         0 => "—".to_string(),
+        n => fmt_money(n),
+    }
+}
+
+/// Micro-dollars as money, always. For a *window* — a day, a week — where nothing spent is a real
+/// answer worth printing, and the dash [`fmt_cost`] gives would read as "not known".
+fn fmt_money(micro: u64) -> String {
+    match micro {
+        0 => "$0.00".to_string(),
         n if n < 10_000 => "<$0.01".to_string(),
         n => format!("${:.2}", n as f64 / 1_000_000.0),
     }
@@ -676,6 +736,14 @@ mod tests {
         assert_eq!(fmt_cost(9_999), "<$0.01");
         assert_eq!(fmt_cost(10_000), "$0.01");
         assert_eq!(fmt_cost(1_500_000), "$1.50");
+    }
+
+    /// A day that cost nothing costs `$0.00`; only a *cell* with nothing to report gets the dash.
+    #[test]
+    fn a_window_reports_zero_rather_than_nothing() {
+        assert_eq!(fmt_money(0), "$0.00");
+        assert_eq!(fmt_money(1), "<$0.01");
+        assert_eq!(fmt_money(2_500_000), "$2.50");
     }
 
     /// The offset is subtracted, so a timestamp just before local midnight belongs to the day that

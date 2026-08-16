@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-50 structs · 7 enums · 1 type alias across 18 files.
+51 structs · 7 enums · 1 type alias across 18 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
-- [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `AgentStats`
+- [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `AgentStats`, `Day`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
@@ -212,6 +212,18 @@ struct AgentStats {
     turns: u64,
     cost_micro: u64,
     last: u64,
+}
+```
+
+### struct `Day`
+
+One day's two totals: how many runs started, and what they came to.
+
+```rust
+#[derive(Clone, Copy, Default)]
+struct Day {
+    runs: usize,
+    cost_micro: u64,
 }
 ```
 
