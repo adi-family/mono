@@ -310,6 +310,11 @@ This is `apps/ios` on a desktop, and the reasoning is the phone's
   a list of rows that all refuse to open. A row that is not yet granted asks for `http:<label>`
   rather than offering a link that would answer *not authorized*, and that escalates nothing —
   `http:app` plus the password *is* the control panel. The grant adds reach, not authority.
+- **The node itself opens, always.** Beside the group's lock sits a link to `app.<node>.n.adi` — the
+  node's own panel, the one service pairing already granted. It is offered in every state, including
+  locked: what "locked" means here is that *this machine* holds no password to ask with, and a
+  browser opening that host asks the operator for one instead. So a node whose rows all read as asks,
+  or which lists nothing at all, is still one click from the panel that can answer why.
 - **This machine keeps the node's password, and that is the one departure from §8.** A transfer asks
   per transfer and stores nothing, which is right for a button pressed once; a rail refreshes, so
   re-prompting would make it unusable. The credential goes into `adi-secrets` (XChaCha20-Poly1305
@@ -318,6 +323,21 @@ This is `apps/ios` on a desktop, and the reasoning is the phone's
   business in a subprocess's env. It is checked against the node before it is stored — a credential
   that does not work is worse than none, because the rail would then report a fault where the answer
   is a password. Nothing puts it back on the wire: the DTO says only whether a node is locked.
+- **And once kept, it is spent on the way out.** An unlocked node's links used to open a browser
+  prompt for the password this machine was already holding — the panel could ask the node anything
+  and the browser beside it could ask nothing. So the **calling side of the gateway** attaches it:
+  on the first head of each connection to `<service>.<node>.n.adi`, if this machine holds that node's
+  credential and the client sent none, an `Authorization` header is added
+  (`adi-mesh::gateway::NodeCredentials`, answered by `adi-app/src/viewer.rs`). Three properties make
+  it the right place. It *adds* to the head and rewrites nothing, so §3's byte-for-byte `Host` and
+  target still hold. A client that authenticated itself always wins, so a stored password gone stale
+  self-heals — the node's `401` reaches the browser, the person types the new one, and their header
+  is never overwritten. And the first head is enough: the node authenticates the request it admits
+  and splices the rest, so a connection that opened authenticated stays that way. What this does
+  **not** do is widen the mesh: both halves of §5 are still enforced on the node, and the password is
+  still one this machine's operator gave it. It moves authority the panel already had onto the client
+  they browse with, and the undo is on screen — **Lock** forgets the password, and the node
+  challenges again on the next connection.
 - **Every state is a row.** A node that is down, locked or refusing still appears, with what it said.
   A fleet that appeared to shrink whenever a machine slept would be worse than one that says so. The
   order is answered, then refused, then locked — which is also where a *viewer* lands, since a phone
@@ -412,4 +432,7 @@ Each item ships with unit tests in the same file.
 - [x] H4 `unlock` / `forget` / `allow`, each answering with the fresh listing so the rail updates
       in one round-trip.
 - [x] H5 The chat home's dashboards rail: the local groups, then one group per node, with an
-      inline password field for a locked one and an "Allow" on a row the node has not granted.
+      inline password field for a locked one, an "Allow" on a row the node has not granted, and a
+      "Panel" link to the node's own `app.<node>.n.adi` beside its lock.
+- [x] H6 The gateway spends a held password: `NodeCredentials` on the calling side, so an unlocked
+      node's links open without a browser prompt, and a client's own header always wins.

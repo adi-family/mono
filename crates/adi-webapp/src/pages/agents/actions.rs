@@ -3756,6 +3756,19 @@ fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
         .into_any()
     };
 
+    // Beside it, the node itself. Its dashboards are each one origin under this node, and the node
+    // is one more: its control panel, which is the only service pairing grants unasked (§8). So this
+    // one link is live even while every row under it is an ask — and even while the row is locked,
+    // where the browser asks for the password this machine does not hold.
+    let panel_host = node.app_host();
+    let panel = view! {
+        <a class="adi-chome__group-act" href=format!("http://{panel_host}/")
+            target="_blank" rel="noreferrer"
+            title=format!("This node's own control panel, over the mesh: {panel_host}")>
+            "Panel"
+        </a>
+    };
+
     let body = if locked && opening {
         chat_unlock_form(state)
     } else if let Some(error) = node.error.clone() {
@@ -3772,13 +3785,13 @@ fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
             .into_any()
     };
 
-    // A node is a band like a project is, so it is the same heading — with the node's one
-    // control riding its right edge where a count would otherwise sit.
+    // A node is a band like a project is, so it is the same heading — with the node's own
+    // controls riding its right edge where a count would otherwise sit.
     let n = node.dashboards.len();
     view! {
         <div class="relative">
             <adi_ui::RailGroup label=name count=n>{body}</adi_ui::RailGroup>
-            <div class="absolute top-3 right-2.5">{action}</div>
+            <div class="absolute top-3 right-2.5 flex items-center gap-2">{panel}{action}</div>
         </div>
     }
     .into_any()

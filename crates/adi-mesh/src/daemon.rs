@@ -20,7 +20,7 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::config::MeshConfig;
-use crate::gateway::{self, Gateway};
+use crate::gateway::{self, Gateway, NodeCredentials};
 use crate::{client, host, identity, join, protocol, relay, ticket};
 
 /// How long to wait for a home relay before publishing a (possibly direct-only) ticket.
@@ -37,11 +37,24 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    /// Load config + identity, bind the endpoint, and start the host + client roles.
+    /// Load config + identity, bind the endpoint, and start the host + client roles, with no node
+    /// passwords to spend — every node this machine calls will challenge for one.
     ///
     /// # Errors
     /// Fails if the config/identity can't be read or the endpoint can't bind.
     pub async fn start() -> anyhow::Result<Self> {
+        Self::start_with(None).await
+    }
+
+    /// [`start`](Self::start), plus the node passwords this machine already holds
+    /// ([`NodeCredentials`]). The control panel passes its store, so a browser here is not asked
+    /// for a password the machine keeps; nothing else does, and nothing else changes.
+    ///
+    /// # Errors
+    /// As [`start`](Self::start).
+    pub async fn start_with(
+        credentials: Option<Arc<dyn NodeCredentials>>,
+    ) -> anyhow::Result<Self> {
         let cfg = MeshConfig::load()?;
         let secret = identity::load_or_create()?;
         let mut builder = Endpoint::builder(presets::N0)
@@ -74,7 +87,11 @@ impl Daemon {
 
         // Both roles served over the endpoint share this: the forward loop dispatches the
         // gateway's ALPN to it, and the local listener below calls out through it.
-        let gateway = Arc::new(Gateway::new(endpoint.clone()));
+        let gateway = Gateway::new(endpoint.clone());
+        let gateway = Arc::new(match credentials {
+            Some(credentials) => gateway.with_credentials(credentials),
+            None => gateway,
+        });
 
         let host_cfg = Arc::new(cfg.host.clone());
         tasks.push(tokio::spawn(host::serve(

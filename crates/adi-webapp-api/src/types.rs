@@ -226,11 +226,10 @@ impl FleetNode {
         format!("{head}\u{2026}{tail}")
     }
 
-    /// This node's control panel: `app.<petname>.n.adi` (§1). The `n.adi` suffix is reserved for
-    /// remote nodes, so this can never collide with a local `<service>.adi`.
+    /// This node's control panel: `app.<petname>.n.adi` (§1).
     #[must_use]
     pub fn app_host(&self) -> String {
-        format!("app.{}.n.adi", self.petname)
+        node_app_host(&self.petname)
     }
 
     /// Whether the node declares a nickname this machine has not acknowledged.
@@ -2673,6 +2672,24 @@ pub struct NodeDashboards {
     pub me: Option<String>,
     /// Its live dashboards, in the order the node's own panel listed them.
     pub dashboards: Vec<NodeDashboard>,
+}
+
+impl NodeDashboards {
+    /// This node's own control panel — the same `app.<petname>.n.adi` the fleet table links to,
+    /// reached from this listing instead of that one. Offered whatever the row's state is: `http:app`
+    /// is the one grant pairing always hands out (§8), and it is the address to reach when the rail
+    /// is locked, since the browser can ask for the password this machine does not hold.
+    #[must_use]
+    pub fn app_host(&self) -> String {
+        node_app_host(&self.node)
+    }
+}
+
+/// `app.<petname>.n.adi` — one node's control panel host (§1). The `n.adi` suffix is reserved for
+/// remote nodes, so this can never collide with a local `<service>.adi`.
+#[must_use]
+pub fn node_app_host(petname: &str) -> String {
+    format!("app.{petname}.n.adi")
 }
 
 /// One dashboard running on a node.

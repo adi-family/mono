@@ -270,6 +270,7 @@ pub struct Gateway {
     registry: Snapshot<FleetRegistry>,
     routes: Snapshot<Routes>,
     pool: Pool<IrohDialer>,
+    credentials: Option<Arc<dyn NodeCredentials>>,
 }
 ```
 

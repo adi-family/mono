@@ -425,6 +425,35 @@ fn credentials(secrets: &Secrets) -> Credentials {
     })
 }
 
+/// The same store, as the **mesh gateway** asks it: the credential for one node, on its way out.
+///
+/// This is what makes the fleet's links click through. A node's dashboards are ordinary links on
+/// their own origin (§4), and the panel is one more — so opening any of them is a browser request
+/// that the node challenges, and a person typing a password this machine has held all along. The
+/// gateway is the last hop that is still ours, and it is the only one that knows which node the
+/// host resolved to, so that is where the credential is spent
+/// ([`adi_mesh::gateway::NodeCredentials`]).
+///
+/// **This is the second departure from §8, and the same one.** Keeping the password already means
+/// this machine can act as the node's operator without asking — the rail lists, grants and
+/// transfers with it. Attaching it to a browser request adds no authority the panel did not have;
+/// it moves the authority the operator already granted from one client (the panel) to the client
+/// they actually browse with. Both halves of §5 still hold *on the node*, which is the side that
+/// owns them. And the undo is the one already on screen: **Lock** forgets the password, and the
+/// node challenges again on the next request.
+///
+/// A unit struct, deliberately: it holds no password and no open store, so nothing is cached past
+/// the moment it is asked and `Lock` takes effect on the next connection rather than the next
+/// restart.
+#[derive(Debug)]
+pub(crate) struct HeldCredentials;
+
+impl adi_mesh::gateway::NodeCredentials for HeldCredentials {
+    fn authorization(&self, node: &str) -> Option<String> {
+        credentials(&Secrets::open()).get(node).map(Credential::auth)
+    }
+}
+
 /// Write the credential set back, removing the secret entirely once it holds nothing — an empty
 /// object left behind would be a row on the Secrets page that says a machine keeps passwords it
 /// does not keep.

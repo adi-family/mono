@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-13 structs · 1 enum · 2 type aliases across 8 files.
+14 structs · 1 enum · 2 type aliases across 8 files.
 
 ## Index
 
@@ -14,7 +14,7 @@
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
 - [`src/node.rs`](#srcnoders) — `CallError`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
-- [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`
+- [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
 
 ---
@@ -225,6 +225,15 @@ Every node credential this machine holds, by petname.
 
 ```rust
 type Credentials = BTreeMap<String, Credential>;
+```
+
+### struct `HeldCredentials`
+
+The same store, as the **mesh gateway** asks it: the credential for one node, on its way out.
+
+```rust
+#[derive(Debug)]
+pub(crate) struct HeldCredentials;
 ```
 
 ---

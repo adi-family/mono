@@ -18,7 +18,9 @@
 //! what the viewer calls it, so a rewritten `Host` would send its absolute redirects to a
 //! same-named host on the *viewer's* machine, and a rewritten path would make a dashboard's `/api`
 //! answer at a URL the page never asked for (`docs/fleet.md` §3, §4). What the gateway matched and
-//! what the service reads are the same bytes.
+//! what the service reads are the same bytes. One header is *added* — the password this machine
+//! already holds for the node, when the client sent none ([`prefill_auth`]) — which is a different
+//! act: nothing that was in the head changes, and a client that authenticated itself is left alone.
 //!
 //! **Authorization comes before resolution.** [`admit`] asks "may this peer have `nosh`?" before
 //! it asks "do we serve `nosh`?", so an unpaired peer learns nothing about which services exist
@@ -318,6 +320,23 @@ pub trait NodeSide: Send + Sync + 'static {
     fn realm(&self) -> String;
 }
 
+/// The node passwords *this* machine already holds, for the calling side to attach.
+///
+/// The gateway is the last point at which a request is this machine's rather than the node's, and
+/// the only one that knows which node a `*.n.adi` host resolved to — so it is where a password the
+/// machine already keeps can be spent, instead of a person being asked for it a second time in a
+/// browser prompt. What is held and where is entirely the implementor's business: the control panel
+/// answers from its encrypted store (`adi-app/src/viewer.rs`), and a gateway built without one — the
+/// `mesh run` binary, the iOS viewer — behaves exactly as it did before, every node challenging.
+///
+/// `Debug` so [`Gateway`] keeps its derive. Implementations are *handles*, never the passwords
+/// themselves, so nothing here prints a credential.
+pub trait NodeCredentials: std::fmt::Debug + Send + Sync + 'static {
+    /// The `Authorization` header value for `node`, or `None` when this machine holds nothing for
+    /// it — in which case the node challenges and the browser asks, as it always did.
+    fn authorization(&self, node: &str) -> Option<String>;
+}
+
 /// The gateway: both ends of `adi/mesh/http/1`, plus the state they share.
 ///
 /// One object rather than two because the registry is the same file for both — the calling side
@@ -335,6 +354,9 @@ pub struct Gateway {
     registry: Snapshot<FleetRegistry>,
     routes: Snapshot<Routes>,
     pool: Pool<IrohDialer>,
+    /// What this machine may authenticate *as* when it calls a node ([`NodeCredentials`]). `None`
+    /// on a gateway nobody gave a store to, which is every gateway that is not the control panel's.
+    credentials: Option<Arc<dyn NodeCredentials>>,
 }
 
 impl Gateway {
@@ -359,7 +381,21 @@ impl Gateway {
             registry: Snapshot::new(registry),
             routes: Snapshot::new(routes),
             pool: Pool::new(IrohDialer { endpoint }),
+            credentials: None,
         }
+    }
+
+    /// Spend the node passwords in `credentials` on the way out, so a browser here is not asked for
+    /// one this machine already holds. See [`NodeCredentials`] and [`Self::prefill_auth`].
+    #[must_use]
+    pub fn with_credentials(mut self, credentials: Arc<dyn NodeCredentials>) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
+    /// This gateway's answer to [`prefill_auth`]. Blocking: the store behind it is a file.
+    fn prefill_auth(&self, node: &str, head: Vec<u8>) -> Vec<u8> {
+        prefill_auth(self.credentials.as_ref(), node, head)
     }
 
     /// Re-read the registry and the route table. Blocking file I/O — call it off the runtime.
@@ -667,7 +703,10 @@ pub async fn serve(listener: TcpListener, gateway: Arc<Gateway>, mut shutdown: w
 }
 
 /// One browser connection: name → peer → bi-stream → bytes.
-async fn handle_client(mut tcp: TcpStream, gateway: &Gateway) -> anyhow::Result<()> {
+///
+/// The `Arc` rather than a plain reference is for the credential lookup, which is file I/O and so
+/// runs on the blocking pool with a handle of its own.
+async fn handle_client(mut tcp: TcpStream, gateway: &Arc<Gateway>) -> anyhow::Result<()> {
     let head = read_head(&mut tcp).await?;
     if head.is_empty() {
         return Ok(()); // The client hung up before sending anything.
@@ -707,10 +746,18 @@ async fn handle_client(mut tcp: TcpStream, gateway: &Gateway) -> anyhow::Result<
         }
     };
 
+    // Off the runtime: reading a held credential is a file read and a decrypt on the control
+    // panel's store, and this runs on the connection's own task.
+    let head = {
+        let gateway = Arc::clone(gateway);
+        let node = node.clone();
+        tokio::task::spawn_blocking(move || gateway.prefill_auth(&node, head)).await?
+    };
+
     protocol::write_http_request(&mut send, &service).await?;
     match protocol::read_http_status(&mut recv).await? {
         HttpStatus::Ok => {
-            // The head verbatim, `Host` and target untouched — see the module docs.
+            // The head verbatim otherwise, `Host` and target untouched — see the module docs.
             send.write_all(&head).await?;
             debug!(%host, %node, %service, "gateway: proxying");
             tunnel::splice(tcp, send, recv).await;
@@ -961,6 +1008,66 @@ fn header_value(head: &[u8], name: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// The request head as it should reach `node`: this machine's stored password attached, when it
+/// holds one and the client sent none.
+///
+/// This is the one thing the calling side puts into a head, and it *adds* rather than rewrites —
+/// `Host` and the target still arrive byte for byte, which is the invariant the module docs are
+/// about. Two rules make it safe to do at all:
+///
+/// **A client that authenticated itself wins.** A stored password that has gone stale therefore
+/// heals itself: the node answers `401`, the browser prompts, and from then on the browser's own
+/// header rides every request and is never overwritten.
+///
+/// **Only the first head of a connection is ours to edit** — the rest is a byte splice. That is
+/// enough, because the node side reads one head per stream too: it authenticates the request it
+/// admits and splices what follows, so a connection that opened authenticated stays that way, and
+/// a browser opening a second connection sends a second head, which lands here.
+///
+/// A free function taking the store rather than a [`Gateway`] method, for the reason [`NodeSide`]
+/// is a trait: the decision is testable against a stub, with nothing bound and nothing on disk.
+fn prefill_auth(
+    credentials: Option<&Arc<dyn NodeCredentials>>,
+    node: &str,
+    head: Vec<u8>,
+) -> Vec<u8> {
+    let Some(credentials) = credentials else {
+        return head;
+    };
+    if header_value(&head, "authorization").is_some() {
+        return head;
+    }
+    let Some(value) = credentials.authorization(node) else {
+        return head;
+    };
+    debug!(%node, "gateway: attaching this machine's stored credential");
+    with_header(&head, "Authorization", &value)
+}
+
+/// The head with one header inserted directly below the request line.
+///
+/// Everything else is copied byte for byte — the request line, the other headers in their order,
+/// and any body bytes that arrived with the head. Directly below the request line rather than at
+/// the end because the end is not a fixed place: a head whose terminating blank line never arrived
+/// (a client that stopped mid-headers, or one that ran past [`MAX_HEAD`]) has no end to append to,
+/// and it is returned untouched by the same rule [`force_connection_close`](adi_hive::proxy::force_connection_close)
+/// uses.
+fn with_header(head: &[u8], name: &str, value: &str) -> Vec<u8> {
+    let Some(eol) = head.windows(2).position(|w| w == b"\r\n") else {
+        return head.to_vec();
+    };
+    if !head_complete(head) {
+        return head.to_vec();
+    }
+    let at = eol + 2;
+    let line = format!("{name}: {value}\r\n");
+    let mut out = Vec::with_capacity(head.len() + line.len());
+    out.extend_from_slice(&head[..at]);
+    out.extend_from_slice(line.as_bytes());
+    out.extend_from_slice(&head[at..]);
+    out
 }
 
 /// The request target off the request line (`METHOD SP target SP HTTP/1.1`), used only to pick
@@ -1810,6 +1917,68 @@ mod tests {
     #[test]
     fn a_truncated_request_line_yields_no_target() {
         assert_eq!(request_target(b"GET /x\r\nHost: a.b.n.adi\r\n\r\n"), None);
+    }
+
+    // -- the credential this machine already holds -----------------------------------------
+
+    /// A store holding one node's credential, so the decision can be exercised with nothing bound.
+    #[derive(Debug)]
+    struct Held(&'static str);
+
+    impl NodeCredentials for Held {
+        fn authorization(&self, node: &str) -> Option<String> {
+            (node == self.0).then(|| "Basic held".to_string())
+        }
+    }
+
+    fn held() -> Arc<dyn NodeCredentials> {
+        Arc::new(Held("laptop-b"))
+    }
+
+    #[test]
+    fn a_held_password_is_attached_and_the_rest_of_the_head_is_untouched() {
+        let head = b"GET /x HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\nAccept: */*\r\n\r\nbody";
+        let out = prefill_auth(Some(&held()), "laptop-b", head.to_vec());
+        let text = String::from_utf8(out).expect("still text");
+        assert_eq!(
+            text,
+            "GET /x HTTP/1.1\r\nAuthorization: Basic held\r\nHost: app.laptop-b.n.adi\r\n\
+             Accept: */*\r\n\r\nbody",
+            "one header added below the request line; Host, target and body byte for byte"
+        );
+    }
+
+    #[test]
+    fn a_client_that_authenticated_itself_is_never_overwritten() {
+        // The self-healing case: a stale stored password draws a 401, the browser asks a person,
+        // and what the person typed must survive this function or the prompt returns forever.
+        let head = b"GET / HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\nAuthorization: Basic typed\r\n\r\n";
+        let out = prefill_auth(Some(&held()), "laptop-b", head.to_vec());
+        assert_eq!(out, head, "the client's own credential stands");
+    }
+
+    #[test]
+    fn nothing_is_attached_without_a_store_or_for_an_unheld_node() {
+        let head = b"GET / HTTP/1.1\r\nHost: app.other.n.adi\r\n\r\n".to_vec();
+        assert_eq!(
+            prefill_auth(None, "laptop-b", head.clone()),
+            head,
+            "a gateway nobody gave a store to is the gateway as it was"
+        );
+        assert_eq!(
+            prefill_auth(Some(&held()), "other", head.clone()),
+            head,
+            "a locked node still challenges"
+        );
+    }
+
+    #[test]
+    fn a_head_that_never_finished_is_left_alone() {
+        // Truncated at MAX_HEAD or by a client that stopped: there is no head to edit safely, and
+        // forwarding it verbatim is what happened before this existed.
+        let head = b"GET / HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\n".to_vec();
+        assert_eq!(prefill_auth(Some(&held()), "laptop-b", head.clone()), head);
+        assert_eq!(with_header(b"no-crlf-at-all", "A", "b"), b"no-crlf-at-all");
     }
 
     // -- pages and wiring -----------------------------------------------------------------

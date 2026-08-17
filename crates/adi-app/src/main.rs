@@ -90,7 +90,9 @@ impl MeshCtl {
     async fn start(&self) -> anyhow::Result<()> {
         let mut slot = self.daemon.lock().await;
         if slot.is_none() {
-            *slot = Some(Daemon::start().await?);
+            // With this machine's stored node passwords, so a `*.n.adi` link opened here does not
+            // ask for one the panel already holds — see [`crate::viewer::HeldCredentials`].
+            *slot = Some(Daemon::start_with(Some(Arc::new(viewer::HeldCredentials))).await?);
         }
         Ok(())
     }
