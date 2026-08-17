@@ -94,6 +94,14 @@ const AGENTS_MODULE: &str = "agents";
 const SESSIONS_MODULE: &str = "sessions";
 const MANIFEST_EXT: &str = "toml";
 
+/// The `terminal_reason` of a run whose engine never started
+/// ([`send_or_note_failure`](Agents::send_or_note_failure)).
+///
+/// Deliberately not a word any engine uses: every other value in that field is the engine's own
+/// verdict (`completed`, `api_error`, …), and a reader must be able to tell "the model stopped for
+/// this reason" from "there was no model — the command could not be spawned".
+const LAUNCH_FAILED: &str = "launch_failed";
+
 /// How long a stopped run is given to end itself before it is killed.
 ///
 /// Long enough for a vendor CLI to finish the request it is blocked on and write out what it has;
@@ -582,7 +590,7 @@ impl Agents {
             )?;
         }
         let message = &for_engine(runner.as_ref(), &store, message, images);
-        runner.send(&spec, &session, message)?;
+        self.send_or_note_failure(runner.as_ref(), &spec, &store, &agent.name, &record.id, message)?;
         // Only now, with this run's own files in place: pruning first would count it as one of the
         // old ones. A run somebody else is still watching is never swept.
         store.prune_old(&agent.name, |record| {
@@ -1105,8 +1113,76 @@ impl Agents {
             store::user_turn_with(&message.text, message.images.clone()),
         )?;
         let sent = for_engine(runner, store, &message.text, &message.images);
-        runner.send(&spec, &session, &sent)?;
+        self.send_or_note_failure(runner, &spec, store, &agent.name, &record.id, &sent)?;
         Ok(launch_of(agent, runner, &session))
+    }
+
+    /// Send a turn's message, and when the engine could not be started, say so **in the run** before
+    /// the error goes back up.
+    ///
+    /// Without this a failed launch is the quietest wreck the store can hold. The record exists, the
+    /// log file exists and is empty (it is created immediately before the spawn that fails), the
+    /// transcript ends on an unanswered question, and [`note_finished`](Self::note_finished) builds
+    /// an outcome out of that empty log — which reports nothing, so the run lists as `unknown`, the
+    /// word for "stopped before anyone could say how". Nothing reaches the app log either. That is
+    /// what a node with no `claude` binary looked like from the panel: three dead runs and not one
+    /// sentence between them, while the CLI printed the reason every time.
+    ///
+    /// So the reason is written where each reader already looks. The transcript gets the answer —
+    /// which is also why it goes in *before* the outcome, since a conversation is read far more
+    /// often than a run list — and [`settle`] leaves it alone afterwards, because it only answers a
+    /// transcript whose last turn is still the question. The outcome gets `is_error`, which is the
+    /// one field a listing or a trigger can act on without knowing any engine's vocabulary, under a
+    /// `terminal_reason` of our own: no engine said this, ADI did, and `launch_failed` is a word no
+    /// engine uses.
+    ///
+    /// Neither write is allowed to mask the launch error: whatever happens here, the caller gets the
+    /// failure it came for.
+    fn send_or_note_failure(
+        &self,
+        runner: &dyn Runner,
+        spec: &RunSpec,
+        store: &SessionStore,
+        agent: &str,
+        run_id: &str,
+        message: &str,
+    ) -> Result<()> {
+        let session = store.session(agent, run_id);
+        let error = match runner.send(spec, &session, message) {
+            Ok(()) => return Ok(()),
+            Err(error) => error,
+        };
+
+        let text = format!("The run could not start: {error}");
+        let _ = store.append_turn(
+            agent,
+            run_id,
+            assistant_turn(&TurnContent {
+                text: text.clone(),
+                steps: Vec::new(),
+                metrics: None,
+            }),
+        );
+        let mut outcome = store::RunOutcome::of(None, &text, store::now_ms());
+        outcome.terminal_reason = Some(LAUNCH_FAILED.to_string());
+        outcome.is_error = true;
+        // Only the writer announces, as everywhere else an ending is recorded: the record settles
+        // the race, so this cannot double up with a watcher that notices the same run.
+        if store.record_outcome(agent, run_id, &outcome).unwrap_or(false) {
+            self.emit(
+                "adi.agents.run.finished",
+                &AgentRunFinished {
+                    agent: agent.to_string(),
+                    run_id: run_id.to_string(),
+                    terminal_reason: outcome.terminal_reason.clone(),
+                    is_error: true,
+                    duration_ms: None,
+                    cost_micro_usd: None,
+                    result_head: outcome.result_head.clone(),
+                },
+            );
+        }
+        Err(error)
     }
 
     /// Run one turn of a `harness:adi` conversation: read its transcript, call the configured model
@@ -2895,6 +2971,133 @@ mod tests {
 
         let bare = agent_with_tools(&store, "bare", "harness:claude-sdk", Vec::new());
         assert!(store.launch_spec(&bare, None).tools.is_empty());
+    }
+
+    /// An engine that cannot be started — the failed spawn, without a spawn.
+    ///
+    /// A stub rather than a backend whose binary happens to be missing: `claude` and `adi-mono` are
+    /// both installed on the machines this suite runs on, so "pick an engine that isn't there" is a
+    /// test that passes for the wrong reason on a developer's laptop and fails in CI, or the other
+    /// way round. What is under test is what the store does with the error, not who produced it.
+    #[derive(Debug)]
+    struct DeadRunner;
+
+    impl Runner for DeadRunner {
+        fn kind(&self) -> runner::RunnerKind {
+            runner::RunnerKind::new("dead")
+        }
+        fn check(&self, _: &RunSpec) -> Result<()> {
+            Ok(())
+        }
+        fn send(&self, _: &RunSpec, _: &dyn Session, _: &str) -> Result<()> {
+            Err(Error::Launch(
+                "couldn't spawn claude: No such file or directory (os error 2)".to_string(),
+            ))
+        }
+        fn is_alive(&self, _: &dyn Session) -> bool {
+            false
+        }
+        fn stop(&self, _: &dyn Session, _: Duration) -> Result<runner::Stopped> {
+            Ok(runner::Stopped::default())
+        }
+        fn emits(&self) -> runner::EventKinds {
+            runner::EventKinds::default()
+        }
+        fn events(
+            &self,
+            _: &dyn Session,
+            _: Option<&serde_json::Value>,
+        ) -> Result<runner::EventBatch> {
+            Ok(runner::EventBatch {
+                events: Vec::new(),
+                cursor: serde_json::Value::Null,
+            })
+        }
+    }
+
+    fn dead_spec() -> RunSpec {
+        RunSpec {
+            cwd: std::env::temp_dir(),
+            path: String::new(),
+            env: Vec::new(),
+            arguments: serde_json::Value::Null,
+            tools: Vec::new(),
+            tool_help: None,
+            system_prompt: None,
+            workspace_note: None,
+            knowledge_note: None,
+        }
+    }
+
+    /// A launch that never got an engine is the one ending nothing else can notice: the log the
+    /// spawn would have filled is empty, and an outcome read off it reports nothing at all — which
+    /// is `unknown`, the word for "stopped before anyone could say how". So the reason is written
+    /// down here instead, in both places a reader looks.
+    #[test]
+    fn a_run_whose_engine_never_started_says_so_in_the_conversation_and_the_outcome() {
+        let store = scratch("launch-failure");
+        let sessions = store.sessions();
+        let record = sessions
+            .create("nobody", Backend::from("harness:claude-sdk"), "/tmp", "hello?")
+            .expect("open the conversation");
+        sessions
+            .append_turn("nobody", &record.id, user_turn("hello?"))
+            .expect("the question is recorded before the send, as the launch paths do it");
+
+        let error = store
+            .send_or_note_failure(
+                &DeadRunner,
+                &dead_spec(),
+                &sessions,
+                "nobody",
+                &record.id,
+                "hello?",
+            )
+            .expect_err("the launch error still reaches the caller");
+        assert!(
+            error.to_string().contains("couldn't spawn claude"),
+            "nothing written down may swallow the failure: {error}"
+        );
+
+        let turns = sessions.turns("nobody", &record.id);
+        let last = turns.last().expect("the conversation has turns");
+        assert_eq!(last.role, "assistant", "the run answers itself");
+        assert!(
+            last.text.contains("could not start") && last.text.contains("couldn't spawn claude"),
+            "the conversation carries the reason: {}",
+            last.text
+        );
+
+        let outcome = sessions
+            .list("nobody")
+            .into_iter()
+            .find(|r| r.id == record.id)
+            .and_then(|r| r.outcome)
+            .expect("the run ended, so it has an outcome");
+        assert!(outcome.is_error, "a listing must call this failed, not done");
+        assert!(
+            outcome.is_reported(),
+            "an outcome that reports nothing lists as `unknown` — the bug this fixes"
+        );
+        assert_eq!(outcome.terminal_reason.as_deref(), Some(LAUNCH_FAILED));
+
+        // `settle` answers a question, and this one is already answered: the next turn must not
+        // append a second, empty assistant turn over the top of the explanation.
+        settle(
+            &sessions,
+            "nobody",
+            &record.id,
+            &TurnContent {
+                text: String::new(),
+                steps: Vec::new(),
+                metrics: None,
+            },
+        );
+        assert_eq!(
+            sessions.turns("nobody", &record.id).len(),
+            turns.len(),
+            "the explanation is the answer; nothing settles on top of it"
+        );
     }
 
     /// Open a conversation of `agent` in the session store, as a launch would. `cwd` is where it
