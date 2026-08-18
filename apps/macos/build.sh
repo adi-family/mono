@@ -51,6 +51,21 @@ export ADI_VERSION="$VERSION"
 # adi-app embeds the webapp at compile time and happily embeds nothing — see the script.
 "$ROOT/scripts/require-webapp-dist.sh"
 
+# Keep the bundle honest about the macOS 13.0 it advertises.
+#
+# `numkong` — the C core under `usearch`, which the indexer uses for vector search — probes the
+# *compiler* for each ISA, not the deployment target. Build on a machine with a recent Xcode and
+# its SME probe passes, so the SME kernels compile in and their memset lowers to `__sme_memset`,
+# a libSystem symbol that exists only on very recent macOS. Nothing catches it: `minos` is still
+# stamped 13.0, the binary signs, notarizes and staples, and it runs fine on the build machine.
+# It aborts at dyld time on an older Mac — and since every button in the app shells out to
+# `adi-mono`, the failure surfaces as a control panel where clicking does nothing at all
+# (`AppModel.perform` discards the CLI's output). Forcing the probes off costs a vector-search
+# kernel on the newest Apple Silicon and buys back every Mac we claim to support.
+for probe in SME SME2 SME2P1 SMEF64 SMEHALF SMEBF16 SMEBI32 SMELUT2 SMEFA64; do
+    export "NK_TARGET_$probe=0"
+done
+
 echo "==> building adi-dns + adi-hive + adi-app + adi-mono (release, universal: ${RUST_TARGETS[*]}, v$VERSION)"
 ( cd "$ROOT" && MACOSX_DEPLOYMENT_TARGET="$DEPLOY_TARGET" cargo build \
     -p adi-dns -p adi-hive -p adi-app -p adi-cli --release \
@@ -79,6 +94,18 @@ echo "    version: $VERSION"
 for name in adi-dns adi-hive adi-app adi-mono; do
     srcs=(); for t in "${RUST_TARGETS[@]}"; do srcs+=("$ROOT/target/$t/release/$name"); done
     lipo -create "${srcs[@]}" -output "$APP/Contents/Resources/$name"
+done
+
+# The guard for the paragraph above: a probe that leaks back in is invisible in every other
+# check, so look at the one thing that actually broke — an undefined symbol no older macOS
+# exports. Cheap, and it fails the build rather than the friend's Mac.
+for name in adi-dns adi-hive adi-app adi-mono; do
+    if nm -arch arm64 -u "$APP/Contents/Resources/$name" 2>/dev/null | grep -q '_sme_'; then
+        echo "error: $name references an SME libSystem symbol, which only very recent macOS has" >&2
+        echo "       it would abort at launch on macOS $DEPLOY_TARGET (dyld: Symbol not found)" >&2
+        echo "       the NK_TARGET_SME* exports above are meant to prevent exactly this" >&2
+        exit 1
+    fi
 done
 
 echo "==> compiling Swift (universal: ${SWIFT_ARCHES[*]}, macos$DEPLOY_TARGET)"
