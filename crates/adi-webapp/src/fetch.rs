@@ -375,6 +375,10 @@ pub async fn run_agent(
             working_dir,
             force,
             attachments,
+            // The composer launches what a person typed; a pre-run is something a launcher that
+            // already knows the agent's first move sends (the CLI's `--pre-run`, a filer's API
+            // call). Nothing in this form offers one, so it sends none.
+            pre_run: Vec::new(),
         },
     )
     .await

@@ -899,6 +899,9 @@ pub(crate) struct AgentsForm {
     /// the form rather than in the shell state because a base's counts are a status pass over its
     /// storage — not something the 4s poll should run on every page.
     pub(crate) knowledge_bases: RwSignal<Option<Vec<KnowledgeBaseDto>>>,
+    /// Commands every run of this agent really runs before its first message reaches the model,
+    /// one per line — its standing orientation read. Parsed on submit.
+    pub(crate) prelude: RwSignal<String>,
     /// Extra `PATH` dirs for the agent's runs, one per line — how an agent pins a toolchain the
     /// machine's default `PATH` doesn't point at. Parsed on submit.
     pub(crate) path: RwSignal<String>,
@@ -937,6 +940,7 @@ impl AgentsForm {
             memory: RwSignal::new(false),
             knowledge_bases: RwSignal::new(None),
             secrets: RwSignal::new(BTreeSet::new()),
+            prelude: RwSignal::new(String::new()),
             path: RwSignal::new(String::new()),
             env: RwSignal::new(String::new()),
             system_prompt: RwSignal::new(String::new()),

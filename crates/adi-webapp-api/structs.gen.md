@@ -1140,6 +1140,8 @@ pub struct AgentDto {
     pub project: Option<String>,
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prelude: Vec<String>,
     #[serde(default)]
     pub knowledge: Vec<String>,
     #[serde(default)]
@@ -1231,6 +1233,8 @@ pub struct SaveAgent {
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
     #[serde(default)]
+    pub prelude: Option<Vec<String>>,
+    #[serde(default)]
     pub knowledge: Option<Vec<String>>,
     #[serde(default)]
     pub memory: Option<bool>,
@@ -1274,6 +1278,8 @@ pub struct RunAgent {
     pub working_dir: Option<String>,
     #[serde(default)]
     pub force: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_run: Vec<String>,
 }
 ```
 

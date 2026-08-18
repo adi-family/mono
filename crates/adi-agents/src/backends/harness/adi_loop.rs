@@ -697,27 +697,46 @@ struct Said<'a> {
 /// its own is the whole message, and dropping it would send a request that answers a picture nobody
 /// attached.
 fn merged(turns: &[Turn]) -> Vec<Said<'_>> {
-    let said = |turn: &Turn| !turn.text.trim().is_empty() || !turn.images.is_empty();
+    let said = |turn: &Turn| {
+        !turn.text.trim().is_empty() || !turn.images.is_empty() || !turn.steps.is_empty()
+    };
     let mut out: Vec<Said<'_>> = Vec::with_capacity(turns.len());
     for turn in turns.iter().filter(|t| said(t)) {
+        let words = words_of(turn);
         match out.last_mut() {
             Some(prev) if prev.role == turn.role => {
-                if !turn.text.trim().is_empty() {
+                if !words.trim().is_empty() {
                     if !prev.text.is_empty() {
                         prev.text.push_str("\n\n");
                     }
-                    prev.text.push_str(&turn.text);
+                    prev.text.push_str(&words);
                 }
                 prev.images.extend(turn.images.iter().cloned());
             }
             _ => out.push(Said {
                 role: turn.role.as_str(),
-                text: turn.text.clone(),
+                text: words,
                 images: turn.images.clone(),
             }),
         }
     }
     out
+}
+
+/// One turn as this engine has to receive it: what was said, plus anything the platform ran on its
+/// behalf before it was asked.
+///
+/// Every other engine is handed its message on a command line, and the launch appends the pre-run
+/// block there. This loop is handed an agent and a conversation instead and replays what the store
+/// holds, so the block has to be rebuilt here or the commands would have really run and the model
+/// would never learn what they said. Same renderer, so the text is byte-identical either way.
+fn words_of(turn: &Turn) -> String {
+    match crate::prelude::block_of_steps(&turn.steps) {
+        Some(block) if turn.role == "user" => {
+            format!("{}\n\n{block}", turn.text.trim_end())
+        }
+        _ => turn.text.clone(),
+    }
 }
 
 /// One image, ready to go into a request body.
@@ -1503,6 +1522,57 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         crate::store::SessionStore::new(dir)
+    }
+
+    /// This loop is handed a conversation id, not a message: the launch's careful work of appending
+    /// the pre-run output to the engine's command line reaches every other engine and none of it
+    /// reaches this one. So the block is rebuilt from the turn's steps here — otherwise the
+    /// commands really run, cost real time, and the model is never told a word of what they said.
+    #[test]
+    fn a_pre_run_reaches_the_loop_through_the_turn_it_was_recorded_on() {
+        let mut opening = turn("user", "work the task");
+        opening.steps = vec![crate::progress::Step::Tool {
+            name: "Bash".into(),
+            input: "adi-mono tasks show BUGBOUNTY-465".into(),
+            status: crate::progress::ToolStatus::Ok,
+            output: "Title: probe the auth flow".into(),
+        }];
+
+        let turns = [opening];
+        let said = merged(&turns);
+        assert_eq!(said.len(), 1);
+        assert!(
+            said[0].text.starts_with("work the task"),
+            "the task still leads: {}",
+            said[0].text
+        );
+        assert!(
+            said[0].text.contains("Title: probe the auth flow"),
+            "the command's output must reach this engine too: {}",
+            said[0].text
+        );
+        assert!(
+            said[0]
+                .text
+                .contains("<pre-run command=\"adi-mono tasks show BUGBOUNTY-465\" status=\"ok\">"),
+            "and framed exactly as every other engine sees it: {}",
+            said[0].text
+        );
+    }
+
+    /// An assistant turn's steps are its own tool calls — already in the transcript as the calls
+    /// they were — so they must not be re-rendered into its words.
+    #[test]
+    fn an_assistant_turns_own_tool_calls_are_not_replayed_as_text() {
+        let mut answer = turn("assistant", "done");
+        answer.steps = vec![crate::progress::Step::Tool {
+            name: "Bash".into(),
+            input: "ls".into(),
+            status: crate::progress::ToolStatus::Ok,
+            output: "a.rs".into(),
+        }];
+        let turns = [answer];
+        assert_eq!(merged(&turns)[0].text, "done");
     }
 
     #[test]

@@ -696,6 +696,19 @@ fn is_scalar_argument_field(name: &str) -> bool {
 pub(crate) fn agent_environment_fields(form: AgentsForm) -> AnyView {
     view! {
         <div class="adi-field">
+            <label class="adi-field__label" for="agent-prelude">"Run before the first message"</label>
+            <textarea class="adi-textarea" id="agent-prelude" rows="2"
+                placeholder="bb-brief"
+                prop:value=move || form.prelude.get()
+                on:input=move |ev| form.prelude.set(event_target_value(&ev))></textarea>
+            {field_hint(
+                "One command per line, really run in the run's own shell and directory before the \
+                 opening message reaches the model. Their real output — exit status included — is \
+                 carried into that message as tool calls that already happened, so an agent that \
+                 always starts by reading something need not spend a turn asking for it.",
+            )}
+        </div>
+        <div class="adi-field">
             <label class="adi-field__label" for="agent-path">"Extra PATH dirs"</label>
             <textarea class="adi-textarea" id="agent-path" rows="2"
                 placeholder="$HOME/.nvm/versions/node/v22.14.0/bin"
@@ -720,6 +733,16 @@ pub(crate) fn agent_environment_fields(form: AgentsForm) -> AnyView {
         </div>
     }
     .into_any()
+}
+
+/// The "run before the first message" box as the wire list: one command per line, blank lines
+/// dropped. Not trimmed of anything else — a command is taken exactly as it was written.
+pub(crate) fn parsed_prelude(text: &str) -> Vec<String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|command| !command.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 /// The "extra PATH dirs" box as the wire list: one directory per line, blank lines dropped.
@@ -764,6 +787,7 @@ pub(crate) fn load_agent_into_form(form: AgentsForm, a: &AgentDto) {
             .map(|s| (s.project.clone(), s.name.clone()))
             .collect(),
     );
+    form.prelude.set(a.prelude.join("\n"));
     form.path.set(a.path.join("\n"));
     form.env.set(
         a.env
@@ -805,6 +829,7 @@ pub(crate) fn clear_agent_form(form: AgentsForm) {
     form.knowledge.set(std::collections::BTreeSet::new());
     form.memory.set(false);
     form.secrets.set(std::collections::BTreeSet::new());
+    form.prelude.set(String::new());
     form.path.set(String::new());
     form.env.set(String::new());
     form.system_prompt.set(String::new());

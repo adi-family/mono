@@ -832,6 +832,12 @@ pub struct AgentDto {
     /// `--allowed-tools` in `arguments.tools`.
     #[serde(default)]
     pub bin_tools: Vec<String>,
+    /// Shell commands really run before this agent's first message reaches the model, in order —
+    /// its standing orientation read. Same shell, directory, `PATH` and environment as the agent's
+    /// own `Bash`; the real output is carried into the opening message, framed as the tool calls
+    /// it was, and recorded on that turn as steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prelude: Vec<String>,
     /// The knowledge bases this agent works with, written as `global/<name>`,
     /// `project:<id>/<name>`, or `agent:<name>/<base>`. A wish list rather than a grant: what the
     /// agent may actually reach is decided by the three isolation levels at read time.
@@ -952,6 +958,11 @@ pub struct SaveAgent {
     /// saying nothing. Send an empty list to actually clear.
     #[serde(default)]
     pub bin_tools: Option<Vec<String>>,
+    /// The commands every run of this agent really runs before its first message reaches the model
+    /// (see [`AgentDto::prelude`]). **Omit to keep whatever the agent already has**, for the same
+    /// reason as `bin_tools`; send an empty list to clear.
+    #[serde(default)]
+    pub prelude: Option<Vec<String>>,
     /// The knowledge bases this agent works with (see [`AgentDto::knowledge`]). **Omit to keep
     /// whatever the agent already has**, for the same reason as `bin_tools`; send an empty list
     /// to clear.
@@ -1025,6 +1036,15 @@ pub struct RunAgent {
     /// the platform starts on its own.
     #[serde(default)]
     pub force: bool,
+    /// Commands to really run before this run's opening message reaches the model, after the
+    /// agent's own `prelude` and in this order. Their real output — exit status included — is
+    /// carried into that message as already-executed tool calls, and recorded on the opening turn
+    /// as steps.
+    ///
+    /// For a caller that already knows the agent's first tool call and would rather spend a
+    /// subprocess on it than a model turn.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_run: Vec<String>,
 }
 
 /// Request naming one specific run of an agent — `POST /api/agents/run/peek` and `/run/stop`.

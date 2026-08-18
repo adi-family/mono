@@ -44,6 +44,18 @@ pub struct AgentManifest<Args> {
     /// `--allowed-tools` (which lives in `arguments.tools`); these are ADI CLIs the agent can run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bin_tools: Vec<String>,
+    /// Shell commands run *before* this agent's first message reaches the model, in order — the
+    /// tool calls the agent would otherwise have to spend its opening turn making.
+    ///
+    /// They are really run (the crate's `prelude` module): same shell, same directory, same `PATH` and
+    /// environment as the agent's own `Bash`, and their real output is carried into the opening
+    /// message, framed as the tool calls they were. A launch may add more of its own — an agent's
+    /// standing orientation read here, this run's task-specific one at the launch.
+    ///
+    /// Declared before [`secrets`](Self::secrets) because the registry is TOML, where a plain
+    /// array cannot follow an array-of-tables.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prelude: Vec<String>,
     /// The knowledge bases this agent works with, written the way `adi-mono knowledge` writes
     /// them: `global/runbooks`, `project:acme/notes`, `agent:reviewer/memory`.
     ///
@@ -131,6 +143,7 @@ impl<Args> AgentManifest<Args> {
             starred: self.starred,
             project: self.project.clone(),
             bin_tools: self.bin_tools.clone(),
+            prelude: self.prelude.clone(),
             knowledge: self.knowledge.clone(),
             memory: self.memory,
             secrets: self.secrets.clone(),

@@ -4,7 +4,7 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, Agents, AgentSummaryArguments, AgentsError, Launch, RunInfo,
+    Adi, AgentManifest, Agents, AgentSummaryArguments, AgentsError, Launch, LaunchOptions, RunInfo,
     SecretAttachment, StoredAgent,
 };
 use clap::Subcommand;
@@ -112,6 +112,16 @@ pub(crate) enum AgentsCommand {
         /// Let the agent stop and ask again (see `--unattended`).
         #[arg(long, conflicts_with = "unattended")]
         no_unattended: bool,
+        /// A command every run of this agent really runs before its first message reaches the
+        /// model — its standing orientation read. Repeatable, run in order, in the run's own shell
+        /// and directory; the real output is carried into the opening message, labelled as the
+        /// tool call it was. Omit every `--prelude` to leave an existing agent's alone; pass
+        /// `--no-prelude` to clear them.
+        #[arg(long = "prelude", value_name = "COMMAND")]
+        prelude: Vec<String>,
+        /// Clear the agent's pre-run commands (see `--prelude`).
+        #[arg(long, conflicts_with = "prelude")]
+        no_prelude: bool,
         /// A knowledge base this agent works with — `global/<name>`, `project:<id>/<name>`, or
         /// `agent:<name>/<base>`. Repeatable; comma-separated values are also accepted. Omit every
         /// `--knowledge` to leave an existing agent's bases alone; pass `--no-knowledge` to clear
@@ -149,6 +159,15 @@ pub(crate) enum AgentsCommand {
         /// The task sent to a process backend (ignored by pty backends).
         #[arg(short, long, default_value = "run")]
         message: String,
+        /// A command to really run before this run's first message reaches the model, after the
+        /// agent's own `--prelude`. Repeatable, run in order; its real output is carried into the
+        /// opening message, labelled as the tool call it was.
+        ///
+        /// For a launcher that already knows the agent's first move: filing a task and launching
+        /// the agent to work it means you hold the id, so `--pre-run "adi-mono tasks show <id>"`
+        /// hands over the task instead of writing an instruction the agent spends a turn obeying.
+        #[arg(long = "pre-run", value_name = "COMMAND")]
+        pre_run: Vec<String>,
         /// Where this run starts, overriding the agent's own `working_dir` and its project
         /// directory. For pointing one agent at a different target each run.
         #[arg(long, value_name = "PATH")]
@@ -291,6 +310,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             no_env,
             unattended,
             no_unattended,
+            prelude,
+            no_prelude,
             knowledge,
             no_knowledge,
             memory,
@@ -393,6 +414,14 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     old.map(|m| m.env.clone()),
                 ),
                 unattended: flag(unattended, no_unattended, old.is_some_and(|m| m.unattended)),
+                // Kept verbatim, not split on commas the way `--knowledge` is: a shell command
+                // routinely contains one, and a prelude cut in half at `--json,--limit` would run
+                // two commands neither of which was asked for.
+                prelude: kept(
+                    no_prelude,
+                    stated(prelude, |commands| commands),
+                    old.map(|m| m.prelude.clone()),
+                ),
                 knowledge: kept(
                     no_knowledge,
                     stated(knowledge, clean_tags),
@@ -413,22 +442,29 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
         AgentsCommand::Run {
             name,
             message,
+            pre_run,
             dir,
             force,
             wait,
         } => {
-            let launch = if force {
-                store.force_run_in(&name, &message, dir.as_deref())
-            } else {
-                store.run_in(&name, &message, dir.as_deref())
-            }
-            .map_err(|e| match e {
-                // The refusal is the one error a human can act on from here, so it says how.
-                AgentsError::TooManyRunning { .. } => {
-                    format!("{e}: re-run with --force to launch it anyway")
-                }
-                other => other.to_string(),
-            })?;
+            let launch = store
+                .launch(
+                    &name,
+                    &message,
+                    &LaunchOptions {
+                        working_dir: dir.as_deref(),
+                        force,
+                        pre_run: &pre_run,
+                        ..LaunchOptions::default()
+                    },
+                )
+                .map_err(|e| match e {
+                    // The refusal is the one error a human can act on from here, so it says how.
+                    AgentsError::TooManyRunning { .. } => {
+                        format!("{e}: re-run with --force to launch it anyway")
+                    }
+                    other => other.to_string(),
+                })?;
             match launch {
                 Launch::Pty { command, session } => {
                     if wait {
@@ -848,6 +884,11 @@ fn print_agent(agent: &StoredAgent) {
     }
     if !agent.manifest.bin_tools.is_empty() {
         println!("  tools (.bin): {}", agent.manifest.bin_tools.join(", "));
+    }
+    // One line per command rather than a joined list: these are shell commands, and a reader
+    // scanning a comma-separated line of them cannot tell a separator from a command's own comma.
+    for command in &agent.manifest.prelude {
+        println!("  pre-run: {command}");
     }
     if !agent.manifest.secrets.is_empty() {
         let refs: Vec<String> = agent

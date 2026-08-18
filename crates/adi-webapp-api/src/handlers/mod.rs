@@ -882,6 +882,61 @@ mod tests {
         }
     }
 
+    /// The pre-run commands an agent always opens with, over the wire: stated on save, reported in
+    /// the listing, and — as for every other field only the full editor offers — left alone by a
+    /// save that never mentions them.
+    #[test]
+    fn an_agents_prelude_round_trips_and_is_omit_to_keep() {
+        let store = temp_agents();
+        let Response { status, body } = save_agent(
+            &store,
+            br#"{
+                "name":"target-agent",
+                "backend":"harness:claude-sdk",
+                "prelude":["bb-brief","  ","adi-mono tasks list --project bugbounty"]
+            }"#,
+        );
+        assert_eq!(status, 200);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(
+            v["agents"][0]["prelude"],
+            serde_json::json!(["bb-brief", "adi-mono tasks list --project bugbounty"]),
+            "stated commands are kept in order, blank ones dropped"
+        );
+
+        // A save from a form that never showed the box must not empty it — the same rule `path`
+        // and `bin_tools` follow, and the one that decides whether an agent still orients itself.
+        let Response { body, .. } = save_agent(
+            &store,
+            br#"{"name":"target-agent","backend":"harness:claude-sdk"}"#,
+        );
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["agents"][0]["prelude"][0], "bb-brief");
+
+        // …and an explicit empty list is how they are actually cleared.
+        let Response { body, .. } = save_agent(
+            &store,
+            br#"{"name":"target-agent","backend":"harness:claude-sdk","prelude":[]}"#,
+        );
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert!(v["agents"][0]["prelude"].as_array().is_none_or(Vec::is_empty));
+    }
+
+    /// The launch request's own pre-run list, which is a different thing from the agent's standing
+    /// one: this run's commands, named by whoever launched it. Absent is empty, never an error.
+    #[test]
+    fn a_launch_request_carries_this_runs_own_pre_run_commands() {
+        let asked: crate::types::RunAgent = serde_json::from_str(
+            r#"{"name":"solver","message":"work it","pre_run":["adi-mono tasks show BUGBOUNTY-465"]}"#,
+        )
+        .expect("parse");
+        assert_eq!(asked.pre_run, ["adi-mono tasks show BUGBOUNTY-465"]);
+
+        let plain: crate::types::RunAgent =
+            serde_json::from_str(r#"{"name":"solver","message":"work it"}"#).expect("parse");
+        assert!(plain.pre_run.is_empty());
+    }
+
     #[test]
     fn save_agent_rejects_unknown_arguments_for_built_in_backends() {
         let store = temp_agents();

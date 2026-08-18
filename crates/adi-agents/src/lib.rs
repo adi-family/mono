@@ -40,6 +40,7 @@ mod knowledge;
 mod launch;
 mod limits;
 mod memo;
+mod prelude;
 pub mod questions;
 pub mod progress;
 pub mod review;
@@ -75,8 +76,8 @@ pub use progress::{
     BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities,
 };
 pub use run::{
-    Launch, Peek, RunInfo, Sent, Turn, capture_pane, is_runnable, running_sessions, send_keys,
-    session_name,
+    Launch, LaunchOptions, Peek, RunInfo, Sent, Turn, capture_pane, is_runnable, running_sessions,
+    send_keys, session_name,
 };
 
 use agent::validate_name;
@@ -486,7 +487,7 @@ impl Agents {
     /// # Errors
     /// Returns [`Error::NotFound`], [`Error::TooManyRunning`], or backend launch errors.
     pub fn run_in(&self, name: &str, message: &str, working_dir: Option<&str>) -> Result<Launch> {
-        self.launch_run(name, message, working_dir, false, &[])
+        self.launch_run(name, message, working_dir, false, &[], &[])
     }
 
     /// A launch whose opening message carries images — a conversation started from a screenshot.
@@ -505,15 +506,45 @@ impl Agents {
         force: bool,
         image_ids: &[String],
     ) -> Result<Launch> {
+        self.launch(
+            name,
+            message,
+            &LaunchOptions {
+                working_dir,
+                force,
+                image_ids,
+                ..LaunchOptions::default()
+            },
+        )
+    }
+
+    /// The launch every other launch verb is a shorthand for: everything one run may ask for
+    /// beyond its agent's own definition, in one place.
+    ///
+    /// Reach for this directly when a launch needs something the short forms do not carry —
+    /// [`pre_run`](LaunchOptions::pre_run) above all, which is how a caller that already knows the
+    /// agent's first tool call hands over its output instead of paying a turn for it.
+    ///
+    /// # Errors
+    /// Returns [`Error::NotFound`], [`Error::TooManyRunning`] (unless `force`),
+    /// [`Error::Unsupported`] for images an engine cannot carry, or backend launch errors.
+    pub fn launch(&self, name: &str, message: &str, options: &LaunchOptions<'_>) -> Result<Launch> {
         // As in [`reply_with`](Self::reply_with): an engine that cannot carry a picture says so,
         // rather than starting a conversation whose first message is missing half of itself.
-        if !image_ids.is_empty()
+        if !options.image_ids.is_empty()
             && !crate::progress::capabilities(&self.backend_of(name)?).images
         {
             return Err(images_unsupported());
         }
-        let images = self.sessions().resolve_attachments(image_ids);
-        self.launch_run(name, message, working_dir, force, &images)
+        let images = self.sessions().resolve_attachments(options.image_ids);
+        self.launch_run(
+            name,
+            message,
+            options.working_dir,
+            options.force,
+            &images,
+            options.pre_run,
+        )
     }
 
     /// The backend an agent is currently defined to run on.
@@ -540,11 +571,12 @@ impl Agents {
         message: &str,
         working_dir: Option<&str>,
     ) -> Result<Launch> {
-        self.launch_run(name, message, working_dir, true, &[])
+        self.launch_run(name, message, working_dir, true, &[], &[])
     }
 
-    /// The one launch path: resolve the agent, weigh the cap unless `force`, open a session, send,
-    /// announce.
+    /// The one launch path: resolve the agent, weigh the cap unless `force`, open a session,
+    /// pre-run what the launch already knows to run, send, announce.
+    #[allow(clippy::too_many_arguments)]
     fn launch_run(
         &self,
         name: &str,
@@ -552,6 +584,7 @@ impl Agents {
         working_dir: Option<&str>,
         force: bool,
         images: &[store::Attachment],
+        pre_run: &[String],
     ) -> Result<Launch> {
         let agent = self
             .get(name)?
@@ -579,17 +612,31 @@ impl Agents {
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
         let session = store.session(&agent.name, &record.id);
+        // Run before the opening turn is recorded, and after `name_conversation` — a pre-run
+        // command that calls back into the platform is part of *this* conversation, and must be
+        // able to say so. A terminal is skipped for the reason its launch message is: nobody typed
+        // anything into it yet, so there is no message for the output to arrive on.
+        let (ran, dropped) = if runner.as_terminal().is_none() {
+            self.pre_run(&agent, &spec, &record.id, pre_run)
+        } else {
+            (Vec::new(), 0)
+        };
+
         // The opening question, recorded as a turn so the run reads as a conversation from its
         // first line. Not for a terminal: its launch message is deliberately never typed (the TUI
         // is still drawing its first frame), so recording it as asked would be a lie.
         if runner.as_terminal().is_none() {
-            store.append_turn(
-                &agent.name,
-                &record.id,
-                store::user_turn_with(message, images.to_vec()),
-            )?;
+            let mut turn = store::user_turn_with(message, images.to_vec());
+            // What was run goes on the turn as steps, not into its text: the transcript keeps the
+            // message a person actually wrote, exactly as it does for an image's file paths.
+            turn.steps = prelude::steps(&ran);
+            store.append_turn(&agent.name, &record.id, turn)?;
         }
-        let message = &for_engine(runner.as_ref(), &store, message, images);
+        let message = &with_prelude(
+            &for_engine(runner.as_ref(), &store, message, images),
+            &ran,
+            dropped,
+        );
         self.send_or_note_failure(runner.as_ref(), &spec, &store, &agent.name, &record.id, message)?;
         // Only now, with this run's own files in place: pruning first would count it as one of the
         // old ones. A run somebody else is still watching is never swept.
@@ -603,6 +650,40 @@ impl Agents {
             &AgentRunStarted::of(name, message, &launch),
         );
         Ok(launch)
+    }
+
+    /// Really run this launch's opening commands, and report what they produced plus how many were
+    /// left un-run by the cap.
+    ///
+    /// The agent's standing prelude first, then the launch's own: an agent that always opens by
+    /// reading its brief keeps doing so, and this run's task-specific read follows it — which is
+    /// also the order somebody reading the transcript expects them in.
+    ///
+    /// Nothing is run when there is nothing to run, so an agent with no prelude never pays for the
+    /// shell this would otherwise open.
+    fn pre_run(
+        &self,
+        agent: &StoredAgent,
+        spec: &RunSpec,
+        conv: &str,
+        launch_commands: &[String],
+    ) -> (Vec<prelude::Ran>, usize) {
+        let commands: Vec<String> = agent
+            .manifest
+            .prelude
+            .iter()
+            .chain(launch_commands)
+            .filter(|command| !command.trim().is_empty())
+            .cloned()
+            .collect();
+        if commands.is_empty() {
+            return (Vec::new(), 0);
+        }
+        let dir = self.sessions().agent_dir(&agent.name);
+        (
+            prelude::run(&commands, spec, &dir, conv),
+            commands.len().saturating_sub(prelude::MAX_COMMANDS),
+        )
     }
 
     /// Say something into one of a harness agent's conversations (`run_id` is the conversation id).
@@ -1995,6 +2076,20 @@ fn for_engine(
         );
     }
     out
+}
+
+/// The opening message with what was pre-run behind it — or the message unchanged, which is every
+/// launch that pre-ran nothing.
+///
+/// Behind rather than in front: the task is what the run is *for*, and a model that meets six
+/// thousand tokens of command output before it is told what to do reads the output without a
+/// question in mind. The block says plainly that it is already-executed tool output, so its place
+/// is where a tool result belongs — after the ask.
+fn with_prelude(message: &str, ran: &[prelude::Ran], dropped: usize) -> String {
+    match prelude::block(ran, dropped) {
+        Some(block) => format!("{}\n\n{block}", message.trim_end()),
+        None => message.to_string(),
+    }
 }
 
 /// What a path-delivery engine is told about the files above its list.
@@ -3408,6 +3503,196 @@ mod tests {
             store.run_in_with("pane", "look", None, false, &[image.id]),
             Err(Error::Unsupported(_)),
         ));
+    }
+
+    /// A fake engine on the agent's own `PATH`, which records the command line it was launched with
+    /// and exits. `PATH` is assembled from the manifest, so an agent pointed at this directory runs
+    /// this instead of the real CLI — which is what makes "what did the engine actually receive?"
+    /// answerable in a test without one installed.
+    #[cfg(unix)]
+    fn fake_engine(store: &Agents, name: &str) -> (String, PathBuf) {
+        let dir = store.config.root().join(format!("fake-{name}"));
+        std::fs::create_dir_all(&dir).expect("fake engine dir");
+        let argv = dir.join("argv");
+        let bin = dir.join(name);
+        std::fs::write(
+            &bin,
+            format!(
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n<<<ARG>>>\\n' \"$a\"; done > '{}'\n",
+                argv.display()
+            ),
+        )
+        .expect("write the fake engine");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
+                .expect("make it executable");
+        }
+        (dir.display().to_string(), argv)
+    }
+
+    /// The engine's command line, once it has run. Polled rather than read straight away: the child
+    /// is detached, so the launch returns as soon as it is spawned.
+    #[cfg(unix)]
+    fn engine_argv(path: &std::path::Path) -> Vec<String> {
+        for _ in 0..200 {
+            if let Ok(text) = std::fs::read_to_string(path)
+                && !text.is_empty()
+            {
+                return text
+                    .split("\n<<<ARG>>>\n")
+                    .filter(|arg| !arg.is_empty())
+                    .map(str::to_string)
+                    .collect();
+            }
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        panic!("the engine never recorded its command line at {}", path.display());
+    }
+
+    /// The whole promise, end to end: a launch that names a command really runs it, and the engine's
+    /// prompt carries that command's real output.
+    ///
+    /// Asserted on the *engine's own command line* rather than on any intermediate string, because
+    /// every layer between here and there is one that could quietly drop it — and an agent told
+    /// "this already ran" that was never given the output is worse off than one told nothing.
+    #[test]
+    #[cfg(unix)]
+    fn a_pre_run_commands_real_output_reaches_the_engines_prompt() {
+        let store = scratch("pre-run-reaches");
+        let (bin, argv_file) = fake_engine(&store, "claude");
+        let mut m = spec("process:claude");
+        m.path = vec![bin];
+        store.save("solver", m).expect("save");
+
+        store
+            .launch(
+                "solver",
+                "work the task",
+                &LaunchOptions {
+                    pre_run: &["printf 'severity: high\\nasset: api.example.com'".to_string()],
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("launch");
+
+        let prompt = engine_argv(&argv_file)
+            .pop()
+            .expect("the engine's positional prompt");
+
+        assert!(
+            prompt.starts_with("work the task"),
+            "the task still leads: {prompt}"
+        );
+        // The output itself — really produced by really running the command.
+        assert!(
+            prompt.contains("severity: high") && prompt.contains("asset: api.example.com"),
+            "the command's real output must reach the model: {prompt}"
+        );
+        // …and framed so the model reads it as a call that already happened rather than as a claim
+        // the person made.
+        assert!(prompt.contains("Already run for you"), "{prompt}");
+        assert!(prompt.contains("status=\"ok\""), "{prompt}");
+    }
+
+    /// The transcript keeps what was *said*; the pre-run is recorded as the tool calls it was.
+    ///
+    /// Same split as an image's file paths: a reader scrolling the conversation should see a Bash
+    /// step it can expand, not a wall of quoted output wedged into the opening message — and the
+    /// message it reads back must be the one somebody actually typed.
+    #[test]
+    #[cfg(unix)]
+    fn the_transcript_records_a_pre_run_as_steps_and_not_as_words() {
+        let store = scratch("pre-run-transcript");
+        let (bin, _) = fake_engine(&store, "claude");
+        let mut m = spec("process:claude");
+        m.path = vec![bin];
+        store.save("solver", m).expect("save");
+
+        let run_id = match store
+            .launch(
+                "solver",
+                "work the task",
+                &LaunchOptions {
+                    pre_run: &["echo briefing".to_string()],
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("launch")
+        {
+            Launch::Process { run_id, .. } => run_id,
+            Launch::Pty { .. } => unreachable!("a process backend is not a pane"),
+        };
+
+        let opening = store
+            .sessions()
+            .turns("solver", &run_id)
+            .into_iter()
+            .next()
+            .expect("the opening turn");
+
+        assert_eq!(opening.text, "work the task", "no output in the words");
+        assert!(!opening.text.contains("briefing"), "{}", opening.text);
+        match opening.steps.as_slice() {
+            [Step::Tool {
+                name,
+                input,
+                status,
+                output,
+            }] => {
+                assert_eq!(name, "Bash", "recorded as the tool it is");
+                assert_eq!(input, "echo briefing");
+                assert_eq!(*status, ToolStatus::Ok);
+                assert!(output.contains("briefing"), "{output}");
+            }
+            other => panic!("expected one Bash step, got {other:?}"),
+        }
+    }
+
+    /// The agent's standing prelude runs first, then this launch's own — the order a reader expects
+    /// and the order the work needs: orient, then take the task.
+    #[test]
+    #[cfg(unix)]
+    fn the_agents_own_prelude_runs_before_the_launchs() {
+        let store = scratch("pre-run-order");
+        let (bin, _) = fake_engine(&store, "claude");
+        let mut m = spec("process:claude");
+        m.path = vec![bin];
+        m.prelude = vec!["echo standing-orders".to_string()];
+        store.save("solver", m).expect("save");
+
+        let run_id = match store
+            .launch(
+                "solver",
+                "work the task",
+                &LaunchOptions {
+                    pre_run: &["echo this-task".to_string()],
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("launch")
+        {
+            Launch::Process { run_id, .. } => run_id,
+            Launch::Pty { .. } => unreachable!("a process backend is not a pane"),
+        };
+
+        let commands: Vec<String> = store.sessions().turns("solver", &run_id)[0]
+            .steps
+            .iter()
+            .map(|step| match step {
+                Step::Tool { input, .. } => input.clone(),
+                other => panic!("expected tool steps, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(commands, ["echo standing-orders", "echo this-task"]);
+    }
+
+    /// An agent with no prelude and a launch that names none must send exactly what was typed. The
+    /// feature has to be invisible when it is not used — every existing run is that case.
+    #[test]
+    fn a_launch_with_nothing_to_pre_run_sends_the_message_unchanged() {
+        assert_eq!(with_prelude("just the task", &[], 0), "just the task");
     }
 
     /// What a path-delivery engine actually receives: the words, then the files, as an instruction

@@ -90,6 +90,10 @@ pub(crate) enum AgentsCommand {
         unattended: bool,
         #[arg(long, conflicts_with = "unattended")]
         no_unattended: bool,
+        #[arg(long = "prelude", value_name = "COMMAND")]
+        prelude: Vec<String>,
+        #[arg(long, conflicts_with = "prelude")]
+        no_prelude: bool,
         #[arg(long = "knowledge")]
         knowledge: Vec<String>,
         #[arg(long, conflicts_with = "knowledge")]
@@ -109,6 +113,8 @@ pub(crate) enum AgentsCommand {
         name: String,
         #[arg(short, long, default_value = "run")]
         message: String,
+        #[arg(long = "pre-run", value_name = "COMMAND")]
+        pre_run: Vec<String>,
         #[arg(long, value_name = "PATH")]
         dir: Option<String>,
         #[arg(long)]

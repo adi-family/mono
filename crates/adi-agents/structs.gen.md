@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-97 structs · 24 enums · 5 type aliases across 40 files.
+99 structs · 24 enums · 5 type aliases across 41 files.
 
 ## Index
 
@@ -29,10 +29,11 @@
 - [`src/lib.rs`](#srclibrs) — `Agents`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
+- [`src/prelude.rs`](#srcpreluders) — `Ran`
 - [`src/progress.rs`](#srcprogressrs) — `Step`, `ToolStatus`, `TurnMetrics`, `TurnContent`, `BackendCapabilities`
 - [`src/questions.rs`](#srcquestionsrs) — `Settled`
 - [`src/review.rs`](#srcreviewrs) — `Options`, `Review`, `Evidence`, `History`, `Totals`
-- [`src/run.rs`](#srcrunrs) — `Launch`, `Sent`, `Peek`, `RunInfo`, `Pane`
+- [`src/run.rs`](#srcrunrs) — `Launch`, `LaunchOptions`, `Sent`, `Peek`, `RunInfo`, `Pane`
 - [`src/runner/detached.rs`](#srcrunnerdetachedrs) — `DetachedRunner`, `State`, `Cursor`
 - [`src/runner/event.rs`](#srcrunnereventrs) — `RunEvent`, `EventKinds`, `EventBatch`
 - [`src/runner/human.rs`](#srcrunnerhumanrs) — `State`, `HumanRunner`
@@ -100,6 +101,8 @@ pub struct AgentManifest<Args> {
     pub project: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bin_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prelude: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub knowledge: Vec<String>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -1316,6 +1319,23 @@ struct Memo<T> {
 
 ---
 
+## `src/prelude.rs`
+
+### struct `Ran`
+
+One command that was run, and what it actually produced.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Ran {
+    pub(crate) command: String,
+    pub(crate) output: String,
+    pub(crate) ok: bool,
+}
+```
+
+---
+
 ## `src/progress.rs`
 
 ### enum `Step`
@@ -1543,6 +1563,20 @@ pub enum Launch {
         log: PathBuf,
         run_id: String,
     },
+}
+```
+
+### struct `LaunchOptions`
+
+What one launch asks for beyond the agent's own definition — see `Agents::launch`.
+
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct LaunchOptions<'a> {
+    pub working_dir: Option<&'a str>,
+    pub force: bool,
+    pub image_ids: &'a [String],
+    pub pre_run: &'a [String],
 }
 ```
 

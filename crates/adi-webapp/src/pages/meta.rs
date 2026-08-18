@@ -224,6 +224,9 @@ fn submit_setup(state: State, form: MetaForm) {
         starred: None,
         project: None,
         bin_tools,
+        // As `path` and `env` below: this form doesn't edit the pre-run commands, so `None`
+        // leaves whatever the agent already has.
+        prelude: None,
         secrets: None,
         // No form offers the knowledge bases or the memory toggle yet, so none of them
         // states one: `None` leaves whatever the agent already has. Set them with

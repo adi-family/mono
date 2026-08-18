@@ -155,7 +155,16 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
         .filter(|d| !d.is_empty());
     // `force` is the human's "run it anyway" after a refusal — the only way past the concurrency
     // limit, and never something an automatic launch sends.
-    let launch = store.run_in_with(name, message, working_dir, req.force, &req.attachments);
+    let launch = store.launch(
+        name,
+        message,
+        &adi_agents::LaunchOptions {
+            working_dir,
+            force: req.force,
+            image_ids: &req.attachments,
+            pre_run: &req.pre_run,
+        },
+    );
     let launch = match launch {
         Ok(launch) => launch,
         Err(e) => return Response::from(&e),
@@ -1157,6 +1166,20 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
                 .map(|m| m.bin_tools.clone())
                 .unwrap_or_default(),
         },
+        // The commands each run pre-executes before its first message. Omit-to-keep, as above —
+        // and blank lines are dropped here so an empty line left in a textarea cannot become a
+        // command that runs the shell's idea of nothing on every launch.
+        prelude: match req.prelude {
+            Some(commands) => commands
+                .into_iter()
+                .map(|command| command.trim().to_string())
+                .filter(|command| !command.is_empty())
+                .collect(),
+            None => stored
+                .as_ref()
+                .map(|m| m.prelude.clone())
+                .unwrap_or_default(),
+        },
         // The knowledge bases this agent works with, and whether it keeps one of its own. Both
         // are omit-to-keep for the same reason `bin_tools` is: only the full agent editor offers
         // them, and a save from the meta setup or the project panel must not silently cut an
@@ -1339,6 +1362,7 @@ fn agent_dto(
         starred: m.starred,
         project: m.project,
         bin_tools: m.bin_tools,
+        prelude: m.prelude,
         knowledge: m.knowledge,
         memory: m.memory,
         secrets: m

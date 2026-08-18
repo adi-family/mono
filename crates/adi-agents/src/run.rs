@@ -33,6 +33,32 @@ pub enum Launch {
     },
 }
 
+/// What one launch asks for beyond the agent's own definition — see [`Agents::launch`](crate::Agents::launch).
+///
+/// A struct rather than four more parameters because the short launch verbs already cover the
+/// common cases: this is the form a caller reaches for when it wants something specific, and each
+/// field reads as the thing it is at the call site. `Default` is the plain launch, so a caller
+/// naming one field says only that one.
+#[derive(Debug, Clone, Default)]
+pub struct LaunchOptions<'a> {
+    /// Where *this* run starts, overriding the directory its manifest implies. `None` leaves the
+    /// manifest and the agent's project to decide.
+    pub working_dir: Option<&'a str>,
+    /// Launch past a full concurrency limit — a human's deliberate "run it anyway". Never set by
+    /// anything the platform starts on its own.
+    pub force: bool,
+    /// Images to attach to the opening message, by the ids the attachment store minted.
+    pub image_ids: &'a [String],
+    /// Commands to really run before the opening message reaches the model, after the agent's own
+    /// [`prelude`](crate::AgentManifest::prelude) and in this order.
+    ///
+    /// For a launcher that already knows the agent's first tool call. Filing a task and launching
+    /// the agent to work it means the filer holds the id — so it can hand over
+    /// `adi-mono tasks show <id>`'s real output here instead of writing an instruction the agent
+    /// spends a whole turn obeying.
+    pub pre_run: &'a [String],
+}
+
 /// What became of a message said into a conversation. One turn runs at a time, so a message sent
 /// while the agent is still answering is not refused — it takes its place in the queue, and is
 /// asked either by the turn in flight (an engine whose loop ADI drives can take it between rounds)

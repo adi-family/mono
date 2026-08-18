@@ -901,6 +901,7 @@ pub(crate) struct AgentsForm {
     pub(crate) knowledge: RwSignal<BTreeSet<String>>,
     pub(crate) memory: RwSignal<bool>,
     pub(crate) knowledge_bases: RwSignal<Option<Vec<KnowledgeBaseDto>>>,
+    pub(crate) prelude: RwSignal<String>,
     pub(crate) path: RwSignal<String>,
     pub(crate) env: RwSignal<String>,
     pub(crate) system_prompt: RwSignal<String>,

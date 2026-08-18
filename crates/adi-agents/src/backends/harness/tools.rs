@@ -841,7 +841,7 @@ fn arg_u64(input: &Value, key: &str) -> Option<u64> {
 
 /// Cut an over-long result down, saying so where the model will see it — silence here reads as
 /// "that was the whole file", which is how an agent ends up editing text that isn't there.
-fn truncate(text: &str) -> String {
+pub(crate) fn truncate(text: &str) -> String {
     if text.len() <= MAX_OUTPUT {
         return text.to_string();
     }

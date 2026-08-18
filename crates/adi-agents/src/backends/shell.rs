@@ -62,7 +62,7 @@ impl Shell {
     /// `<id>.*` namespace and is deleted by sweeping the prefix, so state parked inside it is
     /// cleaned up by machinery that has never heard of it. Files rather than a directory, because
     /// that sweep removes files.
-    pub(super) fn new(agent_dir: &Path, session_id: &str) -> Self {
+    pub(crate) fn new(agent_dir: &Path, session_id: &str) -> Self {
         Self {
             cwd: agent_dir.join(format!("{session_id}.shell-cwd")),
             env: agent_dir.join(format!("{session_id}.shell-env")),
@@ -75,7 +75,7 @@ impl Shell {
     /// Falling back rather than failing is deliberate: a conversation whose `cd` target has since
     /// been deleted is still a conversation, and the run directory is the one place it can always
     /// be resumed in.
-    pub(super) fn start_dir(&self, home: &Path) -> PathBuf {
+    pub(crate) fn start_dir(&self, home: &Path) -> PathBuf {
         std::fs::read_to_string(&self.cwd)
             .map(|dir| PathBuf::from(dir.trim()))
             .ok()
@@ -188,7 +188,7 @@ impl Shell {
 
     /// Windows has no session shell — see the module docs — so the command runs as written.
     #[cfg(windows)]
-    pub(super) fn script(&self, command: &str) -> String {
+    pub(crate) fn script(&self, command: &str) -> String {
         command.to_string()
     }
 }

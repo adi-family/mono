@@ -158,6 +158,46 @@ Two constraints that must survive the refactor:
   write path only. Never build a spec from a read/poll path — that is what `can_advance`
   exists to avoid (`harness/mod.rs:124-126`).
 
+## Pre-run — the tool calls the launcher already knows
+
+A launcher usually knows the agent's first move. The bug-bounty filer has just written the task, so
+it holds the id; a target agent always opens by reading its brief. Left to the agent that costs a
+whole round trip: the model reads the instruction, emits one tool call, and the turn ends having
+learned only what the launcher could have said.
+
+So a launch may **really run** commands before the opening message goes out — `crate::prelude`:
+
+```
+agent manifest `prelude = [...]`      standing orders, every run of this agent
+LaunchOptions::pre_run = [...]        this run's own, after them
+```
+
+Same shell as the agent's `Bash` (so a `cd` or an `export` carries into its first call), same cwd,
+same `PATH` and environment — including the `.bin` shims, which exist on no other `PATH`. Real exit
+status, real stdout and stderr, truncated the way a `Bash` result is. Nothing is predicted or
+summarized, and a command that fails or cannot start says so rather than being dropped.
+
+What lands where:
+
+| | |
+|---|---|
+| the engine's message | the words, then a `# Already run for you` block of `<pre-run command="…" status="ok\|failed">` |
+| the transcript's opening turn | the words **unchanged**, plus one `Step::Tool` per command |
+
+That split is the one `for_engine` already makes for an image's file paths: what the engine is told
+is not what was said. It also means a reader sees the calls where the agent's own calls appear
+instead of a wall of quoted output wedged into the message.
+
+**It lives at the agent layer, not in a runner** — every engine inherits it, and the runner still
+knows nothing but "here is the message to send". The one engine that needs help is `harness:adi`,
+which is handed a conversation id rather than a message and replays the stored transcript: it
+rebuilds the identical block from the turn's steps (`prelude::block_of_steps`). That round trip is
+lossless because a step carries the command, the output, and the status — which is why the exit code
+lives *inside* the output, spelled `(exit 7)` exactly as the `Bash` tool spells it.
+
+A terminal backend runs no prelude: nothing has been typed into it yet, so there is no message for
+the output to arrive on.
+
 ## Events — pull with a cursor, normalized by the runner
 
 Reuses the existing normalized types (`Step`, `ToolStatus`, `TurnMetrics`) — do not invent

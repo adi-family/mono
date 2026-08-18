@@ -34,7 +34,7 @@ pub(crate) use actions::{
 // lives here rather than as a second copy of these renderers.
 pub(crate) use form::{
     agent_argument_values, agent_environment_fields, agent_param_applies, agent_schema_fields,
-    load_agent_into_form, parsed_env_vars, parsed_path_dirs, set_agent_field_value,
+    load_agent_into_form, parsed_env_vars, parsed_path_dirs, parsed_prelude, set_agent_field_value,
 };
 use form::{agent_form_fields, clear_agent_form};
 
@@ -151,6 +151,7 @@ pub(crate) fn agents_view(
                     memory: Some(form.memory.get()),
                     // This is the one form that edits the run environment, so it always states it —
                     // `Some(empty)` clears, where the `None` other forms send means "leave as is".
+                    prelude: Some(parsed_prelude(&form.prelude.get())),
                     path: Some(parsed_path_dirs(&form.path.get())),
                     env: Some(parsed_env_vars(&form.env.get())),
                     // …and the same for whether this agent may stop and wait for somebody.

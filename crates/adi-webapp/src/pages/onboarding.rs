@@ -600,6 +600,9 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         starred: Some(form.agent.starred.get_untracked()),
         project: None,
         bin_tools,
+        // The wizard offers no pre-run box, and a brand-new agent has nothing to keep: `None` is
+        // both "leave it alone" and "there was nothing there".
+        prelude: None,
         secrets: Some(attached_secrets(state, form, &presets, secret.as_ref(), &key)),
         // No form offers the knowledge bases or the memory toggle yet, so none of them
         // states one: `None` leaves whatever the agent already has. Set them with

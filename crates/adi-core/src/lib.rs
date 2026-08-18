@@ -31,7 +31,8 @@ pub use adi_agents::goals;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
-    Launch, RawAgentArguments, RunInfo, RunLimits, SecretAttachment, Sent, StoredAgent,
+    Launch, LaunchOptions, RawAgentArguments, RunInfo, RunLimits, SecretAttachment, Sent,
+    StoredAgent,
     StoredAgentManifest, contains_json_null, event_catalog,
 };
 
