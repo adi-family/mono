@@ -1043,6 +1043,16 @@ pub struct HideRun {
     pub hidden: bool,
 }
 
+/// `POST /api/agents/run/star` request — mark one conversation as kept, or (`starred: false`) let it
+/// go. Nothing about the run changes, but unlike hiding this outlives the rail: a starred session is
+/// exempt from the per-agent session cap, so the mark is what keeps a conversation from ageing out.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StarRun {
+    pub name: String,
+    pub run_id: String,
+    pub starred: bool,
+}
+
 /// `POST /api/agents/run/reply` request — say `message` into one of a harness agent's conversations
 /// (`run_id` is the conversation id). It becomes the next turn, or — while the agent is still
 /// answering — waits in that conversation's queue. Only harness backends keep answerable
@@ -1365,6 +1375,14 @@ pub struct AgentRunInfo {
     /// server does — so a full history view can still show it.
     #[serde(default)]
     pub hidden: bool,
+    /// Whether this conversation has been starred (`POST /api/agents/run/star`) — kept deliberately,
+    /// out of a rail that is otherwise ordered by recency alone.
+    ///
+    /// Like `hidden` it is carried by the listing and applied by the client, but it means more than a
+    /// view: a starred session is exempt from the per-agent session cap, so this is also the flag
+    /// that says why a very old conversation is still here.
+    #[serde(default)]
+    pub starred: bool,
     /// The question this conversation is waiting on a person for, if it is waiting on one.
     ///
     /// Carried by the *listing* and not only by the open chat, because "which of these needs me?"

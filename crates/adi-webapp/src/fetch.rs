@@ -20,7 +20,8 @@ use adi_webapp_api::types::{
     SimulateAgent, SimulateTurn,
     RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
-    SetGoal, SetOAuthSecret, SetRunLimit, SetSecret, StartResult, StartService, StopResult, TaskRef,
+    SetGoal, SetOAuthSecret, SetRunLimit, SetSecret, StarRun, StartResult, StartService, StopResult,
+    TaskRef,
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
     TriggerFireResult, TriggerLog,
     Transcript,
@@ -617,6 +618,21 @@ pub async fn hide_run(name: String, run_id: String, hidden: bool) -> Result<Agen
             name,
             run_id,
             hidden,
+        },
+    )
+    .await
+}
+
+/// Star one conversation, or unstar it (`starred: false`), returning the fresh run history with the
+/// flag on it. Nothing is deleted and nothing is stopped — but a starred conversation is also the
+/// one the per-agent cap will not sweep, so this is how a chat is kept past the fifty newest.
+pub async fn star_run(name: String, run_id: String, starred: bool) -> Result<AgentRuns, String> {
+    post(
+        "/api/agents/run/star",
+        &StarRun {
+            name,
+            run_id,
+            starred,
         },
     )
     .await

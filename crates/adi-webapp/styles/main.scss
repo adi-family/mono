@@ -656,12 +656,12 @@
     font-size: var(--text-xs);
     color: var(--muted);
   }
-  // A control on the right edge of a session row — the delete on the picked agent's chats, the
-  // unhide on a hidden one. Hidden until the row is under the cursor (or holds focus), so the rail
-  // reads as a list of chats rather than a column of marks. `visibility` rather than opacity alone,
-  // so an unseen control is also unclickable.
+  // A control on the right edge of a session row — the delete on the picked agent's chats, the star
+  // beside it, the unhide on a hidden one. Each is positioned against the anchor its row gives it,
+  // which is why a row can carry two of them without them stacking.
   &__session-del,
-  &__session-unhide {
+  &__session-unhide,
+  &__session-star {
     position: absolute;
     right: 4px;
     top: 50%;
@@ -675,9 +675,8 @@
     font-size: var(--text-xs);
     line-height: 1;
     cursor: pointer;
-    visibility: hidden;
-    opacity: 0;
-    transition: opacity var(--transition);
+    transition: opacity var(--transition), color var(--transition),
+                background var(--transition);
   }
   // Deleting is destructive, so it takes the down accent; bringing a chat back is not, so it takes
   // the ordinary one.
@@ -688,6 +687,24 @@
   &__session-unhide:hover {
     color: var(--accent);
     background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+  // A star that is on keeps the accent whether or not anything is pointing at it: it is the row's
+  // state as much as its control, and the rail's Starred band is the only other thing saying so.
+  &__session-star:hover { color: var(--ink); background: var(--surface-2); }
+  &__session-star.is-on,
+  &__session-star.is-on:hover { color: var(--accent); }
+  // The Hidden band builds its own rows and gates its controls here: out of sight until the row is
+  // under the cursor (or holds focus), so the band reads as a list of chats rather than a column of
+  // marks, and `visibility` rather than opacity alone so an unseen control is also unclickable.
+  //
+  // Scoped to that band rather than set on the buttons, which is the whole point of this pair of
+  // rules: the rail above it does the same gating in its own row's utility classes, and a control
+  // that hid itself by default would never come back there — nothing in that markup is a
+  // `&__sessionrow` for the rule below to match.
+  &__sessionrow &__session-del,
+  &__sessionrow &__session-unhide {
+    visibility: hidden;
+    opacity: 0;
   }
   &__sessionrow:hover &__session-del,
   &__sessionrow:focus-within &__session-del,

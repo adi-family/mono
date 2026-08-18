@@ -19,7 +19,7 @@ use crate::types::{
     AgentSimState, AgentSimTool, AgentSimTurn, AgentToken, AgentsState, AgentGoal, AgentGoals,
     AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun, PendingAsk, PendingAsks, ProjectRunLimit,
     ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit,
-    SimulateAgent, SimulateTurn, UnqueueFromRun,
+    SimulateAgent, SimulateTurn, StarRun, UnqueueFromRun,
 };
 
 use super::response::{Response, clean, error, ok_json, parse_body};
@@ -786,6 +786,28 @@ pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
     ok_json(&runs_response(store, &agent))
 }
 
+/// `POST /api/agents/run/star` — mark one conversation as kept, or (`starred: false`) let it go, then
+/// report the fresh run history. Nothing about the run changes and nothing is stopped.
+///
+/// It is not the mirror of `/run/hide` it looks like. Hiding is a preference the rail applies;
+/// starring also exempts the session from the per-agent cap, so it is what keeps a conversation from
+/// being swept once fifty newer ones have been opened. Idempotent, and for a run that is already gone
+/// a no-op; only an unknown agent is a 404.
+#[must_use]
+pub fn star_run(store: &Agents, body: &[u8]) -> Response {
+    let Some(req) = parse_star_run(body) else {
+        return bad_star_run();
+    };
+    let agent = match get_agent(store, req.name.trim()) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    if let Err(e) = store.set_run_starred(&agent.name, req.run_id.trim(), req.starred) {
+        return Response::from(&e);
+    }
+    ok_json(&runs_response(store, &agent))
+}
+
 /// `GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the
 /// cross-agent chat index. One [`AgentRuns`] per agent (same shape as `/api/agents/runs`), in the
 /// store's list order; the client flattens and sorts them.
@@ -820,16 +842,19 @@ pub fn all_agent_runs(store: &Agents, limit: Option<usize>) -> Response {
 /// within each one — "the last hundred chats" is one list in the rail, and a per-agent cut would
 /// spend the budget on agents nobody has touched in months.
 ///
-/// A session that is **running**, or **blocked on a person**, is kept whatever its age and without
-/// spending the budget. Those two are the rail's other two bands, and they are inboxes rather than
-/// history: a question asked three months ago and never answered is exactly the row a person needs
-/// to still be shown, and it is the paging that would have quietly swallowed it. There are only
-/// ever a handful of them — a machine with a hundred live runs has a different problem.
+/// A session that is **running**, **blocked on a person**, or **starred** is kept whatever its age
+/// and without spending the budget. The first two are the rail's other bands, and they are inboxes
+/// rather than history: a question asked three months ago and never answered is exactly the row a
+/// person needs to still be shown, and it is the paging that would have quietly swallowed it. The
+/// third is the same argument made by hand — a star says *keep this one where I can find it*, and a
+/// page that dropped it would answer the mark with the one behaviour it was made to prevent. There
+/// are only ever a handful of any of them; a machine with a hundred live runs has a different
+/// problem, and one with a hundred starred chats has said so deliberately.
 ///
 /// Every agent survives the cut, runs or none: an interactive agent has no runs to begin with and
 /// still contributes a row, and the client reads `caps` off this same listing.
 fn newest(agents: Vec<AgentRuns>, limit: usize) -> Vec<AgentRuns> {
-    let held = |r: &AgentRunInfo| r.running || r.pending_question.is_some();
+    let held = |r: &AgentRunInfo| r.running || r.pending_question.is_some() || r.starred;
     let mut index: Vec<(u64, usize, usize)> = agents
         .iter()
         .enumerate()
@@ -921,6 +946,7 @@ fn runs_response_with(store: &Agents, agent: &StoredAgent, waiting: &Waiting) ->
                 message: title_of(&r.message),
                 running: r.running,
                 hidden: r.hidden,
+                starred: r.starred,
                 outcome: r.outcome.map(agent_run_outcome),
             })
             .collect(),
@@ -2188,6 +2214,18 @@ fn bad_hide_run() -> Response {
     )
 }
 
+fn parse_star_run(body: &[u8]) -> Option<StarRun> {
+    parse_body::<StarRun>(body)
+        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
+}
+
+fn bad_star_run() -> Response {
+    error(
+        400,
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"starred\": true } with a non-empty name and run_id",
+    )
+}
+
 fn parse_reply_to_run(body: &[u8]) -> Option<ReplyToRun> {
     parse_body::<ReplyToRun>(body).filter(|req| {
             !req.name.trim().is_empty()
@@ -2466,6 +2504,58 @@ mod tests {
         );
     }
 
+    /// Starring answers with the listing that already has the mark on it. That is the whole contract
+    /// the rail leans on: the row settles into its new band from this reply, without a second
+    /// round-trip and without waiting for the socket's next tick.
+    #[test]
+    fn starring_a_run_answers_with_the_history_already_marked() {
+        let store = scratch("star");
+        assert_eq!(
+            save_agent(
+                &store,
+                serde_json::json!({ "name": "solver", "backend": "harness:adi" })
+                    .to_string()
+                    .as_bytes(),
+            )
+            .status,
+            200
+        );
+        let sessions =
+            adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
+        let run = sessions
+            .create("solver", adi_agents::Backend::from("harness:adi"), "/tmp", "go")
+            .expect("create")
+            .id;
+
+        let starred = |on: bool| {
+            let body = serde_json::json!({ "name": "solver", "run_id": run, "starred": on });
+            let response = star_run(&store, body.to_string().as_bytes());
+            assert_eq!(response.status, 200);
+            let runs: AgentRuns = serde_json::from_str(&response.body).expect("json");
+            runs.runs
+                .iter()
+                .find(|r| r.run_id == run)
+                .expect("the run is still listed")
+                .starred
+        };
+
+        assert!(starred(true), "the reply already carries the mark");
+        assert!(!starred(false), "and carries its removal");
+
+        // A run that is not there is a no-op, not an error — the same contract as hiding, so a
+        // click from a tab whose chat has since been deleted settles quietly.
+        let stale = serde_json::json!({
+            "name": "solver", "run_id": "1750000000000-0001", "starred": true,
+        });
+        assert_eq!(star_run(&store, stale.to_string().as_bytes()).status, 200);
+        // An unknown agent is still a 404, and a body missing `run_id` is still a 400.
+        let unknown = serde_json::json!({ "name": "nobody", "run_id": "x", "starred": true });
+        assert_eq!(star_run(&store, unknown.to_string().as_bytes()).status, 404);
+        assert_eq!(star_run(&store, b"{}").status, 400);
+
+        let _ = std::fs::remove_dir_all(store.config().root());
+    }
+
     /// A malformed body is answered in the shape it should have had, not with a bare 400.
     #[test]
     fn a_malformed_answer_body_says_what_it_wanted() {
@@ -2622,6 +2712,7 @@ mod tests {
                     message: String::new(),
                     running: false,
                     hidden: false,
+                    starred: false,
                     pending_question: None,
                     outcome: None,
                 })
@@ -2685,6 +2776,23 @@ mod tests {
             kept(&page),
             ["solver-500", "solver-400", "solver-2", "solver-1"],
             "the page is the newest two; the live and the asking ride free"
+        );
+    }
+
+    /// A star is the third thing that rides free, and the only one a person sets by hand. Starring
+    /// an old conversation and then finding it gone from the rail anyway would answer the mark with
+    /// exactly the disappearance it was made to prevent.
+    #[test]
+    fn a_starred_session_outlives_the_page() {
+        let mut agents = vec![listing("solver", &[500, 400, 3, 2, 1])];
+        agents[0].runs[4].starred = true;
+
+        let page = newest(agents, 2);
+
+        assert_eq!(
+            kept(&page),
+            ["solver-500", "solver-400", "solver-1"],
+            "the page is the newest two; the starred one rides free",
         );
     }
 

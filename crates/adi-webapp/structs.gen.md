@@ -171,6 +171,7 @@ struct SessionRow {
     run: Option<AgentRunInfo>,
     when: u64,
     running: bool,
+    starred: bool,
     hotkey: Option<usize>,
 }
 ```
@@ -186,6 +187,7 @@ struct SessionRef {
     run_id: String,
     title: String,
     hidden: bool,
+    starred: bool,
 }
 ```
 
@@ -653,7 +655,7 @@ pub(crate) struct RowMenu {
 
 ### struct `SessionMenu`
 
-An open right-click menu on one of the chat rail's session rows. Carries which session was right-clicked — the rail spans every agent, so a row is named by its agent *and* run id — and whether it is currently hidden, which is what decides between Hide and Unhide.
+An open right-click menu on one of the chat rail's session rows. Carries which session was right-clicked — the rail spans every agent, so a row is named by its agent *and* run id — and both of the row's flags, which are what decide between Hide and Unhide and between Star and Unstar.
 
 ```rust
 #[derive(Clone, PartialEq, Eq)]
@@ -662,6 +664,7 @@ pub(crate) struct SessionMenu {
     pub(crate) run_id: String,
     pub(crate) title: String,
     pub(crate) hidden: bool,
+    pub(crate) starred: bool,
     pub(crate) x: i32,
     pub(crate) y: i32,
 }

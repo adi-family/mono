@@ -1101,6 +1101,7 @@ mod tests {
             started_at: 1_000,
             last_activity: 2_000,
             hidden: false,
+            starred: false,
             runner_state: None,
             outcome: None,
         }

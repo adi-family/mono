@@ -1587,6 +1587,7 @@ pub struct RunInfo {
     pub message: String,
     pub running: bool,
     pub hidden: bool,
+    pub starred: bool,
     pub outcome: Option<RunOutcome>,
 }
 ```
@@ -2064,6 +2065,7 @@ pub struct SessionRecord {
     pub started_at: u64,
     pub last_activity: u64,
     pub hidden: bool,
+    pub starred: bool,
     pub runner_state: Option<serde_json::Value>,
     pub outcome: Option<RunOutcome>,
 }

@@ -730,6 +730,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/run/stop") => handlers::stop_run(agents, &req.body),
         ("POST", "/api/agents/run/delete") => handlers::delete_run(agents, &req.body),
         ("POST", "/api/agents/run/hide") => handlers::hide_run(agents, &req.body),
+        ("POST", "/api/agents/run/star") => handlers::star_run(agents, &req.body),
         ("POST", "/api/agents/stop") => handlers::stop_agent(agents, &req.body),
         ("POST", "/api/agents/peek") => handlers::peek_agent(agents, &req.body),
         ("POST", "/api/agents/send-keys") => handlers::send_agent_keys(agents, &req.body),

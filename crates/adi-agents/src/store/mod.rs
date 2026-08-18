@@ -69,7 +69,7 @@ const DB_FILE: &str = "sessions.db";
 
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
-                              hidden, runner_state, outcome, runner";
+                              hidden, runner_state, outcome, runner, starred";
 
 /// The sessions under one root.
 ///
@@ -210,6 +210,7 @@ impl SessionStore {
             cwd: cwd.into(),
             message: message.to_string(),
             hidden: false,
+            starred: false,
             runner_state: None,
             outcome: None,
         };
@@ -302,6 +303,30 @@ impl SessionStore {
                 rusqlite::params![agent, id, i64::from(hidden)],
             )
             .map_err(|e| db::sql_err("hide a session in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Star (or unstar) a session: the reader's mark that this conversation is one to keep.
+    ///
+    /// Returns whether there was a session there to flag, so a stale click is idempotent rather than
+    /// an error — the same contract as [`set_hidden`](Self::set_hidden), and starring is likewise
+    /// **not** activity: a mark is not the conversation speaking, and a rail sorted by
+    /// `last_activity` must not shuffle because one was made.
+    ///
+    /// It differs from hiding in the one way that matters here: [`prune_old`](Self::prune_old) skips
+    /// a starred session, so this is the only flag on the record that changes what survives rather
+    /// than only what a view draws.
+    ///
+    /// # Errors
+    /// Returns database errors.
+    pub fn set_starred(&self, agent: &str, id: &str, starred: bool) -> Result<bool> {
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET starred = ?3 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id, i64::from(starred)],
+            )
+            .map_err(|e| db::sql_err("star a session in", e))?;
         Ok(changed > 0)
     }
 
@@ -487,6 +512,11 @@ impl SessionStore {
     /// something is still running is the runner's question, and a store that could answer it would
     /// be back to knowing about pids. A session it vouches for is never pruned however old it is,
     /// so the count kept can exceed the cap while a long run is in flight.
+    ///
+    /// A **starred** session is likewise never pruned, and for the plainer reason: somebody said to
+    /// keep it. That is the whole difference between starring and hiding — hiding changes what a
+    /// rail draws, starring changes what survives — and a cap that swept a starred conversation
+    /// anyway would undo the one thing the mark is for, silently, days after it was made.
     pub fn prune_old(&self, agent: &str, is_live: impl Fn(&SessionRecord) -> bool) -> usize {
         let sessions = self.list(agent);
         if sessions.len() <= MAX_SESSIONS {
@@ -495,7 +525,7 @@ impl SessionStore {
         let mut removed = 0;
         // `list` is newest first, so everything past the cap is what ages out.
         for session in sessions.into_iter().skip(MAX_SESSIONS) {
-            if is_live(&session) {
+            if session.starred || is_live(&session) {
                 continue;
             }
             if self.delete(agent, &session.id).unwrap_or(false) {
@@ -1048,6 +1078,121 @@ mod tests {
             !store.set_hidden("talker", "0000000000001-0000", true).expect("absent"),
             "a session that isn't there is nothing to flag",
         );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// Starring is the same kind of flag as hiding — it round-trips, it loses nothing, and it is not
+    /// activity — and it is independent of hiding, which is the pair a view has to be able to read
+    /// apart.
+    #[test]
+    fn starring_a_session_only_flags_it() {
+        let store = scratch("starred");
+        let now = now_ms();
+        let id = format!("{:013}-0001", now - 3_600_000);
+        seed(&store, "talker", &id, "some task");
+        let spoke = now - 1_800_000;
+        store
+            .append_turn("talker", &id, Turn { at: spoke, ..user_turn("said then") })
+            .expect("append");
+
+        let before = store.get("talker", &id).expect("listed");
+        assert!(!before.starred, "a session nobody starred is not starred");
+
+        assert!(
+            store.set_starred("talker", &id, true).expect("star"),
+            "an existing session is there to flag",
+        );
+        let starred = store.get("talker", &id).expect("still listed");
+        assert!(starred.starred, "the flag round-trips");
+        assert_eq!(starred.message, before.message, "the task is not lost");
+        assert_eq!(
+            starred.last_activity, before.last_activity,
+            "starring is not activity",
+        );
+        assert!(!starred.hidden, "and it says nothing about hiding");
+
+        // The two flags are orthogonal: a conversation can be put away *and* kept.
+        store.set_hidden("talker", &id, true).expect("hide");
+        let both = store.get("talker", &id).expect("listed");
+        assert!(both.hidden && both.starred, "neither flag clears the other");
+
+        assert!(store.set_starred("talker", &id, false).expect("unstar"));
+        let unstarred = store.get("talker", &id).expect("listed");
+        assert!(!unstarred.starred);
+        assert!(unstarred.hidden, "unstarring left the other flag alone");
+        assert!(
+            !store.set_starred("talker", "0000000000001-0000", true).expect("absent"),
+            "a session that isn't there is nothing to flag",
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A store written before `starred` existed reads back with it, and can be starred.
+    ///
+    /// This is the case [`SCHEMA`](db) cannot reach and [`MIGRATIONS`](db) exists for. Every machine
+    /// already has this table, so `CREATE TABLE IF NOT EXISTS` is a no-op there — a column added only
+    /// to the schema would arrive on new stores and nowhere else, and the first `SELECT` naming it
+    /// would then fail *every listing at once* on exactly the machines that have history to lose.
+    #[test]
+    fn a_store_written_before_the_column_reads_back_with_it() {
+        let store = scratch("pre-star");
+        std::fs::create_dir_all(store.dir()).expect("root");
+        // The `sessions` table exactly as it stood before this change, written straight to the file
+        // so nothing in the current schema can help it.
+        rusqlite::Connection::open(store.db_path())
+            .expect("open")
+            .execute_batch(
+                "CREATE TABLE sessions (
+                     agent TEXT NOT NULL, id TEXT NOT NULL, backend TEXT NOT NULL DEFAULT '',
+                     cwd TEXT NOT NULL DEFAULT '', message TEXT NOT NULL DEFAULT '',
+                     started_at INTEGER NOT NULL DEFAULT 0,
+                     last_activity INTEGER NOT NULL DEFAULT 0,
+                     hidden INTEGER NOT NULL DEFAULT 0,
+                     runner_state TEXT, outcome TEXT, tool_help TEXT, runner TEXT,
+                     PRIMARY KEY (agent, id));
+                 INSERT INTO sessions (agent, id, message, started_at, last_activity)
+                   VALUES ('solver', '1750000000000-0001', 'an old chat', 1, 1);",
+            )
+            .expect("the old schema");
+
+        let listed = store.list("solver");
+        assert_eq!(listed.len(), 1, "the old row is still listed");
+        assert_eq!(listed[0].message, "an old chat");
+        assert!(!listed[0].starred, "a row nobody could have starred is not");
+
+        assert!(store.set_starred("solver", &listed[0].id, true).expect("star"));
+        assert!(store.get("solver", &listed[0].id).expect("get").starred);
+
+        db::forget_connections();
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The cap sweeps by age, and a star is the one thing that exempts a *finished* session from it.
+    /// Without this, starring a conversation would be undone days later by an unrelated launch —
+    /// which is exactly the loss the mark exists to prevent.
+    #[test]
+    fn pruning_keeps_a_starred_session_however_old() {
+        let store = scratch("prune-starred");
+        // Two past the cap, so the two oldest are what ages out. Ids carry their own start time, so
+        // seeding them in order is what makes one of them the oldest.
+        for i in 0..MAX_SESSIONS + 2 {
+            seed(&store, "solver", &format!("{:013}-0001", 1_000_000 + i), "task");
+        }
+        let oldest = format!("{:013}-0001", 1_000_000);
+        let next_oldest = format!("{:013}-0001", 1_000_001);
+        store.set_starred("solver", &oldest, true).expect("star");
+
+        let removed = store.prune_old("solver", |_| false);
+        assert_eq!(removed, 1, "only the unstarred one aged out");
+        assert!(store.get("solver", &oldest).is_some(), "the starred one stayed");
+        assert!(store.get("solver", &next_oldest).is_none(), "the other did not");
+
+        // And unstarring gives it back to the cap.
+        store.set_starred("solver", &oldest, false).expect("unstar");
+        assert_eq!(store.prune_old("solver", |_| false), 1);
+        assert!(store.get("solver", &oldest).is_none());
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

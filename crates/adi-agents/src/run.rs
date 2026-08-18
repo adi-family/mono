@@ -82,6 +82,10 @@ pub struct RunInfo {
     /// kept in the run's metadata so it survives a reload: a hidden run still runs, still keeps its
     /// log and transcript, and is still returned here — it is up to the *view* to leave it out.
     pub hidden: bool,
+    /// Whether a reader has starred this conversation — kept deliberately, out of a rail that is
+    /// otherwise ordered by recency alone. The mark also exempts it from the per-agent session cap,
+    /// so unlike `hidden` this is not purely a view's business.
+    pub starred: bool,
     /// What became of it, once it has stopped. `None` while it runs, and for runs that ended
     /// before the store began keeping this.
     pub outcome: Option<RunOutcome>,

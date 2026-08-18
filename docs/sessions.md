@@ -81,7 +81,7 @@ Five tables. The first four are keyed `(agent, id)`, and `turns`, `queue` and `g
 
 | table | holds | ordered by |
 |---|---|---|
-| `sessions` | the record: backend, cwd, message, `started_at`, `last_activity`, `hidden`, `runner_state`, `outcome`, `tool_help` | index `sessions_newest (agent, started_at DESC, id DESC)` |
+| `sessions` | the record: backend, cwd, message, `started_at`, `last_activity`, `hidden`, `starred`, `runner_state`, `outcome`, `tool_help` | index `sessions_newest (agent, started_at DESC, id DESC)` |
 | `turns` | one row per turn; the whole `Turn` as JSON plus `at` and `role` | `seq` |
 | `queue` | what is waiting to be said next, and the images waiting with it | `seq` |
 | `goals` | what the conversation is *for*: text, state, who set it, how often it has been asked | `created_at` (partial index on the open ones) |
@@ -145,7 +145,23 @@ gets there first decides and everyone after is a no-op:
 
 Both were added to a table that already existed on every machine, so they arrive through
 `db::MIGRATIONS` (`ALTER TABLE … ADD COLUMN`, error swallowed) rather than through `SCHEMA`, which
-`CREATE TABLE IF NOT EXISTS` makes a no-op against an existing store.
+`CREATE TABLE IF NOT EXISTS` makes a no-op against an existing store. So did `starred`, and the case
+is pinned by `a_store_written_before_the_column_reads_back_with_it` (`store/mod.rs`) — a column added
+to `SCHEMA` alone reaches new stores and nowhere else, and the first `SELECT` naming it then fails
+*every listing at once* on exactly the machines with history to lose.
+
+### The two flags on a row are not the same kind of thing
+
+`hidden` and `starred` look like a pair and are not:
+
+- **`hidden`** is purely a listing preference. The store returns hidden sessions like any other —
+  filtering is the view's job — and nothing else in the system reads it.
+- **`starred`** is a person saying *keep this*. It is read by two things that are not views:
+  `prune_old` skips a starred session however old it is (`store/mod.rs`), and the HTTP paging cut
+  lets one ride free past the limit (`newest`, `handlers/agents.rs`). A star that the cap swept
+  anyway, days later, would be the one outcome the mark exists to prevent.
+
+Neither clears the other: a conversation can be put away and kept at once.
 
 WAL, `busy_timeout = 5000`, `synchronous = NORMAL` — the CLI, the app, and every trigger's child
 open this independently, and the pragma order is load-bearing (`busy_timeout` first, or switching
@@ -228,6 +244,7 @@ Handlers: `crates/adi-webapp-api/src/handlers/agents.rs`. Routing: `crates/adi-a
 | `GET /api/agents/runs/all[?limit=N]` | `all_agent_runs` :457 | `AllAgentRuns` — every agent, one round-trip; `?limit` pages it |
 | `POST /api/agents/run/peek` | `peek_run` :205 | one run's transcript/log snapshot |
 | `POST /api/agents/run/hide` | `hide_run` :439 | flips `hidden`, replies with fresh history |
+| `POST /api/agents/run/star` | `star_run` | flips `starred`, replies with fresh history |
 | `POST /api/agents/run/delete` | `delete_run` :419 | deletes, replies with fresh history |
 | `POST /api/agents/run/stop` | `stop_run` :400 | stops, replies with fresh history |
 | `POST /api/agents/run/reply` | `reply_run` :340 | sends/queues a message, replies with a snapshot |
@@ -255,17 +272,20 @@ The rail asks for a page; every other reader asks for all of it.
 - **The cut** (`newest`, `agents.rs`) is the newest `N` sessions **across every agent**, by
   `max(last_activity, started_at)` — one flat list, as the rail reads it. A per-agent cut would
   spend the budget on agents nobody has touched in months.
-- **Two kinds ride free**: a session that is *running* or *blocked on a person* is kept whatever
-  its age and without spending the budget. Those are the rail's other two bands, and they are
-  inboxes rather than history — a question asked months ago and never answered is exactly the row
-  paging must not swallow.
+- **Three kinds ride free**: a session that is *running*, *blocked on a person*, or *starred* is
+  kept whatever its age and without spending the budget. The first two are the rail's other bands,
+  and they are inboxes rather than history — a question asked months ago and never answered is
+  exactly the row paging must not swallow. The third is the same argument made by hand.
 - **Every agent is still listed**, runs or none: an interactive agent has no runs to begin with
   and still contributes a rail row, and the client reads `caps` off this same listing.
 - **`total`** counts what exists, not what was sent. `total − Σruns` is what the rail's
   **Load more** prints, and a zero there is what removes the button.
 
 `POST /api/agents/runs` is *not* paged — the open conversation has to be findable in it — so the
-client cuts the watched agent's copy itself (`paged`, `actions.rs`) by the same rule.
+client cuts the watched agent's copy itself (`paged`, `actions.rs`) by the same rule. **The three
+free-riding kinds have to be listed identically in both places.** A session the server kept and the
+client then cut would go missing from the rail of the agent you are on, which is the one agent whose
+history arrives whole and so the only place the disagreement would ever show.
 
 ## Layer 4 — transport
 
@@ -310,6 +330,15 @@ nearly every session.
 Other state that shapes the list: `state.rail_limit` (the page, `SESSION_PAGE` = 100 to start),
 `state.starred_only`, `state.show_hidden`, `state.session_menu`, `state.chat_drawer`.
 
+**`starred_only` is about agents, not conversations**, and is the one genuine naming collision in
+this path. It narrows the rail to the sessions of agents starred on the Agents page (a field on the
+*manifest*); a conversation's own star is a column on its session row. Same glyph, two marks.
+
+Both row flags are written through one path: `set_session_hidden` / `set_session_starred` post, then
+hand the answer to `settle_session_flag`, which sets `watch.runs` for the watched agent and re-fetches
+the index **at the rail's current page** — an unlimited refetch would widen the rail to the whole
+index until the socket's next answer narrowed it back.
+
 ## Layer 6 — render
 
 `crates/adi-webapp/src/pages/agents/actions.rs`, from `chat_home_view` (`:1518`).
@@ -317,20 +346,33 @@ Other state that shapes the list: `state.rail_limit` (the page, `SESSION_PAGE` =
 ```
 chat_rail                       :2307   the whole left rail
 ├─ chat_all_sessions            :2338   visible rows
-│   ├─ starred_agents           :2279   ★ filter (watched agent always kept)
-│   ├─ per agent: pty ⇒ one synthetic row (when: now); else runs.filter(!hidden)
-│   │   └─ paged                        the watched agent's own list, cut to state.rail_limit
-│   ├─ sort by last_touch desc  :2423   last_touch = max(last_activity, started_at)  :2243
-│   ├─ partition(running)       :2428   two bands
-│   └─ For(keyed "agent:run_id") -> chat_session_row  :2473
+│   └─ session_bands                    also what the ⌘1…⌘9 hotkeys read
+│       ├─ starred_agents       :2279   ★ *agent* filter (watched agent always kept)
+│       ├─ per agent: pty ⇒ one synthetic row (when: now); else runs.filter(!hidden)
+│       │   └─ paged                    the watched agent's own list, cut to state.rail_limit
+│       ├─ sort by last_touch desc      last_touch = max(last_activity, started_at)
+│       ├─ partition ×3                 four bands: asking, running, starred, the rest
+│       └─ For(keyed "agent:run_id") -> chat_session_row
 ├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
 └─ chat_hidden_sessions         :2674   the collapsed Hidden band (all_chats only)
 ```
 
 `chat_session_row` maps a row to `adi_ui::SessionItem` (`crates/adi-ui/src/session.rs`) inside a
 `RailCard` (`crates/adi-ui/src/rail.rs:38`). `SessionState` has four states but the rail only
-ever produces two: `Working` when `running`, else `Done` (`actions.rs:2509`) — `Waiting` and
-`Error` are unreachable from this path today.
+ever produces three: `Waiting` when the conversation is asking, `Working` when it is running, else
+`Done` — `Error` is unreachable from this path today.
+
+**The band order is deliberate and the starred band comes third.** Waiting and running are states a
+conversation is in *now* and will leave on its own; a star is a standing instruction. A starred chat
+that happens to be working is still found under **Running now**, so the band collects only the ones
+recency ordering would otherwise have carried off — which is the whole reason to mark one.
+
+Each row carries two controls on its right edge, in separate absolute anchors rather than one flex
+row (both buttons are `position: absolute` against whatever anchor they are given, so a row of them
+would stack): the **star** at `right-7`, always lit once it is on, and the **delete** at `right-1`,
+only under the cursor. The auto-hide for the delete lives in the row's own utility classes; the
+`.adi-chome__sessionrow` rules in `main.scss` gate the *Hidden band's* copies, which build their own
+markup.
 
 The `For` key is `"{agent}:{run_id}"` and is load-bearing, not tidiness: a row's click handler is
 bound when the row is *built*, so an unkeyed list rebuilt with a different shape (which is
@@ -385,10 +427,11 @@ Work down this list when one is missing:
 2. Its agent is **pty** → no history by design; the rail synthesizes one row, and only when the
    session is live or that agent is on screen (`actions.rs:2363-2375`).
 3. `hidden: true` → out of the main bands, in the Hidden band (`actions.rs:2387`, `:2674`).
-4. **★ is on** and its agent is not starred (`actions.rs:2279`) — off by default, so this only
-   applies once someone has switched it on this page load.
-5. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs:252`).
-   A live session is never swept.
+4. **★ is on** and its agent is not starred (`starred_agents`, `actions.rs`) — off by default, so
+   this only applies once someone has switched it on this page load. Note this is the head's
+   *agent* filter, which is a different mark from a conversation's own star.
+5. It aged past `MAX_SESSIONS = 50` per agent and was swept by `prune_old` (`store/mod.rs`).
+   A live session is never swept, and neither is a **starred** one.
 6. It has no row in `sessions` — a leftover `<id>.log` on its own is not a session.
 7. Its agent's definition was deleted — sessions are listed per *agent from the manifest list*
    (`all_agent_runs` iterates `store.list()`), so an agent with rows but no manifest is invisible to

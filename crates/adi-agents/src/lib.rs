@@ -1405,6 +1405,7 @@ impl Agents {
                 last_activity: record.last_activity,
                 message: record.message,
                 hidden: record.hidden,
+                starred: record.starred,
                 outcome: record.outcome,
             })
             .collect()
@@ -1577,6 +1578,24 @@ impl Agents {
             return Ok(false);
         }
         self.sessions().set_hidden(name, run_id, hidden)
+    }
+
+    /// Star one conversation, or unstar it (`starred: false`). Returns whether there was a run there
+    /// to flag; flagging one that is already gone is not an error.
+    ///
+    /// Starring is [`Self::set_run_hidden`]'s opposite number and takes the same shape, but it is not
+    /// only a listing preference: a starred session is exempt from the per-agent cap
+    /// ([`SessionStore::prune_old`](store::SessionStore::prune_old)), so this is how a conversation
+    /// is kept past the fifty that would otherwise age it out.
+    ///
+    /// # Errors
+    /// Returns name validation errors.
+    pub fn set_run_starred(&self, name: &str, run_id: &str, starred: bool) -> Result<bool> {
+        validate_name(name)?;
+        if self.get(name)?.is_none() {
+            return Ok(false);
+        }
+        self.sessions().set_starred(name, run_id, starred)
     }
 
     /// Stops a run, returning whether one was found.
@@ -3726,7 +3745,7 @@ mod tests {
         assert_eq!(runs.len(), 2, "newest first");
         assert_eq!(runs[0].run_id, second);
         assert_eq!(runs[0].message, "read the bundles");
-        assert!(runs.iter().all(|r| !r.running && !r.hidden));
+        assert!(runs.iter().all(|r| !r.running && !r.hidden && !r.starred));
 
         let peek = store.peek_run(&agent, &second);
         assert!(!peek.interactive);
@@ -3745,6 +3764,19 @@ mod tests {
         );
         assert!(
             !store.set_run_hidden("recon", "0000000000001-0000", true).expect("absent"),
+            "a run that isn't there is nothing to flag",
+        );
+
+        // The star is the other flag on the same row, and it travels with the listing the same way.
+        assert!(store.set_run_starred("recon", &first, true).expect("star"));
+        assert!(
+            store.runs(&agent).iter().any(|r| r.run_id == first && r.starred && r.hidden),
+            "starring says nothing about hiding, and neither clears the other",
+        );
+        assert!(store.set_run_starred("recon", &first, false).expect("unstar"));
+        assert!(store.runs(&agent).iter().all(|r| !r.starred));
+        assert!(
+            !store.set_run_starred("recon", "0000000000001-0000", true).expect("absent"),
             "a run that isn't there is nothing to flag",
         );
 

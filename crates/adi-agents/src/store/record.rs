@@ -57,6 +57,13 @@ pub struct SessionRecord {
     /// more — a hidden session still runs, still keeps its log, and is still returned here; it is
     /// the *view* that leaves it out.
     pub hidden: bool,
+    /// Whether a reader has starred this session — kept deliberately, out of a rail that is
+    /// otherwise ordered by recency alone.
+    ///
+    /// Unlike [`hidden`](Self::hidden) this is not only a listing preference: a starred session is
+    /// never swept by [`prune_old`](super::SessionStore::prune_old). Starring a conversation that
+    /// the cap then deleted out from under it would be the one thing the mark is *for*, undone.
+    pub starred: bool,
     /// The runner's own scratch space — runner-written, store-opaque, never interpreted here.
     ///
     /// A local-process runner keeps its pid in it, a pty runner its session name, and a runner whose
@@ -170,6 +177,7 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
         started_at: row.get(5)?,
         last_activity: row.get(6)?,
         hidden: row.get::<_, i64>(7)? != 0,
+        starred: row.get::<_, i64>(11)? != 0,
         // A slot that will not parse reads as empty rather than failing the row: it belongs to a
         // runner, and a listing has no stake in what is in it.
         runner_state: state.and_then(|t| serde_json::from_str(&t).ok()),

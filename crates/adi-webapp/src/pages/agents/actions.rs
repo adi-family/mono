@@ -8,7 +8,7 @@
 
 use adi_webapp_api::types::{
     AgentAsk, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo,
-    AgentStep, AgentTokenSource,
+    AgentRuns, AgentStep, AgentTokenSource,
     AgentTokens, AgentToolStatus, AgentTurn, AgentsState, Dashboard,
     FleetDashboards, NodeDashboard, NodeDashboards,
 };
@@ -2757,7 +2757,12 @@ fn last_touch(r: &AgentRunInfo) -> u64 {
 
 /// Cut the *watched* agent's own run list to the page the rail is showing, by the rule the backend
 /// pages the cross-agent index with: the newest [`State::rail_limit`], plus every session that is
-/// running or blocked on a person whatever its age.
+/// running, blocked on a person, or starred, whatever its age.
+///
+/// The three exemptions have to match `newest` in `handlers/agents.rs` exactly. They are the same
+/// rule applied to two lists, and a star that survived the server's cut only to be dropped by this
+/// one would go missing from the rail of the agent you are actually on — which is the one agent
+/// whose history is whole here, and so the only place the difference would show.
 ///
 /// The rail takes the watched agent's conversations from `/api/agents/runs` rather than from the
 /// index, because that list moves the instant a chat is deleted or hidden — and that endpoint
@@ -2773,7 +2778,7 @@ fn paged(runs: Vec<AgentRunInfo>, state: State) -> Vec<AgentRunInfo> {
     }
     runs.into_iter()
         .enumerate()
-        .filter(|(i, r)| *i < limit || r.running || r.pending_question.is_some())
+        .filter(|(i, r)| *i < limit || r.running || r.pending_question.is_some() || r.starred)
         .map(|(_, r)| r)
         .collect()
 }
@@ -2896,6 +2901,9 @@ struct SessionRow {
     /// Unix millis this session last moved; what the rail sorts on.
     when: u64,
     running: bool,
+    /// Kept deliberately: what puts the row in the **Starred** band and draws the ★ on it. Always
+    /// false for a pty row, which has no record to carry a mark.
+    starred: bool,
     /// Which number opens this row, counted down the whole rail rather than within its band —
     /// `None` past the ninth. Filled in by [`session_bands`] once the bands are settled, because
     /// until then there is no "third row" to be.
@@ -2928,9 +2936,10 @@ fn hotkey_glyph() -> &'static str {
     if installed { "\u{2318}" } else { "\u{2303}" }
 }
 
-/// Every visible session, whichever agent it belongs to, in the three bands the rail reads them in:
-/// blocked on you, then running, then the rest — each newest activity first. The `bool` says
-/// whether the ★ filter is on, which is the difference between the rail's two emptinesses.
+/// Every visible session, whichever agent it belongs to, in the four bands the rail reads them in:
+/// blocked on you, then running, then starred, then the rest — each newest activity first. The
+/// `bool` says whether the ★ *agent* filter is on, which is the difference between the rail's two
+/// emptinesses.
 ///
 /// The watched agent's conversations come from `watch.runs` when it has any — that list is updated
 /// the moment a chat is deleted or hidden, so the rail doesn't go on showing a row that has just
@@ -2942,7 +2951,7 @@ fn hotkey_glyph() -> &'static str {
 /// Split out of the view because [`install_session_hotkeys`] needs the same list, and needs it at
 /// the moment a key is struck rather than the moment the rail was last drawn. One function, so the
 /// number printed on a row and the row that number opens cannot drift apart.
-fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], bool) {
+fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 4], bool) {
     let all = state.all_chats.get();
     let watched = watch.name.get().unwrap_or_default();
     // A pty agent's run history is empty either way; the agents list is what says it's live now.
@@ -2977,6 +2986,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
                     run: None,
                     when: now,
                     running,
+                    starred: false,
                     hotkey: None,
                 });
             }
@@ -2992,6 +3002,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
             agent: ar.name.clone(),
             when: last_touch(&r),
             running: r.running,
+            starred: r.starred,
             run: Some(r),
             hotkey: None,
         }));
@@ -3005,6 +3016,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
                 run: None,
                 when: now,
                 running: watch.peek.get().is_some_and(|p| p.running),
+                starred: false,
                 hotkey: None,
             });
         } else {
@@ -3013,6 +3025,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
                 agent: watched.clone(),
                 when: last_touch(&r),
                 running: r.running,
+                starred: r.starred,
                 run: Some(r),
                 hotkey: None,
             }));
@@ -3032,8 +3045,15 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
     let (mut waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
         .into_iter()
         .partition(|r| r.run.as_ref().is_some_and(|run| run.pending_question.is_some()));
-    let (mut running, mut rest): (Vec<SessionRow>, Vec<SessionRow>) =
+    let (mut running, rows): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.running);
+    // Four, and the starred band comes *after* the two inboxes rather than at the top. Waiting and
+    // running are states the conversation is in right now and will leave on its own; a star is a
+    // standing instruction from a person. A starred chat that is working is still best found under
+    // "Running now" — that is where you look for it today — so the band collects only the ones the
+    // recency ordering would otherwise have carried away, which is the whole reason to mark one.
+    let (mut starred, mut rest): (Vec<SessionRow>, Vec<SessionRow>) =
+        rows.into_iter().partition(|r| r.starred);
     // Numbered straight down the rail and across the band headings, not restarted per band: ⌘1 is
     // the row at the very top of the list whatever band it happens to be in today, which is the
     // only rule a hand can learn. Numbering within bands would move ⌘1 to a different session
@@ -3041,22 +3061,23 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 3], boo
     for (i, row) in waiting
         .iter_mut()
         .chain(running.iter_mut())
+        .chain(starred.iter_mut())
         .chain(rest.iter_mut())
         .take(HOTKEYS)
         .enumerate()
     {
         row.hotkey = Some(i + 1);
     }
-    ([waiting, running, rest], keep.is_some())
+    ([waiting, running, starred, rest], keep.is_some())
 }
 
-/// The rail's session list: the three bands, or the one line that says why there are none.
+/// The rail's session list: the four bands, or the one line that says why there are none.
 fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    let ([waiting, running, rest], starred) = session_bands(state, watch);
-    if waiting.is_empty() && running.is_empty() && rest.is_empty() {
+    let ([waiting, running, kept, rest], filtered) = session_bands(state, watch);
+    if waiting.is_empty() && running.is_empty() && kept.is_empty() && rest.is_empty() {
         // Which of the two emptinesses this is: nothing to show, or nothing left after the filter —
         // said apart, so the ★ never reads as "you have no chats".
-        let msg = if starred {
+        let msg = if filtered {
             "No chats from starred agents — star one on the Agents page, or turn ★ off."
         } else {
             "No chats yet — press New to start one."
@@ -3101,6 +3122,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     vec![
         band("Waiting on you", waiting),
         band("Running now", running),
+        band("Starred", kept),
         band("Recent", rest),
     ]
     .into_any()
@@ -3109,10 +3131,11 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 /// One session in the rail: its task, then the agent it belongs to and when it last moved. Clicking
 /// opens it — repointing the whole screen when it belongs to another agent, and only selecting the
 /// conversation when it is already the picked one, so a click on a chat of the agent on screen
-/// doesn't tear the centre pane down and rebuild it. Right-clicking offers to hide it, and a delete
-/// rides the row's right edge. The first nine rows also carry the number that opens them.
+/// doesn't tear the centre pane down and rebuild it. Right-clicking offers to hide or star it, and a
+/// star and a delete ride the row's right edge. The first nine rows also carry the number that opens
+/// them.
 fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
-    let SessionRow { agent, run, when, running, hotkey } = item;
+    let SessionRow { agent, run, when, running, starred, hotkey } = item;
     let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
     let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
     let (title, sub, run_id) = match run {
@@ -3137,7 +3160,7 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
         Some(n) => format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}"),
         None => format!("open this session with {agent}"),
     };
-    let menu = SessionRef::of(&agent, &run_id, &title, false);
+    let menu = SessionRef::of(&agent, &run_id, &title, false, starred);
     // Only a conversation can be deleted: a pty agent's live session is started and stopped from the
     // centre pane, and keeps no transcript to take with it.
     let del = (!run_id.is_empty()).then(|| {
@@ -3148,6 +3171,26 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
                 on:click=move |_| delete_one_run(
                     state, watch, del_agent.clone(), del_id.clone(), del_title.clone(),
                 )>"\u{2715}"</button>
+        }
+    });
+    // The star toggle, on the same edge and by the same rule — a pty row has no record to mark.
+    //
+    // Unlike the delete beside it, it does not wait for a hover once the chat *is* starred: the
+    // mark is the row's state as much as its control, and a keep that only showed under the cursor
+    // would be a keep you had to go looking for to confirm.
+    let star = (!run_id.is_empty()).then(|| {
+        let (star_agent, star_id) = (agent.clone(), run_id.clone());
+        let (glyph, hint) = if starred {
+            ("\u{2605}", "unstar this chat")
+        } else {
+            ("\u{2606}", "star this chat \u{2014} it stays in the rail and outlives the session cap")
+        };
+        view! {
+            <button class="adi-chome__session-star" class:is-on=starred type="button"
+                title=hint aria-label=hint aria-pressed=starred.to_string()
+                on:click=move |_| set_session_starred(
+                    state, watch, star_agent.clone(), star_id.clone(), !starred,
+                )>{glyph}</button>
         }
     });
     // The row itself is `adi-ui`; the delete control is laid over it rather than inside,
@@ -3207,6 +3250,18 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
             >
                 {cap}
             </adi_ui::SessionItem>
+            // Two controls in the same corner, each in its own anchor rather than in one flex row:
+            // both buttons are `position: absolute` against the anchor they are given, so a row of
+            // them would stack rather than sit side by side. The star is the outer of the two, and
+            // keeps its place whether the delete beside it is showing or not.
+            <div class=if starred {
+                "absolute top-1 right-7 transition-opacity"
+            } else {
+                "absolute top-1 right-7 opacity-0 transition-opacity \
+                 group-hover:opacity-100 focus-within:opacity-100"
+            }>
+                {star}
+            </div>
             <div class="absolute top-1 right-1 opacity-0 transition-opacity \
                         group-hover:opacity-100 focus-within:opacity-100">
                 {del}
@@ -3226,15 +3281,17 @@ struct SessionRef {
     run_id: String,
     title: String,
     hidden: bool,
+    starred: bool,
 }
 
 impl SessionRef {
-    fn of(agent: &str, run_id: &str, title: &str, hidden: bool) -> Self {
+    fn of(agent: &str, run_id: &str, title: &str, hidden: bool, starred: bool) -> Self {
         Self {
             agent: agent.to_string(),
             run_id: run_id.to_string(),
             title: title.to_string(),
             hidden,
+            starred,
         }
     }
 
@@ -3250,20 +3307,27 @@ impl SessionRef {
             run_id: self.run_id.clone(),
             title: self.title.clone(),
             hidden: self.hidden,
+            starred: self.starred,
             x: ev.client_x(),
             y: ev.client_y(),
         }));
     }
 }
 
-/// The rail's right-click menu on a session: which chat it is, then Hide (or, for one already put
-/// away, Unhide). A full-viewport scrim behind it makes the next click a dismiss, as on the store
-/// tree's menu.
+/// The rail's right-click menu on a session: which chat it is, then Star (or Unstar) and Hide (or,
+/// for one already put away, Unhide). A full-viewport scrim behind it makes the next click a
+/// dismiss, as on the store tree's menu.
+///
+/// Star comes first because it is the one of the two that is reached from here rather than from the
+/// row — the row's own edge carries a star, but the Hidden band's rows have no edge control for it
+/// and this menu is the whole of their way to one.
 fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let menu = state.session_menu.get()?;
-    let SessionMenu { agent, run_id, title, hidden, x, y } = menu;
-    let label = if hidden { "Unhide" } else { "Hide" };
+    let SessionMenu { agent, run_id, title, hidden, starred, x, y } = menu;
+    let hide_label = if hidden { "Unhide" } else { "Hide" };
+    let star_label = if starred { "Unstar" } else { "Star" };
     let head = format!("{title} \u{00b7} {agent}");
+    let (star_agent, star_id) = (agent.clone(), run_id.clone());
     Some(
         view! {
             <div class="adi-menu__scrim"
@@ -3275,18 +3339,21 @@ fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
             <div class="adi-menu" style=format!("left:{x}px; top:{y}px")>
                 <div class="adi-menu__head" title=head.clone()>{head.clone()}</div>
                 <button class="adi-menu__item" type="button"
+                    on:click=move |_| set_session_starred(
+                        state, watch, star_agent.clone(), star_id.clone(), !starred,
+                    )>{star_label}</button>
+                <button class="adi-menu__item" type="button"
                     on:click=move |_| set_session_hidden(
                         state, watch, agent.clone(), run_id.clone(), !hidden,
-                    )>{label}</button>
+                    )>{hide_label}</button>
             </div>
         }
         .into_any(),
     )
 }
 
-/// Hide a session from the rail, or bring it back. The reply is that agent's fresh history, so the
-/// row leaves (or rejoins) its band without waiting on the next poll, and the cross-agent index the
-/// Recent and Hidden bands read is re-fetched for the same reason.
+/// Hide a session from the rail, or bring it back. See [`settle_session_flag`] for what happens to
+/// the answer.
 ///
 /// Nothing is stopped and nothing is deleted — a hidden run keeps working and keeps its transcript.
 /// The one thing that does move is the centre pane: hiding the conversation on screen closes it,
@@ -3309,21 +3376,59 @@ fn set_session_hidden(
         close_run_view(watch);
     }
     spawn_local(async move {
-        match fetch::hide_run(agent.clone(), run_id, hidden).await {
-            Ok(runs) => {
-                if watch.name.get_untracked().as_deref() == Some(agent.as_str()) {
-                    watch.runs.set(runs.runs);
-                }
-                // Same page the rail is showing — refetching without a limit here would widen the
-                // rail to the whole index until the socket's next answer narrowed it again.
-                let limit = Some(state.rail_limit.get_untracked());
-                if let Ok(all) = fetch::all_agent_runs(limit).await {
-                    state.all_chats.set(Some(all));
-                }
-            }
-            Err(e) => state.flash.set(Some(Flash::err(e))),
-        }
+        let flagged = fetch::hide_run(agent.clone(), run_id, hidden).await;
+        settle_session_flag(state, watch, &agent, flagged).await;
     });
+}
+
+/// Star a conversation, or unstar it — the other flag on the same row, through the same refresh.
+///
+/// Nothing moves but the mark: the chat stays open, stays in the rail, and keeps its place in
+/// whichever band it was in. What it buys is out of sight from here — a starred conversation is
+/// exempt from the per-agent session cap, so this is also how a chat is kept past the fifty newest
+/// rather than swept the next time its agent is run.
+fn set_session_starred(
+    state: State,
+    watch: AgentsWatch,
+    agent: String,
+    run_id: String,
+    starred: bool,
+) {
+    state.session_menu.set(None);
+    if run_id.is_empty() {
+        return;
+    }
+    spawn_local(async move {
+        let flagged = fetch::star_run(agent.clone(), run_id, starred).await;
+        settle_session_flag(state, watch, &agent, flagged).await;
+    });
+}
+
+/// What both of the rail's flag toggles do with their answer.
+///
+/// The endpoint replies with that agent's fresh history, so the row settles into its new band at
+/// once instead of at the socket's next tick — and the cross-agent index the Starred, Recent and
+/// Hidden bands read is re-fetched for the same reason. Refetching it **at the rail's current
+/// page**, not without a limit: an unlimited answer would widen the rail to the whole index until
+/// the socket's next answer narrowed it back.
+async fn settle_session_flag(
+    state: State,
+    watch: AgentsWatch,
+    agent: &str,
+    flagged: Result<AgentRuns, String>,
+) {
+    match flagged {
+        Ok(runs) => {
+            if watch.name.get_untracked().as_deref() == Some(agent) {
+                watch.runs.set(runs.runs);
+            }
+            let limit = Some(state.rail_limit.get_untracked());
+            if let Ok(all) = fetch::all_agent_runs(limit).await {
+                state.all_chats.set(Some(all));
+            }
+        }
+        Err(e) => state.flash.set(Some(Flash::err(e))),
+    }
 }
 
 /// Bind ⌘1…⌘9 to the first nine rows of the sessions rail, in the order the rail reads them.
@@ -3441,7 +3546,7 @@ fn chat_hidden_row(state: State, watch: AgentsWatch, agent: &str, r: &AgentRunIn
     let sub = format!("{agent} \u{00b7} {}", run_age(last_touch(r)));
     let dot = if r.running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
     let hint = format!("open this hidden chat with {agent}");
-    let menu = SessionRef::of(agent, &r.run_id, &title, true);
+    let menu = SessionRef::of(agent, &r.run_id, &title, true, r.starred);
     let (open_name, open_id) = (agent.to_string(), r.run_id.clone());
     let (show_name, show_id) = (agent.to_string(), r.run_id.clone());
     view! {

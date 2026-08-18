@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at    INTEGER NOT NULL DEFAULT 0,
     last_activity INTEGER NOT NULL DEFAULT 0,
     hidden        INTEGER NOT NULL DEFAULT 0,
+    starred       INTEGER NOT NULL DEFAULT 0,
     runner_state  TEXT,
     outcome       TEXT,
     tool_help     TEXT,
@@ -154,6 +155,9 @@ const MIGRATIONS: &[&str] = &[
     "ALTER TABLE sessions ADD COLUMN outcome TEXT",
     "ALTER TABLE sessions ADD COLUMN tool_help TEXT",
     "ALTER TABLE sessions ADD COLUMN runner TEXT",
+    // Kept deliberately, by a person. `NOT NULL DEFAULT 0` and not nullable: every conversation
+    // written before this existed was one nobody had starred, which is exactly what 0 says.
+    "ALTER TABLE sessions ADD COLUMN starred INTEGER NOT NULL DEFAULT 0",
     // A queued message can carry images now. JSON rather than a join table: the queue is read whole
     // or not at all, and a message waiting in line is not something anything queries *by* image.
     "ALTER TABLE queue ADD COLUMN images TEXT",

@@ -379,7 +379,8 @@ pub(crate) struct RowMenu {
 
 /// An open right-click menu on one of the chat rail's session rows. Carries which session was
 /// right-clicked — the rail spans every agent, so a row is named by its agent *and* run id — and
-/// whether it is currently hidden, which is what decides between Hide and Unhide.
+/// both of the row's flags, which are what decide between Hide and Unhide and between Star and
+/// Unstar.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct SessionMenu {
     pub(crate) agent: String,
@@ -388,6 +389,7 @@ pub(crate) struct SessionMenu {
     /// on — a rail can hold several rows that read alike.
     pub(crate) title: String,
     pub(crate) hidden: bool,
+    pub(crate) starred: bool,
     /// Where to draw, in viewport pixels (the menu is `position: fixed`).
     pub(crate) x: i32,
     /// See [`x`](Self::x).
