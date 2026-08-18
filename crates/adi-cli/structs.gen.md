@@ -4,11 +4,11 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-4 structs · 18 enums across 15 files.
+4 structs · 19 enums across 15 files.
 
 ## Index
 
-- [`src/agents.rs`](#srcagentsrs) — `AgentsCommand`, `RunRow`
+- [`src/agents.rs`](#srcagentsrs) — `AgentsCommand`, `AwaitsCommand`, `RunRow`
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
@@ -119,8 +119,14 @@ pub(crate) enum AgentsCommand {
         dir: Option<String>,
         #[arg(long)]
         force: bool,
+        #[arg(long, conflicts_with = "wait")]
+        no_await: bool,
         #[arg(long)]
         wait: bool,
+    },
+    Awaits {
+        #[command(subcommand)]
+        command: AwaitsCommand,
     },
     Runs {
         #[arg(long)]
@@ -163,6 +169,53 @@ pub(crate) enum AgentsCommand {
     },
     Delete {
         name: String,
+    },
+}
+```
+
+### enum `AwaitsCommand`
+
+What can be done to the wakes one conversation is holding.
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum AwaitsCommand {
+    List {
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Ignore {
+        #[arg(required = true)]
+        ids: Vec<String>,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
+    },
+    Update {
+        id: String,
+        #[arg(long)]
+        note: Option<String>,
+        #[arg(long = "event", value_name = "PATTERN")]
+        events: Vec<String>,
+        #[arg(long = "when", value_name = "FIELD=VALUE")]
+        when: Vec<String>,
+        #[arg(long, value_name = "SECONDS")]
+        after: Option<u64>,
+        #[arg(long, value_name = "SECONDS")]
+        every: Option<u64>,
+        #[arg(long)]
+        check: Option<String>,
+        #[arg(long, value_name = "SECONDS")]
+        expires_in: Option<u64>,
+        #[arg(long)]
+        agent: Option<String>,
+        #[arg(long)]
+        session: Option<String>,
     },
 }
 ```

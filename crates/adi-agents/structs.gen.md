@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-99 structs · 24 enums · 5 type aliases across 41 files.
+101 structs · 24 enums · 5 type aliases across 41 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/analytics/mod.rs`](#srcanalyticsmodrs) — `PromptToken`, `Source`, `Shape`, `Site`, `Repeat`, `NearDuplicates`, `TokenReport`, `Options`, `Segment`
 - [`src/analytics/suffix.rs`](#srcanalyticssuffixrs) — `RawRepeat`
 - [`src/arguments.rs`](#srcargumentsrs) — `PtyClaudeArguments`, `ProcessClaudeArguments`, `PtyCodexArguments`, `ProcessCodexArguments`, `HarnessClaudeSdkArguments`, `HarnessAdiArguments`, `AgentSummaryArguments`, `Boolish`, `U64ish`, `F64ish`
-- [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `CheckOutcome`
+- [`src/awaits.rs`](#srcawaitsrs) — `Await`, `Cause`, `Woken`, `Awaits`, `Request`, `Caller`, `Change`, `CheckOutcome`
 - [`src/backend.rs`](#srcbackendrs) — `Backend`
 - [`src/backends/adi_events.rs`](#srcbackendsadi_eventsrs) — `Sink`
 - [`src/backends/detached.rs`](#srcbackendsdetachedrs) — `Spawned`
@@ -562,6 +562,8 @@ pub struct Await {
     #[serde(default)]
     pub events: Vec<String>,
     #[serde(default)]
+    pub when: BTreeMap<String, String>,
+    #[serde(default)]
     pub at: Option<u64>,
     #[serde(default)]
     pub every: Option<u64>,
@@ -629,11 +631,41 @@ What a run asked for, before it becomes a stored `Await`. The tool builds one of
 pub struct Request {
     pub note: String,
     pub events: Vec<String>,
+    pub when: BTreeMap<String, String>,
     pub after_seconds: Option<u64>,
     pub every_seconds: Option<u64>,
     pub check: Option<String>,
     pub expires_in_seconds: Option<u64>,
     pub cwd: String,
+}
+```
+
+### struct `Caller`
+
+The conversation a command was invoked *from*, read out of the environment every turn gives its commands.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caller {
+    pub agent: String,
+    pub conv: String,
+}
+```
+
+### struct `Change`
+
+What an `update` changes about a pending await. Every field is omit-to-keep: `None` leaves that part of the record exactly as it was, so changing a note says nothing about a check.
+
+```rust
+#[derive(Debug, Clone, Default)]
+pub struct Change {
+    pub note: Option<String>,
+    pub events: Option<Vec<String>>,
+    pub when: Option<BTreeMap<String, String>>,
+    pub after_seconds: Option<u64>,
+    pub every_seconds: Option<u64>,
+    pub check: Option<String>,
+    pub expires_in_seconds: Option<u64>,
 }
 ```
 

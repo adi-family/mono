@@ -212,4 +212,56 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
+
+    /// The wake an action registers on its caller's behalf, put through the worker the app really
+    /// runs. `adi.agents.run.finished` is published for every run on the machine, so a supervisor
+    /// that launched one must not be woken — and told it was its own — by a stranger's ending.
+    #[test]
+    fn a_wake_scoped_to_one_run_survives_another_runs_ending() {
+        let config = scratch("scoped");
+        let agents = Agents::with_config(config.clone());
+        let store = Awaits::with_config(config);
+
+        let scoped = awaits::register(
+            &store,
+            "supervisor",
+            "conv-1",
+            &Request {
+                note: "the agent you started ended".into(),
+                events: vec!["adi.agents.run.finished".into()],
+                when: [("run_id".to_string(), "r-42".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Request::default()
+            },
+        )
+        .expect("register");
+
+        let finished = |run_id: &str| EventRecord {
+            name: "adi.agents.run.finished".into(),
+            payload: format!(r#"{{"agent":"worker","run_id":"{run_id}","is_error":false}}"#),
+            emitted_at: 0,
+        };
+        let observer = start(agents);
+
+        // Long enough to be sure the worker has been through it — the other test's event fires
+        // almost at once — and the whole point is that nothing happens.
+        observer(&finished("r-43"));
+        std::thread::sleep(Duration::from_millis(500));
+        assert_eq!(store.list().len(), 1, "a stranger's ending is not this run's");
+
+        observer(&finished("r-42"));
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline && !store.list().is_empty() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            store.list().is_empty(),
+            "its own run's ending must wake it; still pending: {:?}",
+            store.list()
+        );
+        assert!(!store.claim(&scoped.id));
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
 }

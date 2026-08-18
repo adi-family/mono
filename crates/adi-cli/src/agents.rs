@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 
 use adi_core::{
     Adi, AgentManifest, Agents, AgentSummaryArguments, AgentsError, Launch, LaunchOptions, RunInfo,
-    SecretAttachment, StoredAgent,
+    SecretAttachment, StoredAgent, awaits,
 };
 use clap::Subcommand;
 
@@ -176,6 +176,14 @@ pub(crate) enum AgentsCommand {
         /// override of the concurrency limit — for a human who wants this one now.
         #[arg(long)]
         force: bool,
+        /// Don't register the wake that would report this run back to whoever launched it.
+        ///
+        /// Only means anything when an agent is the one launching: a run that starts another agent
+        /// is woken when it ends (see `agents awaits`), and this is how it says up front that it
+        /// does not want to be. From a terminal there is nobody to wake and nothing is registered
+        /// either way.
+        #[arg(long, conflicts_with = "wait")]
+        no_await: bool,
         /// Block until the run finishes, print its answer, and exit with its status.
         ///
         /// What turns a launch into something another program can be composed out of: a shell
@@ -184,6 +192,16 @@ pub(crate) enum AgentsCommand {
         /// no ending to wait for, only a pane somebody is looking at.
         #[arg(long)]
         wait: bool,
+    },
+    /// The wakes a conversation is holding: what it is waiting on, and what to do about it.
+    ///
+    /// A run registers these itself with the `Await` tool, and some of them are registered *for*
+    /// it — launching an agent leaves a wake that reports the launched run's ending back. Either
+    /// way a conversation may hold only a few at once, so dropping the ones it will not read is
+    /// part of using them.
+    Awaits {
+        #[command(subcommand)]
+        command: AwaitsCommand,
     },
     /// List runs across every agent (or one), newest first, with what became of each.
     ///
@@ -256,6 +274,76 @@ pub(crate) enum AgentsCommand {
     Rm { name: String },
     /// Delete an agent definition.
     Delete { name: String },
+}
+
+/// What can be done to the wakes one conversation is holding.
+///
+/// Every verb defaults to the conversation in the environment, so a run acts on its *own* awaits by
+/// naming nothing — and can only ever act on its own, since an id alone would otherwise let one run
+/// cancel a wake another is still counting on.
+#[derive(Debug, Subcommand)]
+pub(crate) enum AwaitsCommand {
+    /// Show what this conversation is waiting on.
+    List {
+        /// The agent whose conversation to read. Defaults to `$ADI_AGENT`.
+        #[arg(long)]
+        agent: Option<String>,
+        /// The conversation id. Defaults to `$ADI_RUN_ID`.
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Drop a wake — the answer to an update you have decided you don't need.
+    ///
+    /// Reach for it as soon as you know: a wake nobody will read still holds one of the few slots a
+    /// conversation gets, and it still costs a turn when it fires.
+    Ignore {
+        /// The await ids to drop, as `agents awaits list` prints them.
+        #[arg(required = true)]
+        ids: Vec<String>,
+        /// The agent whose conversation holds them. Defaults to `$ADI_AGENT`.
+        #[arg(long)]
+        agent: Option<String>,
+        /// The conversation id. Defaults to `$ADI_RUN_ID`.
+        #[arg(long)]
+        session: Option<String>,
+    },
+    /// Change a wake in place: what it says, when it looks, how sure it has to be.
+    ///
+    /// Everything you don't name is left exactly as it was. Changing beats dropping and registering
+    /// a replacement, which leaves a gap the thing you are waiting on can finish inside.
+    Update {
+        /// The await to change.
+        id: String,
+        /// Replace the note you are handed back on waking.
+        #[arg(long)]
+        note: Option<String>,
+        /// Replace the event patterns outright. Repeatable.
+        #[arg(long = "event", value_name = "PATTERN")]
+        events: Vec<String>,
+        /// Replace the payload fields a matching event must carry, as `field=value`. Repeatable.
+        #[arg(long = "when", value_name = "FIELD=VALUE")]
+        when: Vec<String>,
+        /// Move the next look to this many seconds from now.
+        #[arg(long, value_name = "SECONDS")]
+        after: Option<u64>,
+        /// Look again this often while the check says "not yet".
+        #[arg(long, value_name = "SECONDS")]
+        every: Option<u64>,
+        /// Replace the command that decides whether it is really the moment. Empty removes it.
+        #[arg(long)]
+        check: Option<String>,
+        /// Give up this many seconds from now, waking the conversation to say it lapsed.
+        #[arg(long, value_name = "SECONDS")]
+        expires_in: Option<u64>,
+        /// The agent whose conversation holds it. Defaults to `$ADI_AGENT`.
+        #[arg(long)]
+        agent: Option<String>,
+        /// The conversation id. Defaults to `$ADI_RUN_ID`.
+        #[arg(long)]
+        session: Option<String>,
+    },
 }
 
 /// Dispatch an `agents` subcommand over the shared agent-definition store.
@@ -445,6 +533,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             pre_run,
             dir,
             force,
+            no_await,
             wait,
         } => {
             let launch = store
@@ -490,9 +579,15 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     println!("  run:     {run_id}");
                     println!("  command: {command}");
                     println!("  log:     {}", log.display());
+                    if !no_await && let Some(note) = follow_the_run(&store, &name, &run_id, &message)
+                    {
+                        println!();
+                        println!("{note}");
+                    }
                 }
             }
         }
+        AgentsCommand::Awaits { command } => run_awaits(&store, command)?,
         AgentsCommand::Runs {
             agent,
             status,
@@ -935,6 +1030,170 @@ fn print_agent(agent: &StoredAgent) {
 /// The exit status is the *agent's*, not this command's: a turn the engine reported as failed exits
 /// non-zero, so `adi-mono agents run … --wait && deploy` means what it looks like. A run that
 /// answered nothing is a failure too — there is no result to have composed anything out of.
+/// The wake that reports a launched run back to whoever launched it.
+///
+/// This is the whole of "starting an agent is not a dead end". Before it, a run that launched
+/// another had two ways to learn how it went, and both were bad: block the turn on `--wait` and pay
+/// for the whole of somebody else's work with its own, or let the turn end and remember to come back
+/// and poll — which nothing made it do, so mostly it didn't. Here the launch answers with a wake
+/// already registered, and the turn is free to end.
+///
+/// The filter is what makes it a wake rather than a false alarm: `adi.agents.run.finished` is
+/// published for every run on the machine, and the launcher wants exactly one of them.
+fn follow_the_run(store: &Agents, agent: &str, run_id: &str, message: &str) -> Option<String> {
+    let who = awaits::caller()?;
+    let pending = awaits::Awaits::with_config(store.config().clone());
+    Some(awaits::follow_up(
+        &pending,
+        &who,
+        &awaits::Request {
+            note: format!(
+                "You started agent {agent} (run {run_id}) with:\n\n{message}\n\nThis is that run \
+                 ending — the payload below carries its verdict, and `adi-mono agents runs --agent \
+                 {agent}` has the rest. Pick up whatever you were waiting on it for."
+            ),
+            events: vec!["adi.agents.run.finished".to_string()],
+            when: [
+                ("agent".to_string(), agent.to_string()),
+                ("run_id".to_string(), run_id.to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            ..awaits::Request::default()
+        },
+    ))
+}
+
+/// Dispatch an `agents awaits` subcommand over one conversation's pending wakes.
+fn run_awaits(store: &Agents, command: AwaitsCommand) -> Result<(), String> {
+    let pending = awaits::Awaits::with_config(store.config().clone());
+    match command {
+        AwaitsCommand::List {
+            agent,
+            session,
+            json,
+        } => {
+            let (agent, conv) = awaits_address(agent, session)?;
+            let held = pending.for_conversation(&agent, &conv);
+            if json {
+                print_json(&held);
+            } else if held.is_empty() {
+                println!("{agent}/{conv} is waiting on nothing.");
+            } else {
+                for a in &held {
+                    print_await(a);
+                }
+            }
+        }
+        AwaitsCommand::Ignore {
+            ids,
+            agent,
+            session,
+        } => {
+            let (agent, conv) = awaits_address(agent, session)?;
+            // Every id is attempted before anything is refused: somebody dropping three has decided
+            // they want none of them, and leaving two registered because the first was already
+            // spent is not what they asked for.
+            let mut refused = Vec::new();
+            for id in &ids {
+                match awaits::ignore(&pending, &agent, &conv, id) {
+                    Ok(gone) => {
+                        println!("Dropped {} — it was waiting {}.", gone.id, gone.describe());
+                    }
+                    Err(e) => refused.push(e.to_string()),
+                }
+            }
+            if !refused.is_empty() {
+                return Err(refused.join("\n"));
+            }
+        }
+        AwaitsCommand::Update {
+            id,
+            note,
+            events,
+            when,
+            after,
+            every,
+            check,
+            expires_in,
+            agent,
+            session,
+        } => {
+            let (agent, conv) = awaits_address(agent, session)?;
+            let change = awaits::Change {
+                note,
+                events: stated(events, |patterns| patterns),
+                when: if when.is_empty() {
+                    None
+                } else {
+                    Some(parse_when(&when)?)
+                },
+                after_seconds: after,
+                every_seconds: every,
+                check,
+                expires_in_seconds: expires_in,
+            };
+            let changed = awaits::update(&pending, &agent, &conv, &id, &change)
+                .map_err(|e| e.to_string())?;
+            println!("Await {} now wakes you {}.", changed.id, changed.describe());
+        }
+    }
+    Ok(())
+}
+
+/// The conversation a wake belongs to: what was named, or what the environment says.
+///
+/// Same fallback the goals CLI uses and for the same reason — a run acts on its own awaits by naming
+/// nothing, because `ADI_AGENT` and `ADI_RUN_ID` are already in the environment of every command a
+/// turn runs.
+fn awaits_address(
+    agent: Option<String>,
+    session: Option<String>,
+) -> Result<(String, String), String> {
+    let from_run = awaits::caller();
+    let named = |value: Option<String>| value.filter(|v| !v.trim().is_empty());
+    let agent = named(agent)
+        .or_else(|| from_run.as_ref().map(|c| c.agent.clone()))
+        .ok_or_else(|| {
+            "no agent: pass --agent, or run this from inside a turn where $ADI_AGENT is set"
+                .to_string()
+        })?;
+    let conv = named(session)
+        .or_else(|| from_run.as_ref().map(|c| c.conv.clone()))
+        .ok_or_else(|| {
+            "no conversation: pass --session, or run this from inside a turn where $ADI_RUN_ID is \
+             set"
+                .to_string()
+        })?;
+    Ok((agent, conv))
+}
+
+/// `FIELD=VALUE` pairs as the payload filter they stand for.
+fn parse_when(values: &[String]) -> Result<BTreeMap<String, String>, String> {
+    let mut fields = BTreeMap::new();
+    for value in values {
+        let Some((field, want)) = value.split_once('=') else {
+            return Err(format!("--when expects FIELD=VALUE, got: {value}"));
+        };
+        let field = field.trim();
+        if field.is_empty() {
+            return Err("--when needs a payload field name before the `=`".to_string());
+        }
+        fields.insert(field.to_string(), want.trim().to_string());
+    }
+    Ok(fields)
+}
+
+fn print_await(a: &awaits::Await) {
+    println!("{}  waking {}", a.id, a.describe());
+    if !a.note.trim().is_empty() {
+        println!("    note:  {}", title(&a.note));
+    }
+    if let Some(check) = a.check.as_deref() {
+        println!("    check: {}", title(check));
+    }
+}
+
 fn await_run(store: &Agents, name: &str, run_id: &str) -> Result<(), String> {
     /// Long enough that a multi-minute run costs a handful of store reads, short enough that a
     /// quick one is not held up by the polling itself.

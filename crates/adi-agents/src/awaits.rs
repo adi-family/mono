@@ -37,16 +37,39 @@
 //! only wake it between them once. A run that wants to keep watching registers again from the turn
 //! it wakes into.
 //!
+//! # An action can register one for you
+//!
+//! A run does not have to think of this itself. Any action that *starts* something and returns
+//! before it ends — launching another agent, most obviously — can call [`follow_up`] and register
+//! the wake on its caller's behalf, then say so in what it prints. The run reads "it is running,
+//! and you will be told when it ends" instead of a run id it would otherwise have to remember to go
+//! back and poll. [`caller`] is what makes that possible: `ADI_AGENT` and `ADI_RUN_ID` are in the
+//! environment of every command a turn runs, so a command knows which conversation to wake without
+//! being passed anything.
+//!
+//! Such a wake must be exact, which is what [`when`](Await::when) is for: `adi.agents.run.finished`
+//! fires for every run on the machine, and an await matching the name alone would wake its
+//! conversation on a stranger's ending. Filtering the payload down to the one `run_id` is the
+//! difference between a wake and a false alarm.
+//!
+//! And it must be refusable — a wake the run never asked for cannot be one it is stuck with. So a
+//! pending await can be dropped ([`ignore`]) or changed in place ([`update`]), both scoped to the
+//! conversation that owns it. Changing beats replacing: an await rewritten in place never stops
+//! watching, where dropping one and registering another leaves a gap the thing being waited on can
+//! finish inside.
+//!
 //! Nothing here polls or listens: this crate is the store and the decision. The app owns the clock
 //! and feeds it — [`on_event`] when the dispatcher drains a published event, [`tick`] once a second
 //! for deadlines and expiry.
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::Command;
 
 use adi_config::{Config, now_unix};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::Agents;
 use crate::backends::harness::tools::wait_with_timeout;
@@ -93,6 +116,14 @@ pub struct Await {
     /// `adi.tasks.created`, `adi.tasks.*` (one segment), `adi.**` (the tail).
     #[serde(default)]
     pub events: Vec<String>,
+    /// Payload fields a matching event must *all* carry for it to be a candidate — the difference
+    /// between "wake me when a run finishes" and "wake me when **this** run finishes".
+    ///
+    /// Compared against the event's top-level JSON fields as text, so `run_id` reads a string and
+    /// `is_error` reads `true`. Only events are filtered: a timer carries no payload, and a deadline
+    /// comes due whatever is written here.
+    #[serde(default)]
+    pub when: BTreeMap<String, String>,
     /// The next deadline, as Unix epoch seconds. Passing it is a candidate, just like an event.
     #[serde(default)]
     pub at: Option<u64>,
@@ -133,13 +164,53 @@ impl Await {
             .any(|pattern| adi_events::matches(pattern, name))
     }
 
+    /// Whether a published event is a candidate: its name matches a pattern *and* its payload
+    /// carries every field [`when`](Self::when) names.
+    ///
+    /// The payload half is what lets an action register an exact wake on its caller's behalf.
+    /// `adi.agents.run.finished` is published for every run on the machine, so an await matching the
+    /// name alone would wake a conversation on a stranger's ending and it would read it as its own.
+    #[must_use]
+    pub fn wants(&self, name: &str, payload: &str) -> bool {
+        self.wants_event(name) && self.payload_matches(payload)
+    }
+
+    /// Whether `payload` carries every field [`when`](Self::when) names.
+    ///
+    /// A payload that is not a JSON object matches *nothing* rather than everything: a filter that
+    /// silently stops filtering is worse than one that never fires, because the run reads whatever
+    /// arrives as the thing it asked for.
+    fn payload_matches(&self, payload: &str) -> bool {
+        if self.when.is_empty() {
+            return true;
+        }
+        let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(payload) else {
+            return false;
+        };
+        self.when.iter().all(|(field, want)| {
+            fields.get(field).is_some_and(|found| match found {
+                Value::String(text) => text == want,
+                other => other.to_string() == *want,
+            })
+        })
+    }
+
     /// A one-line description of what this await is waiting for, for the tool's reply to the model
     /// and for anything that lists pending wakes.
     #[must_use]
     pub fn describe(&self) -> String {
         let mut parts = Vec::new();
         if !self.events.is_empty() {
-            parts.push(format!("on {}", self.events.join(", ")));
+            let mut on = format!("on {}", self.events.join(", "));
+            if !self.when.is_empty() {
+                let fields: Vec<String> = self
+                    .when
+                    .iter()
+                    .map(|(field, value)| format!("{field}={value}"))
+                    .collect();
+                let _ = write!(on, " carrying {}", fields.join(", "));
+            }
+            parts.push(on);
         }
         if let Some(at) = self.at {
             let secs = at.saturating_sub(now_unix());
@@ -273,6 +344,15 @@ impl Awaits {
             .collect()
     }
 
+    /// One pending await by id, or `None` if it is not (or no longer) pending.
+    ///
+    /// Found by scanning rather than by opening `<id>.json`, so an id that arrived from outside
+    /// cannot name a path — the store is small and its records are already read whole.
+    #[must_use]
+    pub fn get(&self, id: &str) -> Option<Await> {
+        self.list().into_iter().find(|a| a.id == id)
+    }
+
     /// Write a record, creating or replacing it.
     ///
     /// # Errors
@@ -333,6 +413,8 @@ pub struct Request {
     pub note: String,
     /// Event patterns to wake on.
     pub events: Vec<String>,
+    /// Payload fields a matching event must carry — see [`Await::when`].
+    pub when: BTreeMap<String, String>,
     /// Wake this many seconds from now.
     pub after_seconds: Option<u64>,
     /// Look again this often while a check says "not yet".
@@ -372,6 +454,13 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
     for pattern in &req.events {
         check_pattern(pattern)?;
     }
+    if !req.when.is_empty() && req.events.is_empty() {
+        return Err(Error::Arguments(
+            "`when` filters an event's payload, and this await waits on no events — give `events` \
+             too, or drop it"
+                .to_string(),
+        ));
+    }
     let pending = store.for_conversation(agent, conv).len();
     if pending >= MAX_PER_CONVERSATION {
         return Err(Error::Arguments(format!(
@@ -402,6 +491,7 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         conv: conv.to_string(),
         note: req.note.trim().to_string(),
         events: req.events.iter().map(|e| e.trim().to_string()).collect(),
+        when: req.when.clone(),
         at,
         every,
         check,
@@ -414,6 +504,220 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
     };
     store.save(&record)?;
     Ok(record)
+}
+
+/// The conversation a command was invoked *from*, read out of the environment every turn gives its
+/// commands.
+///
+/// `None` for a person at a terminal, a trigger, or the app itself — none of them has a transcript
+/// to be woken into, and an action that guessed at one would leave a wake nobody ever reads.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Caller {
+    /// The agent whose run this is.
+    pub agent: String,
+    /// The conversation the run is speaking in.
+    pub conv: String,
+}
+
+/// Who is running this command, if it is a run at all. See [`Caller`].
+#[must_use]
+pub fn caller() -> Option<Caller> {
+    let named = |key: &str| {
+        std::env::var(key)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    Some(Caller {
+        agent: named(crate::workspace::AGENT_ENV)?,
+        conv: named(crate::workspace::CONV_ENV)?,
+    })
+}
+
+/// Register a wake on behalf of the run whose command this is, and hand back what that run needs to
+/// read about it.
+///
+/// This is how an action that *starts* something long-running stops being a dead end. Launching an
+/// agent, filing work, kicking off a build — each returns in milliseconds and finishes minutes
+/// later, and until now the only ways to hear the ending were to block the whole turn on it or to
+/// come back and poll. An action that calls this instead answers the caller with "it is running,
+/// and you will be told" — the wake is already registered by the time the tool result is read.
+///
+/// Three properties it is worth being explicit about:
+///
+/// * **It only ever speaks to a run.** [`caller`] is the gate, and the action asks it before
+///   reaching here — a person who typed the command is told nothing about a wake they could never
+///   be woken by.
+/// * **It never fails the action.** The thing was started; a wake that could not be registered is
+///   reported as exactly that, in the same breath, so the run knows to check on it itself. Refusing
+///   the launch over a bookkeeping record would be the worse of the two failures — the same
+///   reasoning the background-job path is written under.
+/// * **The run can refuse it.** The message names how to drop it and how to change it, because a
+///   wake the caller did not ask for must be as easy to be rid of as it was to receive — and it
+///   holds one of the few slots the conversation gets until it is.
+#[must_use]
+pub fn follow_up(store: &Awaits, who: &Caller, req: &Request) -> String {
+    let mut req = req.clone();
+    if req.cwd.trim().is_empty() {
+        req.cwd = std::env::current_dir()
+            .map(|dir| dir.display().to_string())
+            .unwrap_or_default();
+    }
+    match register(store, &who.agent, &who.conv, &req) {
+        Ok(registered) => format!(
+            "Registered await {id} for you — you will be woken here {what}. Finish your turn; \
+             don't poll for it.\n  don't want it:  adi-mono agents awaits ignore {id}\n  change \
+             it:      adi-mono agents awaits update {id} --note '…'",
+            id = registered.id,
+            what = registered.describe(),
+        ),
+        // The work is already running and only the wake is missing. Say which is which, the way a
+        // background job does, so the run corrects the right half.
+        Err(e) => format!(
+            "Nothing will wake you when this ends: {e}\nIt is running either way — look in on it \
+             yourself, or register your own wake once you have room."
+        ),
+    }
+}
+
+/// Drop a pending await of `agent`'s conversation `conv`, returning the record that is now gone.
+///
+/// Scoped to the conversation on purpose. Every await in the store is one directory apart and an id
+/// travels in plain text, so without the scope one run could quietly cancel another's wake and leave
+/// it waiting on something that is never coming.
+///
+/// # Errors
+/// [`Error::Arguments`] when this conversation has no such await pending — the message lists the
+/// ones it does have, since a run reaching for the wrong id usually holds a stale one.
+pub fn ignore(store: &Awaits, agent: &str, conv: &str, id: &str) -> Result<Await> {
+    let found = mine(store, agent, conv, id)?;
+    if !store.claim(&found.id) {
+        return Err(Error::Arguments(format!(
+            "await {id} fired before this reached it — there is nothing left to ignore, and the \
+             wake is already on its way into this conversation"
+        )));
+    }
+    Ok(found)
+}
+
+/// What an [`update`] changes about a pending await. Every field is omit-to-keep: `None` leaves
+/// that part of the record exactly as it was, so changing a note says nothing about a check.
+#[derive(Debug, Clone, Default)]
+pub struct Change {
+    /// Replace the note handed back on waking.
+    pub note: Option<String>,
+    /// Replace the event patterns outright.
+    pub events: Option<Vec<String>>,
+    /// Replace the payload fields a matching event must carry.
+    pub when: Option<BTreeMap<String, String>>,
+    /// Move the next deadline to this many seconds from now.
+    pub after_seconds: Option<u64>,
+    /// Replace the polling interval.
+    pub every_seconds: Option<u64>,
+    /// Replace the check. An empty string removes it, which is the only way to say "stop asking and
+    /// just wake me".
+    pub check: Option<String>,
+    /// Move the giving-up point to this many seconds from now, and wake the run when it arrives.
+    pub expires_in_seconds: Option<u64>,
+}
+
+/// Change a pending await of `agent`'s conversation `conv` in place, returning the record as it now
+/// stands.
+///
+/// The point is the one an automatically registered wake raises: an action decided what the run
+/// would be told and when, and the run may know better. Widening a check, moving a deadline out, or
+/// rewriting the note so the woken turn reads the *reason* rather than the mechanics — all of it
+/// beats dropping the await and registering a replacement, which loses the wake in the gap.
+///
+/// The record is claimed before it is rewritten, so an await that fires mid-change is reported as
+/// spent rather than quietly resurrected by the save.
+///
+/// # Errors
+/// [`Error::Arguments`] when no such await is pending here, when the change leaves it with nothing
+/// to wake on, or when it names a pattern the bus could never match; [`Error::Config`] if the
+/// rewritten record can't be stored.
+pub fn update(
+    store: &Awaits,
+    agent: &str,
+    conv: &str,
+    id: &str,
+    change: &Change,
+) -> Result<Await> {
+    let mut record = mine(store, agent, conv, id)?;
+    let now = now_unix();
+    if let Some(note) = &change.note {
+        record.note = note.trim().to_string();
+    }
+    if let Some(events) = &change.events {
+        for pattern in events {
+            check_pattern(pattern)?;
+        }
+        record.events = events.iter().map(|e| e.trim().to_string()).collect();
+    }
+    if let Some(when) = &change.when {
+        record.when = when.clone();
+    }
+    if let Some(check) = &change.check {
+        record.check = Some(check.trim().to_string()).filter(|c| !c.is_empty());
+    }
+    if let Some(every) = change.every_seconds {
+        record.every = Some(every).filter(|n| *n > 0);
+    }
+    // A new interval with no deadline behind it would never be looked at: `at` is what the sweep
+    // reads, and `every` only ever re-arms it. So an await turned into a poll gets its first look
+    // one interval from now, exactly as `register` gives one.
+    if let Some(after) = change.after_seconds {
+        record.at = Some(now.saturating_add(after.max(1)));
+    } else if record.at.is_none() {
+        record.at = record.every.map(|every| now.saturating_add(every.max(1)));
+    }
+    if let Some(expires) = change.expires_in_seconds {
+        record.expires_at = Some(now.saturating_add(expires.max(1)));
+        record.expiry_wakes = true;
+    }
+    if record.events.is_empty() && record.at.is_none() {
+        return Err(Error::Arguments(format!(
+            "that would leave await {id} with nothing to wake on — keep its events, or give it \
+             `after_seconds` or `every_seconds`"
+        )));
+    }
+    if !record.when.is_empty() && record.events.is_empty() {
+        return Err(Error::Arguments(format!(
+            "await {id} would be left filtering payloads with no events to filter — clear `when` \
+             too, or keep its events"
+        )));
+    }
+    if !store.claim(&record.id) {
+        return Err(Error::Arguments(format!(
+            "await {id} fired while this was being changed — it is spent, so register a new one \
+             with what you wanted instead"
+        )));
+    }
+    store.save(&record)?;
+    Ok(record)
+}
+
+/// One of this conversation's own pending awaits, by id.
+///
+/// The failure is written for whoever will read it as a tool result: a run holding the wrong id is
+/// usually holding a spent one, and the ids it *could* have meant are the useful half of the answer.
+fn mine(store: &Awaits, agent: &str, conv: &str, id: &str) -> Result<Await> {
+    let pending = store.for_conversation(agent, conv);
+    if let Some(found) = pending.iter().find(|a| a.id == id) {
+        return Ok(found.clone());
+    }
+    Err(Error::Arguments(if pending.is_empty() {
+        format!("no await {id} is pending in this conversation, and nor is any other")
+    } else {
+        let listed: Vec<String> = pending
+            .iter()
+            .map(|a| format!("{} ({})", a.id, a.describe()))
+            .collect();
+        format!(
+            "no await {id} is pending in this conversation. Pending here: {}",
+            listed.join("; ")
+        )
+    }))
 }
 
 /// Reject an event pattern the bus could never match, or one so broad it would wake the run on
@@ -453,7 +757,7 @@ pub fn on_event(agents: &Agents, name: &str, payload: &str) -> Vec<Woken> {
     store
         .list()
         .iter()
-        .filter(|a| a.wants_event(name))
+        .filter(|a| a.wants(name, payload))
         .filter_map(|a| consider(agents, &store, a, cause))
         .collect()
 }
@@ -683,6 +987,215 @@ mod tests {
         }
     }
 
+    /// The rule an automatically registered wake stands on. `adi.agents.run.finished` fires for
+    /// every run on the machine, so an await that matched the name alone would wake its conversation
+    /// on a stranger's ending — and, worse, read it as the one it started.
+    #[test]
+    fn a_wake_scoped_to_one_run_ignores_every_other_runs_ending() {
+        let store = scratch("scoped");
+        let mut req = request("the run you started ended");
+        req.events = vec!["adi.agents.run.finished".into()];
+        req.when = [("run_id".to_string(), "r-42".to_string())]
+            .into_iter()
+            .collect();
+        let saved = register(&store, "watcher", "conv-1", &req).expect("register");
+
+        let name = "adi.agents.run.finished";
+        assert!(saved.wants(name, r#"{"agent":"solver","run_id":"r-42","is_error":false}"#));
+        assert!(!saved.wants(name, r#"{"agent":"solver","run_id":"r-43","is_error":false}"#));
+        assert!(!saved.wants(name, r#"{"agent":"solver"}"#), "a missing field is not a match");
+        assert!(!saved.wants("adi.tasks.created", r#"{"run_id":"r-42"}"#), "the name still gates");
+        assert!(
+            saved.describe().contains("run_id=r-42"),
+            "the filter belongs in what the run is told: {}",
+            saved.describe()
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A filter that cannot be applied must not read as no filter. A payload the bus published as
+    /// something other than an object would otherwise match everything, and the run would take a
+    /// stranger's ending for its own.
+    #[test]
+    fn an_unreadable_payload_matches_nothing() {
+        let a = Await {
+            id: "w-test".into(),
+            agent: "watcher".into(),
+            conv: "conv-1".into(),
+            note: String::new(),
+            events: vec!["adi.agents.run.finished".into()],
+            when: [("run_id".to_string(), "r-42".to_string())]
+                .into_iter()
+                .collect(),
+            at: None,
+            every: None,
+            check: None,
+            cwd: String::new(),
+            expires_at: None,
+            expiry_wakes: false,
+            created_at: 0,
+        };
+        assert!(!a.wants("adi.agents.run.finished", "not json at all"));
+        assert!(!a.wants("adi.agents.run.finished", "[]"));
+        assert!(!a.wants("adi.agents.run.finished", ""));
+    }
+
+    /// A filter with no events to filter is a mistake worth naming: the run believes it is waiting
+    /// on one specific thing, and a bare timer would wake it on the first tick regardless.
+    #[test]
+    fn a_payload_filter_without_events_is_refused() {
+        let store = scratch("filter-no-events");
+        let req = Request {
+            note: "waiting".into(),
+            when: [("run_id".to_string(), "r-42".to_string())]
+                .into_iter()
+                .collect(),
+            after_seconds: Some(60),
+            ..Request::default()
+        };
+        let err = register(&store, "watcher", "conv-1", &req).expect_err("refused");
+        assert!(err.to_string().contains("`when`"), "{err}");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// What an action hands back to the run that invoked it: the wake is already registered, and the
+    /// two ways out of it are named. A wake nobody asked for that cannot be refused is worse than no
+    /// wake at all — it holds one of the few slots the conversation gets.
+    #[test]
+    fn an_action_registers_a_wake_and_says_how_to_be_rid_of_it() {
+        let store = scratch("follow-up");
+        let who = Caller {
+            agent: "watcher".into(),
+            conv: "conv-1".into(),
+        };
+        let mut req = request("the agent you started ended");
+        req.events = vec!["adi.agents.run.finished".into()];
+        let note = follow_up(&store, &who, &req);
+
+        let pending = store.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1, "the wake is registered before the caller reads about it");
+        assert!(note.contains(&pending[0].id), "{note}");
+        assert!(note.contains("awaits ignore"), "the way out has to be in it: {note}");
+        assert!(note.contains("awaits update"), "so does the way to change it: {note}");
+        assert!(
+            !pending[0].cwd.trim().is_empty(),
+            "a check added later has to run somewhere"
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// The cap still holds against a wake the run did not ask for, and it is told so rather than
+    /// being left believing something will report back.
+    #[test]
+    fn an_action_that_cannot_register_says_the_work_is_running_anyway() {
+        let store = scratch("follow-up-full");
+        let who = Caller {
+            agent: "watcher".into(),
+            conv: "conv-1".into(),
+        };
+        for i in 0..MAX_PER_CONVERSATION {
+            register(&store, "watcher", "conv-1", &request(&format!("wake {i}"))).expect("register");
+        }
+        let note = follow_up(&store, &who, &request("one too many"));
+        assert!(note.starts_with("Nothing will wake you"), "{note}");
+        assert!(note.contains("running either way"), "{note}");
+        assert_eq!(store.for_conversation("watcher", "conv-1").len(), MAX_PER_CONVERSATION);
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// Ignoring is scoped to the conversation that owns the wake. An id travels in plain text and
+    /// every await in the store is one directory apart, so without the scope one run could cancel
+    /// another's wake and leave it waiting on something that is never coming.
+    #[test]
+    fn a_wake_is_dropped_by_its_own_conversation_and_by_nobody_else() {
+        let store = scratch("ignore");
+        let saved = register(&store, "watcher", "conv-1", &request("waiting")).expect("register");
+
+        let err = ignore(&store, "watcher", "conv-2", &saved.id).expect_err("another conversation");
+        assert!(err.to_string().contains("no await"), "{err}");
+        let err = ignore(&store, "stranger", "conv-1", &saved.id).expect_err("another agent");
+        assert!(err.to_string().contains("no await"), "{err}");
+        assert_eq!(store.for_conversation("watcher", "conv-1").len(), 1, "still pending");
+
+        let gone = ignore(&store, "watcher", "conv-1", &saved.id).expect("its own");
+        assert_eq!(gone.id, saved.id);
+        assert!(store.for_conversation("watcher", "conv-1").is_empty());
+
+        let err = ignore(&store, "watcher", "conv-1", &saved.id).expect_err("twice");
+        assert!(err.to_string().contains("nor is any other"), "{err}");
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// Changing beats replacing: the id survives, so nothing that already named the wake goes stale,
+    /// and it never stops watching in the gap a drop-and-re-register would leave.
+    #[test]
+    fn a_wake_is_changed_in_place_and_keeps_its_id() {
+        let store = scratch("update");
+        let mut req = request("the old note");
+        req.events = vec!["adi.agents.run.finished".into()];
+        let saved = register(&store, "watcher", "conv-1", &req).expect("register");
+        assert!(saved.at.is_none(), "no deadline yet");
+
+        let changed = update(
+            &store,
+            "watcher",
+            "conv-1",
+            &saved.id,
+            &Change {
+                note: Some("the reason, not the mechanics".into()),
+                every_seconds: Some(30),
+                check: Some("test -f done".into()),
+                ..Change::default()
+            },
+        )
+        .expect("update");
+
+        assert_eq!(changed.id, saved.id, "the id the caller was handed still names it");
+        assert_eq!(changed.note, "the reason, not the mechanics");
+        assert_eq!(changed.events, saved.events, "what was not named was left alone");
+        assert_eq!(changed.every, Some(30));
+        assert!(changed.at.is_some(), "a poll with no deadline behind it is never looked at");
+        assert_eq!(changed.check.as_deref(), Some("test -f done"));
+        assert_eq!(store.for_conversation("watcher", "conv-1"), vec![changed]);
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
+    /// A change that would leave nothing to wake on is refused, rather than quietly storing a record
+    /// the sweep can never reach.
+    #[test]
+    fn a_change_that_empties_the_wake_condition_is_refused() {
+        let store = scratch("update-empty");
+        let mut req = request("waiting on events alone");
+        req.events = vec!["adi.tasks.created".into()];
+        let saved = register(&store, "watcher", "conv-1", &req).expect("register");
+
+        let err = update(
+            &store,
+            "watcher",
+            "conv-1",
+            &saved.id,
+            &Change {
+                events: Some(Vec::new()),
+                ..Change::default()
+            },
+        )
+        .expect_err("refused");
+        assert!(err.to_string().contains("nothing to wake on"), "{err}");
+        assert_eq!(
+            store.for_conversation("watcher", "conv-1"),
+            vec![saved],
+            "the refusal leaves the wake exactly as it was"
+        );
+
+        let _ = std::fs::remove_dir_all(store.dir());
+    }
+
     #[test]
     fn a_registered_await_round_trips_and_is_claimed_exactly_once() {
         let store = scratch("roundtrip");
@@ -896,6 +1409,7 @@ mod tests {
             conv: "conv-1".into(),
             note: String::new(),
             events: Vec::new(),
+            when: BTreeMap::new(),
             at: None,
             every: None,
             check: Some("sleep 30".into()),
@@ -917,6 +1431,7 @@ mod tests {
             conv: "conv-1".into(),
             note: "check whether the deploy landed".into(),
             events: vec!["adi.tasks.*".into()],
+            when: BTreeMap::new(),
             at: None,
             every: None,
             check: Some("true".into()),

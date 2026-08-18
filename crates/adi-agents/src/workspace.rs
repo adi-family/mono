@@ -30,8 +30,10 @@ const WORKING_DIR: &str = "working_dir";
 
 /// The directory the run starts in, exported so scripts and later turns can find it.
 const WORKDIR_ENV: &str = "ADI_WORKDIR";
-/// The agent's own name — the run had no way to know what it was called.
-const AGENT_ENV: &str = "ADI_AGENT";
+/// The agent's own name — the run had no way to know what it was called. Read back by
+/// [`awaits::caller`](crate::awaits::caller), which is what lets a command an agent runs register a
+/// wake against the conversation that ran it.
+pub(crate) const AGENT_ENV: &str = "ADI_AGENT";
 /// This conversation's id, so a run can address the very session it is speaking in — what lets
 /// `adi-mono goals create` with no arguments set a goal on *itself*.
 ///

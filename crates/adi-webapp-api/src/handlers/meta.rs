@@ -92,9 +92,17 @@ JSON Schema with `{{{{cli}}}} events types <name> --schema` (or GET /api/trigger
 A trigger is not the only way to react to one. On the `harness:adi` backend you can **wait** for an \
 event yourself: the `Await` tool registers a wake against this conversation — on event patterns, on \
 a timer, or both — and you carry on and finish the turn. A shell `check` decides whether a wake is \
-really the moment (exit 0 wakes you), so a timer plus a check is a poll. When it fires you are \
-answered again in this same conversation, with your own note and the whole transcript in front of \
-you. Use it for anything you cannot finish now because you are waiting on the world.\n\n\
+really the moment (exit 0 wakes you), so a timer plus a check is a poll; `when` narrows an event to \
+the one you mean by the payload fields it must carry. When it fires you are answered again in this \
+same conversation, with your own note and the whole transcript in front of you. Use it for anything \
+you cannot finish now because you are waiting on the world.\n\n\
+Some things register a wake **for** you: `{{{{cli}}}} agents run <name>` hands back the id of the \
+await that will report that run's ending, so launching an agent is not something you have to \
+remember to come back and poll. A wake you were handed is one you can be rid of or change — \
+`{{{{cli}}}} agents awaits list` shows what a conversation is holding, `… awaits ignore <id>` drops \
+one, and `… awaits update <id>` changes it in place (the `Await` tool's own `ignore` and `update` do \
+the same from inside a turn). Drop the ones you will not read: a conversation may hold only a few at \
+once.\n\n\
 Events currently published:\n\
 {events}",
         guides = prompt_section(),

@@ -27,6 +27,7 @@ pub use adi_update::{Check as UpdateCheck, Error as UpdateError, State as Update
 pub use adi_update::BUILT_VERSION as VERSION;
 
 pub use adi_agents::arguments::AgentSummaryArguments;
+pub use adi_agents::awaits;
 pub use adi_agents::goals;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{

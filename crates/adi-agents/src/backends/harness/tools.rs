@@ -198,7 +198,16 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
              conversation carrying your `note`, what happened, and what the check printed, and you \
              continue with the whole transcript in front of you. A wake fires once — register \
              another if you still need one. Be specific with patterns: `adi.agents.**` wakes you on \
-             your own runs.",
+             your own runs — and `when` narrows an event to the one you mean, which is how you wait \
+             on *this* run finishing rather than on any run finishing.\n\nSome things register an \
+             await for you: starting an agent hands you back the id of the wake that will report it, \
+             so you need not ask for one. **Two verbs act on a wake you already hold.** `ignore` \
+             drops it — reach for that the moment you decide you don't need the update, because you \
+             may hold only a few at a time and one you are not going to read still takes a slot. \
+             `update` changes a pending await in place instead of registering a second one: name it \
+             and give only the fields you want different — a longer deadline, a wider check, a note \
+             that says why rather than what. Changing beats replacing, which leaves a gap the thing \
+             you are waiting on can finish inside.",
         schema: || {
             json!({
                 "type": "object",
@@ -213,8 +222,19 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
                     "every_seconds": { "type": "integer", "description": "Run the check this often, starting one interval from now, until it passes. With no `events`, this is the whole await: your script on a schedule." },
                     "check": { "type": "string", "description": "A shell command deciding whether it is really the moment. Exit 0 wakes you; anything else means not yet. Runs in this conversation's directory with $ADI_CAUSE, and $ADI_EVENT/$ADI_PAYLOAD when an event woke it. What it prints reaches you with the wake — so make it report what it found, not just succeed or fail." },
                     "expires_in_seconds": { "type": "integer", "description": "Give up after this long and wake you anyway, saying it lapsed." },
+                    "when": {
+                        "type": "object",
+                        "additionalProperties": { "type": "string" },
+                        "description": "Payload fields a matching event must all carry, e.g. `{\"run_id\": \"…\"}`. Without it you wake on every event of that name, including other people's.",
+                    },
+                    "update": { "type": "string", "description": "The id of a pending await to change instead of registering a new one. Only the fields you also give are changed; everything else about it stays. An empty `check` removes its check." },
+                    "ignore": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Ids of pending awaits to drop. Use it on a wake you were handed and don't want. May be the only argument you give.",
+                    },
                 },
-                "required": ["note"],
+                "required": [],
             })
         },
     },
@@ -651,9 +671,17 @@ fn grep(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
 /// confirmation back as a tool result and goes on to finish its answer, which is what makes
 /// "subscribe, then wrap up what I was doing" expressible at all.
 fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    let dropping = string_list(input, "ignore");
+    if !dropping.is_empty() {
+        return drop_awaits(&dropping, ctx);
+    }
+    if let Some(id) = arg_id(input, "update") {
+        return change_await(id, input, ctx);
+    }
     let req = Request {
         note: arg_str(input, "note")?.to_string(),
         events: string_list(input, "events"),
+        when: string_map(input, "when")?,
         after_seconds: arg_u64(input, "after_seconds"),
         every_seconds: arg_u64(input, "every_seconds"),
         check: input
@@ -669,6 +697,56 @@ fn await_wake(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, Strin
         "registered await {} — waking {}. Finish this turn; you will be woken with your note.",
         registered.id,
         registered.describe()
+    ))
+}
+
+/// Drop wakes this conversation is holding — the answer to a wake it never asked for.
+///
+/// Every id is attempted and every outcome is reported, rather than stopping at the first failure.
+/// A model dropping three ids has usually just decided it wants none of them, and leaving two of the
+/// three registered because the first was already spent is not what it asked for.
+fn drop_awaits(ids: &[String], ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    let mut lines = Vec::new();
+    for id in ids {
+        lines.push(match awaits::ignore(&ctx.awaits, ctx.agent, ctx.conv, id) {
+            Ok(gone) => format!("dropped {} — it was waiting {}", gone.id, gone.describe()),
+            Err(e) => format!("{id}: {e}"),
+        });
+    }
+    let left = ctx.awaits.for_conversation(ctx.agent, ctx.conv).len();
+    Ok(format!(
+        "{}\n{left} await(s) still pending in this conversation.",
+        lines.join("\n")
+    ))
+}
+
+/// Change a wake in place. Omit-to-keep throughout: a field the model did not name is a field it
+/// said nothing about, which is what makes "leave everything, just move the deadline" expressible.
+fn change_await(id: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
+    let change = awaits::Change {
+        note: input
+            .get("note")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        events: input.get("events").map(|_| string_list(input, "events")),
+        when: match input.get("when") {
+            Some(_) => Some(string_map(input, "when")?),
+            None => None,
+        },
+        after_seconds: arg_u64(input, "after_seconds"),
+        every_seconds: arg_u64(input, "every_seconds"),
+        check: input
+            .get("check")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        expires_in_seconds: arg_u64(input, "expires_in_seconds"),
+    };
+    let changed = awaits::update(&ctx.awaits, ctx.agent, ctx.conv, id, &change)
+        .map_err(|e| e.to_string())?;
+    Ok(format!(
+        "await {} now wakes you {}. Finish this turn.",
+        changed.id,
+        changed.describe()
     ))
 }
 
@@ -813,6 +891,40 @@ fn string_list(input: &Value, key: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// A string-to-string map argument, rejecting a value that is not one — a filter quietly dropped
+/// for being the wrong shape would leave the model believing its wake was narrowed when it was not.
+fn string_map(
+    input: &Value,
+    key: &str,
+) -> std::result::Result<std::collections::BTreeMap<String, String>, String> {
+    let Some(value) = input.get(key) else {
+        return Ok(std::collections::BTreeMap::new());
+    };
+    let object = value
+        .as_object()
+        .ok_or_else(|| format!("`{key}` is an object of field names to the values they must have"))?;
+    object
+        .iter()
+        .map(|(field, want)| match want {
+            Value::String(text) => Ok((field.clone(), text.clone())),
+            Value::Null | Value::Array(_) | Value::Object(_) => Err(format!(
+                "`{key}.{field}` must be the value to match, as a string"
+            )),
+            other => Ok((field.clone(), other.to_string())),
+        })
+        .collect()
+}
+
+/// A non-empty trimmed string argument, or `None` — how an optional id is read, so `""` and a
+/// missing key mean the same thing rather than one of them naming an await called nothing.
+fn arg_id<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
 }
 
 fn arg_str<'a>(input: &'a Value, key: &str) -> std::result::Result<&'a str, String> {
@@ -1380,6 +1492,66 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].note, "check the deploy");
         assert_eq!(pending[0].cwd, dir.display().to_string());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The two verbs that act on a wake the run already holds — including one an action registered
+    /// for it. A wake it cannot drop is a slot it cannot get back; a wake it cannot change is one it
+    /// has to drop and re-register, leaving a gap the thing it is waiting on can finish inside.
+    #[test]
+    fn await_drops_and_changes_the_wakes_this_conversation_holds() {
+        let dir = scratch("await-verbs");
+        let ctx = ctx_in(&dir, "await-verbs");
+        let registered = await_wake(
+            &json!({
+                "note": "the run you started ended",
+                "events": ["adi.agents.run.finished"],
+                "when": { "run_id": "r-42" },
+            }),
+            &ctx,
+        )
+        .expect("register");
+        assert!(registered.contains("run_id=r-42"), "the filter is in what it reads: {registered}");
+
+        let id = ctx.awaits.for_conversation("watcher", "conv-1")[0].id.clone();
+
+        let changed = await_wake(
+            &json!({ "update": id, "note": "why I am waiting", "expires_in_seconds": 600 }),
+            &ctx,
+        )
+        .expect("update");
+        assert!(changed.contains(&id), "the id survives a change: {changed}");
+        let pending = ctx.awaits.for_conversation("watcher", "conv-1");
+        assert_eq!(pending.len(), 1, "changed in place, not registered again");
+        assert_eq!(pending[0].note, "why I am waiting");
+        assert_eq!(pending[0].events, vec!["adi.agents.run.finished".to_string()]);
+        assert!(pending[0].expiry_wakes, "a deadline it named is one it hears about");
+
+        let dropped = await_wake(&json!({ "ignore": [&id] }), &ctx).expect("ignore");
+        assert!(dropped.contains("dropped"), "{dropped}");
+        assert!(dropped.contains("0 await(s) still pending"), "{dropped}");
+        assert!(ctx.awaits.for_conversation("watcher", "conv-1").is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An id the conversation does not hold is a failed tool result naming the ones it does — a
+    /// model reaching for the wrong id is usually holding one that has already fired.
+    #[test]
+    fn await_answers_an_unknown_id_with_what_is_actually_pending() {
+        let dir = scratch("await-unknown");
+        let ctx = ctx_in(&dir, "await-unknown");
+        await_wake(&json!({ "note": "waiting", "events": ["adi.tasks.*"] }), &ctx).expect("register");
+        let id = ctx.awaits.for_conversation("watcher", "conv-1")[0].id.clone();
+
+        let err = await_wake(&json!({ "update": "w-nope", "note": "x" }), &ctx).expect_err("unknown");
+        assert!(err.contains(&id), "the real one is named: {err}");
+        // `ignore` reports per id rather than failing the call, so a run dropping several is not
+        // stopped by one that has already fired.
+        let mixed = await_wake(&json!({ "ignore": ["w-nope"] }), &ctx).expect("reported, not failed");
+        assert!(mixed.contains(&id), "{mixed}");
+        assert!(mixed.contains("1 await(s) still pending"), "{mixed}");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
