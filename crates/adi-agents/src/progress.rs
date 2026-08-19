@@ -13,9 +13,20 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::Backend;
 
-/// How much of a turn's log is parsed for progress — generous, since a tool-using turn's event
-/// stream is larger than a plain answer but still bounded.
+/// How much of a turn's log one **incremental** read consumes — a caller resuming from a cursor
+/// gets this much per call and the rest on the next one, so this bounds a single poll's work
+/// rather than what can ever be read.
 pub(crate) const MAX_PARSE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// The ceiling on a **whole-turn** read (`events` with no cursor), where there is no next call to
+/// pick up the remainder.
+///
+/// Far above any log this has seen — the largest in a store of ~900 runs was 8 MiB — because the
+/// price of it being too low is not a slow read but a wrong record: the engine's `result` event and
+/// the turn's answer are the *last* things written, so a whole read that stops early loses both and
+/// files a finished run as one whose ending nobody reported. Reaching this at all means the tail is
+/// kept and the head dropped, which costs early steps and keeps the outcome.
+pub(crate) const MAX_WHOLE_PARSE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// One item on a turn's timeline, in the order the engine emitted it.
 ///

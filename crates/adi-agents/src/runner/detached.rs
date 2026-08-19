@@ -30,7 +30,7 @@ use crate::backends::detached::Spawned;
 use crate::backends::harness::claude_sdk::Continuation;
 use crate::backends::{adi_events, claude_stream, detached, harness, process};
 use crate::error::{Error, Result};
-use crate::progress::{self, MAX_PARSE_BYTES, TurnContent};
+use crate::progress::{self, MAX_PARSE_BYTES, MAX_WHOLE_PARSE_BYTES, TurnContent};
 use crate::runner::prompt::{compose, own_prompt, with_knowledge, with_tool_help, with_workspace};
 use crate::runner::{
     EventBatch, EventKinds, ImageDelivery, RunEvent, RunSpec, Runner, RunnerKind, Session,
@@ -379,6 +379,11 @@ impl Runner for DetachedRunner {
     ///   batch is folded as that engine's parser sees fit rather than reaching back. A reader that
     ///   wants the whole picture asks with `None`, which re-reads the log from the top.
     fn events(&self, session: &dyn Session, cursor: Option<&Value>) -> Result<EventBatch> {
+        // No cursor is a request for the *whole* turn, not for the first chunk of one. The
+        // distinction is load-bearing: the parser pairs a `tool_result` to its `tool_use` through
+        // an index it builds per call, so a turn split across calls loses every pairing that
+        // straddles the split — chunking is only safe for a caller that wanted chunks.
+        let whole = cursor.is_none();
         let mut cursor = cursor
             .and_then(|value| serde_json::from_value::<Cursor>(value.clone()).ok())
             .unwrap_or_default();
@@ -388,7 +393,7 @@ impl Runner for DetachedRunner {
             .pid
             .is_some_and(|pid| !detached::pid_alive(pid));
 
-        let (bytes, offset) = read_after(session.log_path(), cursor.offset, done);
+        let (bytes, offset) = read_after(session.log_path(), cursor.offset, done, whole);
         cursor.offset = offset;
 
         let content = self.parse(&bytes);
@@ -553,32 +558,48 @@ fn translate(content: TurnContent) -> Vec<RunEvent> {
 }
 
 /// The log's bytes after `offset`, and the offset to resume from. `complete` says the writer has
-/// exited, so the tail cannot be a half-written line.
+/// exited, so the tail cannot be a half-written line. `whole` says the caller asked for the entire
+/// turn in one go and has no next call to collect a remainder in, which sets both how much may be
+/// read and which end is dropped if that is not enough.
 ///
 /// A log that isn't there yet is not an error — a child that has been spawned but has not printed
 /// anything is the normal first poll of every run.
-fn read_after(path: &Path, offset: u64, complete: bool) -> (Vec<u8>, u64) {
+fn read_after(path: &Path, offset: u64, complete: bool, whole: bool) -> (Vec<u8>, u64) {
     let Ok(mut file) = File::open(path) else {
         return (Vec::new(), offset);
     };
     let Ok(len) = file.metadata().map(|meta| meta.len()) else {
         return (Vec::new(), offset);
     };
+    let cap = if whole {
+        MAX_WHOLE_PARSE_BYTES
+    } else {
+        MAX_PARSE_BYTES
+    };
     // A harness turn spawns into the same log slot and truncates it, so an offset past the end is a
     // cursor left by the previous turn: start over rather than reading nothing for ever.
-    let from = if offset > len { 0 } else { offset };
+    let resume = if offset > len { 0 } else { offset };
+    // A whole read too big for its ceiling keeps the *end*: an incremental caller comes back for
+    // what it did not get, and this one never does, so what it misses it misses for good — and the
+    // answer and the `result` event are both written last.
+    let dropped_head = whole && len - resume > cap;
+    let from = if dropped_head { len - cap } else { resume };
     if file.seek(SeekFrom::Start(from)).is_err() {
         return (Vec::new(), from);
     }
     let mut buf = Vec::new();
-    if file
-        .by_ref()
-        .take(MAX_PARSE_BYTES)
-        .read_to_end(&mut buf)
-        .is_err()
-    {
+    if file.by_ref().take(cap).read_to_end(&mut buf).is_err() {
         return (Vec::new(), from);
     }
+    // Seeking to a byte count lands mid-line. The half line that starts the buffer is not a record
+    // of anything, so it goes rather than reaching the parser as a line that will not parse.
+    let start = if dropped_head {
+        buf.iter()
+            .position(|byte| *byte == b'\n')
+            .map_or(buf.len(), |at| at + 1)
+    } else {
+        0
+    };
     let consumed = if complete {
         buf.len()
     } else {
@@ -586,8 +607,14 @@ fn read_after(path: &Path, offset: u64, complete: bool) -> (Vec<u8>, u64) {
             .rposition(|byte| *byte == b'\n')
             .map_or(0, |at| at + 1)
     };
+    // A single line longer than the cap has no newline to cut on, so the reader above consumes
+    // nothing and the cursor never moves — the stream would stall on that line for ever. Step over
+    // it instead: one oversized line is lost, the rest of the log is not.
+    if consumed == 0 && buf.len() as u64 == cap {
+        return (Vec::new(), from + buf.len() as u64);
+    }
     buf.truncate(consumed);
-    (buf, from + consumed as u64)
+    (buf.split_off(start.min(buf.len())), from + consumed as u64)
 }
 
 /// Wait up to `budget` for `pid` to go away. Returns whether it did.
@@ -1151,6 +1178,91 @@ mod tests {
             matches!(&batch.events[0], RunEvent::Answer { text } if text == "short"),
             "{:?}",
             batch.events
+        );
+    }
+
+    /// The bug this guards: a whole-turn read used to stop at the incremental chunk size, and a
+    /// long tool-using run writes far past it. Everything that says how the run *ended* — the
+    /// answer, the `result` telemetry — is written last, so the read that stopped early reported a
+    /// completed run as one with no answer and no metrics, which is what the outcome is built from.
+    #[test]
+    fn a_log_past_the_chunk_size_still_yields_its_answer_and_metrics() {
+        let session = FakeSession::new("oversized").with_state(json!({ "pid": dead_pid() }));
+        // Tool results big enough to push the closing events past one chunk, as a run that screen-
+        // shots or cats files does within a few minutes.
+        let filler = "x".repeat(64 * 1024);
+        let mut log = String::new();
+        for i in 0..40 {
+            log.push_str(&json!({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": format!("t{i}"), "name": "Bash", "input": {"command": "cat big"}}
+            ]}}).to_string());
+            log.push('\n');
+            log.push_str(&json!({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": format!("t{i}"), "content": filler}
+            ]}}).to_string());
+            log.push('\n');
+        }
+        log.push_str(&json!({"type": "result", "result": "all done",
+            "terminal_reason": "completed", "num_turns": 80}).to_string());
+        log.push('\n');
+        assert!(
+            log.len() as u64 > MAX_PARSE_BYTES,
+            "the fixture must outgrow one chunk: {}",
+            log.len()
+        );
+        session.write_log(&log);
+
+        let batch = DetachedRunner::new(Backend::HarnessClaudeSdk)
+            .events(&session, None)
+            .expect("events");
+        assert!(
+            batch.events.iter().any(|e| matches!(e, RunEvent::Answer { text } if text == "all done")),
+            "the answer is at the end of the log and must survive the read",
+        );
+        assert!(
+            batch.events.iter().any(|e| matches!(
+                e,
+                RunEvent::Metrics(m) if m.terminal_reason.as_deref() == Some("completed")
+            )),
+            "so must the telemetry the outcome is built from",
+        );
+        let tools = batch
+            .events
+            .iter()
+            .filter(|e| matches!(e, RunEvent::Step(Step::Tool { .. })))
+            .count();
+        assert_eq!(tools, 40, "and every step in between, not just the first chunk's");
+    }
+
+    /// An incremental read cuts its chunk at the last newline in it, so a line longer than the
+    /// chunk leaves nothing to cut on — the read consumed nothing and the cursor came back where it
+    /// went in, for ever. One base64 screenshot in a tool result is enough to reach that, and it is
+    /// a real stall rather than a lost line: nothing after it is ever read.
+    #[test]
+    fn a_line_longer_than_a_chunk_does_not_stall_the_cursor() {
+        // A live pid: the writer reads as still going, which is the only case that cuts on a
+        // newline at all.
+        let session = FakeSession::new("giant-line").with_state(json!({ "pid": std::process::id() }));
+        let giant = json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "z".repeat(MAX_PARSE_BYTES as usize)}
+        ]}});
+        session.write_log(&format!(
+            "{giant}\n{}\n",
+            json!({"type": "assistant", "message": {"content": [{"type": "text", "text": "after"}]}}),
+        ));
+
+        let runner = DetachedRunner::new(Backend::HarnessClaudeSdk);
+        let first = runner
+            .events(&session, Some(&json!({ "offset": 0 })))
+            .expect("events");
+        let moved = first.cursor.get("offset").and_then(Value::as_u64).unwrap_or(0);
+        assert!(moved > 0, "the cursor must clear the oversized line, not sit on it");
+
+        let second = runner.events(&session, Some(&first.cursor)).expect("events");
+        assert!(
+            second.events.iter().any(|e| matches!(e, RunEvent::Answer { text } if text == "after")),
+            "and what follows it must still be read: {:?}",
+            second.events,
         );
     }
 
