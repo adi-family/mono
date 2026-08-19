@@ -113,6 +113,18 @@ impl SessionStore {
         db::conn(&self.db_path())
     }
 
+    /// Read something out of the store, answering with `T::default()` when the database won't
+    /// open.
+    ///
+    /// Every list a reader asks for comes through here, and none of them can do anything with the
+    /// failure: the run listing, the chat rail and the sweep each render a page whether or not the
+    /// database opened, and an `Err` they would only unwrap into this same empty answer. Writes
+    /// deliberately do *not* take this path — losing a turn quietly is a different thing from
+    /// showing an empty list — so those keep their `Result`.
+    fn read<T: Default>(&self, f: impl FnOnce(&rusqlite::Connection) -> T) -> T {
+        self.conn().ok().map(|conn| f(&conn)).unwrap_or_default()
+    }
+
     /// Where a session's raw output goes.
     ///
     /// A real path rather than a sink, because a spawned child needs a file descriptor to redirect
@@ -473,7 +485,7 @@ impl SessionStore {
     /// One attachment's record, or `None` when there is no such id.
     #[must_use]
     pub fn attachment(&self, id: &str) -> Option<Attachment> {
-        self.conn().ok().and_then(|conn| attachments::get(&conn, id))
+        self.read(|conn| attachments::get(conn, id))
     }
 
     /// One attachment's bytes, straight off disk.
@@ -499,10 +511,7 @@ impl SessionStore {
     /// carrying attachment ids is turned into the attachments a turn records.
     #[must_use]
     pub fn resolve_attachments(&self, ids: &[String]) -> Vec<Attachment> {
-        self.conn()
-            .ok()
-            .map(|conn| attachments::resolve(&conn, ids))
-            .unwrap_or_default()
+        self.read(|conn| attachments::resolve(conn, ids))
     }
 
     /// Keep only the newest [`MAX_SESSIONS`] sessions of `agent`, deleting older ones.
@@ -580,9 +589,7 @@ impl SessionStore {
     /// How many messages are waiting.
     #[must_use]
     pub fn queue_len(&self, agent: &str, id: &str) -> usize {
-        self.conn()
-            .ok()
-            .map_or(0, |conn| queue::len(&conn, agent, id))
+        self.read(|conn| queue::len(conn, agent, id))
     }
 
     /// Which of `agent`'s sessions have anything waiting at all.
@@ -612,10 +619,7 @@ impl SessionStore {
     /// The messages waiting, oldest first — the order they will be asked in.
     #[must_use]
     pub fn queued(&self, agent: &str, id: &str) -> Vec<QueuedMessage> {
-        self.conn()
-            .ok()
-            .map(|conn| queue::load(&conn, agent, id))
-            .unwrap_or_default()
+        self.read(|conn| queue::load(conn, agent, id))
     }
 
     /// Drop the queued message at `index`. Returns whether there was one there to drop.
@@ -674,36 +678,25 @@ impl SessionStore {
     /// Every ask this conversation has made, oldest first.
     #[must_use]
     pub fn question_history(&self, agent: &str, id: &str) -> Vec<Ask> {
-        self.conn()
-            .ok()
-            .map(|conn| questions::history(&conn, agent, id))
-            .unwrap_or_default()
+        self.read(|conn| questions::history(conn, agent, id))
     }
 
     /// Every unanswered ask in the whole store, oldest first — the inbox's one query.
     #[must_use]
     pub fn all_pending_questions(&self) -> Vec<Ask> {
-        self.conn()
-            .ok()
-            .map(|conn| questions::all_pending(&conn))
-            .unwrap_or_default()
+        self.read(questions::all_pending)
     }
 
     /// Drop every unanswered ask of an agent, returning how many went — what deleting the agent
     /// takes with it. Settled ones stay with the transcript that explains them.
     pub fn forget_questions(&self, agent: &str) -> usize {
-        self.conn()
-            .ok()
-            .map_or(0, |conn| questions::forget_agent(&conn, agent))
+        self.read(|conn| questions::forget_agent(conn, agent))
     }
 
     /// Every pending ask past its deadline, paired with the default it should be settled with.
     #[must_use]
     pub fn overdue_questions(&self, now_ms: u64) -> Vec<(Ask, Answer)> {
-        self.conn()
-            .ok()
-            .map(|conn| questions::overdue(&conn, now_ms))
-            .unwrap_or_default()
+        self.read(|conn| questions::overdue(conn, now_ms))
     }
 
     // ---- goals ---------------------------------------------------------------------
@@ -758,10 +751,7 @@ impl SessionStore {
     /// Every goal of one conversation, oldest first — open and closed alike.
     #[must_use]
     pub fn goals(&self, agent: &str, id: &str) -> Vec<Goal> {
-        self.conn()
-            .ok()
-            .map(|conn| goals::for_conversation(&conn, agent, id))
-            .unwrap_or_default()
+        self.read(|conn| goals::for_conversation(conn, agent, id))
     }
 
     /// The goals of one conversation still being worked toward, oldest first.
@@ -775,18 +765,13 @@ impl SessionStore {
     /// Every open goal in the whole store, oldest first — the sweep's one query.
     #[must_use]
     pub fn all_open_goals(&self) -> Vec<Goal> {
-        self.conn()
-            .ok()
-            .map(|conn| goals::all_open(&conn))
-            .unwrap_or_default()
+        self.read(goals::all_open)
     }
 
     /// Drop every open goal of an agent, returning how many went. Closed ones stay with the
     /// transcript that explains them.
     pub fn forget_goals(&self, agent: &str) -> usize {
-        self.conn()
-            .ok()
-            .map_or(0, |conn| goals::forget_agent(&conn, agent))
+        self.read(|conn| goals::forget_agent(conn, agent))
     }
 
     // ---- the transcript ------------------------------------------------------------
@@ -818,10 +803,7 @@ impl SessionStore {
     /// would splice in that very turn's own empty answer.
     #[must_use]
     pub fn turns(&self, agent: &str, id: &str) -> Vec<Turn> {
-        self.conn()
-            .ok()
-            .map(|conn| transcript::load(&conn, agent, id))
-            .unwrap_or_default()
+        self.read(|conn| transcript::load(conn, agent, id))
     }
 
     /// The whole conversation as a reader sees it: the recorded turns, the answer being written
