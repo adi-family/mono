@@ -4,7 +4,7 @@
 
 > adi-family peer mesh over iroh: expose a machine's allow-listed local ports to authorized peers, and forward a local port to a peer's allowed port — peer-to-peer (QUIC + relay-assisted NAT traversal), no public IP required.
 
-25 structs · 10 enums across 9 files.
+25 structs · 8 enums across 8 files.
 
 ## Index
 
@@ -16,7 +16,6 @@
 - [`src/join.rs`](#srcjoinrs) — `Invite`, `PendingInvite`, `ClaimError`, `InviteBook`, `JoinRequest`, `Accepted`, `JoinReply`, `Joined`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/node.rs`](#srcnoders) — `NodeConfig`
-- [`src/protocol.rs`](#srcprotocolrs) — `Status`, `HttpStatus`
 
 ---
 
@@ -507,40 +506,6 @@ The whole `node.toml`: what this machine calls itself.
 #[serde(default)]
 pub struct NodeConfig {
     pub nickname: String,
-}
-```
-
----
-
-## `src/protocol.rs`
-
-### enum `Status`
-
-How the host answered a forward request. The discriminant is the on-wire byte.
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Status {
-    Ok = 0,
-    PortNotAllowed = 1,
-    PeerNotAuthorized = 2,
-    UpstreamUnavailable = 3,
-}
-```
-
-### enum `HttpStatus`
-
-How a node answered a gateway request. The discriminant is the on-wire byte.
-
-```rust
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum HttpStatus {
-    Ok = 0,
-    ServiceUnknown = 1,
-    NotAuthorized = 2,
-    UpstreamUnavailable = 3,
 }
 ```
 

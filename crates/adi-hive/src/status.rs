@@ -46,25 +46,15 @@ pub fn resolve_path(default: PathBuf) -> PathBuf {
     default
 }
 
-/// Write the status file, creating its directory if needed.
+/// Write the status file, world-readable so a controlling GUI can read a root daemon's.
 ///
 /// # Errors
-/// Fails if the directory can't be created or the file can't be written — a read-only or
-/// root-owned status directory. Callers log it and keep serving; the status file is a report on
-/// the daemon, never a thing the daemon needs.
+/// Fails if the status can't be encoded, its directory can't be created, or the file can't be
+/// written. Callers log it and keep serving; the status file is a report on the daemon, never a
+/// thing the daemon needs.
 pub fn write(path: &Path, status: &Status) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let json = serde_json::to_vec_pretty(status).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)?;
-    // World-readable so a per-user GUI can read a root daemon's status file.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644));
-    }
-    Ok(())
+    adi_osext::write_status_file(path, &json)
 }
 
 pub fn remove(path: &Path) {

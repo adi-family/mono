@@ -12,6 +12,53 @@ use crate::state::{Flash, RowMenu, State};
 /// write 115 times in a comparator.
 pub(crate) use adi_ui::{Sort, SortKey as Key, TableState, sort_rows};
 
+/// A live pane's input row: a text field (submit types it into the session, without a trailing
+/// Enter — the ⏎ quick key sends that) plus the special keys interactive programs need.
+///
+/// Shared by the agents live view and the workspace terminal, which differ only in where the
+/// typed text goes. `send(text, key)` types `text` literally and then presses `key`; either may
+/// be empty, and the callee decides what an empty pair means.
+pub(crate) fn send_bar(
+    input: RwSignal<String>,
+    placeholder: &'static str,
+    send: impl Fn(String, &'static str) + Copy + 'static,
+) -> impl IntoView {
+    view! {
+        <form class="adi-form"
+            on:submit=move |ev| {
+                ev.prevent_default();
+                let text = input.get();
+                input.set(String::new());
+                send(text, "");
+            }>
+            <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
+                placeholder=placeholder
+                prop:value=move || input.get()
+                on:input=move |ev| input.set(event_target_value(&ev)) />
+            <button class="adi-btn adi-btn--primary" type="submit">"Send"</button>
+            {quick_key("⏎", "Enter", send)}
+            {quick_key("↑", "Up", send)}
+            {quick_key("↓", "Down", send)}
+            {quick_key("Tab", "Tab", send)}
+            {quick_key("Esc", "Escape", send)}
+            {quick_key("^C", "C-c", send)}
+        </form>
+    }
+}
+
+/// One special-key button in [`send_bar`], pressing a single key in the session.
+fn quick_key(
+    label: &'static str,
+    key: &'static str,
+    send: impl Fn(String, &'static str) + Copy + 'static,
+) -> impl IntoView {
+    view! {
+        <button class="adi-btn adi-btn--ghost adi-mono" type="button"
+            title=format!("send {key}")
+            on:click=move |_| send(String::new(), key)>{label}</button>
+    }
+}
+
 /// A full-width placeholder row spanning `colspan` columns.
 ///
 /// For the SQL console's result grid, which has no [`TableState`] to take a span from. Tables

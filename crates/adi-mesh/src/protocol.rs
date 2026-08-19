@@ -42,40 +42,58 @@ const VERSION: u8 = 1;
 /// Bytes in the fixed request header: `[version, port_hi, port_lo]`.
 const REQUEST_LEN: usize = 3;
 
-/// How the host answered a forward request. The discriminant is the on-wire byte.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Status {
-    /// The port is allowed and the local upstream is up; raw bytes follow.
-    Ok = 0,
-    /// The requested port is not on the host's allow-list.
-    PortNotAllowed = 1,
-    /// The connecting peer is not on the host's authorized-peers list.
-    PeerNotAuthorized = 2,
-    /// The port is allowed but nothing is listening on it locally.
-    UpstreamUnavailable = 3,
+/// Define a one-byte wire status: the discriminant *is* the byte on the wire, and each variant
+/// carries the sentence the other side shows when that is the answer.
+///
+/// Both protocols here have one, and a variant is only ever right in three places at once — the
+/// byte it is sent as, the parser that reads it back, and its reason. Declaring them together is
+/// what stops a variant from reaching the enum and the reason but not `from_byte`, where a peer
+/// running this build would answer `InvalidData` to a status this build considers valid.
+macro_rules! wire_status {
+    (
+        $(#[$enum_doc:meta])*
+        $name:ident {
+            $( $(#[$variant_doc:meta])* $variant:ident = $byte:literal => $reason:literal, )+
+        }
+    ) => {
+        $(#[$enum_doc])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        #[repr(u8)]
+        pub enum $name {
+            $( $(#[$variant_doc])* $variant = $byte, )+
+        }
+
+        impl $name {
+            /// The human-readable reason, for the error the other side raises when the answer is
+            /// a refusal.
+            #[must_use]
+            pub fn reason(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $reason, )+
+                }
+            }
+
+            fn from_byte(byte: u8) -> Option<Self> {
+                match byte {
+                    $( $byte => Some(Self::$variant), )+
+                    _ => None,
+                }
+            }
+        }
+    };
 }
 
-impl Status {
-    /// The human-readable reason, used in the client's error when a tunnel is refused.
-    #[must_use]
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::PortNotAllowed => "port not allow-listed by the peer",
-            Self::PeerNotAuthorized => "this machine is not an authorized peer",
-            Self::UpstreamUnavailable => "the peer's local service is not listening",
-        }
-    }
-
-    fn from_byte(byte: u8) -> Option<Self> {
-        match byte {
-            0 => Some(Self::Ok),
-            1 => Some(Self::PortNotAllowed),
-            2 => Some(Self::PeerNotAuthorized),
-            3 => Some(Self::UpstreamUnavailable),
-            _ => None,
-        }
+wire_status! {
+    /// How the host answered a forward request. The discriminant is the on-wire byte.
+    Status {
+        /// The port is allowed and the local upstream is up; raw bytes follow.
+        Ok = 0 => "ok",
+        /// The requested port is not on the host's allow-list.
+        PortNotAllowed = 1 => "port not allow-listed by the peer",
+        /// The connecting peer is not on the host's authorized-peers list.
+        PeerNotAuthorized = 2 => "this machine is not an authorized peer",
+        /// The port is allowed but nothing is listening on it locally.
+        UpstreamUnavailable = 3 => "the peer's local service is not listening",
     }
 }
 
@@ -111,8 +129,7 @@ pub async fn read_request<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<u1
 /// # Errors
 /// Propagates any write error on the stream.
 pub async fn write_status<W: AsyncWrite + Unpin>(w: &mut W, status: Status) -> std::io::Result<()> {
-    w.write_all(&[status as u8]).await?;
-    w.flush().await
+    write_byte(w, status as u8).await
 }
 
 /// Read the 1-byte status reply.
@@ -120,14 +137,8 @@ pub async fn write_status<W: AsyncWrite + Unpin>(w: &mut W, status: Status) -> s
 /// # Errors
 /// [`std::io::ErrorKind::InvalidData`] if the byte is not a known status; otherwise any read error.
 pub async fn read_status<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<Status> {
-    let mut buf = [0u8; 1];
-    r.read_exact(&mut buf).await?;
-    Status::from_byte(buf[0]).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("unknown mesh status byte {}", buf[0]),
-        )
-    })
+    let byte = read_byte(r).await?;
+    Status::from_byte(byte).ok_or_else(|| invalid_data(format!("unknown mesh status byte {byte}")))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -151,46 +162,22 @@ pub const MAX_LABEL_LEN: usize = 63;
 /// namespaces can never collide.
 pub const FLEET_SUFFIX: &str = "n.adi";
 
-/// How a node answered a gateway request. The discriminant is the on-wire byte.
-///
-/// Only *transport* outcomes live here. HTTP-level failures (a `401` from the node's auth
-/// gate, a `502` from its front door) are ordinary HTTP responses on an
-/// [`Ok`](HttpStatus::Ok) stream — keeping them apart is what lets the caller render a
-/// precise local error page instead of guessing from a status line it never received.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum HttpStatus {
-    /// The service resolved and its local upstream is up; HTTP bytes follow.
-    Ok = 0,
-    /// No service by that label exists on this node.
-    ServiceUnknown = 1,
-    /// The peer holds no grant for this service (`docs/fleet.md` §5, default-deny).
-    NotAuthorized = 2,
-    /// The service is known but nothing is listening on its local port.
-    UpstreamUnavailable = 3,
-}
-
-impl HttpStatus {
-    /// The human-readable reason, rendered on the caller's error page when a request is
-    /// refused before any HTTP could happen.
-    #[must_use]
-    pub fn reason(self) -> &'static str {
-        match self {
-            Self::Ok => "ok",
-            Self::ServiceUnknown => "no such service on that node",
-            Self::NotAuthorized => "this machine holds no grant for that service",
-            Self::UpstreamUnavailable => "the node's local service is not listening",
-        }
-    }
-
-    fn from_byte(byte: u8) -> Option<Self> {
-        match byte {
-            0 => Some(Self::Ok),
-            1 => Some(Self::ServiceUnknown),
-            2 => Some(Self::NotAuthorized),
-            3 => Some(Self::UpstreamUnavailable),
-            _ => None,
-        }
+wire_status! {
+    /// How a node answered a gateway request. The discriminant is the on-wire byte.
+    ///
+    /// Only *transport* outcomes live here. HTTP-level failures (a `401` from the node's auth
+    /// gate, a `502` from its front door) are ordinary HTTP responses on an
+    /// [`Ok`](HttpStatus::Ok) stream — keeping them apart is what lets the caller render a
+    /// precise local error page instead of guessing from a status line it never received.
+    HttpStatus {
+        /// The service resolved and its local upstream is up; HTTP bytes follow.
+        Ok = 0 => "ok",
+        /// No service by that label exists on this node.
+        ServiceUnknown = 1 => "no such service on that node",
+        /// The peer holds no grant for this service (`docs/fleet.md` §5, default-deny).
+        NotAuthorized = 2 => "this machine holds no grant for that service",
+        /// The service is known but nothing is listening on its local port.
+        UpstreamUnavailable = 3 => "the node's local service is not listening",
     }
 }
 
@@ -282,8 +269,7 @@ pub async fn write_http_status<W: AsyncWrite + Unpin>(
     w: &mut W,
     status: HttpStatus,
 ) -> std::io::Result<()> {
-    w.write_all(&[status as u8]).await?;
-    w.flush().await
+    write_byte(w, status as u8).await
 }
 
 /// Read the 1-byte gateway status reply.
@@ -292,10 +278,9 @@ pub async fn write_http_status<W: AsyncWrite + Unpin>(
 /// [`std::io::ErrorKind::InvalidData`] if the byte is not a known status; otherwise any read
 /// error.
 pub async fn read_http_status<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<HttpStatus> {
-    let mut buf = [0u8; 1];
-    r.read_exact(&mut buf).await?;
-    HttpStatus::from_byte(buf[0])
-        .ok_or_else(|| invalid_data(format!("unknown mesh http status byte {}", buf[0])))
+    let byte = read_byte(r).await?;
+    HttpStatus::from_byte(byte)
+        .ok_or_else(|| invalid_data(format!("unknown mesh http status byte {byte}")))
 }
 
 /// Split a `Host` header value in the reserved namespace into `(service, node)`:
@@ -335,6 +320,19 @@ pub fn parse_fleet_host(host: &str) -> Option<(String, String)> {
 
 fn invalid_data(message: String) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::InvalidData, message)
+}
+
+/// Write one byte and flush, so the peer is unblocked without waiting for later body bytes.
+async fn write_byte<W: AsyncWrite + Unpin>(w: &mut W, byte: u8) -> std::io::Result<()> {
+    w.write_all(&[byte]).await?;
+    w.flush().await
+}
+
+/// Read exactly one byte.
+async fn read_byte<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<u8> {
+    let mut buf = [0u8; 1];
+    r.read_exact(&mut buf).await?;
+    Ok(buf[0])
 }
 
 #[cfg(test)]

@@ -319,6 +319,34 @@ pub fn detach_process_group(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
+/// Write a daemon's status file: create its directory, write `json`, and leave the file readable
+/// by everyone.
+///
+/// The mode is the whole point of having this here. `adi-dns` and `adi-hive` run as root and their
+/// status file is read by a per-user GUI, so a default-umask `0600` would hide from that GUI the
+/// one thing it opens the file for — the port the daemon bound at runtime. Losing the `chmod` is
+/// not fatal to the daemon, so it is not propagated.
+///
+/// Takes bytes rather than a `Serialize` value so this crate stays free of serde; the callers
+/// already own their own status shape and serialize it themselves.
+///
+/// # Errors
+/// Fails if the directory can't be created or the file can't be written — a read-only or
+/// root-owned status directory. Callers log it and keep serving; the status file is a report on
+/// the daemon, never a thing the daemon needs.
+pub fn write_status_file(path: &Path, json: &[u8]) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, json)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644));
+    }
+    Ok(())
+}
+
 /// Create a symbolic link at `link` pointing to the file `target`.
 ///
 /// - **Unix:** `symlink(2)` (works for files or directories).

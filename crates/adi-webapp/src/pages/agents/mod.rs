@@ -559,45 +559,11 @@ pub(crate) fn agent_cell(col: &str, a: &AgentDto) -> AnyView {
     }
 }
 
-/// The live view's input row: a text field (submit types it into the session, without a trailing
-/// Enter — the ⏎ quick key sends that) plus the special keys interactive TUIs need (Enter, arrows
-/// for menus, Esc, Ctrl-C).
+/// The live view's input row, wired to the watched agent's pty session.
 fn send_bar(state: State, watch: AgentsWatch) -> impl IntoView {
-    view! {
-        <form class="adi-form"
-            on:submit=move |ev| {
-                ev.prevent_default();
-                let text = watch.input.get();
-                watch.input.set(String::new());
-                send_to_agent(state, watch, text, "");
-            }>
-            <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
-                placeholder="type to the agent…"
-                prop:value=move || watch.input.get()
-                on:input=move |ev| watch.input.set(event_target_value(&ev)) />
-            <button class="adi-btn adi-btn--primary" type="submit">"Send"</button>
-            {quick_key(state, watch, "⏎", "Enter")}
-            {quick_key(state, watch, "↑", "Up")}
-            {quick_key(state, watch, "↓", "Down")}
-            {quick_key(state, watch, "Tab", "Tab")}
-            {quick_key(state, watch, "Esc", "Escape")}
-            {quick_key(state, watch, "^C", "C-c")}
-        </form>
-    }
-}
-
-/// One special-key button in the send bar, pressing a single key in the session.
-fn quick_key(
-    state: State,
-    watch: AgentsWatch,
-    label: &'static str,
-    key: &'static str,
-) -> impl IntoView {
-    view! {
-        <button class="adi-btn adi-btn--ghost adi-mono" type="button"
-            title=format!("send {key}")
-            on:click=move |_| send_to_agent(state, watch, String::new(), key)>{label}</button>
-    }
+    crate::ui::send_bar(watch.input, "type to the agent…", move |text, key| {
+        send_to_agent(state, watch, text, key);
+    })
 }
 
 /// Type into the watched agent's session: send `text` literally, then press `key`. The reply is

@@ -5,6 +5,24 @@ use std::collections::BTreeMap;
 
 use adi_core::{EffectiveStatus, Report, ServiceReport, TaskStatus, contains_json_null};
 
+/// Resolve the two scope flags into `Option<project-id>` (`None` = global). `--global` is accepted
+/// for explicitness but redundant; passing both is a conflict.
+///
+/// # Errors
+/// The message to print when `--global` and `--project` are both given.
+pub(crate) fn resolve_scope(global: bool, project: Option<String>) -> Result<Option<String>, String> {
+    match (global, project) {
+        (true, Some(_)) => Err("pass either --global or --project <id>, not both".to_string()),
+        (_, Some(id)) => Ok(Some(id)),
+        (_, None) => Ok(None),
+    }
+}
+
+/// A human label for a scope, for status lines.
+pub(crate) fn scope_label(project: Option<&str>) -> String {
+    project.map_or_else(|| "global".to_string(), |id| format!("project {id}"))
+}
+
 /// Serialize any value to pretty JSON, degrading to `{}` on the (unreachable) encode failure.
 pub(crate) fn print_json<T: serde::Serialize>(value: &T) {
     println!(

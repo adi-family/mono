@@ -735,45 +735,11 @@ pub(crate) fn term_view(state: State, term: TermWatch) -> Option<AnyView> {
     )
 }
 
-/// The terminal's input row: a text field (submit types it into the session, without a
-/// trailing Enter — the ⏎ quick key sends that) plus the special keys interactive programs
-/// need.
+/// The terminal's input row, wired to the watched workspace's pty session.
 fn term_send_bar(state: State, term: TermWatch) -> impl IntoView {
-    view! {
-        <form class="adi-form"
-            on:submit=move |ev| {
-                ev.prevent_default();
-                let text = term.input.get();
-                term.input.set(String::new());
-                send_to_terminal(state, term, text, "");
-            }>
-            <input class="adi-input adi-input--wide adi-mono" autocomplete="off"
-                placeholder="type into the terminal…"
-                prop:value=move || term.input.get()
-                on:input=move |ev| term.input.set(event_target_value(&ev)) />
-            <button class="adi-btn adi-btn--primary" type="submit">"Send"</button>
-            {term_quick_key(state, term, "⏎", "Enter")}
-            {term_quick_key(state, term, "↑", "Up")}
-            {term_quick_key(state, term, "↓", "Down")}
-            {term_quick_key(state, term, "Tab", "Tab")}
-            {term_quick_key(state, term, "Esc", "Escape")}
-            {term_quick_key(state, term, "^C", "C-c")}
-        </form>
-    }
-}
-
-/// One special-key button in the terminal send bar, pressing a single key.
-fn term_quick_key(
-    state: State,
-    term: TermWatch,
-    label: &'static str,
-    key: &'static str,
-) -> impl IntoView {
-    view! {
-        <button class="adi-btn adi-btn--ghost adi-mono" type="button"
-            title=format!("send {key}")
-            on:click=move |_| send_to_terminal(state, term, String::new(), key)>{label}</button>
-    }
+    crate::ui::send_bar(term.input, "type into the terminal…", move |text, key| {
+        send_to_terminal(state, term, text, key);
+    })
 }
 
 /// Type into the watched terminal: send `text` literally, then press `key`. The reply is a

@@ -66,19 +66,14 @@ fn default_path() -> PathBuf {
     dir.join("status.json")
 }
 
+/// Write the status file, world-readable so the GUI can read a root daemon's.
+///
+/// # Errors
+/// Fails if the status can't be encoded, its directory can't be created, or the file can't be
+/// written. Callers log it and keep serving.
 pub fn write(path: &Path, status: &Status) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
     let json = serde_json::to_vec_pretty(status).map_err(std::io::Error::other)?;
-    std::fs::write(path, json)?;
-    // World-readable so a per-user GUI can read a root daemon's status file.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644));
-    }
-    Ok(())
+    adi_osext::write_status_file(path, &json)
 }
 
 pub fn remove(path: &Path) {

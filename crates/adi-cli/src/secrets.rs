@@ -4,7 +4,7 @@
 use adi_core::{Adi, Secret};
 use clap::Subcommand;
 
-use crate::format::print_json;
+use crate::format::{print_json, resolve_scope, scope_label};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SecretsCommand {
@@ -174,21 +174,6 @@ pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), Strin
         }
     }
     Ok(())
-}
-
-/// Resolve the two scope flags into `Option<project-id>` (`None` = global). `--global` is
-/// accepted for explicitness but redundant; passing both is a conflict.
-fn resolve_scope(global: bool, project: Option<String>) -> Result<Option<String>, String> {
-    match (global, project) {
-        (true, Some(_)) => Err("pass either --global or --project <id>, not both".to_string()),
-        (_, Some(id)) => Ok(Some(id)),
-        (_, None) => Ok(None),
-    }
-}
-
-/// A human label for a scope, for status lines.
-fn scope_label(project: Option<&str>) -> String {
-    project.map_or_else(|| "global".to_string(), |id| format!("project {id}"))
 }
 
 /// Read a secret value from stdin, dropping a single trailing newline so a piped
