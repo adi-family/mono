@@ -25,44 +25,21 @@ impl std::fmt::Debug for UsearchIndex {
 }
 
 impl UsearchIndex {
+    /// Open the index with the parameters this crate embeds at: 768 dimensions
+    /// (jina-embeddings-v2-base-code), and the HNSW settings that were measured against it.
+    ///
+    /// # Errors
+    /// See [`with_config`](Self::with_config).
     pub fn open(embeddings_dir: &Path) -> Result<Self> {
-        let index_path = embeddings_dir.join("symbols.idx");
-
-        // Default to 768 dimensions (jina-embeddings-v2-base-code)
-        let dimensions = 768;
-
-        let options = IndexOptions {
-            dimensions,
-            metric: MetricKind::Cos,
-            quantization: ScalarKind::F32,
-            connectivity: 16,      // M parameter
-            expansion_add: 200,    // ef_construction
-            expansion_search: 100, // ef_search
-            multi: false,
-        };
-
-        let index = Index::new(&options)
-            .map_err(|e| Error::Index(format!("Failed to create index: {e}")))?;
-
-        // Try to load existing index or reserve capacity
-        if index_path.exists() {
-            index
-                .load(index_path.to_str().unwrap_or(""))
-                .map_err(|e| Error::Index(format!("Failed to load index: {e}")))?;
-        } else {
-            // Reserve initial capacity for new index
-            index
-                .reserve(10000)
-                .map_err(|e| Error::Index(format!("Failed to reserve index capacity: {e}")))?;
-        }
-
-        Ok(Self {
-            index: Mutex::new(index),
-            path: index_path,
-            dimensions,
-        })
+        Self::with_config(embeddings_dir, 768, 16, 200, 100)
     }
 
+    /// Open the index, choosing the vector width and the HNSW knobs: `m` is the connectivity,
+    /// `ef_construction` the build-time expansion, `ef_search` the query-time one.
+    ///
+    /// # Errors
+    /// [`Error::Index`] if usearch cannot build the index, load an existing file, or reserve
+    /// capacity for a new one.
     pub fn with_config(
         embeddings_dir: &Path,
         dimensions: usize,

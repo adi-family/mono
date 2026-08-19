@@ -2,13 +2,13 @@
 
 use adi_webapp_api::types::{NewProject, Project};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{Row as TableRow, Table};
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, State};
 use crate::ui::{
-    Key, TextField, fmt_date, sort_rows,
+    fmt_date, Key, rows_or_placeholder, sort_rows, TextField,
 };
 
 /// The panel's columns. No action column — archive and restore live on the Projects page; a row
@@ -81,13 +81,11 @@ pub(crate) fn subprojects_panel(
 /// Loading/empty placeholders otherwise.
 fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
     let table = state.tables.subprojects;
-    let Some(d) = state.project_detail.get() else {
-        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
-    };
-    if d.subprojects.is_empty() {
-        return view! { <EmptyRow state=table>"No sub-projects yet — add one below."</EmptyRow> }.into_any();
-    }
-    let mut subprojects = d.subprojects;
+    let mut subprojects =
+        match rows_or_placeholder(table, state.project_detail.get().map(|v| v.subprojects), "No sub-projects yet — add one below.") {
+            Ok(rows) => rows,
+            Err(placeholder) => return placeholder,
+        };
     sort_rows(
         &mut subprojects,
         table.sort.get(),

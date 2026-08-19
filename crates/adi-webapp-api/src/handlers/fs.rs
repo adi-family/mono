@@ -12,16 +12,13 @@ use adi_projects::Projects;
 use crate::types::{FsContent, FsCreate, FsListing, FsRef, FsWrite};
 
 use super::files::{MAX_TEXT_BYTES, normalize_rel, parent_rel};
-use super::response::{FromBody, Response, error, ok_json, require};
+use super::response::{FromBody, Response, error, ok_json};
 
 /// `POST /api/fs/list` — list a directory inside the ADI store. `path` is relative to the store
 /// root (`""` is the root).
 #[must_use]
 pub fn fs_list(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<FsRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, FsRef);
     let jail = store_jail(store);
     match jail.list(&req.path) {
         Ok(entries) => {
@@ -41,10 +38,7 @@ pub fn fs_list(store: &Projects, body: &[u8]) -> Response {
 /// [`MAX_TEXT_BYTES`] are refused rather than returned.
 #[must_use]
 pub fn fs_read(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<FsRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, FsRef);
     if req.path.trim().is_empty() {
         return error(400, "a file path is required");
     }
@@ -56,10 +50,7 @@ pub fn fs_read(store: &Projects, body: &[u8]) -> Response {
 /// updates its size/modified in one round-trip.
 #[must_use]
 pub fn fs_write(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<FsWrite>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, FsWrite);
     if req.content.len() as u64 > MAX_TEXT_BYTES {
         return error(
             413,
@@ -81,10 +72,7 @@ pub fn fs_write(store: &Projects, body: &[u8]) -> Response {
 /// Creates never overwrite: a path that is already taken comes back 409.
 #[must_use]
 pub fn fs_create(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<FsCreate>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, FsCreate);
     // Normalizing a path of only `.`/slashes empties it out, which would name the store root.
     let path = normalize_rel(&req.path);
     if path.is_empty() {

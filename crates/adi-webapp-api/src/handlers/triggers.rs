@@ -13,7 +13,7 @@ use crate::types::{
     TriggerRuntimeOption, TriggersState,
 };
 
-use super::response::{FromBody, Response, clean, error, mutate, ok_json, require};
+use super::response::{FromBody, Response, clean, error, mutate, ok_json};
 
 /// Trim dynamic backend parameters and drop empty or unsafe keys. Which keys are *meaningful*
 /// is the code block's business (its preset declares them, and each reaches it as `ADI_<KEY>`),
@@ -136,10 +136,7 @@ pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) ->
 /// supervisor starts whatever should be up anyway.
 #[must_use]
 pub fn restart_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    let req = match require::<TriggerRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, TriggerRef);
     let name = req.name.trim();
     match store.get(name) {
         Ok(Some(trigger)) => {
@@ -162,10 +159,7 @@ pub fn restart_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -
 /// `enabled`. Replies with the spawned pid plus fresh state.
 #[must_use]
 pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
-    let req = match require::<TriggerRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, TriggerRef);
     let name = req.name.trim();
     let firing = match store.fire(name, None) {
         Ok(firing) => firing,
@@ -185,10 +179,7 @@ pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
 /// is a 404.
 #[must_use]
 pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
-    let req = match require::<TriggerRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, TriggerRef);
     let name = req.name.trim();
     match store.get(name) {
         Ok(Some(trigger)) => {

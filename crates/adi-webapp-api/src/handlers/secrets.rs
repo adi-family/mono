@@ -5,7 +5,7 @@ use crate::types::{
     OAuthInfoDto, RevealedSecret, SecretDto, SecretRef, SecretsState, SetOAuthSecret, SetSecret,
 };
 
-use super::response::{FromBody, Response, clean, error, ok_json, require};
+use super::response::{FromBody, Response, clean, error, ok_json};
 
 /// `GET /api/secrets` — every secret across all scopes, metadata only (never values). Each
 /// mutation endpoint below returns a fresh [`SecretsState`], so the client refreshes from one
@@ -24,10 +24,7 @@ pub fn secrets(store: &Secrets) -> Response {
 /// report the fresh list. `project` omitted/blank ⇒ global.
 #[must_use]
 pub fn set_secret(store: &Secrets, body: &[u8]) -> Response {
-    let req = match require::<SetSecret>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, SetSecret);
     let project = clean(req.project);
     match store.set(
         project.as_deref(),
@@ -45,10 +42,7 @@ pub fn set_secret(store: &Secrets, body: &[u8]) -> Response {
 /// the provider/lifetime/scope are recorded. Then report the fresh list.
 #[must_use]
 pub fn set_oauth_secret(store: &Secrets, body: &[u8]) -> Response {
-    let req = match require::<SetOAuthSecret>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, SetOAuthSecret);
     let project = clean(req.project);
     // The provider gives seconds-to-expiry; stamp the absolute time the store keeps.
     let expires_at = req.expires_in.map(|secs| adi_config::now_unix().saturating_add(secs));
@@ -68,10 +62,7 @@ pub fn set_oauth_secret(store: &Secrets, body: &[u8]) -> Response {
 /// `POST /api/secrets/remove` — delete a secret from a scope, then report the fresh list.
 #[must_use]
 pub fn remove_secret(store: &Secrets, body: &[u8]) -> Response {
-    let req = match require::<SecretRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, SecretRef);
     let project = clean(req.project);
     match store.remove(project.as_deref(), req.name.trim()) {
         Ok(_) => secrets(store),
@@ -83,10 +74,7 @@ pub fn remove_secret(store: &Secrets, body: &[u8]) -> Response {
 /// from listing so revealing is always a deliberate, single-secret request.
 #[must_use]
 pub fn reveal_secret(store: &Secrets, body: &[u8]) -> Response {
-    let req = match require::<SecretRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, SecretRef);
     let project = clean(req.project);
     let name = req.name.trim();
     match store.reveal(project.as_deref(), name) {

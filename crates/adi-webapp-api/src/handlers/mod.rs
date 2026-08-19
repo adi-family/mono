@@ -3,6 +3,22 @@
 //! owns the socket and writes the response. Compiled only with the `server` feature,
 //! which pulls in the filesystem-backed registry and so is native-only.
 
+/// Decode a `POST` body into the named type, binding it — or answer the 400 that says what the
+/// type wanted, returning from the enclosing handler.
+///
+/// A macro rather than a function because of that return: a handler answers with a [`Response`],
+/// so there is no `?` to lean on, and the four-line `match` this replaces was the same four lines
+/// at some sixty endpoints. [`require`] itself is still there for the callers that want the
+/// `Result` — [`mutate`] is one.
+macro_rules! require {
+    ($body:expr, $ty:ty) => {
+        match $crate::handlers::response::require::<$ty>($body) {
+            Ok(req) => req,
+            Err(bad) => return bad,
+        }
+    };
+}
+
 mod agents;
 mod dashboards;
 mod db;

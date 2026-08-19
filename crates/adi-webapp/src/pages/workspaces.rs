@@ -15,8 +15,7 @@ use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
 use crate::ui::{
-    Key, TextField, confirm, fmt_date, menu_item,
-    row_actions, sort_rows,
+    confirm, fmt_date, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, TextField,
 };
 
 /// The workspaces table's columns; the trailing blank one holds ⌨ Terminal and Unregister.
@@ -267,13 +266,11 @@ fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
 /// Rows for the hooks table: each hook file with Run / Log / Edit actions.
 fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
     let table = state.tables.hooks;
-    let Some(snapshot) = current_snapshot(state) else {
-        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
-    };
-    if snapshot.hooks.is_empty() {
-        return view! { <EmptyRow state=table>"No hooks yet — add one below."</EmptyRow> }.into_any();
-    }
-    let mut hooks = snapshot.hooks;
+    let mut hooks =
+        match rows_or_placeholder(table, current_snapshot(state).map(|v| v.hooks), "No hooks yet — add one below.") {
+            Ok(rows) => rows,
+            Err(placeholder) => return placeholder,
+        };
     sort_rows(
         &mut hooks,
         table.sort.get(),

@@ -132,11 +132,13 @@ impl EmbeddingStore {
         Ok(())
     }
 
-    pub fn get(&self, index: u64) -> Result<Vec<f32>> {
+    /// Read the embedding at `index` out of an already-open file.
+    ///
+    /// The bounds check is why this is one function rather than two: without it the seek lands
+    /// inside the neighbouring vector and the read succeeds, returning a plausible embedding for
+    /// the wrong symbol. A batch read is many of these, so both take the same path.
+    fn read_at(&self, file: &mut File, file_len: u64, index: u64) -> Result<Vec<f32>> {
         use std::io::Seek;
-        let mut file = File::open(&self.path)?;
-        let file_len = file.metadata()?.len();
-
         let header_size = std::mem::size_of::<Header>() as u64;
         let embedding_size = u64::from(self.dimensions) * 4;
         let offset = header_size + index * embedding_size;
@@ -155,33 +157,20 @@ impl EmbeddingStore {
         Ok(floats.to_vec())
     }
 
+    pub fn get(&self, index: u64) -> Result<Vec<f32>> {
+        let mut file = File::open(&self.path)?;
+        let file_len = file.metadata()?.len();
+        self.read_at(&mut file, file_len, index)
+    }
+
     pub fn get_batch(&self, indices: &[u64]) -> Result<Vec<Vec<f32>>> {
-        use std::io::Seek;
         let mut file = File::open(&self.path)?;
         let file_len = file.metadata()?.len();
 
-        let header_size = std::mem::size_of::<Header>() as u64;
-        let embedding_size = u64::from(self.dimensions) * 4;
-
-        let mut results = Vec::with_capacity(indices.len());
-
-        for &index in indices {
-            let offset = header_size + index * embedding_size;
-
-            if offset + embedding_size > file_len {
-                return Err(Error::Storage(format!(
-                    "Embedding index {index} out of bounds"
-                )));
-            }
-
-            file.seek(std::io::SeekFrom::Start(offset))?;
-            let mut buf = vec![0u8; embedding_size as usize];
-            file.read_exact(&mut buf)?;
-            let floats: &[f32] = bytemuck::cast_slice(&buf);
-            results.push(floats.to_vec());
-        }
-
-        Ok(results)
+        indices
+            .iter()
+            .map(|&index| self.read_at(&mut file, file_len, index))
+            .collect()
     }
 
     pub fn iter(&self) -> Result<EmbeddingIterator> {

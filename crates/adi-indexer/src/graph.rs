@@ -164,46 +164,38 @@ pub fn find_call_path(
     Ok(None)
 }
 
-/// Get symbols that are entry points (no callers but have callees)
-pub fn get_entry_points(storage: &Arc<dyn Storage>) -> Result<Vec<Symbol>> {
+/// Every symbol the whole tree over that `keep` accepts, given whether anything calls it and
+/// whether it calls anything. The two ends of the call graph are the same sweep with opposite
+/// tests, and the sweep is a query per symbol — worth writing once.
+fn ends_of_graph(
+    storage: &Arc<dyn Storage>,
+    keep: impl Fn(bool, bool) -> bool,
+) -> Result<Vec<Symbol>> {
     let tree = storage.get_tree()?;
-    let mut entry_points: Vec<Symbol> = Vec::new();
+    let mut found: Vec<Symbol> = Vec::new();
 
     for file in &tree.files {
         for symbol_node in &file.symbols {
-            let callers = storage.get_callers(symbol_node.id)?;
-            let callees = storage.get_callees(symbol_node.id)?;
+            let is_called = !storage.get_callers(symbol_node.id)?.is_empty();
+            let calls = !storage.get_callees(symbol_node.id)?.is_empty();
 
-            // Entry point: no callers but calls other symbols
-            if callers.is_empty() && !callees.is_empty() {
-                let symbol = storage.get_symbol(symbol_node.id)?;
-                entry_points.push(symbol);
+            if keep(is_called, calls) {
+                found.push(storage.get_symbol(symbol_node.id)?);
             }
         }
     }
 
-    Ok(entry_points)
+    Ok(found)
+}
+
+/// Get symbols that are entry points (no callers but have callees)
+pub fn get_entry_points(storage: &Arc<dyn Storage>) -> Result<Vec<Symbol>> {
+    ends_of_graph(storage, |is_called, calls| !is_called && calls)
 }
 
 /// Get symbols that are leaf nodes (have callers but no callees)
 pub fn get_leaf_nodes(storage: &Arc<dyn Storage>) -> Result<Vec<Symbol>> {
-    let tree = storage.get_tree()?;
-    let mut leaf_nodes: Vec<Symbol> = Vec::new();
-
-    for file in &tree.files {
-        for symbol_node in &file.symbols {
-            let callers = storage.get_callers(symbol_node.id)?;
-            let callees = storage.get_callees(symbol_node.id)?;
-
-            // Leaf node: has callers but doesn't call other symbols
-            if !callers.is_empty() && callees.is_empty() {
-                let symbol = storage.get_symbol(symbol_node.id)?;
-                leaf_nodes.push(symbol);
-            }
-        }
-    }
-
-    Ok(leaf_nodes)
+    ends_of_graph(storage, |is_called, calls| is_called && !calls)
 }
 
 /// Calculate metrics for a symbol in the call graph

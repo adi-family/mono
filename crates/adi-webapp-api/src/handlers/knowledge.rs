@@ -21,7 +21,7 @@ use crate::types::{
     KnowledgeSearch, KnowledgeState, NewKnowledgeBase, NewKnowledgeNote,
 };
 
-use super::response::{FromBody, Response, clean, error, ok_json, require};
+use super::response::{FromBody, Response, clean, error, ok_json};
 
 /// How many notes a list returns when the request names no limit. Generous for a page that
 /// shows one base at a time, and bounded so a base grown to thousands cannot wedge the panel.
@@ -61,10 +61,7 @@ pub fn knowledge(store: &KnowledgeStore) -> Response {
 /// `POST /api/knowledge/base/create` — make a base, then report the fresh state.
 #[must_use]
 pub fn create_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<NewKnowledgeBase>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, NewKnowledgeBase);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -83,10 +80,7 @@ pub fn create_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/base/remove` — delete a base and everything in it.
 #[must_use]
 pub fn remove_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<KnowledgeBaseRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, KnowledgeBaseRef);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -103,10 +97,7 @@ pub fn remove_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// embeds every stale note. The page calls it deliberately, from a button, and shows the report.
 #[must_use]
 pub fn reembed_knowledge(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<KnowledgeBaseRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, KnowledgeBaseRef);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -131,10 +122,7 @@ pub fn reembed_knowledge(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/notes` — the notes in one base, newest first.
 #[must_use]
 pub fn knowledge_notes(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<KnowledgeBaseRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, KnowledgeBaseRef);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -156,10 +144,7 @@ pub fn knowledge_notes(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/note/get` — one note in full.
 #[must_use]
 pub fn knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<KnowledgeNoteRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, KnowledgeNoteRef);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -174,10 +159,7 @@ pub fn knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/note/add` — write a note, embedding it on the way in.
 #[must_use]
 pub fn add_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<NewKnowledgeNote>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, NewKnowledgeNote);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -201,10 +183,7 @@ pub fn add_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// is the store's rule and not this handler's — it only forwards the patch.
 #[must_use]
 pub fn edit_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<EditNote>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, EditNote);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -226,10 +205,7 @@ pub fn edit_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/note/remove` — delete a note, then report the base's fresh list.
 #[must_use]
 pub fn remove_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<KnowledgeNoteRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, KnowledgeNoteRef);
     let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
@@ -257,10 +233,7 @@ pub fn remove_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// it is put to.
 #[must_use]
 pub fn search_knowledge(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let req = match require::<KnowledgeSearch>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, KnowledgeSearch);
     let bases = if req.bases.is_empty() {
         match store.visible_bases() {
             Ok(bases) => bases,

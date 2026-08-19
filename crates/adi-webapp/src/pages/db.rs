@@ -11,11 +11,13 @@ use adi_webapp_api::types::{DbInfoDto, DbQueryResult, DbTableDto};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{Row as TableRow, Table};
 
 use crate::fetch;
 use crate::state::{DbConsole, Flash, State, load};
-use crate::ui::{Key, placeholder_row, sort_rows, updated_text};
+use crate::ui::{
+    Key, placeholder_row, rows_or_placeholder, sort_rows, updated_text,
+};
 
 /// The databases table: one row per scope in the store. No action column — a row's control is the
 /// Scope cell itself, which opens that database.
@@ -134,19 +136,11 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
 /// The databases table: one row per scope, the open one marked. Clicking a row opens that scope.
 fn scope_rows(state: State, console: DbConsole) -> AnyView {
     let table = state.tables.db_scopes;
-    let Some(listing) = state.db.get() else {
-        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
-    };
-    if listing.databases.is_empty() {
-        return view! {
-            <EmptyRow state=table>
-                "No databases yet — the first write creates one. Try a `create table` below."
-            </EmptyRow>
-        }
-        .into_any();
-    }
-
-    let mut databases = listing.databases;
+    let mut databases =
+        match rows_or_placeholder(table, state.db.get().map(|v| v.databases), "No databases yet — the first write creates one. Try a `create table` below.") {
+            Ok(rows) => rows,
+            Err(placeholder) => return placeholder,
+        };
     // By the byte count, not the `1.4 MB` the cell renders — otherwise `900 B` sorts after `2 GB`.
     sort_rows(
         &mut databases,
@@ -209,17 +203,11 @@ fn scope_cell(col: &str, d: &DbInfoDto, console: DbConsole) -> AnyView {
 /// The open scope's tables: shape, live row count, and a preview button per table.
 fn table_rows(state: State, console: DbConsole) -> AnyView {
     let table = state.tables.db_tables;
-    let Some(loaded) = console.tables.get() else {
-        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
-    };
-    if loaded.tables.is_empty() {
-        return view! {
-            <EmptyRow state=table>"This database has no tables yet."</EmptyRow>
-        }
-        .into_any();
-    }
-
-    let mut tables = loaded.tables;
+    let mut tables =
+        match rows_or_placeholder(table, console.tables.get().map(|v| v.tables), "This database has no tables yet.") {
+            Ok(rows) => rows,
+            Err(placeholder) => return placeholder,
+        };
     sort_rows(
         &mut tables,
         table.sort.get(),

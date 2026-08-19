@@ -8,14 +8,13 @@ use std::collections::BTreeMap;
 
 use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State};
 use crate::ui::{
-    Key, flash_view, menu_item, row_actions,
-    sort_rows, updated_text,
+    flash_view, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, updated_text,
 };
 
 /// The Agents page's columns; the trailing blank one holds Run / View / Stop and the kebab.
@@ -470,13 +469,11 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
 /// View (live session), Edit (loads it into the form), and Delete actions.
 fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, sim: Simulate) -> AnyView {
     let table = state.tables.agents;
-    let Some(st) = state.agents.get() else {
-        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
-    };
-    if st.agents.is_empty() {
-        return view! { <EmptyRow state=table>"No agents yet — define one below."</EmptyRow> }.into_any();
-    }
-    let mut agents = st.agents;
+    let mut agents =
+        match rows_or_placeholder(table, state.agents.get().map(|v| v.agents), "No agents yet — define one below.") {
+            Ok(rows) => rows,
+            Err(placeholder) => return placeholder,
+        };
     sort_rows(&mut agents, table.sort.get(), agent_key, |a| {
         Key::text(&a.name)
     });

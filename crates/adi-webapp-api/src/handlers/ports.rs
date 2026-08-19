@@ -4,7 +4,7 @@ use crate::types::{
     Lease, LeaseRef, PortsState, Range, ReleaseResponse, ReserveResponse, UsedPort, UsedPorts,
 };
 
-use super::response::{FromBody, Response, error, ok_json, require};
+use super::response::{FromBody, Response, error, ok_json};
 
 /// `GET /api/ports` — the allocator's configuration and current static leases.
 #[must_use]
@@ -53,10 +53,7 @@ pub fn used_ports(ports: Vec<UsedPort>) -> Response {
 /// `POST /api/ports/reserve` — reserve (or return the existing) static port for a pair.
 #[must_use]
 pub fn reserve(manager: &Ports, body: &[u8]) -> Response {
-    let req = match require::<LeaseRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, LeaseRef);
     match manager.reserve(&req.service, &req.key) {
         Ok(port) => ok_json(&ReserveResponse {
             service: req.service,
@@ -70,10 +67,7 @@ pub fn reserve(manager: &Ports, body: &[u8]) -> Response {
 /// `POST /api/ports/release` — release a static lease, reporting the freed port.
 #[must_use]
 pub fn release(manager: &Ports, body: &[u8]) -> Response {
-    let req = match require::<LeaseRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, LeaseRef);
     match manager.release(&req.service, &req.key) {
         Ok(freed) => ok_json(&ReleaseResponse {
             service: req.service,

@@ -7,7 +7,7 @@ use crate::types::{
     MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
 };
 
-use super::response::{FromBody, Response, error, ok_json, require};
+use super::response::{FromBody, Response, error, ok_json};
 
 /// `GET /api/mesh` — this machine's mesh identity, published ticket, and config. `running`
 /// is the host's authoritative view of whether the in-process daemon is up (the host owns
@@ -23,10 +23,7 @@ pub fn mesh(running: bool) -> Response {
 /// `POST /api/mesh/allow` — expose a local TCP port to peers.
 #[must_use]
 pub fn mesh_allow(running: bool, body: &[u8]) -> Response {
-    let req = match require::<MeshPortRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, MeshPortRef);
     mesh_edit(running, |cfg| {
         cfg.allow_port(req.port);
     })
@@ -35,10 +32,7 @@ pub fn mesh_allow(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/deny` — stop exposing a local TCP port.
 #[must_use]
 pub fn mesh_deny(running: bool, body: &[u8]) -> Response {
-    let req = match require::<MeshPortRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, MeshPortRef);
     mesh_edit(running, |cfg| {
         cfg.deny_port(req.port);
     })
@@ -48,10 +42,7 @@ pub fn mesh_deny(running: bool, body: &[u8]) -> Response {
 /// the canonical id is what gets stored.
 #[must_use]
 pub fn mesh_allow_peer(running: bool, body: &[u8]) -> Response {
-    let req = match require::<MeshPeerRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, MeshPeerRef);
     let id = match ticket::target_id(&req.peer) {
         Ok(id) => id.to_string(),
         Err(e) => return error(400, &format!("invalid peer: {e}")),
@@ -64,10 +55,7 @@ pub fn mesh_allow_peer(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/peers/deny` — revoke a peer's authorization.
 #[must_use]
 pub fn mesh_deny_peer(running: bool, body: &[u8]) -> Response {
-    let req = match require::<MeshPeerRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, MeshPeerRef);
     mesh_edit(running, move |cfg| {
         cfg.deny_peer(&req.peer);
     })
@@ -76,10 +64,7 @@ pub fn mesh_deny_peer(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/forwards/add` — forward a local port to a peer's port.
 #[must_use]
 pub fn mesh_add_forward(running: bool, body: &[u8]) -> Response {
-    let req = match require::<MeshForwardRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, MeshForwardRef);
     let id = match ticket::target_id(&req.peer) {
         Ok(id) => id,
         Err(e) => return error(400, &format!("invalid peer: {e}")),
@@ -102,10 +87,7 @@ pub fn mesh_add_forward(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/forwards/remove` — remove the forward bound to a local port.
 #[must_use]
 pub fn mesh_remove_forward(running: bool, body: &[u8]) -> Response {
-    let req = match require::<MeshListenRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, MeshListenRef);
     mesh_edit(running, move |cfg| {
         cfg.remove_forward(req.listen);
     })

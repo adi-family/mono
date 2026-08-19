@@ -12,7 +12,7 @@ use crate::types::{
     DbTableDto, DbTablesState,
 };
 
-use super::response::{FromBody, Response, clean, error, ok_json, require};
+use super::response::{FromBody, Response, clean, error, ok_json};
 
 /// `GET /api/db` — every database in the store, global first, then each project's.
 #[must_use]
@@ -39,10 +39,7 @@ pub fn db_state(store: &Db) -> Response {
 /// an empty database, not a missing one, and the query box below it still has to work.
 #[must_use]
 pub fn db_tables(store: &Db, body: &[u8]) -> Response {
-    let scope = match require::<DbScope>(body) {
-        Ok(scope) => scope,
-        Err(bad) => return bad,
-    };
+    let scope = require!(body, DbScope);
     let project = clean(scope.project);
     match store.tables(project.as_deref()) {
         Ok(tables) => ok_json(&DbTablesState {
@@ -73,10 +70,7 @@ pub fn db_tables(store: &Db, body: &[u8]) -> Response {
 /// `POST /api/db/schema` — the `create` statements for a scope, or just one table's.
 #[must_use]
 pub fn db_schema(store: &Db, body: &[u8]) -> Response {
-    let scope = match require::<DbScope>(body) {
-        Ok(scope) => scope,
-        Err(bad) => return bad,
-    };
+    let scope = require!(body, DbScope);
     let project = clean(scope.project);
     let table = clean(scope.table);
     match store.schema(project.as_deref(), table.as_deref()) {
@@ -91,10 +85,7 @@ pub fn db_schema(store: &Db, body: &[u8]) -> Response {
 /// SQLite itself. That also means `insert … returning` belongs on `/exec`, not here.
 #[must_use]
 pub fn db_query(store: &Db, body: &[u8]) -> Response {
-    let req = match require::<DbQuery>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, DbQuery);
     let project = clean(req.project);
     let conn = match store.connect_readonly(project.as_deref()) {
         Ok(conn) => conn,
@@ -113,10 +104,7 @@ pub fn db_query(store: &Db, body: &[u8]) -> Response {
 /// `params` the whole body runs as a batch, so a multi-statement migration lands in one call.
 #[must_use]
 pub fn db_exec(store: &Db, body: &[u8]) -> Response {
-    let req = match require::<DbQuery>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, DbQuery);
     let project = clean(req.project);
     match store.exec_json(project.as_deref(), &req.sql, &req.params) {
         Ok(result) => ok_json(&DbExecResult {

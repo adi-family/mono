@@ -22,7 +22,7 @@ use crate::types::{
     SimulateAgent, SimulateTurn, StarRun, UnqueueFromRun,
 };
 
-use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body, require};
+use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
 
 /// `GET /api/agents` — every registered agent definition. Each mutation endpoint below returns a
 /// fresh [`AgentsState`], so the client refreshes from one round-trip.
@@ -130,10 +130,7 @@ pub fn set_run_limit(store: &Agents, body: &[u8]) -> Response {
 /// and do nothing, so that is rejected (400) rather than silently run.
 #[must_use]
 pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<RunAgent>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, RunAgent);
     let name = req.name.trim();
     let message = req.message.trim();
     let agent = match get_agent(store, name) {
@@ -199,10 +196,7 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
 /// run of the agent's settings). Interactive (pty) agents keep no history and answer `runs: []`.
 #[must_use]
 pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<AgentRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, AgentRef);
     match get_agent(store, req.name.trim()) {
         Ok(agent) => ok_json(&runs_response(store, &agent)),
         Err(e) => Response::from(&e),
@@ -215,10 +209,7 @@ pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
 /// turn-by-turn transcript (`turns`) and `answerable: true`.
 #[must_use]
 pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<RunRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, RunRef);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -262,10 +253,7 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
 /// chat that is merely new.
 #[must_use]
 pub fn run_tokens(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<RunRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, RunRef);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -368,10 +356,7 @@ const ROOT_AGENT: &str = "adi-agent";
 /// [`adi_agents::review`] — so the directory is somewhere to read, not somewhere to edit.
 #[must_use]
 pub fn review_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<ReviewRun>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, ReviewRun);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -441,10 +426,7 @@ pub fn review_run(store: &Agents, body: &[u8]) -> Response {
 /// (400).
 #[must_use]
 pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<ReplyToRun>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, ReplyToRun);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -524,10 +506,7 @@ pub fn attachment_bytes(store: &Agents, id: &str) -> Option<(String, Vec<u8>)> {
 /// turn a moment ago) simply changes nothing.
 #[must_use]
 pub fn unqueue_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<UnqueueFromRun>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, UnqueueFromRun);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -579,10 +558,7 @@ fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> R
 /// deadline took the run's own default while this card sat open.
 #[must_use]
 pub fn answer_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<AnswerRun>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, AnswerRun);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -653,10 +629,7 @@ pub fn agent_goals(store: &Agents, body: &[u8]) -> Response {
 /// except that field, so it must not be taken from the request body.
 #[must_use]
 pub fn set_agent_goal(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<SetGoal>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, SetGoal);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -693,10 +666,7 @@ pub fn set_agent_goal(store: &Agents, body: &[u8]) -> Response {
 /// the ending that happened rather than a red box. Only an id that names no goal at all is a 404.
 #[must_use]
 pub fn close_agent_goal(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<CloseGoal>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, CloseGoal);
     let goal_id = req.goal.trim();
     let closed = if req.as_.trim() == "met" {
         adi_agents::goals::met(store, goal_id, &req.note)
@@ -742,10 +712,7 @@ fn agent_goal(goal: &adi_agents::store::Goal) -> AgentGoal {
 /// already-finished run; only an unknown agent is a 404.
 #[must_use]
 pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<RunRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, RunRef);
     run_mutation(store, req.name.trim(), |name| {
         store.stop_run(name, req.run_id.trim())
     })
@@ -757,10 +724,7 @@ pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
 /// backend that keeps no run history is a 400.
 #[must_use]
 pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<RunRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, RunRef);
     run_mutation(store, req.name.trim(), |name| {
         store.delete_run(name, req.run_id.trim())
     })
@@ -773,10 +737,7 @@ pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
 /// unknown agent is a 404, and a backend that keeps no run history is a 400.
 #[must_use]
 pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<HideRun>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, HideRun);
     run_mutation(store, req.name.trim(), |name| {
         store.set_run_hidden(name, req.run_id.trim(), req.hidden)
     })
@@ -791,10 +752,7 @@ pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
 /// a no-op; only an unknown agent is a 404.
 #[must_use]
 pub fn star_run(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<StarRun>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, StarRun);
     run_mutation(store, req.name.trim(), |name| {
         store.set_run_starred(name, req.run_id.trim(), req.starred)
     })
@@ -1088,10 +1046,7 @@ fn agent_metrics(m: adi_agents::TurnMetrics) -> AgentTurnMetrics {
 /// existing agent to `name` before applying the edit, instead of leaving the old manifest behind.
 #[must_use]
 pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<SaveAgent>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, SaveAgent);
     if req.arguments.values().any(contains_json_null) {
         return error(
             400,
@@ -1240,10 +1195,7 @@ pub fn delete_agent(store: &Agents, body: &[u8]) -> Response {
 /// only an unknown name is a 404.
 #[must_use]
 pub fn peek_agent(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<AgentRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, AgentRef);
     match get_agent(store, req.name.trim()) {
         Ok(agent) => peek_response(store, &agent),
         Err(e) => Response::from(&e),
@@ -1255,10 +1207,7 @@ pub fn peek_agent(store: &Agents, body: &[u8]) -> Response {
 /// fresh screen snapshot after a short settle delay, so the sender sees the effect immediately.
 #[must_use]
 pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<AgentKeys>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, AgentKeys);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -1275,10 +1224,7 @@ pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
 /// list. Idempotent for an already-stopped agent; only an unknown definition is a 404.
 #[must_use]
 pub fn stop_agent(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<AgentRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, AgentRef);
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
         Err(e) => return Response::from(&e),
@@ -2937,10 +2883,7 @@ pub fn simulate_agent(store: &Agents, body: &[u8]) -> Response {
 /// assembling a spec, which syncs the agent's `.bin` — a write path, and this is polled by a page.
 #[must_use]
 pub fn simulate_prompt(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<RunRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, RunRef);
     sim_state(store, req.name.trim(), req.run_id.trim())
 }
 
@@ -2952,10 +2895,7 @@ pub fn simulate_prompt(store: &Agents, body: &[u8]) -> Response {
 /// means `tool_use` and the seat stays occupied; none means `end_turn` and the run yields.
 #[must_use]
 pub fn simulate_turn(store: &Agents, body: &[u8]) -> Response {
-    let req = match require::<SimulateTurn>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, SimulateTurn);
     let (name, run_id) = (req.name.trim(), req.run_id.trim());
     if req.blocks.is_empty() {
         return error(

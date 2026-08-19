@@ -14,7 +14,7 @@ use crate::types::{
     WriteToolScript,
 };
 
-use super::response::{FromBody, Response, error, mutate, ok_json, require};
+use super::response::{FromBody, Response, error, mutate, ok_json};
 
 /// The largest script we'll accept on a write — the same bound the project file editor uses.
 /// Comfortably under the server's 1 MiB request-body cap; a larger script is refused, not truncated.
@@ -102,10 +102,7 @@ pub fn remove_tool(store: &Tools, body: &[u8]) -> Response {
 /// `POST /api/tools/script/read` — a tool's script text (owned file, or linked target).
 #[must_use]
 pub fn read_tool_script(store: &Tools, body: &[u8]) -> Response {
-    let req = match require::<ToolRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, ToolRef);
     script_response(store, req.id.trim())
 }
 
@@ -113,10 +110,7 @@ pub fn read_tool_script(store: &Tools, body: &[u8]) -> Response {
 /// carries the authoritative content after the write.
 #[must_use]
 pub fn write_tool_script(store: &Tools, body: &[u8]) -> Response {
-    let req = match require::<WriteToolScript>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WriteToolScript);
     if req.content.len() > MAX_SCRIPT_BYTES {
         return error(
             413,
@@ -134,10 +128,7 @@ pub fn write_tool_script(store: &Tools, body: &[u8]) -> Response {
 /// in the store root.
 #[must_use]
 pub fn run_tool(store: &Tools, projects: &Projects, body: &[u8]) -> Response {
-    let req = match require::<RunTool>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, RunTool);
     let id = req.id.trim();
 
     // Resolve the working directory from the tool's project, if any.

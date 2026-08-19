@@ -6,7 +6,7 @@ use adi_projects::Projects;
 
 use crate::types::{DirListing, FileContent, FileEntry, FilesRef, WriteFile};
 
-use super::response::{FromBody, Response, error, ok_json, require};
+use super::response::{FromBody, Response, error, ok_json};
 
 /// The largest text file we'll read into the editor or accept on a write. Keeps a single
 /// response/request bounded (project files here are configs — small); a larger file is
@@ -18,10 +18,7 @@ pub(crate) const MAX_TEXT_BYTES: u64 = 512 * 1024;
 /// to the project root (`""` is the root).
 #[must_use]
 pub fn list_files(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<FilesRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, FilesRef);
     let jail = match project_jail(store, &req.id) {
         Ok(jail) => jail,
         Err(resp) => return resp,
@@ -45,10 +42,7 @@ pub fn list_files(store: &Projects, body: &[u8]) -> Response {
 /// files and files over [`MAX_TEXT_BYTES`] are refused rather than returned.
 #[must_use]
 pub fn read_file(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<FilesRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, FilesRef);
     let jail = match project_jail(store, &req.id) {
         Ok(jail) => jail,
         Err(resp) => return resp,
@@ -61,10 +55,7 @@ pub fn read_file(store: &Projects, body: &[u8]) -> Response {
 /// so the client updates its size/modified in one round-trip.
 #[must_use]
 pub fn write_file(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<WriteFile>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WriteFile);
     if req.content.len() as u64 > MAX_TEXT_BYTES {
         return error(
             413,

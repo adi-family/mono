@@ -12,6 +12,31 @@ use crate::state::{Flash, RowMenu, State};
 /// write 115 times in a comparator.
 pub(crate) use adi_ui::{Sort, SortKey as Key, TableState, sort_rows};
 
+/// The two placeholders a sortable table body opens with: `Loading…` while the page's data signal
+/// is still empty, then `empty` once it has landed with nothing in it. `Ok` carries the rows to
+/// sort and render — the part that actually differs between tables.
+///
+/// Written out at every table body it looked like boilerplate; it is a house rule. A table that
+/// skipped the first placeholder would flash its empty line during the load, and one that skipped
+/// the second would render a bare frame saying nothing about why it is bare.
+///
+/// # Errors
+/// The placeholder view to render instead of rows.
+pub(crate) fn rows_or_placeholder<T>(
+    table: TableState,
+    loaded: Option<Vec<T>>,
+    empty: &str,
+) -> Result<Vec<T>, AnyView> {
+    let Some(rows) = loaded else {
+        return Err(view! { <adi_ui::EmptyRow state=table>"Loading…"</adi_ui::EmptyRow> }.into_any());
+    };
+    if rows.is_empty() {
+        let empty = empty.to_string();
+        return Err(view! { <adi_ui::EmptyRow state=table>{empty}</adi_ui::EmptyRow> }.into_any());
+    }
+    Ok(rows)
+}
+
 /// A live pane's input row: a text field (submit types it into the session, without a trailing
 /// Enter — the ⏎ quick key sends that) plus the special keys interactive programs need.
 ///

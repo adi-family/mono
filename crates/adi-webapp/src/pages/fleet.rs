@@ -24,13 +24,12 @@
 
 use adi_webapp_api::types::{FleetNode, FleetState};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
+use adi_ui::{Row as TableRow, Table};
 
 use crate::fetch;
 use crate::state::{FleetForm, State};
 use crate::ui::{
-    Key, TextField, apply_mutation, confirm, fmt_date, menu_item,
-    row_actions, sort_rows, updated_text,
+    apply_mutation, confirm, fmt_date, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, TextField, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -178,13 +177,11 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
 /// per node with its grants and the actions that change them.
 fn node_rows(state: State) -> AnyView {
     let table = state.tables.fleet;
-    let Some(fleet) = state.fleet.get() else {
-        return view! { <EmptyRow state=table>"Loading…"</EmptyRow> }.into_any();
-    };
-    if fleet.nodes.is_empty() {
-        return view! { <EmptyRow state=table>"No nodes paired yet — see “Pair a node” below."</EmptyRow> }.into_any();
-    }
-    let mut nodes = fleet.nodes;
+    let mut nodes =
+        match rows_or_placeholder(table, state.fleet.get().map(|v| v.nodes), "No nodes paired yet — see “Pair a node” below.") {
+            Ok(rows) => rows,
+            Err(placeholder) => return placeholder,
+        };
     sort_rows(
         &mut nodes,
         table.sort.get(),

@@ -14,16 +14,13 @@ use crate::types::{
     WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 
-use super::response::{FromBody, Response, error, ok_json, require};
+use super::response::{FromBody, Response, error, ok_json};
 
 /// `POST /api/projects/workspaces` — a project's workspaces and hooks in one snapshot. Every
 /// mutation in this family returns a fresh [`WorkspacesState`] for one-round-trip refreshes.
 #[must_use]
 pub fn workspaces_state(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<WorkspacesRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WorkspacesRef);
     match build_workspaces_state(store, req.id.trim()) {
         Ok(state) => ok_json(&state),
         Err(resp) => resp,
@@ -36,10 +33,7 @@ pub fn workspaces_state(store: &Projects, body: &[u8]) -> Response {
 /// `creating`; with `local`, an existing directory is linked as-is and no hook runs.
 #[must_use]
 pub fn create_workspace(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<NewWorkspace>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, NewWorkspace);
     let id = req.id.trim();
     let (dir, env) = match project_scope(store, id) {
         Ok(scope) => scope,
@@ -75,10 +69,7 @@ pub fn create_workspace(store: &Projects, body: &[u8]) -> Response {
 /// a clone/worktree on disk stays where it is. An unknown name is a 404.
 #[must_use]
 pub fn remove_workspace(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<WorkspaceRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WorkspaceRef);
     let id = req.id.trim();
     let (dir, _) = match project_scope(store, id) {
         Ok(scope) => scope,
@@ -100,10 +91,7 @@ pub fn remove_workspace(store: &Projects, body: &[u8]) -> Response {
 /// cwd at the project directory. Replies with the spawned pid plus fresh state.
 #[must_use]
 pub fn run_project_hook(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<ProjectHookRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, ProjectHookRef);
     let id = req.id.trim();
     let (dir, mut env) = match project_scope(store, id) {
         Ok(scope) => scope,
@@ -143,10 +131,7 @@ pub fn run_project_hook(store: &Projects, body: &[u8]) -> Response {
 /// never ran answers `ran: false` (200, not an error); only an unknown hook file is a 404.
 #[must_use]
 pub fn project_hook_log(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<ProjectHookRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, ProjectHookRef);
     let id = req.id.trim();
     let (dir, _) = match project_scope(store, id) {
         Ok(scope) => scope,
@@ -175,10 +160,7 @@ pub fn project_hook_log(store: &Projects, body: &[u8]) -> Response {
 /// project file browser, where the file lives at `.adi/hooks/<name>`.
 #[must_use]
 pub fn create_project_hook(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<NewProjectHook>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, NewProjectHook);
     let id = req.id.trim();
     let (dir, _) = match project_scope(store, id) {
         Ok(scope) => scope,
@@ -210,10 +192,7 @@ pub fn create_project_hook(store: &Projects, body: &[u8]) -> Response {
 /// live session), and reply with the first pane snapshot.
 #[must_use]
 pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<WorkspaceTermRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WorkspaceTermRef);
     let (id, name) = (req.id.trim(), req.name.trim());
     let entry = match resolve_workspace(store, id, name) {
         Ok(entry) => entry,
@@ -230,10 +209,7 @@ pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
 /// `running: false` (200, not an error).
 #[must_use]
 pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<WorkspaceTermRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WorkspaceTermRef);
     let (id, name) = (req.id.trim(), req.name.trim());
     if let Err(resp) = resolve_workspace(store, id, name) {
         return resp;
@@ -246,10 +222,7 @@ pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
 /// keystrokes show without waiting for the next poll.
 #[must_use]
 pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<WorkspaceTermKeys>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WorkspaceTermKeys);
     let (id, name) = (req.id.trim(), req.name.trim());
     if let Err(resp) = resolve_workspace(store, id, name) {
         return resp;
@@ -264,10 +237,7 @@ pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> Response {
 /// Idempotent: killing an already-gone terminal still answers the (now not-running) snapshot.
 #[must_use]
 pub fn kill_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
-    let req = match require::<WorkspaceTermRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, WorkspaceTermRef);
     let (id, name) = (req.id.trim(), req.name.trim());
     if let Err(resp) = resolve_workspace(store, id, name) {
         return resp;

@@ -30,7 +30,7 @@ use crate::types::{
     SetDashboardProject, UsedPort,
 };
 
-use super::response::{FromBody, Response, error, ok_json, require};
+use super::response::{FromBody, Response, error, ok_json};
 use super::services::is_listening;
 
 /// The metadata file each dashboard directory carries.
@@ -128,10 +128,7 @@ pub fn unarchive_dashboard(
 /// Irreversible — the UI gates it behind a confirm.
 #[must_use]
 pub fn delete_dashboard(cfg: &Config, ports: &Ports, live: &[UsedPort], body: &[u8]) -> Response {
-    let req = match require::<DashboardRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, DashboardRef);
     let id = req.id.trim();
     let Some(dir) = dashboard_dir(cfg, id) else {
         return error(404, &format!("no such dashboard: {id}"));
@@ -154,10 +151,7 @@ fn set_archived(
     body: &[u8],
     archived: bool,
 ) -> Response {
-    let req = match require::<DashboardRef>(body) {
-        Ok(req) => req,
-        Err(bad) => return bad,
-    };
+    let req = require!(body, DashboardRef);
     let id = req.id.trim();
     let Some(dir) = dashboard_dir(cfg, id) else {
         return error(404, &format!("no such dashboard: {id}"));
