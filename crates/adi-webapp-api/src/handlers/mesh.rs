@@ -7,7 +7,7 @@ use crate::types::{
     MeshForward, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState,
 };
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, ok_json, require};
 
 /// `GET /api/mesh` — this machine's mesh identity, published ticket, and config. `running`
 /// is the host's authoritative view of whether the in-process daemon is up (the host owns
@@ -23,8 +23,9 @@ pub fn mesh(running: bool) -> Response {
 /// `POST /api/mesh/allow` — expose a local TCP port to peers.
 #[must_use]
 pub fn mesh_allow(running: bool, body: &[u8]) -> Response {
-    let Some(req) = parse_port_ref(body) else {
-        return bad_port_ref();
+    let req = match require::<MeshPortRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     mesh_edit(running, |cfg| {
         cfg.allow_port(req.port);
@@ -34,8 +35,9 @@ pub fn mesh_allow(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/deny` — stop exposing a local TCP port.
 #[must_use]
 pub fn mesh_deny(running: bool, body: &[u8]) -> Response {
-    let Some(req) = parse_port_ref(body) else {
-        return bad_port_ref();
+    let req = match require::<MeshPortRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     mesh_edit(running, |cfg| {
         cfg.deny_port(req.port);
@@ -46,8 +48,9 @@ pub fn mesh_deny(running: bool, body: &[u8]) -> Response {
 /// the canonical id is what gets stored.
 #[must_use]
 pub fn mesh_allow_peer(running: bool, body: &[u8]) -> Response {
-    let Some(req) = parse_peer_ref(body) else {
-        return bad_peer_ref();
+    let req = match require::<MeshPeerRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match ticket::target_id(&req.peer) {
         Ok(id) => id.to_string(),
@@ -61,8 +64,9 @@ pub fn mesh_allow_peer(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/peers/deny` — revoke a peer's authorization.
 #[must_use]
 pub fn mesh_deny_peer(running: bool, body: &[u8]) -> Response {
-    let Some(req) = parse_peer_ref(body) else {
-        return bad_peer_ref();
+    let req = match require::<MeshPeerRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     mesh_edit(running, move |cfg| {
         cfg.deny_peer(&req.peer);
@@ -72,8 +76,9 @@ pub fn mesh_deny_peer(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/forwards/add` — forward a local port to a peer's port.
 #[must_use]
 pub fn mesh_add_forward(running: bool, body: &[u8]) -> Response {
-    let Some(req) = parse_forward_ref(body) else {
-        return error(400, "expected JSON body { listen, peer, port, name? }");
+    let req = match require::<MeshForwardRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match ticket::target_id(&req.peer) {
         Ok(id) => id,
@@ -97,8 +102,9 @@ pub fn mesh_add_forward(running: bool, body: &[u8]) -> Response {
 /// `POST /api/mesh/forwards/remove` — remove the forward bound to a local port.
 #[must_use]
 pub fn mesh_remove_forward(running: bool, body: &[u8]) -> Response {
-    let Some(req) = parse_listen_ref(body) else {
-        return error(400, "expected JSON body { \"listen\": <port> }");
+    let req = match require::<MeshListenRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     mesh_edit(running, move |cfg| {
         cfg.remove_forward(req.listen);
@@ -131,43 +137,50 @@ fn mesh_snapshot(running: bool) -> Result<MeshState, String> {
     })
 }
 
-/// Load the config, apply `mutate`, save it, and return the fresh [`MeshState`] so the
+/// Load the config, apply `edit`, save it, and return the fresh [`MeshState`] so the
 /// client updates from one round-trip.
-fn mesh_edit(running: bool, mutate: impl FnOnce(&mut MeshConfig)) -> Response {
+fn mesh_edit(running: bool, edit: impl FnOnce(&mut MeshConfig)) -> Response {
     let mut cfg = match MeshConfig::load() {
         Ok(cfg) => cfg,
         Err(e) => return error(500, &format!("reading mesh config: {e}")),
     };
-    mutate(&mut cfg);
+    edit(&mut cfg);
     if let Err(e) = cfg.save() {
         return error(500, &format!("saving mesh config: {e}"));
     }
     mesh(running)
 }
 
-fn parse_port_ref(body: &[u8]) -> Option<MeshPortRef> {
-    parse_body::<MeshPortRef>(body).filter(|req| req.port != 0)
+impl FromBody for MeshPortRef {
+    const EXPECTED: &'static str = "expected JSON body { \"port\": <1-65535> }";
+
+    fn is_complete(&self) -> bool {
+        self.port != 0
+    }
 }
 
-fn bad_port_ref() -> Response {
-    error(400, "expected JSON body { \"port\": <1-65535> }")
+impl FromBody for MeshPeerRef {
+    const EXPECTED: &'static str = "expected JSON body { \"peer\": \"<id-or-ticket>\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.peer.trim().is_empty()
+    }
 }
 
-fn parse_peer_ref(body: &[u8]) -> Option<MeshPeerRef> {
-    parse_body::<MeshPeerRef>(body).filter(|req| !req.peer.trim().is_empty())
+impl FromBody for MeshForwardRef {
+    const EXPECTED: &'static str = "expected JSON body { listen, peer, port, name? }";
+
+    fn is_complete(&self) -> bool {
+        self.listen != 0 && self.port != 0 && !self.peer.trim().is_empty()
+    }
 }
 
-fn bad_peer_ref() -> Response {
-    error(400, "expected JSON body { \"peer\": \"<id-or-ticket>\" }")
-}
+impl FromBody for MeshListenRef {
+    const EXPECTED: &'static str = "expected JSON body { \"listen\": <port> }";
 
-fn parse_forward_ref(body: &[u8]) -> Option<MeshForwardRef> {
-    parse_body::<MeshForwardRef>(body)
-        .filter(|req| req.listen != 0 && req.port != 0 && !req.peer.trim().is_empty())
-}
-
-fn parse_listen_ref(body: &[u8]) -> Option<MeshListenRef> {
-    parse_body::<MeshListenRef>(body).filter(|req| req.listen != 0)
+    fn is_complete(&self) -> bool {
+        self.listen != 0
+    }
 }
 
 /// A short forward label: the peer id's prefix and the remote port.

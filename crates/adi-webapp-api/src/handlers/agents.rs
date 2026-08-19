@@ -22,7 +22,7 @@ use crate::types::{
     SimulateAgent, SimulateTurn, StarRun, UnqueueFromRun,
 };
 
-use super::response::{Response, clean, error, ok_json, parse_body};
+use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body, require};
 
 /// `GET /api/agents` — every registered agent definition. Each mutation endpoint below returns a
 /// fresh [`AgentsState`], so the client refreshes from one round-trip.
@@ -130,8 +130,9 @@ pub fn set_run_limit(store: &Agents, body: &[u8]) -> Response {
 /// and do nothing, so that is rejected (400) rather than silently run.
 #[must_use]
 pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_run_agent(body) else {
-        return bad_agent_ref();
+    let req = match require::<RunAgent>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let name = req.name.trim();
     let message = req.message.trim();
@@ -198,8 +199,9 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
 /// run of the agent's settings). Interactive (pty) agents keep no history and answer `runs: []`.
 #[must_use]
 pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_agent_ref(body) else {
-        return bad_agent_ref();
+    let req = match require::<AgentRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     match get_agent(store, req.name.trim()) {
         Ok(agent) => ok_json(&runs_response(store, &agent)),
@@ -213,8 +215,9 @@ pub fn agent_runs(store: &Agents, body: &[u8]) -> Response {
 /// turn-by-turn transcript (`turns`) and `answerable: true`.
 #[must_use]
 pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_run_ref(body) else {
-        return bad_run_ref();
+    let req = match require::<RunRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -259,8 +262,9 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
 /// chat that is merely new.
 #[must_use]
 pub fn run_tokens(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_run_ref(body) else {
-        return bad_run_ref();
+    let req = match require::<RunRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -364,10 +368,9 @@ const ROOT_AGENT: &str = "adi-agent";
 /// [`adi_agents::review`] — so the directory is somewhere to read, not somewhere to edit.
 #[must_use]
 pub fn review_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<ReviewRun>(body)
-        .filter(|r| !r.name.trim().is_empty() && !r.run_id.trim().is_empty())
-    else {
-        return bad_run_ref();
+    let req = match require::<ReviewRun>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -438,8 +441,9 @@ pub fn review_run(store: &Agents, body: &[u8]) -> Response {
 /// (400).
 #[must_use]
 pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_reply_to_run(body) else {
-        return bad_reply_to_run();
+    let req = match require::<ReplyToRun>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -520,8 +524,9 @@ pub fn attachment_bytes(store: &Agents, id: &str) -> Option<(String, Vec<u8>)> {
 /// turn a moment ago) simply changes nothing.
 #[must_use]
 pub fn unqueue_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_unqueue_from_run(body) else {
-        return bad_unqueue_from_run();
+    let req = match require::<UnqueueFromRun>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -574,11 +579,9 @@ fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> R
 /// deadline took the run's own default while this card sat open.
 #[must_use]
 pub fn answer_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<AnswerRun>(body) else {
-        return error(
-            400,
-            "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"ask\"?: \"…\", \"replies\": [\"…\"] }",
-        );
+    let req = match require::<AnswerRun>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -650,11 +653,9 @@ pub fn agent_goals(store: &Agents, body: &[u8]) -> Response {
 /// except that field, so it must not be taken from the request body.
 #[must_use]
 pub fn set_agent_goal(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<SetGoal>(body) else {
-        return error(
-            400,
-            "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"text\": \"…\", \"goal\"?: \"…\" }",
-        );
+    let req = match require::<SetGoal>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -692,11 +693,9 @@ pub fn set_agent_goal(store: &Agents, body: &[u8]) -> Response {
 /// the ending that happened rather than a red box. Only an id that names no goal at all is a 404.
 #[must_use]
 pub fn close_agent_goal(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<CloseGoal>(body).filter(|r| !r.goal.trim().is_empty()) else {
-        return error(
-            400,
-            "expected JSON body { \"goal\": \"…\", \"as\": \"met\" | \"given_up\", \"note\"?: \"…\" }",
-        );
+    let req = match require::<CloseGoal>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let goal_id = req.goal.trim();
     let closed = if req.as_.trim() == "met" {
@@ -743,17 +742,13 @@ fn agent_goal(goal: &adi_agents::store::Goal) -> AgentGoal {
 /// already-finished run; only an unknown agent is a 404.
 #[must_use]
 pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_run_ref(body) else {
-        return bad_run_ref();
+    let req = match require::<RunRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let agent = match get_agent(store, req.name.trim()) {
-        Ok(agent) => agent,
-        Err(e) => return Response::from(&e),
-    };
-    if let Err(e) = store.stop_run(&agent.name, req.run_id.trim()) {
-        return Response::from(&e);
-    }
-    ok_json(&runs_response(store, &agent))
+    run_mutation(store, req.name.trim(), |name| {
+        store.stop_run(name, req.run_id.trim())
+    })
 }
 
 /// `POST /api/agents/run/delete` — delete one run outright and report the fresh run history. For a
@@ -762,17 +757,13 @@ pub fn stop_run(store: &Agents, body: &[u8]) -> Response {
 /// backend that keeps no run history is a 400.
 #[must_use]
 pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_run_ref(body) else {
-        return bad_run_ref();
+    let req = match require::<RunRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let agent = match get_agent(store, req.name.trim()) {
-        Ok(agent) => agent,
-        Err(e) => return Response::from(&e),
-    };
-    if let Err(e) = store.delete_run(&agent.name, req.run_id.trim()) {
-        return Response::from(&e);
-    }
-    ok_json(&runs_response(store, &agent))
+    run_mutation(store, req.name.trim(), |name| {
+        store.delete_run(name, req.run_id.trim())
+    })
 }
 
 /// `POST /api/agents/run/hide` — hide one session from the chat rail, or bring it back
@@ -782,17 +773,13 @@ pub fn delete_run(store: &Agents, body: &[u8]) -> Response {
 /// unknown agent is a 404, and a backend that keeps no run history is a 400.
 #[must_use]
 pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_hide_run(body) else {
-        return bad_hide_run();
+    let req = match require::<HideRun>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let agent = match get_agent(store, req.name.trim()) {
-        Ok(agent) => agent,
-        Err(e) => return Response::from(&e),
-    };
-    if let Err(e) = store.set_run_hidden(&agent.name, req.run_id.trim(), req.hidden) {
-        return Response::from(&e);
-    }
-    ok_json(&runs_response(store, &agent))
+    run_mutation(store, req.name.trim(), |name| {
+        store.set_run_hidden(name, req.run_id.trim(), req.hidden)
+    })
 }
 
 /// `POST /api/agents/run/star` — mark one conversation as kept, or (`starred: false`) let it go, then
@@ -804,17 +791,13 @@ pub fn hide_run(store: &Agents, body: &[u8]) -> Response {
 /// a no-op; only an unknown agent is a 404.
 #[must_use]
 pub fn star_run(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_star_run(body) else {
-        return bad_star_run();
+    let req = match require::<StarRun>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let agent = match get_agent(store, req.name.trim()) {
-        Ok(agent) => agent,
-        Err(e) => return Response::from(&e),
-    };
-    if let Err(e) = store.set_run_starred(&agent.name, req.run_id.trim(), req.starred) {
-        return Response::from(&e);
-    }
-    ok_json(&runs_response(store, &agent))
+    run_mutation(store, req.name.trim(), |name| {
+        store.set_run_starred(name, req.run_id.trim(), req.starred)
+    })
 }
 
 /// `GET /api/agents/runs/all` — the run history of every agent in one round-trip, for the
@@ -1105,8 +1088,9 @@ fn agent_metrics(m: adi_agents::TurnMetrics) -> AgentTurnMetrics {
 /// existing agent to `name` before applying the edit, instead of leaving the old manifest behind.
 #[must_use]
 pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_save_agent(body) else {
-        return bad_save_agent();
+    let req = match require::<SaveAgent>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     if req.arguments.values().any(contains_json_null) {
         return error(
@@ -1244,13 +1228,11 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
 /// `POST /api/agents/delete` — delete an agent definition, then report the fresh list.
 #[must_use]
 pub fn delete_agent(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_agent_ref(body) else {
-        return bad_agent_ref();
-    };
-    match store.delete(req.name.trim()) {
-        Ok(_) => agents(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: AgentRef| store.delete(req.name.trim()),
+        || agents(store),
+    )
 }
 
 /// `POST /api/agents/peek` — a read-only snapshot of a running agent's pty screen, for the live
@@ -1258,8 +1240,9 @@ pub fn delete_agent(store: &Agents, body: &[u8]) -> Response {
 /// only an unknown name is a 404.
 #[must_use]
 pub fn peek_agent(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_agent_ref(body) else {
-        return bad_agent_ref();
+    let req = match require::<AgentRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     match get_agent(store, req.name.trim()) {
         Ok(agent) => peek_response(store, &agent),
@@ -1272,8 +1255,9 @@ pub fn peek_agent(store: &Agents, body: &[u8]) -> Response {
 /// fresh screen snapshot after a short settle delay, so the sender sees the effect immediately.
 #[must_use]
 pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_agent_keys(body) else {
-        return bad_agent_keys();
+    let req = match require::<AgentKeys>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -1291,8 +1275,9 @@ pub fn send_agent_keys(store: &Agents, body: &[u8]) -> Response {
 /// list. Idempotent for an already-stopped agent; only an unknown definition is a 404.
 #[must_use]
 pub fn stop_agent(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_agent_ref(body) else {
-        return bad_agent_ref();
+    let req = match require::<AgentRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let agent = match get_agent(store, req.name.trim()) {
         Ok(agent) => agent,
@@ -1302,6 +1287,26 @@ pub fn stop_agent(store: &Agents, body: &[u8]) -> Response {
         Ok(_) => agents(store),
         Err(e) => Response::from(&e),
     }
+}
+
+/// The shape of every run-level mutation: resolve the agent, do the one thing the endpoint names
+/// to one of its runs, then answer with the fresh run history.
+///
+/// `op` is handed the agent's *canonical* name rather than the one the request spelled, and the run
+/// id stays with the caller — the four endpoints carry it on four different body types.
+fn run_mutation<R>(
+    store: &Agents,
+    name: &str,
+    op: impl FnOnce(&str) -> Result<R, AgentStoreError>,
+) -> Response {
+    let agent = match get_agent(store, name) {
+        Ok(agent) => agent,
+        Err(e) => return Response::from(&e),
+    };
+    if let Err(e) = op(&agent.name) {
+        return Response::from(&e);
+    }
+    ok_json(&runs_response(store, &agent))
 }
 
 /// Look an agent up, folding "not registered" into [`AgentStoreError::NotFound`] (→ 404).
@@ -2194,104 +2199,125 @@ impl From<&AgentStoreError> for Response {
     }
 }
 
-fn parse_save_agent(body: &[u8]) -> Option<SaveAgent> {
-    parse_body::<SaveAgent>(body)
-        .filter(|req| !req.name.trim().is_empty() && !req.backend.trim().is_empty())
+impl FromBody for SaveAgent {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"backend\": \"…\", … } with a non-empty name and backend";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.backend.trim().is_empty()
+    }
 }
 
-fn bad_save_agent() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"backend\": \"…\", … } with a non-empty name and backend",
-    )
+impl FromBody for AgentRef {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }
 
-fn parse_agent_ref(body: &[u8]) -> Option<AgentRef> {
-    parse_body::<AgentRef>(body).filter(|req| !req.name.trim().is_empty())
+impl FromBody for RunAgent {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"message\"?: \"…\", … } with a non-empty name";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }
 
-fn parse_run_agent(body: &[u8]) -> Option<RunAgent> {
-    parse_body::<RunAgent>(body).filter(|req| !req.name.trim().is_empty())
+impl FromBody for RunRef {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
 }
 
-fn parse_run_ref(body: &[u8]) -> Option<RunRef> {
-    parse_body::<RunRef>(body)
-        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
+impl FromBody for ReviewRun {
+    const EXPECTED: &'static str = RunRef::EXPECTED;
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
 }
 
-fn bad_run_ref() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id",
-    )
+impl FromBody for HideRun {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"hidden\": true } with a non-empty name and run_id";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
 }
 
-fn parse_hide_run(body: &[u8]) -> Option<HideRun> {
-    parse_body::<HideRun>(body)
-        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
+impl FromBody for StarRun {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"starred\": true } with a non-empty name and run_id";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
 }
 
-fn bad_hide_run() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"hidden\": true } with a non-empty name and run_id",
-    )
+impl FromBody for ReplyToRun {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"message\": \"…\" } with all three non-empty";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+            && !self.run_id.trim().is_empty()
+            && !self.message.trim().is_empty()
+    }
 }
 
-fn parse_star_run(body: &[u8]) -> Option<StarRun> {
-    parse_body::<StarRun>(body)
-        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
+impl FromBody for UnqueueFromRun {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"index\": 0 } with a non-empty name and run_id";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
 }
 
-fn bad_star_run() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"starred\": true } with a non-empty name and run_id",
-    )
+impl FromBody for AnswerRun {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"ask\"?: \"…\", \"replies\": [\"…\"] }";
 }
 
-fn parse_reply_to_run(body: &[u8]) -> Option<ReplyToRun> {
-    parse_body::<ReplyToRun>(body).filter(|req| {
-            !req.name.trim().is_empty()
-                && !req.run_id.trim().is_empty()
-                && !req.message.trim().is_empty()
-    })
+impl FromBody for SetGoal {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"text\": \"…\", \"goal\"?: \"…\" }";
 }
 
-fn bad_reply_to_run() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"message\": \"…\" } with all three non-empty",
-    )
+impl FromBody for CloseGoal {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"goal\": \"…\", \"as\": \"met\" | \"given_up\", \"note\"?: \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.goal.trim().is_empty()
+    }
 }
 
-fn parse_unqueue_from_run(body: &[u8]) -> Option<UnqueueFromRun> {
-    parse_body::<UnqueueFromRun>(body)
-        .filter(|req| !req.name.trim().is_empty() && !req.run_id.trim().is_empty())
+impl FromBody for SimulateAgent {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"message\"?: \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }
 
-fn bad_unqueue_from_run() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"index\": 0 } with a non-empty name and run_id",
-    )
+impl FromBody for SimulateTurn {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"blocks\": [ … ] }";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
+    }
 }
 
-fn bad_agent_ref() -> Response {
-    error(400, "expected JSON body { \"name\": \"…\" }")
-}
+impl FromBody for AgentKeys {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"text\": \"…\", \"key\": \"…\" } with a non-empty name and at least one of text/key";
 
-fn parse_agent_keys(body: &[u8]) -> Option<AgentKeys> {
-    parse_body::<AgentKeys>(body).filter(|req| {
-            !req.name.trim().is_empty() && (!req.text.is_empty() || !req.key.is_empty())
-    })
-}
-
-fn bad_agent_keys() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"text\": \"…\", \"key\": \"…\" } with a non-empty name and at least one of text/key",
-    )
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && (!self.text.is_empty() || !self.key.is_empty())
+    }
 }
 
 /// Normalize only the key at the shared top-level boundary. Argument values and nested manifests
@@ -2877,7 +2903,7 @@ mod tests {
 /// really are the agent's tools.
 #[must_use]
 pub fn simulate_agent(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<SimulateAgent>(body).filter(|r| !r.name.trim().is_empty()) else {
+    let Some(req) = parse_body::<SimulateAgent>(body).filter(SimulateAgent::is_complete) else {
         return error(
             400,
             "expected JSON body { \"name\": \"…\", \"message\": \"…\" } with a non-empty name",
@@ -2911,8 +2937,9 @@ pub fn simulate_agent(store: &Agents, body: &[u8]) -> Response {
 /// assembling a spec, which syncs the agent's `.bin` — a write path, and this is polled by a page.
 #[must_use]
 pub fn simulate_prompt(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_run_ref(body) else {
-        return bad_run_ref();
+    let req = match require::<RunRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     sim_state(store, req.name.trim(), req.run_id.trim())
 }
@@ -2925,13 +2952,9 @@ pub fn simulate_prompt(store: &Agents, body: &[u8]) -> Response {
 /// means `tool_use` and the seat stays occupied; none means `end_turn` and the run yields.
 #[must_use]
 pub fn simulate_turn(store: &Agents, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<SimulateTurn>(body)
-        .filter(|r| !r.name.trim().is_empty() && !r.run_id.trim().is_empty())
-    else {
-        return error(
-            400,
-            "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"blocks\": [ … ] }",
-        );
+    let req = match require::<SimulateTurn>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let (name, run_id) = (req.name.trim(), req.run_id.trim());
     if req.blocks.is_empty() {
@@ -2964,6 +2987,8 @@ pub fn simulate_turn(store: &Agents, body: &[u8]) -> Response {
 /// `POST /api/agents/simulate/reply` — answer a yielded simulated run as yourself.
 #[must_use]
 pub fn simulate_reply(store: &Agents, body: &[u8]) -> Response {
+    // Not `require::<ReplyToRun>`: that insists on a message too, and here an empty one has its own
+    // answer below — worth more to the person typing than the shape sentence.
     let Some(req) = parse_body::<ReplyToRun>(body)
         .filter(|r| !r.name.trim().is_empty() && !r.run_id.trim().is_empty())
     else {

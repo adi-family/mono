@@ -12,14 +12,15 @@ use adi_projects::Projects;
 use crate::types::{FsContent, FsCreate, FsListing, FsRef, FsWrite};
 
 use super::files::{MAX_TEXT_BYTES, normalize_rel, parent_rel};
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, ok_json, require};
 
 /// `POST /api/fs/list` — list a directory inside the ADI store. `path` is relative to the store
 /// root (`""` is the root).
 #[must_use]
 pub fn fs_list(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_ref(body) else {
-        return bad_ref();
+    let req = match require::<FsRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let jail = store_jail(store);
     match jail.list(&req.path) {
@@ -40,8 +41,9 @@ pub fn fs_list(store: &Projects, body: &[u8]) -> Response {
 /// [`MAX_TEXT_BYTES`] are refused rather than returned.
 #[must_use]
 pub fn fs_read(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_ref(body) else {
-        return bad_ref();
+    let req = match require::<FsRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     if req.path.trim().is_empty() {
         return error(400, "a file path is required");
@@ -54,11 +56,9 @@ pub fn fs_read(store: &Projects, body: &[u8]) -> Response {
 /// updates its size/modified in one round-trip.
 #[must_use]
 pub fn fs_write(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_write(body) else {
-        return error(
-            400,
-            "expected JSON body { \"path\": \"…\", \"content\": \"…\" }",
-        );
+    let req = match require::<FsWrite>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     if req.content.len() as u64 > MAX_TEXT_BYTES {
         return error(
@@ -81,11 +81,9 @@ pub fn fs_write(store: &Projects, body: &[u8]) -> Response {
 /// Creates never overwrite: a path that is already taken comes back 409.
 #[must_use]
 pub fn fs_create(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_create(body) else {
-        return error(
-            400,
-            "expected JSON body { \"path\": \"…\", \"kind\": \"file\" | \"dir\" }",
-        );
+    let req = match require::<FsCreate>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     // Normalizing a path of only `.`/slashes empties it out, which would name the store root.
     let path = normalize_rel(&req.path);
@@ -151,22 +149,28 @@ fn store_jail(store: &Projects) -> Jail {
     Jail::new(store.config().root().to_path_buf())
 }
 
-fn parse_ref(body: &[u8]) -> Option<FsRef> {
+impl FromBody for FsRef {
+    const EXPECTED: &'static str = "expected JSON body { \"path\"?: \"…\" }";
+
     // An empty body means the root — the panel's first load sends nothing to browse yet.
-    if body.is_empty() {
-        return Some(FsRef::default());
+    fn on_empty() -> Option<Self> {
+        Some(Self::default())
     }
-    serde_json::from_slice(body).ok()
 }
 
-fn bad_ref() -> Response {
-    error(400, "expected JSON body { \"path\"?: \"…\" }")
+impl FromBody for FsWrite {
+    const EXPECTED: &'static str = "expected JSON body { \"path\": \"…\", \"content\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.path.trim().is_empty()
+    }
 }
 
-fn parse_write(body: &[u8]) -> Option<FsWrite> {
-    parse_body::<FsWrite>(body).filter(|req| !req.path.trim().is_empty())
-}
+impl FromBody for FsCreate {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"path\": \"…\", \"kind\": \"file\" | \"dir\" }";
 
-fn parse_create(body: &[u8]) -> Option<FsCreate> {
-    parse_body::<FsCreate>(body).filter(|req| !req.path.trim().is_empty())
+    fn is_complete(&self) -> bool {
+        !self.path.trim().is_empty()
+    }
 }

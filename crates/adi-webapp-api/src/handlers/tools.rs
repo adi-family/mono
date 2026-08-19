@@ -14,7 +14,7 @@ use crate::types::{
     WriteToolScript,
 };
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, mutate, ok_json, require};
 
 /// The largest script we'll accept on a write — the same bound the project file editor uses.
 /// Comfortably under the server's 1 MiB request-body cap; a larger script is refused, not truncated.
@@ -36,110 +36,87 @@ pub fn tools(store: &Tools) -> Response {
 /// `POST /api/tools/create` — register an owned tool (writes its script), then report the fresh list.
 #[must_use]
 pub fn create_tool(store: &Tools, body: &[u8]) -> Response {
-    let req: NewTool = match serde_json::from_slice(body) {
-        Ok(req) => req,
-        Err(_) => {
-            return error(
-                400,
-                "expected JSON body { \"name\": \"…\", \"runtime\": \"sh|ts\" }",
-            );
-        }
-    };
-    if req.name.trim().is_empty() {
-        return error(400, "a tool name is required");
-    }
-    match store.create_file(
-        req.name.trim(),
-        req.description,
-        &req.runtime,
-        req.project,
-        req.content,
-    ) {
-        Ok(_) => tools(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: NewTool| {
+            store.create_file(
+                req.name.trim(),
+                req.description,
+                &req.runtime,
+                req.project,
+                req.content,
+            )
+        },
+        || tools(store),
+    )
 }
 
 /// `POST /api/tools/link` — register a tool that links an existing file, then report the fresh list.
 #[must_use]
 pub fn link_tool(store: &Tools, body: &[u8]) -> Response {
-    let req: LinkTool = match serde_json::from_slice(body) {
-        Ok(req) => req,
-        Err(_) => return error(400, "expected JSON body { \"path\": \"…\" }"),
-    };
-    if req.path.trim().is_empty() {
-        return error(400, "a path is required");
-    }
-    match store.link(
-        req.path.trim(),
-        req.name,
-        req.runtime,
-        req.description,
-        req.project,
-    ) {
-        Ok(_) => tools(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: LinkTool| {
+            store.link(
+                req.path.trim(),
+                req.name,
+                req.runtime,
+                req.description,
+                req.project,
+            )
+        },
+        || tools(store),
+    )
 }
 
 /// `POST /api/tools/archive` — archive a tool (soft delete; drops its `.bin` shim).
 #[must_use]
 pub fn archive_tool(store: &Tools, body: &[u8]) -> Response {
-    let Some(id) = parse_tool_ref(body) else {
-        return bad_tool_ref();
-    };
-    match store.archive(&id) {
-        Ok(_) => tools(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: ToolRef| store.archive(req.id.trim()),
+        || tools(store),
+    )
 }
 
 /// `POST /api/tools/unarchive` — restore an archived tool (re-creates its `.bin` shim).
 #[must_use]
 pub fn unarchive_tool(store: &Tools, body: &[u8]) -> Response {
-    let Some(id) = parse_tool_ref(body) else {
-        return bad_tool_ref();
-    };
-    match store.unarchive(&id) {
-        Ok(_) => tools(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: ToolRef| store.unarchive(req.id.trim()),
+        || tools(store),
+    )
 }
 
 /// `POST /api/tools/remove` — permanently delete a tool (a linked target is never touched).
 #[must_use]
 pub fn remove_tool(store: &Tools, body: &[u8]) -> Response {
-    let Some(id) = parse_tool_ref(body) else {
-        return bad_tool_ref();
-    };
-    match store.remove(&id) {
-        Ok(_) => tools(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: ToolRef| store.remove(req.id.trim()),
+        || tools(store),
+    )
 }
 
 /// `POST /api/tools/script/read` — a tool's script text (owned file, or linked target).
 #[must_use]
 pub fn read_tool_script(store: &Tools, body: &[u8]) -> Response {
-    let Some(id) = parse_tool_ref(body) else {
-        return bad_tool_ref();
+    let req = match require::<ToolRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    script_response(store, &id)
+    script_response(store, req.id.trim())
 }
 
 /// `POST /api/tools/script/write` — overwrite a tool's script, then re-read it so the response
 /// carries the authoritative content after the write.
 #[must_use]
 pub fn write_tool_script(store: &Tools, body: &[u8]) -> Response {
-    let req: WriteToolScript = match serde_json::from_slice(body) {
+    let req = match require::<WriteToolScript>(body) {
         Ok(req) => req,
-        Err(_) => {
-            return error(400, "expected JSON body { \"id\": \"…\", \"content\": \"…\" }");
-        }
+        Err(bad) => return bad,
     };
-    if req.id.trim().is_empty() {
-        return bad_tool_ref();
-    }
     if req.content.len() > MAX_SCRIPT_BYTES {
         return error(
             413,
@@ -157,13 +134,10 @@ pub fn write_tool_script(store: &Tools, body: &[u8]) -> Response {
 /// in the store root.
 #[must_use]
 pub fn run_tool(store: &Tools, projects: &Projects, body: &[u8]) -> Response {
-    let req: RunTool = match serde_json::from_slice(body) {
+    let req = match require::<RunTool>(body) {
         Ok(req) => req,
-        Err(_) => return error(400, "expected JSON body { \"id\": \"…\", \"args\"?: [\"…\"] }"),
+        Err(bad) => return bad,
     };
-    if req.id.trim().is_empty() {
-        return bad_tool_ref();
-    }
     let id = req.id.trim();
 
     // Resolve the working directory from the tool's project, if any.
@@ -256,11 +230,44 @@ impl From<&ToolStoreError> for Response {
     }
 }
 
-fn parse_tool_ref(body: &[u8]) -> Option<String> {
-    parse_body::<ToolRef>(body).filter(|req| !req.id.trim().is_empty())
-        .map(|req| req.id.trim().to_string())
+impl FromBody for ToolRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
 }
 
-fn bad_tool_ref() -> Response {
-    error(400, "expected JSON body { \"id\": \"…\" }")
+impl FromBody for NewTool {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"runtime\": \"sh|ts\" } with a non-empty name";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
+}
+
+impl FromBody for LinkTool {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"path\": \"…\" } with a non-empty path";
+
+    fn is_complete(&self) -> bool {
+        !self.path.trim().is_empty()
+    }
+}
+
+impl FromBody for WriteToolScript {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"content\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
+}
+
+impl FromBody for RunTool {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"args\"?: [\"…\"] }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
 }

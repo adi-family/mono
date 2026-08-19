@@ -4,7 +4,7 @@ use adi_tasks::Tasks;
 
 use crate::types::{NewTask, TaskRef, TaskRow, TasksState};
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, mutate, ok_json};
 
 /// `GET /api/tasks` — the whole task tree as a flat list, ordered by task number so a parent
 /// precedes the children created after it. The client nests them into a tree by `parent`.
@@ -25,20 +25,20 @@ pub fn tasks(store: &Tasks) -> Response {
 /// Only `title` is required; a given `parent` must be an existing task id.
 #[must_use]
 pub fn create_task(store: &Tasks, body: &[u8]) -> Response {
-    let Some(req) = parse_new_task(body) else {
-        return bad_new_task();
-    };
-    match store.create(
-        req.title.trim().to_string(),
-        req.details,
-        req.project,
-        req.tag,
-        req.parent,
-        req.cwd,
-    ) {
-        Ok(_) => tasks(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: NewTask| {
+            store.create(
+                req.title.trim().to_string(),
+                req.details,
+                req.project,
+                req.tag,
+                req.parent,
+                req.cwd,
+            )
+        },
+        || tasks(store),
+    )
 }
 
 /// `POST /api/tasks/archive` — archive a task (stored status `archived`), then report the fresh
@@ -46,26 +46,22 @@ pub fn create_task(store: &Tasks, body: &[u8]) -> Response {
 /// and re-root into the live tree.
 #[must_use]
 pub fn archive_task(store: &Tasks, body: &[u8]) -> Response {
-    let Some(req) = parse_task_ref(body) else {
-        return bad_task_ref();
-    };
-    match store.archive(req.id.trim(), req.cascade) {
-        Ok(_) => tasks(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: TaskRef| store.archive(req.id.trim(), req.cascade),
+        || tasks(store),
+    )
 }
 
 /// `POST /api/tasks/reopen` — return a done or archived task to `open`, then report the fresh
 /// tree. This is the undo for archive.
 #[must_use]
 pub fn reopen_task(store: &Tasks, body: &[u8]) -> Response {
-    let Some(req) = parse_task_ref(body) else {
-        return bad_task_ref();
-    };
-    match store.reopen(req.id.trim()) {
-        Ok(_) => tasks(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: TaskRef| store.reopen(req.id.trim()),
+        || tasks(store),
+    )
 }
 
 /// `POST /api/tasks/delete` — permanently remove a task, reparenting its direct children to the
@@ -73,13 +69,11 @@ pub fn reopen_task(store: &Tasks, body: &[u8]) -> Response {
 /// the UI gates it behind a confirm. The body's `cascade` is ignored (children are kept, reparented).
 #[must_use]
 pub fn delete_task(store: &Tasks, body: &[u8]) -> Response {
-    let Some(req) = parse_task_ref(body) else {
-        return bad_task_ref();
-    };
-    match store.delete(req.id.trim()) {
-        Ok(()) => tasks(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: TaskRef| store.delete(req.id.trim()),
+        || tasks(store),
+    )
 }
 
 /// Flatten a store [`TaskView`] into its wire [`TaskRow`] DTO, stringifying the status enums.
@@ -116,26 +110,21 @@ impl From<&TaskStoreError> for Response {
     }
 }
 
-fn parse_new_task(body: &[u8]) -> Option<NewTask> {
-    parse_body::<NewTask>(body).filter(|req| !req.title.trim().is_empty())
+impl FromBody for NewTask {
+    const EXPECTED: &'static str = "expected JSON body { \"title\": \"…\" } with a non-empty title";
+
+    fn is_complete(&self) -> bool {
+        !self.title.trim().is_empty()
+    }
 }
 
-fn bad_new_task() -> Response {
-    error(
-        400,
-        "expected JSON body { \"title\": \"…\" } with a non-empty title",
-    )
-}
+impl FromBody for TaskRef {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\" } with a non-empty task id";
 
-fn parse_task_ref(body: &[u8]) -> Option<TaskRef> {
-    parse_body::<TaskRef>(body).filter(|req| !req.id.trim().is_empty())
-}
-
-fn bad_task_ref() -> Response {
-    error(
-        400,
-        "expected JSON body { \"id\": \"…\" } with a non-empty task id",
-    )
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
 }
 
 // MARK: agents — AgentDef definitions under ~/.adi/mono/agents

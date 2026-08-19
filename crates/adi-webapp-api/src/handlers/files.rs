@@ -6,7 +6,7 @@ use adi_projects::Projects;
 
 use crate::types::{DirListing, FileContent, FileEntry, FilesRef, WriteFile};
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, ok_json, require};
 
 /// The largest text file we'll read into the editor or accept on a write. Keeps a single
 /// response/request bounded (project files here are configs — small); a larger file is
@@ -18,8 +18,9 @@ pub(crate) const MAX_TEXT_BYTES: u64 = 512 * 1024;
 /// to the project root (`""` is the root).
 #[must_use]
 pub fn list_files(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_files_ref(body) else {
-        return bad_files_ref();
+    let req = match require::<FilesRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let jail = match project_jail(store, &req.id) {
         Ok(jail) => jail,
@@ -44,8 +45,9 @@ pub fn list_files(store: &Projects, body: &[u8]) -> Response {
 /// files and files over [`MAX_TEXT_BYTES`] are refused rather than returned.
 #[must_use]
 pub fn read_file(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_files_ref(body) else {
-        return bad_files_ref();
+    let req = match require::<FilesRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let jail = match project_jail(store, &req.id) {
         Ok(jail) => jail,
@@ -59,11 +61,9 @@ pub fn read_file(store: &Projects, body: &[u8]) -> Response {
 /// so the client updates its size/modified in one round-trip.
 #[must_use]
 pub fn write_file(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_write_file(body) else {
-        return error(
-            400,
-            "expected JSON body { \"id\": \"…\", \"path\": \"…\", \"content\": \"…\" }",
-        );
+    let req = match require::<WriteFile>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     if req.content.len() as u64 > MAX_TEXT_BYTES {
         return error(
@@ -177,20 +177,21 @@ pub(crate) fn parent_rel(norm: &str) -> Option<String> {
     }
 }
 
-fn parse_files_ref(body: &[u8]) -> Option<FilesRef> {
-    parse_body::<FilesRef>(body).filter(|req| !req.id.trim().is_empty())
+impl FromBody for FilesRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"path\"?: \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
 }
 
-fn bad_files_ref() -> Response {
-    error(
-        400,
-        "expected JSON body { \"id\": \"…\", \"path\"?: \"…\" }",
-    )
-}
+impl FromBody for WriteFile {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\", \"path\": \"…\", \"content\": \"…\" }";
 
-fn parse_write_file(body: &[u8]) -> Option<WriteFile> {
-    parse_body::<WriteFile>(body)
-        .filter(|req| !req.id.trim().is_empty() && !req.path.trim().is_empty())
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.path.trim().is_empty()
+    }
 }
 
 // MARK: workspaces & project hooks — working copies created by the script files under

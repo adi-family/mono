@@ -4,7 +4,7 @@ use crate::types::{
     Lease, LeaseRef, PortsState, Range, ReleaseResponse, ReserveResponse, UsedPort, UsedPorts,
 };
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, ok_json, require};
 
 /// `GET /api/ports` — the allocator's configuration and current static leases.
 #[must_use]
@@ -53,8 +53,9 @@ pub fn used_ports(ports: Vec<UsedPort>) -> Response {
 /// `POST /api/ports/reserve` — reserve (or return the existing) static port for a pair.
 #[must_use]
 pub fn reserve(manager: &Ports, body: &[u8]) -> Response {
-    let Some(req) = parse_lease_ref(body) else {
-        return bad_lease_ref();
+    let req = match require::<LeaseRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     match manager.reserve(&req.service, &req.key) {
         Ok(port) => ok_json(&ReserveResponse {
@@ -69,8 +70,9 @@ pub fn reserve(manager: &Ports, body: &[u8]) -> Response {
 /// `POST /api/ports/release` — release a static lease, reporting the freed port.
 #[must_use]
 pub fn release(manager: &Ports, body: &[u8]) -> Response {
-    let Some(req) = parse_lease_ref(body) else {
-        return bad_lease_ref();
+    let req = match require::<LeaseRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     match manager.release(&req.service, &req.key) {
         Ok(freed) => ok_json(&ReleaseResponse {
@@ -84,15 +86,10 @@ pub fn release(manager: &Ports, body: &[u8]) -> Response {
 
 // MARK: projects — metadata manifests under ~/.adi/mono/projects
 
-fn bad_lease_ref() -> Response {
-    error(
-        400,
-        "expected JSON body { \"service\": \"…\", \"key\": \"…\" }",
-    )
-}
+impl FromBody for LeaseRef {
+    const EXPECTED: &'static str = "expected JSON body { \"service\": \"…\", \"key\": \"…\" }";
 
-fn parse_lease_ref(body: &[u8]) -> Option<LeaseRef> {
-    parse_body::<LeaseRef>(body).filter(|req| {
-            !req.service.trim().is_empty() && !req.key.trim().is_empty()
-    })
+    fn is_complete(&self) -> bool {
+        !self.service.trim().is_empty() && !self.key.trim().is_empty()
+    }
 }

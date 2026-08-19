@@ -21,7 +21,7 @@ use crate::types::{
     KnowledgeSearch, KnowledgeState, NewKnowledgeBase, NewKnowledgeNote,
 };
 
-use super::response::{Response, clean, error, ok_json, parse_body};
+use super::response::{FromBody, Response, clean, error, ok_json, require};
 
 /// How many notes a list returns when the request names no limit. Generous for a page that
 /// shows one base at a time, and bounded so a base grown to thousands cannot wedge the panel.
@@ -61,9 +61,9 @@ pub fn knowledge(store: &KnowledgeStore) -> Response {
 /// `POST /api/knowledge/base/create` — make a base, then report the fresh state.
 #[must_use]
 pub fn create_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<NewKnowledgeBase>(body).filter(|r| !r.base.trim().is_empty())
-    else {
-        return bad_new_base();
+    let req = match require::<NewKnowledgeBase>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match parse_base(&req.base) {
         Ok(id) => id,
@@ -83,10 +83,11 @@ pub fn create_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/base/remove` — delete a base and everything in it.
 #[must_use]
 pub fn remove_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(id) = base_ref(body) else {
-        return bad_base_ref();
+    let req = match require::<KnowledgeBaseRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let id = match id {
+    let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -102,10 +103,11 @@ pub fn remove_knowledge_base(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// embeds every stale note. The page calls it deliberately, from a button, and shows the report.
 #[must_use]
 pub fn reembed_knowledge(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(id) = base_ref(body) else {
-        return bad_base_ref();
+    let req = match require::<KnowledgeBaseRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let id = match id {
+    let id = match parse_base(&req.base) {
         Ok(id) => id,
         Err(resp) => return resp,
     };
@@ -129,9 +131,9 @@ pub fn reembed_knowledge(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/notes` — the notes in one base, newest first.
 #[must_use]
 pub fn knowledge_notes(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<KnowledgeBaseRef>(body).filter(|r| !r.base.trim().is_empty())
-    else {
-        return bad_base_ref();
+    let req = match require::<KnowledgeBaseRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match parse_base(&req.base) {
         Ok(id) => id,
@@ -154,8 +156,9 @@ pub fn knowledge_notes(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/note/get` — one note in full.
 #[must_use]
 pub fn knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(req) = note_ref(body) else {
-        return bad_note_ref();
+    let req = match require::<KnowledgeNoteRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match parse_base(&req.base) {
         Ok(id) => id,
@@ -171,10 +174,9 @@ pub fn knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/note/add` — write a note, embedding it on the way in.
 #[must_use]
 pub fn add_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<NewKnowledgeNote>(body).filter(|r| {
-        !r.base.trim().is_empty() && !(r.title.trim().is_empty() && r.body.trim().is_empty())
-    }) else {
-        return bad_new_note();
+    let req = match require::<NewKnowledgeNote>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match parse_base(&req.base) {
         Ok(id) => id,
@@ -199,10 +201,9 @@ pub fn add_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// is the store's rule and not this handler's — it only forwards the patch.
 #[must_use]
 pub fn edit_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<EditNote>(body)
-        .filter(|r| !r.base.trim().is_empty() && !r.id.trim().is_empty())
-    else {
-        return bad_edit_note();
+    let req = match require::<EditNote>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match parse_base(&req.base) {
         Ok(id) => id,
@@ -225,8 +226,9 @@ pub fn edit_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// `POST /api/knowledge/note/remove` — delete a note, then report the base's fresh list.
 #[must_use]
 pub fn remove_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(req) = note_ref(body) else {
-        return bad_note_ref();
+    let req = match require::<KnowledgeNoteRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = match parse_base(&req.base) {
         Ok(id) => id,
@@ -255,9 +257,9 @@ pub fn remove_knowledge_note(store: &KnowledgeStore, body: &[u8]) -> Response {
 /// it is put to.
 #[must_use]
 pub fn search_knowledge(store: &KnowledgeStore, body: &[u8]) -> Response {
-    let Some(req) = parse_body::<KnowledgeSearch>(body).filter(|r| !r.query.trim().is_empty())
-    else {
-        return bad_search();
+    let req = match require::<KnowledgeSearch>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let bases = if req.bases.is_empty() {
         match store.visible_bases() {
@@ -375,54 +377,55 @@ fn parse_base(raw: &str) -> Result<BaseId, Response> {
         .map_err(|e| error(400, &e.to_string()))
 }
 
-fn base_ref(body: &[u8]) -> Option<Result<BaseId, Response>> {
-    parse_body::<KnowledgeBaseRef>(body)
-        .filter(|r| !r.base.trim().is_empty())
-        .map(|r| parse_base(&r.base))
+impl FromBody for NewKnowledgeBase {
+    const EXPECTED: &'static str = "expected JSON body { \"base\": \"global/<name>\", \"provider\"?: \"…\", \"description\"?: \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.base.trim().is_empty()
+    }
 }
 
-fn note_ref(body: &[u8]) -> Option<KnowledgeNoteRef> {
-    parse_body::<KnowledgeNoteRef>(body)
-        .filter(|r| !r.base.trim().is_empty() && !r.id.trim().is_empty())
+impl FromBody for KnowledgeBaseRef {
+    const EXPECTED: &'static str = "expected JSON body { \"base\": \"global/<name>\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.base.trim().is_empty()
+    }
 }
 
-fn bad_new_base() -> Response {
-    error(
-        400,
-        "expected JSON body { \"base\": \"global/<name>\", \"provider\"?: \"…\", \"description\"?: \"…\" }",
-    )
+impl FromBody for KnowledgeNoteRef {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"base\": \"global/<name>\", \"id\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.base.trim().is_empty() && !self.id.trim().is_empty()
+    }
 }
 
-fn bad_base_ref() -> Response {
-    error(400, "expected JSON body { \"base\": \"global/<name>\" }")
+impl FromBody for NewKnowledgeNote {
+    const EXPECTED: &'static str = "expected JSON body { \"base\": \"global/<name>\", \"title\": \"…\", \"body\"?: \"…\", \"tags\"?: [], \"source\"?: \"…\" } — a note needs a title or a body";
+
+    fn is_complete(&self) -> bool {
+        let has_content = !self.title.trim().is_empty() || !self.body.trim().is_empty();
+        !self.base.trim().is_empty() && has_content
+    }
 }
 
-fn bad_note_ref() -> Response {
-    error(
-        400,
-        "expected JSON body { \"base\": \"global/<name>\", \"id\": \"…\" }",
-    )
+impl FromBody for EditNote {
+    const EXPECTED: &'static str = "expected JSON body { \"base\": \"global/<name>\", \"id\": \"…\", \"title\"?, \"body\"?, \"tags\"?, \"source\"? } — omitted fields are left as they are";
+
+    fn is_complete(&self) -> bool {
+        !self.base.trim().is_empty() && !self.id.trim().is_empty()
+    }
 }
 
-fn bad_new_note() -> Response {
-    error(
-        400,
-        "expected JSON body { \"base\": \"global/<name>\", \"title\": \"…\", \"body\"?: \"…\", \"tags\"?: [], \"source\"?: \"…\" } — a note needs a title or a body",
-    )
-}
+impl FromBody for KnowledgeSearch {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"query\": \"…\", \"bases\"?: [], \"limit\"?: 20, \"text\"?: false }";
 
-fn bad_edit_note() -> Response {
-    error(
-        400,
-        "expected JSON body { \"base\": \"global/<name>\", \"id\": \"…\", \"title\"?, \"body\"?, \"tags\"?, \"source\"? } — omitted fields are left as they are",
-    )
-}
-
-fn bad_search() -> Response {
-    error(
-        400,
-        "expected JSON body { \"query\": \"…\", \"bases\"?: [], \"limit\"?: 20, \"text\"?: false }",
-    )
+    fn is_complete(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
 }
 
 // A store error's HTTP status: a malformed name or id is the caller's (400), a missing base or

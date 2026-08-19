@@ -30,7 +30,7 @@ use crate::types::{
     SetDashboardProject, UsedPort,
 };
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, ok_json, require};
 use super::services::is_listening;
 
 /// The metadata file each dashboard directory carries.
@@ -128,10 +128,12 @@ pub fn unarchive_dashboard(
 /// Irreversible — the UI gates it behind a confirm.
 #[must_use]
 pub fn delete_dashboard(cfg: &Config, ports: &Ports, live: &[UsedPort], body: &[u8]) -> Response {
-    let Some(id) = parse_dashboard_ref(body) else {
-        return error(400, "expected JSON body { \"id\": \"…\" }");
+    let req = match require::<DashboardRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let Some(dir) = dashboard_dir(cfg, &id) else {
+    let id = req.id.trim();
+    let Some(dir) = dashboard_dir(cfg, id) else {
         return error(404, &format!("no such dashboard: {id}"));
     };
     if read_manifest(&dir).archived_at.is_none() {
@@ -152,10 +154,12 @@ fn set_archived(
     body: &[u8],
     archived: bool,
 ) -> Response {
-    let Some(id) = parse_dashboard_ref(body) else {
-        return error(400, "expected JSON body { \"id\": \"…\" }");
+    let req = match require::<DashboardRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
-    let Some(dir) = dashboard_dir(cfg, &id) else {
+    let id = req.id.trim();
+    let Some(dir) = dashboard_dir(cfg, id) else {
         return error(404, &format!("no such dashboard: {id}"));
     };
 
@@ -233,9 +237,12 @@ fn dashboard_dir(cfg: &Config, id: &str) -> Option<PathBuf> {
 }
 
 /// Parse a [`DashboardRef`] body into its trimmed, non-empty id.
-fn parse_dashboard_ref(body: &[u8]) -> Option<String> {
-    parse_body::<DashboardRef>(body).filter(|req| !req.id.trim().is_empty())
-        .map(|req| req.id.trim().to_string())
+impl FromBody for DashboardRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
 }
 
 /// The current Unix time in whole seconds (0 before the epoch, which never happens in practice).

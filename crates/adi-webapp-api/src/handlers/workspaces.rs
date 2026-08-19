@@ -14,14 +14,15 @@ use crate::types::{
     WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, ok_json, require};
 
 /// `POST /api/projects/workspaces` — a project's workspaces and hooks in one snapshot. Every
 /// mutation in this family returns a fresh [`WorkspacesState`] for one-round-trip refreshes.
 #[must_use]
 pub fn workspaces_state(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_workspaces_ref(body) else {
-        return error(400, "expected JSON body { \"id\": \"…\" }");
+    let req = match require::<WorkspacesRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     match build_workspaces_state(store, req.id.trim()) {
         Ok(state) => ok_json(&state),
@@ -35,11 +36,9 @@ pub fn workspaces_state(store: &Projects, body: &[u8]) -> Response {
 /// `creating`; with `local`, an existing directory is linked as-is and no hook runs.
 #[must_use]
 pub fn create_workspace(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_new_workspace(body) else {
-        return error(
-            400,
-            "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"path\"?: \"…\", \"local\"?: bool }",
-        );
+    let req = match require::<NewWorkspace>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = req.id.trim();
     let (dir, env) = match project_scope(store, id) {
@@ -76,8 +75,9 @@ pub fn create_workspace(store: &Projects, body: &[u8]) -> Response {
 /// a clone/worktree on disk stays where it is. An unknown name is a 404.
 #[must_use]
 pub fn remove_workspace(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_workspace_ref(body) else {
-        return bad_project_hook_ref();
+    let req = match require::<WorkspaceRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = req.id.trim();
     let (dir, _) = match project_scope(store, id) {
@@ -100,8 +100,9 @@ pub fn remove_workspace(store: &Projects, body: &[u8]) -> Response {
 /// cwd at the project directory. Replies with the spawned pid plus fresh state.
 #[must_use]
 pub fn run_project_hook(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_project_hook_ref(body) else {
-        return bad_project_hook_ref();
+    let req = match require::<ProjectHookRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = req.id.trim();
     let (dir, mut env) = match project_scope(store, id) {
@@ -142,8 +143,9 @@ pub fn run_project_hook(store: &Projects, body: &[u8]) -> Response {
 /// never ran answers `ran: false` (200, not an error); only an unknown hook file is a 404.
 #[must_use]
 pub fn project_hook_log(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_project_hook_ref(body) else {
-        return bad_project_hook_ref();
+    let req = match require::<ProjectHookRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = req.id.trim();
     let (dir, _) = match project_scope(store, id) {
@@ -173,11 +175,9 @@ pub fn project_hook_log(store: &Projects, body: &[u8]) -> Response {
 /// project file browser, where the file lives at `.adi/hooks/<name>`.
 #[must_use]
 pub fn create_project_hook(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_new_project_hook(body) else {
-        return error(
-            400,
-            "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"template\"?: \"init|workspace|blank\" }",
-        );
+    let req = match require::<NewProjectHook>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let id = req.id.trim();
     let (dir, _) = match project_scope(store, id) {
@@ -210,8 +210,9 @@ pub fn create_project_hook(store: &Projects, body: &[u8]) -> Response {
 /// live session), and reply with the first pane snapshot.
 #[must_use]
 pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_workspace_term_ref(body) else {
-        return bad_project_hook_ref();
+    let req = match require::<WorkspaceTermRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let (id, name) = (req.id.trim(), req.name.trim());
     let entry = match resolve_workspace(store, id, name) {
@@ -229,8 +230,9 @@ pub fn open_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
 /// `running: false` (200, not an error).
 #[must_use]
 pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_workspace_term_ref(body) else {
-        return bad_project_hook_ref();
+    let req = match require::<WorkspaceTermRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let (id, name) = (req.id.trim(), req.name.trim());
     if let Err(resp) = resolve_workspace(store, id, name) {
@@ -244,11 +246,9 @@ pub fn peek_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
 /// keystrokes show without waiting for the next poll.
 #[must_use]
 pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_workspace_term_keys(body) else {
-        return error(
-            400,
-            "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"text\"?: \"…\", \"key\"?: \"…\" }",
-        );
+    let req = match require::<WorkspaceTermKeys>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let (id, name) = (req.id.trim(), req.name.trim());
     if let Err(resp) = resolve_workspace(store, id, name) {
@@ -264,8 +264,9 @@ pub fn send_workspace_terminal_keys(store: &Projects, body: &[u8]) -> Response {
 /// Idempotent: killing an already-gone terminal still answers the (now not-running) snapshot.
 #[must_use]
 pub fn kill_workspace_terminal(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_workspace_term_ref(body) else {
-        return bad_project_hook_ref();
+    let req = match require::<WorkspaceTermRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let (id, name) = (req.id.trim(), req.name.trim());
     if let Err(resp) = resolve_workspace(store, id, name) {
@@ -306,16 +307,6 @@ fn resolve_workspace(
         .into_iter()
         .find(|w| w.name == name)
         .ok_or_else(|| error(404, &format!("no such workspace: {name}")))
-}
-
-fn parse_workspace_term_ref(body: &[u8]) -> Option<WorkspaceTermRef> {
-    parse_body::<WorkspaceTermRef>(body)
-        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
-}
-
-fn parse_workspace_term_keys(body: &[u8]) -> Option<WorkspaceTermKeys> {
-    parse_body::<WorkspaceTermKeys>(body)
-        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
 }
 
 /// The full [`WorkspacesState`] for a registered project: entries decorated with live status,
@@ -415,32 +406,63 @@ impl From<&HookStoreError> for Response {
     }
 }
 
-fn parse_workspaces_ref(body: &[u8]) -> Option<WorkspacesRef> {
-    parse_body::<WorkspacesRef>(body).filter(|req| !req.id.trim().is_empty())
+impl FromBody for WorkspacesRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
 }
 
-fn parse_new_workspace(body: &[u8]) -> Option<NewWorkspace> {
-    parse_body::<NewWorkspace>(body)
-        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
+impl FromBody for NewWorkspace {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"path\"?: \"…\", \"local\"?: bool }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.name.trim().is_empty()
+    }
 }
 
-fn parse_workspace_ref(body: &[u8]) -> Option<WorkspaceRef> {
-    parse_body::<WorkspaceRef>(body)
-        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
+impl FromBody for WorkspaceRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"name\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.name.trim().is_empty()
+    }
 }
 
-fn parse_project_hook_ref(body: &[u8]) -> Option<ProjectHookRef> {
-    parse_body::<ProjectHookRef>(body)
-        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
+impl FromBody for ProjectHookRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"name\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.name.trim().is_empty()
+    }
 }
 
-fn parse_new_project_hook(body: &[u8]) -> Option<NewProjectHook> {
-    parse_body::<NewProjectHook>(body)
-        .filter(|req| !req.id.trim().is_empty() && !req.name.trim().is_empty())
+impl FromBody for NewProjectHook {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"template\"?: \"init|workspace|blank\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.name.trim().is_empty()
+    }
 }
 
-fn bad_project_hook_ref() -> Response {
-    error(400, "expected JSON body { \"id\": \"…\", \"name\": \"…\" }")
+impl FromBody for WorkspaceTermRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"name\": \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.name.trim().is_empty()
+    }
+}
+
+impl FromBody for WorkspaceTermKeys {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"text\"?: \"…\", \"key\"?: \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty() && !self.name.trim().is_empty()
+    }
 }
 
 // MARK: hive — every service across all projects + the global front-door hive

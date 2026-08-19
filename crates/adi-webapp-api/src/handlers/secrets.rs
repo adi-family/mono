@@ -5,7 +5,7 @@ use crate::types::{
     OAuthInfoDto, RevealedSecret, SecretDto, SecretRef, SecretsState, SetOAuthSecret, SetSecret,
 };
 
-use super::response::{Response, clean, error, ok_json, parse_body};
+use super::response::{FromBody, Response, clean, error, ok_json, require};
 
 /// `GET /api/secrets` — every secret across all scopes, metadata only (never values). Each
 /// mutation endpoint below returns a fresh [`SecretsState`], so the client refreshes from one
@@ -24,8 +24,9 @@ pub fn secrets(store: &Secrets) -> Response {
 /// report the fresh list. `project` omitted/blank ⇒ global.
 #[must_use]
 pub fn set_secret(store: &Secrets, body: &[u8]) -> Response {
-    let Some(req) = parse_set(body) else {
-        return bad_set();
+    let req = match require::<SetSecret>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let project = clean(req.project);
     match store.set(
@@ -44,8 +45,9 @@ pub fn set_secret(store: &Secrets, body: &[u8]) -> Response {
 /// the provider/lifetime/scope are recorded. Then report the fresh list.
 #[must_use]
 pub fn set_oauth_secret(store: &Secrets, body: &[u8]) -> Response {
-    let Some(req) = parse_set_oauth(body) else {
-        return bad_set_oauth();
+    let req = match require::<SetOAuthSecret>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let project = clean(req.project);
     // The provider gives seconds-to-expiry; stamp the absolute time the store keeps.
@@ -66,8 +68,9 @@ pub fn set_oauth_secret(store: &Secrets, body: &[u8]) -> Response {
 /// `POST /api/secrets/remove` — delete a secret from a scope, then report the fresh list.
 #[must_use]
 pub fn remove_secret(store: &Secrets, body: &[u8]) -> Response {
-    let Some(req) = parse_ref(body) else {
-        return bad_ref();
+    let req = match require::<SecretRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let project = clean(req.project);
     match store.remove(project.as_deref(), req.name.trim()) {
@@ -80,8 +83,9 @@ pub fn remove_secret(store: &Secrets, body: &[u8]) -> Response {
 /// from listing so revealing is always a deliberate, single-secret request.
 #[must_use]
 pub fn reveal_secret(store: &Secrets, body: &[u8]) -> Response {
-    let Some(req) = parse_ref(body) else {
-        return bad_ref();
+    let req = match require::<SecretRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let project = clean(req.project);
     let name = req.name.trim();
@@ -129,36 +133,28 @@ impl From<&SecretStoreError> for Response {
     }
 }
 
-fn parse_set(body: &[u8]) -> Option<SetSecret> {
-    parse_body::<SetSecret>(body).filter(|req| !req.name.trim().is_empty())
+impl FromBody for SetSecret {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"value\": \"…\", \"project\"?: \"…\", \"description\"?: \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }
 
-fn bad_set() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"value\": \"…\", \"project\"?: \"…\", \"description\"?: \"…\" }",
-    )
+impl FromBody for SetOAuthSecret {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"provider\": \"…\", \"access_token\": \"…\", \"project\"?, \"refresh_token\"?, \"expires_in\"?, \"scope\"?, \"description\"? }";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+            && !self.provider.trim().is_empty()
+            && !self.access_token.is_empty()
+    }
 }
 
-fn parse_set_oauth(body: &[u8]) -> Option<SetOAuthSecret> {
-    parse_body::<SetOAuthSecret>(body).filter(|req| {
-            !req.name.trim().is_empty()
-                && !req.provider.trim().is_empty()
-                && !req.access_token.is_empty()
-    })
-}
+impl FromBody for SecretRef {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"project\"?: \"…\" }";
 
-fn bad_set_oauth() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"provider\": \"…\", \"access_token\": \"…\", \"project\"?, \"refresh_token\"?, \"expires_in\"?, \"scope\"?, \"description\"? }",
-    )
-}
-
-fn parse_ref(body: &[u8]) -> Option<SecretRef> {
-    parse_body::<SecretRef>(body).filter(|req| !req.name.trim().is_empty())
-}
-
-fn bad_ref() -> Response {
-    error(400, "expected JSON body { \"name\": \"…\", \"project\"?: \"…\" }")
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }

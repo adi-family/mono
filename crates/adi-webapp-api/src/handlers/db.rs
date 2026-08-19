@@ -12,7 +12,7 @@ use crate::types::{
     DbTableDto, DbTablesState,
 };
 
-use super::response::{Response, clean, error, ok_json, parse_body};
+use super::response::{FromBody, Response, clean, error, ok_json, require};
 
 /// `GET /api/db` — every database in the store, global first, then each project's.
 #[must_use]
@@ -39,8 +39,9 @@ pub fn db_state(store: &Db) -> Response {
 /// an empty database, not a missing one, and the query box below it still has to work.
 #[must_use]
 pub fn db_tables(store: &Db, body: &[u8]) -> Response {
-    let Some(scope) = parse_scope(body) else {
-        return bad_scope();
+    let scope = match require::<DbScope>(body) {
+        Ok(scope) => scope,
+        Err(bad) => return bad,
     };
     let project = clean(scope.project);
     match store.tables(project.as_deref()) {
@@ -72,8 +73,9 @@ pub fn db_tables(store: &Db, body: &[u8]) -> Response {
 /// `POST /api/db/schema` — the `create` statements for a scope, or just one table's.
 #[must_use]
 pub fn db_schema(store: &Db, body: &[u8]) -> Response {
-    let Some(scope) = parse_scope(body) else {
-        return bad_scope();
+    let scope = match require::<DbScope>(body) {
+        Ok(scope) => scope,
+        Err(bad) => return bad,
     };
     let project = clean(scope.project);
     let table = clean(scope.table);
@@ -89,8 +91,9 @@ pub fn db_schema(store: &Db, body: &[u8]) -> Response {
 /// SQLite itself. That also means `insert … returning` belongs on `/exec`, not here.
 #[must_use]
 pub fn db_query(store: &Db, body: &[u8]) -> Response {
-    let Some(req) = parse_query(body) else {
-        return bad_query();
+    let req = match require::<DbQuery>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let project = clean(req.project);
     let conn = match store.connect_readonly(project.as_deref()) {
@@ -110,8 +113,9 @@ pub fn db_query(store: &Db, body: &[u8]) -> Response {
 /// `params` the whole body runs as a batch, so a multi-statement migration lands in one call.
 #[must_use]
 pub fn db_exec(store: &Db, body: &[u8]) -> Response {
-    let Some(req) = parse_query(body) else {
-        return bad_query();
+    let req = match require::<DbQuery>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let project = clean(req.project);
     match store.exec_json(project.as_deref(), &req.sql, &req.params) {
@@ -136,30 +140,22 @@ impl From<&DbStoreError> for Response {
     }
 }
 
-fn parse_scope(body: &[u8]) -> Option<DbScope> {
+impl FromBody for DbScope {
+    const EXPECTED: &'static str = "expected JSON body { \"project\"?: \"…\", \"table\"?: \"…\" }";
+
     // An empty body is the global scope — the panel's default view asks for exactly that.
-    if body.iter().all(u8::is_ascii_whitespace) {
-        return Some(DbScope::default());
+    fn on_empty() -> Option<Self> {
+        Some(Self::default())
     }
-    serde_json::from_slice(body).ok()
 }
 
-fn bad_scope() -> Response {
-    error(
-        400,
-        "expected JSON body { \"project\"?: \"…\", \"table\"?: \"…\" }",
-    )
-}
+impl FromBody for DbQuery {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"sql\": \"…\", \"project\"?: \"…\", \"params\"?: [\"…\"] }";
 
-fn parse_query(body: &[u8]) -> Option<DbQuery> {
-    parse_body::<DbQuery>(body).filter(|req| !req.sql.trim().is_empty())
-}
-
-fn bad_query() -> Response {
-    error(
-        400,
-        "expected JSON body { \"sql\": \"…\", \"project\"?: \"…\", \"params\"?: [\"…\"] }",
-    )
+    fn is_complete(&self) -> bool {
+        !self.sql.trim().is_empty()
+    }
 }
 
 #[cfg(test)]

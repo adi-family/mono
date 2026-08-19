@@ -13,7 +13,7 @@ use crate::types::{
     TriggerRuntimeOption, TriggersState,
 };
 
-use super::response::{Response, clean, error, ok_json, parse_body};
+use super::response::{FromBody, Response, clean, error, mutate, ok_json, require};
 
 /// Trim dynamic backend parameters and drop empty or unsafe keys. Which keys are *meaningful*
 /// is the code block's business (its preset declares them, and each reaches it as `ADI_<KEY>`),
@@ -89,49 +89,46 @@ fn event_types() -> Vec<EventTypeDto> {
 /// the enabled ones, so it is poked here to pick the change up now rather than at its next tick.
 #[must_use]
 pub fn save_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    let Some(req) = parse_save_trigger(body) else {
-        return bad_save_trigger();
-    };
-    let name = req.name.trim().to_string();
-    let manifest = TriggerManifest {
-        // The store normalizes both onto the kinds/runtimes this build understands.
-        kind: req.kind.trim().to_string(),
-        runtime: req.runtime.trim().to_string(),
-        code: req.code,
-        preset: clean(req.preset),
-        description: req.description.trim().to_string(),
-        enabled: req.enabled,
-        project: clean(req.project),
-        extra: clean_extra(req.extra),
-        events: clean_events(req.events),
-        trigger_on: clean_trigger_on(req.trigger_on),
-        // The store owns the timestamps.
-        created_at: 0,
-        updated_at: 0,
-    };
-    match store.save(&name, manifest) {
-        Ok(_) => {
+    mutate(
+        body,
+        |req: SaveTrigger| {
+            let manifest = TriggerManifest {
+                // The store normalizes both onto the kinds/runtimes this build understands.
+                kind: req.kind.trim().to_string(),
+                runtime: req.runtime.trim().to_string(),
+                code: req.code,
+                preset: clean(req.preset),
+                description: req.description.trim().to_string(),
+                enabled: req.enabled,
+                project: clean(req.project),
+                extra: clean_extra(req.extra),
+                events: clean_events(req.events),
+                trigger_on: clean_trigger_on(req.trigger_on),
+                // The store owns the timestamps.
+                created_at: 0,
+                updated_at: 0,
+            };
+            store.save(req.name.trim(), manifest)
+        },
+        || {
             supervisor.poke();
             triggers(store)
-        }
-        Err(e) => Response::from(&e),
-    }
+        },
+    )
 }
 
 /// `POST /api/triggers/delete` — delete a trigger definition, then report the fresh list. A
 /// deleted background trigger's process is stopped by the supervisor on its next reconcile.
 #[must_use]
 pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    let Some(req) = parse_trigger_ref(body) else {
-        return bad_trigger_ref();
-    };
-    match store.delete(req.name.trim()) {
-        Ok(_) => {
+    mutate(
+        body,
+        |req: TriggerRef| store.delete(req.name.trim()),
+        || {
             supervisor.poke();
             triggers(store)
-        }
-        Err(e) => Response::from(&e),
-    }
+        },
+    )
 }
 
 /// `POST /api/triggers/restart` — replace a supervised background trigger's process with a
@@ -139,8 +136,9 @@ pub fn delete_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) ->
 /// supervisor starts whatever should be up anyway.
 #[must_use]
 pub fn restart_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -> Response {
-    let Some(req) = parse_trigger_ref(body) else {
-        return bad_trigger_ref();
+    let req = match require::<TriggerRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let name = req.name.trim();
     match store.get(name) {
@@ -164,8 +162,9 @@ pub fn restart_trigger(store: &Triggers, supervisor: &Supervisor, body: &[u8]) -
 /// `enabled`. Replies with the spawned pid plus fresh state.
 #[must_use]
 pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
-    let Some(req) = parse_trigger_ref(body) else {
-        return bad_trigger_ref();
+    let req = match require::<TriggerRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let name = req.name.trim();
     let firing = match store.fire(name, None) {
@@ -186,8 +185,9 @@ pub fn fire_trigger(store: &Triggers, body: &[u8]) -> Response {
 /// is a 404.
 #[must_use]
 pub fn trigger_log(store: &Triggers, body: &[u8]) -> Response {
-    let Some(req) = parse_trigger_ref(body) else {
-        return bad_trigger_ref();
+    let req = match require::<TriggerRef>(body) {
+        Ok(req) => req,
+        Err(bad) => return bad,
     };
     let name = req.name.trim();
     match store.get(name) {
@@ -370,24 +370,21 @@ impl From<&TriggerStoreError> for Response {
     }
 }
 
-fn parse_save_trigger(body: &[u8]) -> Option<SaveTrigger> {
-    parse_body::<SaveTrigger>(body)
-        .filter(|req| !req.name.trim().is_empty() && !req.kind.trim().is_empty())
+impl FromBody for SaveTrigger {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"kind\": \"…\", … } with a non-empty name and kind";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.kind.trim().is_empty()
+    }
 }
 
-fn bad_save_trigger() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"kind\": \"…\", … } with a non-empty name and kind",
-    )
-}
+impl FromBody for TriggerRef {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\" }";
 
-fn parse_trigger_ref(body: &[u8]) -> Option<TriggerRef> {
-    parse_body::<TriggerRef>(body).filter(|req| !req.name.trim().is_empty())
-}
-
-fn bad_trigger_ref() -> Response {
-    error(400, "expected JSON body { \"name\": \"…\" }")
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }
 
 /// `POST /api/events/emit` — publish one platform event by hand, exactly as a task or agent

@@ -3,7 +3,7 @@ use adi_projects::Projects;
 
 use crate::types::{NewProject, Project, ProjectDetail, ProjectRef, ProjectsState, UsedPort};
 
-use super::response::{Response, error, ok_json, parse_body};
+use super::response::{FromBody, Response, error, mutate, ok_json};
 use super::services::read_hive_services;
 
 /// `GET /api/projects` — every registered project. Each mutation endpoint below returns a
@@ -21,37 +21,31 @@ pub fn projects(store: &Projects) -> Response {
 /// `POST /api/projects/create` — register a project, then report the fresh list.
 #[must_use]
 pub fn create_project(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_new_project(body) else {
-        return bad_new_project();
-    };
-    match store.create(req.name.trim(), req.description, req.parent) {
-        Ok(_) => projects(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: NewProject| store.create(req.name.trim(), req.description, req.parent),
+        || projects(store),
+    )
 }
 
 /// `POST /api/projects/archive` — archive a project (soft delete), then report the fresh list.
 #[must_use]
 pub fn archive_project(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_project_ref(body) else {
-        return bad_project_ref();
-    };
-    match store.archive(req.id.trim()) {
-        Ok(_) => projects(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: ProjectRef| store.archive(req.id.trim()),
+        || projects(store),
+    )
 }
 
 /// `POST /api/projects/unarchive` — restore an archived project, then report the fresh list.
 #[must_use]
 pub fn unarchive_project(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_project_ref(body) else {
-        return bad_project_ref();
-    };
-    match store.unarchive(req.id.trim()) {
-        Ok(_) => projects(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: ProjectRef| store.unarchive(req.id.trim()),
+        || projects(store),
+    )
 }
 
 /// `GET /api/projects/<id>` — one project's manifest plus the services parsed from its
@@ -89,13 +83,11 @@ pub fn project_detail(store: &Projects, id: &str, live: &[UsedPort]) -> Response
 /// `POST /api/projects/remove` — permanently delete a project, then report the fresh list.
 #[must_use]
 pub fn remove_project(store: &Projects, body: &[u8]) -> Response {
-    let Some(req) = parse_project_ref(body) else {
-        return bad_project_ref();
-    };
-    match store.remove(req.id.trim()) {
-        Ok(_) => projects(store),
-        Err(e) => Response::from(&e),
-    }
+    mutate(
+        body,
+        |req: ProjectRef| store.remove(req.id.trim()),
+        || projects(store),
+    )
 }
 
 // MARK: tasks — the task tree under ~/.adi/mono/tasks/tasks.json
@@ -126,23 +118,21 @@ impl From<&ProjectStoreError> for Response {
     }
 }
 
-fn parse_new_project(body: &[u8]) -> Option<NewProject> {
-    parse_body::<NewProject>(body).filter(|req| !req.name.trim().is_empty())
+impl FromBody for NewProject {
+    const EXPECTED: &'static str =
+        "expected JSON body { \"name\": \"…\", \"description\"?: \"…\", \"parent\"?: \"…\" }";
+
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty()
+    }
 }
 
-fn bad_new_project() -> Response {
-    error(
-        400,
-        "expected JSON body { \"name\": \"…\", \"description\"?: \"…\", \"parent\"?: \"…\" }",
-    )
-}
+impl FromBody for ProjectRef {
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\" }";
 
-fn parse_project_ref(body: &[u8]) -> Option<ProjectRef> {
-    parse_body::<ProjectRef>(body).filter(|req| !req.id.trim().is_empty())
-}
-
-fn bad_project_ref() -> Response {
-    error(400, "expected JSON body { \"id\": \"…\" }")
+    fn is_complete(&self) -> bool {
+        !self.id.trim().is_empty()
+    }
 }
 
 // MARK: triggers — background code blocks fired by webhooks & co. (~/.adi/mono/triggers)
