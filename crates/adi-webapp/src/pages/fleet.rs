@@ -228,16 +228,22 @@ fn cell(col: &str, n: &FleetNode, state: State) -> AnyView {
         // "Node", and anything the layout offers that this match doesn't name: the two names,
         // stacked — what we call it, then what it calls itself.
         _ => {
-            let href = format!("http://{}/", n.app_host());
             let host = n.app_host();
+            // The petname is this machine's alone (§2), so the address exists only from here —
+            // read through a node, the name stays and the link goes.
+            let name = match crate::origin::service_url(&host) {
+                Some(href) => view! {
+                    <a href=href target="_blank" rel="noreferrer"
+                        title=format!("This node's control panel, over the mesh: {host}")>
+                        {n.petname.clone()}
+                    </a>
+                }
+                .into_any(),
+                None => view! { <span>{n.petname.clone()}</span> }.into_any(),
+            };
             view! {
                 <span>
-                    <div>
-                        <a href=href.clone() target="_blank" rel="noreferrer"
-                            title=format!("This node's control panel, over the mesh: {host}")>
-                            {n.petname.clone()}
-                        </a>
-                    </div>
+                    <div>{name}</div>
                     <div class="adi-muted">
                         "calls itself "<span class="adi-mono">{n.nickname.clone()}</span>
                     </div>

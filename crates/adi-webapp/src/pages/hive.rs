@@ -266,11 +266,18 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
 
 /// The Host cell: the front door serves every declared host over plain HTTP, so the name doubles
 /// as the way in. A new tab, since leaving the panel to visit a service is rarely what was meant.
+///
+/// The name shown is the one this machine's front door routes; the link is that name *from where
+/// the page is being read* (see [`origin::service_url`](crate::origin::service_url)), which is a
+/// different address when the panel is being read over the mesh. When there is no such address the
+/// name stays, unlinked — the row is still telling the truth about the service.
 fn host_cell(host: Option<&str>) -> AnyView {
     let Some(host) = host else {
         return view! { <span class="font-mono">{dash(None)}</span> }.into_any();
     };
-    let href = format!("http://{host}/");
+    let Some(href) = crate::origin::service_url(host) else {
+        return view! { <span class="font-mono">{host.to_string()}</span> }.into_any();
+    };
     view! {
         <span class="font-mono">
             <a href=href.clone() target="_blank" rel="noreferrer" title=href>{host.to_string()}</a>

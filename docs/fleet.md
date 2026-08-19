@@ -88,6 +88,21 @@ The current scaffold violates this: `frontend/index.ts` reads the backend's leas
 `ports/registry.json` and injects `backendPort` into the HTML, so the browser talks to
 `127.0.0.1:<port>` directly. Over the mesh that address is the *viewer's* machine. This must go.
 
+**One origin, but not one address.** The rule above is what a dashboard's *own* page must obey. The
+control panel is the other side of it: every host it prints — `nosh.adi` in the dashboards rail, in
+the Dashboards table, in the Hive table — is a name the machine *serving that panel* routes, and the
+panel is the same page whether it is read at `app.adi` or at `app.<node>.n.adi`. Read through a node,
+a bare `nosh.adi` link resolves on the reader's own front door and opens their `nosh`, or nothing.
+
+The panel therefore maps every address it prints through the node in its own location
+(`adi-webapp/src/origin.rs`), which is the only thing on that page that knows: §3 keeps the `Host`
+header byte-for-byte, so the node cannot tell a mesh reader from a local one, and §2 says it cannot
+know its own petname anyway. `nosh.adi` becomes `nosh.<node>.n.adi` — the same name
+`adi-app/src/node.rs` builds server-side when this machine asks a node what it runs. Anything with no
+address from where the page is being read loses its link and keeps its name: a `127.0.0.1:<port>`
+fallback (the reader's machine), and any `n.adi` name from the serving machine's own registry, since
+the gateway routes one hop and not a chain of them.
+
 ## 5. Access control
 
 Two independent layers. Both are required.

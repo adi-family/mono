@@ -3866,13 +3866,17 @@ fn chat_node_group(state: State, node: &NodeDashboards) -> AnyView {
     // one link is live even while every row under it is an ask — and even while the row is locked,
     // where the browser asks for the password this machine does not hold.
     let panel_host = node.app_host();
-    let panel = view! {
-        <a class="adi-chome__group-act" href=format!("http://{panel_host}/")
-            target="_blank" rel="noreferrer"
-            title=format!("This node's own control panel, over the mesh: {panel_host}")>
-            "Panel"
-        </a>
-    };
+    // …whenever there is an address for it from here. The petname in it is this machine's own
+    // (§2), so read through a node it names a third machine and the mesh routes one hop only.
+    let panel = crate::origin::service_url(&panel_host).map(|href| {
+        view! {
+            <a class="adi-chome__group-act" href=href
+                target="_blank" rel="noreferrer"
+                title=format!("This node's own control panel, over the mesh: {panel_host}")>
+                "Panel"
+            </a>
+        }
+    });
 
     let body = if locked && opening {
         chat_unlock_form(state)
@@ -3965,6 +3969,10 @@ fn submit_unlock(state: State) {
 /// out `http:app` and nothing else (§8), so the row asks the node for the grant rather than
 /// offering a link that would answer *not authorized*. **Down** is dimmed and says so — the failure
 /// is the node's to fix, not a row that should vanish.
+///
+/// A fourth, when this panel is itself being read through a node: the address the listing built is
+/// a name from *this* machine's registry, so from over the mesh it points at a third machine and
+/// there is nothing to click.
 fn chat_node_dash_item(state: State, node: &str, d: &NodeDashboard) -> AnyView {
     let name = d.name.clone();
     let machine = node.to_string();
@@ -3983,7 +3991,11 @@ fn chat_node_dash_item(state: State, node: &str, d: &NodeDashboard) -> AnyView {
         .into_any();
     }
 
-    match (d.allowed, d.url.clone(), d.service.clone()) {
+    match (
+        d.allowed,
+        d.url.as_deref().and_then(crate::origin::mapped_url),
+        d.service.clone(),
+    ) {
         // Allowed and up: a link, on its own origin at `<service>.<node>.n.adi` — the only
         // address under which the page's own `/api` calls route.
         (true, Some(href), _) => view! {
@@ -4029,17 +4041,25 @@ fn chat_node_dash_item(state: State, node: &str, d: &NodeDashboard) -> AnyView {
             }
             .into_any()
         }
-        // Running, but the node gave it no routable name — a dashboard is one origin, and
-        // this one has none, so there is nothing here that could open it.
-        _ => view! {
-            <adi_ui::AppItem
-                title=name
-                state=adi_ui::AppState::ViewOnly
-                machine=machine
-                attr:title="no host on the node — it has no address the mesh could route to"
-            />
+        // Running and granted, but not reachable from where this page is being read: either the
+        // node gave it no routable name at all, or the name it gave is one only the machine
+        // serving this panel can resolve.
+        _ => {
+            let why = if d.url.is_some() {
+                "on this node's own fleet — not reachable from where you are reading this panel"
+            } else {
+                "no host on the node — it has no address the mesh could route to"
+            };
+            view! {
+                <adi_ui::AppItem
+                    title=name
+                    state=adi_ui::AppState::ViewOnly
+                    machine=machine
+                    attr:title=why
+                />
+            }
+            .into_any()
         }
-        .into_any(),
     }
 }
 

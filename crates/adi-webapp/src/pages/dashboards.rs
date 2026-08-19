@@ -511,14 +511,24 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
 /// frontend serves calls the backend at `/api` on that same host, and only the front door routes
 /// that prefix. So `http://127.0.0.1:<frontend port>` yields a page that loads and then 404s every
 /// request it makes — it is the fallback for a dashboard with no routable name, never the default.
+///
+/// That host is put through [`origin::service_url`](crate::origin::service_url), because it is the
+/// name *the node* routes: this panel is the same page whether it is read at `app.adi` or at
+/// `app.<node>.n.adi`, and the second reader is on a different machine, where a bare `nosh.adi`
+/// means their own front door. Which also disqualifies the loopback fallback there — over the mesh
+/// `127.0.0.1` is the viewer's machine, so a dashboard with no routable name has no address at all
+/// from where they are sitting.
 pub(crate) fn open_url(d: &Dashboard) -> Option<String> {
     if !d.frontend_running {
         return None;
     }
-    routable_host(d).map_or_else(
-        || d.frontend_port.map(|port| format!("http://127.0.0.1:{port}")),
-        |host| Some(format!("http://{host}/")),
-    )
+    if let Some(host) = routable_host(d) {
+        return crate::origin::service_url(host);
+    }
+    if crate::origin::viewing_node().is_some() {
+        return None;
+    }
+    d.frontend_port.map(|port| format!("http://127.0.0.1:{port}"))
 }
 
 /// The dashboard's hostname, with a blank one read as absent: a hand-edited hive file can carry a
@@ -533,7 +543,8 @@ fn routable_host(d: &Dashboard) -> Option<&str> {
 ///
 /// The link is the same `<label>.<node>.n.adi` name the transfer reported. It only resolves while
 /// the node is reachable and has granted this machine the dashboard — the transfer asks for that
-/// grant, and says so when it could not get it.
+/// grant, and says so when it could not get it. It is also a name only *this* machine holds, so
+/// read through a node there is no link at all and the row says only where the dashboard went.
 fn moved_marker(d: &Dashboard) -> AnyView {
     let Some(node) = d.moved_to.clone() else {
         return ().into_any();
@@ -541,7 +552,7 @@ fn moved_marker(d: &Dashboard) -> AnyView {
     let there = routable_host(d)
         .and_then(|host| host.split('.').next())
         .filter(|label| !label.is_empty())
-        .map(|label| format!("http://{label}.{node}.n.adi/"));
+        .and_then(|label| crate::origin::service_url(&format!("{label}.{node}.n.adi")));
     view! {
         <div class="adi-muted">
             "moved to "

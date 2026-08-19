@@ -16,6 +16,7 @@ mod attach;
 mod fetch;
 mod icons;
 mod live;
+mod origin;
 mod pages;
 mod pwa;
 mod routing;
