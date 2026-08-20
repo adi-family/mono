@@ -10,12 +10,25 @@ use super::services::read_hive_services;
 /// fresh [`ProjectsState`], so the client refreshes from one round-trip.
 #[must_use]
 pub fn projects(store: &Projects) -> Response {
-    match store.list() {
-        Ok(list) => ok_json(&ProjectsState {
-            projects: list.into_iter().map(project_dto).collect(),
-        }),
+    match projects_state(store) {
+        Ok(state) => ok_json(&state),
         Err(e) => Response::from(&e),
     }
+}
+
+/// The fresh project list as data rather than a response.
+///
+/// Public because the list is what *every* project mutation answers with, and one of them —
+/// renaming a project, which spans stores this crate does not reach — is composed by the host
+/// (`adi-app`). It still owes the client the same refreshed list, and there should be one place
+/// that says what that list is.
+///
+/// # Errors
+/// Whatever [`Projects::list`] returns.
+pub fn projects_state(store: &Projects) -> Result<ProjectsState, ProjectStoreError> {
+    Ok(ProjectsState {
+        projects: store.list()?.into_iter().map(project_dto).collect(),
+    })
 }
 
 /// `POST /api/projects/create` — register a project, then report the fresh list.

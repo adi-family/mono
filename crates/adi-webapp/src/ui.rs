@@ -313,6 +313,16 @@ pub(crate) fn confirm(message: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// A native prompt, returning `Some` only when the user accepts with text. A browser that has no
+/// `prompt` (or denies it) reads as "cancelled", so nothing is renamed by accident — the same
+/// fail-quiet shape [`confirm`] has for the destructive actions.
+pub(crate) fn prompt(message: &str, default: &str) -> Option<String> {
+    web_sys::window()?
+        .prompt_with_message_and_default(message, default)
+        .ok()
+        .flatten()
+}
+
 /// The "updated Ns ago" label; empty until the first successful load. Generic over the loaded
 /// payload — every page has its own state type and only emptiness matters here.
 pub(crate) fn updated_text<T>(loaded: RwSignal<Option<T>>, secs_since: RwSignal<u32>) -> String

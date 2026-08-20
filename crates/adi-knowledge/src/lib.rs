@@ -392,6 +392,57 @@ impl KnowledgeStore {
         Ok(true)
     }
 
+    /// Follow a project rename into this store: move every base under `project:<from>` to
+    /// `project:<to>`. Returns how many bases moved.
+    ///
+    /// A base is addressed by where it sits (`knowledge/projects/<id>/<base>/`) and nothing inside
+    /// it records its own scope, so this is a directory move per base — the notes, their
+    /// embeddings, and the provider's storage all travel untouched. Agent definitions naming a
+    /// moved base as `project:<from>/<name>` are somebody else's to follow (`adi_agents`).
+    ///
+    /// Nothing moves unless everything can: the destination is checked for collisions and the
+    /// reader for write access to both addresses **before** the first rename, so a refusal leaves
+    /// the store exactly as it was.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe id, [`Error::BaseExists`] when `to` already has a base
+    /// of that name, [`Error::Denied`] when the reader may not write one of the two scopes, or
+    /// [`Error::Io`] if a move fails.
+    pub fn rename_project(&self, from: &str, to: &str) -> Result<usize> {
+        let (from_scope, to_scope) = (Scope::project(from)?, Scope::project(to)?);
+        if from == to {
+            return Ok(0);
+        }
+        let root = self.dir();
+        let source = root.join(from_scope.rel_dir());
+
+        let mut moving = Vec::new();
+        for name in child_names(&source) {
+            if !source.join(&name).join(BASE_MANIFEST).exists() {
+                continue;
+            }
+            let old = BaseId::new(from_scope.clone(), name.clone())?;
+            let new = BaseId::new(to_scope.clone(), name)?;
+            self.reader.require_write(&old)?;
+            self.reader.require_write(&new)?;
+            if self.base_dir(&new).exists() {
+                return Err(Error::BaseExists(new.to_string()));
+            }
+            moving.push((old, new));
+        }
+        if moving.is_empty() {
+            return Ok(0);
+        }
+
+        std::fs::create_dir_all(root.join(to_scope.rel_dir()))?;
+        for (old, new) in &moving {
+            std::fs::rename(self.base_dir(old), self.base_dir(new))?;
+        }
+        // Best-effort: the old scope dir goes only if the move emptied it.
+        let _ = std::fs::remove_dir(&source);
+        Ok(moving.len())
+    }
+
     /// What a base holds, and how much of it is currently searchable by meaning.
     ///
     /// # Errors

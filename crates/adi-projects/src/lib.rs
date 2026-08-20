@@ -278,10 +278,71 @@ impl Projects {
         Ok(removed)
     }
 
+    /// Rename a project: give it a new id, which *is* the name of its directory under
+    /// `projects/`. The manifest travels with the directory, so nothing inside the project has to
+    /// be rewritten — but every sub-project's `parent` names the old id, and those are re-pointed
+    /// here so the tree survives the move.
+    ///
+    /// Renaming to the id it already has is a no-op, not an error: the caller asked for a state,
+    /// and that state already holds.
+    ///
+    /// This is the *registry* half of a rename. A project id is also written down outside this
+    /// store — a tool or an agent filed under it, its scoped secrets, its database, its knowledge
+    /// bases — and none of that is this crate's to reach. Callers that own the whole store
+    /// (`adi_core::rename_project`) follow the rename into those stores after this returns.
+    ///
+    /// # Errors
+    /// [`Error::InvalidId`] for an unsafe id on either side, [`Error::NotFound`] if `from` isn't
+    /// registered, [`Error::Exists`] if anything already occupies `to`, or [`Error::Io`] /
+    /// [`Error::Config`] if the move or a child rewrite fails.
+    pub fn rename(&self, from: &str, to: &str) -> Result<Renamed> {
+        validate_id(from)?;
+        validate_id(to)?;
+        let project = self.require(from)?;
+        if from == to {
+            return Ok(Renamed {
+                project,
+                subprojects: 0,
+            });
+        }
+        // Refuse the move on any occupied directory, not just a registered one: an unregistered
+        // `projects/<to>` (a directory somebody made by hand) would otherwise swallow the moved
+        // project as a child of itself on platforms where that rename succeeds.
+        let target = self.dir().join(to);
+        if target.exists() {
+            return Err(Error::Exists(to.to_string()));
+        }
+        std::fs::rename(self.dir().join(from), &target)?;
+
+        let mut subprojects = 0;
+        for mut child in self.children(from)? {
+            child.manifest.parent = Some(to.to_string());
+            self.manifest_file(&child.id).save(&child.manifest)?;
+            subprojects += 1;
+        }
+        Ok(Renamed {
+            project: Project {
+                id: to.to_string(),
+                manifest: project.manifest,
+            },
+            subprojects,
+        })
+    }
+
     /// Load a project, turning absence into [`Error::NotFound`].
     fn require(&self, id: &str) -> Result<Project> {
         self.get(id)?.ok_or_else(|| Error::NotFound(id.to_string()))
     }
+}
+
+/// What [`Projects::rename`] did: the project under its new id, and how many sub-projects had
+/// their `parent` re-pointed at it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Renamed {
+    /// The renamed project, carrying its new id.
+    pub project: Project,
+    /// How many sub-projects now name the new id as their parent.
+    pub subprojects: usize,
 }
 
 #[cfg(test)]
@@ -397,6 +458,64 @@ mod tests {
         assert!(store.remove("root").expect("remove root"));
         let leaf = store.get("leaf").expect("get").expect("present");
         assert_eq!(leaf.manifest.parent, None);
+    }
+
+    #[test]
+    fn rename_moves_the_directory_and_repoints_children() {
+        let store = scratch("rename");
+        store
+            .create_with_id("old", Some("Old".into()), Some("keep me".into()), None)
+            .expect("root");
+        store
+            .create_with_id("kid", None, None, Some("old".into()))
+            .expect("kid");
+        std::fs::write(
+            store.project_dir("old").expect("dir").join("NOTES.md"),
+            "inside",
+        )
+        .expect("write");
+
+        let renamed = store.rename("old", "new").expect("rename");
+        assert_eq!(renamed.project.id, "new");
+        assert_eq!(renamed.subprojects, 1);
+
+        assert!(store.get("old").expect("get old").is_none());
+        let moved = store.get("new").expect("get new").expect("present");
+        assert_eq!(moved.manifest.name, "Old");
+        assert_eq!(moved.manifest.description.as_deref(), Some("keep me"));
+        // The directory travelled whole — a rename must never cost a project its files.
+        let notes = store.project_dir("new").expect("dir").join("NOTES.md");
+        assert_eq!(std::fs::read_to_string(notes).expect("read"), "inside");
+
+        let kid = store.get("kid").expect("get kid").expect("present");
+        assert_eq!(kid.manifest.parent.as_deref(), Some("new"));
+        assert_eq!(store.children("new").expect("children").len(), 1);
+    }
+
+    #[test]
+    fn renaming_to_the_same_id_changes_nothing() {
+        let store = scratch("rename-noop");
+        store.create_with_id("same", None, None, None).expect("p");
+        let renamed = store.rename("same", "same").expect("rename");
+        assert_eq!(renamed.project.id, "same");
+        assert_eq!(renamed.subprojects, 0);
+        assert!(store.get("same").expect("get").is_some());
+    }
+
+    #[test]
+    fn rename_refuses_an_occupied_id_or_an_unknown_project() {
+        let store = scratch("rename-guard");
+        store.create_with_id("a", None, None, None).expect("a");
+        store.create_with_id("b", None, None, None).expect("b");
+        assert!(matches!(store.rename("a", "b"), Err(Error::Exists(_))));
+        assert!(matches!(store.rename("ghost", "c"), Err(Error::NotFound(_))));
+        assert!(matches!(store.rename("a", "../x"), Err(Error::InvalidId(_))));
+        // A bare directory with no manifest still occupies the id.
+        std::fs::create_dir_all(store.dir().join("squatter")).expect("mkdir");
+        assert!(matches!(store.rename("a", "squatter"), Err(Error::Exists(_))));
+        // Every refusal left both projects exactly where they were.
+        assert!(store.get("a").expect("get a").is_some());
+        assert!(store.get("b").expect("get b").is_some());
     }
 
     #[test]

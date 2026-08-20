@@ -363,6 +363,30 @@ impl Tools {
         Ok(removed)
     }
 
+    /// Follow a project rename into this registry: every tool filed under `from` — archived ones
+    /// too — is re-filed under `to`. Returns how many manifests changed.
+    ///
+    /// A project-scoped tool runs in its project's directory and against its project's database
+    /// (see [`run`](Self::run) and `adi_config::Config::db_env`), so a tool left pointing at an id
+    /// nothing answers to is a tool that runs in the wrong place. The shims are untouched: a
+    /// tool's `.bin` name comes from its own name, never from its project.
+    ///
+    /// # Errors
+    /// [`Error::Config`] if a manifest can't be written, plus everything [`list`](Self::list) can
+    /// return.
+    pub fn rename_project(&self, from: &str, to: &str) -> Result<usize> {
+        let mut changed = 0;
+        for mut tool in self.list()? {
+            if tool.manifest.project.as_deref() != Some(from) {
+                continue;
+            }
+            tool.manifest.project = Some(to.to_string());
+            self.manifest_file(&tool.id).save(&tool.manifest)?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
+
     /// Run a tool once and capture its combined output — the ▶ Run path. `working_dir` sets the
     /// process's cwd; `None` runs in the store root. `args` are forwarded to the script.
     ///
@@ -679,6 +703,41 @@ mod tests {
         // Edit it, then read it back.
         store.write_script(&tool.id, "echo custom\n").expect("write");
         assert_eq!(store.read_script(&tool.id).expect("reread"), "echo custom\n");
+    }
+
+    #[test]
+    fn rename_project_refiles_that_projects_tools_and_nobody_elses() {
+        let store = scratch("rename-project");
+        let mine = store
+            .create_file("Mine", None, "sh", Some("old".into()), None)
+            .expect("mine");
+        let archived = store
+            .create_file("Archived", None, "sh", Some("old".into()), None)
+            .expect("archived");
+        store.archive(&archived.id).expect("archive");
+        let theirs = store
+            .create_file("Theirs", None, "sh", Some("other".into()), None)
+            .expect("theirs");
+        let global = store
+            .create_file("Global", None, "sh", None, None)
+            .expect("global");
+
+        assert_eq!(store.rename_project("old", "new").expect("rename"), 2);
+        let project_of = |id: &str| {
+            store
+                .get(id)
+                .expect("get")
+                .expect("present")
+                .manifest
+                .project
+        };
+        assert_eq!(project_of(&mine.id).as_deref(), Some("new"));
+        assert_eq!(project_of(&archived.id).as_deref(), Some("new"));
+        assert_eq!(project_of(&theirs.id).as_deref(), Some("other"));
+        assert_eq!(project_of(&global.id), None);
+
+        // Nothing left to follow the second time.
+        assert_eq!(store.rename_project("old", "new").expect("again"), 0);
     }
 
     #[test]

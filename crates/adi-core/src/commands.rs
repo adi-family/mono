@@ -45,6 +45,20 @@ impl Adi {
         adi_projects::Projects::open()
     }
 
+    /// Rename a project across the whole store — its registry entry, and every store that files
+    /// something under a project id. See [`crate::projects::rename_project`], which this is the
+    /// standard-store spelling of.
+    ///
+    /// # Errors
+    /// [`adi_projects::Error`] when the registry refuses the move.
+    pub fn rename_project(
+        self,
+        from: &str,
+        to: &str,
+    ) -> adi_projects::Result<crate::projects::ProjectRenamed> {
+        crate::projects::rename_project(&adi_config::Config::open(), from, to)
+    }
+
     /// The task tree backed by the standard store — `Adi::new().tasks().list(...)`.
     #[must_use]
     pub fn tasks(self) -> adi_tasks::Tasks {

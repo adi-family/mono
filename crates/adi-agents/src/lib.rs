@@ -81,6 +81,7 @@ pub use run::{
 };
 
 use agent::validate_name;
+use knowledge::rescope_base;
 use workspace::CONV_ENV;
 use backends::adi_events as turn_events;
 use runner::{
@@ -319,6 +320,61 @@ impl Agents {
             return Err(Error::AlreadyRunning(from.to_string()));
         }
         std::fs::rename(self.agent_file(from).path(), self.agent_file(to).path()).map_err(Error::Io)
+    }
+
+    /// Follow a project rename into this registry: re-point every agent definition that names
+    /// `from` — the agent's own `project`, each attached secret's scope, and every
+    /// `project:<from>/…` knowledge base — and carry that project's run limit across with it.
+    /// Returns how many definitions changed.
+    ///
+    /// All four matter at launch, and each fails differently if left behind: the `project` decides
+    /// where a run starts and which database it gets, a secret attachment that names a dead scope
+    /// silently injects nothing, a knowledge entry pointing at a moved base is dropped as
+    /// unreadable, and a stranded limit stops throttling the project it was written for.
+    ///
+    /// Definitions are written back in place — no `updated_at` bump, no `adi.agents.saved` — since
+    /// following a rename is not an edit anybody made to the agent.
+    ///
+    /// # Errors
+    /// [`Error::Config`] if a manifest or the limits file can't be written, plus everything
+    /// [`list`](Self::list) can return.
+    pub fn rename_project(&self, from: &str, to: &str) -> Result<usize> {
+        if from == to {
+            return Ok(0);
+        }
+        let mut changed = 0;
+        for mut agent in self.list()? {
+            let m = &mut agent.manifest;
+            let mut touched = false;
+            if m.project.as_deref() == Some(from) {
+                m.project = Some(to.to_string());
+                touched = true;
+            }
+            for attachment in &mut m.secrets {
+                if attachment.project.as_deref() == Some(from) {
+                    attachment.project = Some(to.to_string());
+                    touched = true;
+                }
+            }
+            for entry in &mut m.knowledge {
+                if let Some(moved) = rescope_base(entry, from, to) {
+                    *entry = moved;
+                    touched = true;
+                }
+            }
+            if !touched {
+                continue;
+            }
+            self.agent_file(&agent.name).save(m)?;
+            changed += 1;
+        }
+
+        let mut limits = self.limits();
+        if let Some(cap) = limits.projects.remove(from) {
+            limits.projects.insert(to.to_string(), cap);
+            self.set_limits(limits)?;
+        }
+        Ok(changed)
     }
 
     /// How many runs may be live at once — overall and per project — read from
@@ -2415,6 +2471,73 @@ mod tests {
         second_run.tools.clear();
         pin_tool_help(&sessions, "solver", &next.id, &mut second_run);
         assert_eq!(second_run.tool_help, None, "nothing to render, nothing kept");
+    }
+
+    /// Every place an agent definition can name a project has to follow the rename, because each
+    /// one fails silently rather than loudly: a run starts in the wrong directory, a secret
+    /// injects nothing, a base drops out of the wish list, a cap stops applying.
+    #[test]
+    fn rename_project_follows_every_field_that_names_it() {
+        let store = scratch("rename-project");
+        let mut mine = spec("process:claude");
+        mine.project = Some("old".into());
+        mine.knowledge = vec![
+            "project:old/runbook".into(),
+            "global/notes".into(),
+            "project:other/notes".into(),
+        ];
+        mine.secrets = vec![
+            SecretAttachment {
+                project: Some("old".into()),
+                name: "API_KEY".into(),
+            },
+            SecretAttachment {
+                project: None,
+                name: "SHARED".into(),
+            },
+        ];
+        let saved = store.save("solver", mine).expect("save");
+
+        let mut stranger = spec("process:claude");
+        stranger.project = Some("other".into());
+        store.save("stranger", stranger).expect("save stranger");
+
+        store.set_project_limit("old", 2).expect("limit");
+        store.set_project_limit("other", 5).expect("other limit");
+
+        assert_eq!(store.rename_project("old", "new").expect("rename"), 1);
+
+        let moved = store.get("solver").expect("get").expect("present");
+        assert_eq!(moved.manifest.project.as_deref(), Some("new"));
+        assert_eq!(
+            moved.manifest.knowledge,
+            ["project:new/runbook", "global/notes", "project:other/notes"]
+        );
+        assert_eq!(
+            moved.manifest.secrets,
+            [
+                SecretAttachment {
+                    project: Some("new".into()),
+                    name: "API_KEY".into(),
+                },
+                SecretAttachment {
+                    project: None,
+                    name: "SHARED".into(),
+                },
+            ]
+        );
+        // Following a rename is not an edit, so the definition's clock stands still.
+        assert_eq!(moved.manifest.updated_at, saved.manifest.updated_at);
+
+        let limits = store.limits();
+        assert_eq!(limits.projects.get("new"), Some(&2));
+        assert_eq!(limits.projects.get("old"), None);
+        assert_eq!(limits.projects.get("other"), Some(&5));
+
+        let stranger = store.get("stranger").expect("get").expect("present");
+        assert_eq!(stranger.manifest.project.as_deref(), Some("other"));
+
+        assert_eq!(store.rename_project("old", "new").expect("again"), 0);
     }
 
     #[test]

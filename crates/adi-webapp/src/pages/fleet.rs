@@ -29,7 +29,8 @@ use adi_ui::{Row as TableRow, Table};
 use crate::fetch;
 use crate::state::{FleetForm, State};
 use crate::ui::{
-    apply_mutation, confirm, fmt_date, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, TextField, updated_text,
+    apply_mutation, confirm, fmt_date, Key, menu_item, prompt, row_actions, rows_or_placeholder,
+    sort_rows, TextField, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -486,14 +487,4 @@ where
     F: std::future::Future<Output = Result<FleetState, String>> + 'static,
 {
     apply_mutation(state, busy, ok_msg, |s, f| s.fleet.set(Some(f)), fut);
-}
-
-/// A native prompt, returning `Some` only when the user accepts with text. A browser that has no
-/// `prompt` (or denies it) reads as "cancelled", so nothing is renamed by accident — the same
-/// fail-quiet shape [`confirm`](crate::ui::confirm) has for the destructive actions.
-fn prompt(message: &str, default: &str) -> Option<String> {
-    web_sys::window()?
-        .prompt_with_message_and_default(message, default)
-        .ok()
-        .flatten()
 }

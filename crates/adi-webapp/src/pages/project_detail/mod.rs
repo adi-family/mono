@@ -2,7 +2,7 @@
 //! the project's `.adi/hive.yaml`, and an in-place file browser/editor scoped to the project's own
 //! directory (via the isolated `adi-fs` jail).
 
-use adi_webapp_api::types::{ProjectDetail, ProjectsState};
+use adi_webapp_api::types::{ProjectDetail, ProjectRenamed, ProjectsState};
 use leptos::prelude::*;
 use adi_ui::{Table};
 use wasm_bindgen_futures::spawn_local;
@@ -23,7 +23,7 @@ use crate::state::{
     TermWatch,
     ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
 };
-use crate::ui::{flash_view, fmt_date};
+use crate::ui::{flash_view, fmt_date, prompt};
 
 mod agents_panel;
 mod files;
@@ -279,11 +279,15 @@ fn detail_body(
         }
     };
 
+    let slug_id = id.clone();
+    let slug_name = name.clone();
     view! {
         <div class="adi-bar">
             <h1 class="adi-bar__title">{name}</h1>
             <span class="adi-chip">{status_label}</span>
-            <span class="adi-chip adi-mono" title="directory under ~/.adi/mono/projects">{id}</span>
+            <button class="adi-chip adi-chip--action adi-mono" type="button"
+                title="the project's slug: its directory under ~/.adi/mono/projects and the word in its URL — click to rename"
+                on:click=move |_| rename_slug(state, route, &slug_id, &slug_name)>{id}</button>
             {parent_link(state, route, d.parent.clone())}
             <span class="adi-spacer"></span>
             <span class="adi-updated">{meta}</span>
@@ -322,6 +326,73 @@ fn detail_body(
         })}
     }
     .into_any()
+}
+
+/// Rename the project's slug — its id, which is its directory name and the word in its URL.
+///
+/// A prompt rather than an inline field, for the reason the fleet's rename uses one: the rename
+/// names the project the header was drawn for, and a form would let that and the project the page
+/// has since navigated to drift apart. Blank, unchanged, or cancelled does nothing.
+///
+/// On success the page follows the project to its new address — the old one is a 404 the moment
+/// the directory moves — and the flash says what came with it, because a slug rename quietly
+/// carries this project's secrets, database and knowledge bases across with it.
+fn rename_slug(state: State, route: RwSignal<Route>, id: &str, name: &str) {
+    let Some(new_id) = prompt(
+        &format!(
+            "New slug for “{name}”.\n\nEverything filed under it — tools, agents, triggers, \
+             secrets, its database and knowledge bases — moves with it.\n\nLetters, digits, \
+             '.', '-' or '_':"
+        ),
+        id,
+    ) else {
+        return;
+    };
+    let new_id = new_id.trim().to_string();
+    if new_id.is_empty() || new_id == id {
+        return;
+    }
+    let id = id.to_string();
+    spawn_local(async move {
+        match fetch::rename_project(id, new_id).await {
+            Ok(report) => {
+                state.projects.set(Some(report.projects.clone()));
+                state.flash.set(Some(renamed_flash(&report)));
+                open_project(state, route, report.id);
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+    });
+}
+
+/// What a finished rename says: where the project went, what followed it, and — as an error, since
+/// it needs somebody — anything that did not.
+fn renamed_flash(report: &ProjectRenamed) -> Flash {
+    let counts = [
+        ("sub-project", report.subprojects),
+        ("tool", report.tools),
+        ("agent", report.agents),
+        ("trigger", report.triggers),
+        ("secret", report.secrets),
+        ("knowledge base", report.knowledge),
+        ("database", usize::from(report.database)),
+    ];
+    let followed: Vec<String> = counts
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(what, n)| format!("{n} {what}{}", if *n == 1 { "" } else { "s" }))
+        .collect();
+    let moved = if followed.is_empty() {
+        String::new()
+    } else {
+        format!(" — {} came with it", followed.join(", "))
+    };
+    let msg = format!("{} is now {}{moved}.", report.from, report.id);
+    if report.warnings.is_empty() {
+        Flash::ok(msg)
+    } else {
+        Flash::err(format!("{msg} {}", report.warnings.join(" ")))
+    }
 }
 
 /// Which projects' items a panel on this page shows: the open project, plus every transitive

@@ -4,12 +4,12 @@
 
 > Register and track adi projects: one metadata manifest (config.toml) per project directory under ~/.adi/mono/projects. Pure library.
 
-3 structs · 1 enum · 1 type alias across 3 files.
+4 structs · 1 enum · 1 type alias across 3 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
-- [`src/lib.rs`](#srclibrs) — `Projects`
+- [`src/lib.rs`](#srclibrs) — `Projects`, `Renamed`
 - [`src/project.rs`](#srcprojectrs) — `Manifest`, `Project`
 
 ---
@@ -51,6 +51,18 @@ The projects registry: lists, reads, and mutates the per-project manifests under
 #[derive(Debug, Clone)]
 pub struct Projects {
     config: Config,
+}
+```
+
+### struct `Renamed`
+
+What `Projects::rename` did: the project under its new id, and how many sub-projects had their `parent` re-pointed at it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Renamed {
+    pub project: Project,
+    pub subprojects: usize,
 }
 ```
 

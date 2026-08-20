@@ -12,6 +12,7 @@ mod awaits;
 mod http;
 mod live;
 mod node;
+mod projects;
 mod scan;
 mod transfer;
 mod viewer;
@@ -550,6 +551,8 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/projects/archive") => handlers::archive_project(projects, &req.body),
         ("POST", "/api/projects/unarchive") => handlers::unarchive_project(projects, &req.body),
         ("POST", "/api/projects/remove") => handlers::remove_project(projects, &req.body),
+        // Not a `handlers::` arm: a rename spans stores that crate does not reach (see [`projects`]).
+        ("POST", "/api/projects/rename") => projects::rename_project(projects, &req.body),
         ("POST", "/api/projects/files") => handlers::list_files(projects, &req.body),
         ("POST", "/api/projects/file/read") => handlers::read_file(projects, &req.body),
         ("POST", "/api/projects/file/write") => handlers::write_file(projects, &req.body),

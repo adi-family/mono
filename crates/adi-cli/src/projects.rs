@@ -35,6 +35,17 @@ pub(crate) enum ProjectsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Rename a project's id — the slug in its URL and the name of its directory. Everything
+    /// filed under it (tools, agents, triggers, secrets, its database and knowledge bases)
+    /// follows the new id.
+    Rename {
+        /// The project to rename.
+        id: String,
+        /// Its new id: letters, digits, '.', '-', or '_'.
+        new_id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Archive a project (soft delete; reversible with `unarchive`).
     Archive { id: String },
     /// Restore an archived project.
@@ -155,6 +166,16 @@ pub(crate) fn run_projects(adi: Adi, command: ProjectsCommand) -> Result<(), Str
                 print_json(&project);
             } else {
                 print_project(&project);
+            }
+        }
+        ProjectsCommand::Rename { id, new_id, json } => {
+            let report = adi.rename_project(&id, &new_id).map_err(|e| e.to_string())?;
+            if json {
+                print_json(&report);
+            } else {
+                println!("Renamed {} to {}.", report.from, report.project.id);
+                print_project(&report.project);
+                print_followed(&report);
             }
         }
         ProjectsCommand::Archive { id } => {
@@ -390,6 +411,32 @@ fn print_workspace(ws: &adi_core::Workspaces, entry: &adi_core::WorkspaceEntry) 
         meta.push(format!("pid: {pid}"));
     }
     println!("  {}", meta.join(" · "));
+}
+
+/// Print what followed a rename into the rest of the store — one line of counts, and every store
+/// that could not be carried across on a line of its own. A clean rename with nothing filed under
+/// the project says nothing at all rather than a row of zeros.
+fn print_followed(report: &adi_core::ProjectRenamed) {
+    let counts = [
+        ("sub-projects", report.subprojects),
+        ("tools", report.tools),
+        ("agents", report.agents),
+        ("triggers", report.triggers),
+        ("secrets", report.secrets),
+        ("knowledge bases", report.knowledge),
+        ("databases", usize::from(report.database)),
+    ];
+    let followed: Vec<String> = counts
+        .iter()
+        .filter(|(_, n)| *n > 0)
+        .map(|(what, n)| format!("{n} {what}"))
+        .collect();
+    if !followed.is_empty() {
+        println!("  followed: {}", followed.join(", "));
+    }
+    for warning in &report.warnings {
+        println!("  ! {warning}");
+    }
 }
 
 /// Print a project as a human line plus its description, mirroring `print_human` for services.

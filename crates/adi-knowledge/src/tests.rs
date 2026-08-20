@@ -90,6 +90,51 @@ fn a_base_has_to_exist_before_anything_can_be_put_in_it() {
 }
 
 #[test]
+fn renaming_a_project_moves_its_bases_and_the_notes_in_them() {
+    let (_dir, store) = store();
+    let old = base("project:old/runbook");
+    store.ensure_base(&old).expect("ensure");
+    store
+        .add(&old, NewKnowledge::new("Front door", "Rebuild adi-hive"))
+        .expect("add");
+    let elsewhere = base("project:other/runbook");
+    store.ensure_base(&elsewhere).expect("ensure other");
+    let global = base("global/notes");
+    store.ensure_base(&global).expect("ensure global");
+
+    assert_eq!(store.rename_project("old", "new").expect("rename"), 1);
+
+    let moved = base("project:new/runbook");
+    assert!(store.get_base(&moved).expect("get").is_some());
+    assert!(store.get_base(&old).expect("get old").is_none());
+    let notes = store.list(&moved, &Filter::default()).expect("list");
+    assert_eq!(notes.len(), 1);
+    assert_eq!(notes[0].title, "Front door");
+
+    // Bases belonging to another project, or to nobody, stayed where they were.
+    assert!(store.get_base(&elsewhere).expect("get").is_some());
+    assert!(store.get_base(&global).expect("get").is_some());
+
+    // Nothing to move a second time; a project with no bases is a no-op, not a failure.
+    assert_eq!(store.rename_project("old", "new").expect("again"), 0);
+    assert_eq!(store.rename_project("ghost", "spirit").expect("none"), 0);
+}
+
+#[test]
+fn renaming_a_project_onto_an_occupied_base_moves_nothing() {
+    let (_dir, store) = store();
+    store.ensure_base(&base("project:old/runbook")).expect("old");
+    store.ensure_base(&base("project:old/scratch")).expect("old scratch");
+    store.ensure_base(&base("project:new/runbook")).expect("new");
+
+    let err = store.rename_project("old", "new").unwrap_err();
+    assert!(matches!(err, Error::BaseExists(_)), "{err:?}");
+    // The refusal is checked before the first move, so the whole of `old` is still there.
+    assert!(store.get_base(&base("project:old/runbook")).expect("get").is_some());
+    assert!(store.get_base(&base("project:old/scratch")).expect("get").is_some());
+}
+
+#[test]
 fn creating_a_base_twice_is_refused_but_ensuring_it_twice_is_not() {
     let (_dir, store) = store();
     let id = base("global/notes");

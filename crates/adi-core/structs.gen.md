@@ -4,7 +4,7 @@
 
 > Core shared library for the adi-family workspace.
 
-12 structs · 2 enums across 8 files.
+13 structs · 2 enums across 9 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
 - [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `MeshNodeChange`, `Dns`
 - [`src/proc.rs`](#srcprocrs) — `Output`
+- [`src/projects.rs`](#srcprojectsrs) — `ProjectRenamed`
 - [`src/service.rs`](#srcservicers) — `Action`, `ServiceReport`
 - [`src/status.rs`](#srcstatusrs) — `DaemonStatus`
 - [`src/update.rs`](#srcupdaters) — `RunOutcome`, `Update`, `Updater`
@@ -118,6 +119,30 @@ Exit status + combined stdout/stderr of a finished subprocess.
 pub struct Output {
     pub status: i32,
     pub text: String,
+}
+```
+
+---
+
+## `src/projects.rs`
+
+### struct `ProjectRenamed`
+
+What a `rename_project` did, store by store — the receipt the CLI prints and the panel flashes. Counts rather than lists: the point is that nothing was left behind.
+
+```rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ProjectRenamed {
+    pub project: Project,
+    pub from: String,
+    pub subprojects: usize,
+    pub tools: usize,
+    pub agents: usize,
+    pub triggers: usize,
+    pub secrets: usize,
+    pub knowledge: usize,
+    pub database: bool,
+    pub warnings: Vec<String>,
 }
 ```
 

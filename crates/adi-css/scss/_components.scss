@@ -901,6 +901,21 @@ $runlog-dim: #8b93a1;
   color: var(--muted);
 }
 
+// A chip that *does* something — the project header's slug, which is also the control that
+// renames it. A `<button>` inherits neither font nor line-height, so both are taken back here;
+// the hover is what says the chip is more than a label.
+.adi-chip--action {
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: inherit;
+
+  &:hover {
+    border-color: var(--accent);
+    color: var(--ink);
+  }
+}
+
 // A "belongs to a nested sub-project" marker for an item (agent, task) surfaced in a parent
 // project's panel. Rendered as a clickable chip beside the item's name that opens the owning
 // sub-project. Accent-tinted so it reads as borrowed-from-elsewhere, not one of this project's own.

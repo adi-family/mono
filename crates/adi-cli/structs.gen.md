@@ -834,6 +834,12 @@ pub(crate) enum ProjectsCommand {
         #[arg(long)]
         json: bool,
     },
+    Rename {
+        id: String,
+        new_id: String,
+        #[arg(long)]
+        json: bool,
+    },
     Archive {
         id: String,
     },

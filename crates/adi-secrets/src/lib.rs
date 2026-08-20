@@ -306,6 +306,74 @@ impl Secrets {
         Ok(Some(decode_value(plaintext)?))
     }
 
+    /// Follow a project rename into this store: move every secret scoped to `from` into `to`.
+    /// Returns how many were moved.
+    ///
+    /// This cannot be a directory move. A ciphertext is bound to its exact location by its
+    /// [AAD](aad) — that binding is the thing that stops a value being copied into another
+    /// project's scope and still decrypting — so each secret is decrypted under the old scope and
+    /// re-encrypted under the new one, with a fresh nonce. An OAuth secret's refresh token is
+    /// carried across the same way, under its own AAD. Everything else — description, both
+    /// timestamps, the provider metadata — is preserved: the secret did not change, its address
+    /// did.
+    ///
+    /// The old scope's directory is removed once it is empty. A `from` with no secrets is a no-op
+    /// that touches neither the master key nor the disk.
+    ///
+    /// # Errors
+    /// [`Error::InvalidName`] for an unsafe id on either side, [`Error::Decrypt`] if a value in
+    /// scope can't be decrypted, or [`Error::Config`]/[`Error::Crypto`]/[`Error::Io`] on a key,
+    /// write, or removal failure.
+    pub fn rename_project(&self, from: &str, to: &str) -> Result<usize> {
+        validate_project(from)?;
+        validate_project(to)?;
+        if from == to {
+            return Ok(0);
+        }
+        let secrets = self.list(Some(from))?;
+        if secrets.is_empty() {
+            return Ok(0);
+        }
+
+        let key = crypto::load_or_create_key(&self.dir())?;
+        self.ensure_scope_dir(Some(to))?;
+        let mut moved = 0;
+        for secret in secrets {
+            let name = secret.name.as_str();
+            let source = self.manifest_file(Some(from), name)?;
+            let manifest: Manifest = source.load()?;
+
+            let value = crypto::decrypt(
+                &key,
+                &aad(Some(from), name),
+                &manifest.nonce,
+                &manifest.ciphertext,
+            )?;
+            let (nonce, ciphertext) = crypto::encrypt(&key, &aad(Some(to), name), &value)?;
+            let oauth = match manifest.oauth {
+                Some(meta) => Some(recrypt_refresh(&key, from, to, name, meta)?),
+                None => None,
+            };
+
+            let target = self.manifest_file(Some(to), name)?;
+            target.save(&Manifest {
+                description: manifest.description,
+                nonce,
+                ciphertext,
+                created_at: manifest.created_at,
+                updated_at: manifest.updated_at,
+                oauth,
+            })?;
+            harden_file(target.path())?;
+            optional(std::fs::remove_file(source.path()))?;
+            moved += 1;
+        }
+        // Only when it is empty — anything left behind is somebody else's, and a rename is not a
+        // licence to delete it.
+        optional(std::fs::remove_dir(self.scope_dir(Some(from))?))?;
+        Ok(moved)
+    }
+
     /// Delete a secret from a scope. Returns `false` if it wasn't there.
     ///
     /// # Errors
@@ -405,6 +473,29 @@ fn aad(project: Option<&str>, name: &str) -> String {
         None => format!("{GLOBAL_DIR}/{name}"),
         Some(id) => format!("{PROJECTS_DIR}/{id}/{name}"),
     }
+}
+
+/// Re-encrypt an OAuth secret's refresh token from project scope `from` into scope `to`, leaving
+/// the rest of its provenance untouched. A secret with no stored refresh token carries across
+/// unchanged. Beside [`aad_refresh`], which is the only reason it exists.
+fn recrypt_refresh(
+    key: &[u8; 32],
+    from: &str,
+    to: &str,
+    name: &str,
+    meta: OAuthMeta,
+) -> Result<OAuthMeta> {
+    let (Some(nonce), Some(ciphertext)) = (&meta.refresh_nonce, &meta.refresh_ciphertext) else {
+        return Ok(meta);
+    };
+    let refresh = crypto::decrypt(key, &aad_refresh(Some(from), name), nonce, ciphertext)?;
+    let (refresh_nonce, refresh_ciphertext) =
+        crypto::encrypt(key, &aad_refresh(Some(to), name), &refresh)?;
+    Ok(OAuthMeta {
+        refresh_nonce: Some(refresh_nonce),
+        refresh_ciphertext: Some(refresh_ciphertext),
+        ..meta
+    })
 }
 
 /// The AAD binding an OAuth secret's **refresh token** to its location — distinct from the
@@ -609,6 +700,81 @@ mod tests {
         // The global one is untouched.
         assert_eq!(store.reveal(None, "K").expect("reveal").as_deref(), Some("g"));
         assert!(!store.remove(Some("proj"), "K").expect("remove missing"));
+    }
+
+    #[test]
+    fn rename_project_re_encrypts_every_secret_into_the_new_scope() {
+        let store = scratch("rename-project");
+        store
+            .set(Some("old"), "API_KEY", "s3cr3t", Some("the key"))
+            .expect("set");
+        let created = store
+            .get(Some("old"), "API_KEY")
+            .expect("get")
+            .expect("present")
+            .created_at;
+        let token = OAuthToken {
+            provider: "google".to_string(),
+            access_token: "ya29.access".to_string(),
+            refresh_token: Some("1//refresh".to_string()),
+            expires_at: Some(1_800_000_000),
+            scope: Some("email".to_string()),
+        };
+        store
+            .set_oauth(Some("old"), "GOOGLE_TOKEN", &token, None)
+            .expect("set_oauth");
+        store
+            .set(Some("other"), "API_KEY", "not mine", None)
+            .expect("other project");
+        store.set(None, "API_KEY", "global", None).expect("global");
+
+        assert_eq!(store.rename_project("old", "new").expect("rename"), 2);
+
+        // The values decrypt at the new address — which they only can if they were re-encrypted
+        // under it, since the AAD binds a ciphertext to its scope.
+        assert_eq!(
+            store.reveal(Some("new"), "API_KEY").expect("reveal").as_deref(),
+            Some("s3cr3t")
+        );
+        assert_eq!(
+            store.reveal(Some("new"), "GOOGLE_TOKEN").expect("reveal").as_deref(),
+            Some("ya29.access")
+        );
+        assert_eq!(
+            store.reveal_refresh(Some("new"), "GOOGLE_TOKEN").expect("refresh").as_deref(),
+            Some("1//refresh")
+        );
+
+        // Metadata travelled unchanged — a rename is not a re-set.
+        let moved = store.get(Some("new"), "API_KEY").expect("get").expect("present");
+        assert_eq!(moved.description.as_deref(), Some("the key"));
+        assert_eq!(moved.created_at, created);
+        let oauth = store
+            .get(Some("new"), "GOOGLE_TOKEN")
+            .expect("get")
+            .expect("present")
+            .oauth
+            .expect("oauth info");
+        assert_eq!(oauth.provider, "google");
+        assert_eq!(oauth.expires_at, Some(1_800_000_000));
+        assert!(oauth.has_refresh);
+
+        // The old scope is gone, and no other scope was touched.
+        assert!(store.list(Some("old")).expect("list old").is_empty());
+        assert!(!store.dir().join("projects/old").exists());
+        assert_eq!(
+            store.reveal(Some("other"), "API_KEY").expect("reveal").as_deref(),
+            Some("not mine")
+        );
+        assert_eq!(store.reveal(None, "API_KEY").expect("reveal").as_deref(), Some("global"));
+
+        // Nothing to move the second time, and renaming onto itself is a no-op.
+        assert_eq!(store.rename_project("old", "new").expect("again"), 0);
+        assert_eq!(store.rename_project("new", "new").expect("self"), 0);
+        assert_eq!(
+            store.reveal(Some("new"), "API_KEY").expect("reveal").as_deref(),
+            Some("s3cr3t")
+        );
     }
 
     #[test]

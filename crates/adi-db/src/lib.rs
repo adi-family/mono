@@ -336,6 +336,42 @@ impl Db {
         Ok(dest.to_path_buf())
     }
 
+    /// Follow a project rename into this store: move `db/projects/<from>.db` to
+    /// `db/projects/<to>.db`, with the WAL and shared-memory sidecars SQLite may have left beside
+    /// it. Returns `false` when the project never had a database — the common case, and not a
+    /// failure.
+    ///
+    /// A plain file move, deliberately: nothing inside a SQLite file names its own path, and the
+    /// scope a database belongs to is which file it is. Refuses to overwrite an existing database
+    /// at `to` rather than merge or clobber two projects' data.
+    ///
+    /// # Errors
+    /// [`Error::InvalidProject`] for an unsafe id on either side, or [`Error::Io`] if `to` already
+    /// has a database or the move fails.
+    pub fn rename_project(&self, from: &str, to: &str) -> Result<bool> {
+        let source = self.path(Some(from))?;
+        let target = self.path(Some(to))?;
+        if from == to || !source.exists() {
+            return Ok(false);
+        }
+        if target.exists() {
+            return Err(Error::Io(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("{} already exists", target.display()),
+            )));
+        }
+        std::fs::rename(&source, &target)?;
+        // The sidecars only exist while a connection is (or was) open; each is named after the
+        // database file, so each has to follow it or SQLite would read a stale journal.
+        for suffix in ["-wal", "-shm"] {
+            let sidecar = sibling(&source, suffix);
+            if sidecar.exists() {
+                std::fs::rename(sidecar, sibling(&target, suffix))?;
+            }
+        }
+        Ok(true)
+    }
+
     /// The environment a run gets so its `ts` code and shell find the right database without being
     /// told — see [`Config::db_env`], which the launching crates call directly (they need the two
     /// variables, not a SQLite dependency).
@@ -418,6 +454,15 @@ pub fn query_on_json(
     params: &[serde_json::Value],
 ) -> Result<QueryResult> {
     query_bound(conn, sql, params.iter().map(value::to_sql_json).collect())
+}
+
+/// A database file's sidecar path — `<db>-wal`, `<db>-shm`. SQLite names them by appending to the
+/// whole file name (extension included), which is why this is a suffix on the file name rather
+/// than a change of extension.
+fn sibling(db: &Path, suffix: &str) -> PathBuf {
+    let mut name = db.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
 /// The shared body of [`query_on`] and [`query_on_json`], once the parameters are bound.
@@ -518,6 +563,36 @@ mod tests {
                 .expect("project")
                 .ends_with("db/projects/acme.db")
         );
+    }
+
+    #[test]
+    fn rename_project_moves_the_database_and_its_sidecars() {
+        let store = scratch("rename-project");
+        store
+            .exec(Some("old"), "create table t (body text)", &[])
+            .expect("ddl");
+        store
+            .exec(Some("old"), "insert into t values ('kept')", &[])
+            .expect("insert");
+        assert!(store.path(Some("old")).expect("path").exists());
+
+        assert!(store.rename_project("old", "new").expect("rename"));
+        assert!(!store.path(Some("old")).expect("old path").exists());
+        let rows = store
+            .query(Some("new"), "select body from t", &[])
+            .expect("query");
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows[0][0], serde_json::json!("kept"));
+        // No `-wal` left orphaned beside the file that moved away.
+        assert!(!sibling(&store.path(Some("old")).expect("old path"), "-wal").exists());
+
+        // A project with no database of its own is a no-op, not a failure.
+        assert!(!store.rename_project("never-used", "elsewhere").expect("no db"));
+        // And a rename onto an occupied id refuses rather than clobbering it.
+        store
+            .exec(Some("other"), "create table t (body text)", &[])
+            .expect("other");
+        assert!(store.rename_project("new", "other").is_err());
     }
 
     #[test]

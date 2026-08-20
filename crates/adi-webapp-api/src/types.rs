@@ -317,6 +317,54 @@ pub struct ProjectRef {
     pub id: String,
 }
 
+/// Request body for `POST /api/projects/rename` — give a project a new id (its slug: the word in
+/// its URL, and the name of its directory under `projects/`).
+///
+/// The id is not a display name — that is [`Project::name`], and editing one is not editing the
+/// other. `new_id` must be a single path segment of letters, digits, `.`, `-`, or `_`, and must
+/// not already be taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RenameProject {
+    /// The project to rename.
+    pub id: String,
+    /// The id it should have.
+    pub new_id: String,
+}
+
+/// Response from `POST /api/projects/rename` — what the rename did, plus the fresh project list so
+/// the client refreshes in one round-trip (as every other project mutation does).
+///
+/// The counts are what *followed* the project into its new id. They are worth reporting rather
+/// than assuming: a project id is written down in half the store, and "renamed, and 4 secrets and
+/// 2 agents came with it" is the difference between a rename somebody can trust and one they have
+/// to go and check.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectRenamed {
+    /// The new id — where the project now lives.
+    pub id: String,
+    /// The id it had before.
+    pub from: String,
+    /// Sub-projects re-parented onto the new id.
+    pub subprojects: usize,
+    /// Tools re-filed under it.
+    pub tools: usize,
+    /// Agent definitions re-pointed at it.
+    pub agents: usize,
+    /// Triggers re-pointed at it.
+    pub triggers: usize,
+    /// Project-scoped secrets re-encrypted into the new scope.
+    pub secrets: usize,
+    /// Knowledge bases moved to the new scope.
+    pub knowledge: usize,
+    /// Whether the project's database moved with it.
+    pub database: bool,
+    /// Stores that could not be carried across, each said in a sentence. Empty on a clean rename.
+    #[serde(default)]
+    pub warnings: Vec<String>,
+    /// The fresh project list.
+    pub projects: ProjectsState,
+}
+
 /// Request body for `POST /api/hive/start` — launch one hive service's runner. `project` is the
 /// owning project id, or `None` for the global front-door hive.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

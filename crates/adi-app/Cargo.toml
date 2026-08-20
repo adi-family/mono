@@ -21,6 +21,11 @@ adi-ports-manager = { workspace = true }
 
 adi-projects = { workspace = true }
 
+# The cross-store command surface. The panel reaches for it in one place: renaming a project moves
+# an id that half the store files things under (see `crate::projects`), and that follow-the-rename
+# sequence belongs in one crate rather than one copy here and another in the CLI.
+adi-core = { workspace = true }
+
 adi-secrets = { workspace = true }
 
 adi-db = { workspace = true }

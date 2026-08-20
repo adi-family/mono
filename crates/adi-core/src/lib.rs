@@ -9,6 +9,7 @@ pub mod dns;
 pub mod launchd;
 pub mod paths;
 mod proc;
+pub mod projects;
 pub mod service;
 pub mod status;
 pub mod update;
@@ -47,7 +48,9 @@ pub use adi_knowledge::{
     Scope as KnowledgeScope, resolve_agent_bases,
 };
 
-pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects};
+pub use adi_projects::{Error as ProjectsError, Manifest, Project, Projects, Renamed};
+
+pub use projects::{ProjectRenamed, rename_project};
 
 pub use adi_secrets::{Error as SecretsError, Secret, Secrets};
 

@@ -16,6 +16,7 @@ use adi_webapp_api::types::{
     NewTask, NewTool, NewWorkspace,
     NodeServiceRef,
     PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
+    ProjectRenamed, RenameProject,
     GoalsOf, ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun,
     SimulateAgent, SimulateTurn,
     RunAgent, RunRef,
@@ -197,6 +198,13 @@ pub async fn project_detail(id: &str) -> Result<ProjectDetail, String> {
 
 pub async fn remove_project(id: String) -> Result<ProjectsState, String> {
     post("/api/projects/remove", &ProjectRef { id }).await
+}
+
+/// Give a project a new id. The odd one out here: it answers with a receipt of what followed the
+/// project into its new id — which the page has to *say*, since renaming a slug quietly moves
+/// secrets and databases — and carries the fresh list inside it.
+pub async fn rename_project(id: String, new_id: String) -> Result<ProjectRenamed, String> {
+    post("/api/projects/rename", &RenameProject { id, new_id }).await
 }
 
 pub async fn tasks() -> Result<TasksState, String> {

@@ -194,6 +194,43 @@ impl Triggers {
         })
     }
 
+    /// Follow a project rename into this registry: every trigger filed under `from`, and every
+    /// `trigger_on` allowlist that names it, is re-pointed at `to`. Returns how many definitions
+    /// changed.
+    ///
+    /// Both fields matter and for different reasons: a trigger's own `project` decides the
+    /// directory and database its code block runs against, while an allowlist entry decides
+    /// whether it fires at all — an entry left naming a dead id silently stops matching, which is
+    /// the kind of failure nobody reports because nothing happens.
+    ///
+    /// The timestamps are deliberately left alone: following a rename is not an edit anybody made.
+    ///
+    /// # Errors
+    /// [`Error::Config`] if a manifest can't be written, plus everything [`list`](Self::list) can
+    /// return.
+    pub fn rename_project(&self, from: &str, to: &str) -> Result<usize> {
+        let mut changed = 0;
+        for mut trigger in self.list()? {
+            let mut touched = false;
+            if trigger.manifest.project.as_deref() == Some(from) {
+                trigger.manifest.project = Some(to.to_string());
+                touched = true;
+            }
+            for allowed in &mut trigger.manifest.trigger_on {
+                if allowed == from {
+                    *allowed = to.to_string();
+                    touched = true;
+                }
+            }
+            if !touched {
+                continue;
+            }
+            self.trigger_file(&trigger.name).save(&trigger.manifest)?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
+
     /// Fire a registered trigger: spawn its code block detached, with `payload` (an event body,
     /// if the source carries one) handed over via `ADI_PAYLOAD_FILE`/`ADI_PAYLOAD`. This is the
     /// mechanism every event source funnels into — the webhook endpoint passes the request body,
@@ -398,6 +435,37 @@ mod tests {
         assert!(!second.manifest.enabled);
         assert_eq!(second.manifest.created_at, created);
         assert_eq!(store.list().expect("list").len(), 1);
+    }
+
+    #[test]
+    fn rename_project_follows_both_the_owner_and_the_allowlist() {
+        let store = scratch("rename-project");
+        let mut owned = spec(KIND_BACKGROUND, "true");
+        owned.project = Some("old".into());
+        let saved = store.save("owned", owned).expect("owned");
+
+        let mut listener = spec(KIND_EVENT, "true");
+        listener.trigger_on = vec!["old".into(), "other".into()];
+        store.save("listener", listener).expect("listener");
+
+        let mut stranger = spec(KIND_BACKGROUND, "true");
+        stranger.project = Some("other".into());
+        store.save("stranger", stranger).expect("stranger");
+
+        assert_eq!(store.rename_project("old", "new").expect("rename"), 2);
+
+        let owned = store.get("owned").expect("get").expect("present");
+        assert_eq!(owned.manifest.project.as_deref(), Some("new"));
+        // Following a rename is nobody's edit, so the definition's own clock does not move.
+        assert_eq!(owned.manifest.updated_at, saved.manifest.updated_at);
+
+        let listener = store.get("listener").expect("get").expect("present");
+        assert_eq!(listener.manifest.trigger_on, vec!["new", "other"]);
+
+        let stranger = store.get("stranger").expect("get").expect("present");
+        assert_eq!(stranger.manifest.project.as_deref(), Some("other"));
+
+        assert_eq!(store.rename_project("old", "new").expect("again"), 0);
     }
 
     #[test]

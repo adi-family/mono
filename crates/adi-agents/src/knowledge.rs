@@ -24,7 +24,7 @@
 use std::fmt::Write as _;
 
 use adi_config::Config;
-use adi_knowledge::{KnowledgeStore, resolve_agent_bases};
+use adi_knowledge::{BaseId, KnowledgeStore, Scope, resolve_agent_bases};
 
 use crate::agent::StoredAgent;
 
@@ -102,6 +102,21 @@ pub(crate) fn resolve(config: &Config, agent: &StoredAgent) -> RunKnowledge {
     };
 
     RunKnowledge { memory, bases }
+}
+
+/// One `knowledge` entry, re-addressed after its project was renamed — `Some` only when the entry
+/// names a base in project `from`. Anything else (a global base, another project's, an agent's, or
+/// a line that does not parse at all) comes back `None` and is left exactly as written.
+///
+/// Rewriting the entry rather than the whole list is what keeps a wish list a wish list: an agent
+/// that named a base it could never read keeps naming it. A bare `project:<from>` normalizes to
+/// `project:<to>/<default base>` on the way through — the same base, spelled in full.
+pub(crate) fn rescope_base(entry: &str, from: &str, to: &str) -> Option<String> {
+    let id: BaseId = entry.parse().ok()?;
+    if !matches!(&id.scope, Scope::Project { project } if project == from) {
+        return None;
+    }
+    Some(BaseId::new(Scope::project(to).ok()?, id.name).ok()?.to_string())
 }
 
 /// The prompt section telling the run what it knows and how to reach it.
@@ -193,6 +208,28 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&root);
         Config::with_root(root)
+    }
+
+    #[test]
+    fn rescope_base_moves_only_the_renamed_projects_entries() {
+        assert_eq!(
+            rescope_base("project:old/runbook", "old", "new").as_deref(),
+            Some("project:new/runbook")
+        );
+        // A bare project scope means that project's default base, and says so once it moves.
+        assert_eq!(
+            rescope_base("project:old", "old", "new").as_deref(),
+            Some("project:new/default")
+        );
+        for untouched in [
+            "global/runbooks",
+            "agent:reviewer/memory",
+            "project:other/runbook",
+            "not a base id at all",
+            "",
+        ] {
+            assert_eq!(rescope_base(untouched, "old", "new"), None, "{untouched}");
+        }
     }
 
     /// An agent with neither setting must not touch the knowledge store at all — no directory,
