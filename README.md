@@ -91,7 +91,14 @@ cargo test               # test everything
 cargo fmt                # format
 cargo clippy --workspace # lint
 cargo run -p <crate>     # run a specific binary crate
+
+scripts/changelog.sh Unreleased   # the release notes as they stand (see CHANGELOG.md)
 ```
+
+Every user-visible change gets an entry in [CHANGELOG.md](CHANGELOG.md) under
+`## Unreleased`. That file *is* the release notes — the release workflow refuses a tag whose
+version has no section, and what you write there is what every machine is shown before it
+installs the update (`docs/adi-update.md`).
 
 ## License
 

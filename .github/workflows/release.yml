@@ -40,6 +40,8 @@ jobs:
       tag: ${{ steps.resolve.outputs.tag }}
       publish: ${{ steps.resolve.outputs.publish }}
     steps:
+      - uses: actions/checkout@v4
+
       - id: resolve
         run: |
           if [ "${{ github.event_name }}" = "push" ]; then
@@ -62,6 +64,23 @@ jobs:
           echo "tag=$tag"         >> "$GITHUB_OUTPUT"
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
           echo "Releasing $tag (version $version, publish=$publish)"
+
+      # Here, and not in `publish`: the notes are what every machine is shown before it takes
+      # this release, and finding out they were never written after three platforms have spent
+      # half an hour building is finding out too late. Ten seconds, before any of it starts.
+      #
+      # Only when actually publishing — a workflow_dispatch is how the build itself is
+      # rehearsed, at a version that may never be tagged, and that should not need an entry.
+      - name: Check CHANGELOG.md has this release's section
+        run: |
+          if scripts/changelog.sh "${{ steps.resolve.outputs.version }}" > /dev/null; then
+            echo "CHANGELOG.md has a section for ${{ steps.resolve.outputs.version }}."
+          elif [ "${{ steps.resolve.outputs.publish }}" = "true" ]; then
+            echo "::error::CHANGELOG.md has no section for ${{ steps.resolve.outputs.version }} — write the entry (or rename '## Unreleased'), commit, and re-tag"
+            exit 1
+          else
+            echo "::warning::no CHANGELOG.md section for ${{ steps.resolve.outputs.version }} — fine for a dry run, but a real tag would be refused"
+          fi
 
   # ── macOS: the notarized universal bundle, as a DMG ──────────────────────────────────────
   macos:
@@ -249,6 +268,7 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
           TAG: ${{ needs.version.outputs.tag }}
+          PUBLISH: ${{ needs.version.outputs.publish }}
         run: |
           set -euo pipefail
           BASE="https://github.com/${{ github.repository }}/releases/download/$TAG"
@@ -270,17 +290,31 @@ jobs:
           fi
           [ ${#ARGS[@]} -gt 0 ] || { echo "::error::every platform failed to build; nothing to publish"; exit 1; }
 
-          NOTES="ADI v$VERSION"
-          [ ${#MISSING[@]} -eq 0 ] || NOTES="$NOTES (no build for: ${MISSING[*]})"
+          # The release notes, written by hand in CHANGELOG.md and lifted out here. The
+          # `version` job already refused a publish that has no section, so this only falls
+          # back on the dry-run path.
+          if ! scripts/changelog.sh "$VERSION" > release-notes.md; then
+            if [ "$PUBLISH" = "true" ]; then exit 1; fi
+            printf 'ADI v%s\n' "$VERSION" > release-notes.md
+          fi
 
-          scripts/manifest.sh --version "$VERSION" --base-url "$BASE" --notes "$NOTES" "${ARGS[@]}" > manifest.json
+          # A platform that failed to build publishes no artifact, which means it stops
+          # updating — said in the notes rather than left for someone to find by diffing two
+          # manifests.
+          if [ ${#MISSING[@]} -gt 0 ]; then
+            printf '\n---\n\nNo build for: %s. Those platforms stay on the version they are on.\n' \
+              "${MISSING[*]}" >> release-notes.md
+          fi
+
+          scripts/manifest.sh --version "$VERSION" --base-url "$BASE" \
+            --notes "$(cat release-notes.md)" "${ARGS[@]}" > manifest.json
           cat manifest.json
 
           # One line, space separated: this is interpolated straight into the `gh release
           # create` argument list, and a multi-line output would break apart into separate
-          # shell commands there.
+          # shell commands there. The notes go by file for exactly that reason — see the
+          # publish step.
           echo "assets=${ASSETS[*]} manifest.json" >> "$GITHUB_OUTPUT"
-          echo "notes=$NOTES" >> "$GITHUB_OUTPUT"
 
       - name: Check the manifest is what the client expects
         run: |
@@ -311,10 +345,13 @@ jobs:
         run: |
           # --latest matters: the default manifest_url points at `releases/latest/download/`,
           # so a release that is not marked latest reaches nobody.
+          # --notes-file, not --notes: the notes are a whole changelog section, and a
+          # multi-line value interpolated into this argument list would break apart into
+          # separate shell commands.
           gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --title "ADI $TAG" \
-            --notes "${{ steps.manifest.outputs.notes }}" \
+            --notes-file release-notes.md \
             --latest \
             ${{ steps.manifest.outputs.assets }}
           echo "published: https://github.com/${{ github.repository }}/releases/tag/$TAG"
