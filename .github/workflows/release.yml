@@ -255,7 +255,15 @@ jobs:
             [ -f "$d/windows.h" ] && [ ! -e "$d/Windows.h" ] \
               && sudo ln -s windows.h "$d/Windows.h" && echo "linked $d/Windows.h"
           done
-          true
+          # Ubuntu's mingw defaults to the *win32* threading model, whose libgcc pulls in
+          # `gthr-win32.o` and its undefined `__mingwthr_key_dtor`. Nothing referenced that
+          # while the tree was C-only; linking C++ (`-lstdc++`, via usearch → link-cplusplus)
+          # does, and the link fails at the very last step. The posix variant Ubuntu also ships
+          # does not have the problem — and is what Homebrew's mingw defaults to, which is why
+          # this links on a developer's Mac.
+          sudo update-alternatives --set x86_64-w64-mingw32-gcc /usr/bin/x86_64-w64-mingw32-gcc-posix
+          sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
+          x86_64-w64-mingw32-gcc -v 2>&1 | grep -i "thread model" || true
 
       - name: Install trunk
         run: |

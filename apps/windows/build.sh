@@ -53,6 +53,22 @@ if [ "${SKIP_BUILD:-}" != "1" ]; then
             exit 1
         fi
     done
+    # The win32 threading model's libgcc references `__mingwthr_key_dtor`, which nothing
+    # defines. It only bites once C++ is in the link (usearch → link-cplusplus → -lstdc++),
+    # and then it bites at the very last step, after every crate has compiled. Homebrew's
+    # mingw is posix by default; Debian/Ubuntu's is not.
+    case "$(x86_64-w64-mingw32-gcc -v 2>&1)" in
+        *"Thread model: win32"*)
+            echo "error: this mingw uses the win32 threading model, whose libgcc leaves" >&2
+            echo "       __mingwthr_key_dtor undefined once C++ is linked in." >&2
+            echo "       Debian/Ubuntu ships a posix variant — switch to it with:" >&2
+            echo "         sudo update-alternatives --set x86_64-w64-mingw32-gcc \\" >&2
+            echo "           /usr/bin/x86_64-w64-mingw32-gcc-posix" >&2
+            echo "         sudo update-alternatives --set x86_64-w64-mingw32-g++ \\" >&2
+            echo "           /usr/bin/x86_64-w64-mingw32-g++-posix" >&2
+            exit 1
+            ;;
+    esac
     echo "==> cross-compiling for $TARGET (release): ${BINS[*]}"
     ( cd "$ROOT" && cargo build --release --target "$TARGET" \
         -p adi-cli -p adi-dns -p adi-hive -p adi-app )
