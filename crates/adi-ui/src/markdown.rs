@@ -116,9 +116,21 @@ fn blocks(src: &str) -> Vec<Block> {
             let mut items = vec![first];
             i += 1;
             while i < lines.len() {
-                match list_item(lines[i].trim_start()) {
+                let l = lines[i].trim_start();
+                match list_item(l) {
                     Some((same, item)) if same == ordered => {
                         items.push(item);
+                        i += 1;
+                    }
+                    // A line that is neither another item nor a block of its own continues
+                    // the item above it — markdown's lazy continuation, and the only reason
+                    // a wrapped bullet is one bullet. Without it every writer who hard-wraps
+                    // a list (which is every writer with a line limit) gets the tail of each
+                    // item as an unindented paragraph outside the bullet.
+                    None if !l.is_empty() && !opens_block(&lines, i) => {
+                        if let Some(last) = items.last_mut() {
+                            push_soft(last, l);
+                        }
                         i += 1;
                     }
                     _ => break,
@@ -592,5 +604,58 @@ mod tests {
             shapes("# T\n\n- one\n\n> q\n\n```rs\nlet x = 1;\n```"),
             ["h1:T", "ul:one", "quote:q", "code:let x = 1;"],
         );
+    }
+
+    /// A hard-wrapped bullet is one bullet. Anyone writing markdown to a line limit — the
+    /// changelog the update dialog renders, an agent writing a list in chat — produces this,
+    /// and without lazy continuation the tail of each item escaped the bullet and landed
+    /// under the list as its own unindented paragraph.
+    #[test]
+    fn a_wrapped_item_stays_one_item() {
+        assert_eq!(
+            shapes("- **Lead in.** and the rest
+  of the sentence
+- second"),
+            ["ul:**Lead in.** and the rest of the sentence,second"],
+        );
+    }
+
+    /// Continuation stops where a block starts, whatever kind: the list must not swallow the
+    /// heading, fence, quote or table that follows it.
+    #[test]
+    fn continuation_ends_at_the_next_block() {
+        assert_eq!(shapes("- one
+  more
+# H"), ["ul:one more", "h1:H"]);
+        assert_eq!(
+            shapes("- one
+  more
+```rs
+x
+```"),
+            ["ul:one more", "code:x"],
+        );
+        assert_eq!(shapes("- one
+  more
+> q"), ["ul:one more", "quote:q"]);
+        assert_eq!(
+            shapes("- one
+  more
+| a |
+| - |
+| 1 |"),
+            ["ul:one more", "table:[ a ] 1 "],
+        );
+    }
+
+    /// A blank line still ends the list, and the other kind of marker still starts a new one
+    /// — continuation must not have quietly merged either case into the item above.
+    #[test]
+    fn a_blank_line_and_the_other_marker_both_still_end_the_list() {
+        assert_eq!(shapes("- one
+
+after"), ["ul:one", "p:after"]);
+        assert_eq!(shapes("- one
+1. two"), ["ul:one", "ol:two"]);
     }
 }
