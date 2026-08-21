@@ -9,8 +9,8 @@
 //! after command — which is only ever as correct as the run's memory, and silently writes to the
 //! wrong place the first time a command forgets.
 //!
-//! This module is the single answer to "where does this run start". [`resolve`] is the one
-//! precedence chain, applied before any backend builds a command; [`env`] exports the result so a
+//! This module is the single answer to "where does this run start". [`resolve`] is the one-precedence
+//! chain, applied before any backend builds a command; [`env`] exports the result so a
 //! script can find it without being told; [`block`] states it in the system prompt so the agent has
 //! no reason to guess, and an explicit reason not to `cd`.
 
@@ -47,15 +47,15 @@ const PROJECT_DIR_ENV: &str = "ADI_PROJECT_DIR";
 /// it is precisely the one no single project owns.
 const PROJECTS_DIR_ENV: &str = "ADI_PROJECTS_DIR";
 
-/// Where a run of this agent starts, most specific answer first:
+/// Where a run of this agent starts, the most specific answer first:
 ///
 /// 1. `run_dir` — this *launch's* directory, when the caller has one. The answer for an agent
 ///    pointed at a different target every run, which no stored field can express.
-/// 2. the manifest's `working_dir` — the agent's declared home, whatever the backend.
-/// 3. the directory of the agent's `project`, when it names one that is registered. A
+/// 2. The manifest's `working_dir` — the agent's declared home, whatever the backend.
+/// 3. The directory of the agent's `project`, when it names one that is registered. A
 ///    project-scoped agent belongs in its project, the same way a project-scoped tool already runs
 ///    there (see `adi-cli`'s `tools::working_dir`).
-/// 4. the store root — the right home for an agent that operates the environment itself, and the
+/// 4. The store root — the right home for an agent that operates the environment itself, and the
 ///    fallback that can always be spawned into.
 ///
 /// Blank entries count as unset at every level, so clearing a field in the UI falls through rather
@@ -122,7 +122,7 @@ pub(crate) fn env(config: &Config, agent: &StoredAgent, workdir: &Path) -> Vec<(
 ///
 /// The three engines that get this block all keep both now, but only one of them ever did on its
 /// own. Measured against the `claude` CLI before the hook existed: across two `Bash` calls in one
-/// headless turn the `cd` held and an `export` did not, and a call under `--resume` — a reply, which
+/// headless turn the `cd` held, and an `export` did not, and a call under `--resume` — a reply, which
 /// is a new process — started back in the run directory. So the Claude engines are told this on the
 /// strength of [`crate::backends::shell`] bending their `Bash` through the same session shell the
 /// adi loop runs its own in; an engine that has not been wired to it must keep falling through to
@@ -139,7 +139,7 @@ fn shell_note(backend: &Backend) -> &'static str {
         }
         // No session shell: promise only what a command gets on its own. Nothing here is wasted on
         // an engine that would in fact have kept more — it pays for one extra `cd`, which is the
-        // cheap side of being wrong.
+        // inexpensive side of being wrong.
         _ => {
             "When you do work somewhere else, move there **once**, in a command of its own, and \
              expect it to hold no longer than the command that follows it: assume nothing you set \
