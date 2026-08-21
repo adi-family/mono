@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 0.3.0 — 2026-08-21
+
 ### Added
 
 - **The version, and the way to the next one, live in the top bar.** Every screen says what
