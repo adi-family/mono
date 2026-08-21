@@ -124,6 +124,18 @@ jobs:
           xcodebuild -version
           rustc --version
 
+      # The bundle is universal, so `target/` carries two full release builds, and the DMG needs
+      # room for a copy of the finished .app on top of that. v0.3.1's first attempt compiled,
+      # signed and notarized cleanly and then died on `hdiutil: create failed - No space left
+      # on device` — the very last step. The runner's preinstalled Android SDK is ~14GB and
+      # nothing here has ever touched it.
+      - name: Make room for the universal build and the DMG
+        run: |
+          echo "before:"; df -h / | tail -1
+          sudo rm -rf ~/Library/Android/sdk /Users/runner/Library/Android || true
+          sudo rm -rf ~/.rustup/toolchains/*/lib/rustlib/{aarch64,x86_64}-apple-ios* || true
+          echo "after:"; df -h / | tail -1
+
       - name: Rust targets (the bundle is universal)
         run: |
           rustup target add aarch64-apple-darwin x86_64-apple-darwin wasm32-unknown-unknown

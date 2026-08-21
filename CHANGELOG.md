@@ -20,6 +20,16 @@ extraction script cares about.
 
 ## Unreleased
 
+## 0.3.1 — 2026-08-21
+
+### Fixed
+
+- **Linux and Windows have builds again.** 0.3.0 published no Windows package at all, and a
+  Linux one cut by hand off a laptop — the release builder had been unable to produce either
+  since the code index arrived, because that brought the first C++ into a tree whose build
+  hosts only ever had a C compiler. Nothing about the software itself is different here: this
+  is 0.3.0, built where it was supposed to be built.
+
 ## 0.3.0 — 2026-08-21
 
 ### Added
