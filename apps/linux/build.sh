@@ -71,8 +71,17 @@ export ADI_VERSION="$VERSION"
 # adi-app embeds the webapp at compile time and happily embeds nothing — see the script.
 "$ROOT/scripts/require-webapp-dist.sh"
 
+# Both probes below read a command's output with `case` rather than piping it into `grep -q`,
+# and that is not a style choice. This script runs under `set -o pipefail`; `grep -q` exits the
+# moment it matches, which closes the pipe, which kills the writer with SIGPIPE — so a
+# *successful* match reports the pipeline as failed, depending on whether the writer had
+# finished flushing first. It is a race, and it reads as "the toolchain is missing" perhaps one
+# run in two. That cost a green local run and a red CI one for the same commit.
 have_target() {
-    rustup target list --installed 2>/dev/null | grep -qx "$TARGET"
+    case "$(rustup target list --installed 2>/dev/null)" in
+        *"$TARGET"*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # Whether this host's own libc is already musl — an Alpine container, or a musl-native distro.
@@ -85,7 +94,10 @@ have_target() {
 # the prebuilt musl-cross-make tarballs on musl.cc stop at GCC 11, which does not. Alpine ships
 # GCC 14 with musl as its own libc, so the problem disappears instead of being worked around.
 host_is_musl() {
-    rustc -vV 2>/dev/null | grep -q "^host: .*-linux-musl$"
+    case "$(rustc -vV 2>/dev/null)" in
+        *"host: "*"-linux-musl"*) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 # The musl C **and C++** compilers. Sets MUSL_CC/MUSL_CXX as a side effect, so the preflight can
