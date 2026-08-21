@@ -105,6 +105,10 @@
 
   --color-attention: var(--attention);
 
+  --color-await: var(--await);
+  --color-await-bg: var(--await-bg);
+  --color-await-edge: var(--await-edge);
+
   /* The code view's palette. Only `text-syn-*` is ever wanted, but Tailwind generates the
    * whole family from one entry and the unused ones cost nothing. */
   --color-syn-plain: var(--syn-plain);

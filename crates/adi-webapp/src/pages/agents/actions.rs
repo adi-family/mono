@@ -7,7 +7,8 @@
 //! composer — never a shared, overwritten slot.
 
 use adi_webapp_api::types::{
-    AgentAsk, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape, AgentRunInfo,
+    AgentAsk, AgentAwait, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape,
+    AgentRunInfo,
     AgentRuns, AgentStep, AgentTokenSource,
     AgentTokens, AgentToolStatus, AgentTurn, AgentsState, Dashboard,
     FleetDashboards, NodeDashboard, NodeDashboards,
@@ -620,7 +621,7 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
         table.sort.get(),
         |(agent, answerable, _, r), col| match col {
             "Agent" => Key::text(agent),
-            "Status" => Key::text(run_status(*answerable, r.running)),
+            "Status" => Key::text(run_status(*answerable, r)),
             "Conversation" => Key::text(&r.message),
             _ => Key::num(r.started_at),
         },
@@ -647,12 +648,40 @@ fn all_chats_rows(state: State, watch: AgentsWatch, only: &Option<Vec<String>>) 
 
 /// A run's status word: what it says depends on whether the backend holds a conversation or runs
 /// a task to completion. Shared by the cross-agent index and one agent's history.
-fn run_status(answerable: bool, running: bool) -> &'static str {
-    match (answerable, running) {
-        (true, true) => "\u{25CF} answering",
-        (true, false) => "idle",
-        (false, true) => "\u{25CF} running",
-        (false, false) => "done",
+///
+/// A conversation holding a registered wake is neither of the two words a stopped run has: it is
+/// not idle, and it is not done. Saying "idle" of one is the same mistake the rail's `Recent` band
+/// would make — it reads as *nothing more is coming from this*, which is exactly wrong.
+fn run_status(answerable: bool, r: &AgentRunInfo) -> &'static str {
+    match (answerable, r.running, r.awaits.is_empty()) {
+        (true, true, _) => "\u{25CF} answering",
+        (false, true, _) => "\u{25CF} running",
+        (_, false, false) => "\u{25D0} awaiting",
+        (true, false, true) => "idle",
+        (false, false, true) => "done",
+    }
+}
+
+/// What a conversation is waiting on the world for, written for a tooltip: the run's own note for
+/// the wake, then the condition that would fire it.
+///
+/// The note leads because it is the only part a person wrote — the condition is the store's own
+/// sentence, exact down to the payload filter that makes a wake this run's rather than a stranger's,
+/// and worth carrying verbatim rather than paraphrasing into something that could disagree with it.
+/// A conversation holding several says how many first: at that point *what* it is waiting for is no
+/// longer one thing, and only the oldest is named.
+fn awaiting_hint(awaits: &[AgentAwait]) -> String {
+    let said = |a: &AgentAwait| {
+        if a.note.trim().is_empty() {
+            format!("waiting {}", a.summary)
+        } else {
+            format!("waiting {}\n\n{}", a.summary, a.note)
+        }
+    };
+    match awaits {
+        [] => String::new(),
+        [one] => said(one),
+        many => format!("waiting on {} wakes. The first: {}", many.len(), said(&many[0])),
     }
 }
 
@@ -662,7 +691,18 @@ fn run_status(answerable: bool, running: bool) -> &'static str {
 /// builder knowing about it.
 fn run_cell(col: &str, r: &AgentRunInfo, answerable: bool) -> AnyView {
     match col {
-        "Status" => view! { <span>{run_status(answerable, r.running)}</span> }.into_any(),
+        // Blue only where there is a wake to be blue about, and the same blue the rail uses: two
+        // surfaces showing the same state of the same conversation should not disagree about it.
+        "Status" => {
+            let awaiting = !r.running && !r.awaits.is_empty();
+            let hint = awaiting_hint(&r.awaits);
+            view! {
+                <span class=if awaiting { "text-await" } else { "" } title=hint>
+                    {run_status(answerable, r)}
+                </span>
+            }
+            .into_any()
+        }
         "Conversation" | "Task" => {
             let full = r.message.clone();
             let short = truncate_task(&full);
@@ -768,7 +808,7 @@ fn runs_list(state: State, watch: AgentsWatch) -> AnyView {
         &mut runs,
         table.sort.get(),
         |r, col| match col {
-            "Status" => Key::text(run_status(answerable, r.running)),
+            "Status" => Key::text(run_status(answerable, r)),
             "Conversation" | "Task" => Key::text(&r.message),
             _ => Key::num(r.started_at),
         },
@@ -886,6 +926,11 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
         // Above the composer, because a goal is a standing condition on the conversation rather
         // than a thing said in it — and only where there is a conversation to hold one.
         {answerable.then(|| goal_bar(state, watch))}
+
+        // And under it, for the same reason and the other direction: a goal is what the
+        // conversation is *for*, a wake is what it is *waiting on* before it can go on. Both
+        // outlive every turn beneath them, and neither was said in the transcript.
+        {answerable.then(|| awaits_bar(state, watch))}
 
         // The composer sits above the transcript, because the transcript reads newest-first:
         // what you type appears at the top, next to the box you typed it in.
@@ -1413,6 +1458,136 @@ fn goal_row(state: State, watch: AgentsWatch, goal: AgentGoal) -> AnyView {
         </div>
     }
     .into_any()
+}
+
+/// What this conversation is waiting on the *world* for: every wake it has registered, and the one
+/// way out of each.
+///
+/// Sits under the goal bar, and is a **view of the store** rather than a list this tab owns — the
+/// awaits ride the conversation snapshot, so one registered from inside a turn appears within a
+/// poll and one that fires disappears the same way, without anybody having to refresh. That is also
+/// why there is no "register" control here: an await is a note a run leaves *itself*, and a wake
+/// nobody asked for is not one to hand out from a browser.
+///
+/// Nothing at all when there are none, which is the ordinary case. Unlike a goal there is nothing
+/// to offer in that state — no line, no link — because there is nothing a person would want to do
+/// here except to a wake that already exists.
+fn awaits_bar(state: State, watch: AgentsWatch) -> AnyView {
+    view! {
+        <div class="adi-ui-type">
+            {move || {
+                // Narrowed to the awaits alone, so the rows are rebuilt when a wake is registered
+                // or fires — not once a second, under a hand reaching for "Stop waiting".
+                let awaits = watch
+                    .peek
+                    .with(|p| p.as_ref().map(|p| p.awaits.clone()).unwrap_or_default());
+                if awaits.is_empty() {
+                    return ().into_any();
+                }
+                view! {
+                    <div class="px-3 pt-2">
+                        {awaits
+                            .into_iter()
+                            .map(|a| await_row(state, watch, a))
+                            .collect::<Vec<_>>()}
+                    </div>
+                }
+                .into_any()
+            }}
+        </div>
+    }
+    .into_any()
+}
+
+/// One registered wake, on one line: what would wake the chat, why the run said it wanted waking,
+/// and the one control — stop waiting for it.
+///
+/// The note leads and the condition follows in the tooltip. The condition is the machine's sentence
+/// (`on adi.agents.run.finished carrying run_id=…, if the check passes`) and the note is the run's
+/// own — and a reader scanning a chat wants to know what it is waiting *for* long before they want
+/// to know what event carries it. A wake with no note falls back to the condition, because a row
+/// that said only "waiting" would be a row that says nothing.
+fn await_row(state: State, watch: AgentsWatch, a: AgentAwait) -> AnyView {
+    let id = a.id.clone();
+    let said = if a.note.trim().is_empty() {
+        a.summary.clone()
+    } else {
+        a.note.clone()
+    };
+    // Both halves in the tooltip whichever one the row printed — the same sentence the rail and the
+    // All chats table hang on this conversation — and the check verbatim under them. A wake that is
+    // not firing is nearly always a check that keeps saying "not yet", and the command is the whole
+    // of what a person can act on; this is the one place with room to show it.
+    let hint = match &a.check {
+        Some(check) => format!("{}\n\nchecks: {check}", awaiting_hint(std::slice::from_ref(&a))),
+        None => awaiting_hint(std::slice::from_ref(&a)),
+    };
+    view! {
+        <div class="mb-1 flex items-center gap-2 text-mini">
+            <span class="shrink-0 text-await" title="This chat is waiting on something">
+                "Awaiting"
+            </span>
+            <span class="min-w-0 flex-1 truncate text-secondary" title=hint>{said}</span>
+            {countdown(watch, &a)}
+            <adi_ui::Button
+                variant=adi_ui::ButtonVariant::Ghost
+                size=adi_ui::ButtonSize::Small
+                disabled=Signal::derive(move || watch.await_busy.get())
+                attr:title="Drop this wake. The chat stops waiting for it and stays where it is — \
+                            nothing is cancelled at the other end."
+                on:click=move |_| ignore_await(state, watch, id.clone())
+            >
+                "Stop waiting"
+            </adi_ui::Button>
+        </div>
+    }
+    .into_any()
+}
+
+/// How long until a wake's deadline, or nothing at all for one that is only watching for an event.
+///
+/// Recomputed off the poll rather than on a timer of its own, exactly as the question card's
+/// deadline is: the snapshot already lands about once a second, which is finer than a countdown in
+/// minutes can show, and it costs one text node instead of a second clock.
+fn countdown(watch: AgentsWatch, a: &AgentAwait) -> Option<AnyView> {
+    // Seconds, not milliseconds: an await's clock is whole seconds all the way down to the record
+    // on disk, and reading it as millis would put every deadline half a century in the past.
+    let at = a.at?;
+    let every = a.every;
+    let text = Signal::derive(move || {
+        // Tracked for its cadence alone — nothing below reads the snapshot.
+        watch.peek.track();
+        let now = (js_sys::Date::now() / 1000.0) as u64;
+        match at.saturating_sub(now) {
+            0 => "due now".to_string(),
+            left => match every {
+                Some(_) => format!("looks again in {}", short_duration(left * 1000)),
+                None => format!("in {}", short_duration(left * 1000)),
+            },
+        }
+    });
+    Some(view! { <span class="shrink-0 text-meta">{text}</span> }.into_any())
+}
+
+/// Stop waiting on one wake.
+///
+/// The bar is not updated from the answer even though the endpoint returns the remainder: the
+/// awaits on screen come from the snapshot, and writing a second copy of them here would be a list
+/// that could disagree with the poll for a second. The row goes when the next snapshot lands, which
+/// is the same second either way.
+fn ignore_await(state: State, watch: AgentsWatch, id: String) {
+    let (Some(name), Some(run_id)) = (watch.name.get_untracked(), watch.run_id.get_untracked())
+    else {
+        return;
+    };
+    watch.await_busy.set(true);
+    spawn_local(async move {
+        let dropped = fetch::ignore_agent_await(name, run_id, id).await;
+        watch.await_busy.set(false);
+        if let Err(e) = dropped {
+            state.flash.set(Some(Flash::err(e)));
+        }
+    });
 }
 
 /// Open the editor on a new goal (`None`) or on one being reworded, seeded with its current text.
@@ -2936,10 +3111,10 @@ fn hotkey_glyph() -> &'static str {
     if installed { "\u{2318}" } else { "\u{2303}" }
 }
 
-/// Every visible session, whichever agent it belongs to, in the four bands the rail reads them in:
-/// blocked on you, then running, then starred, then the rest — each newest activity first. The
-/// `bool` says whether the ★ *agent* filter is on, which is the difference between the rail's two
-/// emptinesses.
+/// Every visible session, whichever agent it belongs to, in the five bands the rail reads them in:
+/// blocked on you, then running, then awaiting a wake, then starred, then the rest — each newest
+/// activity first. The `bool` says whether the ★ *agent* filter is on, which is the difference
+/// between the rail's two emptinesses.
 ///
 /// The watched agent's conversations come from `watch.runs` when it has any — that list is updated
 /// the moment a chat is deleted or hidden, so the rail doesn't go on showing a row that has just
@@ -2951,7 +3126,7 @@ fn hotkey_glyph() -> &'static str {
 /// Split out of the view because [`install_session_hotkeys`] needs the same list, and needs it at
 /// the moment a key is struck rather than the moment the rail was last drawn. One function, so the
 /// number printed on a row and the row that number opens cannot drift apart.
-fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 4], bool) {
+fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], bool) {
     let all = state.all_chats.get();
     let watched = watch.name.get().unwrap_or_default();
     // A pty agent's run history is empty either way; the agents list is what says it's live now.
@@ -3047,11 +3222,22 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 4], boo
         .partition(|r| r.run.as_ref().is_some_and(|run| run.pending_question.is_some()));
     let (mut running, rows): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.running);
-    // Four, and the starred band comes *after* the two inboxes rather than at the top. Waiting and
-    // running are states the conversation is in right now and will leave on its own; a star is a
-    // standing instruction from a person. A starred chat that is working is still best found under
-    // "Running now" — that is where you look for it today — so the band collects only the ones the
-    // recency ordering would otherwise have carried away, which is the whole reason to mark one.
+    // Then the ones that are coming back on their own. A conversation with a wake registered has
+    // stopped, so it would otherwise fall into "Recent" and read as finished — which is the one
+    // thing it is not. It sits below "Running now" because nothing is happening in it this second,
+    // and above everything else because something is going to.
+    //
+    // Running wins the tie: a run working *and* holding a wake for what it launched is best found
+    // where you look for what is working now, and the await is the smaller half of what it is doing.
+    let (mut awaiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
+        .into_iter()
+        .partition(|r| r.run.as_ref().is_some_and(|run| !run.awaits.is_empty()));
+    // Five, and the starred band comes *after* the three live ones rather than at the top. Waiting,
+    // running and awaiting are states the conversation is in right now and will leave on its own; a
+    // star is a standing instruction from a person. A starred chat that is working is still best
+    // found under "Running now" — that is where you look for it today — so the band collects only
+    // the ones the recency ordering would otherwise have carried away, which is the whole reason to
+    // mark one.
     let (mut starred, mut rest): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.starred);
     // Numbered straight down the rail and across the band headings, not restarted per band: ⌘1 is
@@ -3061,6 +3247,7 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 4], boo
     for (i, row) in waiting
         .iter_mut()
         .chain(running.iter_mut())
+        .chain(awaiting.iter_mut())
         .chain(starred.iter_mut())
         .chain(rest.iter_mut())
         .take(HOTKEYS)
@@ -3068,13 +3255,21 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 4], boo
     {
         row.hotkey = Some(i + 1);
     }
-    ([waiting, running, starred, rest], keep.is_some())
+    (
+        [waiting, running, awaiting, starred, rest],
+        keep.is_some(),
+    )
 }
 
-/// The rail's session list: the four bands, or the one line that says why there are none.
+/// The rail's session list: the five bands, or the one line that says why there are none.
 fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    let ([waiting, running, kept, rest], filtered) = session_bands(state, watch);
-    if waiting.is_empty() && running.is_empty() && kept.is_empty() && rest.is_empty() {
+    let ([waiting, running, awaiting, kept, rest], filtered) = session_bands(state, watch);
+    if waiting.is_empty()
+        && running.is_empty()
+        && awaiting.is_empty()
+        && kept.is_empty()
+        && rest.is_empty()
+    {
         // Which of the two emptinesses this is: nothing to show, or nothing left after the filter —
         // said apart, so the ★ never reads as "you have no chats".
         let msg = if filtered {
@@ -3122,6 +3317,7 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     vec![
         band("Waiting on you", waiting),
         band("Running now", running),
+        band("Awaiting", awaiting),
         band("Starred", kept),
         band("Recent", rest),
     ]
@@ -3138,6 +3334,19 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     let SessionRow { agent, run, when, running, starred, hotkey } = item;
     let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
     let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
+    // What it is waiting on the world for. The row says it with the dot and the band it is under,
+    // and the rest goes in the tooltip — the meta line's parts are all `shrink-0` inside an
+    // `overflow-hidden`, so a third one does not shrink to fit the rail, it clips mid-word.
+    let awaits = run.as_ref().map(|r| r.awaits.len()).unwrap_or(0);
+    // The tooltip is where there is room for the sentence, and it is the same sentence the All
+    // chats table hangs on its status cell — two surfaces showing one conversation should not
+    // describe it two ways.
+    let await_hint = run
+        .as_ref()
+        .map(|r| awaiting_hint(&r.awaits))
+        .filter(|hint| !hint.is_empty())
+        .map(|hint| format!("\n\n{hint}"))
+        .unwrap_or_default();
     let (title, sub, run_id) = match run {
         Some(r) => {
             let t = truncate_task(&r.message);
@@ -3157,8 +3366,10 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     // The tooltip names both, whatever the row prints: whichever of the two the browser keeps for
     // itself, the other one is the way in, and here there is room to say so.
     let hint = match hotkey {
-        Some(n) => format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}"),
-        None => format!("open this session with {agent}"),
+        Some(n) => {
+            format!("open this session with {agent} \u{2014} \u{2318}{n} or Ctrl+{n}{await_hint}")
+        }
+        None => format!("open this session with {agent}{await_hint}"),
     };
     let menu = SessionRef::of(&agent, &run_id, &title, false, starred);
     // Only a conversation can be deleted: a pty agent's live session is started and stopped from the
@@ -3199,10 +3410,16 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     // Waiting outranks working. A conversation with a question up is stopped on *you*, and the
     // one thing the rail exists to answer is which of forty rows needs you — `running: false`
     // alone cannot say it, because finished and blocked-on-you look identical from there.
+    //
+    // Awaiting comes last of the three for the opposite reason: it is the only live state that asks
+    // nothing of anybody, so it yields to both a question and a turn in flight. A run working and
+    // holding a wake for what it launched is a working run.
     let state_of = if waiting {
         adi_ui::SessionState::Waiting
     } else if running {
         adi_ui::SessionState::Working
+    } else if awaits > 0 {
+        adi_ui::SessionState::Awaiting
     } else {
         adi_ui::SessionState::Done
     };
@@ -3233,6 +3450,10 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
                 agent=sub
                 // The only coloured words in the row, and spent on the one thing a rail is
                 // scanned for. What it wants, not how much of it there is.
+                //
+                // An await gets none, though it is the one state here that could have used one: it
+                // asks for nothing, so there is nothing for the row to say it wants. Its dot is
+                // blue and its band is named, which between them is the whole of the news.
                 alert=if waiting { "your answer" } else { "" }
                 selected=is_sel
                 attr:title=hint

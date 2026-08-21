@@ -716,6 +716,10 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("POST", "/api/agents/goals") => handlers::agent_goals(agents, &req.body),
         ("POST", "/api/agents/goal/set") => handlers::set_agent_goal(agents, &req.body),
         ("POST", "/api/agents/goal/close") => handlers::close_agent_goal(agents, &req.body),
+        // What a conversation is waiting on the *world* for. The list rides the run listing and the
+        // conversation snapshot, so there is nothing to read here — only the one write, which drops
+        // a wake that is never coming and would otherwise hold the chat open for a week.
+        ("POST", "/api/agents/await/ignore") => handlers::ignore_await(agents, &req.body),
         // What a conversation spent its context on. Its own endpoint, not part of the peek: it
         // re-tokenizes the whole transcript, and the peek is polled once a second.
         ("POST", "/api/agents/run/tokens") => handlers::run_tokens(agents, &req.body),

@@ -502,6 +502,7 @@ pub enum SessionState {
     Waiting,
     Error,
     Working,
+    Awaiting,
 }
 ```
 

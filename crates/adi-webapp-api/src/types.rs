@@ -1305,6 +1305,70 @@ pub struct AgentGoals {
     pub goals: Vec<AgentGoal>,
 }
 
+/// One pending await on a conversation: the wake it left itself, and what is holding it.
+///
+/// A conversation registers these with the `Await` tool, and an action that starts something and
+/// returns before it ends — launching another agent, most of all — registers one on its caller's
+/// behalf. Either way the run has stopped and is coming back by itself, which is a state no other
+/// field on a run says: `running: false` reads it as finished, and it is not.
+///
+/// Mirrors `adi_agents::awaits::Await`, minus the parts only the worker needs (`cwd`, the raw
+/// `when` filter): what a reader wants is what it is waiting for and when it gives up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentAwait {
+    /// The await's id — what `POST /api/agents/await/ignore` names to drop it.
+    pub id: String,
+    /// The run's note to its future self, handed back verbatim when the wake lands. Usually the
+    /// most human line here: it is the only part a person wrote.
+    #[serde(default)]
+    pub note: String,
+    /// One line saying what would wake it — `adi_agents::awaits::Await::describe`, rendered by the
+    /// server so a client never has to reassemble "on X carrying Y, if the check passes" itself.
+    #[serde(default)]
+    pub summary: String,
+    /// The event patterns it is watching, if any.
+    #[serde(default)]
+    pub events: Vec<String>,
+    /// Its next deadline, as Unix **seconds** — the unit the store keeps, not the milliseconds the
+    /// rest of this module uses, because an await's clock is whole seconds all the way down.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<u64>,
+    /// How long it re-arms for when a check says "not yet" — what makes a deadline a poll.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub every: Option<u64>,
+    /// The command that decides whether a candidate is really the moment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub check: Option<String>,
+    /// When it gives up, as Unix seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at: Option<u64>,
+    /// When it was registered, as Unix seconds.
+    #[serde(default)]
+    pub created_at: u64,
+}
+
+/// `POST /api/agents/await/ignore` request — drop one pending await of one conversation.
+///
+/// Scoped to the conversation, exactly as `adi_agents::awaits::ignore` is: an id travels in plain
+/// text and every await in the store is one directory apart, so without the pair naming the
+/// conversation one caller could cancel another's wake and leave it waiting on something that is
+/// never coming.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct IgnoreAwait {
+    pub name: String,
+    pub run_id: String,
+    pub id: String,
+}
+
+/// The answer to `POST /api/agents/await/ignore`: what the conversation is still waiting on.
+///
+/// The remainder rather than the record that went, so a caller that drops one does not have to
+/// subtract it from a list it may already have re-fetched.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct AgentAwaits {
+    pub awaits: Vec<AgentAwait>,
+}
+
 /// `POST /api/agents/run/unqueue` request — drop the message at `index` from a conversation's queue,
 /// before it is ever asked. Out-of-range is a no-op, not an error: a queued message that started its
 /// turn between the click and the request is simply gone.
@@ -1464,6 +1528,17 @@ pub struct AgentRunInfo {
     /// `None` while it runs, and for runs that ended before the store began keeping this.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<AgentRunOutcome>,
+    /// The wakes this conversation has registered — what it is waiting on the world for.
+    ///
+    /// Carried by the *listing* for the third time and the same reason: a rail is scanned for which
+    /// of forty rows is still alive, and a conversation that stopped with an await pending is alive
+    /// in a way `running: false` cannot express. It is not the "needs you" band either — nobody has
+    /// to do anything about one — which is why it is its own field beside `pending_question` rather
+    /// than folded into it.
+    ///
+    /// Empty for the overwhelming majority of runs, and omitted from the wire when it is.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaits: Vec<AgentAwait>,
 }
 
 /// How a run ended, as reported by whatever engine ran it.
@@ -1635,6 +1710,14 @@ pub struct AgentPeek {
     /// card from. Gone the moment it is answered; the answer itself is a turn like any other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_question: Option<AgentAsk>,
+    /// What this conversation is waiting on the world for — the wakes it has registered.
+    ///
+    /// On the snapshot rather than behind an endpoint of its own, because that is what makes the
+    /// chat's await bar a *view* of the store instead of a list this tab owns: a wake registered
+    /// from anywhere shows up within a poll, and one that fires disappears the same way, without
+    /// anybody having to remember to re-fetch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub awaits: Vec<AgentAwait>,
     /// The run/conversation transcript, oldest first — for backends that produce turns (conversations,
     /// and one-shot runs synthesized as a single answered turn); empty otherwise. Includes the
     /// still-streaming answer, with its parsed tool steps, while a turn is in flight.

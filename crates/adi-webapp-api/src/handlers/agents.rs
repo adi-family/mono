@@ -16,8 +16,10 @@ use crate::types::{
     AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
     AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
     AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult, AgentSimSection,
-    AgentSimState, AgentSimTool, AgentSimTurn, AgentToken, AgentsState, AgentGoal, AgentGoals,
-    AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun, PendingAsk, PendingAsks, ProjectRunLimit,
+    AgentSimState, AgentSimTool, AgentSimTurn, AgentToken, AgentsState, AgentAwait, AgentAwaits,
+    AgentGoal, AgentGoals,
+    AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks,
+    ProjectRunLimit,
     ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit,
     SimulateAgent, SimulateTurn, StarRun, UnqueueFromRun,
 };
@@ -237,6 +239,7 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
             .pending_question(&agent.name, run_id)
             .as_ref()
             .map(agent_ask),
+        awaits: awaits_of(store, &agent.name, run_id),
         turns,
     })
 }
@@ -547,6 +550,7 @@ fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> R
             .pending_question(&agent.name, run_id)
             .as_ref()
             .map(agent_ask),
+        awaits: awaits_of(store, &agent.name, run_id),
         turns,
     })
 }
@@ -602,6 +606,32 @@ pub fn pending_questions(store: &Agents) -> Response {
         })
         .collect();
     ok_json(&PendingAsks { asks })
+}
+
+/// `POST /api/agents/await/ignore` — drop one pending await of one conversation, and answer with
+/// what it is still waiting on.
+///
+/// The one write a person needs over this store. Registering is the run's own business — an await
+/// is a note it left *itself*, and a wake nobody asked for is not one to hand out from a browser —
+/// but a wake that will never come (the event is not coming, the run it followed is long gone)
+/// leaves a conversation looking alive for a week, and somebody has to be able to say so.
+///
+/// Rewording one in place stays in the CLI (`agents awaits update`). It is the run's sentence about
+/// its own future, and the only caller with the context to change rather than cancel it is the run.
+#[must_use]
+pub fn ignore_await(store: &Agents, body: &[u8]) -> Response {
+    let req = require!(body, IgnoreAwait);
+    let (name, run_id, id) = (req.name.trim(), req.run_id.trim(), req.id.trim());
+    let pending = adi_agents::awaits::Awaits::with_config(store.config().clone());
+    // Scoped by the store itself, which also decides what "already gone" means: an await that fired
+    // between the click and this request is an error there, and the right one — the wake is on its
+    // way into the conversation, and there is nothing left to cancel.
+    match adi_agents::awaits::ignore(&pending, name, run_id, id) {
+        Ok(_) => ok_json(&AgentAwaits {
+            awaits: awaits_of(store, name, run_id),
+        }),
+        Err(e) => Response::from(&e),
+    }
 }
 
 /// `POST /api/agents/goals` — one conversation's goals, or every open goal on the machine when the
@@ -774,9 +804,10 @@ pub fn all_agent_runs(store: &Agents, limit: Option<usize>) -> Response {
             // partial and the usual row count is zero, but this endpoint is the chat rail's poll
             // and everything on its path is paid for on every tick.
             let waiting = Waiting::of(store);
+            let awaiting = Awaiting::of(store);
             let mut agents: Vec<AgentRuns> = agents
                 .iter()
-                .map(|a| runs_response_with(store, a, &waiting))
+                .map(|a| runs_response_with(store, a, &waiting, &awaiting))
                 .collect();
             let total = agents.iter().map(|a| a.runs.len()).sum();
             if let Some(limit) = limit {
@@ -792,19 +823,24 @@ pub fn all_agent_runs(store: &Agents, limit: Option<usize>) -> Response {
 /// within each one — "the last hundred chats" is one list in the rail, and a per-agent cut would
 /// spend the budget on agents nobody has touched in months.
 ///
-/// A session that is **running**, **blocked on a person**, or **starred** is kept whatever its age
-/// and without spending the budget. The first two are the rail's other bands, and they are inboxes
-/// rather than history: a question asked three months ago and never answered is exactly the row a
-/// person needs to still be shown, and it is the paging that would have quietly swallowed it. The
-/// third is the same argument made by hand — a star says *keep this one where I can find it*, and a
-/// page that dropped it would answer the mark with the one behaviour it was made to prevent. There
-/// are only ever a handful of any of them; a machine with a hundred live runs has a different
-/// problem, and one with a hundred starred chats has said so deliberately.
+/// A session that is **running**, **blocked on a person**, **awaiting a wake**, or **starred** is
+/// kept whatever its age and without spending the budget. The first three are the rail's other
+/// bands, and they are inboxes rather than history: a question asked three months ago and never
+/// answered is exactly the row a person needs to still be shown, and it is the paging that would
+/// have quietly swallowed it. An await says the same thing about a conversation nobody is blocked
+/// on — it is going to speak again, and a rail that had already paged it out would show it
+/// reappearing from nowhere. The last is the same argument made by hand — a star says *keep this
+/// one where I can find it*, and a page that dropped it would answer the mark with the one
+/// behaviour it was made to prevent. There are only ever a handful of any of them; a machine with a
+/// hundred live runs has a different problem, and one with a hundred starred chats has said so
+/// deliberately.
 ///
 /// Every agent survives the cut, runs or none: an interactive agent has no runs to begin with and
 /// still contributes a row, and the client reads `caps` off this same listing.
 fn newest(agents: Vec<AgentRuns>, limit: usize) -> Vec<AgentRuns> {
-    let held = |r: &AgentRunInfo| r.running || r.pending_question.is_some() || r.starred;
+    let held = |r: &AgentRunInfo| {
+        r.running || r.pending_question.is_some() || !r.awaits.is_empty() || r.starred
+    };
     let mut index: Vec<(u64, usize, usize)> = agents
         .iter()
         .enumerate()
@@ -873,12 +909,77 @@ impl Waiting {
     }
 }
 
-/// Build the [`AgentRuns`] history answer for an agent.
-fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
-    runs_response_with(store, agent, &Waiting::of(store))
+/// Every conversation with a wake registered, keyed by the pair that names one.
+///
+/// Built once and read per run, for the reason [`Waiting`] is: the store answers *every* pending
+/// await in one directory scan, and asking it per row would be that scan again for each of several
+/// hundred conversations to be told "none" by all but a handful.
+struct Awaiting(std::collections::HashMap<(String, String), Vec<AgentAwait>>);
+
+impl Awaiting {
+    fn of(store: &Agents) -> Self {
+        let mut by_conversation: std::collections::HashMap<(String, String), Vec<AgentAwait>> =
+            std::collections::HashMap::new();
+        for a in adi_agents::awaits::Awaits::with_config(store.config().clone()).list() {
+            by_conversation
+                .entry((a.agent.clone(), a.conv.clone()))
+                .or_default()
+                .push(agent_await(&a));
+        }
+        Self(by_conversation)
+    }
+
+    fn get(&self, agent: &str, conv: &str) -> Vec<AgentAwait> {
+        self.0
+            .get(&(agent.to_string(), conv.to_string()))
+            .cloned()
+            .unwrap_or_default()
+    }
 }
 
-fn runs_response_with(store: &Agents, agent: &StoredAgent, waiting: &Waiting) -> AgentRuns {
+/// One conversation's pending awaits, for the snapshots that carry them.
+///
+/// A directory scan, on a poll that runs once a second. That is what the store costs however it is
+/// asked — the records are a handful of small JSON files and a conversation may hold at most eight
+/// — and paying it here is what lets the chat's await bar be a *view* of the store rather than a
+/// list the tab has to remember to refresh: a wake registered from anywhere appears within a poll,
+/// and one that fires disappears the same way.
+fn awaits_of(store: &Agents, agent: &str, run_id: &str) -> Vec<AgentAwait> {
+    adi_agents::awaits::Awaits::with_config(store.config().clone())
+        .for_conversation(agent, run_id)
+        .iter()
+        .map(agent_await)
+        .collect()
+}
+
+/// One stored await as the wire sees it. `summary` is rendered here rather than on the client
+/// because [`describe`](adi_agents::awaits::Await::describe) is the store's own sentence for what a
+/// wake is waiting on, and a second copy of it in a browser would be a second copy to keep true.
+fn agent_await(a: &adi_agents::awaits::Await) -> AgentAwait {
+    AgentAwait {
+        id: a.id.clone(),
+        note: a.note.clone(),
+        summary: a.describe(),
+        events: a.events.clone(),
+        at: a.at,
+        every: a.every,
+        check: a.check.clone(),
+        expires_at: a.expires_at,
+        created_at: a.created_at,
+    }
+}
+
+/// Build the [`AgentRuns`] history answer for an agent.
+fn runs_response(store: &Agents, agent: &StoredAgent) -> AgentRuns {
+    runs_response_with(store, agent, &Waiting::of(store), &Awaiting::of(store))
+}
+
+fn runs_response_with(
+    store: &Agents,
+    agent: &StoredAgent,
+    waiting: &Waiting,
+    awaiting: &Awaiting,
+) -> AgentRuns {
     let caps = agent_caps(agent);
     AgentRuns {
         name: agent.name.clone(),
@@ -890,6 +991,7 @@ fn runs_response_with(store: &Agents, agent: &StoredAgent, waiting: &Waiting) ->
             .into_iter()
             .map(|r| AgentRunInfo {
                 pending_question: waiting.get(&agent.name, &r.run_id),
+                awaits: awaiting.get(&agent.name, &r.run_id),
                 run_id: r.run_id,
                 started_at: r.started_at,
                 last_activity: r.last_activity,
@@ -1275,8 +1377,10 @@ fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
         interactive: peek.interactive,
         run_id: String::new(),
         // …and no question either, for the same reason: being blocked on somebody is a property of
-        // one conversation, and this snapshot is not of one.
+        // one conversation, and this snapshot is not of one. Awaits are the same — a wake is
+        // registered against a conversation, and there is none here to have registered any.
         pending_question: None,
+        awaits: Vec::new(),
         // A name-based peek isn't scoped to a run, so it carries no transcript. The progress feed is
         // driven by the run-scoped `peek_run` / `reply_run` above.
         answerable: false,
@@ -2180,6 +2284,16 @@ impl FromBody for RunRef {
     }
 }
 
+impl FromBody for IgnoreAwait {
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"id\": \"…\" } with a non-empty name, run_id and id";
+
+    // All three, because dropping an await is scoped to the conversation that owns it: an id on its
+    // own would be a way to cancel somebody else's wake.
+    fn is_complete(&self) -> bool {
+        !self.name.trim().is_empty() && !self.run_id.trim().is_empty() && !self.id.trim().is_empty()
+    }
+}
+
 impl FromBody for ReviewRun {
     const EXPECTED: &'static str = RunRef::EXPECTED;
 
@@ -2552,6 +2666,100 @@ mod tests {
         let _ = std::fs::remove_dir_all(store.config().root());
     }
 
+    /// The listing carries what a conversation is waiting on, and dropping one answers with the
+    /// remainder.
+    ///
+    /// The point of the first half is that nothing had to ask for it: a run that stopped with a
+    /// wake registered reads as `running: false` everywhere else, which is the one thing it is not,
+    /// and the rail has only the listing to tell the difference from.
+    #[test]
+    fn a_run_listing_says_what_each_conversation_is_waiting_on() {
+        let store = scratch("awaits");
+        assert_eq!(
+            save_agent(
+                &store,
+                serde_json::json!({ "name": "solver", "backend": "harness:adi" })
+                    .to_string()
+                    .as_bytes(),
+            )
+            .status,
+            200
+        );
+        let sessions =
+            adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
+        let run = sessions
+            .create("solver", adi_agents::Backend::from("harness:adi"), "/tmp", "go")
+            .expect("create")
+            .id;
+
+        // Registered the way launching an agent registers one on its caller's behalf: the finish
+        // event, filtered down to the one run, so a stranger's ending is not read as its own.
+        let pending = adi_agents::awaits::Awaits::with_config(store.config().clone());
+        let registered = adi_agents::awaits::register(
+            &pending,
+            "solver",
+            &run,
+            &adi_agents::awaits::Request {
+                note: "the parser build I launched".to_string(),
+                events: vec!["adi.agents.run.finished".to_string()],
+                when: [("run_id".to_string(), "1750000000000-0002".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..adi_agents::awaits::Request::default()
+            },
+        )
+        .expect("register");
+
+        let listed = |body: &serde_json::Value| -> Vec<crate::types::AgentAwait> {
+            let response = agent_runs(&store, body.to_string().as_bytes());
+            assert_eq!(response.status, 200);
+            let runs: AgentRuns = serde_json::from_str(&response.body).expect("json");
+            runs.runs
+                .into_iter()
+                .find(|r| r.run_id == run)
+                .expect("the run is listed")
+                .awaits
+        };
+        let body = serde_json::json!({ "name": "solver" });
+        let carried = listed(&body);
+        assert_eq!(carried.len(), 1, "the listing carries the pending wake");
+        assert_eq!(carried[0].id, registered.id);
+        assert_eq!(carried[0].note, "the parser build I launched");
+        assert!(
+            carried[0].summary.contains("run_id=1750000000000-0002"),
+            "the summary is the store's own sentence, filter included: {}",
+            carried[0].summary,
+        );
+
+        // Scoped to the conversation that owns it: naming the right id from the wrong chat is a
+        // refusal, not a cancellation — an id travels in plain text, and every await in the store
+        // is one directory apart.
+        let elsewhere = serde_json::json!({
+            "name": "solver", "run_id": "1750000000000-0009", "id": registered.id,
+        });
+        assert_ne!(
+            ignore_await(&store, elsewhere.to_string().as_bytes()).status,
+            200,
+            "another conversation cannot drop this wake",
+        );
+        assert_eq!(listed(&body).len(), 1, "and it is still pending");
+
+        // …and from its own conversation it goes, with the remainder for an answer.
+        let mine =
+            serde_json::json!({ "name": "solver", "run_id": run, "id": registered.id });
+        let response = ignore_await(&store, mine.to_string().as_bytes());
+        assert_eq!(response.status, 200);
+        let left: crate::types::AgentAwaits =
+            serde_json::from_str(&response.body).expect("json");
+        assert!(left.awaits.is_empty(), "nothing is left to wait on");
+        assert!(listed(&body).is_empty(), "and the listing agrees");
+
+        // A body missing the pair that names a conversation is a 400, not a 404 on an id.
+        assert_eq!(ignore_await(&store, b"{}").status, 400);
+
+        let _ = std::fs::remove_dir_all(store.config().root());
+    }
+
     /// A malformed body is answered in the shape it should have had, not with a bare 400.
     #[test]
     fn a_malformed_answer_body_says_what_it_wanted() {
@@ -2710,6 +2918,7 @@ mod tests {
                     hidden: false,
                     starred: false,
                     pending_question: None,
+                    awaits: Vec::new(),
                     outcome: None,
                 })
                 .collect(),

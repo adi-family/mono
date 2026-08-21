@@ -1,14 +1,14 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentAttachment, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
+    AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
     AgentSimBlock, AgentSimState, AgentSimTurn, AgentTokens,
     AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard, DashboardRef,
     DashboardTransferred,
     DashboardsState, DbExecResult,
     DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
     FilesRef, FleetDashboards, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent,
-    FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState,
+    FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState, IgnoreAwait,
     KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed,
     KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState, LeaseRef,
     LinkTool, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState,
@@ -591,6 +591,19 @@ pub async fn close_agent_goal(
     note: String,
 ) -> Result<AgentGoals, String> {
     post("/api/agents/goal/close", &CloseGoal { goal, as_, note }).await
+}
+
+/// Stop waiting on one of a conversation's registered wakes, returning the ones it still holds.
+///
+/// The only write over the await store from here: a run registers its own from inside a turn, and
+/// what a person needs is the other direction — a wake that is never coming, taken off a
+/// conversation that would otherwise sit open until it expires.
+pub async fn ignore_agent_await(
+    name: String,
+    run_id: String,
+    id: String,
+) -> Result<AgentAwaits, String> {
+    post("/api/agents/await/ignore", &IgnoreAwait { name, run_id, id }).await
 }
 
 /// Drop the message at `index` from a conversation's queue, returning the fresh snapshot.

@@ -1032,6 +1032,7 @@ pub(crate) struct AgentsWatch {
     pub(crate) goal_busy: RwSignal<bool>,
     pub(crate) goal_editor: RwSignal<bool>,
     pub(crate) goal_editing: RwSignal<Option<String>>,
+    pub(crate) await_busy: RwSignal<bool>,
     pub(crate) input_files: RwSignal<Vec<adi_ui::Attached>>,
     pub(crate) reply_files: RwSignal<Vec<adi_ui::Attached>>,
 }

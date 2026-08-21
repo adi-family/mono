@@ -2,7 +2,7 @@
 //!
 //! Everything the row *sits in* — the rail, the bands, the card, the quiet second line —
 //! lives in [`crate::rail`] and is shared with the dashboards on the other side. What is
-//! here is only what a session is: four states, and what each of them does to a row.
+//! here is only what a session is: five states, and what each of them does to a row.
 
 use leptos::prelude::*;
 
@@ -10,9 +10,9 @@ use crate::rail::{RailCard, meta_line};
 
 /// Where a session stands, which is the only thing that decides how its row looks.
 ///
-/// Only one of the four asks for anything: `Waiting` is *your turn*, and it is the only one
-/// that moves. The other three report — finished, broken, busy — and a row that reports
-/// should be readable at a glance and quiet the rest of the time.
+/// Only one of the five asks for anything: `Waiting` is *your turn*, and it is the only one
+/// that moves. The other four report — finished, broken, busy, coming back — and a row that
+/// reports should be readable at a glance and quiet the rest of the time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SessionState {
     /// Nothing is pending. The default, because a row you forgot to mark should sit quiet
@@ -26,6 +26,14 @@ pub enum SessionState {
     Error,
     /// An agent is working in it right now.
     Working,
+    /// It stopped, but it is coming back on its own: it left a wake registered — an event
+    /// to watch for, a deadline, a command that decides — and will pick the conversation up
+    /// again when that fires.
+    ///
+    /// The state the other four cannot say. `Done` would call it finished when it is not,
+    /// `Working` would claim a turn is in flight when none is, and `Waiting` would put it in
+    /// the inbox of things that need a person — which is the one thing it does not need.
+    Awaiting,
 }
 
 impl SessionState {
@@ -42,6 +50,10 @@ impl SessionState {
     /// `Waiting` breathes whether it is open or not. A session blocked on you has not
     /// stopped being blocked because you are looking at it, and its wash sits *over* the
     /// open row's fill rather than instead of it — see the `attention-pulse` utility.
+    ///
+    /// `Awaiting` does not breathe, and that is the difference between the two of them said
+    /// in motion: movement is how a row asks, and this one is not asking. It takes the blue
+    /// only under the cursor, where hovering the row is already a question about it.
     #[must_use]
     pub fn row_classes(self, selected: bool) -> &'static str {
         match (self, selected) {
@@ -49,6 +61,8 @@ impl SessionState {
                 "border-transparent hover:bg-card"
             }
             (Self::Done | Self::Error | Self::Working, true) => "border-edge bg-selected",
+            (Self::Awaiting, false) => "border-transparent hover:bg-await-bg",
+            (Self::Awaiting, true) => "border-await-edge bg-selected",
             (Self::Waiting, false) => "attention-pulse border-transparent hover:bg-queue-bg",
             (Self::Waiting, true) => "attention-pulse border-edge bg-selected",
         }
@@ -60,33 +74,40 @@ impl SessionState {
     #[must_use]
     pub fn title_classes(self) -> &'static str {
         match self {
-            Self::Waiting | Self::Error | Self::Working => "font-medium text-ink",
+            Self::Waiting | Self::Error | Self::Working | Self::Awaiting => "font-medium text-ink",
             Self::Done => "text-secondary",
         }
     }
 
     /// Ink for the row's one loud word.
     ///
-    /// A question is amber and everything else that is worth saying twice is red: amber is
-    /// the colour of *your turn*, and spending red on it would put a run that merely wants
-    /// an answer in the same voice as one that broke.
+    /// A question is amber, a registered wake is blue, and everything else that is worth
+    /// saying twice is red: amber is the colour of *your turn*, blue is the colour of
+    /// nobody's, and spending red on either would put a run that merely wants an answer in
+    /// the same voice as one that broke.
     #[must_use]
     pub fn alert_classes(self) -> &'static str {
         match self {
             Self::Waiting => "font-medium text-attention",
+            Self::Awaiting => "font-medium text-await",
             Self::Done | Self::Error | Self::Working => "font-medium text-err",
         }
     }
 
     /// The dot before the title, when this state gets one.
     ///
-    /// Green for busy, red for broken, and nothing for the two that already say it
-    /// elsewhere: `Waiting` has the wash under it and `Done` has nothing to report. A dot
-    /// per state would be four marks where two carry the news.
+    /// Green for busy, blue for coming back, red for broken, and nothing for the two that
+    /// already say it elsewhere: `Waiting` has the wash under it and `Done` has nothing to
+    /// report. A dot per state would be five marks where three carry the news.
+    ///
+    /// `Working` and `Awaiting` get the same mark in two colours on purpose — they are the
+    /// two rows a conversation is still alive in, and a rail is scanned for exactly that.
+    /// What separates them is only whether anything is happening in it this second.
     #[must_use]
     pub fn dot_classes(self) -> Option<&'static str> {
         match self {
             Self::Working => Some("bg-accent"),
+            Self::Awaiting => Some("bg-await"),
             Self::Error => Some("bg-err"),
             Self::Waiting | Self::Done => None,
         }

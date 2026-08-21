@@ -1209,6 +1209,10 @@ pub(crate) struct AgentsWatch {
     pub(crate) goal_editor: RwSignal<bool>,
     /// The goal the open editor is rewording, or `None` when it is writing a new one.
     pub(crate) goal_editing: RwSignal<Option<String>>,
+    /// Whether a "stop waiting" is in flight. The awaits themselves are not held here — they ride
+    /// the conversation snapshot, so the bar is a view of the store and refreshes on the poll —
+    /// but the click that drops one still has to say it was heard before the next one lands.
+    pub(crate) await_busy: RwSignal<bool>,
     /// Images attached to the message the *new-conversation* composer is holding.
     ///
     /// Two trays for the same reason there are two text buffers: the box that starts a conversation
@@ -1245,6 +1249,7 @@ impl AgentsWatch {
             goal_busy: RwSignal::new(false),
             goal_editor: RwSignal::new(false),
             goal_editing: RwSignal::new(None),
+            await_busy: RwSignal::new(false),
             input_files: RwSignal::new(Vec::new()),
             reply_files: RwSignal::new(Vec::new()),
         }
@@ -1273,6 +1278,7 @@ impl AgentsWatch {
         self.goal_busy.set(false);
         self.goal_editor.set(false);
         self.goal_editing.set(None);
+        self.await_busy.set(false);
         self.input_files.set(Vec::new());
         self.reply_files.set(Vec::new());
     }

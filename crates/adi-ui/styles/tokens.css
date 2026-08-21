@@ -72,15 +72,25 @@
 
   --attention:  light-dark(#b56a1f, #f0a35c);
 
+  /* Blue: a conversation waiting on the *world* rather than on you — an await is
+   * registered and the run will continue by itself when it fires. It needs its own hue
+   * because it is the state the two beside it are not: amber is your turn, mint is
+   * working, and a run that has stopped but is coming back is neither. Deliberately cool,
+   * so it never reads as an alarm — nobody has to do anything about it. */
+  --await:      light-dark(#1c62c4, #6aa6f7);
+  --await-bg:   light-dark(#f1f5fd, #090d13);
+  --await-edge: light-dark(#d2dff4, #1a2736);
+
   /* ---- syntax -------------------------------------------------------------------------
    * The code view's own small palette. Eight roles, because that is what the scanner in
    * `src/highlight.rs` can tell apart, and no more: a file with a colour per concept reads
    * as confetti.
    *
    * Mint for the text a program *contains*, amber for its numbers, teal for the words the
-   * language reserves and a cool blue for the names it calls — the one hue that steps
-   * outside the UI palette, because code is the one place five hues have to stay apart at
-   * a glance. Everything structural is grey: brackets and separators are scaffolding, and
+   * language reserves and a cool blue for the names it calls — code is the one place five
+   * hues have to stay apart at a glance. Its blue is a shade of the one `--await` uses and
+   * not the same value: the two never share a surface, and each is tuned for the ground it
+   * sits on. Everything structural is grey: brackets and separators are scaffolding, and
    * they should let the names between them lead. */
   --syn-plain:   light-dark(#1b2320, #dbe4e0);   /* ordinary code — foreground, not muted */
   --syn-comment: light-dark(#8b968f, #63706a);

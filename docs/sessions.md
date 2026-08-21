@@ -351,21 +351,32 @@ chat_rail                       :2307   the whole left rail
 │       ├─ per agent: pty ⇒ one synthetic row (when: now); else runs.filter(!hidden)
 │       │   └─ paged                    the watched agent's own list, cut to state.rail_limit
 │       ├─ sort by last_touch desc      last_touch = max(last_activity, started_at)
-│       ├─ partition ×3                 four bands: asking, running, starred, the rest
+│       ├─ partition ×4                 five bands: asking, running, awaiting, starred, the rest
 │       └─ For(keyed "agent:run_id") -> chat_session_row
 ├─ chat_load_more                       "Load {SESSION_PAGE} more · N older" — total − Σruns
 └─ chat_hidden_sessions         :2674   the collapsed Hidden band (all_chats only)
 ```
 
 `chat_session_row` maps a row to `adi_ui::SessionItem` (`crates/adi-ui/src/session.rs`) inside a
-`RailCard` (`crates/adi-ui/src/rail.rs:38`). `SessionState` has four states but the rail only
-ever produces three: `Waiting` when the conversation is asking, `Working` when it is running, else
-`Done` — `Error` is unreachable from this path today.
+`RailCard` (`crates/adi-ui/src/rail.rs:38`). `SessionState` has five states but the rail only
+ever produces four: `Waiting` when the conversation is asking, `Working` when it is running,
+`Awaiting` when it has stopped holding a registered [wake](../crates/adi-agents/src/awaits.rs),
+else `Done` — `Error` is unreachable from this path today. The three live states are tried in that
+order, so a run that is working *and* holding a wake for what it launched is a working run.
 
-**The band order is deliberate and the starred band comes third.** Waiting and running are states a
-conversation is in *now* and will leave on its own; a star is a standing instruction. A starred chat
-that happens to be working is still found under **Running now**, so the band collects only the ones
-recency ordering would otherwise have carried off — which is the whole reason to mark one.
+**The band order is deliberate and the starred band comes fourth.** Waiting, running and awaiting
+are states a conversation is in *now* and will leave on its own; a star is a standing instruction. A
+starred chat that happens to be working is still found under **Running now**, so the band collects
+only the ones recency ordering would otherwise have carried off — which is the whole reason to mark
+one.
+
+**Awaiting is not an inbox.** It sits below **Running now** because nothing is happening in the
+conversation this second, and above everything else because something is going to: an await is the
+run's own note saying *wake me when…*, and a rail that filed it under **Recent** would say the one
+thing that is false about it. Nobody has to do anything about one, which is why its row does not
+breathe the way a question's does and why its only colour is a blue dot. The listing carries the
+awaits (`AgentRunInfo::awaits`), so the band costs no second request — and `newest()` holds an
+awaiting session through the page cut for the same reason it holds a running one.
 
 Each row carries two controls on its right edge, in separate absolute anchors rather than one flex
 row (both buttons are `position: absolute` against whatever anchor they are given, so a row of them
@@ -405,7 +416,8 @@ a sortable table. It differs from the rail in three ways worth knowing before un
    it, `state.all_chats` is set.
 6. `chat_all_sessions` re-runs: the row is not hidden, its agent passes ★, `last_touch` is now,
    `running` is true → it lands at the top of the **Running now** band.
-7. When the turn ends, `is_alive` goes false; the row moves to **Recent**. The answer is committed
+7. When the turn ends, `is_alive` goes false; the row moves to **Recent** — or to **Awaiting**,
+   if the run registered a wake before it stopped (which launching another agent does for it). The answer is committed
    to the transcript by `settle` (`lib.rs:1131`) — which happens **when the chat is opened/read**,
    and deliberately stamps the turn with the log's mtime, not `now`, so committing an old answer
    does not shove that chat back to the top.
