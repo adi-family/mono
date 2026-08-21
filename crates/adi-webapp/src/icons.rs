@@ -33,6 +33,10 @@ pub(crate) enum Icon {
     Book,
     /// An arrow into a tray — "install this as an app".
     Download,
+    /// [`Icon::Download`] mirrored: an arrow rising *out* of a bar — "move this machine up
+    /// to the published version". The two sit in the same bar, so they are each other's
+    /// reflection rather than two takes on an arrow.
+    Upgrade,
     /// Bars rising inside an axis — a reading of what has happened, which is what the
     /// analytics page is. Deliberately unlike `Dashboard`'s four tiles: one is a chart, the
     /// other a grid of panels, and at 13px only the bars tell them apart.
@@ -44,6 +48,9 @@ pub(crate) enum Icon {
 
 impl Icon {
     /// The glyph's paths. Coordinates assume a 16×16 viewBox and a 1.5 stroke.
+    // One arm per icon and nothing else: the length is the size of the set, and splitting the
+    // table in two would only move the line where the set is looked up.
+    #[allow(clippy::too_many_lines)]
     pub(crate) fn path(self) -> &'static str {
         match self {
             Icon::Globe => {
@@ -134,6 +141,10 @@ impl Icon {
             Icon::Download => {
                 r#"<path d="M8 2.25v7"/><path d="M5 6.5l3 3 3-3"/>
                    <path d="M2.75 11.25v2.5h10.5v-2.5"/>"#
+            }
+            Icon::Upgrade => {
+                r#"<path d="M8 13.75v-7"/><path d="M5 9.5l3-3 3 3"/>
+                   <path d="M2.75 4.75v-2.5h10.5v2.5"/>"#
             }
             Icon::Chart => {
                 r#"<path d="M2.25 2v11.75H14"/>

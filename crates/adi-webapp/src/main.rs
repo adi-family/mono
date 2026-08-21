@@ -23,6 +23,7 @@ mod routing;
 mod state;
 mod store_browser;
 mod ui;
+mod update;
 mod voice;
 
 // The component library. The titlebar is the first thing on this page built from it; the
@@ -126,6 +127,10 @@ fn Home() -> impl IntoView {
     let onb = OnboardingForm::new();
     // True once the browser will let us offer "install as an app" (see [`pwa`]).
     let can_install = pwa::installable();
+    // What version this machine is on, and whether a newer one is published for it. Started
+    // here rather than inside the bar below because the bar is rebuilt whenever `meta` moves,
+    // and this owns a timer (see [`update::watch`]).
+    let updates = update::watch();
 
     // Load the meta state once, seeding the wizard from the server's defaults (or from the agent
     // itself, when there already is one).
@@ -309,6 +314,7 @@ fn Home() -> impl IntoView {
                         on_home=Callback::new(move |()| reset_chat_home(state, watch))
                         actions=move || {
                             view! {
+                                {update::version_pill(updates)}
                                 {install_pill(can_install)}
                                 <Button
                                     size=ButtonSize::Small
@@ -335,6 +341,7 @@ fn Home() -> impl IntoView {
                         logo="adi"
                         actions=move || {
                             view! {
+                                {update::version_pill(updates)}
                                 {install_pill(can_install)}
                                 {analytics_link()}
                                 {extended_link()}
@@ -620,6 +627,8 @@ fn App() -> impl IntoView {
     let current_section = RwSignal::new(project_section_from_path(&current_path()));
     // True once the browser will let us offer "install as an app" (see [`pwa`]).
     let can_install = pwa::installable();
+    // The version pill's watcher — one per mounted app, since it owns a timer.
+    let updates = update::watch();
     let files = FilesState::new();
     let store = state::StoreBrowser::new();
     let state = State {
@@ -1011,6 +1020,10 @@ fn App() -> impl IntoView {
                         <span aria-hidden="true">"\u{2190}"</span>
                         <span>"simple"</span>
                     </a>
+                    // What this machine is on, and the way to the next version — the same
+                    // control the root bar carries, so the answer is in the same place
+                    // whichever of the two documents you are in.
+                    {update::version_pill(updates)}
                     {move || can_install.get().then(|| view! {
                         <Button
                             size=ButtonSize::Small

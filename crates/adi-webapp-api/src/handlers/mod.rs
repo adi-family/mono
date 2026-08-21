@@ -38,6 +38,7 @@ mod services;
 mod tasks;
 mod tools;
 mod triggers;
+mod update;
 mod voice;
 mod workspaces;
 
@@ -59,6 +60,7 @@ pub use services::*;
 pub use tasks::*;
 pub use tools::*;
 pub use triggers::*;
+pub use update::*;
 pub use voice::*;
 pub use workspaces::*;
 

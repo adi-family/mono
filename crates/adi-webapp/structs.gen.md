@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-52 structs · 7 enums · 1 type alias across 19 files.
+53 structs · 7 enums · 1 type alias across 20 files.
 
 ## Index
 
@@ -26,6 +26,7 @@
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
 - [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
+- [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
 ---
@@ -59,6 +60,7 @@ pub(crate) enum Icon {
     Database,
     Book,
     Download,
+    Upgrade,
     Chart,
     Contrast,
 }
@@ -1135,6 +1137,23 @@ A one-line status message under the form; `kind` drives its colour via `data-kin
 pub(crate) struct Flash {
     pub(crate) kind: &'static str,
     pub(crate) msg: String,
+}
+```
+
+---
+
+## `src/update.rs`
+
+### struct `UpdateWatch`
+
+The pill's state: the machine's, plus whether a call this page made is in flight.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct UpdateWatch {
+    state: RwSignal<Option<UpdateState>>,
+    busy: RwSignal<bool>,
+    offer: RwSignal<bool>,
 }
 ```
 

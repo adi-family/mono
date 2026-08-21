@@ -437,6 +437,7 @@ dependencies = [
  "adi-tasks",
  "adi-tools",
  "adi-triggers",
+ "adi-update",
  "base64 0.22.1",
  "reqwest",
  "rustls",

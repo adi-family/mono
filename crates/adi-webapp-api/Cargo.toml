@@ -31,6 +31,10 @@ server = [
     # embedding model), which is exactly why it sits behind this feature and never reaches wasm.
     "dep:adi-knowledge",
     "dep:adi-triggers",
+    # The auto-update engine, for the version pill's `/api/update` surface: what is installed,
+    # what is published, and the marker that says an install is in flight. Native-only (it swaps
+    # binaries and shells out to the platform's own tools), so it lives behind this feature.
+    "dep:adi-update",
     # Background triggers are supervised in-process by the app, so the handlers can poke the
     # supervisor when a save changes what should be running.
     "adi-triggers/supervisor",
@@ -67,6 +71,7 @@ adi-knowledge = { workspace = true, optional = true }
 adi-events = { workspace = true, optional = true }
 adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }
+adi-update = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 # `blocking` because every /api handler is a sync function run on tokio's blocking pool (see

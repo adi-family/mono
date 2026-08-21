@@ -145,6 +145,17 @@ impl Engine {
         &self.settings
     }
 
+    /// The updater's own store directory — `~/.adi/mono/update`, holding `config.toml`,
+    /// `state.json` and the backups.
+    ///
+    /// Exposed for callers that keep a file *beside* those: the control panel writes an
+    /// in-flight marker there when it hands an install to the CLI. Re-deriving the path at
+    /// each call site is how two of them end up disagreeing about which directory this is.
+    #[must_use]
+    pub fn module(&self) -> &adi_config::Module {
+        &self.module
+    }
+
     /// The persisted last check/install record.
     #[must_use]
     pub fn state(&self) -> State {
@@ -215,6 +226,8 @@ impl Engine {
                 let available =
                     Version::is_newer(&m.version, &installed) && m.artifact_for_host().is_some();
                 state.latest_version = Some(m.version.clone());
+                state.latest_notes.clone_from(&m.notes);
+                state.latest_has_artifact = Some(m.artifact_for_host().is_some());
                 state.last_outcome = Some(
                     if available {
                         "update-available"

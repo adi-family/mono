@@ -225,6 +225,8 @@ pub struct State {
     pub last_check_unix: Option<u64>,
     pub installed_version: Option<String>,
     pub latest_version: Option<String>,
+    pub latest_notes: Option<String>,
+    pub latest_has_artifact: Option<bool>,
     pub last_outcome: Option<String>,
     pub last_error: Option<String>,
     pub last_install_unix: Option<u64>,

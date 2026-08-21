@@ -13,6 +13,15 @@ pub struct State {
     pub installed_version: Option<String>,
     /// The newest published version seen.
     pub latest_version: Option<String>,
+    /// The release notes published with [`Self::latest_version`] — one section of
+    /// `CHANGELOG.md`, in markdown. Recorded so the control panel can show what an update
+    /// contains *before* installing it, without re-fetching the manifest to find out.
+    pub latest_notes: Option<String>,
+    /// Whether the release named by [`Self::latest_version`] publishes an artifact for this
+    /// host. Recorded because a newer version that publishes none is *not* an update this
+    /// machine can take, and anything reading the record between checks — the control panel's
+    /// version pill — has only this file to learn that from.
+    pub latest_has_artifact: Option<bool>,
     /// `up-to-date` | `update-available` | `installed` | `error`.
     pub last_outcome: Option<String>,
     /// The error message when `last_outcome == "error"`.

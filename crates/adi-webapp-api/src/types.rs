@@ -16,6 +16,56 @@ pub struct Health {
     pub uptime_secs: u64,
 }
 
+/// `GET /api/update`, and the answer to both `POST /api/update/check` and
+/// `POST /api/update/run` — everything the version pill in the top bar shows.
+///
+/// A read of the updater's own record (`~/.adi/mono/update/state.json`) plus the installed
+/// version, so the plain `GET` touches no network and can be polled. Only `/check` goes out
+/// to the release manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateState {
+    /// The version of the *installed* payload — the app bundle on macOS, the `VERSION` file
+    /// beside the node's binaries on Linux and Windows. This is what update decisions compare
+    /// against, and so what the pill shows.
+    pub installed: String,
+    /// The version compiled into the process answering this call. Equal to `installed` on any
+    /// provisioned machine; it differs on a dev build run out of a checkout, which is worth
+    /// saying rather than hiding behind a number that isn't the one running.
+    pub running: String,
+    /// The newest published version the last check saw, if there has been one.
+    pub latest: Option<String>,
+    /// `latest` is strictly newer than `installed` **and** this platform has an artifact in it.
+    pub update_available: bool,
+    /// The manifest key this host looks itself up under: `macos`, `linux-x86_64`, `windows-x86_64`.
+    pub platform: String,
+    /// Whether the release named by `latest` publishes an artifact for `platform`. `None` until
+    /// a check has run. A newer version that publishes none is not an update this machine can
+    /// take — the pill says so instead of offering a download that would fail.
+    pub has_artifact: Option<bool>,
+    /// What is in the release named by `latest`, in markdown — the changelog section
+    /// published with it. Absent on a release cut without notes, and on a machine that has
+    /// not checked yet; the offer then stands on the version number alone.
+    pub notes: Option<String>,
+    /// `up-to-date` | `update-available` | `installed` | `rolled-back` | `error`.
+    pub outcome: Option<String>,
+    /// What went wrong on the last check or install, when `outcome` is `error` or `rolled-back`.
+    pub error: Option<String>,
+    /// How long ago the last check completed, successful or not. Seconds rather than a
+    /// timestamp because the reader is a browser: the page that renders this may be on
+    /// another machine (a node's panel, read over the mesh), and two clocks that disagree
+    /// would turn "checked 2 minutes ago" into a date in the future.
+    pub checked_secs_ago: Option<u64>,
+    /// How long ago the last successful install finished, in the same terms.
+    pub installed_secs_ago: Option<u64>,
+    /// The last check is older than the configured interval, or never happened — the page
+    /// asks for a fresh one when it sees this, so the pill is right even where the periodic
+    /// background updater is switched off.
+    pub stale: bool,
+    /// An install started from the panel is still running. While this holds, the app is
+    /// expected to restart out from under the page.
+    pub installing: bool,
+}
+
 /// An inclusive `[start, end]` port interval — used for both the allocatable range and
 /// each reserved band.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -475,6 +475,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/tasks",
     "/api/tools",
     "/api/triggers",
+    "/api/update",
     "/api/voice",
 ];
 
@@ -542,6 +543,12 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
     let path = req.route_path();
     match (req.method.as_str(), path) {
         ("GET", "/api/health") => handlers::health(SERVICE, VERSION, start),
+        // Auto-update (`docs/adi-update.md`). The `GET` reads two files and is what the top
+        // bar's version pill polls; `check` fetches the release manifest; `run` hands the
+        // install to the bundled CLI, which restarts this very process on its way through.
+        ("GET", "/api/update") => handlers::update_state(),
+        ("POST", "/api/update/check") => handlers::check_update(),
+        ("POST", "/api/update/run") => handlers::run_update(),
         ("GET", "/api/ports") => handlers::ports(ports),
         ("GET", "/api/ports/used") => handlers::used_ports(scan::listening_ports()),
         ("POST", "/api/ports/reserve") => handlers::reserve(ports, &req.body),

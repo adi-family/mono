@@ -26,7 +26,8 @@ use adi_webapp_api::types::{
     TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
     TriggerFireResult, TriggerLog,
     Transcript,
-    TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UsedPorts, WorkspaceCreateResult,
+    TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateState, UsedPorts,
+    WorkspaceCreateResult,
     WorkspaceRef,
     VoiceState,
     WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
@@ -52,6 +53,27 @@ pub async fn used() -> Result<UsedPorts, String> {
 /// the agent form schema. Creating/running it reuses the `save_agent` / `run_agent` endpoints.
 pub async fn meta() -> Result<MetaState, String> {
     get("/api/meta").await
+}
+
+// Auto-update (`docs/adi-update.md`). All three answer the same shape, so the top bar's
+// pill re-renders from whichever call it last made.
+
+/// What is installed, what was last seen published, and whether an install is in flight.
+/// Reads two files on the server; safe to poll.
+pub async fn update_state() -> Result<UpdateState, String> {
+    get("/api/update").await
+}
+
+/// Go and ask the release manifest. The one call here that leaves the machine, so the pill
+/// makes it only when the server says its record has gone stale.
+pub async fn check_update() -> Result<UpdateState, String> {
+    post("/api/update/check", &()).await
+}
+
+/// Install the published release. Answers as soon as the updater is running — it restarts the
+/// app on its way through, so the socket this reply came over is expected to drop.
+pub async fn run_update() -> Result<UpdateState, String> {
+    post("/api/update/run", &()).await
 }
 
 pub async fn reserve(body: &LeaseRef) -> Result<ReserveResponse, String> {

@@ -15,11 +15,21 @@ is built around.
 **The git tag is the source of truth for the version.**
 
 ```
-git tag v0.2.0 && git push --tags
+# 1. rename `## Unreleased` in CHANGELOG.md to `## 0.3.0 — 2026-08-21`, and open a fresh one
+# 2. commit that
+git tag v0.3.0 && git push --tags
 ```
 
 That is the entire release procedure. `.github/workflows/release.yml` picks the tag up and
 builds all three platforms, then writes and publishes the manifest.
+
+Step 1 is not optional and not a convention — the workflow's *first* job runs
+`scripts/changelog.sh` against the tag's version and **refuses the release** if the file has
+no section for it. That check is deliberately in front of the builds rather than beside the
+publish: the notes are what every machine is shown before it takes the release (§5), and
+discovering they were never written after three platforms have spent half an hour compiling
+is discovering it too late. Forgetting to rename `## Unreleased` looks exactly the same from
+there, and is caught the same way.
 
 `scripts/version.sh` is what resolves the number, and every build path calls it:
 
@@ -60,6 +70,10 @@ in the manifest. They cannot drift.
   }
 }
 ```
+
+`notes` is one section of [`CHANGELOG.md`](../CHANGELOG.md), lifted out by
+`scripts/changelog.sh` — markdown, and the release's own case for being taken. It is the only
+field here written for a person rather than for the updater.
 
 Clients look up `artifacts[host_platform()]` — `macos` for the universal bundle (one DMG covers
 both arches, so the key carries no architecture), `<os>-<arch>` everywhere else.
@@ -130,7 +144,52 @@ adi-mono update enable | disable   # the periodic background agent
 
 `--json` on `check`, `run` and `status` for a machine-readable form.
 
-## 5. Publishing by hand
+## 5. From the control panel
+
+The same three things the CLI does, in the top bar of every adi screen — the chat at `/`, the
+setup wizard, and the workbench at `/extended`. A quiet `v0.2.0` chip beside the other bar
+controls, and, only while there is one to take, a green **Update to 0.3.0** button next to it.
+Hover the chip for what it knows; click it to check now. Both live in
+[`crates/adi-webapp/src/update.rs`](../crates/adi-webapp/src/update.rs).
+
+**The button opens the changelog; it does not install.** Taking an update restarts everything
+the machine is running, which is not a thing to do to someone who meant to click its
+neighbour — and the release carries notes precisely so there is an answer to "what for?". So
+it opens *What's new*: the section of `CHANGELOG.md` published with that release, rendered as
+markdown, with what installing will do said beside the two ways out — **Install 0.3.0** and
+**Not now**. A release cut without notes still offers the update, on the version number
+alone.
+
+The notes reach the machine through `state.json`: `Engine::check` records the manifest's
+`notes` alongside the version, so the dialog opens on what the last check already fetched
+rather than going back to the network to find out what it is offering.
+
+| endpoint | cost | what |
+|----------|------|------|
+| `GET /api/update` | two file reads | the chip's whole state — installed, last published seen, whether an install is running. Polled. |
+| `POST /api/update/check` | one manifest fetch | §2's check, persisted. The page fires it on load *only* when the server reports `stale` — the record is older than `check_interval_hours` — so a machine with the background agent switched off still gets a truthful chip without every tab hitting GitHub on every load. |
+| `POST /api/update/run` | spawns the CLI | §3, start to finish. |
+
+**`run` does not install anything itself.** Step 5 of §3 swaps the binaries this very server is
+running from and step 6 restarts it, so a handler that installed inline would be killed part-way
+through its own reply. It spawns `adi-mono update run --quiet` — the bundled one, resolved beside
+the running binary and never off `PATH` — in its **own process group**, and answers immediately.
+The process group is load-bearing: the supervisor kills the app service's group on kickstart, and
+an updater inside that group would die between the swap and the health check, leaving the machine
+on unverified binaries with nothing left running to roll them back.
+
+That leaves a gap `state.json` cannot describe — the minutes between the button and the verdict,
+spanning the app's own death — so the endpoint writes `update/installing.json` (the child's pid
+and start time) and `GET /api/update` reports `installing` from it. The CLI knows nothing about
+that file; whoever reads it next collects it, once the pid is gone or half an hour has passed.
+`update/run.log` holds that run's output.
+
+None of this is per-platform. The panel asks the same three questions on a Mac, a Linux node and
+a Windows node, and every difference — DMG or tarball, launchd or systemd or Task Scheduler — is
+behind the CLI it hands the work to. A release publishing no artifact for the host reads as "not
+an update for this machine" rather than as an offer that would fail to download.
+
+## 6. Publishing by hand
 
 `apps/macos/publish.sh` cuts a **macOS-only** release from a workstation with the signing
 certificate and notarization credentials in `apps/macos/.env`. It refuses to publish when the
@@ -139,7 +198,7 @@ built bundle's version disagrees with the tree's tag.
 That path leaves Linux and Windows on their old versions — it publishes no artifact for them,
 which the client reports honestly rather than failing on. Use the workflow for a real release.
 
-## 6. Release secrets
+## 7. Release secrets
 
 The macOS job is the only one that needs any:
 
@@ -154,7 +213,7 @@ The macOS job is the only one that needs any:
 The workflow checks all five are present before building, since an unsigned bundle is refused
 by Gatekeeper on every other Mac and by the updater's own Team ID check.
 
-## 7. Things that will bite
+## 8. Things that will bite
 
 - **`crates/adi-app/build.rs` creates an empty `dist/` when the webapp has not been built.**
   That keeps a fresh checkout compiling, but at release time it means a packaging run that
@@ -169,7 +228,7 @@ by Gatekeeper on every other Mac and by the updater's own Team ID check.
   `CLAUDE.md`. The updater kickstarts it as part of a swap, which is a different thing from an
   operator stopping it.
 
-## 8. Not built yet
+## 9. Not built yet
 
 - **No staged rollout.** Every machine takes a release as soon as it appears; there is no
   canary ring and no way to pause a bad one except publishing another.
@@ -177,5 +236,6 @@ by Gatekeeper on every other Mac and by the updater's own Team ID check.
   TLS. Since the manifest and the artifact come from the same GitHub release, an attacker who
   can replace one can replace both — macOS's codesign check has no equivalent there yet.
   `Artifact` has room for a `sig` field when that changes.
-- **No fleet view of versions.** Each node updates itself; the panel does not show which
-  version each one is on, and there is no "update the fleet" action.
+- **No fleet view of versions.** §5's pill answers for *the machine whose panel you have open*
+  — a node's own panel, read over the mesh, shows and updates that node. There is no one screen
+  listing what every paired node is on, and no "update the fleet" action.

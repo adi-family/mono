@@ -24,7 +24,13 @@ pub struct Manifest {
     /// RFC 3339 publication timestamp, informational.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pub_date: Option<String>,
-    /// Human release notes, informational.
+    /// The release notes, in markdown: one section of the repo's `CHANGELOG.md`, lifted out
+    /// by `scripts/changelog.sh` when the release is cut.
+    ///
+    /// Not decoration — this is what the control panel shows a person before they let an
+    /// update restart their machine, so it is the release's own case for being taken. It may
+    /// be absent (a hand-cut release, a manifest from another channel), and the panel then
+    /// offers the update on the version number alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
 }
