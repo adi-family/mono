@@ -188,10 +188,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
 
-      - name: Toolchain (musl, so one tarball runs on any distro)
-        run: |
-          sudo apt-get update && sudo apt-get install -y musl-tools
-          rustup target add x86_64-unknown-linux-musl wasm32-unknown-unknown
+      - name: Toolchain (for the wasm half — the musl half is built in a container)
+        run: rustup target add wasm32-unknown-unknown
 
       - name: Install trunk
         run: |
@@ -202,8 +200,31 @@ jobs:
       - name: Build the webapp
         run: cd crates/adi-webapp && trunk build --release
 
-      - name: Build the node package
-        run: apps/linux/build.sh
+      # The musl half is built inside Alpine, whose *own* libc is musl — so this is a native
+      # compile, not a cross one, and the toolchain question disappears instead of being worked
+      # around. `musl-tools`, which this used to install, is a C compiler only; usearch (reached
+      # through adi-indexer) is C++, and Ubuntu ships no musl C++ at all. The prebuilt
+      # musl-cross-make tarballs that would supply one stop at GCC 11, which is too old for
+      # usearch's SIMD backend, and zig's clang fails on the same code. Alpine 3.22 is GCC 14.
+      #
+      # Everything the build needs is on the mounted workspace, including the `dist/` trunk just
+      # produced; only rustup is fetched inside. Output lands in `target/` as root, which the
+      # upload step after this reads without trouble.
+      - name: Build the node package (Alpine — musl is native there)
+        run: |
+          docker run --rm \
+            -v "$PWD:/w" -w /w \
+            -e ADI_VERSION \
+            alpine:3.22 sh -euc '
+              apk add --no-cache build-base curl bash git tar file >/dev/null
+              curl -fsSL https://sh.rustup.rs \
+                | sh -s -- -y --profile minimal --default-toolchain stable >/dev/null
+              . "$HOME/.cargo/env"
+              # `scripts/version.sh` shells out to git, and the checkout is owned by the
+              # runner user rather than by root inside here.
+              git config --global --add safe.directory /w
+              ./apps/linux/build.sh
+            '
 
       - uses: actions/upload-artifact@v4
         with:
@@ -226,6 +247,15 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y mingw-w64 zip
           rustup target add x86_64-pc-windows-gnu wasm32-unknown-unknown
+          # usearch (through adi-indexer) includes <Windows.h>; mingw-w64 ships the header as
+          # `windows.h`. On Windows and on macOS the filesystem is case-insensitive and the
+          # difference never surfaces — which is exactly why this only ever fails here, and why
+          # it built on a developer's Mac while every CI run died on it.
+          for d in /usr/x86_64-w64-mingw32/include /usr/share/mingw-w64/include; do
+            [ -f "$d/windows.h" ] && [ ! -e "$d/Windows.h" ] \
+              && sudo ln -s windows.h "$d/Windows.h" && echo "linked $d/Windows.h"
+          done
+          true
 
       - name: Install trunk
         run: |

@@ -19,10 +19,21 @@
 #
 #   BUILDER=cargo   (the default: a plain cross-compile, and the fast one)
 #       rustup target add x86_64-unknown-linux-musl
-#       a musl cross toolchain (`x86_64-linux-musl-gcc`, or `musl-gcc` when building on Linux)
-#           macOS:         brew install FiloSottile/musl-cross/musl-cross
-#           Debian/Ubuntu: apt install musl-tools
-#     The linker itself is named for this target in the workspace's .cargo/config.toml.
+#       a musl cross toolchain with **both** a C and a C++ compiler — `x86_64-linux-musl-gcc`
+#       and `x86_64-linux-musl-g++`. The C++ half is not optional: usearch, reached through
+#       adi-indexer, is C++.
+#           macOS:         brew install FiloSottile/musl-cross/musl-cross   (ships both, GCC 14)
+#           Debian/Ubuntu: `musl-tools` is C only, and there is no musl C++ in the archive —
+#                          build in a musl-native container instead (below).
+#
+#   a musl-native host   (no flag: the script notices, and there is nothing to cross-compile)
+#     Alpine's own libc is musl, so `cc`/`c++` already target it and the toolchain question
+#     disappears. This is how CI builds the package:
+#         docker run --rm -v "$PWD:/w" -w /w alpine:3.22 sh -c \
+#           'apk add build-base curl bash git tar file && …rustup… && ./apps/linux/build.sh'
+#     It is also the only easy way to get a musl toolchain new enough: the prebuilt
+#     musl-cross-make tarballs on musl.cc stop at GCC 11, too old for usearch's SIMD backend
+#     (numkong), and zig's clang fails on the same code. Alpine 3.22 is GCC 14.
 #
 #   BUILDER=cross   (a container build; needs `cargo install cross` + Docker/Podman)
 #     Kept as the escape hatch for a host with no musl toolchain. It used to be the *recommended*
@@ -64,11 +75,40 @@ have_target() {
     rustup target list --installed 2>/dev/null | grep -qx "$TARGET"
 }
 
-# The musl C compiler, under either of its two usual names. Sets MUSL_CC as a side effect so the
-# preflight can report it and the builder can hand it to cargo.
+# Whether this host's own libc is already musl — an Alpine container, or a musl-native distro.
+# There the "cross" build is a *native* one: `cc`/`c++` already target musl, there is no
+# `x86_64-linux-musl-` prefix to find, and cargo needs no linker override.
+#
+# This is not an exotic case, it is how CI builds this package. A musl cross toolchain new
+# enough for the tree is otherwise hard to come by: usearch's SIMD backend (numkong, reached
+# through adi-indexer) needs a compiler that understands the recent x86 target attributes, and
+# the prebuilt musl-cross-make tarballs on musl.cc stop at GCC 11, which does not. Alpine ships
+# GCC 14 with musl as its own libc, so the problem disappears instead of being worked around.
+host_is_musl() {
+    rustc -vV 2>/dev/null | grep -q "^host: .*-linux-musl$"
+}
+
+# The musl C **and C++** compilers. Sets MUSL_CC/MUSL_CXX as a side effect, so the preflight can
+# name what is missing and the builder can hand both to cargo.
+#
+# C++ is not optional any more and used to be unasked for: `usearch` is C++, so a host with
+# `musl-gcc` and no `musl-g++` passed every check here and then failed minutes later inside
+# cc-rs, naming a compiler this script had never looked for.
 have_musl_cc() {
+    if host_is_musl; then
+        MUSL_CC="cc"
+        MUSL_CXX="c++"
+        return 0
+    fi
     for candidate in x86_64-linux-musl-gcc musl-gcc; do
-        if command -v "$candidate" >/dev/null 2>&1; then MUSL_CC="$candidate"; return 0; fi
+        if command -v "$candidate" >/dev/null 2>&1; then
+            MUSL_CC="$candidate"
+            # `musl-gcc` is a specs wrapper around the host gcc and has no C++ twin; the
+            # musl-cross-make toolchains ship the `-g++` beside the `-gcc`.
+            MUSL_CXX="$(printf '%s' "$candidate" | sed 's/gcc$/g++/')"
+            command -v "$MUSL_CXX" >/dev/null 2>&1 || MUSL_CXX=""
+            return 0
+        fi
     done
     return 1
 }
@@ -104,11 +144,21 @@ preflight_cargo() {
     }
 
     MUSL_CC=""
+    MUSL_CXX=""
     have_musl_cc || {
         echo "error: no musl cross toolchain on PATH (looked for x86_64-linux-musl-gcc, musl-gcc)" >&2
         echo "       macOS:         brew install FiloSottile/musl-cross/musl-cross" >&2
         echo "       Debian/Ubuntu: apt install musl-tools" >&2
         echo "       or install \`cross\` (cargo install cross) and re-run with BUILDER=cross" >&2
+        exit 1
+    }
+    [ -n "$MUSL_CXX" ] || {
+        echo "error: found $MUSL_CC but no matching musl C++ compiler" >&2
+        echo "       usearch (via adi-indexer) is C++, so this build needs one." >&2
+        echo "       macOS:         brew install FiloSottile/musl-cross/musl-cross  (ships both)" >&2
+        echo "       Debian/Ubuntu: musl-tools is C only — build in a musl-native container" >&2
+        echo "                      instead: docker run --rm -v \"\$PWD:/w\" -w /w alpine:3.22 …" >&2
+        echo "       (see the release workflow's linux job, which does exactly that)" >&2
         exit 1
     }
     # No OpenSSL check any more: every reqwest in the workspace declares
@@ -137,11 +187,14 @@ if [ "${SKIP_BUILD:-}" != "1" ]; then
             ;;
         cargo)
             preflight_cargo
-            # Both variables matter: cargo picks the linker, cc-rs picks the compiler for the
-            # C in the dependency tree. Setting only one produces host objects in a target link.
+            # All three matter: cargo picks the linker, and cc-rs picks the compiler for the C
+            # *and* the C++ in the dependency tree. Setting only some produces host objects in a
+            # target link — or, for the C++ one, sends cc-rs looking for a compiler named after
+            # the target that nobody installed.
             ( cd "$ROOT" \
                 && CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER="$MUSL_CC" \
                    CC_x86_64_unknown_linux_musl="$MUSL_CC" \
+                   CXX_x86_64_unknown_linux_musl="$MUSL_CXX" \
                    cargo build --release --target "$TARGET" "${CRATES[@]}" )
             ;;
         *)

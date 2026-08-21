@@ -41,6 +41,18 @@ if [ "${SKIP_BUILD:-}" != "1" ]; then
         echo "       (macOS: brew install mingw-w64)" >&2
         exit 1
     }
+    # usearch (reached through adi-indexer) includes <Windows.h>; mingw ships `windows.h`. On a
+    # case-insensitive filesystem — macOS, Windows — the two are the same file and nobody
+    # notices. On Linux they are not, and the build dies three minutes in inside cc-rs with the
+    # compiler's own message swallowed. Say it here instead, where it is actionable.
+    for d in /usr/x86_64-w64-mingw32/include /usr/share/mingw-w64/include; do
+        if [ -f "$d/windows.h" ] && [ ! -e "$d/Windows.h" ]; then
+            echo "error: $d has windows.h but no Windows.h, and this filesystem is" >&2
+            echo "       case-sensitive — usearch includes <Windows.h> and will not compile." >&2
+            echo "       fix it once with:  sudo ln -s windows.h $d/Windows.h" >&2
+            exit 1
+        fi
+    done
     echo "==> cross-compiling for $TARGET (release): ${BINS[*]}"
     ( cd "$ROOT" && cargo build --release --target "$TARGET" \
         -p adi-cli -p adi-dns -p adi-hive -p adi-app )
