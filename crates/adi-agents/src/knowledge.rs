@@ -174,6 +174,20 @@ pub(crate) fn block(knowledge: &RunKnowledge) -> String {
         );
     }
 
+    // Written after a run went looking for a memo it had been handed as `business/memos/…` — a
+    // path valid in its *caller's* working directory and meaningless in its own. It fell back to a
+    // `find` over the home directory, missed by one level of `-maxdepth`, and concluded the file
+    // did not exist. The base is the one channel that survives the crossing, so say so here, where
+    // an agent is already being told what it knows.
+    let _ = write!(
+        out,
+        "\n\n**A note reaches another agent; a file path does not.** A run you hand work to \
+         starts in its own working directory, so a path you wrote relative to yours resolves to \
+         nothing there — and it will go hunting for a file it will never find. Cite the base and \
+         the note's title and let it search. If it truly needs the file, give the absolute path, \
+         or put the passage it needs in the brief itself."
+    );
+
     let _ = write!(
         out,
         "\n\nSearch before you set out on anything non-trivial here: the answer may already have \
@@ -350,5 +364,26 @@ mod tests {
         let text = block(&k);
         assert!(!text.contains("memory of your own"));
         assert!(text.contains("global/runbooks"));
+    }
+
+    /// The one thing a run cannot work out for itself: a path it hands to another agent is read
+    /// from a different working directory. It belongs to every agent that has a base to cite,
+    /// whether or not that agent also writes one.
+    #[test]
+    fn every_agent_with_a_base_is_told_how_to_cite_it_to_another_run() {
+        for k in [
+            RunKnowledge {
+                memory: Some("agent:solver/memory".into()),
+                bases: vec!["agent:solver/memory".into()],
+            },
+            RunKnowledge {
+                memory: None,
+                bases: vec!["global/runbooks".into()],
+            },
+        ] {
+            let text = block(&k);
+            assert!(text.contains("A note reaches another agent"), "{text}");
+            assert!(text.contains("absolute path"), "{text}");
+        }
     }
 }
