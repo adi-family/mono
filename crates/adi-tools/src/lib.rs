@@ -45,7 +45,7 @@ use adi_config::{Config, ConfigFile, now_unix};
 pub use error::{Error, Result};
 pub use help::ToolHelp;
 pub use run::RunOutput;
-pub use system::{SYS_KNOWLEDGE, SYS_KNOWLEDGE_ROOT};
+pub use system::{SYS_FACTS, SYS_KNOWLEDGE, SYS_KNOWLEDGE_ROOT};
 pub use tool::{
     Manifest, RUNTIME_SH, RUNTIME_TS, Tool, normalize_runtime, runtime_ext, runtime_from_path,
     validate_runtime,

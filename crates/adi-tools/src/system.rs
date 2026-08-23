@@ -28,6 +28,13 @@ pub const SYS_KNOWLEDGE: &str = "sys-knowledge";
 /// the note on isolation in `docs/knowledge.md`.
 pub const SYS_KNOWLEDGE_ROOT: &str = "sys-knowledge-root";
 
+/// The fact CLI's stable id.
+///
+/// Named here for the same reason [`SYS_KNOWLEDGE`] is: two crates must not drift apart on a
+/// string. Unlike knowledge, nothing adds this shim on an agent's behalf — a fact base is not
+/// implied by any other setting, so an agent has it because somebody said it should.
+pub const SYS_FACTS: &str = "sys-facts";
+
 /// One built-in system tool: a stable id, the name agents invoke it by, a one-line description,
 /// and the `adi-mono` subcommand it forwards to.
 pub(crate) struct SystemTool {
@@ -127,5 +134,11 @@ pub(crate) const SYSTEM_TOOLS: &[SystemTool] = &[
         name: "adi-knowledge-root",
         description: "The knowledge CLI as the owner of the store: same verbs, no isolation — the one way to write into another agent's memory (`agent:<them>/memory`). Use it to leave an agent what it should have known; use plain `adi-knowledge` for everything else.",
         subcommand: "knowledge --root",
+    },
+    SystemTool {
+        id: SYS_FACTS,
+        name: "adi-facts",
+        description: "Record what somebody said, one plain sentence per fact (add/tx/stale/near/get/refresh/bases). `add` stages facts and prints the near pairs it wants ruled on — coexist, merge, supersede or drop — and nothing lands until every one is decided. It never merges on similarity: the closest pair in a real base was a carve-out that a merge would have deleted.",
+        subcommand: "facts",
     },
 ];
