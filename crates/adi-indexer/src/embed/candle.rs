@@ -437,6 +437,19 @@ impl Embedder for CandleEmbedder {
             .lock()
             .map_err(|e| EmbedError::Embedding(format!("Lock: {e}")))?;
 
+        // UNIMPLEMENTED: the mask reaches pooling but never attention. `JinaBertModel::forward`
+        // takes only `input_ids` — as does candle-transformers' stock `jina_bert` — so softmax
+        // runs over the pad positions too and the pad token's embedding leaks into every real
+        // token. A batch pads to its longest member, so only that member is unaffected.
+        //
+        // What a reader will observe: the same two symbols score 0.507 batched with each other
+        // and 0.573 when a longer third symbol shares the batch. Six points of cosine on a
+        // ranking scale whose whole useful range is a few tenths — a score is only reproducible
+        // for a given batch composition, and two symbols' similarity depends on which file they
+        // happened to be indexed alongside. Fixing it means adding `-inf` to the ALiBi bias at pad
+        // positions inside `BertSelfAttention::forward`, which changes every vector already
+        // stored and so needs its own reindex and its own measurement.
+        // `tests::a_texts_vector_depends_on_what_else_shared_its_batch` pins the behaviour.
         let sequence_output = model
             .forward(&input_ids)
             .map_err(|e| EmbedError::Embedding(format!("Forward: {e}")))?;
@@ -455,5 +468,43 @@ impl Embedder for CandleEmbedder {
 
     fn model_name(&self) -> &str {
         MODEL_ID
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pins the padding leak documented in `embed` above: a text's vector depends on what else
+    /// shared its batch, and only the batch's longest member is stable.
+    ///
+    /// Ignored because it loads the model. Run it by hand after touching attention or batching.
+    #[test]
+    #[ignore = "loads model weights"]
+    fn a_texts_vector_depends_on_what_else_shared_its_batch() {
+        let embedder = CandleEmbedder::new().expect("load");
+        let long = "fn supported_countries() -> Vec<Country> { all().except(CIS) }";
+        let short = "fn ukraine() -> Country { Country::UA }";
+        let cos = |x: &[f32], y: &[f32]| x.iter().zip(y).map(|(p, q)| p * q).sum::<f32>();
+
+        let pair = embedder.embed(&[long, short]).expect("embed");
+        let trio = embedder
+            .embed(&[long, short, "fn china_market_entry_plan() -> Plan { Plan::skip(Country::CN) }"])
+            .expect("embed");
+        let alone = embedder.embed(&[long]).expect("embed");
+
+        println!(
+            "pair {:.4}  trio {:.4}",
+            cos(&pair[0], &pair[1]),
+            cos(&trio[0], &trio[1])
+        );
+        assert!(
+            (cos(&pair[0], &alone[0]) - 1.0).abs() < 1e-5,
+            "the batch's longest member is never padded, so it is the one text that is stable"
+        );
+        assert!(
+            (cos(&pair[0], &pair[1]) - cos(&trio[0], &trio[1])).abs() > 1e-3,
+            "and the shorter one moves when the padding around it does"
+        );
     }
 }

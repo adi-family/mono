@@ -37,6 +37,11 @@ adi-indexer = { workspace = true }
 # facade, carries none of the model stack.
 adi-knowledge = { workspace = true }
 
+# The `facts` command group. Unlike the two above it pulls in no model stack at all: it embeds
+# and classifies over HTTP against a local ollama, because that is the model every threshold in
+# its design was measured against.
+adi-facts = { workspace = true }
+
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

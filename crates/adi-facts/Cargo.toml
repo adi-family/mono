@@ -1,0 +1,53 @@
+[package]
+name = "adi-facts"
+description = "The fact base: plain sentences an agent can write in bulk, with a derivation graph that makes anything built on a changed fact go stale. Pure library — `adi-mono facts` is its CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# No features. Unlike `adi-knowledge`, this crate has no `candle` switch to make: both halves of
+# its model work — embedding with `nomic-embed-text` and classifying — are HTTP calls to a local
+# ollama, so there is no weight stack to opt out of.
+
+[dependencies]
+# Scope, access, the base directory layout, the embedder handle, and the vector codec — all of
+# it borrowed rather than rebuilt. A fact base sits at the same three isolation levels as a
+# knowledge base and is addressed by the same `BaseId`, so `Scope`/`Reader`/`BaseRegistry` are
+# that crate's types and not lookalikes.
+#
+# A path dependency rather than `workspace = true`: cargo refuses `default-features = false` on
+# an inherited dependency, and the point here is to take the scoping without the code embedder.
+adi-knowledge = { path = "../adi-knowledge", default-features = false }
+
+# The `Embedder` trait, and nothing else — `default-features = false` leaves behind both the
+# candle stack and eleven tree-sitter grammars. Implementing the workspace's trait rather than
+# declaring a parallel one is what lets a caller inject any embedder the workspace has, and a
+# test inject `HashEmbedder` without a network.
+adi-indexer = { path = "../adi-indexer", default-features = false }
+
+# Where bases live: the `facts` module of the mono store.
+adi-config = { workspace = true }
+
+rusqlite = { workspace = true }
+serde_json = { workspace = true }
+
+# The embedder and the classifier both talk to a local ollama over plain HTTP. Blocking, and no
+# tokio: this crate is synchronous throughout, exactly as adi-agents' provider loop is, so a
+# caller inside an async runtime must reach it through `spawn_blocking`.
+reqwest = { workspace = true, features = ["blocking"] }
+# reqwest is taken workspace-wide with `rustls-no-provider`, so a client cannot be built until
+# somebody installs a crypto provider process-wide. See `judge::OllamaJudge::generate`.
+rustls = { workspace = true }
+
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

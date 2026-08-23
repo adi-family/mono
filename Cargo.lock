@@ -66,6 +66,7 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "adi-core",
+ "adi-facts",
  "adi-indexer",
  "adi-knowledge",
  "adi-mesh",
@@ -149,6 +150,22 @@ dependencies = [
  "adi-config",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "adi-facts"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "adi-indexer",
+ "adi-knowledge",
+ "reqwest",
+ "rusqlite",
+ "rustls",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.20",
+ "tracing",
 ]
 
 [[package]]

@@ -15,6 +15,7 @@ default-members = [
     "crates/adi-db",
     "crates/adi-dns",
     "crates/adi-events",
+    "crates/adi-facts",
     "crates/adi-fs",
     "crates/adi-hive",
     "crates/adi-hooks",
@@ -61,6 +62,7 @@ adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }
 adi-db = { path = "crates/adi-db" }
 adi-events = { path = "crates/adi-events" }
+adi-facts = { path = "crates/adi-facts" }
 adi-fs = { path = "crates/adi-fs" }
 adi-hive = { path = "crates/adi-hive" }
 adi-hooks = { path = "crates/adi-hooks" }

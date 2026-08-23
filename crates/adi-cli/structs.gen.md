@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-4 structs · 19 enums across 15 files.
+4 structs · 21 enums across 16 files.
 
 ## Index
 
@@ -12,6 +12,7 @@
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
+- [`src/facts.rs`](#srcfactsrs) — `FactsCommand`, `TxCommand`
 - [`src/goals.rs`](#srcgoalsrs) — `GoalsCommand`
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
@@ -356,6 +357,88 @@ pub(crate) enum EventsCommand {
         json: bool,
         #[arg(long)]
         schema: bool,
+    },
+}
+```
+
+---
+
+## `src/facts.rs`
+
+### enum `FactsCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum FactsCommand {
+    Add {
+        #[arg(long, default_value = "human")]
+        author: String,
+        #[arg(long, default_value = "agent:unknown")]
+        creator: String,
+        #[arg(long)]
+        text: bool,
+        #[arg(long)]
+        note_id: Option<String>,
+    },
+    Tx {
+        #[command(subcommand)]
+        command: TxCommand,
+    },
+    Stale,
+    Refresh {
+        id: String,
+    },
+    Near {
+        id: String,
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+    },
+    Get {
+        id: String,
+        #[arg(long)]
+        full: bool,
+    },
+    Derive {
+        #[arg(long = "from", required = true)]
+        from: Vec<String>,
+        #[arg(long)]
+        fact: String,
+        #[arg(long, default_value = "human")]
+        author: String,
+        #[arg(long, default_value = "agent:unknown")]
+        creator: String,
+        #[arg(long, default_value = "artifact")]
+        kind: String,
+    },
+    Bases,
+}
+```
+
+### enum `TxCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum TxCommand {
+    Show {
+        tx: String,
+    },
+    Resolve {
+        tx: String,
+        pair: i64,
+        #[arg(long, value_parser = ["coexist", "merge", "supersede", "drop"])]
+        verdict: String,
+        #[arg(long)]
+        keep: Option<String>,
+        #[arg(long)]
+        fact: Option<String>,
+        #[arg(long, default_value = "human")]
+        confirmer: String,
+    },
+    Commit {
+        tx: String,
+    },
+    Abort {
+        tx: String,
     },
 }
 ```
@@ -708,6 +791,18 @@ enum Command {
         root: bool,
         #[command(subcommand)]
         command: KnowledgeCommand,
+    },
+    Facts {
+        #[arg(long, value_name = "BASE")]
+        base: Option<String>,
+        #[arg(long, value_name = "AGENT")]
+        as_agent: Option<String>,
+        #[arg(long, value_name = "PROJECT")]
+        as_project: Option<String>,
+        #[arg(long)]
+        root: bool,
+        #[command(subcommand)]
+        command: FactsCommand,
     },
     Indexer {
         #[command(subcommand)]

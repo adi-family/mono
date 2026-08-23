@@ -8,9 +8,11 @@ mod dns;
 mod format;
 mod goals;
 mod indexer;
+mod facts;
 mod knowledge;
 mod mesh;
 mod projects;
+mod reader;
 mod secrets;
 mod events;
 mod tasks;
@@ -27,6 +29,7 @@ use crate::dns::DnsCommand;
 use crate::format::{print_report, print_service};
 use crate::goals::{GoalsCommand, run_goals};
 use crate::indexer::{IndexerCommand, run_indexer};
+use crate::facts::{FactsCommand, run_facts};
 use crate::knowledge::{KnowledgeCommand, run_knowledge};
 use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
@@ -122,6 +125,25 @@ enum Command {
         root: bool,
         #[command(subcommand)]
         command: KnowledgeCommand,
+    },
+    /// Fact base commands: plain sentences an agent writes in bulk, and a graph that makes
+    /// anything built on a changed fact go stale. Global, per-project, or per-agent.
+    Facts {
+        /// The base to work on. Default: `global/default`, or `$ADI_FACTS_BASE`.
+        #[arg(long, value_name = "BASE")]
+        base: Option<String>,
+        /// Act as this agent, so the isolation levels apply as they would to its runs.
+        #[arg(long, value_name = "AGENT")]
+        as_agent: Option<String>,
+        /// Act as somebody working in this project.
+        #[arg(long, value_name = "PROJECT")]
+        as_project: Option<String>,
+        /// Run as the owner of the store regardless of who the environment says you are.
+        /// Overrides `--as-agent` / `--as-project`.
+        #[arg(long)]
+        root: bool,
+        #[command(subcommand)]
+        command: FactsCommand,
     },
     /// Code index commands: index a project's source and search it by meaning, name, or path.
     Indexer {
@@ -244,6 +266,21 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // No `adi` facade, unlike `knowledge`: the fact store carries an injectable classifier,
+        // and putting it on the facade would make `adi-app` — which links that facade — carry a
+        // blocking HTTP client it never calls.
+        Command::Facts {
+            base,
+            as_agent,
+            as_project,
+            root,
+            command,
+        } => {
+            if let Err(e) = run_facts(base, as_agent, as_project, root, command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         // Like `mesh`, no `adi` facade: an index is state under the project, not the platform.
         Command::Indexer { command } => {
             if let Err(e) = run_indexer(command) {
@@ -349,6 +386,33 @@ mod tests {
             } if a.as_str() == "solver"
         ));
         assert!(Cli::try_parse_from(["adi-mono", "knowledge"]).is_err());
+    }
+
+    #[test]
+    fn the_facts_group_is_reachable_from_the_top_level() {
+        // Its own argv surface is tested in `facts.rs`; this pins the wiring, including that
+        // `--base` and the identity flags sit on the group, before the verb.
+        let cli = Cli::try_parse_from([
+            "adi-mono",
+            "facts",
+            "--base",
+            "project:acme/default",
+            "--as-agent",
+            "solver",
+            "stale",
+        ])
+        .expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Facts {
+                base: Some(ref b),
+                as_agent: Some(ref a),
+                root: false,
+                command: FactsCommand::Stale,
+                ..
+            } if b.as_str() == "project:acme/default" && a.as_str() == "solver"
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "facts"]).is_err());
     }
 
     #[test]

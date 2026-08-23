@@ -4,14 +4,14 @@
 
 > The knowledge base: scoped collections of text notes, embedded for meaning-ranked search. Pure library — `adi-mono knowledge` is its CLI.
 
-28 structs · 3 enums · 1 type alias across 10 files.
+29 structs · 3 enums · 1 type alias across 10 files.
 
 ## Index
 
 - [`src/backend/memory.rs`](#srcbackendmemoryrs) — `MemoryProvider`, `MemoryBackend`, `Entry`
 - [`src/backend/mod.rs`](#srcbackendmodrs) — `Query`, `ChunkHit`, `BaseContext`, `Providers`
 - [`src/backend/sqlite.rs`](#srcbackendsqliters) — `SqliteProvider`, `SqliteBackend`
-- [`src/base.rs`](#srcbasers) — `BaseManifest`, `Base`, `BaseStatus`
+- [`src/base.rs`](#srcbasers) — `BaseManifest`, `Base`, `BaseStatus`, `BaseRegistry`
 - [`src/embed.rs`](#srcembedrs) — `EmbedderSlot`, `HashEmbedder`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
 - [`src/lib.rs`](#srclibrs) — `Saved`, `ReembedReport`, `EmbedFailure`, `KnowledgeStore`
@@ -183,18 +183,31 @@ pub struct BaseStatus {
 }
 ```
 
+### struct `BaseRegistry`
+
+The on-disk registry of bases for one store module: where a base's directory is, what its manifest says, and which bases exist.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct BaseRegistry {
+    config: adi_config::Config,
+    module: String,
+}
+```
+
 ---
 
 ## `src/embed.rs`
 
 ### struct `EmbedderSlot`
 
-The embedder a store uses: whatever was injected, else `default_embedder`, built once.
+The embedder a store uses: whatever was injected, else a lazily built default.
 
 ```rust
-#[derive(Clone, Default)]
-pub(crate) struct EmbedderSlot {
+#[derive(Clone)]
+pub struct EmbedderSlot {
     injected: Option<Arc<dyn Embedder>>,
+    build: Arc<dyn Fn() -> Result<Arc<dyn Embedder>> + Send + Sync>,
     lazy: Arc<OnceLock<std::result::Result<Arc<dyn Embedder>, String>>>,
 }
 ```
@@ -313,7 +326,7 @@ The knowledge store: bases, notes, and the search over them.
 ```rust
 #[derive(Debug, Clone)]
 pub struct KnowledgeStore {
-    config: Config,
+    bases: BaseRegistry,
     providers: Arc<Providers>,
     embedder: EmbedderSlot,
     reader: Reader,

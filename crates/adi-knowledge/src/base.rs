@@ -112,3 +112,152 @@ mod tests {
         assert_eq!(back, manifest);
     }
 }
+
+/// The on-disk registry of bases for one store module: where a base's directory is, what its
+/// manifest says, and which bases exist.
+///
+/// Split out of [`KnowledgeStore`](crate::KnowledgeStore) because `adi-facts` addresses its bases
+/// by exactly the same [`BaseId`] at exactly the same three levels, and everything about that
+/// layout — `global/<base>/`, `projects/<id>/<base>/`, `agents/<name>/<base>/`, each with a
+/// `base.toml` — is common to both. Only what the directory *contains* differs.
+///
+/// It answers no access question. Who may see a base is a [`Reader`](crate::Reader)'s business,
+/// and keeping the two apart is what stops a caller from getting a listing that quietly enforced
+/// somebody else's rules.
+#[derive(Debug, Clone)]
+pub struct BaseRegistry {
+    config: adi_config::Config,
+    module: String,
+}
+
+/// The manifest inside each base's directory.
+const BASE_MANIFEST: &str = "base.toml";
+
+impl BaseRegistry {
+    /// A registry over `<store root>/<module>` — `knowledge` or `facts`.
+    #[must_use]
+    pub fn new(config: adi_config::Config, module: impl Into<String>) -> Self {
+        Self {
+            config,
+            module: module.into(),
+        }
+    }
+
+    /// The store this reads from.
+    #[must_use]
+    pub fn config(&self) -> &adi_config::Config {
+        &self.config
+    }
+
+    /// The module's directory: `~/.adi/mono/<module>`.
+    #[must_use]
+    pub fn dir(&self) -> std::path::PathBuf {
+        self.config.module(&self.module).dir().to_path_buf()
+    }
+
+    /// Where one base's files live.
+    #[must_use]
+    pub fn base_dir(&self, id: &BaseId) -> std::path::PathBuf {
+        self.dir().join(id.rel_dir())
+    }
+
+    /// One base's manifest file, whether or not it exists.
+    #[must_use]
+    pub fn manifest_file(&self, id: &BaseId) -> adi_config::ConfigFile<BaseManifest> {
+        self.config
+            .module(&self.module)
+            .file(&format!("{}/{BASE_MANIFEST}", id.rel_dir()))
+    }
+
+    /// Whether a base has been created.
+    #[must_use]
+    pub fn exists(&self, id: &BaseId) -> bool {
+        self.manifest_file(id).exists()
+    }
+
+    /// One base, or `None` if it is not there. **No access check** — see the type's docs.
+    ///
+    /// # Errors
+    /// A config error when the manifest is there but will not parse.
+    pub fn load(&self, id: &BaseId) -> crate::Result<Option<Base>> {
+        let file = self.manifest_file(id);
+        if !file.exists() {
+            return Ok(None);
+        }
+        Ok(Some(Base {
+            id: id.clone(),
+            manifest: file.load()?,
+        }))
+    }
+
+    /// Write a base's manifest, creating its directory.
+    ///
+    /// # Errors
+    /// A config error when the file cannot be written.
+    pub fn save(&self, id: &BaseId, manifest: &BaseManifest) -> crate::Result<()> {
+        self.manifest_file(id).save(manifest)?;
+        Ok(())
+    }
+
+    /// Remove a base's directory and everything under it. `false` if it wasn't there.
+    ///
+    /// # Errors
+    /// [`Error::Io`](crate::Error::Io) when the directory cannot be removed.
+    pub fn remove(&self, id: &BaseId) -> crate::Result<bool> {
+        let dir = self.base_dir(id);
+        if !dir.exists() {
+            return Ok(false);
+        }
+        std::fs::remove_dir_all(&dir)?;
+        Ok(true)
+    }
+
+    /// Every base id on disk, whether or not any given reader may see it.
+    #[must_use]
+    pub fn scan(&self) -> Vec<BaseId> {
+        let root = self.dir();
+        let mut out = Vec::new();
+        // The three levels are three directory shapes: `global/<base>`, and one more level of
+        // owner under each of the other two. `Scope::rel_dir` writes these; this reads them.
+        collect_bases(&root.join("global"), &crate::Scope::Global, &mut out);
+        for owner in child_names(&root.join("projects")) {
+            if let Ok(scope) = crate::Scope::project(owner.clone()) {
+                collect_bases(&root.join("projects").join(&owner), &scope, &mut out);
+            }
+        }
+        for owner in child_names(&root.join("agents")) {
+            if let Ok(scope) = crate::Scope::agent(owner.clone()) {
+                collect_bases(&root.join("agents").join(&owner), &scope, &mut out);
+            }
+        }
+        out
+    }
+}
+
+/// Directory names directly under `dir` that could name a scope owner or a base, sorted.
+#[must_use]
+pub fn child_names(dir: &std::path::Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|name| crate::scope::validate_segment(name).is_ok())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Append every base directly under `dir` as a base of `scope`.
+fn collect_bases(dir: &std::path::Path, scope: &crate::Scope, out: &mut Vec<BaseId>) {
+    for name in child_names(dir) {
+        if !dir.join(&name).join(BASE_MANIFEST).exists() {
+            continue;
+        }
+        if let Ok(id) = BaseId::new(scope.clone(), name) {
+            out.push(id);
+        }
+    }
+}

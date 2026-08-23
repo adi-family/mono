@@ -83,11 +83,11 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use adi_config::{Config, ConfigFile, now_unix};
+use adi_config::{Config, now_unix};
 use serde::{Deserialize, Serialize};
 
 pub use backend::{Backend, BaseContext, Provider, Providers};
-pub use base::{Base, BaseManifest, BaseStatus};
+pub use base::{Base, BaseManifest, BaseRegistry, BaseStatus};
 pub use embed::{Embedder, HashEmbedder};
 pub use error::{Error, Result};
 pub use note::{
@@ -101,9 +101,6 @@ use note::{content_hash, embed_text, slug};
 
 /// The store module knowledge lives under: `~/.adi/mono/knowledge`.
 const KNOWLEDGE_MODULE: &str = "knowledge";
-
-/// The manifest inside each base's directory.
-const BASE_MANIFEST: &str = "base.toml";
 
 /// How many chunks are handed to the embedder at once.
 ///
@@ -169,7 +166,7 @@ pub struct EmbedFailure {
 /// the reader rather than passing it per call means no call site can forget to.
 #[derive(Debug, Clone)]
 pub struct KnowledgeStore {
-    config: Config,
+    bases: BaseRegistry,
     providers: Arc<Providers>,
     embedder: EmbedderSlot,
     reader: Reader,
@@ -193,7 +190,7 @@ impl KnowledgeStore {
     #[must_use]
     pub fn with_config(config: Config) -> Self {
         Self {
-            config,
+            bases: BaseRegistry::new(config, KNOWLEDGE_MODULE),
             providers: Arc::new(Providers::builtin()),
             embedder: EmbedderSlot::default(),
             reader: Reader::admin(),
@@ -236,7 +233,7 @@ impl KnowledgeStore {
     /// The store this reads from.
     #[must_use]
     pub fn config(&self) -> &Config {
-        &self.config
+        self.bases.config()
     }
 
     /// The provider registry in force.
@@ -260,13 +257,13 @@ impl KnowledgeStore {
     /// The `knowledge` directory: `~/.adi/mono/knowledge`.
     #[must_use]
     pub fn dir(&self) -> PathBuf {
-        self.config.module(KNOWLEDGE_MODULE).dir().to_path_buf()
+        self.bases.dir()
     }
 
     /// Where one base's files live.
     #[must_use]
     pub fn base_dir(&self, id: &BaseId) -> PathBuf {
-        self.dir().join(id.rel_dir())
+        self.bases.base_dir(id)
     }
 
     // ---------------------------------------------------------------- bases
@@ -284,7 +281,7 @@ impl KnowledgeStore {
         settings: BTreeMap<String, String>,
     ) -> Result<Base> {
         self.reader.require_write(id)?;
-        if self.manifest_file(id).exists() {
+        if self.bases.exists(id) {
             return Err(Error::BaseExists(id.to_string()));
         }
         let provider = provider.unwrap_or(backend::SQLITE);
@@ -300,7 +297,7 @@ impl KnowledgeStore {
             created_at: now,
             updated_at: now,
         };
-        self.manifest_file(id).save(&manifest)?;
+        self.bases.save(id, &manifest)?;
         let base = Base {
             id: id.clone(),
             manifest,
@@ -334,15 +331,11 @@ impl KnowledgeStore {
     /// # Errors
     /// [`Error::Denied`] when the base exists but is not this reader's to see, or a config error.
     pub fn get_base(&self, id: &BaseId) -> Result<Option<Base>> {
-        let file = self.manifest_file(id);
-        if !file.exists() {
+        if !self.bases.exists(id) {
             return Ok(None);
         }
         self.reader.require_read(id)?;
-        Ok(Some(Base {
-            id: id.clone(),
-            manifest: file.load()?,
-        }))
+        self.bases.load(id)
     }
 
     /// Every base this reader may see, optionally narrowed to one scope, sorted by id.
@@ -355,11 +348,11 @@ impl KnowledgeStore {
     /// A config or IO error while reading the manifests.
     pub fn list_bases(&self, scope: Option<&Scope>) -> Result<Vec<Base>> {
         let mut out = Vec::new();
-        for id in self.scan_base_ids()? {
+        for id in self.bases.scan() {
             if scope.is_some_and(|s| *s != id.scope) || self.reader.access(&id).is_none() {
                 continue;
             }
-            let file = self.manifest_file(&id);
+            let file = self.bases.manifest_file(&id);
             match file.load() {
                 Ok(manifest) => out.push(Base { id, manifest }),
                 // A manifest that will not parse is a broken base, not a broken listing.
@@ -385,10 +378,7 @@ impl KnowledgeStore {
             Ok(backend) => backend.clear()?,
             Err(e) => tracing::warn!(base = %id, error = %e, "deleting a base its provider cannot open"),
         }
-        let dir = self.base_dir(id);
-        if dir.exists() {
-            std::fs::remove_dir_all(&dir)?;
-        }
+        self.bases.remove(id)?;
         Ok(true)
     }
 
@@ -417,11 +407,11 @@ impl KnowledgeStore {
         let source = root.join(from_scope.rel_dir());
 
         let mut moving = Vec::new();
-        for name in child_names(&source) {
-            if !source.join(&name).join(BASE_MANIFEST).exists() {
+        for name in base::child_names(&source) {
+            let old = BaseId::new(from_scope.clone(), name.clone())?;
+            if !self.bases.exists(&old) {
                 continue;
             }
-            let old = BaseId::new(from_scope.clone(), name.clone())?;
             let new = BaseId::new(to_scope.clone(), name)?;
             self.reader.require_write(&old)?;
             self.reader.require_write(&new)?;
@@ -806,21 +796,10 @@ impl KnowledgeStore {
         Ok(hits)
     }
 
-    fn manifest_file(&self, id: &BaseId) -> ConfigFile<BaseManifest> {
-        self.config
-            .module(KNOWLEDGE_MODULE)
-            .file(&format!("{}/{BASE_MANIFEST}", id.rel_dir()))
-    }
-
     fn require_base(&self, id: &BaseId) -> Result<Base> {
-        let file = self.manifest_file(id);
-        if !file.exists() {
-            return Err(Error::NoSuchBase(id.to_string()));
-        }
-        Ok(Base {
-            id: id.clone(),
-            manifest: file.load()?,
-        })
+        self.bases
+            .load(id)?
+            .ok_or_else(|| Error::NoSuchBase(id.to_string()))
     }
 
     fn open_backend(&self, base: &Base) -> Result<Arc<dyn Backend>> {
@@ -848,25 +827,6 @@ impl KnowledgeStore {
         )))
     }
 
-    /// Every base id on disk, whether or not this reader may see it.
-    fn scan_base_ids(&self) -> Result<Vec<BaseId>> {
-        let root = self.dir();
-        let mut out = Vec::new();
-        // The three levels are three directory shapes: `global/<base>`, and one more level of
-        // owner under each of the other two. `Scope::rel_dir` writes these; this reads them.
-        collect_bases(&root.join("global"), &Scope::Global, &mut out);
-        for owner in child_names(&root.join("projects")) {
-            if let Ok(scope) = Scope::project(owner.clone()) {
-                collect_bases(&root.join("projects").join(&owner), &scope, &mut out);
-            }
-        }
-        for owner in child_names(&root.join("agents")) {
-            if let Ok(scope) = Scope::agent(owner.clone()) {
-                collect_bases(&root.join("agents").join(&owner), &scope, &mut out);
-            }
-        }
-        Ok(out)
-    }
 }
 
 /// Resolve the knowledge bases an agent works with, from the fields on its definition.
@@ -948,32 +908,6 @@ fn slug_or_body(title: &str, body: &str) -> Result<String> {
 }
 
 /// The names of every subdirectory of `dir`, or nothing if it isn't one.
-fn child_names(dir: &std::path::Path) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = entries
-        .flatten()
-        .filter(|e| e.path().is_dir())
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|name| scope::validate_segment(name).is_ok())
-        .collect();
-    out.sort();
-    out
-}
-
-/// Append every base directly under `dir` as a base of `scope`.
-fn collect_bases(dir: &std::path::Path, scope: &Scope, out: &mut Vec<BaseId>) {
-    for name in child_names(dir) {
-        if !dir.join(&name).join(BASE_MANIFEST).exists() {
-            continue;
-        }
-        if let Ok(id) = BaseId::new(scope.clone(), name) {
-            out.push(id);
-        }
-    }
-}
-
 /// Trim, and treat the empty string as absent.
 fn clean(value: Option<&str>) -> Option<String> {
     value

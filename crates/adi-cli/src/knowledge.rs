@@ -18,11 +18,12 @@ use std::io::Read as _;
 
 use adi_core::Adi;
 use adi_knowledge::{
-    BaseId, Filter, Hit, Knowledge, KnowledgePatch, KnowledgeStore, NewKnowledge, Reader, Scope,
+    BaseId, Filter, Hit, Knowledge, KnowledgePatch, KnowledgeStore, NewKnowledge, Scope,
 };
 use clap::Subcommand;
 
 use crate::format::{clean, print_json};
+use crate::reader::reader_for;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum KnowledgeCommand {
@@ -493,47 +494,17 @@ fn run_base(store: &KnowledgeStore, command: BaseCommand) -> Result<(), String> 
 /// flag says *"I am somebody else"* and inherits their isolation, which still cannot reach a third
 /// agent's memory. `--root` says *"apply none of it"*, which is the only way to write to a base
 /// whose owner is not the caller — the point of [`adi-knowledge-root`](adi_tools::SYS_KNOWLEDGE_ROOT).
+/// The store as whoever the flags and the environment say is asking. See [`crate::reader`].
 fn reader_store(
     store: KnowledgeStore,
     as_agent: Option<String>,
     as_project: Option<String>,
     root: bool,
 ) -> KnowledgeStore {
-    // Checked before the flags and before the environment: a run that asked for root asked to be
-    // nobody in particular, and an `ADI_AGENT` it cannot unset would otherwise scope it right back.
-    if root {
-        return store;
-    }
-    match identity(
-        as_agent,
-        as_project,
-        std::env::var("ADI_AGENT").ok(),
-        std::env::var("ADI_PROJECT").ok(),
-    ) {
+    match reader_for(as_agent, as_project, root) {
         Some(reader) => store.as_reader(reader),
         None => store,
     }
-}
-
-/// Who a command runs as: the flags first, then the run environment, then nobody in particular
-/// (which means the owner). Split out from [`reader_store`] so it can be tested without a test
-/// reaching into the process environment every other test shares.
-fn identity(
-    as_agent: Option<String>,
-    as_project: Option<String>,
-    env_agent: Option<String>,
-    env_project: Option<String>,
-) -> Option<Reader> {
-    let agent = clean(as_agent).or_else(|| clean(env_agent));
-    let project = clean(as_project).or_else(|| clean(env_project));
-    if agent.is_none() && project.is_none() {
-        return None;
-    }
-    Some(Reader {
-        agent,
-        project,
-        admin: false,
-    })
 }
 
 fn parse_base(value: &str) -> Result<BaseId, String> {
@@ -763,51 +734,25 @@ mod tests {
         );
     }
 
-    /// The fallback that makes the system tool work: a run already carries who it is.
-    #[test]
-    fn the_run_environment_supplies_an_identity_no_flag_stated() {
-        let from_env = identity(None, None, Some("solver".into()), Some("acme".into()))
-            .expect("an agent run is somebody");
-        assert_eq!(from_env.agent.as_deref(), Some("solver"));
-        assert_eq!(from_env.project.as_deref(), Some("acme"));
-        assert!(!from_env.admin);
-
-        // A stated flag beats the environment — that is what makes `--as-agent` useful for
-        // inspecting another agent's view from inside a run.
-        let stated = identity(Some("reviewer".into()), None, Some("solver".into()), None)
-            .expect("stated");
-        assert_eq!(stated.agent.as_deref(), Some("reviewer"));
-
-        // A person's shell has neither, and stays the owner of the store.
-        assert_eq!(identity(None, None, None, None), None);
-        // …and an empty variable is not an identity, which is how an exported-but-blank
-        // `ADI_PROJECT` avoids hiding every project base from a run that has no project.
-        assert_eq!(identity(None, None, Some(String::new()), Some("  ".into())), None);
-    }
-
     /// Identity is a flag on the group, not on each subcommand — so it is stated once, before
     /// the verb, and every verb gets it.
     #[test]
     fn the_reader_is_the_owner_unless_the_flags_say_otherwise() {
         // `open` resolves paths and touches no disk; the assertions are all about the reader.
         let store = KnowledgeStore::open();
-        let scoped = store
-            .clone()
-            .as_reader(identity(Some("solver".into()), Some("acme".into()), None, None).expect("reader"));
+        let scoped = store.clone().as_reader(
+            reader_for(Some("solver".into()), Some("acme".into()), false).expect("reader"),
+        );
         assert!(!scoped.reader().admin);
         assert_eq!(scoped.reader().agent.as_deref(), Some("solver"));
         assert_eq!(scoped.reader().project.as_deref(), Some("acme"));
 
-        // A blank flag is not an identity — it would otherwise silently drop every base.
-        assert_eq!(identity(Some("  ".into()), None, None, None), None);
         assert!(store.reader().admin);
     }
 
     /// `--root` is answered before the flags and before the environment, and that order is the
-    /// whole feature. A run carries `ADI_AGENT` and cannot unset it, so a root check that came
-    /// second would scope the caller straight back into the isolation it asked to step out of —
-    /// and writing into another agent's memory, the one thing this flag exists for, would stay
-    /// impossible.
+    /// whole feature — the rule itself is tested in `crate::reader`; this pins that this group
+    /// actually applies it to the store it hands the command.
     #[test]
     fn root_is_the_owner_whatever_the_flags_and_the_environment_say() {
         let rooted = reader_store(

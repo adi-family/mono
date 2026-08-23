@@ -1,9 +1,17 @@
 //! Turning notes into vectors — the indexer's embedder, borrowed whole.
 //!
 //! [`Embedder`] *is* [`adi_indexer::embed::Embedder`], not a parallel trait that happens to look
-//! like it. That is what "reuse the indexer's embedder" has to mean if a note and a symbol are
-//! ever to be compared, or the same model loaded once for both: a second trait would have made
-//! the two vector spaces incomparable by construction, however identical the model behind them.
+//! like it: one trait, so a store can be handed any model the indexer can load and the two never
+//! drift apart. A note and a symbol are embedded by the same model here, so they are comparable.
+//!
+//! **That is a property of this store, not of the workspace.** `adi-facts` uses the same trait
+//! and a *different* model — [`TextEmbedder`](adi_indexer::embed::TextEmbedder), prose weights
+//! rather than code weights — because a fact is a sentence somebody said and the embedder is the
+//! largest single effect on how well such sentences rank against each other. Facts and notes
+//! therefore sit in **different vector spaces** and must never be compared by cosine. What keeps
+//! that honest is not a convention: every stored vector records the
+//! [model](adi_indexer::embed::Embedder::model_name) that made it, and a vector whose model no
+//! longer matches is treated as absent.
 //!
 //! Loading is **lazy**. The candle model costs seconds on first use and a download on the very
 //! first run ever, and most of what the store does — adding, listing, editing, deleting, reading
@@ -38,15 +46,27 @@ pub fn default_embedder() -> Result<Arc<dyn Embedder>> {
     Ok(embedder)
 }
 
-/// The embedder a store uses: whatever was injected, else [`default_embedder`], built once.
+/// The embedder a store uses: whatever was injected, else a lazily built default.
+///
+/// `adi-facts` holds one of these too, over a different model, which is why it is public rather
+/// than private to this crate — the laziness and the cached failure are worth exactly as much
+/// there, and a second copy of them would be a second thing to get wrong.
 ///
 /// The failure is cached too. A machine with no network is going to fail on the second note as
 /// surely as the first, and retrying a multi-second model load per note would turn one clear
 /// error into a store that merely feels broken.
-#[derive(Clone, Default)]
-pub(crate) struct EmbedderSlot {
+#[derive(Clone)]
+pub struct EmbedderSlot {
     injected: Option<Arc<dyn Embedder>>,
+    build: Arc<dyn Fn() -> Result<Arc<dyn Embedder>> + Send + Sync>,
     lazy: Arc<OnceLock<std::result::Result<Arc<dyn Embedder>, String>>>,
+}
+
+impl Default for EmbedderSlot {
+    /// A slot that will load [`default_embedder`] when something first needs a vector.
+    fn default() -> Self {
+        Self::lazily(default_embedder)
+    }
 }
 
 impl std::fmt::Debug for EmbedderSlot {
@@ -63,20 +83,37 @@ impl std::fmt::Debug for EmbedderSlot {
 
 impl EmbedderSlot {
     /// A slot holding a caller-supplied embedder.
-    pub(crate) fn injected(embedder: Arc<dyn Embedder>) -> Self {
+    #[must_use]
+    pub fn injected(embedder: Arc<dyn Embedder>) -> Self {
         Self {
             injected: Some(embedder),
+            build: Arc::new(default_embedder),
+            lazy: Arc::default(),
+        }
+    }
+
+    /// A slot that builds its embedder with `build` on first use — how `adi-facts` asks for the
+    /// prose model instead of the code one without reimplementing any of the laziness.
+    #[must_use]
+    pub fn lazily(build: impl Fn() -> Result<Arc<dyn Embedder>> + Send + Sync + 'static) -> Self {
+        Self {
+            injected: None,
+            build: Arc::new(build),
             lazy: Arc::default(),
         }
     }
 
     /// The embedder, building it on first use.
-    pub(crate) fn get(&self) -> Result<Arc<dyn Embedder>> {
+    ///
+    /// # Errors
+    /// [`Error::Embed`] when the model cannot be built — and the same error every time after,
+    /// from cache.
+    pub fn get(&self) -> Result<Arc<dyn Embedder>> {
         if let Some(embedder) = &self.injected {
             return Ok(embedder.clone());
         }
         self.lazy
-            .get_or_init(|| default_embedder().map_err(|e| e.to_string()))
+            .get_or_init(|| (self.build)().map_err(|e| e.to_string()))
             .clone()
             .map_err(Error::Embed)
     }
@@ -85,7 +122,8 @@ impl EmbedderSlot {
     ///
     /// Used where the answer only labels a report — `status`, a listing — so a build that has
     /// never embedded anything doesn't download a model to print a column.
-    pub(crate) fn model_name_if_known(&self) -> Option<String> {
+    #[must_use]
+    pub fn model_name_if_known(&self) -> Option<String> {
         match (&self.injected, self.lazy.get()) {
             (Some(e), _) => Some(e.model_name().to_string()),
             (None, Some(Ok(e))) => Some(e.model_name().to_string()),

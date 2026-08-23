@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-53 structs · 7 enums · 1 type alias across 20 files.
+56 structs · 7 enums · 1 type alias across 21 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `AgentStats`, `Day`
+- [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
 - [`src/pages/onboarding.rs`](#srcpagesonboardingrs) — `RuntimeGuide`, `OnboardingForm`
@@ -59,6 +60,7 @@ pub(crate) enum Icon {
     Key,
     Database,
     Book,
+    Pair,
     Download,
     Upgrade,
     Chart,
@@ -229,6 +231,55 @@ One day's two totals: how many runs started, and what they came to.
 struct Day {
     runs: usize,
     cost_micro: u64,
+}
+```
+
+---
+
+## `src/pages/facts.rs`
+
+### struct `TxView`
+
+The open transaction, as this page needs it.
+
+```rust
+#[derive(Clone, PartialEq)]
+pub(crate) struct TxView {
+    pub(crate) id: String,
+    pub(crate) staged: usize,
+    pub(crate) pairs: Vec<Pair>,
+    pub(crate) truncated: Option<Truncated>,
+}
+```
+
+### struct `FactsData`
+
+Everything the page draws, in one value.
+
+```rust
+#[derive(Clone, PartialEq)]
+pub(crate) struct FactsData {
+    pub(crate) tx: Option<TxView>,
+    pub(crate) stale: Vec<Stale>,
+    pub(crate) facts: Vec<Fact>,
+    pub(crate) history: Vec<(String, Vec<Change>)>,
+}
+```
+
+### struct `FactsConsole`
+
+The page's own state: what it has loaded, what is typed into it, and who it is deciding as.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct FactsConsole {
+    pub(crate) data: RwSignal<Option<FactsData>>,
+    pub(crate) filter: RwSignal<String>,
+    pub(crate) open: RwSignal<String>,
+    pub(crate) acting_as: RwSignal<String>,
+    pub(crate) note: RwSignal<String>,
+    pub(crate) error: RwSignal<Option<String>>,
+    pub(crate) busy: RwSignal<bool>,
 }
 ```
 
@@ -481,6 +532,7 @@ pub(crate) enum Route {
     Tools,
     Secrets,
     Knowledge,
+    Facts,
     Database,
     Triggers,
     Dashboards,

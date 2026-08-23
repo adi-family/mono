@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-23 structs · 22 enums across 23 files.
+32 structs · 27 enums across 25 files.
 
 ## Index
 
@@ -15,12 +15,14 @@
 - [`src/button.rs`](#srcbuttonrs) — `ButtonVariant`, `ButtonSize`
 - [`src/chat.rs`](#srcchatrs) — `Role`, `ToolState`, `ToolCall`, `Image`, `Turn`, `Entry`
 - [`src/code.rs`](#srccoders) — `CodeHeight`
+- [`src/facts.rs`](#srcfactsrs) — `NodeKind`, `Fact`, `Moved`, `Stale`, `Change`
 - [`src/faq.rs`](#srcfaqrs) — `Qna`
 - [`src/feedback.rs`](#srcfeedbackrs) — `FlashKind`
 - [`src/flag.rs`](#srcflagrs) — `Flag`, `Offer`
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`, `Align`
+- [`src/pair.rs`](#srcpairrs) — `Relation`, `Verdict`, `PairSide`, `Decided`, `Pair`, `Ruling`, `Truncated`, `Mode`, `Order`
 - [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
 - [`src/session.rs`](#srcsessionrs) — `SessionState`
 - [`src/simulator.rs`](#srcsimulatorrs) — `ToolDecl`, `Tab`
@@ -296,6 +298,82 @@ pub enum CodeHeight {
 
 ---
 
+## `src/facts.rs`
+
+### enum `NodeKind`
+
+What kind of node this is.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NodeKind {
+    #[default]
+    Fact,
+    Composed,
+    Artifact,
+}
+```
+
+### struct `Fact`
+
+One node of the base.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fact {
+    pub id: String,
+    pub text: String,
+    pub author: String,
+    pub creator: String,
+    pub version: u32,
+    pub kind: NodeKind,
+}
+```
+
+### struct `Moved`
+
+One source fact that moved under a derived node.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moved {
+    pub source: String,
+    pub was: String,
+    pub now: String,
+    pub built_at: u32,
+    pub version: u32,
+}
+```
+
+### struct `Stale`
+
+A derived node that is out of date, and every source that moved under it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Stale {
+    pub node: Fact,
+    pub causes: Vec<Moved>,
+}
+```
+
+### struct `Change`
+
+One step in a fact's log: the version it produced, what caused it, and who confirmed that.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Change {
+    pub version: u32,
+    pub verdict: Option<Verdict>,
+    pub by: String,
+    pub was: String,
+    pub now: String,
+}
+```
+
+---
+
 ## `src/faq.rs`
 
 ### struct `Qna`
@@ -455,6 +533,132 @@ enum Align {
     Left,
     Center,
     Right,
+}
+```
+
+---
+
+## `src/pair.rs`
+
+### enum `Relation`
+
+What the classifier thought the pair was.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Relation {
+    #[default]
+    Controversy,
+    Narrows,
+    Duplicate,
+}
+```
+
+### enum `Verdict`
+
+What a person can rule.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Verdict {
+    #[default]
+    Coexist,
+    Merge,
+    Supersede,
+    Drop,
+}
+```
+
+### struct `PairSide`
+
+One half of a pair.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PairSide {
+    pub fact: Fact,
+    pub staged: bool,
+}
+```
+
+### struct `Decided`
+
+A verdict already recorded, with the identity that made it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Decided {
+    pub verdict: Verdict,
+    pub by: String,
+}
+```
+
+### struct `Pair`
+
+Two facts that need ruling on.
+
+```rust
+#[derive(Debug, Clone, PartialEq)]
+pub struct Pair {
+    pub id: String,
+    pub strength: f32,
+    pub relation: Relation,
+    pub reason: String,
+    pub sides: [PairSide; 2],
+    pub decided: Option<Decided>,
+}
+```
+
+### struct `Ruling`
+
+A decision leaving the card.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ruling {
+    pub pair: String,
+    pub verdict: Verdict,
+    pub keep: Option<String>,
+    pub fact: Option<String>,
+}
+```
+
+### struct `Truncated`
+
+What the pending list left out.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Truncated {
+    pub not_examined: usize,
+    pub below: f32,
+}
+```
+
+### enum `Mode`
+
+What the card is asking for right now.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Mode {
+    #[default]
+    Idle,
+    Merging,
+    Picking(Verdict),
+}
+```
+
+### enum `Order`
+
+How the queue is ordered.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Order {
+    #[default]
+    Ranked,
+    ConflictsFirst,
 }
 ```
 
