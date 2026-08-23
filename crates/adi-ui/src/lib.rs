@@ -41,6 +41,7 @@ mod app;
 mod chat;
 mod code;
 mod composer;
+mod facts;
 mod faq;
 mod feedback;
 mod field;
@@ -51,6 +52,7 @@ mod input;
 mod kbd;
 mod markdown;
 mod modal;
+mod pair;
 mod panel;
 mod path;
 mod rail;
@@ -62,6 +64,7 @@ mod tokens;
 mod toolform;
 mod topbar;
 mod tree;
+mod tx;
 mod voice;
 
 pub use ask::{Ask, AskOption, AskQuestion};
@@ -72,6 +75,9 @@ pub use app::{AppItem, AppState};
 pub use chat::{Chat, Entry, Image, Queued, Role, ToolCall, ToolState, Turn, by_position};
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
+pub use facts::{
+    Change, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Stale, StaleList,
+};
 pub use faq::{Faq, Qna};
 pub use feedback::{Empty, Flash, FlashKind};
 pub use field::Field;
@@ -82,6 +88,9 @@ pub use input::{Input, InputWidth, Select, Textarea};
 pub use kbd::Kbd;
 pub use markdown::Markdown;
 pub use modal::Modal;
+pub use pair::{
+    Decided, Pair, PairCard, PairQueue, PairSide, Relation, Ruling, Truncated, Verdict,
+};
 pub use panel::Panel;
 pub use path::{DirEntry, PathPicker, PathRoot, dir_of, leaf_of, trim_dir};
 pub use rail::{Rail, RailCard, RailGroup};
@@ -93,6 +102,7 @@ pub use tokens::{PromptText, Token, TokenStream};
 pub use toolform::{Param, ParamKind, ToolForm};
 pub use topbar::{Crumb, Crumbs, TopBar};
 pub use tree::{Tree, TreeNode, TreeState};
+pub use tx::TxPanel;
 pub use voice::{MicButton, MicState};
 
 /// Join a component's own classes with whatever the call site passed in `class`.

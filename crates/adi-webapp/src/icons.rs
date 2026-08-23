@@ -31,6 +31,10 @@ pub(crate) enum Icon {
     Database,
     /// An open book — a collection of written notes, which is what a knowledge base is.
     Book,
+    /// Two nodes on a spine, each carrying a line — a pair of facts, linked. The facts base
+    /// is read as pairs before it is read as a list, so the glyph is a pair rather than a
+    /// stack.
+    Pair,
     /// An arrow into a tray — "install this as an app".
     Download,
     /// [`Icon::Download`] mirrored: an arrow rising *out* of a bar — "move this machine up
@@ -166,6 +170,10 @@ impl Icon {
                    <path d="M8 4.25c1.1-1.05 2.6-1.5 4.5-1.5h1.75v9.5H12.5c-1.9 0-3.4.45-4.5 1.5z"/>
                    <path d="M8 4.25v9.5"/>"#
             }
+            Icon::Pair => {
+                r#"<circle cx="3.5" cy="4.75" r="1.6"/><circle cx="3.5" cy="11.25" r="1.6"/>
+                   <path d="M3.5 6.35v3.3"/><path d="M7.25 4.75h6.5M7.25 11.25h6.5"/>"#
+            }
         }
     }
 }
@@ -181,6 +189,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Tools => Icon::Wrench,
         Route::Secrets => Icon::Key,
         Route::Knowledge => Icon::Book,
+        Route::Facts => Icon::Pair,
         Route::Database => Icon::Database,
         Route::Triggers => Icon::Trigger,
         Route::Dashboards => Icon::Dashboard,

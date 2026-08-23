@@ -31,6 +31,9 @@ pub(crate) enum Route {
     Secrets,
     /// Knowledge bases — scoped text notes, searched by meaning (`/knowledge`).
     Knowledge,
+    /// The facts base — plain sentences, and the queue of pair decisions that keeps it
+    /// honest (`/facts`).
+    Facts,
     /// The shared SQLite store — browse tables and run SQL (`/database`).
     Database,
     /// Trigger definitions (`/triggers`).
@@ -66,6 +69,7 @@ impl Route {
             "/tools" => Route::Tools,
             "/secrets" => Route::Secrets,
             "/knowledge" => Route::Knowledge,
+            "/facts" => Route::Facts,
             "/database" => Route::Database,
             "/triggers" => Route::Triggers,
             "/dashboards" => Route::Dashboards,
@@ -91,6 +95,7 @@ impl Route {
             Route::Tools => "/extended/tools",
             Route::Secrets => "/extended/secrets",
             Route::Knowledge => "/extended/knowledge",
+            Route::Facts => "/extended/facts",
             Route::Database => "/extended/database",
             Route::Triggers => "/extended/triggers",
             Route::Dashboards => "/extended/dashboards",
@@ -115,6 +120,7 @@ impl Route {
             Route::Tools => "Tools",
             Route::Secrets => "Secrets",
             Route::Knowledge => "Knowledge",
+            Route::Facts => "Facts",
             Route::Database => "Database",
             Route::Triggers => "Triggers",
             Route::Dashboards => "Dashboards",

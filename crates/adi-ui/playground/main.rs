@@ -29,6 +29,10 @@ use adi_ui::{
     TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar,
     Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of, sort_rows,
 };
+use adi_ui::{
+    Change, Decided, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Pair, PairCard,
+    PairQueue, PairSide, Relation, Ruling, Stale, StaleList, Truncated, TxPanel, Verdict,
+};
 // The gallery's own `Row` is the label-plus-specimen line every panel is built from; the
 // crate's is a table row. Both earn the name in their own context, so the import is aliased
 // rather than either being renamed.
@@ -2234,6 +2238,435 @@ fn Playground() -> impl IntoView {
                     </div>
                 </div>
             </Panel>
+
+            <FactsPanel/>
         </main>
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// facts
+// ---------------------------------------------------------------------------------------
+
+/// The facts the pair fixtures are built from. Real sentences off the measured base, because
+/// the pair that decides the whole design — 0.886, rank 6 — only makes its point in its own
+/// words.
+fn cis() -> Fact {
+    Fact::new("f091", "The company supports all countries except the CIS.")
+        .by("igor", "agent:chat@1")
+        .at(2)
+}
+
+fn ukraine() -> Fact {
+    Fact::new("f104", "Within the CIS, the company supports Ukraine.").by("igor", "agent:chat@1")
+}
+
+fn china_market() -> Fact {
+    Fact::new("f044", "China is one of the operator's main target markets.")
+        .by("igor", "agent:extractor@1")
+}
+
+fn china_great() -> Fact {
+    Fact::new("n#7", "China is a great market.").by("igor", "agent:chat@1")
+}
+
+fn china_unsure() -> Fact {
+    Fact::new("f038", "The company is not sure it can enter the China market.")
+        .by("igor", "agent:extractor@1")
+}
+
+fn china_can() -> Fact {
+    Fact::new("n#9", "The company can support China after all.").by("igor", "agent:chat@1")
+}
+
+fn plan() -> Fact {
+    Fact::new("a012", "Market entry plan: skip China for now, open the EU first.")
+        .by("igor", "agent:planner@2")
+        .at(3)
+        .kind(NodeKind::Artifact)
+}
+
+/// The pending list of an open transaction: one of each relation, and the two cases that need
+/// more than a click.
+fn demo_pairs() -> Vec<Pair> {
+    vec![
+        Pair::new(
+            "p1",
+            0.886,
+            Relation::Narrows,
+            PairSide::staged(cis()),
+            PairSide::base(ukraine()),
+        )
+        .reason("one excludes the CIS, the other carves Ukraine out of it"),
+        Pair::new(
+            "p2",
+            0.821,
+            Relation::Duplicate,
+            PairSide::staged(china_great()),
+            PairSide::base(china_market()),
+        )
+        .reason("both name China as a market the company wants"),
+        Pair::new(
+            "p3",
+            0.712,
+            Relation::Controversy,
+            PairSide::staged(china_can()),
+            PairSide::base(china_unsure()),
+        )
+        .reason("one asserts capability, the other doubts it"),
+        // Both sides staged: `drop` has no base fact to point at, so the card asks which one
+        // lands instead of guessing.
+        Pair::new(
+            "p4",
+            0.664,
+            Relation::Duplicate,
+            PairSide::staged(Fact::new("n#12", "The company was incorporated in Delaware.")
+                .by("igor", "agent:chat@1")),
+            PairSide::staged(Fact::new("n#13", "The company is a Delaware C-corp.")
+                .by("igor", "agent:chat@1")),
+        )
+        .reason("the same incorporation, said twice"),
+    ]
+}
+
+/// Every component in the facts family, in every state it has.
+#[component]
+fn FactsPanel() -> impl IntoView {
+    // The queue is live here: a ruling marks its pair decided in place rather than removing
+    // it, which is what the real screen does too — a pair that vanished when you decided it
+    // would take the record of the decision with it.
+    let pairs = RwSignal::new(demo_pairs());
+    let rule = Callback::new(move |r: Ruling| {
+        pairs.update(|list| {
+            if let Some(p) = list.iter_mut().find(|p| p.id == r.pair) {
+                p.decided = Some(Decided::new(r.verdict, "igor"));
+            }
+        });
+    });
+    let open = Signal::derive(move || pairs.get().iter().filter(|p| p.decided.is_none()).count());
+    let reset = move |_| pairs.set(demo_pairs());
+
+    let stale = RwSignal::new(vec![Stale::new(
+        plan(),
+        vec![
+            Moved::new(
+                "f038",
+                "The company is not sure it can enter the China market.",
+                "The company can support China after all.",
+            )
+            .versions(1, 2),
+            Moved::new(
+                "f091",
+                "The company supports all countries.",
+                "The company supports all countries except the CIS.",
+            )
+            .versions(1, 2),
+        ],
+    )]);
+
+    let history = RwSignal::new(vec![
+        Change::rewritten(
+            2,
+            Verdict::Supersede,
+            "igor",
+            "The company supports all countries.",
+            "The company supports all countries except the CIS.",
+        ),
+        Change::created("agent:chat@1", "The company supports all countries."),
+    ]);
+
+    view! {
+        <Panel title="Facts \u{2014} the pair" flush=true>
+            <div class="px-4 pt-3 text-mini text-meta">
+                "The decision atom. Two facts of equal weight, the classifier's guess and its \
+                 strength as a plain number, its reason underneath and clearly labelled as \
+                 its own, and four verdicts of equal weight \u{2014} `coexist` among them, \
+                 because confirming that both are true is a decision. Click a card and the \
+                 keys work: c / m / s / d rule it, \u{2193}\u{2191} walk the queue."
+            </div>
+            <div class="flex flex-col gap-3 p-4">
+                // One card per relation, so all three tones are on screen at once.
+                <PairCard
+                    pair=Pair::new(
+                        "x1",
+                        0.886,
+                        Relation::Narrows,
+                        PairSide::staged(cis()),
+                        PairSide::base(ukraine()),
+                    )
+                        .reason("one excludes the CIS, the other carves Ukraine out of it")
+                    rank=6
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+                <PairCard
+                    pair=Pair::new(
+                        "x2",
+                        0.712,
+                        Relation::Controversy,
+                        PairSide::staged(china_can()),
+                        PairSide::base(china_unsure()),
+                    )
+                        .reason("one asserts capability, the other doubts it")
+                    rank=31
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+                <PairCard
+                    pair=Pair::new(
+                        "x3",
+                        0.821,
+                        Relation::Duplicate,
+                        PairSide::staged(china_great()),
+                        PairSide::base(china_market()),
+                    )
+                    rank=12
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+                // A reason that is about something else. The check is the caller's — whether
+                // the stated reason names the facts it was handed — and it is free.
+                <PairCard
+                    pair=Pair::new(
+                        "x4",
+                        0.402,
+                        Relation::Controversy,
+                        PairSide::staged(
+                            Fact::new("n#31", "The plan includes launching a website.")
+                                .by("igor", "agent:chat@1"),
+                        ),
+                        PairSide::base(
+                            Fact::new("f077", "The company can support China.")
+                                .by("igor", "agent:extractor@1"),
+                        ),
+                    )
+                        .reason(
+                            "supporting all non-sanctioned countries conflicts with supporting \
+                             China",
+                        )
+                    rank=4279
+                    reason_suspect=true
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+                // Settled. Every verdict carries its confirmer, so a card that is done shows
+                // who did it and offers nothing further.
+                <PairCard
+                    pair=Pair::new(
+                        "x5",
+                        0.617,
+                        Relation::Duplicate,
+                        PairSide::staged(china_great()),
+                        PairSide::base(china_market()),
+                    )
+                        .decided(Decided::new(Verdict::Merge, "agent:verifier@3"))
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+                <PairCard
+                    pair=Pair::new(
+                        "x6",
+                        0.664,
+                        Relation::Narrows,
+                        PairSide::staged(cis()),
+                        PairSide::base(ukraine()),
+                    )
+                        .decided(Decided::new(Verdict::Drop, "igor"))
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+                <PairCard
+                    pair=Pair::new(
+                        "x7",
+                        0.886,
+                        Relation::Narrows,
+                        PairSide::staged(cis()),
+                        PairSide::base(ukraine()),
+                    )
+                        .decided(Decided::new(Verdict::Coexist, "igor"))
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+                <PairCard
+                    pair=Pair::new(
+                        "x8",
+                        0.712,
+                        Relation::Controversy,
+                        PairSide::staged(china_can()),
+                        PairSide::base(china_unsure()),
+                    )
+                        .decided(Decided::new(Verdict::Supersede, "agent:verifier@3"))
+                    on_rule=Callback::new(|_: Ruling| ())
+                />
+            </div>
+        </Panel>
+
+        <Panel
+            title="Facts \u{2014} the transaction"
+            flush=true
+            actions=move || view! {
+                <Button size=ButtonSize::Small variant=ButtonVariant::Ghost on:click=reset>
+                    "reset"
+                </Button>
+            }
+                .into_any()
+        >
+            <div class="px-4 pt-3 pb-3 text-mini text-meta">
+                "The queue, live: rule on a card and it keeps its place wearing its verdict, \
+                 the count drops, and the commit unlocks only when nothing is open. The \
+                 truncation line is drawn either way \u{2014} \"nothing more\" and \"we \
+                 stopped looking\" are different facts."
+            </div>
+            <div class="px-4 pb-4">
+                // The other half of the truncation line: nothing was left out, and the queue
+                // says so rather than saying nothing.
+                <TxPanel
+                    id="tx_0c11e2"
+                    staged=1
+                    pending=1
+                    on_commit=Callback::new(|()| ())
+                    class="mb-4"
+                >
+                    <PairQueue
+                        pairs=vec![Pair::new(
+                            "solo",
+                            0.617,
+                            Relation::Duplicate,
+                            PairSide::staged(china_great()),
+                            PairSide::base(china_market()),
+                        )]
+                        acting_as="agent:verifier@3"
+                        on_rule=Callback::new(|_: Ruling| ())
+                    />
+                </TxPanel>
+                <TxPanel
+                    id="tx_7f3a91"
+                    staged=12
+                    pending=open
+                    busy=false
+                    on_commit=Callback::new(|()| ())
+                    on_abort=Callback::new(|()| ())
+                >
+                    <PairQueue
+                        pairs=pairs
+                        acting_as="igor"
+                        truncated=Some(Truncated::new(214, 0.601))
+                        on_rule=rule
+                    />
+                </TxPanel>
+            </div>
+        </Panel>
+
+        <Panel title="Facts \u{2014} the node" flush=true>
+            <div class="px-4">
+                <Row label="rows">
+                    <div class="flex w-full min-w-0 flex-col">
+                        <FactRow fact=cis()/>
+                        <FactRow fact=ukraine() selected=true/>
+                        <FactRow fact=Fact::new(
+                            "c003",
+                            "The company supports every country outside the CIS, and Ukraine \
+                             inside it.",
+                        )
+                            .by("igor", "agent:composer@1")
+                            .at(4)
+                            .kind(NodeKind::Composed)/>
+                        <FactRow fact=plan()>
+                            <Badge tone=BadgeTone::Warn mono=true>"stale"</Badge>
+                        </FactRow>
+                    </div>
+                </Row>
+                <Row label="card">
+                    <div class="w-full min-w-0">
+                        <FactCard
+                            fact=cis()
+                            actions=move || view! {
+                                <Button size=ButtonSize::Small variant=ButtonVariant::Ghost>
+                                    "history"
+                                </Button>
+                            }
+                                .into_any()
+                        />
+                    </div>
+                </Row>
+                <Row label="card · derived">
+                    <div class="w-full min-w-0">
+                        <FactCard fact=plan()/>
+                    </div>
+                </Row>
+            </div>
+        </Panel>
+
+        <Panel title="Facts \u{2014} stale, and history" flush=true>
+            <div class="px-4 pt-3 text-mini text-meta">
+                "Both are was/now surfaces. Which fact moved is not the question \u{2014} \
+                 whether the derived text still holds is, and only the two sentences answer it."
+            </div>
+            <div class="px-4">
+                <Row label="stale">
+                    <div class="w-full min-w-0">
+                        <StaleList
+                            items=stale
+                            on_refresh=Callback::new(move |_: String| stale.set(Vec::new()))
+                        />
+                    </div>
+                </Row>
+                <Row label="stale · ro">
+                    <div class="w-full min-w-0">
+                        <StaleList items=vec![Stale::new(plan(), vec![Moved::new(
+                            "f038",
+                            "The company is not sure it can enter the China market.",
+                            "The company can support China after all.",
+                        )])]/>
+                    </div>
+                </Row>
+                <Row label="stale · empty">
+                    <div class="w-full min-w-0">
+                        <StaleList items=Vec::new()/>
+                    </div>
+                </Row>
+                <Row label="history · old">
+                    <div class="w-full min-w-0">
+                        <FactHistory fact=cis() changes=history against=Some(1)/>
+                    </div>
+                </Row>
+                <Row label="history · now">
+                    <div class="w-full min-w-0">
+                        <FactHistory fact=cis() changes=history against=Some(2)/>
+                    </div>
+                </Row>
+                <Row label="history · merge">
+                    <div class="w-full min-w-0">
+                        <FactHistory
+                            fact=Fact::new(
+                                "f044",
+                                "China is one of the operator's main target markets, and a \
+                                 great one.",
+                            )
+                                .by("igor", "agent:extractor@1")
+                                .at(2)
+                            changes=vec![
+                                Change::rewritten(
+                                    2,
+                                    Verdict::Merge,
+                                    "agent:verifier@3",
+                                    "China is one of the operator's main target markets.",
+                                    "China is one of the operator's main target markets, and a \
+                                     great one.",
+                                ),
+                                Change::created(
+                                    "agent:extractor@1",
+                                    "China is one of the operator's main target markets.",
+                                ),
+                            ]
+                        />
+                    </div>
+                </Row>
+                <Row label="history · v1">
+                    <div class="w-full min-w-0">
+                        <FactHistory
+                            fact=ukraine()
+                            changes=vec![Change::created(
+                                "agent:chat@1",
+                                "Within the CIS, the company supports Ukraine.",
+                            )]
+                        />
+                    </div>
+                </Row>
+            </div>
+        </Panel>
     }
 }

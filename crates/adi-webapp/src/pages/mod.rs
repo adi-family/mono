@@ -5,6 +5,7 @@ mod agents;
 mod analytics;
 mod dashboards;
 mod db;
+mod facts;
 mod fleet;
 mod hive;
 mod knowledge;
@@ -61,6 +62,7 @@ pub(crate) use agents::{agents_view, chat_home_view, live_view, poll_watch, rese
 pub(crate) use analytics::analytics_view;
 pub(crate) use dashboards::dashboards_view;
 pub(crate) use db::database_view;
+pub(crate) use facts::{FactsConsole, facts_view};
 pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
 pub(crate) use knowledge::knowledge_view;

@@ -43,8 +43,8 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    OnboardingForm, agents_view, analytics_view, chat_home_view, dashboards_view, database_view,
-    fleet_view,
+    FactsConsole, OnboardingForm, agents_view, analytics_view, chat_home_view, dashboards_view,
+    database_view, facts_view, fleet_view,
     hive_view, knowledge_view, live_view, load_dir, load_store_file,
     mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
@@ -752,6 +752,10 @@ fn App() -> impl IntoView {
     // something the shell's 4s poll should be doing on every page.
     let knowledge = KnowledgeConsole::new();
 
+    // The Facts page's transaction queue, base filter and acting-as identity. Page-local for
+    // the same reason as the two above: nothing here belongs on the shell's 4s poll.
+    let facts = FactsConsole::new();
+
     // The Secrets page's create form + reveal cache, shared with a project's Secrets panel.
     let secrets_form = SecretsForm::new();
 
@@ -1104,6 +1108,7 @@ fn App() -> impl IntoView {
                         Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
                         Route::Secrets => secrets_view(state, secrets_form),
                         Route::Knowledge => knowledge_view(state, knowledge),
+                        Route::Facts => facts_view(facts),
                         Route::Database => database_view(state, db_console),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
@@ -1154,6 +1159,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Tools,
             Route::Secrets,
             Route::Knowledge,
+            Route::Facts,
             Route::Database,
             Route::Triggers,
             Route::Dashboards,
