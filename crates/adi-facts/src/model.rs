@@ -198,6 +198,8 @@ pub struct Truncation {
 pub struct Committed {
     /// The facts that landed, in order: id and sentence.
     pub added: Vec<(String, String)>,
+    /// How many provenance edges were written — one per source per landed fact.
+    pub linked: usize,
     /// Base facts rewritten in place by a `merge` or `supersede`.
     pub rewritten: Vec<String>,
     /// How many staged facts were dropped by a verdict and never landed.

@@ -44,7 +44,10 @@ pub fn staging(s: &Staging) -> String {
     }
 
     if s.pending.is_empty() {
-        out.push_str("\n\nnothing to decide — nothing in the base is close to these.");
+        // Not "nothing was close": the nearest neighbours were selected and read, and none of
+        // them conflicts. Saying "nothing close" would misdescribe a base that holds a near
+        // neighbour the classifier called `independent`.
+        out.push_str("\n\nnothing to decide — nothing here conflicts with what the base holds.");
         let _ = write!(out, "\n\n  facts tx commit {}", s.tx);
         return out;
     }
@@ -98,6 +101,9 @@ pub fn committed(c: &Committed) -> String {
     if c.dropped > 0 {
         let _ = write!(out, ", dropped {}", c.dropped);
     }
+    if c.linked > 0 {
+        let _ = write!(out, ", linked to {} source(s)", c.linked);
+    }
     for (id, fact) in &c.added {
         let _ = write!(out, "\n  {id}  {fact}");
     }
@@ -125,12 +131,41 @@ pub fn stale(rows: &[Stale]) -> String {
 #[must_use]
 pub fn near(rows: &[Neighbour]) -> String {
     if rows.is_empty() {
-        return "nothing close".to_string();
+        return "nothing else in this base".to_string();
     }
     rows.iter()
         .map(|n| format!("{:.3}  {}  {}", n.strength, n.id, n.fact))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// Every fact, for somebody reading the base rather than searching it.
+#[must_use]
+pub fn list(rows: &[crate::model::Fact]) -> String {
+    if rows.is_empty() {
+        return "nothing in this base yet".to_string();
+    }
+    rows.iter()
+        .map(|f| {
+            format!(
+                "{:<18} v{:<3} {:<9} {}",
+                f.id, f.version, f.kind, f.fact
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Search results — the same shape as [`near`], because they answer with the same three things.
+///
+/// "nothing close" would be a lie: neither this nor [`near`] cuts anything for scoring low, so an
+/// empty result means the base holds nothing else, not that nothing matched.
+#[must_use]
+pub fn search(rows: &[Neighbour]) -> String {
+    if rows.is_empty() {
+        return "nothing in this base yet".to_string();
+    }
+    near(rows)
 }
 
 /// What a reference resolves to, and what changed under it.
@@ -268,6 +303,7 @@ mod tests {
     fn nothing_close_is_said_plainly_and_offers_the_commit() {
         let text = staging(&staging_of(vec![]));
         assert!(text.contains("nothing to decide"), "{text}");
+        assert!(!text.contains("close"), "the pairs were read, not skipped: {text}");
         assert!(text.contains("facts tx commit"), "{text}");
     }
 

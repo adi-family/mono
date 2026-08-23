@@ -15,13 +15,18 @@
 //! base held more controversies than duplicates, and merging the top-ranked pair would have
 //! silently deleted a carve-out (`RESULTS.md` §9).
 //!
-//! # The prompts are verbatim
+//! # The prompts
 //!
-//! [`EXTRACT_SYSTEM`] and [`CLASSIFY_SYSTEM`] are copied word for word from the Python prototype
-//! (`experiment/knowledge-base/facts`). Their wording was iterated against a hand-labelled
-//! corpus and every measurement in `RESULTS.md` was taken with them — §10 makes the point
-//! sharply: change the extraction prompt and the similarity floor needs re-measuring just as
-//! surely as if the embedder had changed. Edit them only with a re-measurement in hand.
+//! [`EXTRACT_SYSTEM`] is copied word for word from the Python prototype
+//! (`experiment/knowledge-base/facts`). Its wording was iterated against a hand-labelled corpus,
+//! and §10 makes the stakes sharp: change it and every measured number moves, because it changes
+//! how verbosely facts are written and therefore what they score against each other. Edit it only
+//! with a re-measurement in hand.
+//!
+//! [`CLASSIFY_SYSTEM`] is the prototype's plus one paragraph, added after a real run found the
+//! classifier could not see the difference between a person's statement and an agent's conclusion
+//! drawn from it. That change moves no cosine and so touches no threshold; see the constant's own
+//! docs for what it does cost.
 //!
 //! # Failure is reported, never assumed
 //!
@@ -97,6 +102,47 @@ impl FromStr for Relation {
     }
 }
 
+/// One side of a pair, with the provenance the classifier needs to read it correctly.
+///
+/// The texts alone are not enough, and that was found by using the tool rather than by reading
+/// it. An agent recording what a person said and then recording a conclusion it drew from that
+/// statement produces two sentences that are near-identical in wording and entirely different as
+/// records: one is what was said, the other is what was inferred. Judged on wording, the pair is
+/// a `duplicate` and the merge deletes a person's own words. Judged with `author`, `creator`, and
+/// `kind` in view, it is two records that both stand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Side<'a> {
+    /// The sentence.
+    pub fact: &'a str,
+    /// Whose meaning it is.
+    pub author: &'a str,
+    /// Who wrote the record.
+    pub creator: &'a str,
+    /// `fact`, `note`, or `artifact`.
+    pub kind: &'a str,
+}
+
+impl<'a> Side<'a> {
+    /// A side with no provenance to offer — a caller that has only the text.
+    #[must_use]
+    pub fn bare(fact: &'a str) -> Self {
+        Self {
+            fact,
+            author: "unknown",
+            creator: "unknown",
+            kind: "fact",
+        }
+    }
+
+    /// How this side is labelled in the prompt: `said by igor, written by agent:chat@1 [fact]`.
+    fn provenance(&self) -> String {
+        format!(
+            "said by {}, written by {} [{}]",
+            self.author, self.creator, self.kind
+        )
+    }
+}
+
 /// One classified pair: what it is, and why in the model's own words.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Judgement {
@@ -135,7 +181,7 @@ pub trait Judge: fmt::Debug + Send + Sync {
     /// [`JudgeError`] only when nothing at all could be classified. A partial failure comes back
     /// as [`Relation::Unclassified`] for the pairs it touched, so the rest still reach a
     /// reviewer.
-    fn classify(&self, pairs: &[(&str, &str)]) -> Result<Vec<Judgement>, JudgeError>;
+    fn classify(&self, pairs: &[(Side<'_>, Side<'_>)]) -> Result<Vec<Judgement>, JudgeError>;
 }
 
 /// The extraction prompt. Verbatim from the prototype — see the [module docs](self).
@@ -154,11 +200,26 @@ Use the speaker's own terms. Empty array is a valid answer.
 
 Output STRICTLY a JSON array of strings, no prose, no fence."#;
 
-/// The classification prompt. Verbatim from the prototype — see the [module docs](self).
+/// The classification prompt.
+///
+/// **No longer verbatim**, and this is the one place in the crate that departs from the
+/// prototype's wording. A real run showed the classifier calling `duplicate` on a person's
+/// statement paired with an agent's conclusion drawn from it — right about the wording, wrong
+/// about the record, and a merge there deletes what somebody actually said. It could not have
+/// done better: the prompt never showed it who said either sentence. So each side now arrives
+/// labelled, and one paragraph tells the model what the labels mean.
+///
+/// Be clear about what that does and does not invalidate. **Neighbour selection is untouched**:
+/// it reads cosines, and no classifier prompt moves a cosine. (The *extraction* prompt does, by
+/// changing how verbosely facts are written — `RESULTS.md` §10 — which is why that one is still
+/// verbatim.) What this does invalidate is the classifier's own measured precision: §9's "124 of
+/// 6441 pairs actionable, 66 of them controversies" was counted with the old wording, on pairs
+/// shown without provenance.
 pub const CLASSIFY_SYSTEM: &str = r#"You are reviewing a knowledge base of one person's facts. You get PAIRS the base
 found similar. For each, say what a reviewer must do:
 
-  duplicate    — they say the same thing; one merged fact would replace both
+  duplicate    — they say the same thing AND are the same kind of record; one merged fact
+                 would replace both. A [fact] and an [artifact] are NEVER duplicates.
   narrows      — one is a more specific or qualified version of the other; still compatible
   independent  — both true at once, about different things; nothing to do
   controversy  — they cannot comfortably both stand. One rules out or reverses the other, or the
@@ -166,6 +227,12 @@ found similar. For each, say what a reviewer must do:
 
 Be strict about `controversy`. Two facts on the same topic are not a controversy. A hope and a
 doubt about the same thing IS one. A decision reversed later IS one.
+
+Each side is labelled with who said it, who wrote it down, and its kind. [fact] is something a
+person stated; [artifact] is a conclusion an agent derived from other facts. A statement and a
+conclusion drawn from it must both stand, however alike the wording — one is what was said, the
+other is what was inferred from it. Call that pair `narrows` when the conclusion is the sharper
+of the two, `independent` otherwise.
 
 Return STRICTLY a JSON array, one object per pair, in the order given, no prose, no fence:
 [{"i":<index>,"verdict":"...","why":"<=12 words"}]"#;
@@ -177,11 +244,18 @@ Return STRICTLY a JSON array, one object per pair, in the order given, no prose,
 /// for with room for the answer.
 const BATCH: usize = 60;
 
+/// The output budget one call gets, in tokens.
+///
+/// A full [`BATCH`] of judgements is ~1,800 tokens of JSON; this is roughly double, because the
+/// cost of being wrong in one direction is a truncated answer and in the other is nothing at all
+/// on a local model.
+const NUM_PREDICT: u32 = 4096;
+
 /// A local model served by ollama — what the prototype used, and the default here.
 ///
 /// Local because the classifier reads roughly 2 pairs per inserted fact and the whole measured
 /// sweep was 6441 pairs in 53 minutes at zero cost (`RESULTS.md` §9). A hosted model would make
-/// the floor a budget decision instead of a compute one.
+/// review a budget decision instead of a compute one.
 ///
 /// It shares [`Ollama`] with [`OllamaEmbedder`](crate::embed::OllamaEmbedder), so
 /// `ADI_FACTS_OLLAMA` moves both halves of the model work at once.
@@ -232,7 +306,17 @@ impl OllamaJudge {
             // Reasoning tokens come out of the same budget as the answer and this asks for JSON,
             // not deliberation.
             "think": false,
-            "options": {"temperature": 0, "num_ctx": 16384},
+            "options": {
+                "temperature": 0,
+                "num_ctx": 16384,
+                // DO NOT DROP THIS while tidying the options map. Without `num_predict` ollama
+                // applies its own default output cap, and a full batch of 60 pairs needs roughly
+                // 1,800 tokens of JSON — so the array arrives truncated, deterministically, for
+                // any input long enough to reach the cap. The first agent to use this tool hit it
+                // four times in one run and could reproduce it byte for byte. It costs nothing on
+                // a local model.
+                "num_predict": NUM_PREDICT,
+            },
         });
         let answer = self
             .ollama
@@ -274,7 +358,7 @@ impl Judge for OllamaJudge {
             .collect())
     }
 
-    fn classify(&self, pairs: &[(&str, &str)]) -> Result<Vec<Judgement>, JudgeError> {
+    fn classify(&self, pairs: &[(Side<'_>, Side<'_>)]) -> Result<Vec<Judgement>, JudgeError> {
         if pairs.is_empty() {
             return Ok(Vec::new());
         }
@@ -293,7 +377,15 @@ impl Judge for OllamaJudge {
             let prompt = chunk
                 .iter()
                 .enumerate()
-                .map(|(i, (a, b))| format!("[{i}] A: {a}\n     B: {b}"))
+                .map(|(i, (a, b))| {
+                    format!(
+                        "[{i}] A ({}): {}\n     B ({}): {}",
+                        a.provenance(),
+                        a.fact,
+                        b.provenance(),
+                        b.fact
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n\n");
             let answer = match self.generate(CLASSIFY_SYSTEM, &prompt) {
@@ -303,13 +395,14 @@ impl Judge for OllamaJudge {
                     continue;
                 }
             };
-            let Some(array) = json_array(&answer) else {
+            let array = json_objects(&answer);
+            if array.is_empty() {
                 first_error.get_or_insert(format!(
-                    "the classifier answered with no JSON array: {}",
+                    "the classifier answered with no usable JSON: {}",
                     preview(&answer)
                 ));
                 continue;
-            };
+            }
             for entry in array {
                 // The model indexes into the chunk it was shown, not the whole batch. An index
                 // it invented is dropped rather than written over somebody else's pair.
@@ -342,7 +435,7 @@ impl Judge for OllamaJudge {
 
 /// A judge that answers nothing, for a build or a machine with no model.
 ///
-/// Every pair comes back [`Relation::Unclassified`], which means every pair above the floor
+/// Every pair comes back [`Relation::Unclassified`], which means every selected pair
 /// reaches the reviewer. That is the honest degradation: the base still refuses to decide
 /// anything by itself, and the reviewer sees more than they would have rather than less.
 #[derive(Debug, Clone, Copy, Default)]
@@ -365,7 +458,7 @@ impl Judge for NoJudge {
         ))
     }
 
-    fn classify(&self, pairs: &[(&str, &str)]) -> Result<Vec<Judgement>, JudgeError> {
+    fn classify(&self, pairs: &[(Side<'_>, Side<'_>)]) -> Result<Vec<Judgement>, JudgeError> {
         Ok(vec![
             Judgement {
                 relation: Relation::Unclassified,
@@ -376,10 +469,12 @@ impl Judge for NoJudge {
     }
 }
 
-/// The outermost `[...]` in a model's answer, parsed.
+/// The outermost `[...]` in a model's answer, parsed whole.
 ///
 /// Models wrap JSON in prose and fences however firmly they are told not to, so the answer is cut
-/// at the first `[` and the last `]` rather than parsed whole.
+/// at the first `[` and the last `]` rather than parsed whole. Used where a partial answer is
+/// worse than none — extraction, where salvaging half a note's facts would silently lose the
+/// rest.
 fn json_array(raw: &str) -> Option<Vec<Value>> {
     let start = raw.find('[')?;
     let end = raw.rfind(']')?;
@@ -390,6 +485,66 @@ fn json_array(raw: &str) -> Option<Vec<Value>> {
         .ok()?
         .as_array()
         .cloned()
+}
+
+/// Every **complete** object inside the answer's array, whatever state the array ends in.
+///
+/// The reason this is not [`json_array`]: a truncated response is a well-formed prefix and a
+/// broken tail, and handing the whole span to serde loses every judgement in it — 59 perfectly
+/// good verdicts thrown away because the sixtieth was cut mid-word. That is what a real run hit,
+/// and it read as "the classifier could not be reached" followed by 40 pairs to decide by hand.
+///
+/// So a malformed tail costs the pairs in the tail and nothing else. Whatever cannot be recovered
+/// stays [`Relation::Unclassified`], which already reaches the reviewer rather than being assumed
+/// compatible.
+///
+/// Brace-matching rather than a regular expression (the prototype scanned for
+/// `\{[^{}]*"verdict"[^{}]*\}`): it needs no dependency, and it cannot be fooled by a brace
+/// inside a `why` string.
+fn json_objects(raw: &str) -> Vec<Value> {
+    let Some(start) = raw.find('[') else {
+        return Vec::new();
+    };
+    let bytes = raw.as_bytes();
+    let mut out = Vec::new();
+    let (mut depth, mut object_at) = (0usize, 0usize);
+    let (mut in_string, mut escaped) = (false, false);
+
+    for i in (start + 1)..bytes.len() {
+        let c = bytes[i];
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => in_string = true,
+            b'{' => {
+                if depth == 0 {
+                    object_at = i;
+                }
+                depth += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    // Byte indices of ASCII braces are always char boundaries.
+                    if let Ok(value) = serde_json::from_str::<Value>(&raw[object_at..=i]) {
+                        out.push(value);
+                    }
+                }
+            }
+            // The array closed cleanly; anything after it is prose.
+            b']' if depth == 0 => break,
+            _ => {}
+        }
+    }
+    out
 }
 
 fn preview(text: &str) -> String {
@@ -416,6 +571,42 @@ mod tests {
         assert!(json_array("] backwards [").is_none());
     }
 
+    /// The failure a real run hit: ollama's default output cap cut the array mid-object, and
+    /// parsing the whole span lost all sixty verdicts — including the fifty-nine that were
+    /// intact. `num_predict` stops the truncation; this stops it from being catastrophic when
+    /// something else truncates anyway.
+    #[test]
+    fn a_truncated_answer_costs_the_tail_and_nothing_else() {
+        let truncated = r#"[
+          {"i":0,"verdict":"duplicate","why":"same claim twice"},
+          {"i":1,"verdict":"controversy","why":"one reverses the other"},
+          {"i":2,"verdict":"narr"#;
+        let salvaged = json_objects(truncated);
+        assert_eq!(salvaged.len(), 2, "the two complete objects survive");
+        assert_eq!(salvaged[0]["verdict"], "duplicate");
+        assert_eq!(salvaged[1]["i"], 1);
+        // The strict parser is what used to be used here, and it recovers nothing at all.
+        assert!(json_array(truncated).is_none());
+    }
+
+    #[test]
+    fn salvage_is_not_fooled_by_braces_and_brackets_inside_a_reason() {
+        let awkward = r#"Sure! ```json
+          [{"i":0,"verdict":"narrows","why":"A qualifies B { and ] tricky \" quote"},
+           {"i":1,"verdict":"independent","why":"different things"}]
+        ``` hope that helps"#;
+        let salvaged = json_objects(awkward);
+        assert_eq!(salvaged.len(), 2);
+        assert!(salvaged[0]["why"].as_str().unwrap().contains("tricky"));
+        assert_eq!(salvaged[1]["verdict"], "independent");
+    }
+
+    #[test]
+    fn an_answer_with_nothing_parseable_salvages_nothing_rather_than_guessing() {
+        assert!(json_objects("I could not do that.").is_empty());
+        assert!(json_objects("[{\"broken").is_empty());
+    }
+
     #[test]
     fn a_verdict_nobody_recognises_is_unclassified_and_not_independent() {
         assert_eq!("controversy".parse::<Relation>(), Ok(Relation::Controversy));
@@ -427,7 +618,10 @@ mod tests {
 
     #[test]
     fn with_no_model_every_pair_reaches_the_reviewer() {
-        let pairs = [("a", "b"), ("c", "d")];
+        let pairs = [
+            (Side::bare("a"), Side::bare("b")),
+            (Side::bare("c"), Side::bare("d")),
+        ];
         let judged = NoJudge.classify(&pairs).expect("classify");
         assert_eq!(judged.len(), 2);
         assert!(judged.iter().all(|j| j.relation == Relation::Unclassified));

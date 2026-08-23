@@ -91,8 +91,8 @@ The company supports all countries except the CIS.
 Within the CIS, the company supports Ukraine.
 ```
 
-Merging on similarity would erase the Ukraine carve-out. The floor bounds the *search*; it
-decides nothing.
+Merging on similarity would erase the Ukraine carve-out. Selection bounds the *search* — the
+closest twenty and no more; it decides nothing.
 
 ## The verdicts, and the one mechanism behind two of them
 
@@ -132,19 +132,50 @@ error: --keep f_typo is neither side of p0. It must be #0 or f_1a02cbfe28e_2.
 
 ## Staleness is mechanical, and never a timestamp
 
-Record something built *on* facts, and the graph does the rest:
+### Provenance and checking are the same operation
+
+An agent that draws a conclusion from what a person said needs two things at once: the conclusion
+**linked** to the facts it was built on, so it goes stale when they move, and the conclusion
+**checked** against everything already in the base, so it cannot quietly contradict something.
+Those are not two features. They are one, and `--from` is how you ask for it:
 
 ```
 $ adi-mono facts derive --from f_1a02cbfe28e_2 \
     --fact "Market entry plan: skip China for now." --creator agent:planner@1
-d_1a02cc00a57  derived from f_1a02cbfe28e_2
+
+tx_1a02cc00a57  1 staged, 1 to decide
+
+[p0] 0.793  narrows
+  new   #0   Market entry plan: skip China for now.
+  base  f_1a02cbfe28e_2 We are not sure we can enter the China market.
+  why        Uncertainty supports skipping; compatible
+
+decide each, then commit:
+  facts tx resolve tx_1a02cc00a57 <p> --verdict coexist|merge|supersede|drop --confirmer <who>
+```
+
+A derived node goes through **exactly the transaction a stated fact does** — staged, ranked
+against the base, refused until every pair is ruled on. `derive` is `add --from … --kind
+artifact` with the sentence given as a flag rather than on stdin, and nothing more. `--from` is
+equally available on `add`: repeatable, applying to the whole batch, and taking either a
+committed fact id or `#N` for a fact staged in the same call.
+
+```
+$ adi-mono facts tx resolve tx_1a02cc00a57 0 --verdict coexist --confirmer igor
+$ adi-mono facts tx commit tx_1a02cc00a57
+committed 1 new, linked to 1 source(s)
+  d_1a02cc00a57_0  Market entry plan: skip China for now.
 
 $ adi-mono facts stale
 everything is up to date
 ```
 
-Each edge stores the exact `version` its source was at when the derivation happened. Now a
-reversal arrives:
+Each edge stores the exact `version` its source was at **when the batch committed**, not when it
+was staged. A source that moved while the caller was deciding must not be recorded at the version
+it had when they started typing, or the new node would be born claiming to be current against
+text it never saw.
+
+Now a reversal arrives:
 
 ```
 $ echo "We can support China after all." | adi-mono facts add --author igor --creator agent:chat@1
@@ -157,7 +188,7 @@ tx_1a02cc00a73  1 staged, 3 to decide
 
 [p1] 0.657  controversy
   new   #0   We can support China after all.
-  base  d_1a02cc00a57 Market entry plan: skip China for now.
+  base  d_1a02cc00a57_0 Market entry plan: skip China for now.
   why        Supporting contradicts skipping market entry for China
 ```
 
@@ -171,13 +202,30 @@ $ adi-mono facts tx commit tx_1a02cc00a73
 committed 0 new, rewrote 1 in place (f_1a02cbfe28e_2), dropped 1
 
 $ adi-mono facts stale
-d_1a02cc00a57  Market entry plan: skip China for now.
+d_1a02cc00a57_0  Market entry plan: skip China for now.
     out of date because f_1a02cbfe28e_2 changed
 ```
 
 No duplicate row exists, the base fact is at v2 with the new text, and the plan is out of date
 with the fact that reversed it named as the cause. Nothing had to be remembered by hand.
-`adi-mono facts refresh d_1a02cc00a57` says the plan has been regenerated: it brings that node's
+
+**There is exactly one door into the base, and this is why.** `derive` briefly wrote a node and
+its edges straight in — no transaction, no neighbour scan, no pair — and that was a hole in the
+whole design: this same conclusion, drawn from this same fact, could contradict something already
+recorded and land beside it in silence. Nothing errored; the base just quietly held both. So
+`--from` became an argument to staging rather than a command of its own, and the library method
+that wrote directly is gone. A source that does not exist, or that a verdict in the same
+transaction threw away, is an error that names it:
+
+```
+$ adi-mono facts derive --from f_nope --fact "A conclusion."
+error: no such fact: f_nope
+```
+
+An edge quietly not written is a derived node that never goes stale — the one outcome this design
+exists to prevent, arriving as silence rather than as a message.
+
+`adi-mono facts refresh d_1a02cc00a57_0` says the plan has been regenerated: it brings that node's
 incoming edges up to its sources' current versions and bumps its own, so anything built on *the
 plan* goes stale in turn. Refreshing one artifact disturbs no sibling.
 
@@ -240,6 +288,40 @@ finds the id that swallowed it. The winner's own staged wording is *not* kept wh
 replaces it — that is the design's accepted edge, not an oversight, and it is the one place a
 sentence can leave no trace.
 
+## Reading the base
+
+**`search` is the command to run before `add`, not after.**
+
+```
+$ adi-mono facts search "pricing in China" --top 5
+0.788  f_1a02d59d0f8_0  China pricing is set per seat, not per workspace.
+0.682  f_1a02d59d0f8_1  We are not sure we can enter the China market.
+0.363  f_1a02d59d0f8_2  The office is in Warsaw.
+```
+
+Everything you add is compared against the whole base, and every near pair comes back to be ruled
+on by hand. Asking what the base already knows *before* writing is the review queue reduced at the
+source rather than worked through afterwards — which is worth more than any amount of skill at
+working it. The first agent to use this tool had no way to ask, so every fact went in blind and it
+burned four aborted transactions on the consequences.
+
+**Nothing is cut for scoring low,** here or anywhere else. Every fact is ranked, the top `--top`
+come back, and the scores travel with them — the 0.363 line above is a weak match shown honestly
+rather than hidden. An answer of "nothing found" about a base that plainly holds something closest
+is not one a caller can act on. `near <id>` is the same, starting from an id you already have
+instead of from words.
+
+```
+$ adi-mono facts list --limit 3
+f_1a02d59d0f8_0    v1   fact      China pricing is set per seat, not per workspace.
+f_1a02d59d0f8_1    v1   fact      We are not sure we can enter the China market.
+d_1a02d292fdb_0    v1   artifact  Market entry plan: skip China for now.
+```
+
+`list` is everything, most recently changed first. Between them these are what stop a caller
+dropping to `sqlite3` against the store — which the first agent did, and which is a missing
+command rather than resourcefulness.
+
 ## Working the queue
 
 ```
@@ -253,78 +335,73 @@ is deliberately not the operator's: a verifier agent works it, its confirmations
 identity and version (`--confirmer agent:verifier@3`), and only what it cannot settle reaches a
 person. Nothing yet caps that queue's growth — that is a known gap, not a solved problem.
 
-## The floor, and what measuring it again showed
+## Neighbour selection: top-K, and the floor that used to be here
 
-The similarity floor is **0.55**, and unlike most numbers in a ported design it did not have to
-be re-derived: it belongs to the embedder, and this crate embeds with the same
-`nomic-embed-text` the whole calibration was measured on. `RESULTS.md` §9 arrived at it by
-classifying all 6441 pairs of a 114-fact base, finding the lowest cosine at which a genuine
-finding still appeared (0.551, a real contradiction six notes apart), and setting the floor just
-below it.
+Every fact you add is compared against its **20 nearest neighbours** and nothing else. A pair
+surfaces when *either* side holds the other in its top K, and nothing is ever discarded for
+scoring low.
 
-The floor spends **compute, not attention** — the classifier stands between it and a person and
-filters hard — which is why it can be generous. Dropping it from 0.60 to 0.55 doubled machine
-time and added eleven items to a reviewer's queue, of which about four were real. Below 0.50 the
-return collapses: 1157 more pairs bought 4 more flags, none of which survived reading.
+```
+$ ADI_FACTS_TOP_K=30 adi-mono facts add …
+```
 
-### It reproduces
+**The symmetry is load-bearing, not tidiness.** A fact in a sparse neighbourhood keeps a busy fact
+in its own top K while the busy one, surrounded by closer things, does not reciprocate. Selecting
+on one direction only would lose exactly those pairs — and the measured recall assumes both
+directions.
 
-`golden-flat.json` is §8's fixture: 33 extracted facts, 528 pairs, 14 hand-labelled as related.
-Re-run through this crate's embedder:
+**K = 20 is the knee**, measured on the 114-fact base with 124 actionable pairs: K=10 caught 96,
+K=20 caught 108 (87%), K=30 caught 112. Thirty buys three points for half again the work.
+
+### Why there is no similarity floor
+
+There was one, at 0.55, for most of this design's life. It is gone — removed rather than defaulted
+to zero, so it cannot come back as a mystery constant. The reasoning is worth keeping, because a
+threshold is the obvious tool here and the next person to reach for it should know it was tried.
+
+It was doing neither of the two jobs it appeared to do.
+
+**It was not bounding cost.** A threshold admits a roughly constant *fraction* of a base, so what
+it costs grows with the base. On the live 97-fact `project:adi/business` base, one inserted fact
+drew 43 pairs above 0.55; another drew **76 of 96 — 79% of everything there**. At a thousand facts
+that is hundreds of pairs per insert. K is constant at any size, which is the property the queue
+actually needs.
+
+**It was not judging quality.** What filters is the classifier: everything selected goes to it, it
+answers `independent` for the weak ones, and only what it flags reaches a person. That was the
+argument for *lowering* the floor to 0.55 in the first place — it spends machine time, not
+attention — and it cuts the other way too. If the classifier is what filters, a floor on top of it
+was not filtering; it was declining to look.
+
+**And it would not hold still.** 0.55 was measured with `nomic-embed-text` on one corpus. On
+`jina-embeddings-v2-base-en` it admitted 100% of the same fixture. On a real base it admitted
+between 3% and 79% depending on which fact was being inserted. A number that has to be re-measured
+whenever the model or the corpus changes, and that nobody can set correctly without redoing §9's
+day of compute, is a trap rather than a setting.
+
+The scores are still shown everywhere they were. They inform a reader; they gate nothing.
+
+### What is still measured, and what the fixture cannot tell you
 
 ```bash
-$ cargo test -p adi-facts --lib -- --ignored --nocapture the_floor_admits
-nomic-embed-text on golden-flat: 14 of 14 labelled pairs found; deepest rank 125 of 528;
-weakest labelled cosine 0.520
-  median cosine over all 528 pairs: 0.456
-  floor 0.50: 153 pairs above (29.0%), 14/14 labelled kept
-  floor 0.55:  88 pairs above (16.7%), 12/14 labelled kept
-  floor 0.60:  53 pairs above (10.0%), 12/14 labelled kept
-  floor 0.65:  27 pairs above ( 5.1%),  8/14 labelled kept
+$ cargo test -p adi-facts --lib -- --ignored --nocapture top_k_recall
+nomic-embed-text on golden-flat: 14 labelled pairs, 528 pairs in all; deepest labelled at rank 125
+  K=5   14/14 labelled caught, 108 of 528 pairs selected (20%)
+  K=10  14/14 labelled caught, 201 of 528 pairs selected (38%)
+  K=20  14/14 labelled caught, 393 of 528 pairs selected (74%)
+  K=30  14/14 labelled caught, 517 of 528 pairs selected (98%)
 ```
 
-**Deepest rank 125 of 528** is `RESULTS.md` §8's published number, to the rank. The median at
-0.456 and the fat middle are §9's distribution. Whatever else is true, the vectors this crate
-compares are the vectors the design was measured with — which is the thing a port can most
-easily get wrong and least easily notice.
+**Deepest labelled pair at rank 125 of 528 is `RESULTS.md` §8's published number, to the rank** —
+which is the thing worth asserting, because a drift there would mean the vectors this crate
+compares are not the vectors the design was measured with.
 
-### And it shows something the design did not
-
-12 of the 14 labelled pairs clear 0.55. The two that do not are not the same kind of loss:
-
-- **`mkt-04` / `mkt-09` at 0.532** — *"India and the post-CIS countries are secondary markets to
-  consider"* against *"We do not support the CIS"*, labelled `supersede`, and annotated in the
-  fixture itself as **"the hard one"**: different predicates on paper, the same real-world claim.
-  This is a genuine finding, and it is the very pair §9 held up as what flat facts recovered that
-  the subject/predicate schema had recorded as unfindable.
-- **`msh-01` / `msh-03` at 0.520** — labelled `coexist`, "unrelated predicates under one
-  subject". Losing a `coexist` costs nothing actionable.
-
-So the design's own procedure, applied to two corpora, gives two answers: 0.55 on the 114-fact
-live base, about 0.50 on this 33-fact fixture. They disagree by 0.02 — at exactly the resolution
-that decides whether a finding is seen. That is not a defect in either measurement; it is
-evidence for the conclusion `DESIGN.md` already reached, that **top-K neighbours will have to
-replace the threshold**, and it is the strongest single argument in the tree for building that.
-
-**The floor is left at 0.55.** Fitting a threshold to whichever corpus was measured last is how a
-calibration stops meaning anything, and the safe error on a floor is the generous one — too low
-costs compute, too high loses findings silently. Anyone who wants the fixture's answer instead
-can have it per process:
-
-```
-$ ADI_FACTS_FLOOR=0.50 adi-mono facts add …
-```
-
-Two things still invalidate it outright, and both are one environment variable away:
-
-1. **A different embedder.** `ADI_FACTS_EMBED` changes the model, and with it every number on
-   this page. The same fourteen pairs land inside the top 125 with `nomic-embed-text`, the top
-   166 with `embeddinggemma`, and the top 465 with `mxbai-embed-large`; paying does not help,
-   because every hosted model tried compresses the pairs into a narrow high band and ranking
-   needs spread.
-2. **A different extraction prompt.** The floor depends on how verbosely facts are written: the
-   same relation moves from 0.583 to 0.886 across four phrasings, and adding a shared subject —
-   "The company…" — is worth 0.11 on its own.
+The K column, read honestly, cannot choose K. Thirty-three facts is smaller than the regime top-K
+exists for: K=20 already reaches most of that base, so every K from 5 up catches all fourteen and
+what actually varies is cost. The knee that picked 20 was measured on the 114-fact live base,
+which is not in this tree. Two things still invalidate all of it, and both are one environment
+variable away: a different embedder (`ADI_FACTS_EMBED`), and a different extraction prompt, which
+changes how verbosely facts are written and so what they score against each other.
 
 ## The three levels
 
@@ -363,9 +440,9 @@ not by the jina-embeddings-v2-base-code model on candle that `adi-indexer` and `
 share.
 
 This is the single most load-bearing choice in the crate, and it is not about prose versus code.
-*Every threshold in this design was measured against `nomic-embed-text`*: the 0.55 floor, the
-recall table, the band structure where `duplicate` sits around 0.82 and `controversy` around
-0.67. A different embedder does not shift those numbers, it invalidates them. The experiment
+*Every number in this design was measured against `nomic-embed-text`*: the recall table, the
+band structure where `duplicate` sits around 0.82 and `controversy` around 0.67, and the ranking
+that top-K reads. A different embedder does not shift those numbers, it invalidates them. The experiment
 tried several and the spread is enormous — the same fourteen related pairs inside the top 125 of
 528 with this model, the top 465 with `mxbai-embed-large` — so the model is a design parameter,
 not a detail to be settled by what the workspace already loads.
@@ -382,7 +459,7 @@ inject `HashEmbedder` and never touch a network.
 
 ```bash
 ADI_FACTS_OLLAMA=http://127.0.0.1:11434   # moves the embedder and the classifier together
-ADI_FACTS_EMBED=nomic-embed-text          # changing this invalidates the floor
+ADI_FACTS_EMBED=nomic-embed-text          # changing this invalidates every measured number
 ```
 
 **Vectors from two models must never be compared**, and nothing relies on remembering that: every
@@ -410,13 +487,51 @@ ADI_FACTS_JUDGE=qwen3.6   # the model the measurements were taken with
 ```
 
 Local because the classifier reads roughly two pairs per inserted fact, and the full measured
-sweep was 6441 pairs in 53 minutes at zero cost. A hosted model would make the floor a budget
+sweep was 6441 pairs in 53 minutes at zero cost. A hosted model would make review a budget
 decision instead of a compute one.
 
-The two prompts — extraction and classification — are **verbatim** from the prototype. Their
-wording was iterated against a hand-labelled corpus and every measurement in `RESULTS.md` was
-taken with them; change the extraction prompt and the floor needs re-measuring just as surely as
-if the embedder had changed.
+The **extraction** prompt is verbatim from the prototype. Its wording was iterated against a
+hand-labelled corpus, and changing it means re-measuring just as surely as changing the embedder
+would — it changes how verbosely facts are written, and therefore what they score against each
+other.
+
+The **classification** prompt is the prototype's plus two changes, and both were forced by a real
+run. That does *not* touch neighbour selection: a classifier prompt moves no cosine.
+
+### `num_predict` — do not tidy this away
+
+`options` carries an explicit `num_predict`, and it must stay there. Without it ollama applies its
+own output cap; a full batch of 60 pairs needs roughly 1,800 tokens of JSON, so the array arrives
+**truncated** — deterministically, for any input long enough to reach the cap. The first agent to
+use this tool hit it four times in one run, aborted four transactions over it, and reproduced it
+byte for byte. It costs nothing on a local model. It is exactly the kind of line somebody removes
+while tidying an options map.
+
+The second half of that fix is in the parser. A truncated response is a well-formed prefix and a
+broken tail, and handing the whole span to a JSON parser loses **every** judgement in it — 59 good
+verdicts thrown away because the sixtieth was cut mid-word, surfacing as "the classifier could not
+be reached" and 40 unclassified pairs. So the parser now walks the response and takes each
+complete object: a malformed tail costs the pairs in the tail and nothing else, and what cannot be
+recovered stays `unclassified`, which already reaches the reviewer.
+
+### The classifier is shown who said each side
+
+Each side arrives labelled — `said by igor, written by agent:chat@1 [fact]` — because judged on
+wording alone the classifier called a person's statement and an agent's conclusion drawn from it a
+`duplicate`, at cosine 0.954. It could not have done better; it was never shown who said either
+sentence. A `merge` on that verdict deletes what somebody actually said.
+
+Where the rule sits was measured rather than guessed. As its own paragraph after the verdict list,
+the model ignored it. Moved *into the definition of `duplicate`* — read at the moment the verdict
+is chosen — the pair came back `narrows`. And a prohibition alone did not hold either: the rule
+only stuck once it also said what to answer instead.
+
+**Even so, the prompt is the belt and not the brace.** The same pair came back `narrows` alone and
+`duplicate` when a second pair shared the batch. A rule decidable from data already in hand should
+not depend on a model obeying it, so `duplicate` across two different kinds of record is
+downgraded to `narrows` in code. It downgrades a label and never drops a pair — both kinds reach
+the reviewer — so nothing is hidden; what changes is the hint, and the hint is what sent a real
+agent toward the wrong verdict.
 
 **A classifier that cannot be reached is reported, never assumed.** The prototype caught every
 error and defaulted the batch to `independent`, which means "nothing to do", which means an
@@ -429,9 +544,16 @@ tx_1a02d0  4 staged, 6 to decide
    every close pair is listed below, unread — decide them or abort.
 ```
 
-The same rule governs the cap. If more pairs cleared the floor than one transaction shows, the
-output says how many were dropped and below what strength — a silent cut reads as "nothing else
-to see", which is the one lie this interface must never tell.
+The same rule governs the cap. If more pairs were selected than one transaction shows, the output
+says how many were dropped and below what strength — a silent cut reads as "nothing else to see",
+which is the one lie this interface must never tell.
+
+The cap is **200**, and it is a backstop against a runaway queue rather than a workload control.
+What bounds the queue in the normal case is K: a batch of `n` facts selects at most `n × K` pairs
+however large the base is. It binds only when a batch is itself enormous — fifty facts at K=20 can
+reach a thousand pairs — which is the runaway it exists to catch. Under the old similarity floor
+it bound at *ordinary* size (one fact against a 97-fact base drew 43 pairs, another 76), which is
+how a cap ended up quietly deciding what a reviewer saw. It no longer does.
 
 ```
    [capped: 12 more pair(s) below 0.612 not examined]
@@ -463,6 +585,38 @@ the original is only possible if the original survived. A side effect worth nami
 resolved transaction is a labelled training example — these facts, this pair, this verdict, this
 confirmer — so the system produces its own training set as a by-product of being used.
 
+## What an agent is told
+
+An agent gets this tool as `adi-facts`, and what it is *told* about it is whatever
+`adi-mono facts llm help` prints — `adi-tools` captures that and folds it into the agent's system
+prompt on every turn. So the help is the interface: an agent that uses the tool wrongly is a help
+that is wrong, not an agent that is careless.
+
+```
+$ adi-mono facts llm help
+```
+
+It is capped at 3,000 characters, which is the real constraint — every sentence displaces
+something else the agent was going to be told, and the *tail* is what gets cut. So it carries
+instructions and no rationale: what a fact sentence looks like (with two bad examples, which teach
+faster than rules), **search before you write**, a three-command session showing that nothing
+lands until `commit`, one line per verdict, `--from`, the difference between `--author` and
+`--creator`, and one rule in capitals — **never guess a verdict**, with `tx abort` named as what
+to do instead. An agent that reads `coexist` as "dismiss" will use it for everything, so that
+line says it is a confirmation.
+
+The ordering is the part that was learned rather than designed. `search` sits **before** the `add`
+session, because an agent that asks what the base already knows will not stage what it already
+holds — and that is worth more than any wording further down. Everything below it fits in
+whatever budget is left, which is why `tx show` is not in the help at all: `resolve` reprints the
+remaining pairs, so an agent finds it without being told.
+
+Two things to know when changing it. The capture is **cached for an hour** and keyed on the shim
+script's mtime — and the shim is a stable one-liner over `adi-mono`, so *rebuilding `adi-mono`
+does not invalidate it*. Clear `~/.adi/mono/tools/.help/sys-facts` or wait out the TTL, or a test
+run is graded on the old text. And `adi-mono` on an agent's PATH is the **release** binary, so a
+debug build never reaches one.
+
 ## No JSON, anywhere
 
 There is no `--json` flag on any subcommand, and that is deliberate rather than unfinished. The
@@ -483,17 +637,13 @@ atoms — which is itself deferred, because terse atomic sentences score *lower*
 on an identical relation, so splitting would hide facts from the base's own search unless both
 layers were indexed. Do not reintroduce it.
 
-**Top-K neighbours instead of a floor.** A threshold does not scale: 0.55 admits about a quarter
-of all pairs, so a new fact is compared against a quarter of the base and cost grows linearly with
-it — 31 pairs per fact at 114 facts, ~2740 at 10,000. Top-K is constant at any base size, and
-K=20 caught 108 of 124 actionable pairs at a fixed 100 pairs per note. **This is the one that will
-have to be built** — not because the floor is wrong, but because it stops working somewhere
-between here and a base ten times this size.
+**A two-tier floor** — a high threshold at insert time for a fast answer, a low one in a
+background sweep for completeness. Moot now that there is no threshold at all, and it was already
+weak: the fast pass caught a minority (17 of 48 actionable pairs at 0.75), so its value would have
+been "don't let an agent write something obviously contradictory unnoticed", not completeness.
 
-**A two-tier floor** — a high one at insert time for a fast answer, a low one in a background
-sweep for completeness. The fast pass catches a minority (17 of 48 actionable pairs at 0.75), so
-its value would be "don't let an agent write something obviously contradictory unnoticed", not
-completeness. One floor is simpler than two.
+(**Top-K neighbours** was the other entry here, described as "the one that will have to be built".
+It has been — see [neighbour selection](#neighbour-selection-top-k-and-the-floor-that-used-to-be-here).)
 
 **Gaps are accepted.** Some pairs will never surface, usually because the same real subject was
 framed two different ways in two notes. That is a decision, not a defect: the base does not

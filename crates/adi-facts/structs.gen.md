@@ -4,15 +4,15 @@
 
 > The fact base: plain sentences an agent can write in bulk, with a derivation graph that makes anything built on a changed fact go stale. Pure library — `adi-mono facts` is its CLI.
 
-22 structs · 3 enums · 1 type alias across 8 files.
+25 structs · 4 enums · 1 type alias across 8 files.
 
 ## Index
 
 - [`src/db.rs`](#srcdbrs) — `Db`, `Candidate`
 - [`src/embed.rs`](#srcembedrs) — `OllamaEmbedder`
 - [`src/error.rs`](#srcerrorrs) — `Error`, `Result`
-- [`src/judge.rs`](#srcjudgers) — `Relation`, `Judgement`, `JudgeError`, `OllamaJudge`, `NoJudge`
-- [`src/lib.rs`](#srclibrs) — `FactStore`, `Pair`
+- [`src/judge.rs`](#srcjudgers) — `Relation`, `Side`, `Judgement`, `JudgeError`, `OllamaJudge`, `NoJudge`
+- [`src/lib.rs`](#srclibrs) — `Incoming`, `FactStore`, `Other`, `Pair`, `Provenance`
 - [`src/model.rs`](#srcmodelrs) — `Fact`, `Stale`, `Neighbour`, `Verdict`, `Pending`, `Staging`, `Truncation`, `Committed`, `Event`, `Reference`
 - [`src/ollama.rs`](#srcollamars) — `OllamaError`, `Ollama`
 - [`src/tests.rs`](#srctestsrs) — `StubJudge`, `UnreachableJudge`
@@ -94,6 +94,10 @@ pub enum Error {
     },
     #[error("no such fact: {0}")]
     NoSuchFact(String),
+    #[error("--from {0} is neither a fact id nor #N for a fact staged in this batch")]
+    BadSource(String),
+    #[error( "--from {0} names a fact this transaction dropped, so there is nothing to derive from. \ Re-run `tx show` and pick a source that is still staged." )]
+    SourceDropped(String),
     #[error( "merge needs --fact: the one sentence that says what both say.\n left: {left}\n right: {right}" )]
     MergeNeedsFact {
         left: String,
@@ -161,6 +165,20 @@ pub enum Relation {
 }
 ```
 
+### struct `Side`
+
+One side of a pair, with the provenance the classifier needs to read it correctly.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Side<'a> {
+    pub fact: &'a str,
+    pub author: &'a str,
+    pub creator: &'a str,
+    pub kind: &'a str,
+}
+```
+
 ### struct `Judgement`
 
 One classified pair: what it is, and why in the model's own words.
@@ -208,6 +226,20 @@ pub struct NoJudge;
 
 ## `src/lib.rs`
 
+### struct `Incoming`
+
+Who is writing a batch, what it was derived from, and what it becomes.
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Incoming {
+    pub author: String,
+    pub creator: String,
+    pub sources: Vec<String>,
+    pub kind: String,
+}
+```
+
 ### struct `FactStore`
 
 The fact store: bases, the facts in them, and the graph over them.
@@ -219,8 +251,20 @@ pub struct FactStore {
     reader: Reader,
     embedder: EmbedderSlot,
     judge: Arc<dyn Judge>,
-    floor: f32,
+    top_k: usize,
     max_pending: usize,
+}
+```
+
+### enum `Other`
+
+The far side of a candidate pair: a node already in the base, or a sibling in this batch.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Other {
+    Base(usize),
+    Staged(usize),
 }
 ```
 
@@ -236,7 +280,22 @@ struct Pair {
     base_seq: Option<i64>,
     strength: f32,
     left: String,
+    left_by: Provenance,
     right: String,
+    right_by: Provenance,
+}
+```
+
+### struct `Provenance`
+
+Who a sentence belongs to, owned — a `Side` borrows from this and from the text beside it.
+
+```rust
+#[derive(Debug, Clone)]
+struct Provenance {
+    author: String,
+    creator: String,
+    kind: String,
 }
 ```
 
@@ -360,6 +419,7 @@ What committing a transaction did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Committed {
     pub added: Vec<(String, String)>,
+    pub linked: usize,
     pub rewritten: Vec<String>,
     pub dropped: usize,
 }

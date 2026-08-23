@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-4 structs · 21 enums across 16 files.
+4 structs · 22 enums across 16 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/db.rs`](#srcdbrs) — `DbCommand`
 - [`src/dns.rs`](#srcdnsrs) — `DnsCommand`
 - [`src/events.rs`](#srceventsrs) — `EventsCommand`
-- [`src/facts.rs`](#srcfactsrs) — `FactsCommand`, `TxCommand`
+- [`src/facts.rs`](#srcfactsrs) — `FactsCommand`, `LlmCommand`, `TxCommand`
 - [`src/goals.rs`](#srcgoalsrs) — `GoalsCommand`
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
@@ -379,6 +379,10 @@ pub(crate) enum FactsCommand {
         text: bool,
         #[arg(long)]
         note_id: Option<String>,
+        #[arg(long = "from")]
+        from: Vec<String>,
+        #[arg(long, default_value = KIND_FACT, value_parser = [KIND_FACT, KIND_ARTIFACT])]
+        kind: String,
     },
     Tx {
         #[command(subcommand)]
@@ -387,6 +391,15 @@ pub(crate) enum FactsCommand {
     Stale,
     Refresh {
         id: String,
+    },
+    Search {
+        query: String,
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+    },
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
     },
     Near {
         id: String,
@@ -407,10 +420,24 @@ pub(crate) enum FactsCommand {
         author: String,
         #[arg(long, default_value = "agent:unknown")]
         creator: String,
-        #[arg(long, default_value = "artifact")]
+        #[arg(long, default_value = KIND_ARTIFACT, value_parser = [KIND_FACT, KIND_ARTIFACT])]
         kind: String,
     },
     Bases,
+    #[command(disable_help_subcommand = true)]
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
+    },
+}
+```
+
+### enum `LlmCommand`
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum LlmCommand {
+    Help,
 }
 ```
 

@@ -15,10 +15,83 @@
 
 use std::io::Read as _;
 
-use adi_facts::{BaseId, FactStore, Verdict, render};
+use adi_facts::{BaseId, FactStore, Incoming, KIND_ARTIFACT, KIND_FACT, Verdict, render};
 use clap::Subcommand;
 
 use crate::reader::reader_for;
+
+/// What an agent is told about this tool, folded into its system prompt on every turn.
+///
+/// `adi-tools` captures this by running `facts llm help` and caps it at 3,000 characters, so
+/// every sentence here displaces something else the agent was going to be told. The order is
+/// deliberate and it is the order a caller needs things in: what to write, how the session ends,
+/// which verdict fits, and the one rule that prevents damage.
+///
+/// It is instructions, not rationale. **Why** the design is like this belongs in `docs/facts.md`
+/// and in the code; an agent that has read a paragraph of justification has spent context and
+/// learned nothing it can act on. The examples do the teaching — a bad example teaches faster
+/// than a rule, which is why two of them are here and the corresponding rules are not.
+const LLM_HELP: &str = r"adi-facts — record what somebody said as plain sentences, and keep what you
+build on them honest.
+
+A FACT IS ONE SENTENCE THAT STANDS ALONE
+  Write it as you would tell someone who was not there. Put negation inside the
+  sentence. One fact per line on stdin; send fifty at once if you have them.
+    good:  We do not support the CIS.
+    bad:   that direction is fine  (a pointer nobody can resolve later)
+           run the marketer again  (an instruction, not a fact)
+
+SEARCH FIRST, THEN WRITE ONLY WHAT IS NEW
+  $ adi-facts search 'pricing in China' --top 5
+  0.812  f_9c1  China pricing is per seat, not per workspace.
+  Everything you add is compared against the whole base and every near pair comes
+  back for you to rule on by hand. Asking first is how you avoid a queue you then
+  work through. No id needed, no cut-off: weak matches show with their score.
+
+A SESSION
+  $ printf '%s\n' 'We support all countries.' 'We do not support the CIS.' \
+      | adi-facts add --author igor --creator agent:chat@1
+  tx_1a02d2f  2 staged, 1 to decide
+
+  [p0] 0.583  controversy
+    new   #0   We support all countries.
+    base  #1   We do not support the CIS.
+
+  $ adi-facts tx resolve tx_1a02d2f 0 --verdict coexist --confirmer igor
+  $ adi-facts tx commit tx_1a02d2f
+
+  NOTHING IS IN THE BASE UNTIL commit; commit refuses while a pair is open.
+  'base' is the pair's other side: '#N' if new here too, else a committed id.
+
+VERDICTS  (one per pair, then commit)
+  coexist             both are true — you are CONFIRMING that, not dismissing it
+  drop                the new fact is wrong or already known; the base was right
+  merge --fact '...'  they say the same thing; your sentence replaces both
+  supersede --keep ID one wins; ID is '#N' (a new fact) or the base id shown
+  merge and supersede rewrite the loser; what was built on it goes stale.
+
+NEVER GUESS A VERDICT. If a pair is genuinely unclear, run `adi-facts tx abort TX`
+and tell the person which pair you could not decide. A wrong verdict silently
+deletes or keeps the wrong sentence; an abort costs nothing.
+
+--author IS NOT --creator
+  --author is whose meaning it is; --creator is who wrote it down. Recording what
+  a person said is --author <person> --creator <you>; backwards, every record is
+  filed as your own opinion.
+
+A CONCLUSION YOU DREW FROM FACTS
+  $ adi-facts derive --from f_9c1 --from f_9c2 \
+      --fact 'Market entry plan: skip China.' --creator agent:planner@1
+  Reviewed like any other write. --from is what makes `adi-facts stale` report the
+  conclusion when a fact under it later changes. Works on `add` too.
+
+READING
+  adi-facts list        every fact, most recently changed first
+  adi-facts stale       what is out of date, and which fact changed under it
+  adi-facts near ID     the facts closest to one you already have
+  adi-facts get ID@2    what a fact says now, and what changed since version 2
+  --base ID             default global/default; also project:<id>/… agent:<n>/…
+";
 
 /// The base a command works on when nothing names one.
 const DEFAULT_BASE: &str = "global/default";
@@ -46,6 +119,18 @@ pub(crate) enum FactsCommand {
         /// Id for the stored source note. Default: generated.
         #[arg(long)]
         note_id: Option<String>,
+        /// A fact this batch was derived from — a fact id, or `#N` for a fact in this same
+        /// batch. Repeat for more.
+        ///
+        /// Applies to the whole batch. Every fact that lands gets an edge from every source, so
+        /// it goes stale the moment any of them moves. Two conclusions from two different source
+        /// sets are two calls.
+        #[arg(long = "from")]
+        from: Vec<String>,
+        /// What these become: `fact` for something stated, `artifact` for something derived and
+        /// regenerable.
+        #[arg(long, default_value = KIND_FACT, value_parser = [KIND_FACT, KIND_ARTIFACT])]
+        kind: String,
     },
     /// Work a staged transaction: show, resolve, commit, abort.
     Tx {
@@ -59,7 +144,27 @@ pub(crate) enum FactsCommand {
         /// The node that was regenerated.
         id: String,
     },
+    /// Find facts by meaning. **Run this before `add`.**
+    ///
+    /// No id needed: every fact is ranked and the best come back with their scores, so a weak
+    /// match is shown rather than hidden. Asking what the base already knows before writing is
+    /// how you avoid staging something it already holds — and a pair you never created is a pair
+    /// nobody has to rule on.
+    Search {
+        /// What you are looking for, in words.
+        query: String,
+        #[arg(long, default_value_t = 10)]
+        top: usize,
+    },
+    /// Every fact in the base, most recently changed first.
+    List {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+    },
     /// Facts close to this one, for a verifier to work through.
+    ///
+    /// Unlike `search`, this starts from an id you already have — it walks the queue around one
+    /// fact rather than answering a question in words.
     Near {
         /// The fact to look around.
         id: String,
@@ -74,7 +179,12 @@ pub(crate) enum FactsCommand {
         #[arg(long)]
         full: bool,
     },
-    /// Record something built *on* facts — a plan, a summary — so it goes stale when they move.
+    /// Record something built *on* facts — a plan, a summary, a conclusion — so it goes stale
+    /// when they move.
+    ///
+    /// Exactly `add --from … --kind artifact` with the sentence given as a flag instead of on
+    /// stdin, for a caller that has one conclusion and no stdin to spare. It stages, ranks, and
+    /// waits for a verdict like any other write; there is no second way into the base.
     Derive {
         /// A fact this was built from. Repeat for more.
         #[arg(long = "from", required = true)]
@@ -87,11 +197,27 @@ pub(crate) enum FactsCommand {
         #[arg(long, default_value = "agent:unknown")]
         creator: String,
         /// `artifact` for something regenerated, `fact` for something stated.
-        #[arg(long, default_value = "artifact")]
+        #[arg(long, default_value = KIND_ARTIFACT, value_parser = [KIND_FACT, KIND_ARTIFACT])]
         kind: String,
     },
     /// List fact bases. Only the ones the caller may read are shown.
     Bases,
+    /// Help written for a language model rather than for a person.
+    ///
+    // `disable_help_subcommand`: clap generates a `help` subcommand for anything that has
+    // subcommands, which collides with the `help` this group exists to provide. `adi-tools`
+    // captures a tool by running `llm help`, so that name is not ours to move.
+    #[command(disable_help_subcommand = true)]
+    Llm {
+        #[command(subcommand)]
+        command: LlmCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum LlmCommand {
+    /// Everything an agent needs to use this tool correctly, and nothing else.
+    Help,
 }
 
 #[derive(Debug, Subcommand)]
@@ -154,7 +280,18 @@ pub(crate) fn run_facts(
     };
     let id = parse_base(base)?;
 
+    // Answered before anything opens the store: `adi-tools` captures this on every agent launch
+    // with a three-second budget, and a base that cannot be opened must not cost it that.
+    if let FactsCommand::Llm {
+        command: LlmCommand::Help,
+    } = command
+    {
+        print!("{LLM_HELP}");
+        return Ok(());
+    }
+
     match command {
+        FactsCommand::Llm { .. } => unreachable!("answered above, before the store is opened"),
         FactsCommand::Bases => {
             let bases = store.list_bases(None);
             if bases.is_empty() {
@@ -170,14 +307,22 @@ pub(crate) fn run_facts(
             creator,
             text,
             note_id,
+            from,
+            kind,
         } => {
             let raw = read_stdin()?;
+            let incoming = Incoming {
+                author,
+                creator,
+                sources: from,
+                kind,
+            };
             // `add` is the only command that creates a base: anything else opening one on demand
             // would turn a mistyped base id into an empty base and an answer of "nothing here".
             store.ensure_base(&id).map_err(err)?;
             let staging = if text {
                 store
-                    .add_note(&id, &author, &creator, &raw, note_id.as_deref())
+                    .add_note(&id, &incoming, &raw, note_id.as_deref())
                     .map_err(err)?
             } else {
                 let facts: Vec<String> = raw
@@ -189,12 +334,21 @@ pub(crate) fn run_facts(
                 if facts.is_empty() {
                     return Err("nothing on stdin: one fact per line, or --text for a note".into());
                 }
-                store.add(&id, &author, &creator, facts).map_err(err)?
+                store.add(&id, &incoming, facts).map_err(err)?
             };
             println!("{}", render::staging(&staging));
         }
         FactsCommand::Tx { command } => run_tx(&store, &id, command)?,
         FactsCommand::Stale => println!("{}", render::stale(&store.stale(&id).map_err(err)?)),
+        FactsCommand::Search { query, top } => {
+            println!(
+                "{}",
+                render::search(&store.search(&id, &query, top).map_err(err)?)
+            );
+        }
+        FactsCommand::List { limit } => {
+            println!("{}", render::list(&store.list(&id, limit).map_err(err)?));
+        }
         FactsCommand::Refresh { id: node } => {
             store.refresh(&id, &node).map_err(err)?;
             println!("{node} refreshed");
@@ -213,10 +367,15 @@ pub(crate) fn run_facts(
             creator,
             kind,
         } => {
-            let node = store
-                .derive(&id, &from, &fact, &author, &creator, &kind)
-                .map_err(err)?;
-            println!("{node}  derived from {}", from.join(", "));
+            store.ensure_base(&id).map_err(err)?;
+            let incoming = Incoming {
+                author,
+                creator,
+                sources: from,
+                kind,
+            };
+            let staging = store.add(&id, &incoming, vec![fact]).map_err(err)?;
+            println!("{}", render::staging(&staging));
         }
     }
     Ok(())
@@ -306,6 +465,52 @@ mod tests {
             .command
     }
 
+    /// `adi-tools` caps a captured help at 3,000 characters and folds it into the agent's system
+    /// prompt on **every turn**, so this is both a hard limit and a running cost. Pinned because
+    /// the failure is invisible: nothing errors, the agent is just silently told less than it
+    /// needs — and the tail is what gets cut, which is where `--from` and the reading commands
+    /// are.
+    #[test]
+    fn the_llm_help_fits_what_an_agent_is_actually_given() {
+        const MAX_HELP_CHARS: usize = 3_000;
+        assert!(
+            LLM_HELP.len() <= MAX_HELP_CHARS,
+            "{} chars, cap is {MAX_HELP_CHARS}",
+            LLM_HELP.len()
+        );
+
+        // The six things an agent cannot work the tool without. A rewrite that drops one of these
+        // is the regression this test exists to catch.
+        for needle in [
+            "One fact per line",          // what to send
+            "NOTHING IS IN THE BASE UNTIL commit",
+            "coexist",
+            "supersede --keep",
+            "NEVER GUESS A VERDICT",
+            "--from",                     // provenance, and what makes staleness work
+            "--author",
+            "--creator",
+        ] {
+            assert!(
+                LLM_HELP.contains(needle),
+                "the agent is never told about {needle:?}"
+            );
+        }
+    }
+
+    /// It is reachable as `facts llm help` — the first form `adi-tools` tries. Clap generates its
+    /// own `help` subcommand for anything with subcommands, which collides with this one, so the
+    /// wiring is load-bearing rather than incidental.
+    #[test]
+    fn llm_help_is_reachable_under_the_name_the_capture_uses() {
+        assert!(matches!(
+            parse(&["llm", "help"]),
+            FactsCommand::Llm {
+                command: LlmCommand::Help
+            }
+        ));
+    }
+
     #[test]
     fn the_group_is_well_formed() {
         use clap::CommandFactory as _;
@@ -319,6 +524,7 @@ mod tests {
             creator,
             text,
             note_id,
+            ..
         } = parse(&["add", "--author", "igor", "--creator", "agent:chat@1"])
         else {
             panic!("expected add");
@@ -357,6 +563,28 @@ mod tests {
         assert_eq!(verdict.parse::<Verdict>().expect("verdict"), Verdict::Supersede);
         assert_eq!(keep.as_deref(), Some("#0"));
         assert_eq!(confirmer, "agent:verifier@3");
+    }
+
+    /// `--from` is repeatable and applies to the whole batch — per-line sources were considered
+    /// and rejected, because one plain sentence per line is a deliberate property of the format.
+    #[test]
+    fn adding_takes_repeated_sources_and_a_kind() {
+        let FactsCommand::Add { from, kind, .. } = parse(&[
+            "add", "--from", "f_abc", "--from", "#0", "--kind", "artifact",
+        ]) else {
+            panic!("expected add");
+        };
+        assert_eq!(from, vec!["f_abc", "#0"]);
+        assert_eq!(kind, KIND_ARTIFACT);
+
+        let FactsCommand::Add { from, kind, .. } = parse(&["add"]) else {
+            panic!("expected add");
+        };
+        assert!(from.is_empty(), "a batch derived from nothing is the common case");
+        assert_eq!(kind, KIND_FACT);
+
+        // A kind nobody defined is refused before the base is opened.
+        assert!(Harness::try_parse_from(["facts", "add", "--kind", "composed"]).is_err());
     }
 
     #[test]

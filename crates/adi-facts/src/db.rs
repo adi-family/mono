@@ -57,6 +57,7 @@ impl Db {
         let conn = Connection::open(path)?;
         conn.execute_batch(PRAGMAS)?;
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -70,15 +71,35 @@ impl Db {
 
     // ------------------------------------------------------------------ nodes
 
-    /// Every node, id and sentence — what a new fact is compared against.
+    /// Every node, with the provenance a classifier needs to read it.
     ///
     /// Every kind, not only `fact`. A derived artifact is a node, so a new fact is checked
     /// against it too; that is how "we can support China" surfaced against a plan that said
     /// "skip China for now" (`CLI.md`).
-    pub(crate) fn nodes(&self) -> Result<Vec<(String, String)>> {
+    ///
+    /// Read through `facts_v` rather than `nodes`, so the author and creator come back as names
+    /// rather than as the integers they are interned to.
+    pub(crate) fn nodes(&self) -> Result<Vec<Fact>> {
         let conn = self.conn()?;
-        let mut stmt = conn.prepare("select id, fact from nodes order by id")?;
-        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        let mut stmt = conn.prepare(
+            "select id, fact, author, creator, version, updated_at, kind from facts_v order by id",
+        )?;
+        let rows = stmt.query_map([], row_to_fact)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Every fact in the base, most recently touched first.
+    ///
+    /// What `facts list` prints. Separate from [`nodes`](Self::nodes) because it is a person's
+    /// question rather than the pair scan's: newest first is the order somebody reading wants,
+    /// and a cap keeps a large base from filling a terminal.
+    pub(crate) fn list(&self, limit: usize) -> Result<Vec<Fact>> {
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "select id, fact, author, creator, version, updated_at, kind from facts_v
+             order by updated_at desc, id limit ?1",
+        )?;
+        let rows = stmt.query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], row_to_fact)?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -89,43 +110,6 @@ impl Db {
             .prepare("select id, fact, author, creator, version, updated_at, kind from facts_v where id = ?1")?
             .query_row(params![id], row_to_fact)
             .optional()?)
-    }
-
-    /// A node derived from `sources`, stamped at the version each of them is at right now.
-    pub(crate) fn derive(
-        &self,
-        id: &str,
-        fact: &str,
-        author: &str,
-        creator: &str,
-        kind: &str,
-        sources: &[String],
-    ) -> Result<()> {
-        let mut conn = self.conn()?;
-        let tx = conn.transaction()?;
-        for source in sources {
-            if node_version(&tx, source)?.is_none() {
-                return Err(Error::NoSuchFact(source.clone()));
-            }
-        }
-        let (author, creator) = (actor(&tx, author)?, actor(&tx, creator)?);
-        let now = now_ms();
-        tx.execute(
-            "insert into nodes (id, fact, author, creator, version, updated_at, kind)
-             values (?1, ?2, ?3, ?4, 1, ?5, ?6)",
-            params![id, fact, author, creator, now, kind],
-        )?;
-        for source in sources {
-            let version = node_version(&tx, source)?.unwrap_or(1);
-            tx.execute(
-                "insert or replace into edges (src, dst, src_version, created_at)
-                 values (?1, ?2, ?3, ?4)",
-                params![source, id, version, now],
-            )?;
-        }
-        log(&tx, id, 1, "derived", "", fact, &sources.join(", "), None, "")?;
-        tx.commit()?;
-        Ok(())
     }
 
     // ------------------------------------------------------------------ graph
@@ -216,8 +200,17 @@ impl Db {
 
     // ------------------------------------------------------------ transactions
 
-    /// Stage a batch of facts under a fresh transaction, with the note they came from when
-    /// there was one.
+    /// Stage a batch of facts under a fresh transaction: the note they came from when there was
+    /// one, what they were derived from, and what kind of node they become.
+    ///
+    /// `sources` are checked here so a typo costs nothing — the caller finds out before the
+    /// batch is embedded and classified — and checked **again** at commit, because the base can
+    /// move while a transaction is open.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per thing a batch carries into the base — who, what, from where, \
+                  as what. A struct here would be `Incoming` again, one layer down."
+    )]
     pub(crate) fn stage(
         &self,
         tx_id: &str,
@@ -225,9 +218,14 @@ impl Db {
         creator: &str,
         note: Option<(&str, &str)>,
         facts: &[String],
+        sources: &[String],
+        kind: &str,
     ) -> Result<()> {
         let mut conn = self.conn()?;
         let tx = conn.transaction()?;
+        for source in sources {
+            resolve_source(&tx, source, facts.len(), None)?;
+        }
         let (author_id, creator_id) = (actor(&tx, author)?, actor(&tx, creator)?);
         let now = now_ms();
         if let Some((note_id, text)) = note {
@@ -237,14 +235,20 @@ impl Db {
             )?;
         }
         tx.execute(
-            "insert into transactions (id, state, author, creator, note_id, created_at)
-             values (?1, 'needs_review', ?2, ?3, ?4, ?5)",
-            params![tx_id, author_id, creator_id, note.map(|(id, _)| id), now],
+            "insert into transactions (id, state, author, creator, note_id, kind, created_at)
+             values (?1, 'needs_review', ?2, ?3, ?4, ?5, ?6)",
+            params![tx_id, author_id, creator_id, note.map(|(id, _)| id), kind, now],
         )?;
         for (seq, fact) in facts.iter().enumerate() {
             tx.execute(
                 "insert into staged (tx, seq, fact) values (?1, ?2, ?3)",
                 params![tx_id, i64::try_from(seq).unwrap_or(0), fact],
+            )?;
+        }
+        for source in sources {
+            tx.execute(
+                "insert or ignore into tx_sources (tx, src) values (?1, ?2)",
+                params![tx_id, source],
             )?;
         }
         tx.commit()?;
@@ -447,11 +451,16 @@ impl Db {
             });
         }
 
-        let (author, creator, note_id): (i64, i64, Option<String>) = tx.query_row(
-            "select author, creator, note_id from transactions where id = ?1",
+        let (author, creator, note_id, kind): (i64, i64, Option<String>, String) = tx.query_row(
+            "select author, creator, note_id, kind from transactions where id = ?1",
             params![tx_id],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )?;
+        let sources: Vec<String> = {
+            let mut stmt = tx.prepare("select src from tx_sources where tx = ?1 order by src")?;
+            let rows = stmt.query_map(params![tx_id], |r| r.get(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
 
         // A base fact is rewritten in place when the incoming one wins: always for `merge`
         // (which supplies the sentence), and for `supersede` only when the winner was the
@@ -567,37 +576,77 @@ impl Db {
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
 
-        let mut added = Vec::new();
+        // Nodes first, edges second, in two passes. A `#N` source names a fact staged in this
+        // same batch, so its id does not exist until every row has been inserted.
+        let mut added: Vec<(String, String)> = Vec::new();
+        let mut ids_by_seq: Vec<(i64, String)> = Vec::new();
         for (seq, fact) in rows {
-            let id = fresh_id(&tx, seq)?;
+            let id = fresh_id(&tx, seq, &kind)?;
             let now = now_ms();
             tx.execute(
-                "insert into nodes (id, fact, author, creator, version, updated_at)
-                 values (?1, ?2, ?3, ?4, 1, ?5)",
-                params![id, fact, author, creator, now],
+                "insert into nodes (id, fact, author, creator, version, updated_at, kind)
+                 values (?1, ?2, ?3, ?4, 1, ?5, ?6)",
+                params![id, fact, author, creator, now, &kind],
             )?;
-            log(&tx, &id, 1, "created", "", &fact, "", Some(creator), tx_id)?;
-            if let Some(note_id) = &note_id {
-                // The note is a node so that editing it makes every fact drawn from it stale —
-                // the same mechanism, with no special case for "came from prose".
-                tx.execute(
-                    "insert or ignore into nodes (id, fact, author, creator, version, updated_at, kind)
-                     values (?1, '(source note)', ?2, ?3, 1, ?4, 'note')",
-                    params![note_id, author, creator, now],
-                )?;
-                let version = node_version(&tx, note_id)?.unwrap_or(1);
-                tx.execute(
-                    "insert or replace into edges (src, dst, src_version, created_at)
-                     values (?1, ?2, ?3, ?4)",
-                    params![note_id, id, version, now],
-                )?;
-            }
+            log(
+                &tx,
+                &id,
+                1,
+                "created",
+                "",
+                &fact,
+                &sources.join(", "),
+                Some(creator),
+                tx_id,
+            )?;
             for (winner, lost, verdict, confirmer) in &absorbed {
                 if *winner == seq {
                     log(&tx, &id, 1, "absorbed", lost, &fact, verdict, *confirmer, tx_id)?;
                 }
             }
+            ids_by_seq.push((seq, id.clone()));
             added.push((id, fact));
+        }
+
+        // Every edge is stamped with its source's version **as of now**, not as of staging. A
+        // source that moved while the transaction was open would otherwise be recorded at the
+        // version it had when the caller started typing, and the derived node would be born
+        // claiming to be current when it never saw that text.
+        let now = now_ms();
+        if let Some(note_id) = &note_id {
+            // The note is a node so that editing it makes every fact drawn from it stale — the
+            // same mechanism as `--from`, with no special case for "came from prose".
+            tx.execute(
+                "insert or ignore into nodes (id, fact, author, creator, version, updated_at, kind)
+                 values (?1, '(source note)', ?2, ?3, 1, ?4, 'note')",
+                params![note_id, author, creator, now],
+            )?;
+        }
+        let mut linked = 0usize;
+        for (_, dst) in &ids_by_seq {
+            let mut srcs: Vec<String> = Vec::new();
+            if let Some(note_id) = &note_id {
+                srcs.push(note_id.clone());
+            }
+            for source in &sources {
+                srcs.push(resolve_source(&tx, source, 0, Some(&ids_by_seq))?);
+            }
+            for src in srcs {
+                // A node never derives from itself. `--from #0` on a batch that includes #0 is
+                // the readable way to say "everything else here follows from that one", so the
+                // self-edge is skipped rather than made an error.
+                if &src == dst {
+                    continue;
+                }
+                let version = node_version(&tx, &src)?
+                    .ok_or_else(|| Error::NoSuchFact(src.clone()))?;
+                tx.execute(
+                    "insert or replace into edges (src, dst, src_version, created_at)
+                     values (?1, ?2, ?3, ?4)",
+                    params![src, dst, version, now],
+                )?;
+                linked += 1;
+            }
         }
 
         let dropped: i64 = tx.query_row(
@@ -612,6 +661,7 @@ impl Db {
         tx.commit()?;
         Ok(Committed {
             added,
+            linked,
             rewritten,
             dropped: usize::try_from(dropped).unwrap_or(0),
         })
@@ -650,12 +700,15 @@ impl Db {
     }
 }
 
-/// Rank every other node against `vector`, keeping what clears `floor`.
+/// Rank every other node against `vector`, best first.
+///
+/// Nothing is dropped for scoring low. Both callers take a top-N slice of the result, which is
+/// what bounds it; a similarity cut-off here would mean an answer of "nothing" whenever the best
+/// the base had to offer happened to sit below some number.
 pub(crate) fn rank(
     mine: &str,
     vector: &[f32],
     others: &[(String, String, Vec<f32>)],
-    floor: f32,
 ) -> Vec<Neighbour> {
     let mut out: Vec<Neighbour> = others
         .iter()
@@ -665,7 +718,6 @@ pub(crate) fn rank(
             fact: fact.clone(),
             strength: adi_knowledge::backend::cosine(vector, v),
         })
-        .filter(|n| n.strength >= floor)
         .collect();
     out.sort_by(|a, b| {
         b.strength
@@ -716,6 +768,63 @@ fn actor(tx: &Transaction<'_>, name: &str) -> Result<i64> {
     Ok(tx.last_insert_rowid())
 }
 
+/// Turn one `--from` argument into the node id its edge will point at.
+///
+/// Two forms, and both can go wrong quietly if nobody checks:
+///
+/// * a **committed id**, which must exist — a typo would otherwise write no edge at all, and a
+///   derived node with a missing edge is one that never goes stale. That is the failure this
+///   whole design exists to prevent, arriving as silence;
+/// * **`#N`**, a fact staged in this same batch. `staged` is `Some` at commit, when every
+///   surviving row has an id; `None` at staging, when the only thing checkable is that `N` is in
+///   range. A `#N` that was dropped by a verdict has no id to point at, and saying so is the
+///   difference between a refused commit and a dangling edge.
+fn resolve_source(
+    tx: &Transaction<'_>,
+    source: &str,
+    staged_len: usize,
+    staged: Option<&[(i64, String)]>,
+) -> Result<String> {
+    let Some(n) = source.strip_prefix('#') else {
+        if node_version(tx, source)?.is_none() {
+            return Err(Error::NoSuchFact(source.to_string()));
+        }
+        return Ok(source.to_string());
+    };
+    let seq: i64 = n
+        .trim()
+        .parse()
+        .map_err(|_| Error::BadSource(source.to_string()))?;
+    let Some(rows) = staged else {
+        if seq < 0 || usize::try_from(seq).unwrap_or(usize::MAX) >= staged_len {
+            return Err(Error::BadSource(source.to_string()));
+        }
+        return Ok(source.to_string());
+    };
+    rows.iter()
+        .find(|(s, _)| *s == seq)
+        .map(|(_, id)| id.clone())
+        .ok_or_else(|| Error::SourceDropped(source.to_string()))
+}
+
+/// Add what `create table if not exists` cannot.
+///
+/// A base created before `--from` existed has a `transactions` table with no `kind` column, and
+/// the schema script will not add one — every later `add` would fail with `no such column` and
+/// no hint about why.
+fn migrate(conn: &Connection) -> Result<()> {
+    let has_kind = conn
+        .prepare("select 1 from pragma_table_info('transactions') where name = 'kind'")?
+        .exists([])?;
+    if !has_kind {
+        conn.execute(
+            "alter table transactions add column kind text not null default 'fact'",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
 fn node_version(tx: &Transaction<'_>, id: &str) -> Result<Option<i64>> {
     Ok(tx
         .prepare("select version from nodes where id = ?1")?
@@ -752,13 +861,15 @@ fn log(
     Ok(())
 }
 
-/// A fact id nothing else has taken.
+/// A node id nothing else has taken.
 ///
-/// `f_<ms>_<seq>` is the prototype's shape and reads well in a reference. The retry is insurance
-/// the prototype did not have: two processes committing in the same millisecond would otherwise
-/// collide on the primary key and fail the whole transaction.
-fn fresh_id(tx: &Transaction<'_>, seq: i64) -> Result<String> {
-    let stem = format!("f_{:x}_{seq}", now_ms());
+/// `f_<ms>_<seq>` is the prototype's shape and reads well in a reference; an artifact gets `d_`
+/// so a stale-report line says at a glance whether a person stated it or an agent derived it.
+/// The retry is insurance the prototype did not have: two processes committing in the same
+/// millisecond would otherwise collide on the primary key and fail the whole transaction.
+fn fresh_id(tx: &Transaction<'_>, seq: i64, kind: &str) -> Result<String> {
+    let prefix = if kind == "artifact" { "d" } else { "f" };
+    let stem = format!("{prefix}_{:x}_{seq}", now_ms());
     for suffix in 0..1000 {
         let candidate = if suffix == 0 {
             stem.clone()

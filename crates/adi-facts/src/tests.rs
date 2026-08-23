@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use adi_config::Config;
 use adi_knowledge::HashEmbedder;
 
-use crate::judge::{Judge, JudgeError, Judgement, Relation};
-use crate::{BaseId, Error, FactStore, Reader, Verdict};
+use crate::judge::{Judge, JudgeError, Judgement, Relation, Side};
+use crate::{BaseId, Error, FactStore, Incoming, Reader, Verdict};
 
 /// A classifier that calls every pair the same thing, and counts what it was asked.
 #[derive(Debug)]
@@ -47,7 +47,7 @@ impl Judge for StubJudge {
             .collect())
     }
 
-    fn classify(&self, pairs: &[(&str, &str)]) -> Result<Vec<Judgement>, JudgeError> {
+    fn classify(&self, pairs: &[(Side<'_>, Side<'_>)]) -> Result<Vec<Judgement>, JudgeError> {
         self.seen.fetch_add(pairs.len(), Ordering::Relaxed);
         Ok(pairs
             .iter()
@@ -73,7 +73,7 @@ impl Judge for UnreachableJudge {
         Err(JudgeError("connection refused".into()))
     }
 
-    fn classify(&self, _pairs: &[(&str, &str)]) -> Result<Vec<Judgement>, JudgeError> {
+    fn classify(&self, _pairs: &[(Side<'_>, Side<'_>)]) -> Result<Vec<Judgement>, JudgeError> {
         Err(JudgeError("connection refused".into()))
     }
 }
@@ -83,8 +83,7 @@ fn store(relation: Relation) -> (tempfile::TempDir, FactStore) {
     let dir = tempfile::tempdir().expect("tempdir");
     let store = FactStore::with_config(Config::with_root(dir.path()))
         .with_embedder(Arc::new(HashEmbedder))
-        .with_judge(StubJudge::new(relation))
-        .with_floor(0.0);
+        .with_judge(StubJudge::new(relation));
     (dir, store)
 }
 
@@ -92,13 +91,17 @@ fn base(id: &str) -> BaseId {
     id.parse().expect("base id")
 }
 
+/// The identities every test writes under, so a call site says what it is testing and not who.
+fn writer() -> Incoming {
+    Incoming::new("igor", "agent:chat@1")
+}
+
 /// Stage facts and commit them with no pair open, for a test that needs a populated base.
 fn seed(store: &FactStore, id: &BaseId, facts: &[&str]) -> Vec<String> {
     let staging = store
         .add(
             id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             facts.iter().map(ToString::to_string).collect(),
         )
         .expect("add");
@@ -122,6 +125,25 @@ fn seed(store: &FactStore, id: &BaseId, facts: &[&str]) -> Vec<String> {
         .into_iter()
         .map(|(id, _)| id)
         .collect()
+}
+
+/// Stage one derived artifact from `sources` and land it, ruling `coexist` on whatever it
+/// raises.
+///
+/// There is no shortcut into the base for this — a derived node goes through exactly the
+/// transaction a stated fact does, which is the point (`a_derived_write_is_checked_like_any_other`).
+fn derive(store: &FactStore, id: &BaseId, sources: &[String], fact: &str) -> String {
+    let incoming = Incoming::new("igor", "agent:planner@1")
+        .from_sources(sources.to_vec())
+        .as_artifact();
+    let staging = store.add(id, &incoming, vec![fact.to_string()]).expect("derive");
+    for pair in staging.open() {
+        store
+            .resolve(id, &staging.tx, pair.pair, Verdict::Coexist, None, None, "igor")
+            .expect("resolve");
+    }
+    let done = store.commit(id, &staging.tx).expect("commit");
+    done.added.first().expect("the artifact landed").0.clone()
 }
 
 // --------------------------------------------------------------------- bases
@@ -150,7 +172,7 @@ fn a_fact_base_is_scoped_exactly_as_a_knowledge_base_is() {
     let reviewer = owner.clone().as_agent("reviewer", None);
     assert!(reviewer.stale(&mine).is_ok(), "another agent may read it");
     let denied = reviewer
-        .add(&mine, "igor", "agent:reviewer@1", vec!["x".into()])
+        .add(&mine, &Incoming::new("igor", "agent:reviewer@1"), vec!["x".into()])
         .unwrap_err();
     assert!(matches!(denied, Error::Denied { .. }), "{denied:?}");
     assert!(denied.to_string().contains("agent:solver/default"), "{denied}");
@@ -177,8 +199,7 @@ fn nothing_is_visible_to_the_base_until_the_transaction_commits() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec!["We support all countries.".into(), "We support all regions.".into()],
         )
         .expect("add");
@@ -200,8 +221,7 @@ fn a_pair_the_classifier_calls_independent_never_reaches_the_queue() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec!["We support Ukraine.".into(), "The office is in Warsaw.".into()],
         )
         .expect("add");
@@ -221,8 +241,7 @@ fn an_unreachable_classifier_surfaces_every_pair_instead_of_dropping_them() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec!["We support all countries.".into(), "We support all regions.".into()],
         )
         .expect("add");
@@ -233,7 +252,7 @@ fn an_unreachable_classifier_surfaces_every_pair_instead_of_dropping_them() {
     // `--text` is the one path that must fail outright: with nothing extracted there is nothing
     // to stage, and an empty transaction would read as "this note said nothing".
     let err = store
-        .add_note(&id, "igor", "agent:chat@1", "some prose", None)
+        .add_note(&id, &writer(), "some prose", None)
         .unwrap_err();
     assert!(matches!(err, Error::Judge(_)), "{err:?}");
     drop(dir);
@@ -251,8 +270,7 @@ fn a_capped_candidate_list_reports_what_it_cut_and_below_what_strength() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec![
                 "We support all countries.".into(),
                 "We support all regions.".into(),
@@ -282,8 +300,7 @@ fn merging_with_a_base_fact_rewrites_it_in_place_and_leaves_no_duplicate() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec!["China is one of our main target markets.".into()],
         )
         .expect("add");
@@ -321,8 +338,7 @@ fn merging_two_facts_from_the_same_batch_retires_the_loser() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec![
                 "China is a great market.".into(),
                 "China is one of the main target markets.".into(),
@@ -371,8 +387,7 @@ fn superseding_two_facts_from_the_same_batch_retires_whichever_side_lost() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec![
                 "We are not sure we can enter the China market.".into(),
                 "We can enter the China market.".into(),
@@ -409,8 +424,7 @@ fn a_keep_that_is_neither_side_fails_and_names_both_valid_answers() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec!["We can support China after all.".into()],
         )
         .expect("add");
@@ -460,7 +474,7 @@ fn dropping_the_incoming_fact_leaves_the_base_as_it_was() {
     seed(&store, &id, &["We do not support the CIS."]);
 
     let staging = store
-        .add(&id, "igor", "agent:chat@1", vec!["We do not support the CIS.".into()])
+        .add(&id, &writer(), vec!["We do not support the CIS.".into()])
         .expect("add");
     let pair = staging.open()[0].pair;
     store
@@ -480,8 +494,7 @@ fn a_verdict_records_who_made_it() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec!["We support all countries.".into(), "We support all regions.".into()],
         )
         .expect("add");
@@ -511,31 +524,23 @@ fn editing_a_fact_makes_what_was_derived_from_it_stale_directly_and_transitively
     let seeded = seed(&store, &id, &["We are not sure we can enter the China market."]);
     let fact = seeded[0].clone();
 
-    let plan = store
-        .derive(
-            &id,
-            std::slice::from_ref(&fact),
-            "Market entry plan: skip China for now.",
-            "igor",
-            "agent:planner@1",
-            "artifact",
-        )
-        .expect("derive");
-    let summary = store
-        .derive(
-            &id,
-            std::slice::from_ref(&plan),
-            "This quarter's plan avoids China.",
-            "igor",
-            "agent:planner@1",
-            "artifact",
-        )
-        .expect("derive");
+    let plan = derive(
+        &store,
+        &id,
+        std::slice::from_ref(&fact),
+        "Market entry plan: skip China for now.",
+    );
+    let summary = derive(
+        &store,
+        &id,
+        std::slice::from_ref(&plan),
+        "This quarter's plan avoids China.",
+    );
     assert!(store.stale(&id).expect("stale").is_empty(), "nothing has moved yet");
 
     // A new fact reverses the old one, and the caller rules that it supersedes it.
     let staging = store
-        .add(&id, "igor", "agent:chat@1", vec!["We can support China after all.".into()])
+        .add(&id, &writer(), vec!["We can support China after all.".into()])
         .expect("add");
     let pair = staging
         .open()
@@ -598,16 +603,12 @@ fn two_edits_under_a_frozen_clock_are_still_two_versions() {
     let id = base("global/default");
     store.ensure_base(&id).expect("ensure");
     let fact = seed(&store, &id, &["The company is incorporated in Delaware."])[0].clone();
-    let dependent = store
-        .derive(
-            &id,
-            std::slice::from_ref(&fact),
-            "Filing plan assumes Delaware.",
-            "igor",
-            "agent:planner@1",
-            "artifact",
-        )
-        .expect("derive");
+    let dependent = derive(
+        &store,
+        &id,
+        std::slice::from_ref(&fact),
+        "Filing plan assumes Delaware.",
+    );
     store.refresh(&id, &dependent).expect("refresh to a clean slate");
 
     let path = store
@@ -647,7 +648,7 @@ fn rewriting_a_fact_in_place_throws_away_the_vector_of_what_it_used_to_say() {
     store.near(&id, &old, 10).expect("near");
 
     let staging = store
-        .add(&id, "igor", "agent:chat@1", vec!["delta epsilon zeta.".into()])
+        .add(&id, &writer(), vec!["delta epsilon zeta.".into()])
         .expect("add");
     let pair = staging.open()[0].clone();
     store
@@ -687,8 +688,7 @@ fn a_note_is_a_node_so_the_facts_drawn_from_it_go_stale_when_it_changes() {
     let staging = store
         .add_note(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             "We do not support the CIS. The office is in Warsaw.",
             Some("note_1"),
         )
@@ -720,8 +720,7 @@ fn a_reference_written_against_an_older_version_is_told_the_fact_has_moved() {
     let staging = store
         .add(
             &id,
-            "igor",
-            "agent:chat@1",
+            &writer(),
             vec!["The company was reincorporated in Nevada.".into()],
         )
         .expect("add");
@@ -792,7 +791,7 @@ fn a_committed_or_aborted_transaction_cannot_be_worked_on_again() {
     store.ensure_base(&id).expect("ensure");
 
     let staging = store
-        .add(&id, "igor", "agent:chat@1", vec!["We support Ukraine.".into()])
+        .add(&id, &writer(), vec!["We support Ukraine.".into()])
         .expect("add");
     store.commit(&id, &staging.tx).expect("commit");
     assert!(matches!(
@@ -801,7 +800,7 @@ fn a_committed_or_aborted_transaction_cannot_be_worked_on_again() {
     ));
 
     let second = store
-        .add(&id, "igor", "agent:chat@1", vec!["The office is in Warsaw.".into()])
+        .add(&id, &writer(), vec!["The office is in Warsaw.".into()])
         .expect("add");
     store.abort(&id, &second.tx).expect("abort");
     assert_eq!(store.count(&id).expect("count"), 1, "an aborted batch lands nothing");
@@ -838,38 +837,24 @@ fn a_reader_who_is_nobody_in_particular_is_the_owner_of_the_store() {
     assert_eq!(scoped.reader().agent.as_deref(), Some("solver"));
 }
 
-/// Reproduce [`DEFAULT_FLOOR`](crate::DEFAULT_FLOOR) against the model it was measured on.
+/// Recall against `golden-flat.json` at a range of K, and a check that the port still compares
+/// the vectors the design was measured with.
 ///
-/// `RESULTS.md` §8 and §9 set every threshold in this design with `nomic-embed-text`, which is
-/// what [`OllamaEmbedder`](crate::embed::OllamaEmbedder) runs — so this is not a re-calibration,
-/// it is a check that the port did not change what the numbers describe. `golden-flat.json` is
-/// the fixture §8 used: 33 extracted facts, 14 hand-labelled related pairs, 528 pairs in all,
-/// and the published result is that all 14 land inside the top 125.
+/// `RESULTS.md` §8 published the ranking result for this fixture with `nomic-embed-text` — 33
+/// extracted facts, 528 pairs, 14 hand-labelled as related, all 14 inside the top 125. That is
+/// what the assertion guards: **a drift there means these are not the design's vectors**, which
+/// matters more than any selection parameter.
 ///
-/// **If this stops reproducing, suspect the port before suspecting the fixture.** A drift here
-/// means the vectors this crate compares are not the vectors the design was measured with, and
-/// that is a more serious finding than any threshold. As of this writing it reproduces exactly:
-/// deepest labelled pair at rank **125 of 528**, median pair 0.456.
+/// The printed table is the reason the test exists in this shape. It used to report what a series
+/// of *floors* admitted; the floor is gone, so it reports what a series of **K** catches.
 ///
-/// # What it also shows: the floor cuts two labelled pairs on this fixture
-///
-/// 12 of the 14 clear 0.55. The two that do not are worth naming, because they are not the same
-/// kind of loss:
-///
-/// * `mkt-04` / `mkt-09` at **0.532** — "India and the post-CIS countries are secondary markets"
-///   against "We do not support the CIS", labelled `supersede` and annotated in the fixture as
-///   *"the hard one"*. This is a genuine finding, and it is the very pair `RESULTS.md` §9 held
-///   up as what flat facts recovered that the structured schema had recorded as unfindable.
-/// * `msh-01` / `msh-03` at **0.520** — labelled `coexist`, "unrelated predicates under one
-///   subject". Losing a `coexist` costs nothing actionable.
-///
-/// So the design's own procedure — find the lowest cosine at which a genuine finding still
-/// appears, set the floor below it — gives 0.55 on the 114-fact live base (§9's sharpest was
-/// 0.551) and about 0.50 on this 33-fact fixture. The floor is corpus-sensitive at exactly the
-/// resolution that decides things, which is more evidence for `DESIGN.md`'s own conclusion that
-/// top-K neighbours will have to replace it. **The floor is left at the design's number**; this
-/// is recorded, not fixed, because fitting a threshold to whichever corpus was measured last is
-/// how a calibration stops meaning anything.
+/// Read it knowing what it cannot show. **This fixture is too small to choose K**: 33 facts means
+/// K=20 already reaches most of the base, so every K from 5 up catches all 14 labelled pairs and
+/// what actually varies is cost — K=5 selects 20% of all pairs, K=30 selects 98%. The knee that
+/// picked K=20 (96 / 108 / 112 actionable at K=10 / 20 / 30) was measured on the 114-fact live
+/// base, which is not in this tree. What this test *does* prove is the ranking underneath: the
+/// deepest labelled pair at rank 125 of 528 is §8's published number, and a drift there means the
+/// vectors are wrong, which is worth more than any parameter.
 ///
 /// Ignored because it needs a local ollama with `nomic-embed-text` pulled.
 #[test]
@@ -879,7 +864,7 @@ fn a_reader_who_is_nobody_in_particular_is_the_owner_of_the_store() {
     reason = "one measurement end to end: read the fixture, embed, rank, report. Every line is \
               part of the number it prints, and splitting it would hide the method."
 )]
-fn the_floor_admits_every_hand_labelled_pair_on_the_measured_corpus() {
+fn top_k_recall_on_the_measured_corpus() {
     use adi_indexer::embed::Embedder;
 
     let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -912,95 +897,609 @@ fn the_floor_admits_every_hand_labelled_pair_on_the_measured_corpus() {
 
     let embedder = crate::embed::OllamaEmbedder::new();
     let texts: Vec<&str> = claims.iter().map(|(_, f)| f.as_str()).collect();
-    let vectors = embedder.embed(&texts).expect("embed — is ollama up and nomic-embed-text pulled?");
+    let vectors = embedder
+        .embed(&texts)
+        .expect("embed — is ollama up and nomic-embed-text pulled?");
 
-    let mut pairs: Vec<(f32, String, String)> = Vec::new();
-    for i in 0..claims.len() {
-        for j in (i + 1)..claims.len() {
-            pairs.push((
-                adi_knowledge::backend::cosine(&vectors[i], &vectors[j]),
-                claims[i].0.clone(),
-                claims[j].0.clone(),
-            ));
-        }
-    }
-    pairs.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-
-    let is_labelled = |a: &str, b: &str| {
-        labelled
-            .iter()
-            .any(|(x, y)| (x == a && y == b) || (x == b && y == a))
-    };
-    let hits: Vec<(usize, f32, String, String)> = pairs
+    let n = claims.len();
+    let sim = |i: usize, j: usize| adi_knowledge::backend::cosine(&vectors[i], &vectors[j]);
+    let index_of = |id: &str| claims.iter().position(|(c, _)| c == id).expect("claim id");
+    let labelled_pairs: Vec<(usize, usize)> = labelled
         .iter()
-        .enumerate()
-        .filter(|(_, (_, a, b))| is_labelled(a, b))
-        .map(|(rank, (s, a, b))| (rank + 1, *s, a.clone(), b.clone()))
+        .map(|(a, b)| (index_of(a), index_of(b)))
         .collect();
 
-    let worst_rank = hits.iter().map(|(r, ..)| *r).max().expect("labelled pairs");
-    let weakest = hits.iter().map(|(_, s, ..)| *s).fold(f32::MAX, f32::min);
-    println!(
-        "{} on golden-flat: {} of {} labelled pairs found; deepest rank {worst_rank} of {}; \
-         weakest labelled cosine {weakest:.3}",
-        embedder.model_name(),
-        hits.len(),
-        labelled.len(),
-        pairs.len(),
-    );
-    for (rank, strength, a, b) in &hits {
-        let cut = if *strength < crate::DEFAULT_FLOOR { "  <- below the floor" } else { "" };
-        println!("  rank {rank:>3}  {strength:.3}  {a} / {b}{cut}");
+    // The §8 result: where the labelled pairs sit in a global ranking of all 528.
+    let mut all: Vec<(f32, usize, usize)> = Vec::new();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            all.push((sim(i, j), i, j));
+        }
     }
-    let median = pairs[pairs.len() / 2].0;
-    println!("  median cosine over all {} pairs: {median:.3}", pairs.len());
-    for floor in [0.50f32, 0.55, 0.60, 0.65, 0.70, 0.75] {
-        let above = pairs.iter().filter(|(s, _, _)| *s >= floor).count();
-        let kept = hits.iter().filter(|(_, s, ..)| *s >= floor).count();
+    all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
+    let deepest = labelled_pairs
+        .iter()
+        .map(|(a, b)| {
+            all.iter()
+                .position(|(_, i, j)| (i, j) == (a, b) || (i, j) == (b, a))
+                .expect("every labelled pair is a pair")
+                + 1
+        })
+        .max()
+        .expect("labelled pairs");
+    println!(
+        "{} on golden-flat: {} labelled pairs, {} pairs in all; deepest labelled at rank {deepest}",
+        embedder.model_name(),
+        labelled.len(),
+        all.len()
+    );
+
+    // Symmetric top-K: a pair is selected when either side holds the other.
+    let top_k_of = |i: usize, k: usize| -> Vec<usize> {
+        let mut ranked: Vec<(f32, usize)> =
+            (0..n).filter(|j| *j != i).map(|j| (sim(i, j), j)).collect();
+        ranked.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap().then_with(|| a.1.cmp(&b.1)));
+        ranked.truncate(k);
+        ranked.into_iter().map(|(_, j)| j).collect()
+    };
+    for k in [5usize, 10, 20, 30] {
+        let neighbours: Vec<Vec<usize>> = (0..n).map(|i| top_k_of(i, k)).collect();
+        let selected = |a: usize, b: usize| neighbours[a].contains(&b) || neighbours[b].contains(&a);
+        let caught = labelled_pairs.iter().filter(|(a, b)| selected(*a, *b)).count();
+        let total: usize = (0..n)
+            .flat_map(|i| ((i + 1)..n).map(move |j| (i, j)))
+            .filter(|(i, j)| selected(*i, *j))
+            .count();
         println!(
-            "  floor {floor:.2}: {above:>3} pairs above ({:>5.1}% of the base), \
-             {kept}/{} labelled pairs kept",
-            100.0 * above as f32 / pairs.len() as f32,
-            labelled.len()
+            "  K={k:<3} {caught}/{} labelled caught, {total} of {} pairs selected ({:.0}%)",
+            labelled.len(),
+            all.len(),
+            100.0 * total as f32 / all.len() as f32
         );
     }
 
-    assert_eq!(hits.len(), labelled.len(), "every labelled pair is a pair");
+    // §8's published result, and the only thing here that is an assertion rather than a report.
+    assert!(
+        deepest <= 150,
+        "RESULTS.md §8 puts all 14 inside the top 125 of 528; the deepest here is {deepest}. \
+         Suspect the port, not the parameter."
+    );
+    // K=20 is the shipped default; on this fixture it must still reach most of the labelled set.
+    let neighbours: Vec<Vec<usize>> = (0..n).map(|i| top_k_of(i, crate::DEFAULT_TOP_K)).collect();
+    let caught = labelled_pairs
+        .iter()
+        .filter(|(a, b)| neighbours[*a].contains(b) || neighbours[*b].contains(a))
+        .count();
+    assert!(
+        caught * 10 >= labelled.len() * 8,
+        "K={} caught only {caught} of {}",
+        crate::DEFAULT_TOP_K,
+        labelled.len()
+    );
+}
 
-    // §8's published result on this fixture with this model, and the reason this test exists: a
-    // ranking that has drifted past it means the vectors this crate compares are not the vectors
-    // the design was measured with, which matters more than any threshold.
+// ------------------------------------------------------- one door into the base
+
+/// The bug this section exists for, inverted into an assertion.
+///
+/// `derive` used to write a node and its edges straight into the base: no transaction, no
+/// neighbour scan, no pair. A conclusion that flatly contradicted a committed fact landed beside
+/// it and nothing said a word — `transactions` and `pending` were untouched. Two doors with
+/// different safety, and an agent that wanted provenance was forced through the unlocked one.
+#[test]
+fn a_derived_write_is_checked_like_any_other_and_cannot_land_unresolved() {
+    let (_dir, store) = store(Relation::Controversy);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    let stated = seed(&store, &id, &["The USA is our main market."])[0].clone();
+
+    let conclusion = Incoming::new("igor", "agent:planner@1")
+        .from_sources(vec![stated.clone()])
+        .as_artifact();
+    let staging = store
+        .add(
+            &id,
+            &conclusion,
+            vec!["The USA is not our market; we focus on the EU.".into()],
+        )
+        .expect("add");
+
+    // The contradiction is raised, not written.
+    let pair = staging
+        .open()
+        .into_iter()
+        .find(|p| p.base_id.as_deref() == Some(stated.as_str()))
+        .expect("the conclusion is checked against the fact it was drawn from")
+        .clone();
+    assert_eq!(pair.kind, "controversy");
+    assert_eq!(store.count(&id).expect("count"), 1, "nothing landed yet");
+
+    // …and it cannot be committed around.
+    let err = store.commit(&id, &staging.tx).unwrap_err();
+    assert!(matches!(err, Error::StillOpen { count: 1, .. }), "{err:?}");
+    assert_eq!(store.count(&id).expect("count"), 1);
+
+    // Ruled on, it lands — with the edge that makes it stale later.
+    store
+        .resolve(&id, &staging.tx, pair.pair, Verdict::Coexist, None, None, "igor")
+        .expect("resolve");
+    let done = store.commit(&id, &staging.tx).expect("commit");
+    assert_eq!(done.added.len(), 1);
+    assert_eq!(done.linked, 1, "one source, one edge");
     assert!(
-        worst_rank <= 150,
-        "RESULTS.md §8 puts all 14 inside the top 125 of 528; the deepest here is {worst_rank}. \
-         Suspect the port, not the threshold."
+        done.added[0].0.starts_with("d_"),
+        "an artifact is named so a stale report says at a glance who wrote it: {}",
+        done.added[0].0
     );
-    // §9's distribution: a fat middle around 0.49, which is what gives the floor something to cut.
-    assert!(
-        (0.40..0.60).contains(&median),
-        "§9 measured a median near 0.49; this base's is {median:.3}"
+}
+
+#[test]
+fn provenance_and_staleness_are_the_same_edge() {
+    let (_dir, store) = store(Relation::Independent);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    let premise = seed(&store, &id, &["The company is incorporated in Delaware."])[0].clone();
+
+    let conclusion = derive(
+        &store,
+        &id,
+        std::slice::from_ref(&premise),
+        "Filing plan assumes Delaware.",
     );
-    let above_floor = pairs
-        .iter()
-        .filter(|(s, _, _)| *s >= crate::DEFAULT_FLOOR)
-        .count();
-    assert!(
-        above_floor * 4 < pairs.len(),
-        "the floor is supposed to spend compute: {above_floor} of {} pairs is not a cut",
-        pairs.len()
-    );
-    // 12 of 14, not 14 of 14 — see this test's doc comment. Pinned so that a change in either
-    // direction is noticed rather than absorbed.
-    let kept = hits
-        .iter()
-        .filter(|(_, s, ..)| *s >= crate::DEFAULT_FLOOR)
-        .count();
+    assert!(store.stale(&id).expect("stale").is_empty());
+
+    // The premise moves; the conclusion drawn from it is out of date, naming what changed.
+    store.refresh(&id, &premise).expect("refresh");
+    let stale = store.stale(&id).expect("stale");
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].id, conclusion);
+    assert_eq!(stale[0].root_cause, premise);
+}
+
+/// A source that moved while the transaction was open must be stamped at the version it has when
+/// the batch lands, not the one it had when the caller started typing — otherwise the derived
+/// node is born claiming to be current against text it never saw.
+#[test]
+fn an_edge_is_stamped_at_the_sources_version_at_commit_not_at_staging() {
+    let (_dir, store) = store(Relation::Independent);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    let premise = seed(&store, &id, &["The company is incorporated in Delaware."])[0].clone();
+
+    let conclusion = Incoming::new("igor", "agent:planner@1")
+        .from_sources(vec![premise.clone()])
+        .as_artifact();
+    let staging = store
+        .add(&id, &conclusion, vec!["Filing plan assumes Delaware.".into()])
+        .expect("add");
+
+    // Somebody edits the premise while this transaction sits open.
+    store.refresh(&id, &premise).expect("refresh");
     assert_eq!(
-        kept, 12,
-        "the floor's cut against this fixture has moved; re-read the two pairs it drops"
+        store.fact(&id, &premise).expect("fact").expect("there").version,
+        2
+    );
+
+    for pair in store.show(&id, &staging.tx).expect("show").open() {
+        store
+            .resolve(&id, &staging.tx, pair.pair, Verdict::Coexist, None, None, "igor")
+            .expect("resolve");
+    }
+    store.commit(&id, &staging.tx).expect("commit");
+
+    // Stamped at v2, so nothing is stale: the plan was written against what the premise says now.
+    assert!(
+        store.stale(&id).expect("stale").is_empty(),
+        "an edge stamped at the staging-time version would report a node stale the moment it landed"
+    );
+    // And it still goes stale on the next edit, which is what proves the edge is live.
+    store.refresh(&id, &premise).expect("refresh");
+    assert_eq!(store.stale(&id).expect("stale").len(), 1);
+}
+
+#[test]
+fn a_from_that_names_nothing_fails_and_says_which_id() {
+    let (_dir, store) = store(Relation::Independent);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    seed(&store, &id, &["The company is incorporated in Delaware."]);
+
+    let bad = Incoming::new("igor", "agent:planner@1").from_sources(vec!["f_typo".into()]);
+    let err = store
+        .add(&id, &bad, vec!["Filing plan assumes Delaware.".into()])
+        .unwrap_err();
+    assert!(matches!(err, Error::NoSuchFact(_)), "{err:?}");
+    assert!(err.to_string().contains("f_typo"), "{err}");
+    // The batch was refused outright, not staged with an edge quietly missing.
+    assert_eq!(store.count(&id).expect("count"), 1);
+
+    // `#N` out of range is the same refusal: there is no such staged fact to derive from.
+    let out_of_range = Incoming::new("igor", "agent:planner@1").from_sources(vec!["#7".into()]);
+    let err = store
+        .add(&id, &out_of_range, vec!["A conclusion.".into()])
+        .unwrap_err();
+    assert!(matches!(err, Error::BadSource(_)), "{err:?}");
+    assert!(err.to_string().contains("#7"), "{err}");
+}
+
+/// `--from #N` names a fact staged in this same batch — how an agent writes premises and the
+/// conclusion drawn from them in one call. If a verdict then throws that premise away, the edge
+/// has nothing to point at, and writing no edge would leave a conclusion that never goes stale.
+#[test]
+fn a_from_pointing_at_a_fact_this_batch_dropped_fails_rather_than_dangling() {
+    let (_dir, store) = store(Relation::Duplicate);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    seed(&store, &id, &["The company is incorporated in Delaware."]);
+
+    let batch = Incoming::new("igor", "agent:planner@1").from_sources(vec!["#0".into()]);
+    let staging = store
+        .add(
+            &id,
+            &batch,
+            vec![
+                "The company is incorporated in Delaware.".into(),
+                "Filing plan assumes Delaware.".into(),
+            ],
+        )
+        .expect("add");
+
+    // Rule the duplicate against the base as a `drop`: the premise never lands.
+    let against_base = staging
+        .open()
+        .into_iter()
+        .find(|p| p.new_seq == 0 && p.base_id.is_some())
+        .expect("#0 duplicates the committed fact")
+        .clone();
+    store
+        .resolve(&id, &staging.tx, against_base.pair, Verdict::Drop, None, None, "igor")
+        .expect("resolve");
+    for pair in store.show(&id, &staging.tx).expect("show").open() {
+        store
+            .resolve(&id, &staging.tx, pair.pair, Verdict::Coexist, None, None, "igor")
+            .expect("resolve");
+    }
+
+    let err = store.commit(&id, &staging.tx).unwrap_err();
+    assert!(matches!(err, Error::SourceDropped(_)), "{err:?}");
+    assert!(err.to_string().contains("#0"), "{err}");
+    assert!(err.to_string().contains("tx show"), "it says what to do next: {err}");
+}
+
+/// A batch that derives from one of its own members: everything else links to it, and it does not
+/// link to itself.
+#[test]
+fn a_fact_never_derives_from_itself() {
+    let (_dir, store) = store(Relation::Independent);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+
+    let batch = Incoming::new("igor", "agent:chat@1").from_sources(vec!["#0".into()]);
+    let staging = store
+        .add(
+            &id,
+            &batch,
+            vec![
+                "The company is incorporated in Delaware.".into(),
+                "Filing plan assumes Delaware.".into(),
+                "The registered agent is in Wilmington.".into(),
+            ],
+        )
+        .expect("add");
+    for pair in staging.open() {
+        store
+            .resolve(&id, &staging.tx, pair.pair, Verdict::Coexist, None, None, "igor")
+            .expect("resolve");
+    }
+    let done = store.commit(&id, &staging.tx).expect("commit");
+    assert_eq!(done.added.len(), 3);
+    assert_eq!(done.linked, 2, "two dependents, and no self-edge");
+
+    let premise = done.added[0].0.clone();
+    store.refresh(&id, &premise).expect("refresh");
+    let stale = store.stale(&id).expect("stale");
+    assert_eq!(stale.len(), 2, "the other two are stale");
+    assert!(
+        !stale.iter().any(|s| s.id == premise),
+        "and the premise did not make itself stale"
+    );
+}
+
+// ------------------------------------------------------------------- reading
+
+/// Neither `search` nor `near` cuts anything for scoring low. An answer of "nothing found" about
+/// a base that plainly holds something closest is not one a caller can act on — and under the old
+/// similarity floor both commands could give it.
+#[test]
+fn search_and_near_answer_with_the_best_the_base_has_however_weak() {
+    let (_dir, store) = store(Relation::Independent);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    seed(
+        &store,
+        &id,
+        &[
+            "China pricing is set per seat.",
+            "Sourdough needs a long cold retard.",
+        ],
+    );
+
+    let hits = store.search(&id, "china pricing", 5).expect("search");
+    assert_eq!(hits.len(), 2, "every fact is ranked, none is cut");
+    assert_eq!(hits[0].fact, "China pricing is set per seat.");
+    assert!(
+        hits[0].strength > hits[1].strength,
+        "and the caller sees the scores, to judge a weak match: {hits:?}"
+    );
+    assert_eq!(store.search(&id, "china pricing", 1).expect("search").len(), 1, "--top caps it");
+
+    // `near` on a fact whose only neighbour is unrelated still answers with that neighbour.
+    let sourdough = &store.list(&id, 10).expect("list")[1];
+    let queue = store.near(&id, &sourdough.id, 5).expect("near");
+    assert_eq!(queue.len(), 1, "the one other fact, whatever it scores: {queue:?}");
+}
+
+#[test]
+fn list_shows_the_whole_base_most_recently_changed_first() {
+    let (_dir, store) = store(Relation::Independent);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    assert!(store.list(&id, 50).expect("list").is_empty());
+
+    seed(&store, &id, &["The first fact.", "The second fact."]);
+    let rows = store.list(&id, 50).expect("list");
+    assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|f| f.version == 1 && f.kind == "fact"));
+    assert_eq!(store.list(&id, 1).expect("list").len(), 1, "the limit is honoured");
+}
+
+/// What a real run got wrong, and could not have got right: shown two sentences and nothing else,
+/// the classifier called a person's statement and an agent's conclusion drawn from it a
+/// `duplicate`. A merge there deletes what somebody actually said.
+#[test]
+fn the_classifier_is_shown_who_said_each_side() {
+    use std::sync::Mutex;
+
+    /// Records the provenance it was handed, so a test can assert the prompt carries it.
+    #[derive(Debug, Default)]
+    struct Recording {
+        seen: Mutex<Vec<(String, String)>>,
+    }
+
+    impl Judge for Recording {
+        #[allow(clippy::unnecessary_literal_bound, reason = "the trait fixes the signature")]
+        fn name(&self) -> &str {
+            "recording"
+        }
+
+        fn extract(&self, _note: &str) -> Result<Vec<String>, JudgeError> {
+            Ok(Vec::new())
+        }
+
+        fn classify(&self, pairs: &[(Side<'_>, Side<'_>)]) -> Result<Vec<Judgement>, JudgeError> {
+            let mut seen = self.seen.lock().expect("lock");
+            for (a, b) in pairs {
+                seen.push((
+                    format!("{}|{}|{}", a.author, a.creator, a.kind),
+                    format!("{}|{}|{}", b.author, b.creator, b.kind),
+                ));
+            }
+            Ok(pairs
+                .iter()
+                .map(|_| Judgement {
+                    relation: Relation::Independent,
+                    why: String::new(),
+                })
+                .collect())
+        }
+    }
+
+    let (_dir, plain) = store(Relation::Independent);
+    let judge = Arc::new(Recording::default());
+    let store = plain.with_judge(judge.clone());
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    seed(&store, &id, &["We are not sure we can enter the China market."]);
+
+    let conclusion = Incoming::new("igor", "agent:planner@1")
+        .from_sources(vec![])
+        .as_artifact();
+    store
+        .add(&id, &conclusion, vec!["We are not sure about the China market.".into()])
+        .expect("add");
+
+    let seen = judge.seen.lock().expect("lock");
+    let pair = seen.first().expect("the near pair reached the classifier");
+    assert_eq!(
+        pair.0, "igor|agent:planner@1|artifact",
+        "the incoming side carries the batch's own provenance"
+    );
+    assert_eq!(
+        pair.1, "igor|agent:chat@1|fact",
+        "and the base side carries its own, read back through facts_v"
+    );
+}
+
+/// The prompt has to *say* what the labels mean, or a model shown them will still judge on
+/// wording alone.
+#[test]
+fn the_classification_prompt_tells_the_model_what_provenance_means() {
+    let prompt = crate::judge::CLASSIFY_SYSTEM;
+    assert!(prompt.contains("who said it"), "{prompt}");
+    assert!(
+        prompt.contains("NEVER duplicates"),
+        "the rule has to be stated, not implied: {prompt}"
+    );
+    // The extraction prompt is still the prototype's word for word — changing it would move the
+    // cosines the floor is calibrated on (RESULTS.md §10).
+    assert!(crate::judge::EXTRACT_SYSTEM.contains("You are the extraction step of a knowledge base."));
+}
+
+/// The mechanical half of the statement-versus-conclusion fix. The prompt asks the classifier
+/// not to do this and measurably helps, but it is not reliable — so a rule that is decidable
+/// from data already in hand is decided in code.
+#[test]
+fn a_duplicate_across_two_kinds_of_record_is_corrected_to_narrows() {
+    let (_dir, store) = store(Relation::Duplicate);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    seed(&store, &id, &["We are not sure we can enter the China market."]);
+
+    // An agent's conclusion, worded almost identically to what the person said.
+    let conclusion = Incoming::new("igor", "agent:planner@1").as_artifact();
+    let staging = store
+        .add(
+            &id,
+            &conclusion,
+            vec!["We are not confident about entering the China market.".into()],
+        )
+        .expect("add");
+
+    let pair = &staging.pending[0];
+    assert_eq!(
+        pair.kind, "narrows",
+        "the classifier said `duplicate`; a fact and an artifact are different records"
+    );
+    assert!(pair.why.contains("different records"), "and it says why: {}", pair.why);
+    assert_eq!(staging.open().len(), 1, "the pair still reaches the reviewer");
+}
+
+/// …and it does not fire on two records of the same kind, which is where `duplicate` is right.
+#[test]
+fn two_facts_that_say_the_same_thing_are_still_a_duplicate() {
+    let (_dir, store) = store(Relation::Duplicate);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    seed(&store, &id, &["China pricing is set per seat."]);
+
+    let staging = store
+        .add(&id, &writer(), vec!["Pricing for China is per seat.".into()])
+        .expect("add");
+    assert_eq!(staging.pending[0].kind, "duplicate");
+}
+
+// ------------------------------------------------------------ neighbour selection
+
+/// The point of top-K, and the thing a regression would quietly undo.
+///
+/// Under the similarity floor the pair count grew with the base — measured on the live 97-fact
+/// base, one fact drew 43 pairs and another 76 of 96. K bounds it at any size.
+#[test]
+fn the_pair_count_is_bounded_by_k_and_does_not_grow_with_the_base() {
+    let (_dir, store) = store(Relation::Controversy);
+    let store = store.with_top_k(3);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+
+    // Twelve facts that all share wording, so every one of them is close to every other — the
+    // shape that made a floor admit most of the base.
+    let crowd: Vec<&str> = vec![
+        "We support market alpha.", "We support market beta.", "We support market gamma.",
+        "We support market delta.", "We support market epsilon.", "We support market zeta.",
+        "We support market eta.", "We support market theta.", "We support market iota.",
+        "We support market kappa.", "We support market lambda.", "We support market mu.",
+    ];
+    seed(&store, &id, &crowd);
+    assert_eq!(store.count(&id).expect("count"), 12);
+
+    let staging = store
+        .add(&id, &writer(), vec!["We support market nu.".into()])
+        .expect("add");
+    assert!(
+        staging.pending.len() <= 3 * 2,
+        "one fact against a base of twelve selected {} pairs at K=3; a floor would have taken \
+         most of the base",
+        staging.pending.len()
+    );
+
+    // Double the base and the count must not follow it up.
+    let before = staging.pending.len();
+    store.abort(&id, &staging.tx).expect("abort");
+    seed(
+        &store,
+        &id,
+        &[
+            "We support market nu.", "We support market xi.", "We support market omicron.",
+            "We support market pi.", "We support market rho.", "We support market sigma.",
+            "We support market tau.", "We support market upsilon.", "We support market phi.",
+            "We support market chi.", "We support market psi.", "We support market omega.",
+        ],
+    );
+    assert_eq!(store.count(&id).expect("count"), 24);
+    let after = store
+        .add(&id, &writer(), vec!["We support market koppa.".into()])
+        .expect("add");
+    assert!(
+        after.pending.len() <= 3 * 2,
+        "the base doubled and the queue went {before} -> {}",
+        after.pending.len()
+    );
+}
+
+/// Symmetry, and why it is not tidiness: a fact in a sparse neighbourhood keeps a busy fact in
+/// its own top K while the busy one, surrounded by closer things, does not reciprocate. Selecting
+/// on one direction only loses exactly those pairs.
+#[test]
+fn a_pair_surfaces_when_only_one_side_ranks_the_other() {
+    let (_dir, store) = store(Relation::Controversy);
+    let store = store.with_top_k(1);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+
+    // Two near-identical facts crowd each other out at K=1, plus a loner that shares one word
+    // with them and nothing with anything else.
+    seed(
+        &store,
+        &id,
+        &[
+            "alpha beta gamma delta epsilon.",
+            "alpha beta gamma delta zeta.",
+            "epsilon quite alone.",
+        ],
+    );
+
+    // The incoming fact's own top 1 is one of the crowded pair. The loner's top 1, however, is
+    // the incoming fact — nothing else shares a word with it.
+    let staging = store
+        .add(&id, &writer(), vec!["epsilon and nothing else.".into()])
+        .expect("add");
+
+    let loner = store
+        .list(&id, 10)
+        .expect("list")
+        .into_iter()
+        .find(|f| f.fact == "epsilon quite alone.")
+        .expect("the loner is in the base");
+    assert!(
+        staging
+            .pending
+            .iter()
+            .any(|p| p.base_id.as_deref() == Some(loner.id.as_str())),
+        "the loner holds the newcomer in its top 1, so the pair must surface even though the \
+         newcomer's own top 1 is elsewhere: {:?}",
+        staging.pending
+    );
+}
+
+/// There is no floor anywhere. Two facts with almost nothing in common still pair.
+#[test]
+fn nothing_is_dropped_for_scoring_low() {
+    let (_dir, store) = store(Relation::Controversy);
+    let id = base("global/default");
+    store.ensure_base(&id).expect("ensure");
+    seed(&store, &id, &["Sourdough needs a long cold retard."]);
+
+    let staging = store
+        .add(&id, &writer(), vec!["The registered agent is in Wilmington.".into()])
+        .expect("add");
+    assert_eq!(
+        staging.open().len(),
+        1,
+        "two barely-related facts are still each other's nearest neighbour"
     );
     assert!(
-        weakest < crate::DEFAULT_FLOOR,
-        "recorded for the reader: the weakest labelled pair is at {weakest:.3}"
+        staging.pending[0].strength < 0.2,
+        "and the score says how weak it is without gating on it: {}",
+        staging.pending[0].strength
     );
 }

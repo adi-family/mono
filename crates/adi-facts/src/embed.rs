@@ -4,8 +4,8 @@
 //!
 //! `adi-indexer` and `adi-knowledge` embed with jina-embeddings-v2-base-code on candle, and this
 //! crate deliberately does not. **Every threshold in this design was measured against
-//! `nomic-embed-text`** — the 0.55 floor, the recall table, the band structure where `duplicate`
-//! sits around 0.82 and `controversy` around 0.67 (`RESULTS.md` §8, §9). A different model does
+//! `nomic-embed-text`** — the recall table, the band structure where `duplicate` sits around 0.82
+//! and `controversy` around 0.67 (`RESULTS.md` §8, §9). A different model does
 //! not shift those numbers, it invalidates them: the experiment measured the same fourteen
 //! related pairs landing inside the top 125 of 528 with this model, the top 166 with
 //! `embeddinggemma`, and the top 465 with `mxbai-embed-large`. Paying does not help either —
@@ -13,7 +13,7 @@
 //! because it compresses every pair into a narrow high band and ranking needs spread.
 //!
 //! So the model is not a detail to be settled by what the workspace already loads. Using the one
-//! the calibration came from is the only way the floor means anything.
+//! the calibration came from is the only way those numbers mean anything.
 //!
 //! # Why over HTTP rather than in-process
 //!
@@ -36,7 +36,7 @@ use crate::ollama::{Ollama, env_or};
 /// The model every threshold in this design was measured against.
 pub const DEFAULT_MODEL: &str = "nomic-embed-text";
 
-/// The environment variable that changes it — and invalidates the floor when it does.
+/// The environment variable that changes it — and invalidates every measured number when it does.
 pub const MODEL_VAR: &str = "ADI_FACTS_EMBED";
 
 /// `nomic-embed-text`'s width.

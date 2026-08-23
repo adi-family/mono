@@ -97,6 +97,14 @@ select id, root_cause, min(depth) as depth from spread group by id, root_cause;
 -- Ingestion. Facts are staged in a transaction and are invisible to the base
 -- until it commits, so a caller can be shown what needs deciding before
 -- anything lands.
+--
+-- This is the ONLY way a node enters the base. There was briefly a second door
+-- — a `derive` that wrote a node and its edges straight in — and it was a hole
+-- in the whole design: a conclusion drawn from a fact could contradict
+-- something already recorded and land beside it in silence, because nothing on
+-- that path ranked neighbours or asked anybody. Provenance and checking are the
+-- same operation, so `--from` is an argument to staging and not a command of
+-- its own.
 -- ---------------------------------------------------------------------------
 
 create table if not exists notes (            -- the prose a fact came from, kept verbatim
@@ -109,7 +117,23 @@ create table if not exists transactions (
     author     integer not null references actors(id),
     creator    integer not null references actors(id),
     note_id    text,
+    kind       text    not null default 'fact',  -- what the facts in this batch become
     created_at integer not null);
+
+-- What this batch was derived from: the ids every fact in it gets an edge from at commit.
+--
+-- Per transaction and not per staged row, because the input format is one plain sentence per
+-- line and stays that way. A caller with two conclusions from two different source sets calls
+-- `add` twice; that is cheap, and it reads better than an encoded line syntax.
+--
+-- `src` is a committed node id, or `#N` for a fact staged in this same batch — resolved to the
+-- id that fact receives at commit. It is deliberately NOT a foreign key: `#N` is not a node id
+-- yet, and a source that has gone missing must be reported by name rather than refused by a
+-- constraint that cannot say which row it was.
+create table if not exists tx_sources (
+    tx  text not null references transactions(id) on delete cascade,
+    src text not null,
+    primary key (tx, src));
 
 create table if not exists staged (
     tx text not null references transactions(id) on delete cascade,

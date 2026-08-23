@@ -46,6 +46,21 @@ pub enum Error {
     #[error("no such fact: {0}")]
     NoSuchFact(String),
 
+    /// A `--from` that is neither a fact id nor `#N` for a fact in this batch.
+    #[error("--from {0} is neither a fact id nor #N for a fact staged in this batch")]
+    BadSource(String),
+
+    /// A `--from #N` naming a staged fact that a verdict has since thrown away.
+    ///
+    /// Refused rather than skipped: an edge that is quietly not written is a derived node that
+    /// never goes stale, which is the one outcome this design exists to prevent — arriving as
+    /// silence rather than as an error.
+    #[error(
+        "--from {0} names a fact this transaction dropped, so there is nothing to derive from. \
+         Re-run `tx show` and pick a source that is still staged."
+    )]
+    SourceDropped(String),
+
     /// `merge` arrived without the sentence that replaces both sides.
     #[error(
         "merge needs --fact: the one sentence that says what both say.\n  left:  {left}\n  right: {right}"
