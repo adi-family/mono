@@ -3873,10 +3873,11 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
     .into_any()
 }
 
-/// The headless centre: the selected conversation's transcript (+ reply), or a composer to start a
-/// new one when no session is selected. The composer's title *is* the agent chooser — with several
-/// agents to pick between, which one a new chat goes to is both the thing worth saying out loud and
-/// the thing worth being able to change right there.
+/// The headless centre: the selected conversation's transcript (+ reply), or — when no session is
+/// selected — the home screen: a composer to start a new one, and under it the board of what is
+/// already going on ([`chat_home_board`]). The composer's title *is* the agent chooser — with
+/// several agents to pick between, which one a new chat goes to is both the thing worth saying out
+/// loud and the thing worth being able to change right there.
 fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         <div class="adi-chome__chatwrap">
@@ -3894,10 +3895,109 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
                             </h2>
                         </div>
                         {run_bar(state, watch)}
+                        // Its own closure, and that is not style: this arm holds the composer, and
+                        // reading the session lists out here would put every session update in the
+                        // dependencies of the tree the message is being typed into.
+                        {move || chat_home_board(state, watch)}
                     </div>
                 }
                 .into_any(),
             }}
+        </div>
+    }
+    .into_any()
+}
+
+/// How many sessions one board column lists before it stops and says how many are left.
+///
+/// Six: the board answers "what is going on" at a glance, and the rail beside it is the full list.
+/// A column that grew without limit would be a second rail — and would push the composer, the one
+/// thing on this screen you came here to use, off the top of the pane.
+const BOARD_ROWS: usize = 6;
+
+/// The board under the composer: **what needs you, what is working, and what you were last in** —
+/// the three questions this screen is opened with, answered where the eye already is rather than
+/// only in a rail that is a drawer on a narrow viewport and easy to read past on a wide one.
+///
+/// Drawn from [`session_bands`], the same list the rail is built from, so the two can never
+/// disagree about a session. Five bands become three columns: **Awaiting** folds into Active —
+/// something is going to happen in it, on its own — and **Starred** into Recent, because a star is
+/// a keep rather than a state, and a starred chat that is running is already in Active.
+///
+/// `None` when there is no session at all: on a fresh machine the composer keeps the pane to
+/// itself, which is the whole of what there is to say there.
+fn chat_home_board(state: State, watch: AgentsWatch) -> Option<AnyView> {
+    let ([waiting, running, awaiting, starred, rest], _filtered) = session_bands(state, watch);
+    // Re-sorted after each merge: the two halves are each newest-first, and concatenating two
+    // descending lists does not give a descending one.
+    let merge = |mut head: Vec<SessionRow>, tail: Vec<SessionRow>| {
+        head.extend(tail);
+        head.sort_by(|a, b| b.when.cmp(&a.when));
+        head
+    };
+    let active = merge(running, awaiting);
+    let recent = merge(starred, rest);
+    if waiting.is_empty() && active.is_empty() && recent.is_empty() {
+        return None;
+    }
+    Some(
+        view! {
+            <div class="adi-chome__board adi-ui-type">
+                {chat_board_column(state, watch, "Waiting on you", "Nothing is asking.", waiting)}
+                {chat_board_column(state, watch, "Active", "Nothing running.", active)}
+                {chat_board_column(state, watch, "Recent", "Nothing finished yet.", recent)}
+            </div>
+        }
+        .into_any(),
+    )
+}
+
+/// One column of the board: a band heading carrying the band's *full* count, up to [`BOARD_ROWS`]
+/// sessions under it, and — when the band is longer than that — how many the rail still has.
+///
+/// The rows are the rail's own ([`chat_session_row`]), so a session opens, stars, deletes and
+/// right-clicks here exactly as it does over there; a second kind of row would be a second set of
+/// behaviours to keep in step with the first.
+///
+/// An empty column keeps its place and says so. The three are a fixed set of questions, and a
+/// column that vanished when its answer was "none" would move the other two under the cursor every
+/// time a chat stopped.
+fn chat_board_column(
+    state: State,
+    watch: AgentsWatch,
+    label: &'static str,
+    empty: &'static str,
+    rows: Vec<SessionRow>,
+) -> AnyView {
+    let total = rows.len();
+    let more = total.saturating_sub(BOARD_ROWS);
+    // Keyed, for the reason the rail's list is: a click handler is bound when its row is *built*,
+    // so a positional rebuild — which is what a band gaining or losing a row is — would leave the
+    // handler of the session that used to be in that slot on the one now drawn there.
+    let shown = StoredValue::new(rows.into_iter().take(BOARD_ROWS).collect::<Vec<_>>());
+    view! {
+        <div class="adi-chome__board-col">
+            <adi_ui::RailGroup label=label count=total>
+                {(total == 0).then(|| view! { <p class="adi-chome__board-empty">{empty}</p> })}
+                <For
+                    each=move || shown.get_value()
+                    key=|row: &SessionRow| {
+                        format!(
+                            "{}:{}",
+                            row.agent,
+                            row.run.as_ref().map_or("", |r| r.run_id.as_str()),
+                        )
+                    }
+                    let:row
+                >
+                    {chat_session_row(state, watch, row)}
+                </For>
+            </adi_ui::RailGroup>
+            {(more > 0).then(|| view! {
+                <p class="adi-chome__board-more">
+                    {format!("+{more} more in the sessions rail")}
+                </p>
+            })}
         </div>
     }
     .into_any()
