@@ -113,8 +113,11 @@ is true of the legacy raw-forward list too: an empty `authorized_peers` now admi
 reachable through a public relay was an open door to anyone who learned the id. Nothing was lost by
 closing it: pairing writes a fleet record, never this list, so "empty" never meant "the peers I
 paired" — it meant everyone. A grant names what the peer may
-reach (`http:*`, `http:app`, `tcp:127.0.0.1:22`, `ctl:read`). Unknown keys are rejected at the
-iroh `after_handshake` hook, before any stream is opened.
+reach (`http:*`, `http:app`, `tcp:127.0.0.1:22`, `ctl:read`). An unknown key is refused before it
+reaches anything local — but say where, because it is not where this doc used to claim. There is no
+`after_handshake` hook anywhere in the tree: the raw-forward check runs in `host::handle_connection`
+*after* `accept_bi`, and the HTTP one in `gateway::admit` on the accepted stream. The stream is
+opened; nothing behind it is.
 
 **HTTP layer (human-to-service).** Basic authentication, enforced **on the node**, for
 everything reachable over the mesh — including `app.<node>.n.adi`. The mesh grant is
