@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>adi mesh — browser peer spike</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; }
+  pre  { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>adi mesh — browser peer spike</h1>
+<pre id="out">running…</pre>
+<script type="module">
+// Everything the tab needs comes off the query string: the harness (`run.sh`) writes the node's
+// key, the relay and the credential there after it has started a node that already authorizes this
+// tab's key. Nothing is hard-coded, so the same page can be pointed at a real node by hand.
+import init, { run_spike } from './pkg/adi_mesh_browser_spike.js';
+
+const q = new URLSearchParams(location.search);
+const out = document.getElementById('out');
+
+let report;
+try {
+  await init();
+  report = await run_spike(
+    q.get('secret') ?? '',
+    q.get('node') ?? '',
+    q.get('relay') ?? '',
+    q.get('home_relay') ?? '',
+    q.get('service') ?? 'spike',
+    q.get('user') ?? 'adi',
+    q.get('pass') ?? '',
+    q.get('path') ?? '/',
+  );
+} catch (e) {
+  // A panic or a failed `init` never reaches the Rust reporter, and a spike that dies silently is
+  // worse than one that fails — so the exception becomes a report of the same shape.
+  report = JSON.stringify({ ok: false, error: `the page threw: ${e}`, steps: [] }, null, 2);
+}
+
+out.textContent = report;
+// The harness reads this file rather than the console: a headless browser's console is not
+// something a shell can wait on, and a POST is.
+await fetch('/report', { method: 'POST', body: report }).catch(() => {});
+</script>
+</body>
+</html>

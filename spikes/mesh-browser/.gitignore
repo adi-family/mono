@@ -1,0 +1,9 @@
+target/
+pkg/
+pkg-release/
+service/
+.chrome-profile*/
+*.log
+report*.json
+*.pem
+spike-url.txt

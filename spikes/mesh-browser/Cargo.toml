@@ -1,0 +1,45 @@
+[package]
+name = "adi-mesh-browser-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Spike: does an iroh Endpoint compiled to wasm32-unknown-unknown dial an adi node and speak adi/mesh/http/1 from a browser tab?"
+
+# Its own workspace root, like `lints/adi-clone-lint`. The tree's workspace is `crates/*`, and a
+# member that only ever builds for wasm32 would be dragged into every `cargo test --workspace` and
+# `cargo clippy --workspace` on the native target, where it cannot link. Keeping it out means this
+# spike can be deleted (or promoted) without touching the workspace it is proving something about.
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The version the tree pins (`Cargo.lock`: iroh 1.0.3). Pinned exactly, because the whole point of
+# the spike is what *this* version does in a browser.
+iroh = { version = "=1.0.3", default-features = false, features = ["tls-ring"] }
+
+# `src/protocol.rs` is included verbatim from `crates/adi-mesh` and is written against tokio's IO
+# traits; `io-util` is the one feature that carries them, and it builds for wasm32-unknown-unknown.
+# (`net`, `time`, `fs` and the multi-thread runtime do not — nothing here asks for them.)
+tokio = { version = "1", default-features = false, features = ["io-util"] }
+
+# Timeouts that work in a browser. `tokio::time` is not available on wasm32-unknown-unknown;
+# n0-future is iroh's own answer to the same problem and is already in the graph.
+n0-future = "0.3"
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["console", "Window", "Performance"] }
+console_error_panic_hook = "0.1"
+
+# iroh logs the relay handshake and the QUIC path through `tracing`; without a subscriber a failed
+# dial is a bare error string. wasm-tracing routes it to the browser console, which is the only
+# debugger this transport has.
+tracing = "0.1"
+wasm-tracing = "2.1"
+
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

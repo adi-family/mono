@@ -1,0 +1,15 @@
+# `ring` (iroh's `tls-ring` crypto provider, and the only one the tree uses) compiles C for every
+# target it supports, wasm32-unknown-unknown included. Apple's `clang` is built without the wasm
+# backend, so cc-rs fails with:
+#
+#     error: unable to create target: 'No available targets are compatible with triple
+#     "wasm32-unknown-unknown"'
+#
+# Homebrew's LLVM has that backend. Pointing cc-rs at it is the whole fix — no wasi-sdk, no
+# emscripten. This is the one piece of host setup a browser build of anything iroh needs on a Mac.
+[env]
+CC_wasm32-unknown-unknown = "/opt/homebrew/opt/llvm/bin/clang"
+AR_wasm32-unknown-unknown = "/opt/homebrew/opt/llvm/bin/llvm-ar"
+
+[build]
+target = "wasm32-unknown-unknown"
