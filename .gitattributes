@@ -2,3 +2,7 @@
 # generated collapses them by default in GitHub diffs and keeps them out of language statistics —
 # the diff is still there to read when a review wants to see the data model move.
 crates/*/structs.gen.md linguist-generated=true
+
+# `legal/*.gen.md` follows the same naming and is written by `bun run legal/generate.ts`, but is
+# deliberately NOT marked generated: regenerating a document users agree to is a legal review step,
+# and collapsing that diff by default hides the one change somebody has to read.

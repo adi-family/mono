@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+"""facts — a base of plain sentences an agent can write to in bulk.
+
+The name is the instruction. A caller who sees `facts add` knows what shape of input is wanted:
+sentences, not prose, and more than one at a time.
+
+Design and rationale: CLI.md. Staleness graph: graph.sql.
+Every expensive step (embedding, neighbour search, classification) happens once, inside the
+transaction, so the caller's decisions are cheap and repeatable.
+""" 
+import argparse, json, math, os, re, sqlite3, sys, time, urllib.request
+
+DB      = os.environ.get("FACTS_DB", os.path.expanduser("~/.facts/facts.db"))
+EMBED   = os.environ.get("FACTS_EMBED", "nomic-embed-text")
+JUDGE   = os.environ.get("FACTS_JUDGE", "qwen3.6")
+OLLAMA  = os.environ.get("FACTS_OLLAMA", "http://127.0.0.1:11434")
+# Below this, nothing on the measured corpus was ever worth a look (RESULTS.md §9). It is a
+# property of KB_EMBED and is meaningless if that changes.
+FLOOR   = float(os.environ.get("FACTS_FLOOR", "0.55"))
+MAX_PENDING = int(os.environ.get("FACTS_MAX_PENDING", "40"))
+
+def now_ms(): return int(time.time() * 1000)
+
+def ollama(path, body, timeout=900):
+    req = urllib.request.Request(f"{OLLAMA}/api/{path}", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    return json.loads(urllib.request.urlopen(req, timeout=timeout).read())
+
+def embed(text):
+    v = ollama("embeddings", {"model": EMBED, "prompt": text})["embedding"]
+    n = math.sqrt(sum(x*x for x in v)) or 1.0
+    return [x/n for x in v]
+
+def cos(a, b): return sum(x*y for x, y in zip(a, b))
+
+def db():
+    os.makedirs(os.path.dirname(os.path.abspath(DB)), exist_ok=True)
+    d = sqlite3.connect(DB); d.row_factory = sqlite3.Row
+    here = os.path.dirname(os.path.abspath(__file__))
+    d.executescript(open(os.path.join(here, "graph.sql")).read())
+    return d
+
+def actor(d, name):
+    """Intern an identity. Everything that writes a name goes through here, so `actors` is the
+    only place a name is spelled out."""
+    r = d.execute("SELECT id FROM actors WHERE name=?", (name,)).fetchone()
+    if r: return r["id"]
+    kind = "agent" if ":" in name or "@" in name else "human"
+    return d.execute("INSERT INTO actors(name,kind) VALUES(?,?)", (name, kind)).lastrowid
+
+def log(d, id, version, event, was="", now="", other="", confirmer="", tx=""):
+    d.execute("INSERT INTO history(id,at,version,event,was,now,other,confirmer,tx) "
+              "VALUES(?,?,?,?,?,?,?,?,?)",
+              (id, now_ms(), version, event, was, now, other,
+               actor(d, confirmer) if confirmer else None, tx))
+
+def vec_of(d, node_id, text):
+    r = d.execute("SELECT vec, model FROM vectors WHERE id=?", (node_id,)).fetchone()
+    if r and r["model"] == EMBED: return json.loads(r["vec"])
+    v = embed(text)
+    d.execute("INSERT OR REPLACE INTO vectors(id,model,vec) VALUES(?,?,?)",
+              (node_id, EMBED, json.dumps(v)))
+    return v
+
+# --------------------------------------------------------------------------- extraction
+
+EXTRACT_SYS = """You are the extraction step of a knowledge base. You are given ONE note: raw,
+verbatim, possibly dictated speech. It may ramble and cover several topics. Filler carries no
+meaning.
+
+Write down the durable FACTS it establishes. A fact is ONE plain sentence — no fields, no
+categories — the way a person would say it to someone who wasn't there. Negation belongs inside
+the sentence ("We do not support the CIS"), never split out.
+
+One fact per sentence. Each must stand alone: resolve nothing you cannot resolve from THIS note,
+and drop a fact whose referent is missing rather than guessing it. Only durable things —
+decisions, constraints, preferences, rejections. Not instructions, not questions, not tasks.
+Use the speaker's own terms. Empty array is a valid answer.
+
+Output STRICTLY a JSON array of strings, no prose, no fence."""
+
+def extract(text):
+    r = ollama("generate", {"model": JUDGE, "system": EXTRACT_SYS, "prompt": text,
+                            "stream": False, "think": False,
+                            "options": {"temperature": 0, "num_ctx": 16384}})["response"]
+    try:    return [s for s in json.loads(r[r.index("["):r.rindex("]")+1]) if isinstance(s, str)]
+    except Exception: return []
+
+# --------------------------------------------------------------------------- classification
+
+JUDGE_SYS = """You are reviewing a knowledge base of one person's facts. You get PAIRS the base
+found similar. For each, say what a reviewer must do:
+
+  duplicate    — they say the same thing; one merged fact would replace both
+  narrows      — one is a more specific or qualified version of the other; still compatible
+  independent  — both true at once, about different things; nothing to do
+  controversy  — they cannot comfortably both stand. One rules out or reverses the other, or the
+                 person changed his mind.
+
+Be strict about `controversy`. Two facts on the same topic are not a controversy. A hope and a
+doubt about the same thing IS one. A decision reversed later IS one.
+
+Return STRICTLY a JSON array, one object per pair, in the order given, no prose, no fence:
+[{"i":<index>,"verdict":"...","why":"<=12 words"}]"""
+
+def classify(pairs):
+    """pairs: [(a_text, b_text)] -> [(verdict, why)]. Batched; the model is local and free."""
+    if not pairs: return []
+    out = [("independent", "")] * len(pairs)
+    for k in range(0, len(pairs), 60):
+        chunk = pairs[k:k+60]
+        prompt = "\n\n".join(f"[{i}] A: {a}\n     B: {b}" for i, (a, b) in enumerate(chunk))
+        try:
+            raw = ollama("generate", {"model": JUDGE, "system": JUDGE_SYS, "prompt": prompt,
+                                      "stream": False, "think": False,
+                                      "options": {"temperature": 0, "num_ctx": 16384}})["response"]
+            got = json.loads(raw[raw.index("["):raw.rindex("]")+1])
+        except Exception:
+            got = []
+        for g in got:
+            i = g.get("i")
+            if isinstance(i, int) and 0 <= i < len(chunk):
+                out[k+i] = (g.get("verdict", "independent"), g.get("why", ""))
+    return out
+
+
+# --------------------------------------------------------------------------- commands
+
+def cmd_add(a):
+    raw = sys.stdin.read()
+    d = db()
+    tx = f"tx_{now_ms():x}"
+    note_id = None
+    if a.text:
+        note_id = a.note_id or f"note_{now_ms():x}"
+        d.execute("INSERT INTO notes(id,text,author,created_at) VALUES(?,?,?,?)",
+                  (note_id, raw, actor(d, a.author), now_ms()))
+        facts = extract(raw)
+    else:
+        facts = [l.strip() for l in raw.splitlines() if l.strip()]
+    d.execute("INSERT INTO transactions(id,state,author,creator,note_id,created_at) VALUES(?,?,?,?,?,?)",
+              (tx, "needs_review", actor(d, a.author), actor(d, a.creator), note_id, now_ms()))
+    for i, f in enumerate(facts):
+        d.execute("INSERT INTO staged(tx,seq,fact) VALUES(?,?,?)", (tx, i, f))
+    d.commit()
+
+    # every staged fact against the base AND against its siblings, above the floor
+    base = [dict(r) for r in d.execute("SELECT id, fact FROM nodes")]
+    bvecs = {b["id"]: vec_of(d, b["id"], b["fact"]) for b in base}
+    svecs = [embed(f) for f in facts]
+    cands = []
+    for i, f in enumerate(facts):
+        for b in base:
+            s = cos(svecs[i], bvecs[b["id"]])
+            if s >= FLOOR: cands.append((s, i, b["id"], None, f, b["fact"]))
+        for j in range(i+1, len(facts)):
+            s = cos(svecs[i], svecs[j])
+            if s >= FLOOR: cands.append((s, i, None, j, f, facts[j]))
+    cands.sort(key=lambda c: -c[0])
+    dropped = max(0, len(cands) - MAX_PENDING)
+    cands = cands[:MAX_PENDING]
+
+    verdicts = classify([(c[4], c[5]) for c in cands])
+    n = 0
+    for (s, i, bid, bseq, _, _), (v, why) in zip(cands, verdicts):
+        if v == "independent": continue
+        d.execute("INSERT INTO pending(tx,pair,new_seq,base_id,base_seq,strength,kind,why) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (tx, n, i, bid, bseq, s, v, why))
+        n += 1
+    d.execute("UPDATE transactions SET state=? WHERE id=?",
+              ("needs_review" if n else "ready", tx))
+    d.commit()
+    # a cap must never read as "nothing else to see"
+    extra = (f"   [capped: {dropped} more pairs below {cands[-1][0]:.3f} not examined]"
+             if dropped and cands else "")
+    print(render(d, tx, extra))
+
+
+def _actor_name(d, aid):
+    r = d.execute("SELECT name FROM actors WHERE id=?", (aid,)).fetchone() if aid else None
+    return r["name"] if r else "?"
+
+def render(d, tx, header_extra=""):
+    """What the caller sees. `add` prints this itself, so there is never a round trip just to
+    find out what needs deciding."""
+    t = d.execute("SELECT * FROM transactions WHERE id=?", (tx,)).fetchone()
+    ps = [dict(r) for r in d.execute("SELECT * FROM pending WHERE tx=? ORDER BY strength DESC", (tx,))]
+    n = d.execute("SELECT count(*) c FROM staged WHERE tx=? AND dropped=0", (tx,)).fetchone()["c"]
+    open_ps = [p for p in ps if not p["verdict"]]
+    out = [f"{tx}  {n} staged, {len(open_ps)} to decide{header_extra}"]
+    if not ps:
+        out.append("\nnothing to decide — nothing in the base is close to these.")
+        out.append(f"\n  facts tx commit {tx}")
+        return "\n".join(out)
+    for p in ps:
+        if p["verdict"]:
+            out.append(f"\n[p{p['pair']}] {p['strength']:.3f}  {p['kind']}  "
+                       f"-> {p['verdict']} by {_actor_name(d, p['confirmer'])}")
+            continue
+        other_id = p["base_id"] or f"#{p['base_seq']}"
+        out.append(f"\n[p{p['pair']}] {p['strength']:.3f}  {p['kind']}")
+        out.append(f"  new   #{p['new_seq']:<3} {_txt(d, tx, p, 'new')}")
+        out.append(f"  base  {other_id:<4} {_txt(d, tx, p, 'other')}")
+        if p["why"]: out.append(f"  why        {p['why']}")
+    if open_ps:
+        out.append(f"\ndecide each, then commit:")
+        out.append(f"  facts tx resolve {tx} <p> --verdict coexist|merge|supersede|drop --confirmer <who>")
+        out.append(f"  facts tx commit {tx}")
+    else:
+        out.append(f"\n  facts tx commit {tx}")
+    return "\n".join(out)
+
+def _pending(d, tx): return [dict(r) for r in d.execute(
+    "SELECT * FROM pending WHERE tx=? ORDER BY strength DESC", (tx,))]
+
+def _txt(d, tx, p, side):
+    if side == "new":
+        return d.execute("SELECT fact FROM staged WHERE tx=? AND seq=?", (tx, p["new_seq"])).fetchone()["fact"]
+    if p["base_id"]:
+        return d.execute("SELECT fact FROM nodes WHERE id=?", (p["base_id"],)).fetchone()["fact"]
+    return d.execute("SELECT fact FROM staged WHERE tx=? AND seq=?", (tx, p["base_seq"])).fetchone()["fact"]
+
+def cmd_show(a):
+    d = db()
+    if not d.execute("SELECT 1 FROM transactions WHERE id=?", (a.tx,)).fetchone():
+        sys.exit(f"no such transaction: {a.tx}")
+    print(render(d, a.tx))
+
+def cmd_resolve(a):
+    d = db()
+    p = d.execute("SELECT * FROM pending WHERE tx=? AND pair=?", (a.tx, a.pair)).fetchone()
+    if not p: sys.exit(f"no such pair p{a.pair} in {a.tx}")
+    mine, theirs = f"#{p['new_seq']}", p["base_id"] or f"#{p['base_seq']}"
+    if a.verdict == "merge" and not a.fact:
+        sys.exit("merge needs --fact: the one sentence that says what both say.\n"
+                 f"  left:  {_txt(d, a.tx, p, 'new')}\n  right: {_txt(d, a.tx, p, 'other')}")
+    if a.verdict == "supersede":
+        if not a.keep: sys.exit(f"supersede needs --keep: the winner, {mine} or {theirs}")
+        # a typo here used to be silent: an unrecognised id was read as "the base won" and the
+        # incoming fact was discarded without a word.
+        if a.keep not in (mine, theirs):
+            sys.exit(f"--keep {a.keep} is neither side of p{a.pair}. It must be {mine} or {theirs}.")
+    d.execute("UPDATE pending SET verdict=?, keep=?, confirmer=?, resolved_at=? WHERE tx=? AND pair=?",
+              (a.verdict, a.keep, actor(d, a.confirmer), now_ms(), a.tx, a.pair))
+
+    # merge and supersede are one operation: the losing fact is replaced, never left beside the
+    # winner. Which row that is depends on whether the other side is already in the base or is
+    # another fact in this same batch.
+    def drop(seq): d.execute("UPDATE staged SET dropped=1 WHERE tx=? AND seq=?", (a.tx, seq))
+    if a.verdict == "drop":
+        drop(p["new_seq"])
+    elif a.verdict == "merge":
+        d.execute("UPDATE staged SET fact=? WHERE tx=? AND seq=?", (a.fact, a.tx, p["new_seq"]))
+        if p["base_seq"] is not None: drop(p["base_seq"])   # both sides are staged: retire the other
+    elif a.verdict == "supersede":
+        if a.keep == theirs: drop(p["new_seq"])
+        elif p["base_seq"] is not None: drop(p["base_seq"])
+    left = d.execute("SELECT count(*) c FROM pending WHERE tx=? AND verdict IS NULL", (a.tx,)).fetchone()["c"]
+    if not left: d.execute("UPDATE transactions SET state='ready' WHERE id=?", (a.tx,))
+    d.commit()
+    print(f"p{a.pair} -> {a.verdict} by {a.confirmer}")
+    print(render(d, a.tx) if left else
+          f"all decided.\n  facts tx commit {a.tx}")
+
+def cmd_commit(a):
+    d = db()
+    t = d.execute("SELECT * FROM transactions WHERE id=?", (a.tx,)).fetchone()
+    if not t: sys.exit(f"no such transaction: {a.tx}")
+    left = [dict(r) for r in d.execute(
+        "SELECT pair, kind, strength FROM pending WHERE tx=? AND verdict IS NULL ORDER BY strength DESC", (a.tx,))]
+    if left:
+        print(f"cannot commit: {len(left)} pair(s) still open — " +
+              ", ".join(f"p{p['pair']}" for p in left)); sys.exit(1)
+    # merge always retires the base fact; supersede does so only when the new one won
+    superseded = {}          # staged seq -> base node it rewrites
+    for p in d.execute("SELECT * FROM pending WHERE tx=? AND verdict IN ('supersede','merge')", (a.tx,)):
+        if not p["base_id"]: continue
+        if p["verdict"] == "merge" or p["keep"] == f"#{p['new_seq']}":
+            superseded[p["new_seq"]] = p["base_id"]
+    rewritten = []
+    for seq, base_id in superseded.items():
+        f = d.execute("SELECT fact FROM staged WHERE tx=? AND seq=?", (a.tx, seq)).fetchone()["fact"]
+        old = d.execute("SELECT fact, version FROM nodes WHERE id=?", (base_id,)).fetchone()
+        p = d.execute("SELECT pn.verdict, ac.name AS confirmer FROM pending pn "
+                      "LEFT JOIN actors ac ON ac.id = pn.confirmer "
+                      "WHERE pn.tx=? AND pn.new_seq=? AND pn.base_id=?",
+                      (a.tx, seq, base_id)).fetchone()
+        d.execute("UPDATE nodes SET fact=?, version=version+1, updated_at=? WHERE id=?",
+                  (f, now_ms(), base_id))
+        d.execute("UPDATE staged SET dropped=1 WHERE tx=? AND seq=?", (a.tx, seq))
+        log(d, base_id, old["version"] + 1, p["verdict"], was=old["fact"], now=f,
+            confirmer=p["confirmer"], tx=a.tx)
+        rewritten.append(base_id)
+    creator_name = d.execute("SELECT name FROM actors WHERE id=?", (t["creator"],)).fetchone()["name"]
+    absorbed = []   # (surviving staged seq, text that lost, verdict, confirmer)
+    for p in d.execute("SELECT pn.*, ac.name AS cname FROM pending pn "
+                       "LEFT JOIN actors ac ON ac.id = pn.confirmer "
+                       "WHERE pn.tx=? AND pn.verdict IN ('merge','supersede') "
+                       "AND pn.base_id IS NULL", (a.tx,)):
+        loser = p["base_seq"] if (p["verdict"] == "merge" or p["keep"] == f"#{p['new_seq']}") else p["new_seq"]
+        winner = p["new_seq"] if loser == p["base_seq"] else p["base_seq"]
+        row = d.execute("SELECT fact FROM staged WHERE tx=? AND seq=?", (a.tx, loser)).fetchone()
+        if row: absorbed.append((winner, row["fact"], p["verdict"], p["cname"]))
+    rows = [dict(r) for r in d.execute("SELECT seq, fact FROM staged WHERE tx=? AND dropped=0 ORDER BY seq", (a.tx,))]
+    ids = []
+    for r in rows:
+        fid = f"f_{now_ms():x}_{r['seq']}"
+        d.execute("INSERT INTO nodes(id,fact,author,creator,version,updated_at) VALUES(?,?,?,?,1,?)",
+                  (fid, r["fact"], t["author"], t["creator"], now_ms()))
+        log(d, fid, 1, "created", now=r["fact"], confirmer=creator_name, tx=a.tx)
+        if t["note_id"]:
+            d.execute("INSERT OR IGNORE INTO nodes(id,fact,author,creator,version,updated_at) "
+                      "VALUES(?,?,?,?,1,?)", (t["note_id"], "(source note)", t["author"], t["creator"], now_ms()))
+            v = d.execute("SELECT version FROM nodes WHERE id=?", (t["note_id"],)).fetchone()["version"]
+            d.execute("INSERT INTO edges(src,dst,src_version,created_at) VALUES(?,?,?,?)",
+                      (t["note_id"], fid, v, now_ms()))
+        for wseq, lost, verdict, who in absorbed:
+            if wseq == r["seq"]:
+                log(d, fid, 1, "absorbed", was=lost, now=r["fact"], confirmer=who, tx=a.tx)
+        ids.append(fid)
+    d.execute("UPDATE transactions SET state='committed' WHERE id=?", (a.tx,))
+    d.commit()
+    ndrop = d.execute("SELECT count(*) c FROM staged WHERE tx=? AND dropped=1", (a.tx,)).fetchone()["c"]
+    print(f"committed {len(ids)} new" +
+          (f", rewrote {len(rewritten)} in place ({', '.join(rewritten)})" if rewritten else "") +
+          (f", dropped {ndrop}" if ndrop else ""))
+    for i, r in zip(ids, rows): print(f"  {i}  {r['fact']}")
+
+def cmd_abort(a):
+    d = db(); d.execute("UPDATE transactions SET state='aborted' WHERE id=?", (a.tx,)); d.commit()
+    print(f"{a.tx} aborted")
+
+def cmd_stale(a):
+    d = db()
+    rows = [dict(r) for r in d.execute(
+        "SELECT s.id, s.root_cause, s.depth, n.fact FROM stale s JOIN nodes n ON n.id=s.id "
+        "ORDER BY s.depth, s.id")]
+    print("\n".join(f"{r['id']}  {r['fact']}\n    out of date because {r['root_cause']} changed"
+                     for r in rows) or "everything is up to date")
+
+def cmd_refresh(a):
+    d = db()
+    for e in d.execute("SELECT src FROM edges WHERE dst=?", (a.id,)).fetchall():
+        v = d.execute("SELECT version FROM nodes WHERE id=?", (e["src"],)).fetchone()["version"]
+        d.execute("UPDATE edges SET src_version=? WHERE src=? AND dst=?", (v, e["src"], a.id))
+    d.execute("UPDATE nodes SET version=version+1, updated_at=? WHERE id=?", (now_ms(), a.id))
+    d.commit(); print(f"{a.id} refreshed")
+
+def cmd_near(a):
+    d = db()
+    me = d.execute("SELECT id, fact FROM nodes WHERE id=?", (a.id,)).fetchone()
+    if not me: sys.exit(f"no such fact: {a.id}")
+    mv = vec_of(d, me["id"], me["fact"])
+    out = []
+    for r in d.execute("SELECT id, fact FROM nodes WHERE id<>?", (a.id,)):
+        s = cos(mv, vec_of(d, r["id"], r["fact"]))
+        if s >= FLOOR: out.append({"id": r["id"], "strength": round(s, 3), "fact": r["fact"]})
+    d.commit()
+    out.sort(key=lambda x: -x["strength"])
+    print("\n".join(f"{o['strength']:.3f}  {o['id']}  {o['fact']}" for o in out[:a.top])
+          or "nothing close")
+
+def cmd_get(a):
+    """What an outside reference resolves to today, and what changed under it.
+
+    Accepts `f_abc@3` — the version the reference was written against. That makes a marker in
+    source self-checking: the tool says the fact moved, instead of the reader having to notice.
+    """
+    d = db()
+    fid, _, v = a.id.partition("@")
+    seen = int(v) if v.isdigit() else None
+    n = d.execute("SELECT * FROM facts_v WHERE id=?", (fid,)).fetchone()
+    if not n: sys.exit(f"no such fact: {fid}")
+    h = [dict(r) for r in d.execute(
+        "SELECT h.*, COALESCE(ac.name,'') AS confirmer_name FROM history h "
+        "LEFT JOIN actors ac ON ac.id = h.confirmer WHERE h.id=? ORDER BY h.seq", (fid,))]
+
+    print(f"{fid}  v{n['version']}  [{n['kind']}]")
+    print(f"  {n['fact']}")
+    print(f"  said by {n['author']}, written by {n['creator']}")
+
+    if seen is not None and seen == n["version"]:
+        print(f"\n  reference is current (v{seen})")
+        if not a.full: return
+        since = h
+    elif seen is not None:
+        print(f"\n  STALE REFERENCE — written against v{seen}, the fact is now v{n['version']}.")
+        since = [e for e in h if e["version"] > seen]
+    else:
+        if len(h) <= 1 and not a.full:
+            print("\n  unchanged since it was written")
+            return
+        since = h
+
+    print("\nwhat changed since:" if seen is not None else "\nhistory:")
+    for e in since:
+        print(f"  v{e['version']:<3} {e['event']:<11} by {e['confirmer_name']}")
+        if e["was"]: print(f"        was: {e['was']}")
+        if e["now"] and e["now"] != e["was"]: print(f"        now: {e['now']}")
+    if seen is None and any(e["event"] != "created" for e in h):
+        print("\n  NOTE: this id still resolves, but what it says has changed since v1. A reference")
+        print("        written against an earlier version may no longer mean what its author meant.")
+
+def main():
+    p = argparse.ArgumentParser(
+        prog="facts",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description="A base of plain sentences. One fact is one sentence that stands on its own.",
+        epilog="""\
+WHAT A FACT LOOKS LIKE
+
+  Good:  We do not support the CIS.
+         A company is already incorporated in the USA.
+         Our audience is founders who cannot afford to hire a team.
+
+  Bad:   that direction is fine        (a pointer nobody can resolve later)
+         run the marketer again        (an instruction, not a fact)
+         audience: solo founders       (a field, not a sentence)
+
+  Write it the way you would tell someone who was not there. Negation goes inside the
+  sentence — "We do not support X" — never split out into a flag. Resolve every referent
+  from what you know now; a fact whose subject only makes sense in this conversation is
+  worthless in six months. One fact per sentence: three markets are three facts.
+
+TYPICAL SESSION
+
+  printf '%s\\n' "We support all countries." "We do not support the CIS." \\
+    | facts add --author igor --creator agent:chat@1
+  -> the pairs needing a decision, printed immediately — no second call to find out
+
+  facts tx resolve tx_... 0 --verdict coexist --confirmer igor
+  facts tx commit tx_...
+
+  Nothing is visible to the base until commit, and commit refuses while a pair is open.
+  Nothing is ever merged automatically, at any similarity.
+""")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    a = sub.add_parser("add", help="stage facts (one per line on stdin), or a note with --text",
+                       description="Reads stdin. One fact per line — send fifty at once if you have fifty. "
+                                   "With --text, stdin is one raw note and facts are extracted from it first.")
+    a.add_argument("--author", default="human",
+                   help="whose meaning this is — the person who said it (default: human)")
+    a.add_argument("--creator", default="agent:unknown",
+                   help="who is writing the record — your own agent id and version")
+    a.add_argument("--text", action="store_true",
+                   help="stdin is one raw note, not a fact list; extract facts from it first")
+    a.add_argument("--note-id", help="id for the stored source note (default: generated)")
+    a.set_defaults(fn=cmd_add)
+
+    t = sub.add_parser("tx", help="work a staged transaction: show, resolve, commit, abort")
+    ts = t.add_subparsers(dest="txcmd", required=True)
+    s_ = ts.add_parser("show", help="pairs awaiting a decision, strongest first")
+    s_.add_argument("tx"); s_.set_defaults(fn=cmd_show)
+    r = ts.add_parser("resolve", help="rule on one pair",
+        description="coexist   — both stand, and you are confirming that, not skipping it\n"
+                    "merge     — one sentence replaces both; give it with --fact\n"
+                    "supersede — the winner replaces the loser; name it with --keep\n"
+                    "drop      — throw the new fact away, the base was already right\n\n"
+                    "merge and supersede both rewrite the OLD fact in place and bump its version,\n"
+                    "so anything derived from it goes stale. No duplicate row is ever created.",
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    r.add_argument("tx"); r.add_argument("pair", type=int)
+    r.add_argument("--verdict", required=True,
+                   choices=["coexist", "merge", "supersede", "drop"])
+    r.add_argument("--keep", help="supersede: the winner — a base id, or #N for a staged fact")
+    r.add_argument("--fact", help="merge: the single sentence that replaces both")
+    r.add_argument("--confirmer", default="human",
+                   help="who decided — a person, or an agent id and version. Recorded on the verdict.")
+    r.set_defaults(fn=cmd_resolve)
+    c = ts.add_parser("commit", help="land the transaction; refuses while any pair is open")
+    c.add_argument("tx"); c.set_defaults(fn=cmd_commit)
+    b = ts.add_parser("abort", help="discard the whole transaction")
+    b.add_argument("tx"); b.set_defaults(fn=cmd_abort)
+
+    st = sub.add_parser("stale", help="what is out of date, and which fact changed under it")
+    st.set_defaults(fn=cmd_stale)
+    rf = sub.add_parser("refresh", help="a derived node was regenerated; bring its sources up to date")
+    rf.add_argument("id"); rf.set_defaults(fn=cmd_refresh)
+    g = sub.add_parser("get", help="what a referenced fact id says now, and what changed under it")
+    g.add_argument("id", help="fact id, optionally with the version you referenced: f_abc@3")
+    g.add_argument("--full", action="store_true", help="show the log even if nothing changed")
+    g.set_defaults(fn=cmd_get)
+    nr = sub.add_parser("near", help="facts close to this one, for a verifier to work through")
+    nr.add_argument("id"); nr.add_argument("--top", type=int, default=10); nr.set_defaults(fn=cmd_near)
+
+    args = p.parse_args(); args.fn(args)
+
+if __name__ == "__main__": main()

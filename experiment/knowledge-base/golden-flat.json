@@ -1,0 +1,382 @@
+{
+ "note": "Flat fixture. A node is author + creator + one fact, written as a plain sentence. No subject/predicate/value split, no polarity field — negation lives in the sentence, the way a person says it. Same ids and same relations as golden.json, so the two representations can be compared on identical pairs.",
+ "corpus": "corpus.md — 30 dictated human turns, adi-business session 1787359989639-0002",
+ "claims": [
+  {
+   "id": "aud-01",
+   "fact": "We focus on exactly one target audience.",
+   "turn": 0,
+   "quote": "первое, наверное, что хотелось бы сделать, это сфокусироваться на одной целевой аудитории",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-02",
+   "fact": "Our target audience is founders who cannot afford to hire a large team but want to delegate and compete.",
+   "turn": 2,
+   "quote": "сфокусироваться на одной аудитории, да, на фаундерах, у которых нет возможности нанять себе большую команду и так далее, но которые хотят делегировать",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-03",
+   "fact": "Solo developers are part of our target audience.",
+   "turn": 28,
+   "quote": "откуда фаундер получает информацию или соло-разраб, как у нас продумано",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-04",
+   "fact": "Our audience is people who need delegation but have no money to hire real people.",
+   "turn": 28,
+   "quote": "Нужно делегирование, но у него нет денег на то, чтобы нанять реальных людей",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-05",
+   "fact": "People with enough budget to hire real humans are not our audience — they will hire a human rather than an AI.",
+   "turn": 28,
+   "quote": "если у человека достаточно денег и у него достаточный бюджет для реальных людей, то он наймёт реального человека, а не искусственный интеллект",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-06",
+   "fact": "Micromanagers are not our audience, and there are too few of them anyway.",
+   "turn": 28,
+   "quote": "Разве что он микроменеджер, но таких, скорее всего, слишком мало",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-07",
+   "fact": "We do not limit the audience by role; we define it by the need to delegate.",
+   "turn": 28,
+   "quote": "Мы не будем лимитировать, мы про делегирование будем говорить",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-08",
+   "fact": "Resellers who resell what the platform's agents produce were considered as an audience.",
+   "turn": 42,
+   "quote": "а может еще темщиков? которые будут перепродавать то что будет агенты на платформе делать?",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-09",
+   "fact": "We do not want the product to turn into something like ETN.",
+   "turn": 44,
+   "quote": "я бы не хотел я с тобой согласен действительно не хотелось бы превращаться в ETN",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "aud-10",
+   "fact": "We want to be a professional tool.",
+   "turn": 44,
+   "quote": "хотелось бы быть каким-то профессиональным инструментом",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-01",
+   "fact": "The USA is our market.",
+   "turn": 28,
+   "quote": "То есть, да, для нас это США",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-02",
+   "fact": "A company is already incorporated in the USA.",
+   "turn": 74,
+   "quote": "по поводу рынка США — это одна из компаний, да? Компания уже открыта в США",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-03",
+   "fact": "China, the USA and the European Union are our core markets.",
+   "turn": 74,
+   "quote": "из рынков у нас есть 100% — это Китай, США, Евросоюз. Это основные рынки",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-04",
+   "fact": "India and the post-CIS countries are secondary markets to consider.",
+   "turn": 74,
+   "quote": "Потом можно рассматривать Индию и пост-СНГ",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-05",
+   "fact": "We are not sure we can enter China, because of how much regulation there is.",
+   "turn": 74,
+   "quote": "Китай классный, но Китай — там надо ещё соблюсти регуляции. Поэтому тут я немножко не уверен то, что мы сможем в Китай выйти",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-06",
+   "fact": "We do not want users to perceive us as a product made for India.",
+   "turn": 74,
+   "quote": "не хотелось бы, чтобы было ощущение у пользователей, будто бы мы продукт для Индии",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-07",
+   "fact": "We can support China.",
+   "turn": 80,
+   "quote": "Китай, по идее, мы можем",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-08",
+   "fact": "We support all non-sanctioned countries, including the EU, India, China, the USA and Brazil.",
+   "turn": 80,
+   "quote": "делаем регуляцию на весь ЕС, Индию, Китай и США, ну, то есть Бразилия и так далее... все не санкционные страны",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-09",
+   "fact": "We do not support the CIS.",
+   "turn": 80,
+   "quote": "всё, кроме СНГ, мы поддерживаем",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "mkt-10",
+   "fact": "We do support Ukraine.",
+   "turn": 80,
+   "quote": "из СНГ мы поддерживаем Украину",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-01",
+   "fact": "The license is issued to the company.",
+   "turn": 48,
+   "quote": "Да лицензия на компанию",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-02",
+   "fact": "The license is proprietary with open source code.",
+   "turn": 50,
+   "quote": "Давай проприетарная с открытым кодом да",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-03",
+   "fact": "Employees inside companies use it for free when ADI is not deployed company-wide.",
+   "turn": 52,
+   "quote": "я хочу не отпугнуть емплои которые сидят в компаниях (им бесплатно если не внедрено на уровне компании)",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-04",
+   "fact": "Solo people who earn nothing use it for free.",
+   "turn": 52,
+   "quote": "ну и соло ребят которые ничего не зарабатывают",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-05",
+   "fact": "The model is proprietary plus a subscription, free at first.",
+   "turn": 52,
+   "quote": "можем еьануть проприетарная + подписка (первое время просто будет бесплатно)",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-06",
+   "fact": "Forks are allowed, but the license stays ours.",
+   "turn": 54,
+   "quote": "Разрешим форки но лицензия у нас",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-07",
+   "fact": "Some features are available only in an enterprise license negotiated with us directly.",
+   "turn": 58,
+   "quote": "фичи, которые ты получаешь только в enterprise-лицензии, которые лично обсуждаются с нами",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-08",
+   "fact": "Open core and enterprise live in separate repositories, and the enterprise one is developed only by us.",
+   "turn": 60,
+   "quote": "OpenCore плюс Enterprise отдельные репозитории, которые чисто нами разрабатываются",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-09",
+   "fact": "Hiding the enterprise code makes it easier to defend legally.",
+   "turn": 60,
+   "quote": "просто защитить юридически будет проще, если мы спрячем этот код",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "lic-10",
+   "fact": "An enterprise can write its own wrapper, and then our whole monetisation collapses.",
+   "turn": 62,
+   "quote": "никто не мешает тому же Enterprise написать просто свою обёртку. И тогда наша просто вся монетизация разваливается",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "msh-01",
+   "fact": "Mesh does not get user management.",
+   "turn": 64,
+   "quote": "в Mesh не будем добавлять управление пользователями",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "msh-02",
+   "fact": "Enterprise gets global control of Mesh — seeing where Mesh goes and allowing Mesh on specific ports.",
+   "turn": 64,
+   "quote": "для энтерпрайза сделаем возможность контролировать Mesh глобально",
+   "author": "human",
+   "creator": "agent"
+  },
+  {
+   "id": "msh-03",
+   "fact": "We should integrate with Tailscale, so our mesh can be switched onto Tailscale when a company has enterprise Tailscale.",
+   "turn": 70,
+   "quote": "нам стоит сделать интеграцию с Tailscale, то есть возможность переключить наш mesh на Tailscale",
+   "author": "human",
+   "creator": "agent"
+  }
+ ],
+ "relations": [
+  {
+   "a": "aud-02",
+   "b": "aud-03",
+   "machine": "different-value",
+   "verdict": "coexist",
+   "why": "Solo devs and cash-poor founders are two segments of one set-valued predicate. Both stand."
+  },
+  {
+   "a": "aud-02",
+   "b": "aud-04",
+   "machine": "different-value",
+   "verdict": "merge",
+   "why": "Same segment said twice, second phrasing is the sharper one. Value should become the union."
+  },
+  {
+   "a": "aud-04",
+   "b": "aud-05",
+   "machine": "same-value-opposite-polarity",
+   "verdict": "coexist",
+   "why": "A positive and a negative that define the same boundary from two sides. Not a conflict — the pair IS the definition."
+  },
+  {
+   "a": "aud-01",
+   "b": "aud-07",
+   "machine": "different-value",
+   "verdict": "coexist",
+   "why": "Different predicates entirely — one is the audience, the other is how the audience may be defined."
+  },
+  {
+   "a": "mkt-03",
+   "b": "mkt-01",
+   "machine": "different-value",
+   "verdict": "merge",
+   "why": "USA alone, then USA inside the core three. The later claim contains the earlier."
+  },
+  {
+   "a": "mkt-05",
+   "b": "mkt-07",
+   "machine": "same-value-opposite-polarity",
+   "verdict": "supersede",
+   "why": "THE headline case: hedged 'not sure we can enter China', then 'China we can'. Six turns apart, in different sessions of the same conversation."
+  },
+  {
+   "a": "mkt-03",
+   "b": "mkt-05",
+   "machine": "same-value-opposite-polarity",
+   "verdict": "review",
+   "why": "Same turn asserts China is a core market AND doubts entry. A human must say which layer this lives on — ambition vs feasibility."
+  },
+  {
+   "a": "mkt-04",
+   "b": "mkt-09",
+   "machine": "same-value-opposite-polarity",
+   "verdict": "supersede",
+   "why": "'post-CIS is a secondary market' vs 'everything except CIS'. Different predicates on paper, same real-world claim — the hard one."
+  },
+  {
+   "a": "mkt-09",
+   "b": "mkt-10",
+   "machine": "same-value-opposite-polarity",
+   "verdict": "coexist",
+   "why": "Ukraine is a carve-out from the CIS exclusion, not a contradiction of it. Needs the human to say so."
+  },
+  {
+   "a": "lic-02",
+   "b": "lic-05",
+   "machine": "different-value",
+   "verdict": "merge",
+   "why": "'proprietary + open source' refined into 'proprietary + subscription, free at first'. Same decision, sharpened."
+  },
+  {
+   "a": "lic-03",
+   "b": "lic-04",
+   "machine": "different-value",
+   "verdict": "coexist",
+   "why": "Two free-tier populations, set-valued predicate, no tension."
+  },
+  {
+   "a": "lic-08",
+   "b": "lic-10",
+   "machine": "different-value",
+   "verdict": "review",
+   "why": "Not a contradiction of values — a stated risk against a stated decision. The base should surface it, and a human decides."
+  },
+  {
+   "a": "msh-01",
+   "b": "msh-02",
+   "machine": "different-value",
+   "verdict": "coexist",
+   "why": "Different subjects: base Mesh vs enterprise Mesh. This is the Airbnb buyers/sellers shape, in real data."
+  },
+  {
+   "a": "msh-01",
+   "b": "msh-03",
+   "machine": "different-value",
+   "verdict": "coexist",
+   "why": "Unrelated predicates under one subject."
+  }
+ ],
+ "accepted_gaps": [
+  {
+   "a": "aud-08",
+   "b": "aud-09",
+   "why": "Note 42 proposes resellers as an audience; note 44 rejects the direction without naming it, saying only that the product must not become ETN. Recorded self-contained, the two claims share no address and no mechanical pass will ever pair them. The operator accepts this: a human or a verifier sweeping the base later marks the link."
+  },
+  {
+   "a": "mkt-05",
+   "b": "mkt-07",
+   "why": "'not sure we can enter China' (go-to-market) vs 'China we can' (regulatory coverage). Self-contained extraction puts them under different subjects, so the reversal does not surface mechanically. Same accepted gap."
+  }
+ ]
+}

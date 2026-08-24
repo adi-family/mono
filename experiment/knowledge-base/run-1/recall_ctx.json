@@ -1,0 +1,200 @@
+[
+ {
+  "ref": "aud-01",
+  "match": "e0-4",
+  "polarity_ok": true,
+  "note": "both state focus on single target audience"
+ },
+ {
+  "ref": "aud-02",
+  "match": "e2-2",
+  "polarity_ok": true,
+  "note": "Claim split across e2-1/2/3/4; picked closest (team-size) part"
+ },
+ {
+  "ref": "aud-03",
+  "match": null,
+  "polarity_ok": true,
+  "note": "no candidate names solo developers as audience"
+ },
+ {
+  "ref": "aud-04",
+  "match": "e28-5",
+  "polarity_ok": true,
+  "note": "captures no-money-to-hire aspect; delegation need in e28-3"
+ },
+ {
+  "ref": "aud-05",
+  "match": "e28-6",
+  "polarity_ok": true,
+  "note": "high-budget prefer real humans implies exclusion"
+ },
+ {
+  "ref": "aud-06",
+  "match": null,
+  "polarity_ok": true,
+  "note": "e28-7 is market size, not audience exclusion"
+ },
+ {
+  "ref": "aud-07",
+  "match": null,
+  "polarity_ok": true,
+  "note": "no candidate on defining boundary by need not role"
+ },
+ {
+  "ref": "mkt-01",
+  "match": "e28-10",
+  "polarity_ok": true,
+  "note": "both state USA as target market"
+ },
+ {
+  "ref": "aud-08",
+  "match": "e42-0",
+  "polarity_ok": true,
+  "note": "same target audience claim, reworded"
+ },
+ {
+  "ref": "aud-09",
+  "match": null,
+  "polarity_ok": true,
+  "note": "no candidate addresses target audience negation"
+ },
+ {
+  "ref": "aud-10",
+  "match": "e44-2",
+  "polarity_ok": true,
+  "note": "both assert professional tool positioning"
+ },
+ {
+  "ref": "lic-01",
+  "match": null,
+  "polarity_ok": true,
+  "note": "candidate is about license scope, not holder"
+ },
+ {
+  "ref": "lic-02",
+  "match": "e50-0",
+  "polarity_ok": true,
+  "note": "same claim: proprietary license with open-source code"
+ },
+ {
+  "ref": "lic-03",
+  "match": "e52-0",
+  "polarity_ok": true,
+  "note": "same: free tier for employees when not company-wide"
+ },
+ {
+  "ref": "lic-04",
+  "match": "e52-1",
+  "polarity_ok": true,
+  "note": "same: free tier for solo no-income people"
+ },
+ {
+  "ref": "lic-05",
+  "match": "e52-2",
+  "polarity_ok": true,
+  "note": "proprietary+subscription matched; 'free at first' only in e52-3"
+ },
+ {
+  "ref": "lic-06",
+  "match": "e54-0",
+  "polarity_ok": true,
+  "note": "covers forks-allowed part; ownership-retained split into e54-1"
+ },
+ {
+  "ref": "lic-07",
+  "match": "e58-0",
+  "polarity_ok": true,
+  "note": "both describe features gated behind directly-negotiated enterprise license"
+ },
+ {
+  "ref": "lic-08",
+  "match": null,
+  "polarity_ok": true,
+  "note": "candidates split claim; none states 'only by us' fully"
+ },
+ {
+  "ref": "lic-09",
+  "match": "e60-2",
+  "polarity_ok": true,
+  "note": "same rationale: easier legal protection/defense"
+ },
+ {
+  "ref": "lic-10",
+  "match": "e62-1",
+  "polarity_ok": true,
+  "note": "split across e62-0 (wrapper) and e62-1 (collapse); combined matches"
+ },
+ {
+  "ref": "msh-01",
+  "match": "e64-2",
+  "polarity_ok": true,
+  "note": "both assert user mgmt excluded from Mesh feature scope"
+ },
+ {
+  "ref": "msh-02",
+  "match": "e64-6",
+  "polarity_ok": true,
+  "note": "corporate-wide control layer matches global control claim"
+ },
+ {
+  "ref": "msh-03",
+  "match": "e70-1",
+  "polarity_ok": true,
+  "note": "candidate describes switching mesh to run on Tailscale"
+ },
+ {
+  "ref": "mkt-02",
+  "match": "e74-0",
+  "polarity_ok": true,
+  "note": "US company already established, matches"
+ },
+ {
+  "ref": "mkt-03",
+  "match": "e74-8",
+  "polarity_ok": true,
+  "note": "China/US/EU core markets split across e74-8,9,10"
+ },
+ {
+  "ref": "mkt-04",
+  "match": "e74-11",
+  "polarity_ok": true,
+  "note": "India/post-CIS secondary markets split across e74-11,12"
+ },
+ {
+  "ref": "mkt-05",
+  "match": "e74-15",
+  "polarity_ok": true,
+  "note": "No certainty of entering China, both negative"
+ },
+ {
+  "ref": "mkt-06",
+  "match": "e74-3",
+  "polarity_ok": true,
+  "note": "Avoid being seen as India-only product, matches"
+ },
+ {
+  "ref": "mkt-07",
+  "match": "e80-2",
+  "polarity_ok": true,
+  "note": "China listed as supported market, matches go-to-market claim"
+ },
+ {
+  "ref": "mkt-08",
+  "match": null,
+  "polarity_ok": true,
+  "note": "Aggregate list split across e80-0,1,2,3,4; no single candidate matches"
+ },
+ {
+  "ref": "mkt-09",
+  "match": "e80-5",
+  "polarity_ok": true,
+  "note": "CIS unsupported, same negative claim"
+ },
+ {
+  "ref": "mkt-10",
+  "match": "e80-6",
+  "polarity_ok": true,
+  "note": "Ukraine supported, same positive claim"
+ }
+]

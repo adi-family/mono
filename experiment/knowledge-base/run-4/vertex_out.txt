@@ -1,0 +1,42 @@
+модель / task_type                                 @20 @30 @50 @80 @120   все 14
+------------------------------------------------------------------------------------------------------
+gemini-embedding-001 (3072d) SEMANTIC_SIMILARITY    5   6   9   9   11   топ-336  Китай:48
+gemini-embedding-001 (3072d) RETRIEVAL_DOCUMENT     5   5  10  12   12   топ-212  Китай:48
+gemini-embedding-001 (3072d) CLUSTERING             6   7   7   9   12   топ-388  Китай:56
+gemini-embedding-001 (768d)  SEMANTIC_SIMILARITY    5   6   6   9   11   топ-323  Китай:60
+text-multilingual-embedding-002 SEM_SIM             6   6   8  10   11   топ-207  Китай:61
+text-embedding-005 SEM_SIM                          7   7   8  10   11   топ-251  Китай:107
+
+gemini-embedding-001 (3072d) SEMANTIC_SIMILARITY    5   6   9   9   11   топ-336  Китай:48
+
+ТОП-15 очереди:
+✓ 0.909  Our target audience is founders who cannot afford to hire a la
+          Our audience is people who need delegation but have no money t
+  0.886  The USA is our market.
+          A company is already incorporated in the USA.
+✓ 0.885  The USA is our market.
+          China, the USA and the European Union are our core markets.
+✓ 0.882  Our target audience is founders who cannot afford to hire a la
+          Solo developers are part of our target audience.
+  0.880  We can support China.
+          We do support Ukraine.
+  0.877  We focus on exactly one target audience.
+          Solo developers are part of our target audience.
+✓ 0.872  The license is proprietary with open source code.
+          The model is proprietary plus a subscription, free at first.
+  0.872  Our audience is people who need delegation but have no money t
+          We do not limit the audience by role; we define it by the need
+  0.870  The license is proprietary with open source code.
+          Forks are allowed, but the license stays ours.
+  0.868  We can support China.
+          We support all non-sanctioned countries, including the EU, Ind
+  0.861  A company is already incorporated in the USA.
+          The license is issued to the company.
+  0.860  People with enough budget to hire real humans are not our audi
+          Micromanagers are not our audience, and there are too few of t
+✓ 0.857  Our audience is people who need delegation but have no money t
+          People with enough budget to hire real humans are not our audi
+  0.851  Solo developers are part of our target audience.
+          Our audience is people who need delegation but have no money t
+  0.849  Some features are available only in an enterprise license nego
+          Open core and enterprise live in separate repositories, and th

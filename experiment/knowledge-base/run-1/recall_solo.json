@@ -1,0 +1,200 @@
+[
+ {
+  "ref": "aud-01",
+  "match": "e0-4",
+  "polarity_ok": true,
+  "note": "same claim: focus on single target audience"
+ },
+ {
+  "ref": "aud-02",
+  "match": "e2-2",
+  "polarity_ok": true,
+  "note": "compound ref split across e2-2/e2-3/e2-4"
+ },
+ {
+  "ref": "aud-03",
+  "match": null,
+  "polarity_ok": true,
+  "note": "no candidate names solo developers as audience"
+ },
+ {
+  "ref": "aud-04",
+  "match": "e28-4",
+  "polarity_ok": true,
+  "note": "cannot afford real employees matches no money to hire"
+ },
+ {
+  "ref": "aud-05",
+  "match": "e28-5",
+  "polarity_ok": true,
+  "note": "funded users hire real person, implying exclusion"
+ },
+ {
+  "ref": "aud-06",
+  "match": "e28-6",
+  "polarity_ok": true,
+  "note": "micromanagers not a significant target segment"
+ },
+ {
+  "ref": "aud-07",
+  "match": null,
+  "polarity_ok": true,
+  "note": "no candidate on defining audience by need vs role"
+ },
+ {
+  "ref": "mkt-01",
+  "match": "e28-9",
+  "polarity_ok": true,
+  "note": "target market geography USA directly matches"
+ },
+ {
+  "ref": "aud-08",
+  "match": "e42-0",
+  "polarity_ok": true,
+  "note": "Same meaning: resellers of platform agents' output"
+ },
+ {
+  "ref": "aud-09",
+  "match": null,
+  "polarity_ok": true,
+  "note": "no candidate mentions resellers or target audience"
+ },
+ {
+  "ref": "aud-10",
+  "match": "e44-3",
+  "polarity_ok": true,
+  "note": "both assert positioning as a professional tool"
+ },
+ {
+  "ref": "lic-01",
+  "match": "e48-0",
+  "polarity_ok": true,
+  "note": "registered to = license holder, same meaning"
+ },
+ {
+  "ref": "lic-02",
+  "match": "e50-0",
+  "polarity_ok": true,
+  "note": "same proprietary+open source claim, reworded"
+ },
+ {
+  "ref": "lic-03",
+  "match": "e52-0",
+  "polarity_ok": true,
+  "note": "same: free access for non-org-wide employees"
+ },
+ {
+  "ref": "lic-04",
+  "match": "e52-2",
+  "polarity_ok": true,
+  "note": "same: solo devs/people with no income get free tier"
+ },
+ {
+  "ref": "lic-05",
+  "match": "e52-3",
+  "polarity_ok": true,
+  "note": "covers proprietary+subscription; 'free at first' split into e52-4"
+ },
+ {
+  "ref": "lic-06",
+  "match": null,
+  "polarity_ok": true,
+  "note": "compound claim split across e54-0 and e54-1, no single match"
+ },
+ {
+  "ref": "lic-07",
+  "match": "e58-1",
+  "polarity_ok": true,
+  "note": "same fact: enterprise features require direct negotiation with vendor"
+ },
+ {
+  "ref": "lic-08",
+  "match": "e60-0",
+  "polarity_ok": true,
+  "note": "Separate repos matched; ownership-by-us nuance only partly covered"
+ },
+ {
+  "ref": "lic-09",
+  "match": "e60-2",
+  "polarity_ok": true,
+  "note": "Hiding enterprise code eases legal defense, same meaning"
+ },
+ {
+  "ref": "lic-10",
+  "match": "e62-1",
+  "polarity_ok": true,
+  "note": "same collapse-if-wrapper risk, matches"
+ },
+ {
+  "ref": "msh-01",
+  "match": "e64-1",
+  "polarity_ok": true,
+  "note": "same fact: Mesh lacks user management, framed as negated feature"
+ },
+ {
+  "ref": "msh-02",
+  "match": "e64-3",
+  "polarity_ok": true,
+  "note": "core global-control claim matches; port/visibility details split into e64-4/e64-5"
+ },
+ {
+  "ref": "msh-03",
+  "match": "e70-0",
+  "polarity_ok": true,
+  "note": "same integration decision; condition split into e70-1"
+ },
+ {
+  "ref": "mkt-02",
+  "match": "e74-0",
+  "polarity_ok": true,
+  "note": "Company already established/operating in USA matches incorporation there"
+ },
+ {
+  "ref": "mkt-03",
+  "match": "e74-7",
+  "polarity_ok": true,
+  "note": "Core markets split across e74-7/8/9 (China/US/EU)"
+ },
+ {
+  "ref": "mkt-04",
+  "match": "e74-10",
+  "polarity_ok": true,
+  "note": "Secondary markets split across e74-10/11 (India/post-CIS)"
+ },
+ {
+  "ref": "mkt-05",
+  "match": "e74-14",
+  "polarity_ok": true,
+  "note": "Lack of confidence entering China aligns with negated China market claim"
+ },
+ {
+  "ref": "mkt-06",
+  "match": "e74-2",
+  "polarity_ok": true,
+  "note": "Both express avoiding perception as India-only product"
+ },
+ {
+  "ref": "mkt-07",
+  "match": null,
+  "polarity_ok": true,
+  "note": "candidates cover legal/regulatory support, not go-to-market market entry"
+ },
+ {
+  "ref": "mkt-08",
+  "match": "e80-0,e80-1,e80-2,e80-3,e80-4",
+  "polarity_ok": true,
+  "note": "aggregate region list split across e80-0 to e80-4"
+ },
+ {
+  "ref": "mkt-09",
+  "match": "e80-5",
+  "polarity_ok": true,
+  "note": "CIS excluded from regulatory support, matches"
+ },
+ {
+  "ref": "mkt-10",
+  "match": "e80-6",
+  "polarity_ok": true,
+  "note": "Ukraine supported region, matches"
+ }
+]

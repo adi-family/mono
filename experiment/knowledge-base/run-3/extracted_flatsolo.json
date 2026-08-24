@@ -1,0 +1,713 @@
+[
+ {
+  "turn": 0,
+  "claims": [
+   {
+    "fact": "Work on popularizing the project is planned to begin in September.",
+    "quote": "с сентября над популяризацией проекта",
+    "turn": 0
+   },
+   {
+    "fact": "As part of popularizing the project, they will most likely launch on Reddit.",
+    "quote": "мы, скорее всего, будем Reddit",
+    "turn": 0
+   },
+   {
+    "fact": "As part of popularizing the project, they will most likely do a Product Hunt launch.",
+    "quote": "Product Hunt запуск",
+    "turn": 0
+   },
+   {
+    "fact": "As part of popularizing the project, they plan to have a website among other things.",
+    "quote": "сайт и так далее",
+    "turn": 0
+   },
+   {
+    "fact": "The first priority is to focus on one target audience.",
+    "quote": "сфокусироваться на одной целевой аудитории",
+    "turn": 0
+   },
+   {
+    "fact": "The operator does not want generic, mainstream ('popsy') marketing.",
+    "quote": "мне не нужен попсовый bullshit",
+    "turn": 0
+   },
+   {
+    "fact": "The operator wants guerrilla-style marketing that will work on the American audience.",
+    "quote": "мне нужно что-то из разряда партизанского маркетинга, который сработает на американскую аудиторию",
+    "turn": 0
+   },
+   {
+    "fact": "Their target audience is founders, people who spend time on platforms like Product Hunt.",
+    "quote": "в нашем кейсе это фаундеры, люди, которые сидят на Product Hunt",
+    "turn": 0
+   },
+   {
+    "fact": "They plan to consult the marketing agent often.",
+    "quote": "мы будем у него часто консультироваться",
+    "turn": 0
+   }
+  ],
+  "cost": 0.05009559999999999
+ },
+ {
+  "turn": 2,
+  "claims": [
+   {
+    "fact": "The GTM agent likely contains outdated information.",
+    "quote": "в GTM-агенте, вероятно, там немножко старая информация",
+    "turn": 2
+   },
+   {
+    "fact": "The target audience is now focused on a single segment: founders.",
+    "quote": "стараемся всё-таки сфокусироваться на одной аудитории, да, на фаундерах",
+    "turn": 2
+   },
+   {
+    "fact": "The target founders are those who cannot afford to hire a large team.",
+    "quote": "у которых нет возможности нанять себе большую команду",
+    "turn": 2
+   },
+   {
+    "fact": "The target founders want to delegate.",
+    "quote": "которые хотят делегировать",
+    "turn": 2
+   },
+   {
+    "fact": "The target founders want to compete.",
+    "quote": "хотят, м-м-м, конкурировать",
+    "turn": 2
+   }
+  ],
+  "cost": 0.0218416
+ },
+ {
+  "turn": 10,
+  "claims": [
+   {
+    "fact": "The operator's goal is to reach ten thousand users by January.",
+    "quote": "мне обязательно, чтобы в итоге к январю мы получили десять тысяч пользователей",
+    "turn": 10
+   },
+   {
+    "fact": "The operator considers the goal achievable no matter how impossible it may seem.",
+    "quote": "Мне по барабану, если это невозможно. Это все возможно.",
+    "turn": 10
+   },
+   {
+    "fact": "The operator wants the marketer to bring him numbers as the analysis of how to achieve the goal.",
+    "quote": "Я хочу, чтобы маркетолог мне принес цифры.",
+    "turn": 10
+   },
+   {
+    "fact": "The operator wants at least several options for how to achieve the goal, not just one.",
+    "quote": "нужно, э-э-э, как минимум несколько вариантов",
+    "turn": 10
+   },
+   {
+    "fact": "The operator does not require every one of the marketer's ideas to succeed, as long as the overall goal is met.",
+    "quote": "мне не обязательно, чтобы, м-м-м. Каждая его идея стреляла",
+    "turn": 10
+   }
+  ],
+  "cost": 0.050646
+ },
+ {
+  "turn": 20,
+  "claims": [
+   {
+    "fact": "The operator wants a very wide range of clearly different options to be checked, not just similar variations.",
+    "quote": "пускай проверяет различные, просто мега разные варианты",
+    "turn": 20
+   },
+   {
+    "fact": "The operator considers there to be a growth option available, but says its chance of success is very small.",
+    "quote": "есть, скажем так, вариант, который предполагает рост, но шанс очень маленький",
+    "turn": 20
+   },
+   {
+    "fact": "The operator wants many options like that low-probability growth option, not just one.",
+    "quote": "нужно таких вариантов много",
+    "turn": 20
+   },
+   {
+    "fact": "The operator wants these growth options to be simple, explosive, and most likely high-risk.",
+    "quote": "они должны быть простые, э-э-э, взрывные иии, скорее всего, высокорискованные",
+    "turn": 20
+   }
+  ],
+  "cost": 0.0604986
+ },
+ {
+  "turn": 28,
+  "claims": [
+   {
+    "fact": "The operator would only build a browser extension if it would somehow boost growth, not as a strategy on its own.",
+    "quote": "мы можем сделать расширение, если это нас как-то забустит",
+    "turn": 28
+   },
+   {
+    "fact": "The target audience is a founder or solo developer.",
+    "quote": "откуда фаундер получает информацию или соло-разраб",
+    "turn": 28
+   },
+   {
+    "fact": "The target user needs delegation of development work but does not have enough money to hire real people.",
+    "quote": "Нужно делегирование, но у него нет денег на то, чтобы нанять реальных людей.",
+    "turn": 28
+   },
+   {
+    "fact": "The operator believes that if a person has enough budget to hire real employees, they will hire a real person instead of artificial intelligence.",
+    "quote": "если у человека достаточно денег и у него достаточный бюджет для реальных людей, то он наймёт реального человека, а не искусственный интеллект",
+    "turn": 28
+   },
+   {
+    "fact": "The operator believes micromanagers might use AI even with sufficient budget to hire people, but considers that segment too small to matter.",
+    "quote": "Разве что он микроменеджер, но таких, скорее всего, слишком мало",
+    "turn": 28
+   },
+   {
+    "fact": "The operator wants the product's messaging to center on delegation rather than being limited narrowly to hiring developers.",
+    "quote": "Мы не будем лимитировать, мы про делегирование будем говорить.",
+    "turn": 28
+   },
+   {
+    "fact": "The company's target market is the USA.",
+    "quote": "для нас это США",
+    "turn": 28
+   },
+   {
+    "fact": "The operator's preferred approach is to first fully define the target user before deciding on marketing tactics, rather than starting from the desired result.",
+    "quote": "нужно идти по шагам от нашего пользователя",
+    "turn": 28
+   },
+   {
+    "fact": "The operator's goal is for the company to be on the target user's radar in the places that user frequents.",
+    "quote": "мы должны быть на радаре у этого пользователя",
+    "turn": 28
+   }
+  ],
+  "cost": 0.0811566
+ },
+ {
+  "turn": 30,
+  "claims": [
+   {
+    "fact": "The intended result of the work is a complete breakdown of how much time the target audience spends online and in the physical world.",
+    "quote": "должно быть полноценная проработка времени, которое пользователь, наша целевая аудитория тратит в интернете или в физическом мире",
+    "turn": 30
+   },
+   {
+    "fact": "This time breakdown should be tracked hour by hour.",
+    "quote": "Мне нужно полностью, вот по часам",
+    "turn": 30
+   },
+   {
+    "fact": "Ideally the time breakdown should also be viewable as an annual view broken down by month.",
+    "quote": "если ты мне даже в год покажешь, то есть годовое по месяцам",
+    "turn": 30
+   },
+   {
+    "fact": "The target audience analysis may include several different user profiles.",
+    "quote": "Это может быть несколько профилей пользователей",
+    "turn": 30
+   },
+   {
+    "fact": "The user/persona data must be built so it is convenient for other agents to use afterward, is visualizable, and lets other agents coordinate and retrieve all the information on request.",
+    "quote": "сделай мне пользователя и так, чтобы это потом удобно было использовать другим агентам",
+    "turn": 30
+   },
+   {
+    "fact": "The operator has decided to prioritize building the user profile and dashboard first, postponing any discussion of tactics until that is done.",
+    "quote": "Не нужно мне сейчас никакие, блядь, тактики и так далее",
+    "turn": 30
+   }
+  ],
+  "cost": 0.10516160000000001
+ },
+ {
+  "turn": 40,
+  "claims": [],
+  "cost": 0.019057599999999997
+ },
+ {
+  "turn": 42,
+  "claims": [],
+  "cost": 0.021925600000000003
+ },
+ {
+  "turn": 44,
+  "claims": [
+   {
+    "fact": "The operator does not want the product to turn into an ETN.",
+    "quote": "не хотелось бы превращаться в ETN",
+    "turn": 44
+   },
+   {
+    "fact": "The operator wants the product to be a professional instrument.",
+    "quote": "хотелось бы быть каким-то профессиональным инструментом",
+    "turn": 44
+   }
+  ],
+  "cost": 0.029186600000000004
+ },
+ {
+  "turn": 46,
+  "claims": [],
+  "cost": 0.0228426
+ },
+ {
+  "turn": 48,
+  "claims": [],
+  "cost": 0.022187600000000002
+ },
+ {
+  "turn": 50,
+  "claims": [],
+  "cost": 0.0344876
+ },
+ {
+  "turn": 52,
+  "claims": [
+   {
+    "fact": "The operator wants to avoid alienating employees who work at companies where the product has not been adopted at the company level.",
+    "quote": "я хочу не отпугнуть емплои которые сидят в компаниях",
+    "turn": 52
+   },
+   {
+    "fact": "For employees at companies where the product is not implemented at the company level, the product is free for them.",
+    "quote": "им бесплатно если не внедрено на уровне компании",
+    "turn": 52
+   },
+   {
+    "fact": "The operator wants to avoid alienating solo users who are not earning any money.",
+    "quote": "соло ребят которые ничего не зарабатывают",
+    "turn": 52
+   },
+   {
+    "fact": "The operator is considering a proprietary-plus-subscription pricing model as an alternative.",
+    "quote": "можем еьануть проприетарная + подписка",
+    "turn": 52
+   },
+   {
+    "fact": "Under the proprietary-plus-subscription model being considered, the product would initially be free.",
+    "quote": "первое время просто будет бесплатно",
+    "turn": 52
+   }
+  ],
+  "cost": 0.0333876
+ },
+ {
+  "turn": 54,
+  "claims": [
+   {
+    "fact": "They will allow forks of the product.",
+    "quote": "Разрешим форки",
+    "turn": 54
+   },
+   {
+    "fact": "The license remains with them even when forks are allowed.",
+    "quote": "лицензия у нас",
+    "turn": 54
+   }
+  ],
+  "cost": 0.0219716
+ },
+ {
+  "turn": 56,
+  "claims": [
+   {
+    "fact": "He wants to freeze the current monetization thresholds rather than keep adjusting them.",
+    "quote": "Я бы хотел заморозить пороги",
+    "turn": 56
+   },
+   {
+    "fact": "The team does not yet know how much they will monetize the product.",
+    "quote": "мы не знаем, сколько мы будем монетизировать",
+    "turn": 56
+   },
+   {
+    "fact": "He does not want large companies such as Anthropic, OpenAI, and Microsoft to roll the product out company-wide and push employees to use it while paying nothing in return.",
+    "quote": "какой-то Anthropic, OpenAI и Microsoft, и кто-то еще внедрили наш УШУ Ади, да, и мотивировали сотрудников его использовать, но при этом вообще бы не донатили нам",
+    "turn": 56
+   },
+   {
+    "fact": "The product is considered fairly self-sufficient on its own.",
+    "quote": "продукт, а, м-м-м, достаточно самодостаточный",
+    "turn": 56
+   },
+   {
+    "fact": "He does not want to go with a one-time-purchase, JetBrains-style versioned licensing model either.",
+    "quote": "но с другой стороны, не хотелось бы так",
+    "turn": 56
+   }
+  ],
+  "cost": 0.08672860000000002
+ },
+ {
+  "turn": 58,
+  "claims": [
+   {
+    "fact": "The operator likes the idea of having certain features available only in an enterprise license.",
+    "quote": "мне на самом деле даже нравится вот эта вот идея про какие-то фичи, которые ты получаешь только в, грубо говоря, enterprise-лицензии",
+    "turn": 58
+   },
+   {
+    "fact": "Enterprise license terms are to be discussed personally with the operator as AD.",
+    "quote": "которые лично обсуждаются с с нами как AD",
+    "turn": 58
+   },
+   {
+    "fact": "The enterprise version is meant to include user management, among other things.",
+    "quote": "которая будет в себе включать там, э-э-э, менеджмент пользователей и так далее, и так далее, и так далее",
+    "turn": 58
+   }
+  ],
+  "cost": 0.0218156
+ },
+ {
+  "turn": 60,
+  "claims": [
+   {
+    "fact": "The operator likes that Enterprise code lives in a separate repository from OpenCore.",
+    "quote": "мне нравится про, м-м-м, Enterprise код, то, что он живёт в отдельной репе",
+    "turn": 60
+   },
+   {
+    "fact": "OpenCore and Enterprise are separate repositories.",
+    "quote": "OpenCore плюс Enterprise отдельные репозитории",
+    "turn": 60
+   },
+   {
+    "fact": "The OpenCore and Enterprise repositories are developed solely by them (not by outside contributors).",
+    "quote": "которые чисто нами разрабатываются",
+    "turn": 60
+   },
+   {
+    "fact": "The operator believes it will be legally simpler to protect the Enterprise code if they keep that code hidden.",
+    "quote": "просто защитить юридически будет, э-э-э, проще, если мыыы спрячем этот код",
+    "turn": 60
+   }
+  ],
+  "cost": 0.038646599999999996
+ },
+ {
+  "turn": 62,
+  "claims": [
+   {
+    "fact": "If an Enterprise customer writes their own wrapper, the operator's monetization model would collapse entirely.",
+    "quote": "тому же Enterprise написать просто свою обёртку. И тогда наша просто вся монетизация разваливается",
+    "turn": 62
+   }
+  ],
+  "cost": 0.0199686
+ },
+ {
+  "turn": 64,
+  "claims": [
+   {
+    "fact": "The standard version of Mesh will not have user management added to it.",
+    "quote": "в Mesh не будем добавлять управление пооользователями",
+    "turn": 64
+   },
+   {
+    "fact": "For enterprise, there will be a feature to control Mesh globally.",
+    "quote": "для энтерпрайза, э-э-э, сделаем возможность контролировать Mesh глобально",
+    "turn": 64
+   },
+   {
+    "fact": "The enterprise Mesh control feature will let you see where Mesh traffic goes.",
+    "quote": "видеть, где Mesh уходит",
+    "turn": 64
+   },
+   {
+    "fact": "The enterprise Mesh control feature will let you restrict Mesh to specific ports.",
+    "quote": "давать возможность, м-м-м, Mesh на какие-то порты",
+    "turn": 64
+   }
+  ],
+  "cost": 0.0298806
+ },
+ {
+  "turn": 66,
+  "claims": [],
+  "cost": 0.032435599999999995
+ },
+ {
+  "turn": 70,
+  "claims": [
+   {
+    "fact": "The operator believes they should build an integration with Tailscale.",
+    "quote": "нам стоит сделать интеграцию с Tailscale",
+    "turn": 70
+   },
+   {
+    "fact": "The proposed integration would let the company switch its mesh network to Tailscale if the company has enterprise Tailscale.",
+    "quote": "возможность переключить наш mesh на Tailscale, если у компании, да, есть enterprise Tailscale",
+    "turn": 70
+   }
+  ],
+  "cost": 0.0206796
+ },
+ {
+  "turn": 74,
+  "claims": [
+   {
+    "fact": "A company is already incorporated in the USA.",
+    "quote": "Компания уже открыта в США.",
+    "turn": 74
+   },
+   {
+    "fact": "The company is open to working with India if it turns out to be an interesting business case for them.",
+    "quote": "м-мы на Индию тоже можем работать, если действительно это будет",
+    "turn": 74
+   },
+   {
+    "fact": "The operator does not want the product to be perceived by users as a product made specifically for India.",
+    "quote": "будто бы мы, э-э-э, продукт для Индии",
+    "turn": 74
+   },
+   {
+    "fact": "The operator believes India carries an association with being a cheap/budget option.",
+    "quote": "она достаточно имеет такой флёр, знаешь, э-э-э, экономии",
+    "turn": 74
+   },
+   {
+    "fact": "The operator believes many enterprises have Indians in technical leadership roles because Indians are strong technically.",
+    "quote": "много энтерпрайзов индусы в-во главе технические, потому чтооо индусы достаточно хороши технически",
+    "turn": 74
+   },
+   {
+    "fact": "China is one of the company's main target markets.",
+    "quote": "Китай, э-э-э, США, Евросоюз. Это основные рынки",
+    "turn": 74
+   },
+   {
+    "fact": "The USA is one of the company's main target markets.",
+    "quote": "Китай, э-э-э, США, Евросоюз. Это основные рынки",
+    "turn": 74
+   },
+   {
+    "fact": "The European Union is one of the company's main target markets.",
+    "quote": "Китай, э-э-э, США, Евросоюз. Это основные рынки",
+    "turn": 74
+   },
+   {
+    "fact": "India can be considered as a secondary market.",
+    "quote": "можно рассматривать Индию, э-э-э, и пост-СНГ",
+    "turn": 74
+   },
+   {
+    "fact": "Post-CIS countries can be considered as a secondary market.",
+    "quote": "можно рассматривать Индию, э-э-э, и пост-СНГ",
+    "turn": 74
+   },
+   {
+    "fact": "The operator considers China a great potential market.",
+    "quote": "Китай классный",
+    "turn": 74
+   },
+   {
+    "fact": "Entering the Chinese market requires complying with significant regulations.",
+    "quote": "там надо ещё соблюсти регуляции",
+    "turn": 74
+   },
+   {
+    "fact": "The operator is unsure whether the company will be able to enter the Chinese market due to regulatory requirements.",
+    "quote": "я немножкооо не уверен то, что мы сможем в Китай выйти",
+    "turn": 74
+   }
+  ],
+  "cost": 0.06761659999999999
+ },
+ {
+  "turn": 76,
+  "claims": [
+   {
+    "fact": "The operator considers China an interesting market.",
+    "quote": "Китай я считаю интересным рынком",
+    "turn": 76
+   },
+   {
+    "fact": "The operator is unsure how much purchasing power people in China have.",
+    "quote": "Не знаю, насколько они платежеспособны",
+    "turn": 76
+   }
+  ],
+  "cost": 0.0202676
+ },
+ {
+  "turn": 80,
+  "claims": [
+   {
+    "fact": "The company's market coverage includes the entire EU.",
+    "quote": "весь ЕС",
+    "turn": 80
+   },
+   {
+    "fact": "The company's market coverage includes India.",
+    "quote": "Индию",
+    "turn": 80
+   },
+   {
+    "fact": "The company's market coverage includes China.",
+    "quote": "Китай",
+    "turn": 80
+   },
+   {
+    "fact": "The company's market coverage includes the USA.",
+    "quote": "США",
+    "turn": 80
+   },
+   {
+    "fact": "The company's market coverage includes Brazil.",
+    "quote": "Бразилия",
+    "turn": 80
+   },
+   {
+    "fact": "The company supports all countries except the CIS.",
+    "quote": "кроме СНГ",
+    "turn": 80
+   },
+   {
+    "fact": "The company supports Ukraine even though Ukraine is part of the CIS.",
+    "quote": "из СНГ мы поддерживаем Украину",
+    "turn": 80
+   },
+   {
+    "fact": "The company's actual rule is to support all non-sanctioned countries.",
+    "quote": "все не санкционные страны",
+    "turn": 80
+   },
+   {
+    "fact": "The product gives users the ability to disable telemetry.",
+    "quote": "мы даём возможность отключить телеметрию",
+    "turn": 80
+   },
+   {
+    "fact": "The product gives users the ability to choose the servers where their data is stored.",
+    "quote": "выбрать сервера, на которых хранится информация",
+    "turn": 80
+   }
+  ],
+  "cost": 0.0868826
+ },
+ {
+  "turn": 82,
+  "claims": [
+   {
+    "fact": "The terms of usage text will be generated from a list of countries.",
+    "quote": "перечислим список стран и на основе этого будем генер-генерировать текст",
+    "turn": 82
+   },
+   {
+    "fact": "The terms of usage document will be generated by running a TypeScript file rather than being written as static text.",
+    "quote": "это должен быть, например, там TypeScript файл, например, который запускается и генерируется текст политики",
+    "turn": 82
+   }
+  ],
+  "cost": 0.0325906
+ },
+ {
+  "turn": 86,
+  "claims": [],
+  "cost": 0.0313176
+ },
+ {
+  "turn": 88,
+  "claims": [
+   {
+    "fact": "The company was incorporated in Delaware.",
+    "quote": "your company was incorporated in Delaware",
+    "turn": 88
+   },
+   {
+    "fact": "Atlas does not provide a Certificate of Good Standing for the company.",
+    "quote": "Atlas does not provide a Certificate of Good Standing.",
+    "turn": 88
+   },
+   {
+    "fact": "Atlas recommends using its partner LegalInc if a Certificate of Good Standing is needed.",
+    "quote": "we recommend using our partner LegalInc",
+    "turn": 88
+   },
+   {
+    "fact": "Atlas filed Form SS-4 with the IRS to request a tax ID (EIN) for the company.",
+    "quote": "Atlas files this form with the IRS to request a tax ID (EIN) for your company.",
+    "turn": 88
+   },
+   {
+    "fact": "Form 8821 gives Atlas permission to call the IRS on behalf of the company to prevent delays in getting its EIN.",
+    "quote": "Gives Atlas permission to call the IRS on your behalf to prevent delays in getting your EIN.",
+    "turn": 88
+   },
+   {
+    "fact": "Herasymovych Ihor has an Indemnification Agreement protecting him in the event of lawsuits while serving in his role at the company.",
+    "quote": "Protects you in the event of lawsuits while serving in your role.",
+    "turn": 88
+   },
+   {
+    "fact": "Herasymovych Ihor filed a Section 83(b) election for his equity in the company.",
+    "quote": "Section 83(b) for Herasymovych Ihor",
+    "turn": 88
+   },
+   {
+    "fact": "Herasymovych Ihor signed an Employee CIIAA to protect the company's intellectual property.",
+    "quote": "Protects your company's intellectual property.",
+    "turn": 88
+   },
+   {
+    "fact": "Herasymovych Ihor's founders' shares are held in escrow with the company Secretary under Joint Escrow Instructions.",
+    "quote": "Puts founders' shares in escrow with the company Secretary.",
+    "turn": 88
+   },
+   {
+    "fact": "The company has the right to repurchase Herasymovych Ihor's shares according to the terms of his Restricted Stock Purchase Agreement.",
+    "quote": "Allows the company to repurchase your shares based on terms in your Restricted Stock Purchase Agreement.",
+    "turn": 88
+   },
+   {
+    "fact": "Herasymovych Ihor's Restricted Stock Purchase Agreement defines the vesting schedule and acceleration terms for his initial share purchase in the company.",
+    "quote": "Defines the terms of your initial share purchase in the company, including your vesting schedule and acceleration.",
+    "turn": 88
+   },
+   {
+    "fact": "Herasymovych Ihor holds a Common Stock Certificate as the official record of his ownership in the company.",
+    "quote": "Official record of your ownership in the company.",
+    "turn": 88
+   }
+  ],
+  "cost": 0.0922846
+ },
+ {
+  "turn": 90,
+  "claims": [
+   {
+    "fact": "A document has been signed.",
+    "quote": "он подписан",
+    "turn": 90
+   },
+   {
+    "fact": "The document was signed without the transfer of any rights.",
+    "quote": "подписано типа без передачи каких-либо прав",
+    "turn": 90
+   },
+   {
+    "fact": "The document most likely needs to be signed again.",
+    "quote": "скорее всего, нужно прям еще раз подписывать",
+    "turn": 90
+   }
+  ],
+  "cost": 0.0204276
+ },
+ {
+  "turn": 92,
+  "claims": [],
+  "cost": 0.0533744
+ },
+ {
+  "turn": 94,
+  "claims": [],
+  "cost": 0.0273676
+ }
+]

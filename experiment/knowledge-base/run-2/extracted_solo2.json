@@ -1,0 +1,1304 @@
+[
+ {
+  "turn": 0,
+  "claims": [
+   {
+    "subject": "project popularization work",
+    "predicate": "start timeframe",
+    "value": "September 2026",
+    "polarity": "+",
+    "quote": "работы с, м-м-м, с сентября над популяризацией проекта",
+    "turn": 0
+   },
+   {
+    "subject": "project popularization plan",
+    "predicate": "planned channel",
+    "value": "Reddit launch",
+    "polarity": "+",
+    "quote": "мы, скорее всего, будем Reddit",
+    "turn": 0
+   },
+   {
+    "subject": "project popularization plan",
+    "predicate": "planned channel",
+    "value": "Product Hunt launch",
+    "polarity": "+",
+    "quote": "Product Hunt запуск",
+    "turn": 0
+   },
+   {
+    "subject": "project popularization plan",
+    "predicate": "planned channel",
+    "value": "dedicated website",
+    "polarity": "+",
+    "quote": "сайт и так далее",
+    "turn": 0
+   },
+   {
+    "subject": "marketing strategy",
+    "predicate": "initial priority",
+    "value": "focusing on a single target audience",
+    "polarity": "+",
+    "quote": "сфокусироваться на одной целевой аудитории",
+    "turn": 0
+   },
+   {
+    "subject": "marketing function",
+    "predicate": "tooling decision",
+    "value": "dedicated marketing agent",
+    "polarity": "+",
+    "quote": "создать маркетолога, агента маркетинга",
+    "turn": 0
+   },
+   {
+    "subject": "marketing agent setup",
+    "predicate": "prerequisite",
+    "value": "research into best practices the agent should follow before configuration",
+    "polarity": "+",
+    "quote": "перед этим изучи, пожалуйста, э-э-э, best practices, которые должен он придерживаться",
+    "turn": 0
+   },
+   {
+    "subject": "marketing agent",
+    "predicate": "usage pattern",
+    "value": "frequent consultation to get precise answers",
+    "polarity": "+",
+    "quote": "мы будем у него часто консультироваться",
+    "turn": 0
+   },
+   {
+    "subject": "marketing style",
+    "predicate": "style preference",
+    "value": "generic mainstream marketing",
+    "polarity": "-",
+    "quote": "мне не нужен попсовый bullshit",
+    "turn": 0
+   },
+   {
+    "subject": "marketing style",
+    "predicate": "style preference",
+    "value": "guerrilla marketing",
+    "polarity": "+",
+    "quote": "что-то из разряда партизанского маркетинга",
+    "turn": 0
+   },
+   {
+    "subject": "marketing strategy",
+    "predicate": "target market",
+    "value": "American audience",
+    "polarity": "+",
+    "quote": "которое сработает на американскую аудиторию",
+    "turn": 0
+   },
+   {
+    "subject": "target audience",
+    "predicate": "audience segment",
+    "value": "startup founders",
+    "polarity": "+",
+    "quote": "и в нашем кейсе это фаундеры",
+    "turn": 0
+   },
+   {
+    "subject": "target audience",
+    "predicate": "audience segment",
+    "value": "Product Hunt users",
+    "polarity": "+",
+    "quote": "люди, которые сидят на Product Hunt",
+    "turn": 0
+   }
+  ],
+  "cost": 0.0706814
+ },
+ {
+  "turn": 2,
+  "claims": [
+   {
+    "subject": "GTM agent",
+    "predicate": "data currency",
+    "value": "outdated information",
+    "polarity": "+",
+    "quote": "в GTM-агенте, вероятно, там немножко старая информация",
+    "turn": 2
+   },
+   {
+    "subject": "target audience",
+    "predicate": "audience segment",
+    "value": "founders",
+    "polarity": "+",
+    "quote": "сфокусироваться на одной аудитории, да, на фаундерах",
+    "turn": 2
+   },
+   {
+    "subject": "founders (target audience)",
+    "predicate": "team size",
+    "value": "small, resource-constrained teams",
+    "polarity": "+",
+    "quote": "у которых нет возможности нанять себе большую команду",
+    "turn": 2
+   },
+   {
+    "subject": "founders (target audience)",
+    "predicate": "core need",
+    "value": "delegating tasks",
+    "polarity": "+",
+    "quote": "хотят делегировать",
+    "turn": 2
+   },
+   {
+    "subject": "founders (target audience)",
+    "predicate": "core need",
+    "value": "competing with larger companies",
+    "polarity": "+",
+    "quote": "хотят, м-м-м, конкурировать",
+    "turn": 2
+   }
+  ],
+  "cost": 0.0569174
+ },
+ {
+  "turn": 10,
+  "claims": [
+   {
+    "subject": "product user growth goal",
+    "predicate": "target metric and deadline",
+    "value": "reaching 10,000 users by January",
+    "polarity": "+",
+    "quote": "мне обязательно, чтобы в итоге к январю мы получили десять тысяч пользователей",
+    "turn": 10
+   },
+   {
+    "subject": "marketing agent's analysis of the growth goal",
+    "predicate": "required output format",
+    "value": "numbers-backed analysis of how to achieve the goal",
+    "polarity": "+",
+    "quote": "Я хочу, чтобы маркетолог мне принес цифры.",
+    "turn": 10
+   },
+   {
+    "subject": "marketing agent's proposals for reaching the growth goal",
+    "predicate": "quantity of options required",
+    "value": "several alternative variants",
+    "polarity": "+",
+    "quote": "Мне нужно, э-э-э, как минимум несколько вариантов",
+    "turn": 10
+   },
+   {
+    "subject": "individual marketing ideas proposed toward the growth goal",
+    "predicate": "requirement for each idea to succeed",
+    "value": "every single idea working",
+    "polarity": "-",
+    "quote": "мне не обязательно, чтобы, м-м-м. Каждая его идея стреляла",
+    "turn": 10
+   },
+   {
+    "subject": "goal of reaching 10,000 users by January",
+    "predicate": "feasibility",
+    "value": "achievable",
+    "polarity": "+",
+    "quote": "Это все возможно.",
+    "turn": 10
+   },
+   {
+    "subject": "marketing agent's approach when the growth goal seems unreachable",
+    "predicate": "expected behavior toward claims of impossibility",
+    "value": "keep searching for a way to achieve it regardless",
+    "polarity": "+",
+    "quote": "Мне по барабану, если это невозможно",
+    "turn": 10
+   }
+  ],
+  "cost": 0.0608314
+ },
+ {
+  "turn": 20,
+  "claims": [
+   {
+    "subject": "requested growth strategy variants",
+    "predicate": "diversity",
+    "value": "highly varied and different from one another",
+    "polarity": "+",
+    "quote": "пускай проверяет различные, просто мега разные варианты",
+    "turn": 20
+   },
+   {
+    "subject": "requested growth strategy variants",
+    "predicate": "quantity needed",
+    "value": "many options",
+    "polarity": "+",
+    "quote": "нужно таких вариантов много",
+    "turn": 20
+   },
+   {
+    "subject": "requested growth strategy variants",
+    "predicate": "complexity",
+    "value": "simple",
+    "polarity": "+",
+    "quote": "они должны быть простые",
+    "turn": 20
+   },
+   {
+    "subject": "requested growth strategy variants",
+    "predicate": "impact profile",
+    "value": "explosive, high-impact growth",
+    "polarity": "+",
+    "quote": "взрывные",
+    "turn": 20
+   },
+   {
+    "subject": "requested growth strategy variants",
+    "predicate": "risk profile",
+    "value": "high-risk",
+    "polarity": "+",
+    "quote": "скорее всего, высокорискованные",
+    "turn": 20
+   },
+   {
+    "subject": "an acceptable growth variant",
+    "predicate": "probability of success",
+    "value": "very low chance of success despite real growth potential",
+    "polarity": "+",
+    "quote": "вариант, который предполагает рост, но шанс очень маленький",
+    "turn": 20
+   }
+  ],
+  "cost": 0.1214904
+ },
+ {
+  "turn": 28,
+  "claims": [
+   {
+    "subject": "10,000 users goal by January",
+    "predicate": "what counts toward the goal",
+    "value": "browser extension installations",
+    "polarity": "-",
+    "quote": "установка расширения не считается",
+    "turn": 28
+   },
+   {
+    "subject": "browser extension",
+    "predicate": "development rationale",
+    "value": "justified only if it boosts growth toward the user goal",
+    "polarity": "+",
+    "quote": "мы можем сделать расширение, если это нас как-то забустит",
+    "turn": 28
+   },
+   {
+    "subject": "growth strategy research",
+    "predicate": "focus",
+    "value": "identifying where founders and solo developers get their information from",
+    "polarity": "+",
+    "quote": "нужно смотреть на то, откуда фаундер получает информацию или соло-разраб",
+    "turn": 28
+   },
+   {
+    "subject": "product messaging",
+    "predicate": "framing",
+    "value": "delegation, rather than narrowly hiring developers",
+    "polarity": "+",
+    "quote": "Мы не будем лимитировать, мы про делегирование будем говорить",
+    "turn": 28
+   },
+   {
+    "subject": "target audience",
+    "predicate": "defining trait",
+    "value": "needs delegation but lacks budget to hire real developers",
+    "polarity": "+",
+    "quote": "Нужно делегирование, но у него нет денег на то, чтобы нанять реальных людей",
+    "turn": 28
+   },
+   {
+    "subject": "founders with sufficient budget for real developers",
+    "predicate": "product adoption likelihood",
+    "value": "adopting an AI-based delegation product",
+    "polarity": "-",
+    "quote": "если у человека достаточно денег и у него достаточный бюджет для реальных людей, то он наймёт реального человека, а не искусственный интеллект",
+    "turn": 28
+   },
+   {
+    "subject": "micromanager founders with budget",
+    "predicate": "size as a target audience segment",
+    "value": "a large enough segment to prioritize",
+    "polarity": "-",
+    "quote": "таких, скорее всего, слишком мало",
+    "turn": 28
+   },
+   {
+    "subject": "marketing research deliverable",
+    "predicate": "required content",
+    "value": "full list of information sources the target users get information from",
+    "polarity": "+",
+    "quote": "Мне нужно все источники информации, из которых они получают информацию",
+    "turn": 28
+   },
+   {
+    "subject": "marketing research deliverable",
+    "predicate": "excluded content",
+    "value": "calculated growth numbers/projections",
+    "polarity": "-",
+    "quote": "не то, чтобы мне просчитать какие-то цифры",
+    "turn": 28
+   },
+   {
+    "subject": "target market",
+    "predicate": "geography",
+    "value": "United States",
+    "polarity": "+",
+    "quote": "для нас это США",
+    "turn": 28
+   },
+   {
+    "subject": "target user research",
+    "predicate": "required data",
+    "value": "the user's concerns and pain points",
+    "polarity": "+",
+    "quote": "какие у него переживания",
+    "turn": 28
+   },
+   {
+    "subject": "go-to-market methodology",
+    "predicate": "process order",
+    "value": "first defining the target user profile, then designing guerrilla tactics to reach them",
+    "polarity": "+",
+    "quote": "сначала нужно проработать вот это вот — пользователя. А потом уже на этого пользователя навешивать варианты",
+    "turn": 28
+   },
+   {
+    "subject": "guerrilla marketing tactics",
+    "predicate": "candidate tactic",
+    "value": "creating accounts and artificially boosting engagement (накрутка)",
+    "polarity": "+",
+    "quote": "создание аккаунта и накрутка",
+    "turn": 28
+   },
+   {
+    "subject": "guerrilla marketing tactics",
+    "predicate": "candidate tactic",
+    "value": "cheap advertising through microbloggers",
+    "polarity": "+",
+    "quote": "какая-то дешёвая реклама у микроблогеров",
+    "turn": 28
+   },
+   {
+    "subject": "guerrilla marketing tactics",
+    "predicate": "candidate tactic",
+    "value": "YouTube videos",
+    "polarity": "+",
+    "quote": "YouTube-видео как один из шансов",
+    "turn": 28
+   },
+   {
+    "subject": "guerrilla marketing tactics",
+    "predicate": "candidate tactic",
+    "value": "solving a specific problem the user faces",
+    "polarity": "+",
+    "quote": "решение какой-то с-специфической проблемы, с которой он сталкивается",
+    "turn": 28
+   },
+   {
+    "subject": "go-to-market methodology",
+    "predicate": "starting point",
+    "value": "the target user",
+    "polarity": "+",
+    "quote": "нужно идти по шагам от нашего пользователя",
+    "turn": 28
+   },
+   {
+    "subject": "go-to-market methodology",
+    "predicate": "starting point",
+    "value": "the desired end result",
+    "polarity": "-",
+    "quote": "ты пошёл от результата",
+    "turn": 28
+   },
+   {
+    "subject": "go-to-market strategy",
+    "predicate": "goal",
+    "value": "being visible across every touchpoint in the user's discovery journey (e.g. TikTok, GitHub, website)",
+    "polarity": "+",
+    "quote": "мы должны быть на радаре у этого пользователя",
+    "turn": 28
+   }
+  ],
+  "cost": 0.13320040000000002
+ },
+ {
+  "turn": 30,
+  "claims": [
+   {
+    "subject": "current work priority",
+    "predicate": "topic to focus on now",
+    "value": "building the target user profile",
+    "polarity": "+",
+    "quote": "сначала сделай мне пользователя, сделай мне охуенную просто",
+    "turn": 30
+   },
+   {
+    "subject": "current work priority",
+    "predicate": "topic to focus on now",
+    "value": "go-to-market tactics",
+    "polarity": "-",
+    "quote": "Не нужно мне сейчас никакие, блядь, тактики",
+    "turn": 30
+   },
+   {
+    "subject": "work output",
+    "predicate": "deliverable format",
+    "value": "a dashboard showing the results of the work",
+    "polarity": "+",
+    "quote": "сделай мне дашборд, в котором я смогу видеть результат работы",
+    "turn": 30
+   },
+   {
+    "subject": "dashboard result definition",
+    "predicate": "what the result should show",
+    "value": "full breakdown of time the target audience spends online and in the physical world",
+    "polarity": "+",
+    "quote": "Результатом работы в данном случае должно быть полноценная проработка времени, которое пользователь, наша целевая аудитория тратит в интернете или в физическом мире",
+    "turn": 30
+   },
+   {
+    "subject": "time breakdown in dashboard",
+    "predicate": "required granularity",
+    "value": "hour-by-hour breakdown",
+    "polarity": "+",
+    "quote": "Мне нужно полностью, вот по часам",
+    "turn": 30
+   },
+   {
+    "subject": "time breakdown in dashboard",
+    "predicate": "ideal reporting timeframe",
+    "value": "a full year broken down by month",
+    "polarity": "+",
+    "quote": "В идеале, если ты мне даже в год покажешь, то есть годовое по месяцам",
+    "turn": 30
+   },
+   {
+    "subject": "dashboard",
+    "predicate": "number of user profiles supported",
+    "value": "multiple user profiles",
+    "polarity": "+",
+    "quote": "Это может быть несколько профилей пользователей",
+    "turn": 30
+   },
+   {
+    "subject": "target user profile data",
+    "predicate": "reusability requirement",
+    "value": "structured for convenient use by other agents",
+    "polarity": "+",
+    "quote": "чтобы это потом удобно было использовать другим агентам",
+    "turn": 30
+   },
+   {
+    "subject": "target user profile data",
+    "predicate": "presentation requirement",
+    "value": "visualizable format",
+    "polarity": "+",
+    "quote": "это должно быть и визуализируемо",
+    "turn": 30
+   },
+   {
+    "subject": "target user profile data",
+    "predicate": "agent access requirement",
+    "value": "queryable on request by other agents for coordination",
+    "polarity": "+",
+    "quote": "чтобы другие агенты мо-могли, э-э-э, координироваться хорошо и видеть всю эту информацию по запросу",
+    "turn": 30
+   }
+  ],
+  "cost": 0.10017440000000001
+ },
+ {
+  "turn": 40,
+  "claims": [],
+  "cost": 0.028772000000000002
+ },
+ {
+  "turn": 42,
+  "claims": [],
+  "cost": 0.033063
+ },
+ {
+  "turn": 44,
+  "claims": [
+   {
+    "subject": "reselling agents' output (темщики model)",
+    "predicate": "assessment of the idea",
+    "value": "good potential use case",
+    "polarity": "+",
+    "quote": "хороший кейс хорошей кейс",
+    "turn": 44
+   },
+   {
+    "subject": "reselling agents' output (темщики model)",
+    "predicate": "market entry policy",
+    "value": "pursue this direction only if market demand clearly requires it",
+    "polarity": "+",
+    "quote": "если рыночек скажет то что нужно туда идти то пойдём",
+    "turn": 44
+   },
+   {
+    "subject": "product identity",
+    "predicate": "association to avoid",
+    "value": "ETN",
+    "polarity": "-",
+    "quote": "не хотелось бы превращаться в ETN",
+    "turn": 44
+   },
+   {
+    "subject": "product positioning",
+    "predicate": "desired identity",
+    "value": "professional tool",
+    "polarity": "+",
+    "quote": "хотелось бы быть каким-то профессиональным инструментом",
+    "turn": 44
+   }
+  ],
+  "cost": 0.041158
+ },
+ {
+  "turn": 46,
+  "claims": [],
+  "cost": 0.024088
+ },
+ {
+  "turn": 48,
+  "claims": [
+   {
+    "subject": "product license",
+    "predicate": "licensing unit",
+    "value": "per company",
+    "polarity": "+",
+    "quote": "лицензия на компанию",
+    "turn": 48
+   }
+  ],
+  "cost": 0.024983
+ },
+ {
+  "turn": 50,
+  "claims": [
+   {
+    "subject": "company software license",
+    "predicate": "license model",
+    "value": "proprietary license with open-source code",
+    "polarity": "+",
+    "quote": "проприетарная с открытым кодом да",
+    "turn": 50
+   }
+  ],
+  "cost": 0.023538999999999997
+ },
+ {
+  "turn": 52,
+  "claims": [
+   {
+    "subject": "employees at companies where the product is not adopted at company level",
+    "predicate": "cost of the product for them",
+    "value": "free",
+    "polarity": "+",
+    "quote": "им бесплатно если не внедрено на уровне компании",
+    "turn": 52
+   },
+   {
+    "subject": "solo developers with zero revenue",
+    "predicate": "role in pricing strategy",
+    "value": "a segment the pricing strategy aims to keep engaged with lenient terms",
+    "polarity": "+",
+    "quote": "соло ребят которые ничего не зарабатывают",
+    "turn": 52
+   },
+   {
+    "subject": "pricing model",
+    "predicate": "alternative structure under consideration",
+    "value": "proprietary license with a subscription",
+    "polarity": "+",
+    "quote": "проприетарная + подписка",
+    "turn": 52
+   },
+   {
+    "subject": "proprietary license subscription",
+    "predicate": "pricing during the initial period",
+    "value": "free",
+    "polarity": "+",
+    "quote": "первое время просто будет бесплатно",
+    "turn": 52
+   }
+  ],
+  "cost": 0.080729
+ },
+ {
+  "turn": 54,
+  "claims": [
+   {
+    "subject": "product license",
+    "predicate": "forking policy",
+    "value": "forks are permitted",
+    "polarity": "+",
+    "quote": "Разрешим форки",
+    "turn": 54
+   },
+   {
+    "subject": "product license",
+    "predicate": "license ownership",
+    "value": "license is retained by us",
+    "polarity": "+",
+    "quote": "лицензия у нас",
+    "turn": 54
+   }
+  ],
+  "cost": 0.024663000000000004
+ },
+ {
+  "turn": 56,
+  "claims": [
+   {
+    "subject": "pricing/usage thresholds",
+    "predicate": "threshold policy",
+    "value": "thresholds kept frozen and unchanged",
+    "polarity": "+",
+    "quote": "Я бы хотел заморозить пороги",
+    "turn": 56
+   },
+   {
+    "subject": "big tech companies (Anthropic, OpenAI, Microsoft) adopting the product company-wide",
+    "predicate": "payment for company-wide adoption",
+    "value": "free company-wide use by employees without the company paying or donating anything",
+    "polarity": "-",
+    "quote": "не хотелось бы, если бы, знаешь, company wide, там, какой-то Anthropic, OpenAI и Microsoft, и кто-то еще внедрили наш УШУ Ади, да, и мотивировали сотрудников его использовать, но при этом вообще бы не донатили нам",
+    "turn": 56
+   },
+   {
+    "subject": "the product",
+    "predicate": "self-sufficiency",
+    "value": "a sufficiently self-sufficient product",
+    "polarity": "+",
+    "quote": "продукт, а, м-м-м, достаточно самодостаточный",
+    "turn": 56
+   },
+   {
+    "subject": "JetBrains-style versioned license purchase model",
+    "predicate": "licensing model for the product",
+    "value": "customers buying a specific fixed version, JetBrains-style",
+    "polarity": "-",
+    "quote": "но с другой стороны, не хотелось бы так",
+    "turn": 56
+   }
+  ],
+  "cost": 0.09113900000000003
+ },
+ {
+  "turn": 58,
+  "claims": [
+   {
+    "subject": "enterprise license tier",
+    "predicate": "feature access model",
+    "value": "certain features are unlocked only in the enterprise license and negotiated personally with the vendor",
+    "polarity": "+",
+    "quote": "мне на самом деле даже нравится вот эта вот идея про какие-то фичи, которые ты получаешь только в, грубо говоря, enterprise-лицензии, которые лично обсуждаются с с нами как AD",
+    "turn": 58
+   },
+   {
+    "subject": "enterprise license tier",
+    "predicate": "included features",
+    "value": "user management functionality",
+    "polarity": "+",
+    "quote": "менеджмент пользователей",
+    "turn": 58
+   }
+  ],
+  "cost": 0.030467
+ },
+ {
+  "turn": 60,
+  "claims": [
+   {
+    "subject": "Enterprise code",
+    "predicate": "repository structure",
+    "value": "kept in a separate repository from OpenCore",
+    "polarity": "+",
+    "quote": "он живёт в отдельной репе, да, то есть OpenCore плюс Enterprise отдельные репозитории",
+    "turn": 60
+   },
+   {
+    "subject": "Enterprise repository",
+    "predicate": "development ownership",
+    "value": "developed solely in-house by the company",
+    "polarity": "+",
+    "quote": "которые чисто нами разрабатываются",
+    "turn": 60
+   },
+   {
+    "subject": "hiding Enterprise source code",
+    "predicate": "legal rationale",
+    "value": "makes it easier to defend legally, since the hidden code can later be shown as proof if needed",
+    "polarity": "+",
+    "quote": "просто защитить юридически будет, э-э-э, проще, если мыыы спрячем этот код, чтобы потом сказать: «Ну, вот смотрите, вот этот код»",
+    "turn": 60
+   }
+  ],
+  "cost": 0.033222
+ },
+ {
+  "turn": 62,
+  "claims": [
+   {
+    "subject": "Enterprise licensing monetization strategy",
+    "predicate": "risk to the model",
+    "value": "an enterprise customer writing their own wrapper around the code, which collapses the monetization model",
+    "polarity": "+",
+    "quote": "никто не мешает, м-м-м, тому же Enterprise написать просто свою обёртку. И тогда наша просто вся монетизация разваливается",
+    "turn": 62
+   }
+  ],
+  "cost": 0.034862
+ },
+ {
+  "turn": 64,
+  "claims": [
+   {
+    "subject": "Mesh product",
+    "predicate": "necessity",
+    "value": "the product is needed",
+    "polarity": "+",
+    "quote": "Mesh нужен, знаешь почему?",
+    "turn": 64
+   },
+   {
+    "subject": "enterprise Mesh global control feature",
+    "predicate": "user management inclusion",
+    "value": "user management functionality",
+    "polarity": "-",
+    "quote": "в Mesh не будем добавлять управление пооользователями и так далее",
+    "turn": 64
+   },
+   {
+    "subject": "user management functionality",
+    "predicate": "product location",
+    "value": "the regular/current Mesh",
+    "polarity": "+",
+    "quote": "Это будет в обычном Mesh, вот как сейчас, да?",
+    "turn": 64
+   },
+   {
+    "subject": "enterprise Mesh global control feature",
+    "predicate": "capability",
+    "value": "global control over Mesh deployments",
+    "polarity": "+",
+    "quote": "сделаем возможность контролировать Mesh глобально",
+    "turn": 64
+   },
+   {
+    "subject": "enterprise Mesh global control feature",
+    "predicate": "capability",
+    "value": "visibility into where Mesh traffic goes",
+    "polarity": "+",
+    "quote": "видеть, где Mesh уходит",
+    "turn": 64
+   },
+   {
+    "subject": "enterprise Mesh global control feature",
+    "predicate": "capability",
+    "value": "restricting Mesh to specific ports",
+    "polarity": "+",
+    "quote": "давать возможность, м-м-м, Mesh на какие-то порты и так далее",
+    "turn": 64
+   },
+   {
+    "subject": "enterprise Mesh global control feature",
+    "predicate": "product category",
+    "value": "corporate-level control over the whole system",
+    "polarity": "+",
+    "quote": "скорее корпоративный такой контроль всего",
+    "turn": 64
+   }
+  ],
+  "cost": 0.053387
+ },
+ {
+  "turn": 66,
+  "claims": [],
+  "cost": 0.018265999999999998
+ },
+ {
+  "turn": 70,
+  "claims": [
+   {
+    "subject": "Tailscale integration",
+    "predicate": "product decision",
+    "value": "build an integration with Tailscale",
+    "polarity": "+",
+    "quote": "нам стоит сделать интеграцию с Tailscale",
+    "turn": 70
+   },
+   {
+    "subject": "mesh product",
+    "predicate": "Tailscale switching capability",
+    "value": "allow switching the mesh to Tailscale for companies that have enterprise Tailscale",
+    "polarity": "+",
+    "quote": "возможность переключить наш mesh на Tailscale, если у компании, да, есть enterprise Tailscale",
+    "turn": 70
+   }
+  ],
+  "cost": 0.031114
+ },
+ {
+  "turn": 74,
+  "claims": [
+   {
+    "subject": "the company",
+    "predicate": "US market presence",
+    "value": "already established in the United States",
+    "polarity": "+",
+    "quote": "Компания уже открыта в США.",
+    "turn": 74
+   },
+   {
+    "subject": "India market",
+    "predicate": "willingness to enter",
+    "value": "pursued if it proves an interesting business case",
+    "polarity": "+",
+    "quote": "мы на Индию тоже можем работать",
+    "turn": 74
+   },
+   {
+    "subject": "product brand perception",
+    "predicate": "association with India",
+    "value": "perceived as a product made specifically for India",
+    "polarity": "-",
+    "quote": "будто бы мы, э-э-э, продукт для Индии",
+    "turn": 74
+   },
+   {
+    "subject": "India",
+    "predicate": "market perception",
+    "value": "carries an economy/cheap connotation",
+    "polarity": "+",
+    "quote": "имеет такой флёр, знаешь, э-э-э, экономии",
+    "turn": 74
+   },
+   {
+    "subject": "India enterprise segment",
+    "predicate": "attitude toward pursuing",
+    "value": "openness, since many enterprises are technically led by Indians",
+    "polarity": "+",
+    "quote": "потому что много энтерпрайзов индусы в-во главе технические",
+    "turn": 74
+   },
+   {
+    "subject": "Indian engineers",
+    "predicate": "technical skill",
+    "value": "strong technical ability",
+    "polarity": "+",
+    "quote": "индусы достаточно хороши технически",
+    "turn": 74
+   },
+   {
+    "subject": "India market strategy",
+    "predicate": "positioning approach",
+    "value": "balancing engagement with India against avoiding an India-only brand image",
+    "polarity": "+",
+    "quote": "главное, наверное, будет соблюсти баланс",
+    "turn": 74
+   },
+   {
+    "subject": "China",
+    "predicate": "target market priority",
+    "value": "one of the main target markets",
+    "polarity": "+",
+    "quote": "Кит-- ой, Китай, э-э-э, США, Евросоюз. Это основные рынки",
+    "turn": 74
+   },
+   {
+    "subject": "United States",
+    "predicate": "target market priority",
+    "value": "one of the main target markets",
+    "polarity": "+",
+    "quote": "Кит-- ой, Китай, э-э-э, США, Евросоюз. Это основные рынки",
+    "turn": 74
+   },
+   {
+    "subject": "European Union",
+    "predicate": "target market priority",
+    "value": "one of the main target markets",
+    "polarity": "+",
+    "quote": "Кит-- ой, Китай, э-э-э, США, Евросоюз. Это основные рынки",
+    "turn": 74
+   },
+   {
+    "subject": "India",
+    "predicate": "target market priority",
+    "value": "a secondary market considered after the main markets",
+    "polarity": "+",
+    "quote": "Потом можно рассматривать Индию, э-э-э, и пост-СНГ",
+    "turn": 74
+   },
+   {
+    "subject": "post-CIS countries",
+    "predicate": "target market priority",
+    "value": "a secondary market considered after the main markets",
+    "polarity": "+",
+    "quote": "Потом можно рассматривать Индию, э-э-э, и пост-СНГ",
+    "turn": 74
+   },
+   {
+    "subject": "China market entry",
+    "predicate": "feasibility",
+    "value": "uncertain due to extensive regulatory requirements",
+    "polarity": "+",
+    "quote": "Китай классный, но Китай — там надо ещё соблюсти регуляции. Поэтому тут я немножкооо не уверен то, что мы сможем в Китай выйти.",
+    "turn": 74
+   }
+  ],
+  "cost": 0.08171499999999998
+ },
+ {
+  "turn": 76,
+  "claims": [
+   {
+    "subject": "China",
+    "predicate": "market attractiveness",
+    "value": "interesting market",
+    "polarity": "+",
+    "quote": "Китай я считаю интересным рынком",
+    "turn": 76
+   },
+   {
+    "subject": "China",
+    "predicate": "population size",
+    "value": "very large population",
+    "polarity": "+",
+    "quote": "Там очень много людей",
+    "turn": 76
+   },
+   {
+    "subject": "China",
+    "predicate": "consumer purchasing power",
+    "value": "unclear how much paying ability the population has",
+    "polarity": "+",
+    "quote": "Не знаю, насколько они платежеспособны",
+    "turn": 76
+   },
+   {
+    "subject": "China",
+    "predicate": "market candidacy",
+    "value": "one of the markets worth considering",
+    "polarity": "+",
+    "quote": "я бы тоже рассматривал его как один из",
+    "turn": 76
+   },
+   {
+    "subject": "China",
+    "predicate": "market entry decision process",
+    "value": "requires calculating how reasonable entering the market would be",
+    "polarity": "+",
+    "quote": "посчитал бы, м-м-м, типа, насколько действительно это было бы там резонно",
+    "turn": 76
+   }
+  ],
+  "cost": 0.04737
+ },
+ {
+  "turn": 80,
+  "claims": [
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "European Union",
+    "polarity": "+",
+    "quote": "весь ЕС",
+    "turn": 80
+   },
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "India",
+    "polarity": "+",
+    "quote": "Индию",
+    "turn": 80
+   },
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "China",
+    "polarity": "+",
+    "quote": "Китай",
+    "turn": 80
+   },
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "United States",
+    "polarity": "+",
+    "quote": "США",
+    "turn": 80
+   },
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "Brazil",
+    "polarity": "+",
+    "quote": "Бразилия",
+    "turn": 80
+   },
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "CIS (Commonwealth of Independent States)",
+    "polarity": "-",
+    "quote": "кроме СНГ",
+    "turn": 80
+   },
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "Ukraine",
+    "polarity": "+",
+    "quote": "Украину, по идее, мы тоже можем поддерживать",
+    "turn": 80
+   },
+   {
+    "subject": "Product country/market support",
+    "predicate": "supported markets",
+    "value": "sanctioned countries",
+    "polarity": "-",
+    "quote": "санкционные страны и исключить их",
+    "turn": 80
+   },
+   {
+    "subject": "China market entry",
+    "predicate": "compliance measure",
+    "value": "option to disable telemetry",
+    "polarity": "+",
+    "quote": "мы даём возможность отключить телеметрию",
+    "turn": 80
+   },
+   {
+    "subject": "China market entry",
+    "predicate": "compliance measure",
+    "value": "option to choose data storage server location",
+    "polarity": "+",
+    "quote": "выбрать сервера, на которых хранится информация",
+    "turn": 80
+   }
+  ],
+  "cost": 0.10826300000000001
+ },
+ {
+  "turn": 82,
+  "claims": [
+   {
+    "subject": "policy document generated from the country list",
+    "predicate": "document type",
+    "value": "privacy policy",
+    "polarity": "-",
+    "quote": "не конфиденциальности",
+    "turn": 82
+   },
+   {
+    "subject": "policy document generated from the country list",
+    "predicate": "document type",
+    "value": "terms of usage document",
+    "polarity": "+",
+    "quote": "terms of, э-э-э, usage типа",
+    "turn": 82
+   },
+   {
+    "subject": "terms of usage document",
+    "predicate": "content source",
+    "value": "generated from a maintained list of countries",
+    "polarity": "+",
+    "quote": "перечислим список стран и на основе этого будем генер-генерировать текст",
+    "turn": 82
+   },
+   {
+    "subject": "terms of usage document",
+    "predicate": "implementation format",
+    "value": "a TypeScript file that runs and generates the policy text",
+    "polarity": "+",
+    "quote": "это должен быть, например, там TypeScript файл, например, который запускается и генерируется текст политики",
+    "turn": 82
+   }
+  ],
+  "cost": 0.07029200000000001
+ },
+ {
+  "turn": 86,
+  "claims": [
+   {
+    "subject": "international data transfer",
+    "predicate": "legal basis",
+    "value": "data is transferred officially",
+    "polarity": "+",
+    "quote": "переда-передаем официально",
+    "turn": 86
+   },
+   {
+    "subject": "international data transfer",
+    "predicate": "contractual option",
+    "value": "a contract can be signed to formalize the data transfer",
+    "polarity": "+",
+    "quote": "можем даже контракт подписать",
+    "turn": 86
+   }
+  ],
+  "cost": 0.031602000000000005
+ },
+ {
+  "turn": 88,
+  "claims": [
+   {
+    "subject": "the company",
+    "predicate": "state of incorporation",
+    "value": "incorporated in Delaware",
+    "polarity": "+",
+    "quote": "Formal record that your company was incorporated in Delaware.",
+    "turn": 88
+   },
+   {
+    "subject": "company bylaws",
+    "predicate": "content",
+    "value": "define the role of the board and officers, and company procedures like holding board meetings and approving shares",
+    "polarity": "+",
+    "quote": "Defines the role of the board and officers, and company procedures like holding board meetings and approving shares.",
+    "turn": 88
+   },
+   {
+    "subject": "Action by Written Consent of Sole Incorporator",
+    "predicate": "purpose",
+    "value": "appoints the company's initial board of directors",
+    "polarity": "+",
+    "quote": "Appoints the initial board of directors.",
+    "turn": 88
+   },
+   {
+    "subject": "Initial Action by the Board of Directors",
+    "predicate": "purpose",
+    "value": "serves as the company's initial board meeting and approves issuance of founders' shares",
+    "polarity": "+",
+    "quote": "Serves as your initial board meeting and approves issuance of founders' shares.",
+    "turn": 88
+   },
+   {
+    "subject": "Atlas",
+    "predicate": "Certificate of Good Standing service",
+    "value": "providing a Certificate of Good Standing",
+    "polarity": "-",
+    "quote": "Atlas does not provide a Certificate of Good Standing.",
+    "turn": 88
+   },
+   {
+    "subject": "Atlas",
+    "predicate": "recommended partner for Certificate of Good Standing",
+    "value": "LegalInc",
+    "polarity": "+",
+    "quote": "we recommend using our partner LegalInc",
+    "turn": 88
+   },
+   {
+    "subject": "Atlas",
+    "predicate": "EIN application process",
+    "value": "files Form SS-4 with the IRS to request the company's tax ID (EIN)",
+    "polarity": "+",
+    "quote": "Atlas files this form with the IRS to request a tax ID (EIN) for your company.",
+    "turn": 88
+   },
+   {
+    "subject": "Form 8821",
+    "predicate": "purpose",
+    "value": "grants Atlas permission to call the IRS on the company's behalf to prevent delays in getting the EIN",
+    "polarity": "+",
+    "quote": "Gives Atlas permission to call the IRS on your behalf to prevent delays in getting your EIN.",
+    "turn": 88
+   },
+   {
+    "subject": "Herasymovych Ihor",
+    "predicate": "equity tax election",
+    "value": "filed a Section 83(b) election to pay taxes on his equity when granted rather than when it vests",
+    "polarity": "+",
+    "quote": "Tax filing that allows founders to pay taxes on equity when it's granted, rather than when it vests.",
+    "turn": 88
+   },
+   {
+    "subject": "Herasymovych Ihor",
+    "predicate": "intellectual property assignment agreement",
+    "value": "signed a CIIAA that protects the company's intellectual property",
+    "polarity": "+",
+    "quote": "Form of Employee CIIAA for Herasymovych Ihor\nProtects your company's intellectual property.",
+    "turn": 88
+   },
+   {
+    "subject": "Herasymovych Ihor's founder shares",
+    "predicate": "escrow arrangement",
+    "value": "held in escrow with the company Secretary",
+    "polarity": "+",
+    "quote": "Puts founders' shares in escrow with the company Secretary.",
+    "turn": 88
+   },
+   {
+    "subject": "the company",
+    "predicate": "repurchase right over Herasymovych Ihor's shares",
+    "value": "can repurchase his shares based on the terms in his Restricted Stock Purchase Agreement",
+    "polarity": "+",
+    "quote": "Allows the company to repurchase your shares based on terms in your Restricted Stock Purchase Agreement.",
+    "turn": 88
+   },
+   {
+    "subject": "Herasymovych Ihor's initial share purchase",
+    "predicate": "terms",
+    "value": "defined by the RSPA, including vesting schedule and acceleration",
+    "polarity": "+",
+    "quote": "Defines the terms of your initial share purchase in the company, including your vesting schedule and acceleration.",
+    "turn": 88
+   },
+   {
+    "subject": "Herasymovych Ihor",
+    "predicate": "ownership record",
+    "value": "holds a Common Stock Certificate as the official record of his ownership in the company",
+    "polarity": "+",
+    "quote": "Official record of your ownership in the company.",
+    "turn": 88
+   },
+   {
+    "subject": "Herasymovych Ihor",
+    "predicate": "indemnification protection",
+    "value": "protected by an Indemnification Agreement in the event of lawsuits while serving in his role",
+    "polarity": "+",
+    "quote": "Protects you in the event of lawsuits while serving in your role.",
+    "turn": 88
+   }
+  ],
+  "cost": 0.095514
+ },
+ {
+  "turn": 90,
+  "claims": [
+   {
+    "subject": "the transfer agreement",
+    "predicate": "completeness of the signed version",
+    "value": "transfer of rights",
+    "polarity": "-",
+    "quote": "этооо подписано типа без передачи каких-либо прав",
+    "turn": 90
+   },
+   {
+    "subject": "the transfer agreement",
+    "predicate": "required next step",
+    "value": "re-signing the document",
+    "polarity": "+",
+    "quote": "скорее всего, нужно прям еще раз подписывать",
+    "turn": 90
+   }
+  ],
+  "cost": 0.106376
+ },
+ {
+  "turn": 92,
+  "claims": [],
+  "cost": 0.026395000000000002
+ },
+ {
+  "turn": 94,
+  "claims": [],
+  "cost": 0.024287999999999997
+ }
+]
