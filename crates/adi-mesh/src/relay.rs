@@ -45,13 +45,29 @@ pub fn relay_mode(relays: &[String]) -> Option<RelayMode> {
         if !relays.is_empty() {
             warn!(
                 configured = relays.len(),
-                "mesh: no configured relay URL parsed; falling back to the public relays"
+                "mesh: no configured relay URL parsed; falling back to the adi relays"
             );
         }
-        return None;
+        let fallback = relay_urls(&DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        return Some(RelayMode::Custom(RelayMap::from_iter(fallback)));
     }
     Some(RelayMode::Custom(RelayMap::from_iter(urls)))
 }
+
+/// Where a machine calls home when its config names no relay. **Ours, not n0's, since
+/// 2026-08-24**, and the reason is not preference.
+///
+/// n0's public relay answers a websocket upgrade *without* echoing `sec-websocket-protocol`, which
+/// RFC 6455 §4.1 requires a client to fail on — so a browser gets `CloseEvent { code: 1006 }` and a
+/// node left on the public default is unreachable from the browser client **entirely**, not slowly
+/// (measured 2026-08-24). Ours echoes `iroh-relay-v2`.
+///
+/// **One entry, deliberately.** iroh settles each machine on its own *nearest* relay in the map, so
+/// a mixed map of ours and n0's would make browser reachability a coin flip decided by geography —
+/// the "everything works, just not where you think" failure this module's header warns about. A
+/// second region is one more line here once it exists; `fra.mono-relay.withadi.dev` was in this
+/// crate's test fixtures and has never resolved, so it is not in this list.
+pub const DEFAULT_RELAYS: &[&str] = &["https://mad.mono-relay.withadi.dev"];
 
 /// The schemes a relay can actually be reached over. A relay is an HTTPS endpoint that upgrades to
 /// a websocket; `http` is here only because a `--dev` relay on a trusted LAN skips TLS.
@@ -99,11 +115,13 @@ mod tests {
     }
 
     #[test]
-    fn no_configured_relay_leaves_the_preset_alone() {
-        // Not `Disabled`: a machine that configured nothing must keep the behaviour it had before
-        // this setting existed, which is n0's public relays.
-        assert!(relay_mode(&[]).is_none());
-        assert!(relay_mode(&urls(&["", "   "])).is_none());
+    fn no_configured_relay_lands_on_ours() {
+        // Not `Disabled`, and no longer n0's preset either: a machine that configures nothing must
+        // still be reachable from a browser, and n0's relay refuses a browser websocket outright.
+        for cfg in [vec![], urls(&["", "   "])] {
+            let mode = relay_mode(&cfg).expect("a default map, never None");
+            assert_eq!(mode.relay_map().len(), DEFAULT_RELAYS.len());
+        }
     }
 
     #[test]
@@ -139,10 +157,9 @@ mod tests {
     fn all_urls_unusable_falls_back_rather_than_disabling_relays() {
         // The dangerous shape: an empty custom map is `Disabled` in all but name, and a machine
         // with relaying off is simply unreachable from anywhere but its own LAN.
-        assert!(
-            relay_mode(&urls(&["not a url", "also::not::one"])).is_none(),
-            "a config that parsed to nothing must fall back, never disable"
-        );
+        let mode = relay_mode(&urls(&["not a url", "also::not::one"]))
+            .expect("a config that parsed to nothing must fall back, never disable");
+        assert_eq!(mode.relay_map().len(), DEFAULT_RELAYS.len());
     }
 
     #[test]

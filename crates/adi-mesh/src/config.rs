@@ -23,8 +23,11 @@ pub struct MeshConfig {
     pub host: HostConfig,
     /// Local ports this machine forwards to a peer's port.
     pub forwards: Vec<Forward>,
-    /// The relay servers this machine may call home (`docs/fleet.md` §9). **Empty means n0's
-    /// public relays**, which is what every machine used before this field existed.
+    /// The relay servers this machine may call home (`docs/fleet.md` §9). **Empty means the adi
+    /// relays** ([`crate::relay::DEFAULT_RELAYS`]) — changed 2026-08-24, because n0's public relay
+    /// refuses a browser websocket outright and a machine on it is unreachable from the browser
+    /// client entirely. It used to mean n0's, which is what every machine used before this field
+    /// existed. Naming your own here still overrides both.
     ///
     /// A **list**, not one URL, and that is the whole scaling story. iroh measures every relay in
     /// the map and each machine settles on its own nearest as its home relay, so adding a second

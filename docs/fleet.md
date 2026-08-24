@@ -243,7 +243,14 @@ Relays are configured per machine, as a **list**, in `mesh.toml`:
 relays = ["https://mad.mono-relay.withadi.dev"]
 ```
 
-Empty means n0's public relays, which is what every machine ran before the field existed —
+Empty means **the adi relays** (`adi-mesh/src/relay.rs`, `DEFAULT_RELAYS`) as of 2026-08-24. It
+used to mean n0's public relays, which is what every machine ran before the field existed, and the
+reason it changed is not preference: n0's relay answers a websocket upgrade without echoing
+`sec-websocket-protocol`, which RFC 6455 §4.1 requires a client to fail on, so a browser gets
+`CloseEvent { code: 1006 }` and a machine left on the public default is unreachable from the
+browser client **entirely**. One entry, deliberately — iroh settles each machine on its own
+*nearest* relay, so a mixed map of ours and n0's would make browser reachability a coin flip
+decided by geography. Naming your own here still overrides the default —
 deliberately *not* `RelayMode::Disabled`, because off-LAN that reads as "unreachable" far more often
 than "direct only". A list rather than one URL because iroh probes every relay in the map and each
 machine settles on its own nearest as its home (`net_report`'s `preferred_relay`): a second region
