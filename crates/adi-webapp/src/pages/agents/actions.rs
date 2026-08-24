@@ -3874,10 +3874,10 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
 }
 
 /// The headless centre: the selected conversation's transcript (+ reply), or — when no session is
-/// selected — the home screen: a composer to start a new one, and under it the board of what is
-/// already going on ([`chat_home_board`]). The composer's title *is* the agent chooser — with
-/// several agents to pick between, which one a new chat goes to is both the thing worth saying out
-/// loud and the thing worth being able to change right there.
+/// selected — the home screen: a composer to start a new one, and under it whatever is stopped
+/// waiting on you ([`chat_inbox`]). The composer's title *is* the agent chooser — with several
+/// agents to pick between, which one a new chat goes to is both the thing worth saying out loud
+/// and the thing worth being able to change right there.
 fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
     view! {
         <div class="adi-chome__chatwrap">
@@ -3896,9 +3896,9 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
                         </div>
                         {run_bar(state, watch)}
                         // Its own closure, and that is not style: this arm holds the composer, and
-                        // reading the session lists out here would put every session update in the
+                        // reading the session list out here would put every session update in the
                         // dependencies of the tree the message is being typed into.
-                        {move || chat_home_board(state, watch)}
+                        {move || chat_inbox(state, watch)}
                     </div>
                 }
                 .into_any(),
@@ -3908,99 +3908,67 @@ fn chat_center_headless(state: State, watch: AgentsWatch) -> AnyView {
     .into_any()
 }
 
-/// How many sessions one board column lists before it stops and says how many are left.
+/// How many conversations the inbox lists before it stops and says how many are left.
 ///
-/// Six: the board answers "what is going on" at a glance, and the rail beside it is the full list.
-/// A column that grew without limit would be a second rail — and would push the composer, the one
-/// thing on this screen you came here to use, off the top of the pane.
-const BOARD_ROWS: usize = 6;
+/// Six: this sits under the composer, which is the thing you came to this screen to use, and a list
+/// that grew without limit would push it off the top of the pane. The rail beside it holds the
+/// rest — and lists them under the same heading, in the same order.
+const INBOX_ROWS: usize = 6;
 
-/// The board under the composer: **what needs you, what is working, and what you were last in** —
-/// the three questions this screen is opened with, answered where the eye already is rather than
-/// only in a rail that is a drawer on a narrow viewport and easy to read past on a wide one.
+/// Under the composer: **the conversations stopped waiting on you**, and nothing else.
 ///
-/// Drawn from [`session_bands`], the same list the rail is built from, so the two can never
-/// disagree about a session. Five bands become three columns: **Awaiting** folds into Active —
-/// something is going to happen in it, on its own — and **Starred** into Recent, because a star is
-/// a keep rather than a state, and a starred chat that is running is already in Active.
+/// The rail beside it already lists every session, banded — running, awaiting, starred, recent — so
+/// anything else here would be a second copy of the rail, drawn wider, on the one screen where
+/// there is nothing to compare it against. The exception is this band, because it is not a list but
+/// an *inbox*: those conversations have stopped until a person answers them, and that is the one
+/// thing worth putting in front of the person rather than off to the side of them.
 ///
-/// `None` when there is no session at all: on a fresh machine the composer keeps the pane to
-/// itself, which is the whole of what there is to say there.
-fn chat_home_board(state: State, watch: AgentsWatch) -> Option<AnyView> {
-    let ([waiting, running, awaiting, starred, rest], _filtered) = session_bands(state, watch);
-    // Re-sorted after each merge: the two halves are each newest-first, and concatenating two
-    // descending lists does not give a descending one.
-    let merge = |mut head: Vec<SessionRow>, tail: Vec<SessionRow>| {
-        head.extend(tail);
-        head.sort_by(|a, b| b.when.cmp(&a.when));
-        head
-    };
-    let active = merge(running, awaiting);
-    let recent = merge(starred, rest);
-    if waiting.is_empty() && active.is_empty() && recent.is_empty() {
+/// Drawn from [`session_bands`], the same list the rail is built from, so the two cannot disagree
+/// about a session; and the rows are the rail's own ([`chat_session_row`]), so a session opens,
+/// stars, deletes and right-clicks here exactly as it does over there.
+///
+/// `None` when nothing is waiting — which is the normal state of a machine, and then the composer
+/// keeps the pane to itself. Nothing asking is not news, and a panel saying so every day is how a
+/// panel stops being read on the day it has something to say.
+fn chat_inbox(state: State, watch: AgentsWatch) -> Option<AnyView> {
+    // Only the first band. The other four are the rail's business.
+    let ([waiting, ..], _filtered) = session_bands(state, watch);
+    if waiting.is_empty() {
         return None;
     }
+    let total = waiting.len();
+    let more = total.saturating_sub(INBOX_ROWS);
+    // Keyed, for the reason the rail's list is: a click handler is bound when its row is *built*,
+    // so a positional rebuild — which is what this list gaining or losing a row is — would leave
+    // the handler of the session that used to be in that slot on the one now drawn there.
+    let shown = StoredValue::new(waiting.into_iter().take(INBOX_ROWS).collect::<Vec<_>>());
     Some(
         view! {
-            <div class="adi-chome__board adi-ui-type">
-                {chat_board_column(state, watch, "Waiting on you", "Nothing is asking.", waiting)}
-                {chat_board_column(state, watch, "Active", "Nothing running.", active)}
-                {chat_board_column(state, watch, "Recent", "Nothing finished yet.", recent)}
+            <div class="adi-chome__inbox adi-ui-type">
+                <adi_ui::RailGroup label="Waiting on you" count=total>
+                    <For
+                        each=move || shown.get_value()
+                        key=|row: &SessionRow| {
+                            format!(
+                                "{}:{}",
+                                row.agent,
+                                row.run.as_ref().map_or("", |r| r.run_id.as_str()),
+                            )
+                        }
+                        let:row
+                    >
+                        {chat_session_row(state, watch, row)}
+                    </For>
+                </adi_ui::RailGroup>
+                {(more > 0).then(|| view! {
+                    <p class="adi-chome__inbox-more">
+                        {format!("+{more} more in the sessions rail")}
+                    </p>
+                })}
             </div>
         }
         .into_any(),
     )
-}
-
-/// One column of the board: a band heading carrying the band's *full* count, up to [`BOARD_ROWS`]
-/// sessions under it, and — when the band is longer than that — how many the rail still has.
-///
-/// The rows are the rail's own ([`chat_session_row`]), so a session opens, stars, deletes and
-/// right-clicks here exactly as it does over there; a second kind of row would be a second set of
-/// behaviours to keep in step with the first.
-///
-/// An empty column keeps its place and says so. The three are a fixed set of questions, and a
-/// column that vanished when its answer was "none" would move the other two under the cursor every
-/// time a chat stopped.
-fn chat_board_column(
-    state: State,
-    watch: AgentsWatch,
-    label: &'static str,
-    empty: &'static str,
-    rows: Vec<SessionRow>,
-) -> AnyView {
-    let total = rows.len();
-    let more = total.saturating_sub(BOARD_ROWS);
-    // Keyed, for the reason the rail's list is: a click handler is bound when its row is *built*,
-    // so a positional rebuild — which is what a band gaining or losing a row is — would leave the
-    // handler of the session that used to be in that slot on the one now drawn there.
-    let shown = StoredValue::new(rows.into_iter().take(BOARD_ROWS).collect::<Vec<_>>());
-    view! {
-        <div class="adi-chome__board-col">
-            <adi_ui::RailGroup label=label count=total>
-                {(total == 0).then(|| view! { <p class="adi-chome__board-empty">{empty}</p> })}
-                <For
-                    each=move || shown.get_value()
-                    key=|row: &SessionRow| {
-                        format!(
-                            "{}:{}",
-                            row.agent,
-                            row.run.as_ref().map_or("", |r| r.run_id.as_str()),
-                        )
-                    }
-                    let:row
-                >
-                    {chat_session_row(state, watch, row)}
-                </For>
-            </adi_ui::RailGroup>
-            {(more > 0).then(|| view! {
-                <p class="adi-chome__board-more">
-                    {format!("+{more} more in the sessions rail")}
-                </p>
-            })}
-        </div>
-    }
-    .into_any()
 }
 
 /// The dashboards rail: **what this machine runs, then what its fleet does.**

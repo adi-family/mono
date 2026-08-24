@@ -799,23 +799,16 @@
     }
   }
 
-  // --- the home board (centre, under the composer) ---------------------------------
-  // Three columns of sessions: waiting on you, active, recent. Wider than the composer above it
-  // on purpose — the composer is one line of typing and this is three lists to scan, so they want
-  // different widths, and the board being the wider of the two is what makes it read as a second
-  // thing rather than as an overrun of the first.
+  // --- the inbox (centre, under the composer) --------------------------------------
+  // The conversations stopped waiting on an answer, and only those — everything else about the
+  // sessions is the rail's job. Rendered only when there is one, so most of the time this is not
+  // on the screen at all.
   //
-  // `auto-fit` rather than a fixed three: between the mobile breakpoint and a wide window the
-  // centre pane is the viewport less both rails, and three columns in ~500px are three columns of
-  // clipped titles. It drops to two, then to one, on its own.
-  &__board {
-    width: min(100%, 980px);
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-    gap: var(--space-3);
-    align-items: start;
-  }
-  &__board-col {
+  // The composer's width, not wider: the two are one block read top to bottom — type a new
+  // message, or answer one of these — and a panel that broke the composer's edge would read as a
+  // second region of the screen rather than as the rest of the same one.
+  &__inbox {
+    width: min(100%, 620px);
     display: flex;
     flex-direction: column;
     min-width: 0;
@@ -824,16 +817,14 @@
     border-radius: var(--radius-sm);
     background: var(--surface);
   }
-  // What an empty column says, and what a full one says it is holding back. Both are asides about
-  // the list rather than rows in it, so they take the muted small type the rail's notes do.
-  &__board-empty,
-  &__board-more {
+  // What the list is holding back, when there are more waiting than it shows. An aside about the
+  // list rather than a row in it, so it takes the muted small type the rail's notes do.
+  &__inbox-more {
     margin: 0;
-    padding: 4px 10px;
+    padding: 8px 10px 4px;
     color: var(--muted);
     font-size: var(--text-xs);
   }
-  &__board-more { padding-top: 8px; }
   &__compose-intro { text-align: center; }
   // The title ends in the agent chooser, so it wraps as a line of text and a control rather than as
   // a heading alone — centred together, and never overflowing on a narrow pane.
