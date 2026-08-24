@@ -109,7 +109,7 @@ pub(crate) fn mesh_view(state: State, form: MeshForm) -> AnyView {
                 <h2 class="adi-panel__title">"Authorized peers"</h2>
                 <span class="adi-spacer"></span>
                 <span class="adi-updated">{move || mesh.get().map_or_else(String::new,
-                    |m| if m.authorized_peers.is_empty() { "any peer allowed".to_string() }
+                    |m| if m.authorized_peers.is_empty() { "none allowed".to_string() }
                         else { format!("{} allowed", m.authorized_peers.len()) })}</span>
             </div>
             <Table state=state.tables.mesh_peers>{move || mesh_peer_rows(state)}</Table>
@@ -215,11 +215,11 @@ fn mesh_allow_rows(state: State) -> AnyView {
         .into_any()
 }
 
-/// Rows for the authorized-peers table: a note when open to any peer, else one row per id.
+/// Rows for the authorized-peers table: a note when the list is empty, else one row per id.
 fn mesh_peer_rows(state: State) -> AnyView {
     let table = state.tables.mesh_peers;
     let mut peers =
-        match rows_or_placeholder(table, state.mesh.get().map(|v| v.authorized_peers), "Any peer may use the exposed ports. Add one to restrict access.") {
+        match rows_or_placeholder(table, state.mesh.get().map(|v| v.authorized_peers), "No peer may use the exposed ports. Add a key to allow one.") {
             Ok(rows) => rows,
             Err(placeholder) => return placeholder,
         };

@@ -43,8 +43,10 @@ pub struct MeshConfig {
 pub struct HostConfig {
     /// Local TCP ports exposed to peers (`127.0.0.1:<port>`). Empty exposes nothing.
     pub allow: Vec<u16>,
-    /// `EndpointId`s permitted to reach the allowed ports. **Empty means any peer** may
-    /// use them (still only the allow-listed ports). Non-empty restricts to this set.
+    /// `EndpointId`s permitted to reach the allowed ports. **Default-deny: empty admits
+    /// nobody.** Naming a key is what opens a raw forward to it, and pairing does not do that
+    /// for you — pairing writes a fleet record, which is a different (and also default-deny)
+    /// gate. Changed 2026-08-24; empty used to mean *any* peer.
     pub authorized_peers: Vec<String>,
 }
 
@@ -120,8 +122,8 @@ impl MeshConfig {
         true
     }
 
-    /// Remove `peer` from the authorized set; returns `true` if it was present. With the
-    /// set empty again, any peer may use the allowed ports.
+    /// Remove `peer` from the authorized set; returns `true` if it was present. Emptying the
+    /// set closes the allowed ports to everyone rather than opening them to anyone.
     pub fn deny_peer(&mut self, peer: &str) -> bool {
         let before = self.host.authorized_peers.len();
         self.host.authorized_peers.retain(|p| p != peer);

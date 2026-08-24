@@ -107,9 +107,12 @@ the gateway routes one hop and not a chain of them.
 
 Two independent layers. Both are required.
 
-**Mesh layer (machine-to-machine).** Per-peer grants, **default-deny**. Today an empty
-`authorized_peers` means *any peer* (`adi-mesh/src/host.rs:103`); on an endpoint reachable
-through a public relay that is a footgun and is fixed here. A grant names what the peer may
+**Mesh layer (machine-to-machine).** Per-peer grants, **default-deny** — and since 2026-08-24 that
+is true of the legacy raw-forward list too: an empty `authorized_peers` now admits **nobody**
+(`adi-mesh/src/host.rs`, `peer_authorized`). It used to mean *any peer*, which on an endpoint
+reachable through a public relay was an open door to anyone who learned the id. Nothing was lost by
+closing it: pairing writes a fleet record, never this list, so "empty" never meant "the peers I
+paired" — it meant everyone. A grant names what the peer may
 reach (`http:*`, `http:app`, `tcp:127.0.0.1:22`, `ctl:read`). Unknown keys are rejected at the
 iroh `after_handshake` hook, before any stream is opened.
 

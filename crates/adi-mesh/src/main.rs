@@ -39,7 +39,7 @@ enum Command {
         /// The local port to remove from the allow-list.
         port: u16,
     },
-    /// Restrict allowed ports to a specific peer (repeatable). With none set, any peer may use them.
+    /// Authorize a peer to reach the allowed ports (repeatable). With none set, nobody may.
     AllowPeer {
         /// The peer's `EndpointId` or ticket to authorize (stored as its id).
         peer: String,
@@ -185,7 +185,7 @@ fn list() -> anyhow::Result<()> {
     }
 
     if cfg.host.authorized_peers.is_empty() {
-        println!("authorized peers: (any)");
+        println!("authorized peers: (none — raw forwards admit nobody; name a key to allow one)");
     } else {
         for peer in &cfg.host.authorized_peers {
             println!("authorized peer: {peer}");

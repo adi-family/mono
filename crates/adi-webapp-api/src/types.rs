@@ -168,7 +168,7 @@ pub struct MeshState {
     pub running: bool,
     /// Local TCP ports this machine exposes to peers.
     pub allow: Vec<u16>,
-    /// `EndpointId`s permitted to reach the exposed ports; empty means any peer may.
+    /// `EndpointId`s permitted to reach the exposed ports; default-deny, so empty means nobody may.
     pub authorized_peers: Vec<String>,
     /// Local ports this machine forwards to a peer's port.
     pub forwards: Vec<MeshForward>,

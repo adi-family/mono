@@ -127,13 +127,19 @@ async fn refuse(conn: &Connection, send: &mut SendStream, status: Status) -> any
     Ok(())
 }
 
-/// A peer is authorized when the list is empty (open to any peer for allowed ports) or it
-/// contains the peer's id. Entries that don't parse as an id are ignored (and warned once
-/// per hit) rather than silently authorizing everyone.
+/// A peer is authorized when the list contains its id. **Default-deny: an empty list admits
+/// nobody**, which is the same rule the fleet's peer records already keep
+/// ([`crate::fleet`]) and the gateway already enforces ([`crate::gateway::admit`]).
+///
+/// It used to be the opposite — an empty list meant *any* peer — and on an endpoint reachable
+/// through a public relay that is an open door for anyone who learns the id (`docs/fleet.md` §5
+/// said so about itself). Nothing is lost by closing it: pairing does not write this list, it
+/// writes a fleet record, so an empty list never meant "the peers I paired" — it meant "everyone".
+/// Raw forwards are now what they should have been, something you name a key for.
+///
+/// Entries that don't parse as an id are ignored (and warned once per hit) rather than silently
+/// authorizing everyone.
 fn peer_authorized(host: &HostConfig, peer: &EndpointId) -> bool {
-    if host.authorized_peers.is_empty() {
-        return true;
-    }
     host.authorized_peers.iter().any(|entry| match entry.parse::<EndpointId>() {
         Ok(id) => &id == peer,
         Err(e) => {
@@ -152,9 +158,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_authorized_list_admits_any_peer() {
+    fn empty_authorized_list_admits_nobody() {
         let host = HostConfig::default();
-        assert!(peer_authorized(&host, &some_id()));
+        assert!(!peer_authorized(&host, &some_id()));
     }
 
     #[test]
