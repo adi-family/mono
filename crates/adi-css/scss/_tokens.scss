@@ -34,19 +34,26 @@ $hue-warn:  74;
 $hue-down:  22;
 
 /// One step on the ramp. `$l` is perceptual lightness 0-100; `$c` is chroma, defaulting to
-/// a neutral that still carries a whisper of the seed — a grey biased toward the accent
-/// reads as chosen, a pure one reads as a default nobody looked at.
-@function tone($l, $c: .008, $h: $hue) {
+/// **zero** — a true grey.
+///
+/// An earlier version tinted every neutral toward the accent on the theory that a biased
+/// grey reads as chosen. Measured against what shipping products actually do, that is
+/// wrong at this strength and wrong in this place. YouTube's dark ground has a red-to-blue
+/// spread of 0, GitHub's is -10, Slack's -7, Gmail's -6; the tinted set here ran +4 to +16,
+/// and the *worst* offenders were `ink` and `muted` — the text. Tinting a large surface by
+/// a few points is a real technique; tinting the type is what made every screen read
+/// orange. The accent carries the colour. The greys stay out of its way.
+@function tone($l, $c: 0, $h: $hue) {
   @return #{"oklch(#{$l}% #{$c} #{$h})"};
 }
 
 $light: (
-  bg:         tone(98.5, .006),
+  bg:         tone(98.5),
   surface:    tone(100,  0),
-  surface-2:  tone(96.5, .008),
-  border:     tone(90,   .012),
-  ink:        tone(22,   .020),
-  muted:      tone(52,   .016),
+  surface-2:  tone(96.5),
+  border:     tone(90),
+  ink:        tone(22),
+  muted:      tone(52),
   accent:     tone(55,   .180),
   accent-ink: tone(46,   .170),
   on-accent:  tone(99,   .010),
@@ -62,12 +69,12 @@ $light: (
 );
 
 $dark: (
-  bg:         tone(12, .008),
-  surface:    tone(17, .010),
-  surface-2:  tone(22, .012),
-  border:     tone(30, .014),
-  ink:        tone(95, .010),
-  muted:      tone(68, .016),
+  bg:         tone(12),
+  surface:    tone(17),
+  surface-2:  tone(22),
+  border:     tone(30),
+  ink:        tone(95),
+  muted:      tone(68),
   accent:     tone(70, .190),
   accent-ink: tone(78, .150),
   on-accent:  tone(18, .045),
@@ -156,12 +163,6 @@ $dark: (
   --lift: inset 0 1px 0 rgb(255 255 255 / .70);
   --elevate: 0 1px 2px rgb(24 16 14 / .05), 0 8px 24px rgb(24 16 14 / .07);
   --elevate-lg: 0 2px 6px rgb(24 16 14 / .07), 0 18px 44px rgb(24 16 14 / .12);
-  // A surface that is raised without being a different colour: a whisper of the seed hue,
-  // top-lit. This is what replaces the accent-tinted backgrounds — those said "selected"
-  // when they only meant "grouped".
-  --raise: linear-gradient(180deg,
-      color-mix(in oklab, var(--ink) 3%, var(--surface)),
-      var(--surface));
 }
 
 @media (prefers-color-scheme: dark) {
@@ -171,9 +172,6 @@ $dark: (
     --lift: inset 0 1px 0 rgb(255 255 255 / .06);
     --elevate: 0 1px 2px rgb(0 0 0 / .35), 0 8px 24px rgb(0 0 0 / .30);
     --elevate-lg: 0 2px 6px rgb(0 0 0 / .45), 0 18px 44px rgb(0 0 0 / .50);
-    --raise: linear-gradient(180deg,
-        color-mix(in oklab, var(--ink) 5%, var(--surface)),
-        var(--surface));
   }
 }
 
@@ -183,9 +181,6 @@ $dark: (
   --lift: inset 0 1px 0 rgb(255 255 255 / .06);
   --elevate: 0 1px 2px rgb(0 0 0 / .35), 0 8px 24px rgb(0 0 0 / .30);
   --elevate-lg: 0 2px 6px rgb(0 0 0 / .45), 0 18px 44px rgb(0 0 0 / .50);
-  --raise: linear-gradient(180deg,
-      color-mix(in oklab, var(--ink) 5%, var(--surface)),
-      var(--surface));
 }
 
 // OS preference (only when the user hasn't pinned a theme).

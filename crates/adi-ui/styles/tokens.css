@@ -6,9 +6,10 @@
  * itself is never repeated, and a token cannot drift between its four copies because it
  * only has one.
  *
- * The colours are generated, not picked. Every neutral is one lightness on a ramp whose hue
- * is the accent's, so the greys belong to the accent instead of merely coexisting with it —
- * they used to be green-tinted, which is what made an orange accent look pasted on. Every
+ * The colours are generated, not picked. The neutrals are true greys — chroma zero — because
+ * that is what shipping products do: YouTube's dark ground has a red-to-blue spread of 0,
+ * GitHub's is -10, Slack's -7. They were green-tinted once and warm-tinted after that, and
+ * both read as a cast over the whole product rather than as a considered neutral. Every
  * semantic colour keeps its meaning and gives up a third of its distance to the seed, so
  * "running" is still green but a warm one. See `crates/adi-css/scss/_tokens.scss`, which
  * generates the same ramp from the same seed, and `docs/design.md` for why.
@@ -27,32 +28,32 @@
   /* ---- backgrounds, lightest surface last ------------------------------------------
    * The stack inverts between themes: in dark, `canvas` is the deepest black and a card
    * sits above it; in light, `canvas` is the greyest and a card is plain white. */
-  --canvas:    light-dark(oklch(94.4% 0.004 36), oklch(13.7% 0.004 36));   /* outside the window */
-  --stage:     light-dark(oklch(97.3% 0.004 36), oklch(16.0% 0.004 36));   /* the main chat canvas */
-  --panel:     light-dark(oklch(96.1% 0.004 36), oklch(15.5% 0.004 36));   /* side panels */
-  --panel-alt: light-dark(oklch(95.1% 0.004 36), oklch(14.6% 0.004 36));   /* the right panel, variant C */
-  --bar:       light-dark(oklch(100.0% 0.004 36), oklch(17.3% 0.004 36));   /* top bar and composer */
-  --card:      light-dark(oklch(100.0% 0.004 36), oklch(18.2% 0.004 36));   /* cards, inputs, table heads */
-  --bubble:    light-dark(oklch(94.6% 0.005 36), oklch(21.2% 0.004 36));   /* the user's message */
-  --selected:  light-dark(oklch(93.9% 0.008 36), oklch(20.6% 0.005 36));   /* the selected session */
+  --canvas:    light-dark(oklch(94.4% 0 0), oklch(13.7% 0 0));   /* outside the window */
+  --stage:     light-dark(oklch(97.3% 0 0), oklch(16.0% 0 0));   /* the main chat canvas */
+  --panel:     light-dark(oklch(96.1% 0 0), oklch(15.5% 0 0));   /* side panels */
+  --panel-alt: light-dark(oklch(95.1% 0 0), oklch(14.6% 0 0));   /* the right panel, variant C */
+  --bar:       light-dark(oklch(100.0% 0 0), oklch(17.3% 0 0));   /* top bar and composer */
+  --card:      light-dark(oklch(100.0% 0 0), oklch(18.2% 0 0));   /* cards, inputs, table heads */
+  --bubble:    light-dark(oklch(94.6% 0 0), oklch(21.2% 0 0));   /* the user's message */
+  --selected:  light-dark(oklch(93.9% 0 0), oklch(20.6% 0 0));   /* the selected session */
 
   /* ---- lines, subtlest first --------------------------------------------------------
    * Ordered by how much they show, which is why the light values descend while the dark
    * ones climb: visibility is distance from the surface, in opposite directions. */
-  --divider: light-dark(oklch(93.8% 0.004 36), oklch(21.7% 0.004 36));     /* between panels */
-  --frame:   light-dark(oklch(91.2% 0.005 36), oklch(24.1% 0.005 36));     /* the window frame */
-  --edge:    light-dark(oklch(90.3% 0.006 36), oklch(24.5% 0.005 36));     /* card borders */
-  --edge-2:  light-dark(oklch(92.0% 0.004 36), oklch(23.7% 0.005 36));     /* the quieter card border */
-  --dim:     light-dark(oklch(88.4% 0.006 36), oklch(25.7% 0.006 36));     /* dashes and inactive chips */
+  --divider: light-dark(oklch(93.8% 0 0), oklch(21.7% 0 0));     /* between panels */
+  --frame:   light-dark(oklch(91.2% 0 0), oklch(24.1% 0 0));     /* the window frame */
+  --edge:    light-dark(oklch(90.3% 0 0), oklch(24.5% 0 0));     /* card borders */
+  --edge-2:  light-dark(oklch(92.0% 0 0), oklch(23.7% 0 0));     /* the quieter card border */
+  --dim:     light-dark(oklch(88.4% 0 0), oklch(25.7% 0 0));     /* dashes and inactive chips */
 
   /* ---- text, strongest first --------------------------------------------------------- */
-  --ink:         light-dark(oklch(16.7% 0.005 36), oklch(96.0% 0.004 36)); /* headings, emphasis */
-  --body:        light-dark(oklch(24.7% 0.007 36), oklch(91.1% 0.006 36)); /* running text */
-  --secondary:   light-dark(oklch(37.5% 0.009 36), oklch(84.8% 0.007 36));
-  --meta:        light-dark(oklch(53.6% 0.010 36), oklch(67.5% 0.009 36));
-  --placeholder: light-dark(oklch(66.2% 0.009 36), oklch(51.2% 0.010 36));
-  --faint:       light-dark(oklch(70.9% 0.008 36), oklch(45.6% 0.009 36)); /* caps labels, arrows */
-  --fainter:     light-dark(oklch(76.7% 0.007 36), oklch(39.8% 0.009 36));
+  --ink:         light-dark(oklch(16.7% 0 0), oklch(96.0% 0 0)); /* headings, emphasis */
+  --body:        light-dark(oklch(24.7% 0 0), oklch(91.1% 0 0)); /* running text */
+  --secondary:   light-dark(oklch(37.5% 0 0), oklch(84.8% 0 0));
+  --meta:        light-dark(oklch(53.6% 0 0), oklch(67.5% 0 0));
+  --placeholder: light-dark(oklch(66.2% 0 0), oklch(51.2% 0 0));
+  --faint:       light-dark(oklch(70.9% 0 0), oklch(45.6% 0 0)); /* caps labels, arrows */
+  --fainter:     light-dark(oklch(76.7% 0 0), oklch(39.8% 0 0));
 
   /* ---- accent -------------------------------------------------------------------------
    * #fa5019, the one accent in `docs/design.md`. This file and adi-css used to name two
