@@ -127,25 +127,38 @@ where a platform quietly overrides you.
 
 ## What this replaces
 
-Two token systems exist today and both say something else. Any redesign has to reconcile them
-before it can apply this language, and *that* is probably the first task, not the colours.
+Two token systems still exist — `crates/adi-css/scss/_tokens.scss` and
+`crates/adi-ui/styles/tokens.css` — but they no longer contradict each other. Both generate
+their palette from one seed at hue 36, both name `#FA5019`, and both carry the same card
+shadow. A page that loads both (the control panel does) takes adi-css's values wherever the two
+name the same token, which is why the pair has to be kept in step by hand until one of them
+wins outright.
 
-- **`crates/adi-css/scss/_tokens.scss`** — teal accent (`#0d9488` / `#2dd4bf`), near-neutral
-  greys, and an explicit stance in its own header comment: *"Surfaces are separated by borders
-  rather than elevation, so `shadow` stays a hairline — depth is a last resort, not the house
-  style."* That is the direct opposite of rule 1, and it is a deliberate position that
-  deserves a deliberate reversal rather than a quiet overwrite.
-- **`crates/adi-ui/styles/tokens.css`** — mint accent (`#3ddc9c` / `#0e8a63`), green-tinted
-  neutrals, one `light-dark()` declaration per token.
-
-Neither uses `#FA5019`. The macOS app and the pages adi-hive serves have moved (see **The
-mark** below); the two token files have not.
+**On depth, this language reversed a stated position rather than quietly overwriting it.**
+adi-css used to say, in its own header comment: *"Surfaces are separated by borders rather than
+elevation, so `shadow` stays a hairline — depth is a last resort, not the house style."* That is
+the direct opposite of rule 1, and it was a deliberate position, so it gets a deliberate answer:
+**a card is raised.** `--shadow` is two layers — a tight contact shadow that seats the card on
+what is under it, and a wider soft one that says how far above that it sits — and the hairline
+border stays underneath, so nothing depends on the shadow being seen. The instinct behind the
+old rule was right about *reach* rather than about shadows: the negative spread on the wide
+layer is what stops one card's shadow washing into the next, which is the failure that turns a
+dense list into soup. Alpha is not shared between the themes — black on a near-black ground is
+invisible until about a third opaque, and the same value on white reads as dirt.
 
 ## The mark
 
 **Trefoil**: three hexagons at 120°, painted back to front, weak to strong. The geometry is
-`apps/macos/Sources/Trefoil.swift` on the Swift side and SVG literals in
-`crates/adi-hive/src/notfound.rs`, which re-derives them in a test so the two cannot drift.
+`apps/macos/Sources/Trefoil.swift` on the Swift side, `crates/adi-ui/src/mark.rs` on the web
+(the `Mark` component, which generates the SVG rather than holding it), and SVG literals in
+`crates/adi-hive/src/notfound.rs`. Each of the two Rust copies re-derives the literals in a
+test, so none of the three can drift from the others.
+
+The control panel writes the mark out by hand in two more places, because both are read before
+any of that code runs: `crates/adi-webapp/index.html`, whose splash paints before there is wasm
+to draw it, and `crates/adi-webapp/assets/mark*.svg`, which a browser and a launcher fetch on
+their own (`assets/regen-icons.sh` rasterises those into the PNG icon set). Both are pinned to
+the component by `every_copy_of_the_mark_agrees`.
 
 Two things about it are load-bearing:
 

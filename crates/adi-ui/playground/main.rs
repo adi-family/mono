@@ -23,7 +23,8 @@ use adi_ui::{
     BadgeTone, Chat, Button, ButtonSize,
     ButtonVariant, CodeEditor, CodeFrame,
     CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
-    Form, Hint, Input, InputWidth, Kbd, Lang, Markdown, Modal, Panel, PathPicker, PathRoot, Qna,
+    Form, Hint, Input, InputWidth, Kbd, Lang, Mark, MarkVariant, Markdown, Modal, Panel,
+    PathPicker, PathRoot, Qna,
     Block, Flag, FlagList, FlagMark, Param, ParamKind, PromptText, Queued, Rail, RailCard,
     RailGroup, Role, Select, SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table,
     TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar,
@@ -1663,6 +1664,56 @@ fn Playground() -> impl IntoView {
                             ("attention", "bg-attention"),
                         ]
                     />
+                </div>
+            </Panel>
+
+            <Panel title="Mark" flush=true>
+                <div class="px-4 pt-3 text-mini text-meta">
+                    "Trefoil \u{2014} three hexagons at 120\u{b0}, painted back to front, weak to \
+                     strong. It never names its own ink: every lobe is "<code>"currentColor"</code>" \
+                     at one of three tones, which is why the row below only changes the text \
+                     colour and the mark follows. The middle lobe is the one exception, and only \
+                     when it is asked to be."
+                </div>
+                <div class="px-4 pt-2 text-mini text-meta">
+                    "One drawing cannot serve a 16px tab icon and a 168px error page, so there \
+                     are three. "<code>"Cut"</code>" keeps hairline gaps between the lobes and is \
+                     the only one that survives being small; "<code>"Solid"</code>" drops them \
+                     above ~64px; "<code>"Glass"</code>" lets the lobes mix, which is rich at \
+                     96px and mud below it. Compare the first column of each row."
+                </div>
+                <div class="px-4">
+                    <Row label="cut">
+                        <Mark class="size-4"/>
+                        <Mark class="size-8"/>
+                        <Mark accent=true class="size-8"/>
+                        <Mark accent=true class="size-24"/>
+                    </Row>
+                    <Row label="solid">
+                        <Mark variant=MarkVariant::Solid class="size-4"/>
+                        <Mark variant=MarkVariant::Solid class="size-8"/>
+                        <Mark variant=MarkVariant::Solid accent=true class="size-8"/>
+                        <Mark variant=MarkVariant::Solid accent=true class="size-24"/>
+                    </Row>
+                    <Row label="glass">
+                        <Mark variant=MarkVariant::Glass class="size-4"/>
+                        <Mark variant=MarkVariant::Glass class="size-8"/>
+                        <Mark variant=MarkVariant::Glass accent=true class="size-8"/>
+                        <Mark variant=MarkVariant::Glass accent=true class="size-24"/>
+                    </Row>
+                    <Row label="on a ground">
+                        // The mark inherits whatever ink it lands in, which is the whole
+                        // reason it is drawn in `currentColor` rather than in a palette.
+                        <span class="flex items-center gap-3 rounded-md bg-accent p-3 \
+                                     text-on-accent">
+                            <Mark class="size-8"/>
+                            <Mark variant=MarkVariant::Solid class="size-8"/>
+                        </span>
+                        <span class="flex items-center gap-3 rounded-md bg-ink p-3 text-canvas">
+                            <Mark class="size-8"/>
+                            <Mark variant=MarkVariant::Solid accent=true class="size-8"/>
+                        </span>
+                    </Row>
                 </div>
             </Panel>
 

@@ -4,7 +4,7 @@
 
 > The adi UI component library: Leptos components styled with Tailwind over the adi design tokens, with a Trunk-served playground to develop them in.
 
-32 structs · 27 enums across 25 files.
+32 structs · 28 enums across 26 files.
 
 ## Index
 
@@ -21,6 +21,7 @@
 - [`src/flag.rs`](#srcflagrs) — `Flag`, `Offer`
 - [`src/highlight.rs`](#srchighlightrs) — `Tok`, `Lang`
 - [`src/input.rs`](#srcinputrs) — `InputWidth`
+- [`src/mark.rs`](#srcmarkrs) — `MarkVariant`
 - [`src/markdown.rs`](#srcmarkdownrs) — `Block`, `Align`
 - [`src/pair.rs`](#srcpairrs) — `Relation`, `Verdict`, `PairSide`, `Decided`, `Pair`, `Ruling`, `Truncated`, `Mode`, `Order`
 - [`src/path.rs`](#srcpathrs) — `DirEntry`, `PathRoot`
@@ -492,6 +493,24 @@ pub enum InputWidth {
     Default,
     Wide,
     Num,
+}
+```
+
+---
+
+## `src/mark.rs`
+
+### enum `MarkVariant`
+
+Which drawing of the mark this is. One drawing cannot serve a 16px favicon and a 168px error page, so there are three, and the size decides.
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MarkVariant {
+    #[default]
+    Cut,
+    Solid,
+    Glass,
 }
 ```
 

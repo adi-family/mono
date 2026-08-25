@@ -11,6 +11,21 @@
 //! whatever else is worth reaching from a keyboard: every dashboard this machine can open,
 //! here or on a paired node, the way into the control panel, the theme.
 //!
+//! It is the Trefoil ([`adi_ui::Mark`]) and nothing else — a 44px square carrying the same mark
+//! as the Dock icon and the browser tab. Deliberately *without* the `adi.` wordmark beside it: a
+//! control that floats over somebody's chat forever should be as small as it can be and still be
+//! recognised, and a mark that needs the word spelled out next to it is not doing its job. The
+//! name it owes a reader is the accessible one, which the [`aria-label`] and the `title` (which
+//! also names `⌘K`) carry.
+//!
+//! Being the only always-present control on the screen, it is also the only one that gets a
+//! flourish: hovering lifts the chip and steps the mark's three lobes apart, pressing closes them
+//! again. That lives in `styles/main.scss` under `.adi-launcher`, not here — it is entirely CSS,
+//! and a hover that needed a signal would be a hover that stopped working the moment wasm was
+//! busy.
+//!
+//! [`aria-label`]: https://developer.mozilla.org/en-US/docs/Web/Accessibility/ARIA/Attributes/aria-label
+//!
 //! **A drag is not a click.** The mark is both a handle and a button, which is only safe
 //! because the press has to travel [`DRAG_SLOP`] pixels before it stops being the second
 //! one — otherwise every reader who nudged the mark by two pixels while clicking it would
@@ -25,7 +40,7 @@
 use leptos::html;
 use leptos::{ev, prelude::*};
 
-use adi_ui::Modal;
+use adi_ui::{Mark, Modal};
 
 use crate::icons;
 use crate::ui::storage;
@@ -46,12 +61,13 @@ const DRAG_SLOP: f64 = 4.0;
 /// would otherwise be outside a narrow one, with no way to get it back.
 const EDGE: f64 = 8.0;
 
-/// The mark's own size, used only to keep it on screen — a deliberate over-estimate of the
-/// ~51×32 the chip actually measures. Reading the element would be exact, but [`clamp`] also
-/// runs at construction, before there is an element to read; erring wide only ever holds the
-/// mark a few pixels further inside the edge than it had to be.
-const MARK_W: f64 = 56.0;
-const MARK_H: f64 = 32.0;
+/// The mark's own size, used only to keep it on screen.
+///
+/// Exact rather than measured, because the chip is a fixed square: it carries `size-11` and
+/// nothing inside it can stretch it. Reading the element would be the general answer, but
+/// [`clamp`] also runs at construction, before there is an element to read.
+const MARK_W: f64 = 44.0;
+const MARK_H: f64 = 44.0;
 
 /// The floating mark and everything the menu behind it needs to remember.
 ///
@@ -232,12 +248,15 @@ pub(crate) fn launcher(
             node_ref=mark
             type="button"
             // `touch-none` so a drag on a touchscreen moves the mark instead of scrolling the
-            // chat underneath it.
-            class="adi-ui-type island fixed z-40 flex h-8 cursor-grab touch-none select-none \
-                   items-center bg-card px-2.5 font-mono text-sub font-semibold \
-                   tracking-[-0.03em] text-ink active:cursor-grabbing \
-                   focus-visible:outline-2 focus-visible:outline-offset-2 \
-                   focus-visible:outline-accent"
+            // chat underneath it. What `adi-launcher` adds is the hover — the lift and the
+            // lobes stepping apart, in `styles/main.scss`.
+            //
+            // `text-ink` survives the wordmark it was written for: the mark draws in
+            // `currentColor`, so this line is what colours two of its three lobes.
+            class="adi-launcher island fixed z-40 flex size-11 cursor-grab touch-none \
+                   select-none items-center justify-center bg-card text-ink \
+                   active:cursor-grabbing focus-visible:outline-2 \
+                   focus-visible:outline-offset-2 focus-visible:outline-accent"
             style=move || match l.pos.get() {
                 Some((x, y)) => format!("left:{x}px;top:{y}px"),
                 // The corner it starts in, stated as a corner rather than as coordinates —
@@ -302,7 +321,7 @@ pub(crate) fn launcher(
                 }
             }
         >
-            "adi"<span class="text-accent">"."</span>
+            <Mark accent=true class="size-7"/>
         </button>
 
         {menu(l, actions)}

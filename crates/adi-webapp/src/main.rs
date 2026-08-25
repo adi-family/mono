@@ -30,7 +30,10 @@ mod voice;
 // The component library. The titlebar is the first thing on this page built from it; the
 // rest of the screen is still the `adi-*` layer, and the two share a page by load order
 // (see `styles/tailwind.css`).
-use adi_ui::{Button, ButtonSize, ButtonVariant, Crumb, Crumbs, TopBar, Tree, TreeNode, TreeState};
+use adi_ui::{
+    Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Mark, MarkVariant, TopBar, Tree, TreeNode,
+    TreeState,
+};
 use launcher::{Action, Launcher};
 use adi_webapp_api::types::{
     AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
@@ -101,13 +104,17 @@ fn drop_boot_splash() {
     }
 }
 
-/// The front door's boot screen: the wordmark alone, held while we still don't know what this
-/// stack is. Onboarding copy ("Welcome to adi.") would claim a first run before `/api/meta`
+/// The front door's boot screen: the mark and the wordmark, held while we still don't know what
+/// this stack is. Onboarding copy ("Welcome to adi.") would claim a first run before `/api/meta`
 /// has said whether it *is* one — for the far more common set-up stack that reads as a wrong
-/// turn on every load. Mirrors the pre-wasm splash markup in `index.html`.
+/// turn on every load. Mirrors the pre-wasm splash markup in `index.html`, which is what makes
+/// the handover between the two invisible.
 fn boot_splash() -> AnyView {
     view! {
         <div class="adi-boot">
+            // Solid rather than cut: the splash never draws the mark below 72px, and above ~64
+            // the lobes are told apart by their tones without hairline gaps.
+            <Mark variant=MarkVariant::Solid accent=true class="adi-boot__mark"/>
             <span class="adi-boot__logo">"adi"<span class="adi-boot__dot">"."</span></span>
         </div>
     }

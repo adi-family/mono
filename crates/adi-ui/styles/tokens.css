@@ -123,8 +123,21 @@
   --syn-func:    light-dark(#2f5fa8, #8fb4f0);
   --syn-punct:   light-dark(#9aa49e, #55615c);
 
-  /* Depth is a line, not a lift — this stays a hairline. */
-  --shadow: 0 1px 2px light-dark(rgba(9, 11, 15, .05), rgba(0, 0, 0, .35));
+  /* A card is raised, not just outlined. Two layers, because one blur cannot say both of the
+   * things a shadow says: the tight one seats the card on the surface under it, the wide one
+   * says how far above that surface it is. The negative spread on the second keeps it from
+   * washing sideways into the card beside it, which is what a dense screen cannot survive.
+   *
+   * `light-dark()` wraps each *colour* and not the whole value — it is a colour function, so
+   * the geometry has to be the same in both themes. It wants to be anyway; only the alpha
+   * differs, and it differs a lot: black on a near-black ground is nothing until it is about a
+   * third opaque, while the same alpha on white reads as dirt.
+   *
+   * Keep in step with `shadow` in `crates/adi-css/scss/_tokens.scss` — a page that loads both
+   * takes adi-css's, so a card would otherwise be raised in the playground and flat in the app. */
+  --shadow:
+    0 1px 2px light-dark(rgb(24 16 14 / .06), rgb(0 0 0 / .40)),
+    0 8px 20px -4px light-dark(rgb(24 16 14 / .13), rgb(0 0 0 / .52));
 }
 
 /* The explicit override, both directions. Flipping `color-scheme` re-resolves every

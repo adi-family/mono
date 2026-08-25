@@ -186,7 +186,9 @@
  * able to leave the panel it is anchored in. An island whose children have to be clipped to
  * its corners (a header strip, a scrolling body) adds `overflow-hidden` itself.
  *
- * Depth is a line, not a lift: the shadow is a hairline and stays one. */
+ * It is raised: `--shadow` is a real two-layer elevation, not a hairline. The border stays
+ * anyway — a card has to hold its edge against a surface the same colour as itself, and on a
+ * light theme the shadow alone will not do that. */
 @utility island {
   border-radius: var(--radius-md);
   border: 1px solid var(--edge);

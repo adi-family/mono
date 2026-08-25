@@ -3,6 +3,7 @@
 
 use leptos::prelude::*;
 
+use crate::mark::Mark;
 use crate::merge;
 
 /// One segment of the path in the bar.
@@ -103,7 +104,7 @@ pub fn Crumbs(
 /// It is `sticky`, so it stays while a document scrolls under it, and harmless in an app
 /// shell where it is a flex row that never scrolls in the first place.
 ///
-/// Three slots, left to right: the wordmark, whatever says where you are, and the controls.
+/// Three slots, left to right: the mark, whatever says where you are, and the controls.
 /// The middle one takes the free space, which is what puts the actions hard against the
 /// right edge whether it is filled or empty.
 ///
@@ -117,8 +118,9 @@ pub fn Crumbs(
 /// ```
 #[component]
 pub fn TopBar(
-    /// The wordmark, set in mono and closed with an accent dot — `logo="adi"` reads `adi.`,
-    /// which is the mark. Left off, the bar starts with whatever the children are.
+    /// The word beside the mark, set in mono and closed with an accent dot — `logo="adi"`
+    /// reads `adi.` next to the Trefoil ([`crate::Mark`]). Left off, the bar starts with
+    /// whatever the children are: the two travel together, so there is no mark without it.
     #[prop(optional, into)]
     logo: String,
     /// Where the mark goes when you click it: the way home, and the one navigation every
@@ -160,10 +162,12 @@ pub fn TopBar(
                 // screen gains a way home. The link only adds what a link is: a target, a
                 // focus ring, and no underline — the mark is a mark, not a sentence.
                 let mark = view! {
-                    {logo}<span class="text-accent">"."</span>
+                    <Mark accent=true class="size-4.5"/>
+                    <span>{logo}<span class="text-accent">"."</span></span>
                 };
-                let cls = "shrink-0 font-mono text-sub font-semibold tracking-[-0.03em] \
-                           text-ink no-underline hover:text-ink hover:no-underline";
+                let cls = "flex shrink-0 items-center gap-1.5 font-mono text-sub font-semibold \
+                           tracking-[-0.03em] text-ink no-underline hover:text-ink \
+                           hover:no-underline";
                 match (on_home, home.is_empty()) {
                     // Home already: the mark reopens this screen rather than going to it. A
                     // button and not a link, because nothing is being navigated to.

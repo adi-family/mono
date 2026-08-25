@@ -51,6 +51,7 @@ pub mod highlight;
 mod input;
 mod kbd;
 mod markdown;
+mod mark;
 mod modal;
 mod pair;
 mod panel;
@@ -86,6 +87,7 @@ pub use form::{Form, Hint};
 pub use highlight::{Lang, Tok, highlight};
 pub use input::{Input, InputWidth, Select, Textarea};
 pub use kbd::Kbd;
+pub use mark::{Mark, MarkVariant, SPIN_ORIGIN, lobe_path};
 pub use markdown::Markdown;
 pub use modal::Modal;
 pub use pair::{

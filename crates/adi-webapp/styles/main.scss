@@ -349,23 +349,36 @@
 // ---- boot splash (`/`, before we know what to show) --------------------------------
 // Written twice on purpose — once in `index.html` for the pre-wasm frame, once from the app while
 // `/api/meta` is in flight — and both use this block, so the handover between them is a no-op on
-// screen. Just the wordmark: the welcome copy belongs to a real first run.
+// screen. The mark and the wordmark and nothing else: the welcome copy belongs to a real first
+// run.
 .adi-boot {
   min-height: 100dvh;
-  display: grid;
-  place-items: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
   background: var(--bg);
   color: var(--ink);
   // The splash's whole job is the mark, so it breathes above the fold rather than sitting dead
   // centre of a tall viewport.
   padding-bottom: 6vh;
 }
+.adi-boot__mark {
+  // Above the ~64px where the Trefoil no longer needs hairline gaps to keep its lobes apart,
+  // which is why both splashes draw the solid build.
+  width: clamp(72px, 14vw, 104px);
+  height: auto;
+  color: var(--ink);
+  animation: adi-boot-breathe 1.6s ease-in-out infinite;
+}
 .adi-boot__logo {
   font-family: var(--font-mono), monospace;
   font-weight: 600;
-  font-size: clamp(28px, 6vw, 44px);
+  font-size: clamp(24px, 5vw, 34px);
   letter-spacing: -.03em;
   // Slow, shallow breath — enough to read as "working", not as a spinner demanding attention.
+  // The mark carries the same one: they start together, so they stay in step.
   animation: adi-boot-breathe 1.6s ease-in-out infinite;
 }
 .adi-boot__dot { color: var(--accent); }
@@ -375,7 +388,77 @@
   50%      { opacity: .45; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .adi-boot__logo { animation: none; }
+  .adi-boot__logo, .adi-boot__mark { animation: none; }
+}
+
+// ---- the floating mark (`src/launcher.rs`) -----------------------------------------
+// The one control that is always on the chat, and the only one that is a handle and a button at
+// once. Hover has to answer both: the chip lifts the way something you can pick up does, and the
+// Trefoil's three lobes step apart along their own axes — which says the thing is a mechanism
+// rather than a picture, and is the one flourish the mark gets.
+//
+// The spread is 12 units of the mark's 200-unit box, so it scales with whatever size the mark is
+// drawn at — about 1.7px at the 28px in the chip. That sounds like nothing and is the whole
+// difference between a mark that reacts and one that does not.
+//
+// Nothing here exceeds 180ms, everything is ease-out with no overshoot (docs/design.md rule 4),
+// and reduced motion keeps the accent edge and drops the travel: the colour is the state, the
+// movement is the decoration.
+.adi-launcher {
+  transition: transform 140ms ease-out, box-shadow 140ms ease-out, border-color 140ms ease-out;
+
+  .adi-mark__lobes {
+    transition: transform 180ms ease-out;
+    // The drawn shape's centre, which is *not* the middle of the viewBox — see `SPIN_ORIGIN`
+    // in adi-ui's `mark.rs`. `view-box` rather than the default `fill-box`, so all three lobes
+    // scale about one point instead of each about its own.
+    transform-origin: 50% 54%;
+    transform-box: view-box;
+  }
+  .adi-mark__lobe { transition: transform 180ms ease-out; }
+
+  &:hover,
+  &:focus-visible {
+    transform: translateY(-2px);
+    border-color: var(--accent-soft-edge);
+    // The card elevation it already has, plus an accent bloom under it. Composed from
+    // `--shadow` rather than written out, so the depth of a hovered chip stays whatever the
+    // depth of a card is — and so the dark theme, which needs three times the alpha for the
+    // same read, gets it here for free.
+    box-shadow: var(--shadow),
+      0 10px 24px -6px color-mix(in oklab, var(--accent) 45%, transparent);
+  }
+
+  // 12 units along each lobe's own axis: 150°, 30°, -90°.
+  &:hover .adi-mark__lobe--back,
+  &:focus-visible .adi-mark__lobe--back { transform: translate(-10.39px, 6px); }
+  &:hover .adi-mark__lobe--mid,
+  &:focus-visible .adi-mark__lobe--mid { transform: translate(10.39px, 6px); }
+  &:hover .adi-mark__lobe--front,
+  &:focus-visible .adi-mark__lobe--front { transform: translate(0, -12px); }
+
+  // Pressed — which is also every moment of a drag, since the pointer stays down through it.
+  // The mark closes back up and shrinks into the chip: picking the thing up should feel like
+  // taking hold of it, not like it is still blooming under your finger.
+  &:active {
+    transform: translateY(0);
+    box-shadow: var(--shadow);
+  }
+  &:active .adi-mark__lobes { transform: scale(.94); }
+  &:active .adi-mark__lobe { transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adi-launcher,
+  .adi-launcher .adi-mark__lobes,
+  .adi-launcher .adi-mark__lobe { transition: none; }
+  .adi-launcher:hover,
+  .adi-launcher:focus-visible,
+  .adi-launcher:active { transform: none; }
+  .adi-launcher:hover .adi-mark__lobe,
+  .adi-launcher:focus-visible .adi-mark__lobe,
+  .adi-launcher:active .adi-mark__lobes,
+  .adi-launcher:active .adi-mark__lobe { transform: none; }
 }
 
 // ---- chat home (`/` once the root agent exists) ------------------------------------

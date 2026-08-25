@@ -74,3 +74,39 @@ pub(crate) fn install() {
         let _ = f.call0(&pwa);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use adi_ui::lobe_path;
+
+    /// Every place the mark is *written out* instead of drawn by `adi_ui::Mark`, and why each
+    /// one has to be: the splash paints before there is any wasm to draw it, and the icons are
+    /// files a browser and a launcher fetch on their own.
+    ///
+    /// They live under this module because they are all part of the same bridge as the rest of
+    /// it — the half of the app that is markup in `index.html` rather than Rust.
+    const WRITTEN_OUT: [(&str, &str); 3] = [
+        ("index.html", include_str!("../index.html")),
+        ("assets/mark.svg", include_str!("../assets/mark.svg")),
+        (
+            "assets/mark-maskable.svg",
+            include_str!("../assets/mark-maskable.svg"),
+        ),
+    ];
+
+    /// The mark is one drawing however many files hold it. Regenerate the copies from
+    /// `crates/adi-ui/src/mark.rs` — and the PNGs beside them with `assets/regen-icons.sh` —
+    /// rather than editing a path here by hand.
+    #[test]
+    fn every_copy_of_the_mark_agrees() {
+        for (name, markup) in WRITTEN_OUT {
+            for index in 0..3 {
+                let lobe = lobe_path(index);
+                assert!(
+                    markup.contains(&lobe),
+                    "{name} draws a different lobe {index}; expected {lobe}"
+                );
+            }
+        }
+    }
+}

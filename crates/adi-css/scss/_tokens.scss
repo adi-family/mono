@@ -65,7 +65,9 @@ $light: (
   online:     tone(50,   .120, $hue-ok),
   warn:       tone(55,   .120, $hue-warn),
   down:       tone(48,   .190, $hue-down),
-  shadow:     0 1px 2px rgba(9, 11, 15, .04),
+  // Warm-black rather than neutral: a grey shadow under a card on a warm-white ground
+  // reads as a smudge, and the tint is free.
+  shadow:     (0 1px 2px rgb(24 16 14 / .06), 0 8px 20px -4px rgb(24 16 14 / .13)),
 );
 
 $dark: (
@@ -83,7 +85,9 @@ $dark: (
   online:     tone(78, .130, $hue-ok),
   warn:       tone(80, .110, $hue-warn),
   down:       tone(66, .190, $hue-down),
-  shadow:     0 1px 2px rgba(0, 0, 0, .3),
+  // Far more alpha than the light half for the same read: black on a near-black ground is
+  // nothing at all until it is about a third opaque.
+  shadow:     (0 1px 2px rgb(0 0 0 / .40), 0 8px 20px -4px rgb(0 0 0 / .52)),
 );
 
 // Emit `--name: value` for every entry of a theme map, plus the `color-scheme` that goes
@@ -139,10 +143,21 @@ $dark: (
   // read *through* them at length; a list of sessions may not, because the luminance under
   // the text would then depend on whatever happened to be scrolled behind it.
   //
-  // `--lift` is what makes a surface read as raised without a shadow — a one-pixel highlight
-  // along the top edge, which is how light actually falls on a raised thing. It costs no
-  // contrast, unlike a shadow, which is why it works on a dense screen where shadows would
-  // turn a list into soup.
+  // Three depths, and a card now takes the shallowest of them. `--shadow` (in the theme maps
+  // above) is the resting card: two layers, because one blur cannot say both of the things a
+  // shadow says — a tight contact shadow seats the card on the surface under it, and a wider,
+  // softer one says how far above that surface it is. `--elevate` is a popover, `--elevate-lg`
+  // an overlay.
+  //
+  // The card shadow used to be a hairline, on the argument that a list separated by shadows is
+  // soup. That argument is about *reach*, not about shadows: the negative spread on the second
+  // layer is what keeps this one from washing sideways into the card beside it, and with it
+  // there a dense screen still reads. The hairline border stays either way, so nothing depends
+  // on the shadow being seen.
+  //
+  // `--lift` is the other way to say raised — a one-pixel highlight along the top edge, which is
+  // how light actually falls on a raised thing. It costs no contrast at all, so it composes with
+  // the shadows above rather than competing with them.
   // Composed here, and interpolated, for one non-obvious reason: `saturate()` is a *Sass*
   // colour function, so writing `backdrop-filter: blur(...) saturate(...)` in a .scss file
   // makes Sass try to desaturate a colour it was never given and fail the build. Quoting it
