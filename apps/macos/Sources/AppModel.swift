@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// What the power button shows: dim when off, blue while a command runs or the service
@@ -18,11 +19,11 @@ final class AppModel: ObservableObject {
 
     private var timer: Timer?
 
-    /// Set when the app is running somewhere its services must not point at, which is what the
-    /// window asks about before doing anything else.
-    @Published private(set) var installLocation = InstallLocation.current()
     /// A failed move, to show instead of silently doing nothing.
     @Published var moveFailure: String?
+    /// Set once the stack has been auto-started, so it happens once per launch and not on
+    /// every two-second poll that happens to arrive after the last permission is granted.
+    private var didAutoStart = false
 
     init() {
         refresh()
@@ -31,13 +32,11 @@ final class AppModel: ObservableObject {
         // on a fresh one it installs + starts everything (one admin prompt for the DNS
         // route + front door). This is what makes services autostart when the app opens.
         //
-        // Not from a disk image or a translocated copy. `adi-core` refuses those anyway, but
-        // this is the launch that would otherwise hit the refusal on every single open —
-        // double-clicking the app inside the downloaded .dmg is the most common first run
-        // there is, and the honest response to it is the move prompt, not a no-op.
-        if !installLocation.needsMoving {
-            perform(["up"])
-        }
+        // Not until setup is finished. `adi-core` refuses to install from a disk image anyway,
+        // and would refuse to route anything before the grants exist, but hitting those
+        // refusals on every launch is not onboarding — the window asks for what is missing
+        // instead, and `autoStartIfReady` runs this the moment the last piece lands.
+        autoStartIfReady()
         // Unwrap *before* the Task, so it captures an immutable binding rather than the
         // outer closure's mutable optional. Reading a captured `var` from concurrently
         // executing code is rejected outright by Swift 5.10 ("reference to captured var
@@ -58,11 +57,51 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Carry on without moving: bring the stack up anyway, accepting that the services will
-    /// break when the volume goes. Offered because refusing to do anything at all is worse than
-    /// letting someone who knows what they are doing proceed.
-    func proceedWithoutMoving() {
-        installLocation = .durable
+    // MARK: onboarding
+    //
+    // Three states, in order, and each one is the whole window until it is satisfied. Nothing
+    // below the current step is reachable: an app that cannot install services has no business
+    // showing a power button, and a power button that turns on services nothing can route to
+    // would come up "Running" while `app.adi` goes nowhere.
+
+    enum Stage: Equatable {
+        /// The bundle is on a disk image or translocated. Move it; nothing else is offered.
+        case mustMove
+        /// Moved, but one or both privileged grants are missing.
+        case needsPermissions
+        /// Everything is in place.
+        case ready
+    }
+
+    var stage: Stage {
+        if !report.setup.locationDurable { return .mustMove }
+        if !report.setup.ready { return .needsPermissions }
+        return .ready
+    }
+
+    var hasDNS: Bool { report.setup.dnsRoute }
+    var hasNetwork: Bool { report.setup.frontDoor }
+
+    /// Grant the DNS route — one admin prompt.
+    func grantDNS() { perform(["dns", "grant-dns"]) }
+
+    /// Grant the front door — one admin prompt.
+    func grantNetwork() { perform(["dns", "grant-network"]) }
+
+    /// Open the dashboard, which is the whole point of the app being on.
+    func openDashboard() {
+        guard let url = URL(string: "http://app.\(Core.domain)/") else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    /// Start the stack as soon as — and only once — setup is complete.
+    ///
+    /// Called on launch and after every action, so granting the second permission starts
+    /// everything without a further click. The flag is what keeps the two-second poll from
+    /// re-running `up` forever.
+    func autoStartIfReady() {
+        guard !didAutoStart, report.setup.ready else { return }
+        didAutoStart = true
         perform(["up"])
     }
 
@@ -96,7 +135,10 @@ final class AppModel: ObservableObject {
     func refresh() {
         Task.detached(priority: .utility) {
             if let latest = Core.report() {
-                await MainActor.run { self.report = latest }
+                await MainActor.run {
+                    self.report = latest
+                    self.autoStartIfReady()
+                }
             }
         }
     }
@@ -111,6 +153,7 @@ final class AppModel: ObservableObject {
             await MainActor.run {
                 if let latest { self.report = latest }
                 self.busy = false
+                self.autoStartIfReady()
             }
         }
     }

@@ -16,7 +16,7 @@ pub mod status;
 pub mod update;
 
 pub use app::App;
-pub use commands::{Adi, Report};
+pub use commands::{Adi, Report, SetupReport};
 pub use dns::Dns;
 pub use install::Location;
 pub use service::{Action, Service, ServiceReport};

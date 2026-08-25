@@ -116,6 +116,7 @@ plutil -replace CFBundleDisplayName -string "$APP_NAME" "$APP/Contents/Info.plis
 plutil -replace CFBundleIdentifier -string "$ADI_BUNDLE_ID" "$APP/Contents/Info.plist"
 plutil -replace CFBundleExecutable -string "$APP_NAME" "$APP/Contents/Info.plist"
 plutil -replace ADIFlavor -string "$ADI_FLAVOR" "$APP/Contents/Info.plist"
+plutil -replace ADIDomain -string "$ADI_DOMAIN" "$APP/Contents/Info.plist"
 # App icon (Info.plist references it via CFBundleIconFile = ADI). Regenerate with
 # `build.sh --regen-icon`.
 [ -f "$ICNS" ] && cp "$ICNS" "$APP/Contents/Resources/$APP_NAME.icns"

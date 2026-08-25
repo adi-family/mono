@@ -9,6 +9,14 @@ enum Core {
     /// constant (and `crates/adi-cli/Cargo.toml`'s `[[bin]] name`) to match.
     static let binaryName = "adi-mono"
 
+    /// The zone this install serves — `adi`, or `adi-dev` for a dev build. From the bundle's
+    /// own `Info.plist`, for the same reason the flavour is: both apps ship the same CLI, and a
+    /// dev build must link to `app.adi-dev`, not to the real install's dashboard.
+    static var domain: String {
+        (Bundle.main.object(forInfoDictionaryKey: "ADIDomain") as? String)
+            .flatMap { $0.isEmpty ? nil : $0 } ?? "adi"
+    }
+
     private static var binaryPath: String {
         Bundle.main.resourceURL?.appendingPathComponent(binaryName).path
             ?? Bundle.main.bundlePath + "/Contents/Resources/" + binaryName

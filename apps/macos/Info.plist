@@ -27,5 +27,9 @@
          real install's store, ports or launchd namespace. -->
     <key>ADIFlavor</key>
     <string>release</string>
+    <!-- The zone this install serves, so the app can link to its own dashboard without
+         shelling out to ask. Restamped per flavour by build.sh alongside ADIFlavor. -->
+    <key>ADIDomain</key>
+    <string>adi</string>
 </dict>
 </plist>

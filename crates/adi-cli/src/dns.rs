@@ -16,6 +16,14 @@ pub(crate) enum DnsCommand {
     },
     /// Install the `.adi` route + front-door proxy (one admin prompt).
     InstallRoute,
+    /// Grant only the DNS route, so this zone's names resolve here (one admin prompt).
+    ///
+    /// The halves of `install-route`, for an onboarding that asks for one permission at a
+    /// time. Both are idempotent, so granting them in sequence lands exactly where
+    /// `install-route` would.
+    GrantDns,
+    /// Grant only the front door, so those names have something answering them.
+    GrantNetwork,
     /// Remove the `.adi` route + front-door proxy (one admin prompt).
     RemoveRoute,
 }

@@ -1091,13 +1091,31 @@ impl Dns {
         set_mesh_node_in(&adi_config::Config::open(), petname, false)
     }
 
+    /// Whether names in this install's zone resolve locally — the `/etc/resolver` file.
+    ///
+    /// Half of what [`Self::route_installed`] asks. Split out because the two are separate
+    /// grants with separate consequences: without this, `app.adi` does not resolve at all;
+    /// without the front door, it resolves and then nothing answers on port 80.
+    #[cfg(target_os = "macos")]
+    #[must_use]
+    pub fn dns_route_installed(self) -> bool {
+        resolver_file().exists()
+    }
+
+    /// Whether the root front door is installed — the thing that answers on `:80`/`:443`.
+    #[cfg(target_os = "macos")]
+    #[must_use]
+    pub fn front_door_installed(self) -> bool {
+        PathBuf::from(frontdoor_plist()).exists()
+    }
+
     /// Whether the `.adi` route and front door are installed.
     #[cfg(target_os = "macos")]
     #[must_use]
     pub fn route_installed(self) -> bool {
         // Both bits must be present; a missing either re-runs the idempotent install rather
         // than stranding a half state.
-        resolver_file().exists() && PathBuf::from(frontdoor_plist()).exists()
+        self.dns_route_installed() && self.front_door_installed()
     }
 
     /// Whether the `.adi` route and front door are installed.
@@ -1109,14 +1127,42 @@ impl Dns {
     #[cfg(target_os = "linux")]
     #[must_use]
     pub fn route_installed(self) -> bool {
-        resolver_file().exists() && launchd::unit_path(frontdoor_label()).exists()
+        self.dns_route_installed() && self.front_door_installed()
+    }
+
+    /// Half of [`Self::route_installed`] — the `systemd-resolved` drop-in.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn dns_route_installed(self) -> bool {
+        resolver_file().exists()
+    }
+
+    /// Half of [`Self::route_installed`] — the front door's user unit.
+    #[cfg(target_os = "linux")]
+    #[must_use]
+    pub fn front_door_installed(self) -> bool {
+        launchd::unit_path(frontdoor_label()).exists()
     }
 
     /// Whether the `.adi` NRPT route + front-door task are installed (marker written on install).
     #[cfg(windows)]
     #[must_use]
     pub fn route_installed(self) -> bool {
-        route_marker().exists() && launchd::is_loaded(frontdoor_label())
+        self.dns_route_installed() && self.front_door_installed()
+    }
+
+    /// Half of [`Self::route_installed`] — the NRPT rule, recorded by a marker on install.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn dns_route_installed(self) -> bool {
+        route_marker().exists()
+    }
+
+    /// Half of [`Self::route_installed`] — the front door's scheduled task.
+    #[cfg(windows)]
+    #[must_use]
+    pub fn front_door_installed(self) -> bool {
+        launchd::is_loaded(frontdoor_label())
     }
 
     /// The one privileged step: install the `/etc/resolver` route AND the root front-door daemon in a single admin prompt.
@@ -1152,6 +1198,69 @@ impl Dns {
              && killall -HUP mDNSResponder"
         );
         report_admin("installing the .adi route + front door", &proc::run_admin(&shell));
+    }
+
+    /// Grant just the DNS route: `/etc/resolver/<domain>`, so names in this zone resolve here.
+    ///
+    /// Separate from [`Self::install_front_door`] because they are two different permissions to
+    /// ask for and two different things to lose. [`Self::install_route`] still does both in one
+    /// prompt and is what the CLI's `install-route` runs; these two exist for an onboarding that
+    /// asks for one thing at a time, and each is idempotent, so granting one after the other
+    /// leaves exactly the state `install_route` would have.
+    #[cfg(target_os = "macos")]
+    pub fn install_dns_route(self) {
+        let port = port();
+        let _ = std::fs::create_dir_all(service_dir());
+        let _ = std::fs::write(
+            stage_path(),
+            format!("nameserver {RESOLVER_BIND}\nport {port}\n"),
+        );
+        let stage = stage_path();
+        let stage = stage.to_string_lossy();
+        let resolver = resolver_file();
+        let resolver = resolver.to_string_lossy();
+        let shell = format!(
+            "mkdir -p /etc/resolver\
+             && cp '{stage}' '{resolver}'\
+             && chmod 644 '{resolver}'\
+             && dscacheutil -flushcache\
+             && killall -HUP mDNSResponder"
+        );
+        report_admin("routing this zone to the local resolver", &proc::run_admin(&shell));
+    }
+
+    /// Grant just the front door: the root `LaunchDaemon` that answers `:80`/`:443`.
+    #[cfg(target_os = "macos")]
+    pub fn install_front_door(self) {
+        let frontdoor_label = frontdoor_label();
+        let frontdoor_plist = frontdoor_plist();
+        write_frontdoor_artifacts();
+        let plist_stage = frontdoor_plist_stage();
+        let plist_stage = plist_stage.to_string_lossy();
+        let shell = format!(
+            "cp '{plist_stage}' '{frontdoor_plist}'\
+             && chown root:wheel '{frontdoor_plist}'\
+             && chmod 644 '{frontdoor_plist}'\
+             && (launchctl bootout system/{frontdoor_label} 2>/dev/null || true)\
+             && launchctl bootstrap system '{frontdoor_plist}'\
+             && launchctl enable system/{frontdoor_label}"
+        );
+        report_admin("installing the front door", &proc::run_admin(&shell));
+    }
+
+    /// Grant just the DNS route on Linux — the `systemd-resolved` drop-in.
+    ///
+    /// The Linux install was already two separate steps for its own reasons (see
+    /// [`Self::install_route`] below); these name them so the same onboarding works here.
+    #[cfg(not(target_os = "macos"))]
+    pub fn install_dns_route(self) {
+        self.install_route();
+    }
+
+    /// Grant just the front door on Linux and Windows.
+    #[cfg(not(target_os = "macos"))]
+    pub fn install_front_door(self) {
+        self.install_route();
     }
 
     /// The privileged steps on Linux, each attempted through `sudo -n` and each **reported**.

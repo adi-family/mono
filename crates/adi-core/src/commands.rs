@@ -17,6 +17,28 @@ use crate::update::{Update, Updater};
 pub struct Report {
     pub any_running: bool,
     pub services: Vec<ServiceReport>,
+    /// What still has to happen before any of the above means anything.
+    pub setup: SetupReport,
+}
+
+/// The gate in front of the whole app, as three answers.
+///
+/// The app cannot derive these for itself: whether the bundle is somewhere services may point
+/// at is a question about the *running executable*, and whether the two privileged grants are
+/// in place is a question about files under `/etc` and `/Library`. It reads them here and shows
+/// one of three windows, so there is exactly one definition of "ready" rather than one in Rust
+/// and a second in Swift that drifts from it.
+#[derive(Debug, Clone, Serialize)]
+pub struct SetupReport {
+    /// The bundle is somewhere a service may record a path to. False from a mounted disk image
+    /// or a translocated copy — see [`crate::install`].
+    pub location_durable: bool,
+    /// Names in this install's zone resolve locally.
+    pub dns_route: bool,
+    /// The front door is installed, so those names have something answering them.
+    pub front_door: bool,
+    /// All three. Nothing should be enabled, and nothing auto-started, until this is true.
+    pub ready: bool,
 }
 
 /// The adi platform command surface — a zero-sized facade over the platform commands.
@@ -184,6 +206,29 @@ impl Adi {
         Report {
             any_running: services.iter().any(|s| s.running),
             services,
+            setup: self.setup(),
+        }
+    }
+
+    /// What still stands between this install and being usable.
+    #[must_use]
+    pub fn setup(self) -> SetupReport {
+        let location_durable = install::current().is_durable();
+        let dns = self.dns();
+        // Asked in order, and each is only meaningful once the one before it holds: a route
+        // written from a disk image points at binaries that will not be there, so a build that
+        // cannot be installed from is reported as having neither grant rather than as having
+        // grants that happen to be lying around from some other copy.
+        let (dns_route, front_door) = if location_durable {
+            (dns.dns_route_installed(), dns.front_door_installed())
+        } else {
+            (false, false)
+        };
+        SetupReport {
+            location_durable,
+            dns_route,
+            front_door,
+            ready: location_durable && dns_route && front_door,
         }
     }
 }

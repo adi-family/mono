@@ -3,10 +3,13 @@ import Foundation
 
 /// Where this bundle is running from, and moving it somewhere services can point at.
 ///
-/// The mirror of `adi-core`'s `install` module, which refuses to install services from a path
-/// that will not survive — a mounted disk image, or Gatekeeper's randomised copy. The core's job
-/// is to say no; this one's is to make saying yes a single click, because "drag me to
-/// Applications" is otherwise a sentence the user has to act on themselves.
+/// The companion to `adi-core`'s `install` module, which refuses to install services from a path
+/// that will not survive — a mounted disk image, or Gatekeeper's randomised copy.
+///
+/// The core decides *whether* the app is misplaced and reports it in `setup.location_durable`;
+/// this type only supplies the wording and does the moving. Deliberately not a second opinion:
+/// one definition of "durable", in Rust, and the window reads it from the same status the rest
+/// of the UI is built from.
 ///
 /// Copying is deliberate rather than moving. A translocated bundle is readable but its *real*
 /// location is not knowable without `SecTranslocate…`, and on a disk image the original must
@@ -26,8 +29,6 @@ enum InstallLocation {
         if path.hasPrefix("/Volumes/") { return .volume }
         return .durable
     }
-
-    var needsMoving: Bool { self != .durable }
 
     /// Why the app is asking, in the user's terms — no paths, no jargon.
     var reason: String {

@@ -265,6 +265,8 @@ fn main() {
             DnsCommand::Disable => adi.dns().disable(),
             DnsCommand::Status { json } => print_service(&adi.dns().report(), json),
             DnsCommand::InstallRoute => adi.dns().install_route(),
+            DnsCommand::GrantDns => adi.dns().install_dns_route(),
+            DnsCommand::GrantNetwork => adi.dns().install_front_door(),
             DnsCommand::RemoveRoute => adi.dns().remove_route(),
         },
         Command::Projects { command } => {

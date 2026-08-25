@@ -329,6 +329,8 @@ pub(crate) enum DnsCommand {
         json: bool,
     },
     InstallRoute,
+    GrantDns,
+    GrantNetwork,
     RemoveRoute,
 }
 ```

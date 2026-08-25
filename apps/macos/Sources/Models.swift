@@ -6,13 +6,41 @@ import Foundation
 struct Report: Codable {
     let anyRunning: Bool
     let services: [ServiceReport]
+    let setup: SetupReport
 
     enum CodingKeys: String, CodingKey {
         case anyRunning = "any_running"
         case services
+        case setup
     }
 
-    static let empty = Report(anyRunning: false, services: [])
+    static let empty = Report(anyRunning: false, services: [], setup: .unknown)
+}
+
+/// What still has to happen before the app can do anything, straight from `adi-core`.
+///
+/// Deliberately not derived here. Whether the bundle is somewhere services may point at, and
+/// whether the two privileged grants are in place, are questions about the running executable
+/// and about files under `/etc` and `/Library` — the core answers all three so there is one
+/// definition of "ready" rather than a second one in Swift that drifts from it.
+struct SetupReport: Codable {
+    let locationDurable: Bool
+    let dnsRoute: Bool
+    let frontDoor: Bool
+    let ready: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case locationDurable = "location_durable"
+        case dnsRoute = "dns_route"
+        case frontDoor = "front_door"
+        case ready
+    }
+
+    /// Before the first report arrives. Not ready, and not claiming the bundle is misplaced
+    /// either — showing the move prompt for a few milliseconds on every launch would be a lie
+    /// most of the time.
+    static let unknown = SetupReport(locationDurable: true, dnsRoute: false,
+                                     frontDoor: false, ready: false)
 }
 
 struct ServiceReport: Codable, Identifiable {

@@ -4,12 +4,12 @@
 
 > Core shared library for the adi-family workspace.
 
-13 structs · 3 enums across 10 files.
+14 structs · 3 enums across 10 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `App`
-- [`src/commands.rs`](#srccommandsrs) — `Report`, `Adi`
+- [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
 - [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `MeshNodeChange`, `Dns`
 - [`src/install.rs`](#srcinstallrs) — `Location`
@@ -45,6 +45,21 @@ Aggregate live state across every managed service — the JSON the GUI polls.
 pub struct Report {
     pub any_running: bool,
     pub services: Vec<ServiceReport>,
+    pub setup: SetupReport,
+}
+```
+
+### struct `SetupReport`
+
+The gate in front of the whole app, as three answers.
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct SetupReport {
+    pub location_durable: bool,
+    pub dns_route: bool,
+    pub front_door: bool,
+    pub ready: bool,
 }
 ```
 
