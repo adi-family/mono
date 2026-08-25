@@ -5,60 +5,77 @@
 
 @use "sass:map";
 
-// ---- colour themes -----------------------------------------------------------------
-// Greys carry the UI; the accent is reserved for the few things that are genuinely
-// interactive or selected. See `docs/design.md` for the language these implement.
+// ---- colour, generated ---------------------------------------------------------------
 //
-// The greys are warm rather than neutral — every one is its old cool value with red and
-// blue swapped, which leaves the luminance where it was and only changes which way the
-// hue leans. A grey biased toward the accent reads as chosen; a pure one reads as a
-// default nobody looked at.
+// Every colour below comes out of ONE seed by function. There are no hand-picked hexes to
+// drift apart, which is what the palette this replaces had become: a teal accent, a mint
+// accent in the other stylesheet, an error red ten degrees away from the accent's hue, and
+// a mint "running" green a hundred and twenty-five degrees from everything else. Six
+// unrelated decisions reading as noise.
 //
-// **On depth.** This block used to say "depth is a last resort, not the house style",
-// which overstated a good instinct into a rule that contradicts the design language.
-// The instinct is right for the workbench: a dense list separated by shadows is soup,
-// so `shadow` stays a hairline and borders do the separating. Depth belongs to chrome
-// and to things that float above the page — the top bar already blurs what is behind
-// it — and that is where the language asks for it, not in the lists.
+// The space is OKLCH because its lightness is perceptual: two tones at the same `L` look
+// equally light whatever their hue, so a ramp written once behaves the same for the greys,
+// the accent and every semantic colour. The same ramp in HSL does not — HSL yellow at 50%
+// is far brighter than HSL blue at 50%, which is why hand-tuning per hue is normally
+// unavoidable.
 //
-// The accent differs between themes rather than being one value used twice. #fa5019 is
-// 5.8:1 on the dark ground and 3.4:1 on white, so the light theme takes a deeper orange.
-// The old teal was 3.7:1 on white — under the 4.5:1 bar the language sets, in the theme
-// where it was hardest to read.
+// Turn $hue and the whole system turns with it.
+
+$hue: 36;        // #fa5019 — the ADI accent, in OKLCH
+$chroma: .19;    // how saturated the accent is allowed to get
+
+// Semantics, harmonised toward the seed rather than left at their textbook hues. A mint
+// green beside a warm orange reads as two products; the same green rotated a third of the
+// way toward the seed still says "running" and stops fighting. Error is the exception that
+// proves it: red sits ~10deg from orange, so it is pushed the other way and given more
+// chroma and less lightness, because hue alone cannot separate them.
+$hue-ok:   138;
+$hue-warn:  74;
+$hue-down:  22;
+
+/// One step on the ramp. `$l` is perceptual lightness 0-100; `$c` is chroma, defaulting to
+/// a neutral that still carries a whisper of the seed — a grey biased toward the accent
+/// reads as chosen, a pure one reads as a default nobody looked at.
+@function tone($l, $c: .008, $h: $hue) {
+  @return #{"oklch(#{$l}% #{$c} #{$h})"};
+}
+
 $light: (
-  bg:         #f8f6f5,
-  surface:    #ffffff,
-  surface-2:  #f3efed,
-  border:     #ebe6e3,
-  ink:        #120f0d,
-  muted:      #80726b,
-  accent:     #c43a0c,
-  accent-ink: #a8320a,
-  on-accent:  #ffffff,
-  online:     #16a34a,
-  warn:       #d97706,
-  down:       #dc2626,
+  bg:         tone(98.5, .006),
+  surface:    tone(100,  0),
+  surface-2:  tone(96.5, .008),
+  border:     tone(90,   .012),
+  ink:        tone(22,   .020),
+  muted:      tone(52,   .016),
+  accent:     tone(55,   .180),
+  accent-ink: tone(46,   .170),
+  on-accent:  tone(99,   .010),
+  // Solid tints, not the accent at 10% alpha. An alpha wash takes its final colour from
+  // whatever is behind it, so the same "selected" state looked different on every surface
+  // and muddy on most of them. These are steps on the ramp and land identically everywhere.
+  accent-soft:      tone(95, .045),
+  accent-soft-edge: tone(87, .070),
+  online:     tone(50,   .120, $hue-ok),
+  warn:       tone(55,   .120, $hue-warn),
+  down:       tone(48,   .190, $hue-down),
   shadow:     0 1px 2px rgba(9, 11, 15, .04),
 );
 
 $dark: (
-  bg:         #0d0b0a,
-  surface:    #151210,
-  surface-2:  #1d1917,
-  border:     #2b2623,
-  ink:        #f1ece9,
-  muted:      #9c918b,
-  accent:     #fa5019,
-  // Both accents are used as fills as well as ink, with `on-accent` on top of them — so
-  // the hover value has to stay legible against the same text, not merely look different.
-  accent-ink: #ff7a4d,
-  // Near-black rather than white: white on #fa5019 is 3.4:1, black is 6.2:1. The fill is
-  // bright here and the text on it is dark, which is the other way round from the light
-  // theme and is what each ground actually wants.
-  on-accent:  #26100a,
-  online:     #34d399,
-  warn:       #fbbf24,
-  down:       #f87171,
+  bg:         tone(12, .008),
+  surface:    tone(17, .010),
+  surface-2:  tone(22, .012),
+  border:     tone(30, .014),
+  ink:        tone(95, .010),
+  muted:      tone(68, .016),
+  accent:     tone(70, .190),
+  accent-ink: tone(78, .150),
+  on-accent:  tone(18, .045),
+  accent-soft:      tone(26, .055),
+  accent-soft-edge: tone(38, .090),
+  online:     tone(78, .130, $hue-ok),
+  warn:       tone(80, .110, $hue-warn),
+  down:       tone(66, .190, $hue-down),
   shadow:     0 1px 2px rgba(0, 0, 0, .3),
 );
 
@@ -106,6 +123,69 @@ $dark: (
 
   // Motion.
   --transition: 120ms ease;
+
+  // ---- material ---------------------------------------------------------------------
+  // Depth, as tokens rather than a blur hand-written wherever someone wanted one.
+  //
+  // The rule the whole system follows (`docs/design.md`): glass goes on chrome, never
+  // behind content. A bar, a menu, an overlay may be translucent because nothing has to be
+  // read *through* them at length; a list of sessions may not, because the luminance under
+  // the text would then depend on whatever happened to be scrolled behind it.
+  //
+  // `--lift` is what makes a surface read as raised without a shadow — a one-pixel highlight
+  // along the top edge, which is how light actually falls on a raised thing. It costs no
+  // contrast, unlike a shadow, which is why it works on a dense screen where shadows would
+  // turn a list into soup.
+  // Composed here, and interpolated, for one non-obvious reason: `saturate()` is a *Sass*
+  // colour function, so writing `backdrop-filter: blur(...) saturate(...)` in a .scss file
+  // makes Sass try to desaturate a colour it was never given and fail the build. Quoting it
+  // once means call sites are plain `var(--glass-filter)` and cannot trip over it again.
+  --glass-filter: #{"blur(18px) saturate(160%)"};
+  --glass-filter-strong: #{"blur(30px) saturate(165%)"};
+  --lift: inset 0 1px 0 rgb(255 255 255 / .06);
+  --elevate: 0 1px 2px rgb(0 0 0 / .10), 0 8px 24px rgb(0 0 0 / .10);
+  --elevate-lg: 0 2px 6px rgb(0 0 0 / .12), 0 18px 44px rgb(0 0 0 / .18);
+}
+
+// The material values that differ by theme. Light needs a darker highlight and a softer
+// shadow — a white `--lift` on a white card is invisible, and the same shadow that reads as
+// depth on black reads as dirt on white.
+:root, :root[data-theme="light"] {
+  --glass: color-mix(in oklab, var(--surface) 72%, transparent);
+  --glass-2: color-mix(in oklab, var(--surface) 84%, transparent);
+  --lift: inset 0 1px 0 rgb(255 255 255 / .70);
+  --elevate: 0 1px 2px rgb(24 16 14 / .05), 0 8px 24px rgb(24 16 14 / .07);
+  --elevate-lg: 0 2px 6px rgb(24 16 14 / .07), 0 18px 44px rgb(24 16 14 / .12);
+  // A surface that is raised without being a different colour: a whisper of the seed hue,
+  // top-lit. This is what replaces the accent-tinted backgrounds — those said "selected"
+  // when they only meant "grouped".
+  --raise: linear-gradient(180deg,
+      color-mix(in oklab, var(--ink) 3%, var(--surface)),
+      var(--surface));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --glass: color-mix(in oklab, var(--surface) 66%, transparent);
+    --glass-2: color-mix(in oklab, var(--surface) 80%, transparent);
+    --lift: inset 0 1px 0 rgb(255 255 255 / .06);
+    --elevate: 0 1px 2px rgb(0 0 0 / .35), 0 8px 24px rgb(0 0 0 / .30);
+    --elevate-lg: 0 2px 6px rgb(0 0 0 / .45), 0 18px 44px rgb(0 0 0 / .50);
+    --raise: linear-gradient(180deg,
+        color-mix(in oklab, var(--ink) 5%, var(--surface)),
+        var(--surface));
+  }
+}
+
+:root[data-theme="dark"] {
+  --glass: color-mix(in oklab, var(--surface) 66%, transparent);
+  --glass-2: color-mix(in oklab, var(--surface) 80%, transparent);
+  --lift: inset 0 1px 0 rgb(255 255 255 / .06);
+  --elevate: 0 1px 2px rgb(0 0 0 / .35), 0 8px 24px rgb(0 0 0 / .30);
+  --elevate-lg: 0 2px 6px rgb(0 0 0 / .45), 0 18px 44px rgb(0 0 0 / .50);
+  --raise: linear-gradient(180deg,
+      color-mix(in oklab, var(--ink) 5%, var(--surface)),
+      var(--surface));
 }
 
 // OS preference (only when the user hasn't pinned a theme).

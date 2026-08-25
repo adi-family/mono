@@ -6,10 +6,19 @@
  * itself is never repeated, and a token cannot drift between its four copies because it
  * only has one.
  *
- * The dark half is the specified palette. **The light half is derived from it** — role by
- * role, keeping the same neutrals and the accent, darkened where a value has to carry text
- * on white. Those are proposals, not spec: correct any of them here and
- * every component follows.
+ * The colours are generated, not picked. Every neutral is one lightness on a ramp whose hue
+ * is the accent's, so the greys belong to the accent instead of merely coexisting with it —
+ * they used to be green-tinted, which is what made an orange accent look pasted on. Every
+ * semantic colour keeps its meaning and gives up a third of its distance to the seed, so
+ * "running" is still green but a warm one. See `crates/adi-css/scss/_tokens.scss`, which
+ * generates the same ramp from the same seed, and `docs/design.md` for why.
+ *
+ * OKLCH because its lightness is perceptual: holding `L` and changing only the hue leaves a
+ * token exactly as light as it was, which is how this palette was re-hued without moving a
+ * single contrast ratio.
+ *
+ * The one exception is `--syn-*`: the code view needs five hues that stay apart at a glance,
+ * and harmonising them toward one seed is the opposite of what it is for.
  */
 
 :root {
@@ -18,32 +27,32 @@
   /* ---- backgrounds, lightest surface last ------------------------------------------
    * The stack inverts between themes: in dark, `canvas` is the deepest black and a card
    * sits above it; in light, `canvas` is the greyest and a card is plain white. */
-  --canvas:    light-dark(#e9eeeb, #070908);   /* outside the window */
-  --stage:     light-dark(#f4f7f5, #0b0e0d);   /* the main chat canvas */
-  --panel:     light-dark(#eff3f1, #0a0d0c);   /* side panels */
-  --panel-alt: light-dark(#ebf0ed, #080b0a);   /* the right panel, variant C */
-  --bar:       light-dark(#ffffff, #0d1110);   /* top bar and composer */
-  --card:      light-dark(#ffffff, #0f1312);   /* cards, inputs, table heads */
-  --bubble:    light-dark(#e9efeb, #151a19);   /* the user's message */
-  --selected:  light-dark(#e3eee8, #131917);   /* the selected session */
+  --canvas:    light-dark(oklch(94.4% 0.004 36), oklch(13.7% 0.004 36));   /* outside the window */
+  --stage:     light-dark(oklch(97.3% 0.004 36), oklch(16.0% 0.004 36));   /* the main chat canvas */
+  --panel:     light-dark(oklch(96.1% 0.004 36), oklch(15.5% 0.004 36));   /* side panels */
+  --panel-alt: light-dark(oklch(95.1% 0.004 36), oklch(14.6% 0.004 36));   /* the right panel, variant C */
+  --bar:       light-dark(oklch(100.0% 0.004 36), oklch(17.3% 0.004 36));   /* top bar and composer */
+  --card:      light-dark(oklch(100.0% 0.004 36), oklch(18.2% 0.004 36));   /* cards, inputs, table heads */
+  --bubble:    light-dark(oklch(94.6% 0.005 36), oklch(21.2% 0.004 36));   /* the user's message */
+  --selected:  light-dark(oklch(93.9% 0.008 36), oklch(20.6% 0.005 36));   /* the selected session */
 
   /* ---- lines, subtlest first --------------------------------------------------------
    * Ordered by how much they show, which is why the light values descend while the dark
    * ones climb: visibility is distance from the surface, in opposite directions. */
-  --divider: light-dark(#e7ece9, #161b1a);     /* between panels */
-  --frame:   light-dark(#dde4e0, #1b211f);     /* the window frame */
-  --edge:    light-dark(#d9e1dd, #1c2220);     /* card borders */
-  --edge-2:  light-dark(#e0e6e3, #1a201e);     /* the quieter card border */
-  --dim:     light-dark(#d3dbd7, #1e2523);     /* dashes and inactive chips */
+  --divider: light-dark(oklch(93.8% 0.004 36), oklch(21.7% 0.004 36));     /* between panels */
+  --frame:   light-dark(oklch(91.2% 0.005 36), oklch(24.1% 0.005 36));     /* the window frame */
+  --edge:    light-dark(oklch(90.3% 0.006 36), oklch(24.5% 0.005 36));     /* card borders */
+  --edge-2:  light-dark(oklch(92.0% 0.004 36), oklch(23.7% 0.005 36));     /* the quieter card border */
+  --dim:     light-dark(oklch(88.4% 0.006 36), oklch(25.7% 0.006 36));     /* dashes and inactive chips */
 
   /* ---- text, strongest first --------------------------------------------------------- */
-  --ink:         light-dark(#0b100e, #eef3f0); /* headings, emphasis */
-  --body:        light-dark(#1b2320, #dbe4e0); /* running text */
-  --secondary:   light-dark(#39443f, #c6d0cb);
-  --meta:        light-dark(#64716c, #8e9a95);
-  --placeholder: light-dark(#8b968f, #5d6a65);
-  --faint:       light-dark(#9aa49e, #4e5a55); /* caps labels, arrows */
-  --fainter:     light-dark(#adb6b0, #3f4a46);
+  --ink:         light-dark(oklch(16.7% 0.005 36), oklch(96.0% 0.004 36)); /* headings, emphasis */
+  --body:        light-dark(oklch(24.7% 0.007 36), oklch(91.1% 0.006 36)); /* running text */
+  --secondary:   light-dark(oklch(37.5% 0.009 36), oklch(84.8% 0.007 36));
+  --meta:        light-dark(oklch(53.6% 0.010 36), oklch(67.5% 0.009 36));
+  --placeholder: light-dark(oklch(66.2% 0.009 36), oklch(51.2% 0.010 36));
+  --faint:       light-dark(oklch(70.9% 0.008 36), oklch(45.6% 0.009 36)); /* caps labels, arrows */
+  --fainter:     light-dark(oklch(76.7% 0.007 36), oklch(39.8% 0.009 36));
 
   /* ---- accent -------------------------------------------------------------------------
    * #fa5019, the one accent in `docs/design.md`. This file and adi-css used to name two
@@ -54,44 +63,44 @@
    * ground and 3.4:1 on white, so the light half takes a deeper orange. The button fill
    * follows the same rule, which is why it is no longer a single value for both themes —
    * a filled surface still has to carry `--on-accent` on top of it. */
-  --accent:       light-dark(#c43a0c, #fa5019);
-  --accent-fill:  light-dark(#c43a0c, #fa5019); /* the primary button */
-  --on-accent:    light-dark(#fffaf8, #26100a); /* …and its text */
-  --accent-soft:      light-dark(#fdeee8, #241310);
-  --accent-soft-edge: light-dark(#f6cdbc, #46231a);
-  --tip:      light-dark(#fdf4f0, #15100e);    /* a recommendation block */
-  --tip-edge: light-dark(#f3d8cb, #38221b);
+  --accent:       light-dark(oklch(55% 0.180 36), oklch(70% 0.190 36));
+  --accent-fill:  light-dark(oklch(55% 0.180 36), oklch(70% 0.190 36)); /* the primary button */
+  --on-accent:    light-dark(oklch(99% 0.010 36), oklch(18% 0.045 36)); /* …and its text */
+  --accent-soft:      light-dark(oklch(95% 0.045 36), oklch(26% 0.055 36));
+  --accent-soft-edge: light-dark(oklch(87% 0.070 36), oklch(38% 0.090 36));
+  --tip:      light-dark(oklch(97% 0.020 36), oklch(20% 0.030 36));    /* a recommendation block */
+  --tip-edge: light-dark(oklch(90% 0.045 36), oklch(30% 0.055 36));
 
   /* ---- states -------------------------------------------------------------------------
    * `live` is a state, not the accent. It used to *be* the accent, which read correctly
    * only because the accent was mint — the moment the accent became orange, every running
    * app in the list turned the colour of a warning. Semantic colour is a separate axis
    * from the accent (`docs/design.md`), and this is why. */
-  --live:       light-dark(#1f7a46, #3ddc9c);
-  --live-bg:    light-dark(#eef7f1, #101a15);
-  --live-edge:  light-dark(#c5e3d1, #1f3a2b);
-  --err:        light-dark(#c0322b, #f0645c);
-  --err-btn:    light-dark(#d9564e, #f0918a);
-  --err-bg:     light-dark(#fdf3f2, #120d0d);
-  --err-bg-2:   light-dark(#fbe7e5, #2a1210);
-  --err-edge:   light-dark(#f2cdc9, #3a1a17);
-  --err-edge-2: light-dark(#e5a9a3, #5e2420);
+  --live:       light-dark(oklch(51.4% 0.117 138), oklch(79.8% 0.159 138));
+  --live-bg:    light-dark(oklch(96.8% 0.012 138), oklch(20.6% 0.018 138));
+  --live-edge:  light-dark(oklch(88.9% 0.040 138), oklch(32.2% 0.043 138));
+  --err:        light-dark(oklch(53.6% 0.180 22), oklch(67.8% 0.174 22));
+  --err-btn:    light-dark(oklch(62.3% 0.166 22), oklch(75.4% 0.116 22));
+  --err-bg:     light-dark(oklch(97.2% 0.011 22), oklch(16.6% 0.009 22));
+  --err-bg-2:   light-dark(oklch(94.3% 0.022 22), oklch(21.7% 0.040 22));
+  --err-edge:   light-dark(oklch(87.9% 0.042 22), oklch(26.3% 0.051 22));
+  --err-edge-2: light-dark(oklch(78.9% 0.072 22), oklch(34.5% 0.086 22));
 
-  --queue:      light-dark(#8a6414, #c79a4e);  /* amber: waiting its turn */
-  --queue-ink:  light-dark(#4a4436, #c9bfa8);
-  --queue-bg:   light-dark(#fdf8ee, #12100c);
-  --queue-edge: light-dark(#ecdfc4, #33291a);
+  --queue:      light-dark(oklch(52.9% 0.102 74), oklch(71.3% 0.108 74));  /* amber: waiting its turn */
+  --queue-ink:  light-dark(oklch(38.8% 0.024 74), oklch(80.7% 0.033 74));
+  --queue-bg:   light-dark(oklch(98.0% 0.014 74), oklch(17.4% 0.009 74));
+  --queue-edge: light-dark(oklch(90.7% 0.039 74), oklch(28.8% 0.029 74));
 
-  --attention:  light-dark(#b56a1f, #f0a35c);
+  --attention:  light-dark(oklch(59.6% 0.127 74), oklch(77.7% 0.126 74));
 
   /* Blue: a conversation waiting on the *world* rather than on you — an await is
    * registered and the run will continue by itself when it fires. It needs its own hue
    * because it is the state the two beside it are not: amber is your turn, mint is
    * working, and a run that has stopped but is coming back is neither. Deliberately cool,
    * so it never reads as an alarm — nobody has to do anything about it. */
-  --await:      light-dark(#1c62c4, #6aa6f7);
-  --await-bg:   light-dark(#f1f5fd, #090d13);
-  --await-edge: light-dark(#d2dff4, #1a2736);
+  --await:      light-dark(oklch(51.1% 0.168 250), oklch(71.9% 0.134 250));
+  --await-bg:   light-dark(oklch(96.9% 0.012 250), oklch(15.8% 0.014 250));
+  --await-edge: light-dark(oklch(90.0% 0.032 250), oklch(26.8% 0.033 250));
 
   /* ---- syntax -------------------------------------------------------------------------
    * The code view's own small palette. Eight roles, because that is what the scanner in

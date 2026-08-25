@@ -224,7 +224,10 @@
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  box-shadow: 0 8px 24px rgb(0 0 0 / 25%);
+  box-shadow: var(--elevate-lg), var(--lift);
+  background: var(--glass-2);
+  -webkit-backdrop-filter: var(--glass-filter-strong);
+  backdrop-filter: var(--glass-filter-strong);
 
   &__scrim {
     position: fixed;
@@ -291,7 +294,7 @@ $runlog-dim: #8b93a1;
   border-radius: var(--radius-sm);
   overflow: hidden;
   background: $runlog-body;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, .12);
+  box-shadow: var(--elevate);
 }
 
 // Its title bar: says "Log", names the run, shows the tail-f hint, and carries the one Close.
@@ -1105,7 +1108,7 @@ $runlog-dim: #8b93a1;
   &:focus-visible {
     outline: none;
     border-color: var(--accent);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+    box-shadow: 0 0 0 3px var(--accent-soft-edge);
   }
 }
 
