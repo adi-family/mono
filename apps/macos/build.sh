@@ -41,7 +41,11 @@ if [ "${1:-}" = "--regen-icon" ]; then
     echo "==> regenerating ADI.icns"
     TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT
-    swift "$SCRIPT_DIR/icon-gen.swift" "$TMP/icon_1024.png"
+    # Compiled with Sources/Trefoil.swift, not run as a script: the geometry has one
+    # definition now, and swiftc only permits top-level code in main.swift — hence @main.
+    swiftc -parse-as-library -O \
+        "$SCRIPT_DIR/Sources/Trefoil.swift" "$SCRIPT_DIR/icon-gen.swift" -o "$TMP/icon-gen"
+    "$TMP/icon-gen" "$TMP/icon_1024.png"
     mkdir -p "$TMP/ADI.iconset"
     for s in 16 32 128 256 512; do
         sips -z "$s" "$s" "$TMP/icon_1024.png" --out "$TMP/ADI.iconset/icon_${s}x${s}.png" >/dev/null

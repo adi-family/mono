@@ -37,19 +37,22 @@ pub const PAGE: &str = r##"<!doctype html>
     width: min(168px, 38vw); height: min(168px, 38vw); display: block;
     color: var(--fg); overflow: visible;
   }
-  .adi-mark path, .adi-mark line { stroke-linecap: round; stroke-linejoin: round; }
-  .mk-outer { stroke-dasharray: 1; animation: nfDraw .9s ease .15s both; }
-  .mk-node { transform-box: fill-box; transform-origin: center; animation: nfPop .5s 1.2s both; }
-  .mk-core { transform-box: fill-box; transform-origin: center;
-    animation: nfPop .55s 1.75s cubic-bezier(.2,1.5,.35,1) both; }
-  .mk-halo { transform-box: fill-box; transform-origin: center;
-    animation: nfHalo 2.8s 2.0s ease-in-out infinite both; }
-  @keyframes nfDraw { from { stroke-dashoffset: 1; } }
-  @keyframes nfPop { from { transform: scale(0); opacity: 0; } }
-  @keyframes nfHalo {
-    0%, 100% { transform: scale(1); opacity: .5; }
-    50% { transform: scale(1.2); opacity: 1; }
-  }
+  /* The translucent build: the lobes mix where they overlap instead of stacking, which is
+     richer than flat fills at this size and muddy below about 96px -- so it belongs here and
+     not in the icon set. Painted back to front, weak to strong; that order is the design.
+
+     Each lobe is a base fill plus a gloss pass over it -- a specular across the top and a
+     shade under the bottom. The lighting is always laid *over* the lobe and never a ramp in
+     its own alpha: grading the alpha turns the front lobe translucent at its foot and lets
+     whatever is behind show through it. Same surface as apps/macos/Sources/Trefoil.swift. */
+  .lobe { transform-box: fill-box; transform-origin: center; }
+  .lobe .base { fill: currentColor; }
+  .lobe .gl   { fill: url(#mkGloss); }
+  .l-back  { opacity: .42; animation: nfRise .55s ease .10s both; }
+  .l-mid   { opacity: .82; animation: nfRise .55s ease .24s both; }
+  .l-front { opacity: .88; animation: nfRise .55s ease .38s both; }
+  .l-mid .base { fill: url(#mkAccent); }
+  @keyframes nfRise { from { transform: scale(.86); opacity: 0; } }
 
   .err { margin-top: 18px; }
   .err-code {
@@ -68,34 +71,44 @@ pub const PAGE: &str = r##"<!doctype html>
 
   /* Hold the mark in its finished state for anyone who has asked for less motion. */
   @media (prefers-reduced-motion: reduce) {
-    .mk-outer, .mk-node, .mk-core, .mk-halo, .err-code b { animation: none !important; }
-    .mk-outer { stroke-dasharray: none; }
+    .lobe, .err-code b { animation: none !important; }
   }
 </style>
 </head>
 <body>
+  <!-- Trefoil: three hexagons of radius 56, centres 32 from the middle at 150/30/-90 degrees,
+       shifted 8 down so the drawn shape is centred rather than the lobe centres. Generated
+       from those numbers, and `trefoil_geometry_matches_the_spec` re-derives them and fails if
+       these literals drift. The same geometry is in apps/macos/Sources/Trefoil.swift. -->
   <svg class="adi-mark" viewBox="0 0 200 200" fill="none" role="img" aria-label="adi">
-    <path class="mk-outer" pathLength="1" d="M98.25 2.74219C99.3329 2.11705 100.667 2.11705 101.75 2.74219L183.353 49.8555C184.435 50.4807 185.103 51.6363 185.103 52.8867V147.113C185.103 148.364 184.435 149.519 183.353 150.145L101.75 197.258C100.667 197.883 99.3329 197.883 98.25 197.258L16.6475 150.145C15.5646 149.519 14.8975 148.364 14.8975 147.113V52.8867C14.8975 51.6363 15.5646 50.4807 16.6475 49.8555L98.25 2.74219Z" stroke="currentColor" stroke-width="3"/>
-    <g id="inner">
-      <path d="M167.258 98.25C167.883 99.3329 167.883 100.667 167.258 101.75L135.145 157.372C134.519 158.455 133.364 159.122 132.113 159.122L67.8867 159.122C66.6363 159.122 65.4807 158.455 64.8555 157.372L32.7422 101.75C32.117 100.667 32.117 99.3328 32.7422 98.25L64.8555 42.6279C65.4807 41.5451 66.6364 40.8779 67.8867 40.8779L132.113 40.8779C133.364 40.8779 134.519 41.5451 135.145 42.6279L167.258 98.25Z" stroke="currentColor" stroke-width="3"/>
-      <line x1="100" y1="100" x2="167.9" y2="100"   stroke="currentColor" stroke-width="2"/>
-      <line x1="100" y1="100" x2="66.4"  y2="158.2" stroke="currentColor" stroke-width="2"/>
-      <line x1="100" y1="100" x2="66.4"  y2="41.8"  stroke="currentColor" stroke-width="2"/>
+    <defs>
+      <linearGradient id="mkAccent" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#FF8A4A"/>
+        <stop offset=".55" stop-color="#FA5019"/>
+        <stop offset="1" stop-color="#D8380A"/>
+      </linearGradient>
+      <!-- Specular then shade, handing over at the same point so there is no band between. -->
+      <linearGradient id="mkGloss" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#ffffff" stop-opacity=".38"/>
+        <stop offset=".55" stop-color="#ffffff" stop-opacity="0"/>
+        <stop offset=".55" stop-color="#000000" stop-opacity="0"/>
+        <stop offset="1" stop-color="#000000" stop-opacity=".28"/>
+      </linearGradient>
+    </defs>
+    <g id="lobes">
+      <g class="lobe l-back">
+        <path class="base" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
+        <path class="gl" d="M72.29 68.00 L120.78 96.00 L120.78 152.00 L72.29 180.00 L23.79 152.00 L23.79 96.00 Z"/>
+      </g>
+      <g class="lobe l-mid">
+        <path class="base" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
+        <path class="gl" d="M127.71 68.00 L176.21 96.00 L176.21 152.00 L127.71 180.00 L79.22 152.00 L79.22 96.00 Z"/>
+      </g>
+      <g class="lobe l-front">
+        <path class="base" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
+        <path class="gl" d="M100.00 20.00 L148.50 48.00 L148.50 104.00 L100.00 132.00 L51.50 104.00 L51.50 48.00 Z"/>
+      </g>
     </g>
-    <line class="spoke" id="s0" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s1" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s2" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s3" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s4" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s5" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s6" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s7" stroke="currentColor" stroke-width="2"/>
-    <line class="spoke" id="s8" stroke="currentColor" stroke-width="2"/>
-    <circle class="mk-halo" cx="100" cy="100" r="30" fill="#c96422" fill-opacity="0.35"/>
-    <circle class="mk-core" cx="100" cy="100" r="20" fill="#c96422"/>
-    <circle class="mk-node" cx="100"   cy="2"   r="6" fill="currentColor"/>
-    <circle class="mk-node" cx="185.1" cy="149" r="6" fill="currentColor"/>
-    <circle class="mk-node" cx="14.9"  cy="149" r="6" fill="currentColor"/>
   </svg>
 
   <div class="err">
@@ -105,34 +118,14 @@ pub const PAGE: &str = r##"<!doctype html>
 
   <script>
   (function () {
-    var cx = 100, cy = 100, period = 14000; // ms per full turn of the inner mechanism
-    var outer = [[100, 2], [185.1, 149], [14.9, 149]];
-    var innerBase = [[167.9, 100], [133.6, 158.2], [66.4, 158.2], [32.1, 100], [66.4, 41.8], [133.6, 41.8]];
-    var inner = document.getElementById('inner');
-    var spokes = [0, 1, 2, 3, 4, 5, 6, 7, 8].map(function (i) { return document.getElementById('s' + i); });
+    var period = 14000;                       // ms per full turn of the mechanism
+    var lobes = document.getElementById('lobes');
 
+    // The whole trefoil turns about the centre of the box. The lobes keep their paint order as
+    // they go, so the mark stays legible at every angle -- rotating the tones instead would put
+    // the faintest lobe in front, which is the exact fault this mark was redrawn to fix.
     function place(th) {
-      inner.setAttribute('transform', 'rotate(' + (th * 180 / Math.PI) + ' ' + cx + ' ' + cy + ')');
-      var cos = Math.cos(th), sin = Math.sin(th);
-      var iv = innerBase.map(function (p) {
-        return [cx + (p[0] - cx) * cos - (p[1] - cy) * sin, cy + (p[0] - cx) * sin + (p[1] - cy) * cos];
-      });
-      var s = 0;
-      for (var o = 0; o < outer.length; o++) {
-        var ox = outer[o][0], oy = outer[o][1];
-        var ds = iv.map(function (p) { return Math.sqrt((p[0] - ox) * (p[0] - ox) + (p[1] - oy) * (p[1] - oy)); });
-        var order = [0, 1, 2, 3, 4, 5].sort(function (a, b) { return ds[a] - ds[b]; });
-        var dNear = ds[order[0]], dCut = ds[order[3]], span = (dCut - dNear) || 1;
-        for (var j = 0; j < 3; j++) {
-          var p = iv[order[j]];
-          var op = (dCut - ds[order[j]]) / span;      // 1 at the closest, -> 0 as it nears drop-out
-          if (op < 0) op = 0; else if (op > 1) op = 1;
-          spokes[s].setAttribute('x1', ox); spokes[s].setAttribute('y1', oy);
-          spokes[s].setAttribute('x2', p[0]); spokes[s].setAttribute('y2', p[1]);
-          spokes[s].setAttribute('opacity', op.toFixed(3));
-          s++;
-        }
-      }
+      lobes.setAttribute('transform', 'rotate(' + (th * 180 / Math.PI) + ' 100 100)');
     }
 
     // ---- "lag" glitch: the spin hitches while the logo and 4XX jitter + flicker together ----
@@ -194,9 +187,9 @@ pub fn mesh_unavailable(host: &str, node: Option<&str>) -> String {
 <style>
   /* Mirrors the adi design-system tokens; inlined because this page makes no external
      requests. Keep in sync with crates/adi-css/scss/_tokens.scss. */
-  :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; --accent:#c96422; }}
+  :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; --accent:#FA5019; }}
   @media (prefers-color-scheme: dark) {{
-    :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; --accent:#e08a4a; }}
+    :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; --accent:#FF7A4D; }}
   }}
   * {{ box-sizing: border-box; }}
   html, body {{ height: 100%; }}
@@ -301,6 +294,47 @@ pub fn escape(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The mark's path data is written into the page as literals, and the same geometry is
+    /// drawn independently in `apps/macos/Sources/Trefoil.swift`. Re-derive it from the numbers
+    /// both are supposed to be built from, so a drift is a failing test rather than two logos
+    /// that quietly stop matching.
+    #[test]
+    fn trefoil_geometry_matches_the_spec() {
+        const RADIUS: f64 = 56.0;
+        const OFFSET: f64 = 32.0;
+        const NUDGE: f64 = 8.0;
+        // back, mid, front — paint order, and the order the paths appear in the page.
+        const ANGLES: [f64; 3] = [150.0, 30.0, -90.0];
+
+        for angle in ANGLES {
+            let (cx, cy) = (
+                100.0 + OFFSET * angle.to_radians().cos(),
+                100.0 + OFFSET * angle.to_radians().sin() + NUDGE,
+            );
+            let corners: Vec<String> = (0..6)
+                .map(|i| {
+                    let a = (f64::from(i) * 60.0 - 90.0).to_radians();
+                    format!("{:.2} {:.2}", cx + RADIUS * a.cos(), cy + RADIUS * a.sin())
+                })
+                .collect();
+            let path = format!("M{} Z", corners.join(" L"));
+            assert!(
+                PAGE.contains(&path),
+                "the page is missing the lobe at {angle}°: expected {path}"
+            );
+        }
+    }
+
+    /// The lobe in front must be the strongest. An earlier mark had it the other way round and
+    /// laid a wash of the palest shape over everything, which is invisible on a dark ground and
+    /// ruins it on a light one.
+    #[test]
+    fn the_front_lobe_is_the_strongest() {
+        let front = PAGE.find("opacity: .88").expect("front lobe opacity");
+        let back = PAGE.find("opacity: .42").expect("back lobe opacity");
+        assert!(back < front, "lobes must be declared back to front");
+    }
+
     use super::{PAGE, escape, mesh_unavailable};
 
     #[test]

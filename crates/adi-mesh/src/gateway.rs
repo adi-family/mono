@@ -1204,9 +1204,9 @@ fn page(host: &str, reason: &str, message: &str, rows: &[(&str, &str)]) -> Strin
 <style>
   /* Mirrors the adi design-system tokens; inlined because this page makes no external
      requests. Keep in sync with crates/adi-css/scss/_tokens.scss. */
-  :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; --accent:#c96422; }}
+  :root {{ --bg:#fafafb; --fg:#0d0f12; --muted:#6b7280; --line:#e5e7eb; --accent:#FA5019; }}
   @media (prefers-color-scheme: dark) {{
-    :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; --accent:#e08a4a; }}
+    :root {{ --bg:#0a0b0d; --fg:#e9ecf1; --muted:#8b919c; --line:#23262b; --accent:#FF7A4D; }}
   }}
   * {{ box-sizing: border-box; }}
   html, body {{ height: 100%; }}
