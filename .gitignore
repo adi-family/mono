@@ -16,6 +16,11 @@ apps/*/.build-device/
 # `adi-mono indexer index` and tens of megabytes on a tree this size.
 .adi/
 
+# The isolated store the dev loop runs adi-app against (scripts/dev.sh, and the supervised
+# `adi` project services), plus the log a panel-started runner drops in its working dir.
+/.adi-dev/
+server.log
+
 # Backtraces
 rustc-ice-*.txt
 
