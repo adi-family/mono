@@ -47,6 +47,38 @@ describe("allowedRedirect", () => {
   it("rejects an unparsable candidate", () => {
     expect(allowedRedirect("::::not a url", env())).toBeNull();
   });
+
+  it("matches whole origins — scheme, host and port all count", () => {
+    // The two halves of the check disagree on purpose, and this is the seam that bites twice:
+    // the http exemption looks only at the *hostname*, while the allow-list matches whole
+    // *origins*. So the same app is refused when reached over the other scheme or on another
+    // port, which reads in production as "redirect target is missing or not allow-listed".
+    // Both halves of this were live bugs: ADI's front door answers on http *and* https for
+    // app.adi and the browser upgrades to https on its own, and adi-app is reachable directly
+    // on several loopback ports as well as through the front door.
+    const e = env({ APP_URL: "http://app.adi", ALLOWED_REDIRECT_ORIGINS: "http://localhost:8000" });
+    expect(allowedRedirect("http://app.adi/extended/secrets", e)).toBe(
+      "http://app.adi/extended/secrets",
+    );
+    // Same host, other scheme. Note it clears the transport gate — https always does — and
+    // still fails, because the allow-list holds http://app.adi and not https://app.adi.
+    expect(allowedRedirect("https://app.adi/extended/secrets", e)).toBeNull();
+
+    expect(allowedRedirect("http://localhost:8000/extended/secrets", e)).toBe(
+      "http://localhost:8000/extended/secrets",
+    );
+    // Same host, other port; and same port, other spelling of loopback. Distinct origins both.
+    expect(allowedRedirect("http://localhost:8090/extended/secrets", e)).toBeNull();
+    expect(allowedRedirect("http://127.0.0.1:8000/extended/secrets", e)).toBeNull();
+  });
+
+  it("rejects a host that merely ends in the allowed one", () => {
+    // `app.adi.evil.example` does not end in `.adi`, so it never reaches the origin check —
+    // but it is the shape of a lookalike worth having pinned.
+    const e = env({ APP_URL: "http://app.adi" });
+    expect(allowedRedirect("http://app.adi.evil.example/x", e)).toBeNull();
+    expect(allowedRedirect("https://app.adi.evil.example/x", e)).toBeNull();
+  });
 });
 
 describe("deliveryUrl", () => {

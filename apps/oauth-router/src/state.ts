@@ -1,7 +1,7 @@
 /**
  * The OAuth `state` parameter, made trustworthy without server-side storage.
  *
- * A Worker has no session by default, yet the callback must know three things the login
+ * The router has no session store, yet the callback must know three things the login
  * request chose: which provider this is, where to deliver the token, and a nonce to bind
  * against a cookie. We carry those across the round-trip *through the user's browser* — so
  * they must be unforgeable. Each field lives in a compact payload that is HMAC-signed with

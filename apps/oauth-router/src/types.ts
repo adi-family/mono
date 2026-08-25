@@ -1,6 +1,6 @@
 /**
- * The Worker's runtime configuration, injected by Cloudflare from `wrangler.toml`
- * `[vars]` (public) and `wrangler secret put` (secret). The code itself carries no
+ * The router's runtime configuration, injected by Cloudflare from `wrangler.toml`
+ * `[vars]` (public) and `wrangler pages secret put` (secret). The code itself carries no
  * credentials — everything the router needs to run is here.
  *
  * Per-provider credentials follow a fixed convention keyed by the uppercased provider
@@ -25,6 +25,19 @@ export interface Env {
    * `/login` request carries no explicit `?redirect=`. Its origin is always allow-listed.
    */
   APP_URL: string;
+
+  /**
+   * This deployment's own canonical public URL — the origin the provider redirect URIs are
+   * registered against, e.g. `https://oauth-router.withadi.dev`.
+   *
+   * Required on Cloudflare Pages. A Pages project always also answers on
+   * `<project>.pages.dev` and `<branch>.<project>.pages.dev`, and there is no equivalent of a
+   * Worker's `workers_dev = false` to turn those off. Without this pin the redirect URI would
+   * be derived from whichever hostname the request arrived on, and a login entered through a
+   * `pages.dev` host would send the provider an unregistered URI. Unset ⇒ the request origin
+   * is used, which is what `wrangler pages dev` wants.
+   */
+  ROUTER_URL?: string;
 
   /**
    * Comma-separated extra origins a caller-supplied `?redirect=` may target, on top of

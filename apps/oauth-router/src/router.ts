@@ -1,5 +1,5 @@
 /**
- * The OAuth router. One Worker fronts many providers; every flow is two hops through here:
+ * The OAuth router. One deployment fronts many providers; every flow is two hops through here:
  *
  * 1. `GET /login/<provider>?redirect=<app-url>&scope=<optional>`
  *    → build the provider's authorize URL and 302 the browser to it. What the callback will
@@ -11,7 +11,7 @@
  *      302 the browser back to the app with the token in the URL fragment
  *      ({@link deliveryUrl}). Provider-side errors (`?error=`) are forwarded the same way.
  *
- * The Worker keeps no state between the two hops: trust comes from the signed `state`, not a
+ * The router keeps no state between the two hops: trust comes from the signed `state`, not a
  * session store. `GET /` / `GET /health` report which providers are enabled.
  */
 
@@ -49,6 +49,14 @@ export async function handle(request: Request, env: Env, now: number = Date.now(
   }
 
   if (request.method === "GET" && segments.length === 2 && segments[0] === "login") {
+    // Start the flow on the canonical origin or not at all: the nonce cookie is set here and
+    // read back on the callback, and Pages answers on `*.pages.dev` too (see routerOrigin).
+    // A login begun on one of those hosts would drop its cookie on the wrong domain and die
+    // at the callback with "state / cookie mismatch"; bouncing first makes it just work.
+    const canonical = routerOrigin(url, env);
+    if (canonical !== url.origin) {
+      return redirectTo(new URL(url.pathname + url.search, canonical).toString());
+    }
     return handleLogin(url, segments[1], env, now);
   }
 
@@ -126,7 +134,7 @@ async function handleLogin(url: URL, providerId: string, env: Env, now: number):
   const authorize = new URL(provider.authUrl);
   const p = authorize.searchParams;
   p.set("client_id", provider.clientId);
-  p.set("redirect_uri", callbackUri(url, providerId));
+  p.set("redirect_uri", callbackUri(url, providerId, env));
   p.set("response_type", "code");
   p.set("scope", scopes.join(provider.scopeSeparator ?? " "));
   p.set("state", state);
@@ -182,7 +190,7 @@ async function handleCallback(
   const code = url.searchParams.get("code");
   if (!code) return problem(400, "missing authorization code", clearCookie);
 
-  const result = await exchangeCode(provider, code, callbackUri(url, providerId));
+  const result = await exchangeCode(provider, code, callbackUri(url, providerId, env));
   if (!result.ok) {
     return redirectTo(
       deliveryUrl(target, { provider: providerId, error: "token_exchange_failed", error_description: result.error }),
@@ -262,9 +270,30 @@ async function postToken(provider: ResolvedProvider, body: URLSearchParams): Pro
   return { ok: true, token };
 }
 
-/** This Worker's own callback URL for a provider, derived from the live request origin. */
-function callbackUri(url: URL, providerId: string): string {
-  return new URL(`/callback/${providerId}`, url.origin).toString();
+/**
+ * This deployment's own public origin — the one the provider has a redirect URI registered
+ * for. `ROUTER_URL` pins it because Cloudflare Pages always answers on `<project>.pages.dev`
+ * and `<branch>.<project>.pages.dev` as well as the custom domain, and unlike a Worker's
+ * `workers_dev = false` there is no way to switch those off. Deriving the redirect URI from
+ * whichever host the request arrived on would send the provider an unregistered URI and earn
+ * a `redirect_uri_mismatch`. Falls back to the request origin when unset, which is what
+ * `wrangler pages dev` and the tests want.
+ */
+function routerOrigin(url: URL, env: Env): string {
+  if (env.ROUTER_URL) {
+    try {
+      return new URL(env.ROUTER_URL).origin;
+    } catch {
+      // A malformed ROUTER_URL shouldn't take the router down; the request origin still works
+      // on the custom domain, which is where real traffic arrives.
+    }
+  }
+  return url.origin;
+}
+
+/** The callback URL registered with the provider, on this deployment's canonical origin. */
+function callbackUri(url: URL, providerId: string, env: Env): string {
+  return new URL(`/callback/${providerId}`, routerOrigin(url, env)).toString();
 }
 
 function isHttps(url: URL): boolean {

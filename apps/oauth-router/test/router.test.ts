@@ -74,6 +74,39 @@ describe("login", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("sends the provider the ROUTER_URL callback, not the request's own host", async () => {
+    // On Pages the project also answers on <project>.pages.dev, and that host is not what is
+    // registered with the provider — so the redirect URI has to come from ROUTER_URL.
+    const e = env({ ROUTER_URL: "https://oauth-router.withadi.dev" });
+    const { location } = await login(e, "https://oauth-router.withadi.dev/login/google");
+    expect(location.searchParams.get("redirect_uri")).toBe(
+      "https://oauth-router.withadi.dev/callback/google",
+    );
+  });
+
+  it("bounces a login that arrived on a non-canonical host to ROUTER_URL", async () => {
+    // Otherwise the nonce cookie would be set on the pages.dev host and the callback, which
+    // lands on the custom domain, would never see it.
+    const e = env({ ROUTER_URL: "https://oauth-router.withadi.dev" });
+    const res = await handle(
+      new Request("https://adi-oauth-router.pages.dev/login/google?scope=openid"),
+      e,
+      NOW,
+    );
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe(
+      "https://oauth-router.withadi.dev/login/google?scope=openid",
+    );
+    // Nothing was committed to yet, so no nonce cookie rides along.
+    expect(res.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("ignores a malformed ROUTER_URL rather than failing the login", async () => {
+    const e = env({ ROUTER_URL: "not a url" });
+    const { location } = await login(e);
+    expect(location.searchParams.get("redirect_uri")).toBe("https://router.example/callback/google");
+  });
 });
 
 describe("callback", () => {
@@ -107,6 +140,28 @@ describe("callback", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     const [calledUrl] = fetchMock.mock.calls[0];
     expect(calledUrl).toBe("https://oauth2.googleapis.com/token");
+  });
+
+  it("exchanges the code against the same pinned redirect_uri the login used", async () => {
+    // OAuth requires the two to match exactly; both have to read ROUTER_URL, not the Host.
+    const e = env({ ROUTER_URL: "https://oauth-router.withadi.dev" });
+    const { state, nonce } = await login(e, "https://oauth-router.withadi.dev/login/google");
+    const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) =>
+      tokenResponse({ access_token: "AT" }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handle(
+      new Request(
+        `https://oauth-router.withadi.dev/callback/google?code=CODE&state=${encodeURIComponent(state)}`,
+        { headers: { cookie: `oauth_nonce_google=${nonce}` } },
+      ),
+      e,
+      NOW + 5_000,
+    );
+
+    const body = fetchMock.mock.calls[0][1]!.body as URLSearchParams;
+    expect(body.get("redirect_uri")).toBe("https://oauth-router.withadi.dev/callback/google");
   });
 
   it("keeps the refresh_token out of the fragment unless opted in", async () => {

@@ -5,7 +5,7 @@
  * back to the app with the token attached. Two safety rules live here:
  *
  * 1. The redirect target's **origin must be allow-listed** ({@link allowedRedirect}) — an
- *    open redirect here would let anyone turn this Worker into a token-stealing endpoint.
+ *    open redirect here would let anyone turn this router into a token-stealing endpoint.
  * 2. The token is delivered in the URL **fragment** ({@link deliveryUrl}), never the query
  *    — fragments aren't sent to servers, don't land in access logs, and don't leak via
  *    `Referer`. The app reads it from `location.hash`.

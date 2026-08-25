@@ -1,38 +1,51 @@
-# Cloudflare Worker config for the OAuth router.
+# Cloudflare **Pages** config for the OAuth router.
+#
+# The router is a Pages project: `pages_build_output_dir` below is the static root (it holds
+# only `_routes.json`, which hands every path to the catch-all Pages Function in
+# `functions/[[path]].ts`), and all the real work happens in that Function.
 #
 # Non-secret settings live under [vars]; secrets are set out-of-band and never committed:
-#   npx wrangler secret put STATE_SECRET
-#   npx wrangler secret put GOOGLE_CLIENT_ID
-#   npx wrangler secret put GOOGLE_CLIENT_SECRET
-#   npx wrangler secret put GITHUB_CLIENT_ID
-#   npx wrangler secret put GITHUB_CLIENT_SECRET
+#   npx wrangler pages secret put STATE_SECRET      --project-name adi-oauth-router
+#   npx wrangler pages secret put GOOGLE_CLIENT_ID  --project-name adi-oauth-router
+#   ...
+# Note: once this file exists, Pages takes [vars] from *here* and ignores plain-text vars set
+# in the dashboard. Secrets are separate and still come from `pages secret put`.
 #
-# Deploy:  npx wrangler deploy
-# Local:   npx wrangler dev   (reads secrets from .dev.vars — see .dev.vars.example)
+# First-time setup on a fresh Cloudflare account:  ./scripts/setup-cf.sh
+# Deploy:                                          npx wrangler pages deploy
+# Local:  npx wrangler pages dev   (reads secrets from .dev.vars — see .dev.vars.example)
 
 name = "adi-oauth-router"
-main = "src/index.ts"
+pages_build_output_dir = "public"
 compatibility_date = "2025-06-01"
 
-# Served on this custom domain. Requires the `withadi.dev` zone to be on this Cloudflare
-# account; `wrangler deploy` provisions the DNS record + TLS certificate automatically.
-# The provider callback URLs are then https://oauth-router.withadi.dev/callback/<provider>.
-routes = [
-  { pattern = "oauth-router.withadi.dev", custom_domain = true }
-]
-# Reachable only on the custom domain above — no *.workers.dev URL (keeps the
-# request-derived redirect_uri stable at https://oauth-router.withadi.dev).
-workers_dev = false
-
 [vars]
+# This project's own canonical origin. Load-bearing, not cosmetic: a Pages project always
+# also answers on adi-oauth-router.pages.dev (and per-branch preview hosts), which no setting
+# can disable, so the redirect URI sent to a provider is pinned here rather than read off the
+# request's Host. It must equal the origin of the redirect URIs registered at each provider.
+# The custom domain is attached to the project separately — see scripts/setup-cf.sh.
+ROUTER_URL = "https://oauth-router.withadi.dev"
 # Default token-delivery target when /login carries no ?redirect=. The local ADI app is
 # served over http on the .adi split-DNS zone, which the redirect guard permits; this is
 # the only origin redirects may target unless ALLOWED_REDIRECT_ORIGINS adds more. Any path
 # under this origin is allowed (e.g. http://app.adi/oauth/callback/<...>).
 APP_URL = "http://app.adi"
-# Extra origins a caller-supplied ?redirect= may target (comma-separated). APP_URL's
-# origin is always allowed; uncomment to permit more.
-# ALLOWED_REDIRECT_ORIGINS = "http://app.adi,http://localhost:8000"
+# Extra origins a caller-supplied ?redirect= may target (comma-separated). APP_URL's origin
+# (http://app.adi) is always allowed and is not repeated here.
+#
+# The rest are the loopback origins adi-app actually serves on, because the Secrets page sends
+# `?redirect=<window.location.origin>/extended/secrets` — so reaching the app by port instead of
+# through the front door means the redirect target is that port, and an origin missing from this
+# list is refused with "redirect target is missing or not allow-listed". :8000 is the release
+# binary the front door proxies to (it also answers on :10080), :8001 the ADI Dev.app bundle,
+# :8090 a debug build. Both spellings of loopback are listed because which one appears here is
+# whichever the browser was pointed at, not something the app chooses.
+# https://app.adi is listed even though APP_URL covers http://app.adi: the front door answers
+# on both schemes, and a browser picks which one — Chrome's HTTPS-First upgrades app.adi to
+# https on its own. The two are different origins, so covering only the http spelling refuses
+# the app's own Secrets page.
+ALLOWED_REDIRECT_ORIGINS = "https://app.adi,http://localhost:8000,https://localhost:8000,http://127.0.0.1:8000,http://localhost:8001,http://127.0.0.1:8001,http://localhost:8090,http://127.0.0.1:8090,http://localhost:10080,http://127.0.0.1:10080"
 # Forward the provider's refresh_token to the app too, so ADI can store it and later renew the
 # access token via POST /refresh/<provider> without the user re-authorizing. On for this
 # deployment because the ADI secrets store captures the refresh token (encrypted at rest).

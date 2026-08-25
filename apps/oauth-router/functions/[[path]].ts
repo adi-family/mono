@@ -1,9 +1,9 @@
 /**
- * Cloudflare Pages entrypoint (alternative to the standalone Worker in `src/index.ts`).
+ * The Cloudflare Pages entrypoint — the whole router, as a catch-all Pages Function.
  *
- * A catch-all Pages Function so the router owns every path when this project is deployed as
- * a Pages project instead of a Worker. Same {@link handle}, different wrapper — pick one
- * deploy target; you don't need both.
+ * `public/_routes.json` includes `/*`, so every request reaches this Function rather than the
+ * static root, and `handle` owns the routing. All the logic lives in `../src/router`; this is
+ * only the adapter from Pages' `onRequest` context to it.
  */
 
 import { handle } from "../src/router";

@@ -1,5 +1,14 @@
-# Copy to `.dev.vars` for `wrangler dev` (git-ignored). In production these are set with
-# `wrangler secret put <NAME>` instead of living in a file.
+# Copy to `.dev.vars` for `wrangler pages dev` (git-ignored). In production these are set
+# with `wrangler pages secret put <NAME> --project-name adi-oauth-router` instead of living
+# in a file — or in one go by `./scripts/setup-cf.sh --secrets-from .dev.vars`.
+#
+# Values here override `[vars]` in wrangler.toml, which is why ROUTER_URL is repeated below:
+# without the override, local `/login` bounces you to the production origin, because the
+# router pins its callback URL to whatever ROUTER_URL says.
+
+# The local dev server's own origin, overriding the production value in wrangler.toml. Match
+# the port you pass to `wrangler pages dev` (8788 is its default).
+ROUTER_URL="http://127.0.0.1:8788"
 
 # Signs the opaque `state`. Use a long random value: `openssl rand -hex 32`.
 STATE_SECRET="dev-only-change-me"

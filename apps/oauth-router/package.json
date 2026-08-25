@@ -3,10 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "Generic OAuth router Cloudflare Worker: /login/<provider> -> provider, /callback/<provider> -> exchange code and redirect the token back to the app.",
+  "description": "Generic OAuth router on Cloudflare Pages: /login/<provider> -> provider, /callback/<provider> -> exchange code and redirect the token back to the app.",
   "scripts": {
-    "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "dev": "wrangler pages dev",
+    "deploy": "wrangler pages deploy",
+    "setup": "./scripts/setup-cf.sh",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"
