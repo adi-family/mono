@@ -45,12 +45,31 @@ use crate::update::{UpdateCommand, run_update};
 // stays at the workspace floor and would report an older number than the bundle it ships in.
 #[command(name = "adi-mono", about = "Control the adi platform.", version = VERSION)]
 struct Cli {
+    /// Which install to act on: `release` (the default), `dev`, or any other flavour id.
+    ///
+    /// Equivalent to `ADI_FLAVOR`, and composes with the per-field `ADI_*` overrides the same
+    /// way. Without it every command addresses the real install — which is the right default,
+    /// and the reason it is spelled out rather than inferred from anything.
+    #[arg(long, global = true, value_name = "ID")]
+    flavor: Option<String>,
+
     #[command(subcommand)]
     command: Command,
 }
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Print the resolved flavour — which install this invocation would act on.
+    ///
+    /// `--env` emits shell-quoted assignments, which is how the macOS build learns the app
+    /// name and bundle id: the presets then have exactly one definition, in Rust, instead of
+    /// a second copy in a build script that nothing keeps in step.
+    Flavor {
+        #[arg(long)]
+        json: bool,
+        #[arg(long, conflicts_with = "json")]
+        env: bool,
+    },
     /// Bring every service up if not already running (the launch-time bootstrap; never
     /// restarts a running service). Safe to run on every app launch.
     Up,
@@ -192,10 +211,51 @@ enum Command {
     },
 }
 
+/// Print the resolved flavour, for a human, a script, or `jq`.
+fn print_flavor(json: bool, env: bool) {
+    let flavour = adi_config::Flavor::current();
+    if json {
+        match serde_json::to_string_pretty(flavour) {
+            Ok(text) => println!("{text}"),
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else if env {
+        for (key, value) in flavour.env() {
+            // Single-quoted, with embedded quotes escaped the POSIX way, so a caller can
+            // `eval` this without an app name containing a space splitting into two words.
+            println!("{key}='{}'", value.replace('\'', r"'\''"));
+        }
+    } else {
+        println!("flavor          {}", flavour.id);
+        println!("app             {}", flavour.app_name);
+        println!("bundle id       {}", flavour.bundle_id);
+        println!("domain          .{}", flavour.domain);
+        println!("store           ~/{}/mono", flavour.dir_name);
+        println!("labels          {}.*", flavour.label_prefix);
+        println!("resolver        127.0.0.1:{}", flavour.resolver_port);
+        println!("front door      {}:80", flavour.frontdoor_addr);
+        println!("supervisor      127.0.0.1:{}", flavour.supervisor_port);
+        println!("auto-update     {}", flavour.auto_update);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
+    // Before anything else: every path, label, port and hostname below is derived from the
+    // flavour, and it resolves itself from the environment the first time it is asked. Pinning
+    // has to happen while nothing has asked yet.
+    if let Some(id) = cli.flavor.as_deref() {
+        if let Err(active) = adi_config::Flavor::pin(adi_config::Flavor::for_id(id)) {
+            eprintln!("error: --flavor came too late; already running as '{}'", active.id);
+            std::process::exit(1);
+        }
+    }
     let adi = Adi::new();
     match cli.command {
+        Command::Flavor { json, env } => print_flavor(json, env),
         Command::Up => adi.ensure_enabled(),
         Command::Enable => adi.enable(),
         Command::Disable => adi.disable(),

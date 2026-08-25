@@ -14,6 +14,18 @@ enum Core {
             ?? Bundle.main.bundlePath + "/Contents/Resources/" + binaryName
     }
 
+    /// Which install this bundle drives, from its own `Info.plist` (`ADIFlavor`, stamped by
+    /// build.sh). Absent means the release install, which is what an older bundle wants.
+    ///
+    /// The bundle carrying its own identity is the point: ADI Dev.app and ADI.app ship the
+    /// same `adi-mono`, and a CLI that resolved the flavour from the environment would get the
+    /// release install for both — so the dev app would enable, disable and reconfigure the
+    /// real one. Reading it here means the wrong install is not reachable by accident.
+    private static var flavor: String? {
+        (Bundle.main.object(forInfoDictionaryKey: "ADIFlavor") as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
+    }
+
     /// Run `adi-mono <args>` to completion; returns exit status + combined stdout/stderr.
     /// Blocking — callers run it off the main thread (some actions prompt for a password).
     @discardableResult
@@ -21,6 +33,11 @@ enum Core {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: binaryPath)
         proc.arguments = args
+        if let flavor {
+            var env = ProcessInfo.processInfo.environment
+            env["ADI_FLAVOR"] = flavor
+            proc.environment = env
+        }
         let pipe = Pipe()
         proc.standardOutput = pipe
         proc.standardError = pipe

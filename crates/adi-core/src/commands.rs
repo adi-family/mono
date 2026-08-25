@@ -3,6 +3,8 @@
 
 use serde::Serialize;
 
+use adi_config::Flavor;
+
 use crate::app::App;
 use crate::dashboards::Dashboards;
 use crate::dns::Dns;
@@ -120,15 +122,21 @@ impl Adi {
     /// binds the shared port — otherwise the old runner-supervised adi-app would collide
     /// with the new agent on it.
     pub(crate) fn services(self) -> Vec<Box<dyn Service>> {
-        vec![
+        let mut services: Vec<Box<dyn Service>> = vec![
             Box::new(Dns::new()),
             Box::new(App::new()),
             // After the panel: it is the panel that scaffolds dashboards, and the supervisor has
             // nothing to run until one exists. Before the updater only because the updater is
             // periodic and cares about neither.
             Box::new(Dashboards::new()),
-            Box::new(Updater::new()),
-        ]
+        ];
+        // Only an install that *is* the release channel may install itself from it. A dev
+        // build that ran the updater would download the released bundle and swap it over its
+        // own — silently turning ADI Dev.app into a stale copy of ADI.app.
+        if Flavor::current().auto_update {
+            services.push(Box::new(Updater::new()));
+        }
+        services
     }
 
     /// Enable every service (`adi.enable()`).

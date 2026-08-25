@@ -191,9 +191,9 @@ fn mono_in(install: &Path) -> PathBuf {
 /// * run the **new** `adi-mono up` to reconcile — this is what enables services a
 ///   newer version introduces, so future additions need no updater changes.
 fn restart_onto(app: &Path) {
-    for label in [crate::dns::LABEL, crate::app::LABEL] {
-        if launchd::is_loaded(label) {
-            launchd::kickstart(label);
+    for label in [crate::dns::label(), crate::app::label()] {
+        if launchd::is_loaded(&label) {
+            launchd::kickstart(&label);
         }
     }
     if cfg!(target_os = "macos") {

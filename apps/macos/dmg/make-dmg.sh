@@ -2,7 +2,7 @@
 #
 # Package a designed ADI.dmg around an already-built, already-signed ADI.app.
 #
-#   make-dmg.sh <path/to/ADI.app> <path/to/out.dmg>
+#   make-dmg.sh <path/to/ADI.app> <path/to/out.dmg> [flavor]
 #
 # Both build.sh and release.sh call this. release.sh repackages after stapling the app, so
 # the two used to carry their own copy of the assembly and were free to drift apart — the
@@ -15,20 +15,31 @@
 #   .background/         the background picture the layout points at, 1x + 2x in one TIFF
 #   .VolumeIcon.icns     the mounted volume's icon, in the Finder sidebar and on the desktop
 #
-# The names and positions here are load-bearing: layout.DS_Store stores the icon positions
-# against the item names "ADI.app" and "Applications", and the background against the path
-# ".background/background.tiff". Rename any of them and the window opens unstyled, with no
+# The names and positions here are load-bearing: the layout stores icon positions against the
+# item names ("ADI.app" / "ADI Dev.app", and "Applications") and the background against the
+# path ".background/background.tiff". Rename any of them and the window opens unstyled, with no
 # error anywhere.
+#
+# The volume takes its name from the bundle rather than from the flavour argument. They agree,
+# but only one of them is the thing Finder will actually see, and deriving it from the bundle
+# means a mismatch is impossible rather than merely unlikely.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-APP="${1:?usage: make-dmg.sh <ADI.app> <out.dmg>}"
-OUT="${2:?usage: make-dmg.sh <ADI.app> <out.dmg>}"
-VOLNAME="ADI"
+APP="${1:?usage: make-dmg.sh <ADI.app> <out.dmg> [flavor]}"
+OUT="${2:?usage: make-dmg.sh <ADI.app> <out.dmg> [flavor]}"
+FLAVOR="${3:-release}"
+VOLNAME="$(basename "$APP" .app)"
+BG="$HERE/background-$FLAVOR.tiff"
+LAYOUT="$HERE/layout-$FLAVOR.DS_Store"
 
 [ -d "$APP" ] || { echo "error: no app bundle at $APP" >&2; exit 1; }
-for asset in background.tiff layout.DS_Store; do
-    [ -f "$HERE/$asset" ] || { echo "error: missing $HERE/$asset — run make-assets.sh" >&2; exit 1; }
+for asset in "$BG" "$LAYOUT"; do
+    [ -f "$asset" ] || {
+        echo "error: missing $asset" >&2
+        echo "       run: apps/macos/dmg/make-assets.sh --flavor $FLAVOR --bake-layout" >&2
+        exit 1
+    }
 done
 
 TMP="$(mktemp -d)"
@@ -43,9 +54,10 @@ ROOT="$TMP/root"
 mkdir -p "$ROOT/.background"
 cp -R "$APP" "$ROOT/$VOLNAME.app"
 ln -s /Applications "$ROOT/Applications"
-cp "$HERE/background.tiff" "$ROOT/.background/background.tiff"
-cp "$HERE/layout.DS_Store" "$ROOT/.DS_Store"
-cp "$HERE/../$VOLNAME.icns" "$ROOT/.VolumeIcon.icns"
+cp "$BG" "$ROOT/.background/background.tiff"
+cp "$LAYOUT" "$ROOT/.DS_Store"
+# The mark is shared across flavours until the icon work lands.
+cp "$HERE/../ADI.icns" "$ROOT/.VolumeIcon.icns"
 
 # Two stages, because the "this volume has a custom icon" bit lives in the volume root's
 # Finder flags, which only exist once there is a mounted volume to set them on. -nobrowse

@@ -6,6 +6,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use adi_config::Flavor;
+
 use crate::launchd;
 use crate::status::{self, DaemonStatus};
 
@@ -32,7 +34,9 @@ pub trait Service {
     /// Short, stable id and CLI namespace (e.g. `dns` → `adi-mono dns …`).
     fn id(&self) -> &'static str;
     fn name(&self) -> &'static str;
-    /// launchd label, namespaced `family.adi.app.*`.
+    /// Supervisor label, namespaced under the flavour's prefix (`family.adi.app.*` for the
+    /// real install). Build it with [`adi_config::Flavor::label`] rather than a literal, or a
+    /// second install's services will be installed over the first's.
     fn label(&self) -> String;
     fn status_path(&self) -> PathBuf;
     fn log_path(&self) -> PathBuf;
@@ -40,8 +44,21 @@ pub trait Service {
     /// Full argv (binary + args); may write a config file as a side effect.
     fn program(&self) -> Vec<String>;
 
+    /// The environment the supervisor starts the service with.
+    ///
+    /// Always carries the resolved [`adi_config::Flavor`]. A service launchd starts at login
+    /// gets a bare environment, so without this it would resolve the *default* identity and a
+    /// dev install's services would come up pointed at the real install's store, ports and
+    /// zone. Overriding this method should extend the result rather than replace it.
     fn env(&self) -> Vec<(String, String)> {
-        vec![("RUST_LOG".to_string(), "info".to_string())]
+        let mut env = vec![("RUST_LOG".to_string(), "info".to_string())];
+        env.extend(
+            Flavor::current()
+                .env()
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v)),
+        );
+        env
     }
 
     fn on_enable(&self) {}

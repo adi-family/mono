@@ -24,10 +24,11 @@ The app is a **thin trigger**: all control logic (config, launchd supervision, t
 ## Build
 
 ```bash
-apps/macos/build.sh
+apps/macos/build.sh                 # ADI.app        — the real install
+apps/macos/build.sh --flavor dev    # ADI Dev.app    — installable beside it
 ```
 
-Produces `apps/macos/build/ADI.app` and `apps/macos/build/ADI.dmg`. The script builds
+Produces `apps/macos/build/<name>.app` and `apps/macos/build/<name>.dmg`. The script builds
 the release Rust binaries, compiles the Swift sources with `swiftc` (no Xcode
 project), assembles the `.app`, code-signs it, and packages the DMG via
 `dmg/make-dmg.sh` (see **Disk image** below).
@@ -37,20 +38,66 @@ Signing is **ad-hoc** by default (fine for local use). Set `SIGN_ID` to a
 "Developer ID Application" identity to sign for distribution (hardened runtime +
 secure timestamp).
 
+## Flavours: running a build beside the real install
+
+`--flavor dev` builds **ADI Dev.app**, a complete second install that shares nothing with the
+real one: it serves `.adi-dev`, keeps its store in `~/.adi-dev`, supervises under
+`family.adi-dev.app.*`, resolves on 10063 and fronts on `127.0.0.54:80`. Both can be installed,
+enabled and running at once — which is the point, since the alternative is testing a change by
+overwriting the copy that is currently serving.
+
+The identity is one type, `adi_config::Flavor` (`crates/adi-config/src/flavor.rs`). Ask any
+build what it is:
+
+```bash
+adi-mono flavor                    # the release install
+adi-mono --flavor dev flavor       # what a dev build would touch
+adi-mono --flavor dev status       # ...and what it currently has running
+```
+
+`--flavor` is global, so every subcommand takes it. Two named flavours exist — `release` and
+`dev`, guaranteed disjoint by a test — and **any other id also works with no code**, deriving a
+whole identity from its own name: `--flavor staging` gives `.adi-staging`, `~/.adi-staging`,
+`family.adi-staging.app.*` and ports of its own. Every field is separately overridable
+(`ADI_DOMAIN`, `ADI_DIR`, `ADI_RESOLVER_PORT`, `ADI_FRONTDOOR_ADDR`, `ADI_SUPERVISOR_PORT`,
+`ADI_APP_NAME`, `ADI_BUNDLE_ID`, `ADI_LABEL_PREFIX`, `ADI_AUTO_UPDATE`), and an explicit
+variable always beats the preset.
+
+Three things are worth knowing:
+
+- **The bundle carries its own flavour**, in `Info.plist`'s `ADIFlavor`. Both apps ship the same
+  `adi-mono`, so a CLI that read the flavour from the environment would give *both* the release
+  install — and the dev app would enable, disable and reconfigure the real one. `Core.swift`
+  reads the key and pins every CLI it launches.
+- **The identity is exported, not re-derived.** `Flavor::env()` goes into every service
+  definition and every spawned runner, so a service launchd starts at login resolves the
+  identity its installer had rather than re-deriving today's presets.
+- **Only `release` auto-updates.** A dev build that ran the updater would pull the released
+  bundle over its own. `adi-core` does not register the updater outside the release flavour,
+  and `adi-update`'s default target is the flavour's own bundle.
+
+A dev install still needs its own privileged step — its own `/etc/resolver/adi-dev` and its own
+root front-door daemon on `127.0.0.54` — so `dns install-route` prompts once, exactly as the
+real one did. Nothing it does touches `/etc/resolver/adi`, `family.adi.app.*` or the running
+resolver.
+
+To undo one completely: disable it (`adi-mono --flavor dev disable`), remove its route
+(`dns remove-route`), and `rm -rf ~/.adi-dev`.
+
 ## Disk image
 
-`dmg/make-dmg.sh <ADI.app> <out.dmg>` packages the install window: the app, the
+`dmg/make-dmg.sh <ADI.app> <out.dmg> [flavor]` packages the install window: the app, the
 `/Applications` symlink, the background picture, the committed Finder layout and the
 volume icon. `build.sh` and `release.sh` both call it, so the design cannot drift between
 a local build and a notarized one.
 
 ```
-dmg/background.html      the art; rendered headless, this is what to edit
-dmg/background.tiff      committed, 1x + 2x in one file so Retina is sharp
-dmg/layout.applescript   the Finder view settings (window size, icon positions, bars off)
-dmg/layout.DS_Store      committed, baked from the above by driving Finder once
-dmg/check-contrast.py    the readability guardrail
-dmg/make-assets.sh       regenerates background.tiff, and layout.DS_Store with --bake-layout
+dmg/background.html            the art; rendered headless, this is what to edit
+dmg/background-<id>.tiff       committed, 1x + 2x in one file so Retina is sharp
+dmg/layout.applescript         the Finder view settings (window size, icon positions, bars off)
+dmg/layout-<id>.DS_Store       committed, baked from the above by driving Finder once
+dmg/check-contrast.py          the readability guardrail
+dmg/make-assets.sh             regenerates both, per flavour
 ```
 
 The layout is baked once and committed rather than applied at build time, because
@@ -73,8 +120,18 @@ Three things about the design are load-bearing and easy to break:
   `.background/background.tiff`. Rename any of them, or move an icon without moving its
   card in `background.html`, and the window opens wrong with no error anywhere.
 
-To change the art: edit `dmg/background.html`, run `dmg/make-assets.sh`, and re-bake the
-layout too (`--bake-layout`) if any geometry moved.
+Assets are **per flavour**, and the layout has to be as well as the art: Finder keys an icon
+position on the item's *name*, so the release layout would leave `ADI Dev.app`'s icon unplaced.
+`make-assets.sh` asks `adi-mono flavor` for the name and passes it into the art, so a disk image
+cannot announce a name its bundle does not ship under.
+
+To change the art: edit `dmg/background.html`, then regenerate every flavour —
+
+```bash
+for f in release dev; do apps/macos/dmg/make-assets.sh --flavor "$f"; done
+```
+
+adding `--bake-layout` if any geometry moved.
 
 ## Release (signed + notarized)
 

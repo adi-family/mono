@@ -38,8 +38,10 @@
 //! a node's privileged steps testable from a macOS checkout, the same trick `launchd.rs` and
 //! `adi-dns/src/os_routing.rs` use.
 
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 
+use adi_config::Flavor;
 use serde::{Deserialize, Serialize};
 
 use crate::launchd;
@@ -49,30 +51,50 @@ use crate::proc;
 use crate::service::{Action, Service};
 use crate::status::DaemonStatus;
 
-const DOMAIN: &str = "adi";
+/// The TLD this install serves — `adi`, or whatever the process's [`Flavor`] says.
+///
+/// An accessor rather than a constant because it is the first thing two installs on the same
+/// machine must differ in: the resolver zone, the `/etc/resolver` file, every generated
+/// hostname and the front door's host list are all derived from it, so making it a function
+/// makes all of them follow at once.
+fn domain() -> &'static str {
+    &Flavor::current().domain
+}
 
-/// The resolver's listen port. macOS/Linux use a high port and route `.adi` to it out-of-band;
-/// Windows must use `53`, because an NRPT rule redirects a namespace to a nameserver *address*
-/// with no port field.
+/// The resolver's listen port. macOS/Linux take a high port from the flavour and route
+/// `.<domain>` to it out-of-band. Windows must use `53`, because an NRPT rule redirects a
+/// namespace to a nameserver *address* with no port field — there it is not a free choice, and
+/// so not the flavour's to make.
 #[cfg(not(windows))]
-const PORT: u16 = 10053;
+fn port() -> u16 {
+    Flavor::current().resolver_port
+}
 #[cfg(windows)]
-const PORT: u16 = 53;
+fn port() -> u16 {
+    53
+}
 
 /// The address [`render_config`] tells the resolver to bind — and therefore the address the OS
 /// route has to point *at*. One constant, so a route can never be written for an address the
 /// resolver does not answer on.
 const RESOLVER_BIND: &str = "127.0.0.1";
 
-pub(crate) const LABEL: &str = "family.adi.app.dns";
+pub(crate) fn label() -> String {
+    Flavor::current().label("dns")
+}
 
-/// Kept off `127.0.0.1` so `:80` never collides with anything else serving there.
-const FRONTDOOR_ADDR: &str = "127.0.0.53";
+/// Kept off `127.0.0.1` so `:80` never collides with anything else serving there — and one
+/// alias per flavour, so two installs' front doors do not collide with each other either.
+fn frontdoor_addr() -> Ipv4Addr {
+    Flavor::current().frontdoor_addr
+}
 const FRONTDOOR_PORT: u16 = 80;
 /// The HTTPS front door. Same privileged-port story as [`FRONTDOOR_PORT`] — fine, because the
 /// front-door daemon already runs as root; an unprivileged hive just logs a skipped bind.
 const FRONTDOOR_TLS_PORT: u16 = 443;
-const FRONTDOOR_LABEL: &str = "family.adi.app.dns-landing";
+fn frontdoor_label() -> String {
+    Flavor::current().label("dns-landing")
+}
 
 /// The loopback port the local **mesh gateway** listens on — where the front door hands every
 /// `*.n.adi` request (`docs/fleet.md` §3).
@@ -85,10 +107,24 @@ const FRONTDOOR_LABEL: &str = "family.adi.app.dns-landing";
 pub use adi_config::{MESH_GATEWAY_PORT, mesh_gateway_addr};
 
 // macOS-only: the root front-door `LaunchDaemon` lives at a system path with a system log.
+// Both are named after the label, so a second install's root daemon can never be mistaken for
+// -- or worse, installed over -- the real one's.
 #[cfg(target_os = "macos")]
-const FRONTDOOR_DAEMON_PLIST: &str = "/Library/LaunchDaemons/family.adi.app.dns-landing.plist";
+fn frontdoor_plist() -> String {
+    format!("/Library/LaunchDaemons/{}.plist", frontdoor_label())
+}
+
+/// The real install keeps the log path it has always had; anything else is namespaced. Moving
+/// the release log would orphan whatever is already tailing it, for no gain.
 #[cfg(target_os = "macos")]
-const FRONTDOOR_LOG: &str = "/Library/Logs/adi-hive-frontdoor.log";
+fn frontdoor_log() -> String {
+    let flavour = Flavor::current();
+    if flavour.is_release() {
+        "/Library/Logs/adi-hive-frontdoor.log".to_string()
+    } else {
+        format!("/Library/Logs/{}.log", frontdoor_label())
+    }
+}
 
 // MARK: file locations (free helpers — all state is on disk / in the OS supervisor)
 
@@ -122,15 +158,18 @@ fn frontdoor_config_path() -> PathBuf {
 // macOS-only route/daemon artifact paths.
 #[cfg(target_os = "macos")]
 fn stage_path() -> PathBuf {
-    service_dir().join(format!("resolver-{DOMAIN}"))
+    let domain = domain();
+    service_dir().join(format!("resolver-{domain}"))
 }
 #[cfg(target_os = "macos")]
 fn resolver_file() -> PathBuf {
-    PathBuf::from(format!("/etc/resolver/{DOMAIN}"))
+    let domain = domain();
+    PathBuf::from(format!("/etc/resolver/{domain}"))
 }
 #[cfg(target_os = "macos")]
 fn frontdoor_plist_stage() -> PathBuf {
-    service_dir().join(format!("{FRONTDOOR_LABEL}.plist"))
+    let frontdoor_label = frontdoor_label();
+    service_dir().join(format!("{frontdoor_label}.plist"))
 }
 
 // Linux-only: the drop-in is staged unprivileged inside the store and *copied* into place by the
@@ -138,11 +177,11 @@ fn frontdoor_plist_stage() -> PathBuf {
 // the root-owned step down to `cp` + `chmod`, with nothing to quote and nothing to interpolate.
 #[cfg(target_os = "linux")]
 fn stage_path() -> PathBuf {
-    service_dir().join(format!("resolved-{DOMAIN}.conf"))
+    service_dir().join(format!("resolved-{domain}.conf"))
 }
 #[cfg(target_os = "linux")]
 fn resolver_file() -> PathBuf {
-    PathBuf::from(linux_plan::resolved_drop_in_path(DOMAIN))
+    PathBuf::from(linux_plan::resolved_drop_in_path(domain()))
 }
 
 /// The socket the resolver listens on, as the route has to name it.
@@ -152,7 +191,7 @@ fn resolver_addr() -> std::net::SocketAddr {
     let ip = RESOLVER_BIND
         .parse()
         .unwrap_or(IpAddr::V4(Ipv4Addr::LOCALHOST));
-    SocketAddr::new(ip, PORT)
+    SocketAddr::new(ip, port())
 }
 
 // Windows-only: a marker written once the NRPT route + front-door task are installed, so the
@@ -176,8 +215,9 @@ struct FrontdoorSettings {
 
 impl Default for FrontdoorSettings {
     fn default() -> Self {
+        let domain = domain();
         Self {
-            hosts: vec![format!("app.{DOMAIN}"), format!("api.{DOMAIN}")],
+            hosts: vec![format!("app.{domain}"), format!("api.{domain}")],
         }
     }
 }
@@ -256,20 +296,23 @@ pub(crate) fn sibling_binary(name: &str, env_override: &str) -> String {
 // MARK: config rendering (pure — unit-tested)
 
 fn render_config() -> String {
+    let domain = domain();
+    let frontdoor_addr = frontdoor_addr();
+    let port = port();
     format!(
         "# Written by adi-core — edits are overwritten when the CLI rewrites it.\n\
-         domain = \"{DOMAIN}\"\n\
+         domain = \"{domain}\"\n\
          bind_addr = \"{RESOLVER_BIND}\"\n\
-         preferred_port = {PORT}\n\
+         preferred_port = {port}\n\
          fallback_ports = []\n\
          upstreams = [\"1.1.1.1:53\", \"8.8.8.8:53\"]\n\
          manage_os_routing = false\n\
          status_file = \"{status}\"\n\
          \n\
-         # Route .{DOMAIN} to the front-door address so http://<name>.{DOMAIN}/ hits adi-hive.\n\
+         # Route .{domain} to the front-door address so http://<name>.{domain}/ hits adi-hive.\n\
          [[overrides]]\n\
-         suffix = \"{DOMAIN}\"\n\
-         address = \"{FRONTDOOR_ADDR}\"\n",
+         suffix = \"{domain}\"\n\
+         address = \"{frontdoor_addr}\"\n",
         status = status_file().to_string_lossy(),
     )
 }
@@ -396,6 +439,8 @@ fn patch_mesh_nodes(yaml: &str, nodes: &[String]) -> String {
 /// `mesh_nodes` are the petnames of the machines this one has paired with, carried through from
 /// the file being replaced (see [`frontdoor_mesh_nodes_in`]) so a regeneration keeps them.
 fn render_frontdoor_hive(hosts: &[String], app_port: u16, mesh_nodes: &[String]) -> String {
+    let domain = domain();
+    let frontdoor_addr = frontdoor_addr();
     // One `services:` entry per host, keyed by the host's first label (`app.adi` → `app`). All
     // point at the same `app_port` — different names for one upstream. Built as a plain literal
     // so YAML indentation is exact.
@@ -413,18 +458,18 @@ fn render_frontdoor_hive(hosts: &[String], app_port: u16, mesh_nodes: &[String])
         );
     }
     format!(
-        "# Written by adi-core — adi-hive front door for the .{DOMAIN} zone.
+        "# Written by adi-core — adi-hive front door for the .{domain} zone.
 # Always-on plumbing: proxies the hosts below to the adi control panel (adi-app), which runs
 # as its own per-user service on this reserved port so it can be toggled without a
 # password. Hosts come from ~/.adi/mono/dns/frontdoor.toml. Any other host gets the 4XX page.
 proxy:
   bind:
-    - \"{FRONTDOOR_ADDR}:{FRONTDOOR_PORT}\"
+    - \"{frontdoor_addr}:{FRONTDOOR_PORT}\"
   # HTTPS alongside (never instead of) plain HTTP. adi-hive mints a locally-trusted certificate
   # for the hosts below; trusting its CA once makes https://app.adi a secure context, which is
   # what lets the control panel be installed as an app. See adi-hive's `tls` module.
   tls_bind:
-    - \"{FRONTDOOR_ADDR}:{FRONTDOOR_TLS_PORT}\"
+    - \"{frontdoor_addr}:{FRONTDOOR_TLS_PORT}\"
   # `n.adi` is RESERVED, and it is not a zone of this machine: <service>.<node>.n.adi names a
   # service on a DIFFERENT adi machine, reached over the mesh. Local services keep <service>.adi,
   # so the two can never collide. The front door deliberately knows nothing about peers — it sees
@@ -501,29 +546,57 @@ fn write_frontdoor_config() {
     );
 }
 
+/// The environment every front door is started with, on any platform.
+///
+/// Carries the whole resolved [`Flavor`], not just `ADI_DIR`: the front door is started by a
+/// supervisor with a bare environment, and one that resolved the default identity would serve
+/// the *other* install's hosts on this flavour's address. `HOME` is pinned by the macOS caller
+/// on top of this, because a root daemon would otherwise read `/var/root`.
+fn frontdoor_env(watch_self: bool) -> Vec<(String, String)> {
+    let mut env = vec![("RUST_LOG".to_string(), "info".to_string())];
+    env.extend(
+        Flavor::current()
+            .env()
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v)),
+    );
+    if watch_self {
+        env.push(("ADI_WATCH_SELF".to_string(), "1".to_string()));
+    }
+    env
+}
+
+/// The front door's own log, namespaced so two installs never interleave into one file.
+#[cfg(any(target_os = "linux", windows))]
+fn frontdoor_user_log() -> PathBuf {
+    let flavour = Flavor::current();
+    let name = if flavour.is_release() {
+        "adi-hive-frontdoor.log".to_string()
+    } else {
+        format!("adi-hive-frontdoor-{}.log", flavour.domain)
+    };
+    paths::logs_dir().join(name)
+}
+
 /// Stage the front-door daemon's config + plist (unprivileged); pins `HOME`/`ADI_DIR` to the installing user's, since the root daemon would otherwise use `/var/root/.adi`.
 #[cfg(target_os = "macos")]
 fn write_frontdoor_artifacts() {
     write_frontdoor_config();
-    let env = [
-        ("RUST_LOG".to_string(), "info".to_string()),
-        (
-            "HOME".to_string(),
-            std::env::var("HOME").unwrap_or_default(),
-        ),
-        ("ADI_DIR".to_string(), paths::dir_name()),
-        // The front door is the one root piece the updater can't kickstart without a
-        // password, so it watches its own binary and exits when the bundle is swapped —
-        // launchd's KeepAlive then respawns the new build (see adi-hive's self-watch).
-        ("ADI_WATCH_SELF".to_string(), "1".to_string()),
-    ];
+    // The front door is the one root piece the updater can't kickstart without a password, so
+    // it watches its own binary and exits when the bundle is swapped — launchd's KeepAlive
+    // then respawns the new build (see adi-hive's self-watch).
+    let mut env = frontdoor_env(true);
+    env.push((
+        "HOME".to_string(),
+        std::env::var("HOME").unwrap_or_default(),
+    ));
     let plist = launchd::plist_xml(
-        FRONTDOOR_LABEL,
+        &frontdoor_label(),
         &[
             hive_binary_path(),
             frontdoor_config_path().to_string_lossy().into_owned(),
         ],
-        FRONTDOOR_LOG,
+        &frontdoor_log(),
         &env,
     );
     let _ = std::fs::write(frontdoor_plist_stage(), plist);
@@ -537,7 +610,7 @@ fn write_frontdoor_artifacts() {
 fn frontdoor_plist_managed() -> bool {
     let marker = frontdoor_config_path();
     let marker = marker.to_string_lossy();
-    std::fs::read_to_string(FRONTDOOR_DAEMON_PLIST).is_ok_and(|p| p.contains(marker.as_ref()))
+    std::fs::read_to_string(frontdoor_plist()).is_ok_and(|p| p.contains(marker.as_ref()))
 }
 
 /// True when the installed root daemon plist already carries the self-watch env — the
@@ -546,7 +619,7 @@ fn frontdoor_plist_managed() -> bool {
 /// binary path, which legitimately differs between installs.
 #[cfg(target_os = "macos")]
 fn frontdoor_plist_current() -> bool {
-    std::fs::read_to_string(FRONTDOOR_DAEMON_PLIST).is_ok_and(|p| p.contains("ADI_WATCH_SELF"))
+    std::fs::read_to_string(frontdoor_plist()).is_ok_and(|p| p.contains("ADI_WATCH_SELF"))
 }
 
 /// Report the outcome of an elevated step instead of discarding it.
@@ -569,15 +642,11 @@ fn report_admin(what: &str, out: &proc::Output) {
 #[cfg(windows)]
 fn install_frontdoor_task() {
     write_frontdoor_config();
-    let env = [
-        ("RUST_LOG".to_string(), "info".to_string()),
-        ("ADI_DIR".to_string(), paths::dir_name()),
-        // Self-watch so an auto-update that swaps the binary makes the task restart into it.
-        ("ADI_WATCH_SELF".to_string(), "1".to_string()),
-    ];
-    let log = paths::logs_dir().join("adi-hive-frontdoor.log");
+    // Self-watch so an auto-update that swaps the binary makes the task restart into it.
+    let env = frontdoor_env(true);
+    let log = frontdoor_user_log();
     launchd::enable(
-        FRONTDOOR_LABEL,
+        &frontdoor_label(),
         &[
             hive_binary_path(),
             frontdoor_config_path().to_string_lossy().into_owned(),
@@ -782,20 +851,17 @@ mod linux_plan {
 #[cfg(target_os = "linux")]
 fn install_frontdoor_unit() {
     write_frontdoor_config();
-    let env = [
-        ("RUST_LOG".to_string(), "info".to_string()),
-        ("ADI_DIR".to_string(), paths::dir_name()),
-        // No `ADI_WATCH_SELF` here, unlike macOS and Windows. Self-watch exists because a root
-        // `LaunchDaemon` cannot be restarted without a password; a user unit can, freely. And it
-        // would actively hurt: replacing the binary drops its capability, so a front door that
-        // exited the moment the file changed would be restarted into a binary that can no longer
-        // bind `:80` — `Restart=always` would then loop it forever. Moving the front door onto a
-        // new build is `dns install-route` (re-grant, then restart), a step that knows about the
-        // capability, rather than a race that does not.
-    ];
-    let log = paths::logs_dir().join("adi-hive-frontdoor.log");
+    // No `ADI_WATCH_SELF` here, unlike macOS and Windows. Self-watch exists because a root
+    // `LaunchDaemon` cannot be restarted without a password; a user unit can, freely. And it
+    // would actively hurt: replacing the binary drops its capability, so a front door that
+    // exited the moment the file changed would be restarted into a binary that can no longer
+    // bind `:80` — `Restart=always` would then loop it forever. Moving the front door onto a
+    // new build is `dns install-route` (re-grant, then restart), a step that knows about the
+    // capability, rather than a race that does not.
+    let env = frontdoor_env(false);
+    let log = frontdoor_user_log();
     launchd::enable(
-        FRONTDOOR_LABEL,
+        &frontdoor_label(),
         &[
             hive_binary_path(),
             frontdoor_config_path().to_string_lossy().into_owned(),
@@ -822,7 +888,7 @@ fn frontdoor_can_bind() -> bool {
     use std::io::ErrorKind;
     use std::net::TcpListener;
 
-    match TcpListener::bind((FRONTDOOR_ADDR, FRONTDOOR_PORT)) {
+    match TcpListener::bind((frontdoor_addr(), FRONTDOOR_PORT)) {
         // Bound and immediately dropped — this is a question, not a reservation.
         Ok(_) => return true,
         Err(e) if e.kind() == ErrorKind::AddrInUse => return true,
@@ -881,7 +947,7 @@ fn run_privileged(what: &str, steps: &[String]) -> bool {
 #[cfg(target_os = "linux")]
 fn report_frontdoor_blocked() {
     eprintln!(
-        "adi: the .{DOMAIN} front door cannot start — adi-hive may not bind {FRONTDOOR_ADDR}:{FRONTDOOR_PORT} as this user."
+        "adi: the .{domain} front door cannot start — adi-hive may not bind {frontdoor_addr}:{FRONTDOOR_PORT} as this user."
     );
     eprintln!(
         "adi: grant it once (or use {}), then re-run `{} dns install-route`:",
@@ -1031,7 +1097,7 @@ impl Dns {
     pub fn route_installed(self) -> bool {
         // Both bits must be present; a missing either re-runs the idempotent install rather
         // than stranding a half state.
-        resolver_file().exists() && PathBuf::from(FRONTDOOR_DAEMON_PLIST).exists()
+        resolver_file().exists() && PathBuf::from(frontdoor_plist()).exists()
     }
 
     /// Whether the `.adi` route and front door are installed.
@@ -1043,23 +1109,26 @@ impl Dns {
     #[cfg(target_os = "linux")]
     #[must_use]
     pub fn route_installed(self) -> bool {
-        resolver_file().exists() && launchd::unit_path(FRONTDOOR_LABEL).exists()
+        resolver_file().exists() && launchd::unit_path(frontdoor_label()).exists()
     }
 
     /// Whether the `.adi` NRPT route + front-door task are installed (marker written on install).
     #[cfg(windows)]
     #[must_use]
     pub fn route_installed(self) -> bool {
-        route_marker().exists() && launchd::is_loaded(FRONTDOOR_LABEL)
+        route_marker().exists() && launchd::is_loaded(frontdoor_label())
     }
 
     /// The one privileged step: install the `/etc/resolver` route AND the root front-door daemon in a single admin prompt.
     #[cfg(target_os = "macos")]
     pub fn install_route(self) {
+        let frontdoor_label = frontdoor_label();
+        let frontdoor_plist = frontdoor_plist();
+        let port = port();
         let _ = std::fs::create_dir_all(service_dir());
         let _ = std::fs::write(
             stage_path(),
-            format!("nameserver {RESOLVER_BIND}\nport {PORT}\n"),
+            format!("nameserver {RESOLVER_BIND}\nport {port}\n"),
         );
         write_frontdoor_artifacts();
 
@@ -1073,12 +1142,12 @@ impl Dns {
             "mkdir -p /etc/resolver\
              && cp '{stage}' '{resolver}'\
              && chmod 644 '{resolver}'\
-             && cp '{plist_stage}' '{FRONTDOOR_DAEMON_PLIST}'\
-             && chown root:wheel '{FRONTDOOR_DAEMON_PLIST}'\
-             && chmod 644 '{FRONTDOOR_DAEMON_PLIST}'\
-             && (launchctl bootout system/{FRONTDOOR_LABEL} 2>/dev/null || true)\
-             && launchctl bootstrap system '{FRONTDOOR_DAEMON_PLIST}'\
-             && launchctl enable system/{FRONTDOOR_LABEL}\
+             && cp '{plist_stage}' '{frontdoor_plist}'\
+             && chown root:wheel '{frontdoor_plist}'\
+             && chmod 644 '{frontdoor_plist}'\
+             && (launchctl bootout system/{frontdoor_label} 2>/dev/null || true)\
+             && launchctl bootstrap system '{frontdoor_plist}'\
+             && launchctl enable system/{frontdoor_label}\
              && dscacheutil -flushcache\
              && killall -HUP mDNSResponder"
         );
@@ -1107,13 +1176,13 @@ impl Dns {
         write_config();
         let _ = std::fs::write(
             stage_path(),
-            linux_plan::resolved_drop_in(DOMAIN, resolver_addr()),
+            linux_plan::resolved_drop_in(domain(), resolver_addr()),
         );
 
         let stage = stage_path();
         let drop_in = resolver_file();
         run_privileged(
-            &format!("routing .{DOMAIN} to the local resolver"),
+            &format!("routing .{domain} to the local resolver"),
             &linux_plan::route_install_steps(
                 &stage.to_string_lossy(),
                 &drop_in.to_string_lossy(),
@@ -1148,8 +1217,8 @@ impl Dns {
         // whole `.adi` namespace at the local resolver, and flush the client cache.
         let ps = format!(
             "$ErrorActionPreference='Stop';\n\
-             Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -eq '.{DOMAIN}' }} | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue;\n\
-             Add-DnsClientNrptRule -Namespace '.{DOMAIN}' -NameServers '127.0.0.1';\n\
+             Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -eq '.{domain}' }} | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue;\n\
+             Add-DnsClientNrptRule -Namespace '.{domain}' -NameServers '127.0.0.1';\n\
              Clear-DnsClientCache;\n"
         );
         let out = proc::run_admin(&ps);
@@ -1164,6 +1233,8 @@ impl Dns {
     /// stale; after this the front door is proxy-only and the toggle never touches it again.
     #[cfg(target_os = "macos")]
     pub fn update_frontdoor(self) {
+        let frontdoor_label = frontdoor_label();
+        let frontdoor_plist = frontdoor_plist();
         write_frontdoor_artifacts();
         let plist_stage = frontdoor_plist_stage();
         let plist_stage = plist_stage.to_string_lossy();
@@ -1173,13 +1244,13 @@ impl Dns {
         // :80 can be rebound.
         let shell = format!(
             "set -e\
-             ; cp '{plist_stage}' '{FRONTDOOR_DAEMON_PLIST}'\
-             ; chown root:wheel '{FRONTDOOR_DAEMON_PLIST}'\
-             ; chmod 644 '{FRONTDOOR_DAEMON_PLIST}'\
-             ; launchctl bootout system/{FRONTDOOR_LABEL} 2>/dev/null || true\
+             ; cp '{plist_stage}' '{frontdoor_plist}'\
+             ; chown root:wheel '{frontdoor_plist}'\
+             ; chmod 644 '{frontdoor_plist}'\
+             ; launchctl bootout system/{frontdoor_label} 2>/dev/null || true\
              ; n=0\
-             ; until launchctl bootstrap system '{FRONTDOOR_DAEMON_PLIST}' 2>/dev/null; do n=$((n+1)); if [ \"$n\" -ge 25 ]; then exit 1; fi; sleep 0.2; done\
-             ; launchctl enable system/{FRONTDOOR_LABEL}"
+             ; until launchctl bootstrap system '{frontdoor_plist}' 2>/dev/null; do n=$((n+1)); if [ \"$n\" -ge 25 ]; then exit 1; fi; sleep 0.2; done\
+             ; launchctl enable system/{frontdoor_label}"
         );
         report_admin("updating the front door", &proc::run_admin(&shell));
     }
@@ -1202,19 +1273,22 @@ impl Dns {
     #[cfg(windows)]
     pub fn update_frontdoor(self) {
         install_frontdoor_task();
-        launchd::kickstart(FRONTDOOR_LABEL);
+        launchd::kickstart(frontdoor_label());
     }
 
     /// Tear down both privileged bits, best-effort (incl. the `lo0` alias).
     #[cfg(target_os = "macos")]
     pub fn remove_route(self) {
+        let frontdoor_addr = frontdoor_addr();
+        let frontdoor_label = frontdoor_label();
+        let frontdoor_plist = frontdoor_plist();
         let resolver = resolver_file();
         let resolver = resolver.to_string_lossy();
         let shell = format!(
-            "(launchctl bootout system/{FRONTDOOR_LABEL} 2>/dev/null || true)\
-             ; rm -f '{FRONTDOOR_DAEMON_PLIST}'\
+            "(launchctl bootout system/{frontdoor_label} 2>/dev/null || true)\
+             ; rm -f '{frontdoor_plist}'\
              ; rm -f '{resolver}'\
-             ; (ifconfig lo0 -alias {FRONTDOOR_ADDR} 2>/dev/null || true)\
+             ; (ifconfig lo0 -alias {frontdoor_addr} 2>/dev/null || true)\
              ; dscacheutil -flushcache\
              ; killall -HUP mDNSResponder"
         );
@@ -1228,10 +1302,10 @@ impl Dns {
     /// privileged ports on a machine whose operator has just said they do not want it to.
     #[cfg(target_os = "linux")]
     pub fn remove_route(self) {
-        launchd::disable(FRONTDOOR_LABEL);
+        launchd::disable(frontdoor_label());
         let drop_in = resolver_file();
         run_privileged(
-            &format!("removing the .{DOMAIN} route"),
+            &format!("removing the .{domain} route"),
             &linux_plan::route_remove_steps(&drop_in.to_string_lossy()),
         );
         run_privileged(
@@ -1243,9 +1317,9 @@ impl Dns {
     /// Tear down the NRPT route (one UAC prompt) and the front-door task, best-effort.
     #[cfg(windows)]
     pub fn remove_route(self) {
-        launchd::disable(FRONTDOOR_LABEL);
+        launchd::disable(frontdoor_label());
         let ps = format!(
-            "Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -eq '.{DOMAIN}' }} | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue;\n\
+            "Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -eq '.{domain}' }} | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue;\n\
              Clear-DnsClientCache;\n"
         );
         proc::run_admin(&ps);
@@ -1261,7 +1335,7 @@ impl Service for Dns {
         "DNS"
     }
     fn label(&self) -> String {
-        LABEL.to_string()
+        label()
     }
     fn status_path(&self) -> PathBuf {
         status_file()
@@ -1318,7 +1392,7 @@ impl Service for Dns {
             report_frontdoor_blocked();
             return;
         }
-        if launchd::is_loaded(FRONTDOOR_LABEL) {
+        if launchd::is_loaded(frontdoor_label()) {
             if !frontdoor_config_current() {
                 self.update_frontdoor();
             }
@@ -1359,7 +1433,7 @@ impl Service for Dns {
                 s.port,
                 linux_plan::detail_suffix(
                     resolver_file().exists(),
-                    launchd::unit_path(FRONTDOOR_LABEL).exists(),
+                    launchd::unit_path(frontdoor_label()).exists(),
                 )
             )
         })
@@ -1372,10 +1446,11 @@ impl Service for Dns {
 
 /// The install/remove-route action for the current route state.
 fn route_action(installed: bool) -> Action {
+    let domain = domain();
     let (title, verb) = if installed {
-        (format!("Remove .{DOMAIN} route + page"), "remove-route")
+        (format!("Remove .{domain} route + page"), "remove-route")
     } else {
-        (format!("Install .{DOMAIN} route + page…"), "install-route")
+        (format!("Install .{domain} route + page…"), "install-route")
     };
     Action {
         id: "route".to_string(),
@@ -1388,14 +1463,28 @@ fn route_action(installed: bool) -> Action {
 mod tests {
     use super::*;
 
+    /// The resolver config must describe the flavour this process belongs to — not the
+    /// literals the release install happens to use. Asserting against the flavour is what
+    /// makes the test say something on a `dev` build instead of simply failing on it.
     #[test]
-    fn config_has_expected_fields() {
+    fn config_describes_this_flavour() {
+        let flavour = Flavor::current();
         let cfg = render_config();
-        assert!(cfg.contains("domain = \"adi\""));
-        assert!(cfg.contains(&format!("preferred_port = {PORT}")));
-        assert!(cfg.contains("suffix = \"adi\""));
-        assert!(cfg.contains("address = \"127.0.0.53\""));
+        assert!(cfg.contains(&format!("domain = \"{}\"", flavour.domain)), "{cfg}");
+        assert!(cfg.contains(&format!("preferred_port = {}", port())), "{cfg}");
+        assert!(cfg.contains(&format!("suffix = \"{}\"", flavour.domain)), "{cfg}");
+        assert!(cfg.contains(&format!("address = \"{}\"", flavour.frontdoor_addr)), "{cfg}");
         assert!(cfg.contains("status_file = \""));
+    }
+
+    /// The route and the resolver are written from the same two accessors, so they cannot
+    /// disagree — but only as long as nobody reintroduces a literal on one side of the pair.
+    #[test]
+    fn the_route_points_at_the_port_the_resolver_binds() {
+        let cfg = render_config();
+        assert!(cfg.contains(&format!("preferred_port = {}", port())));
+        assert_eq!(resolver_addr().port(), port());
+        assert_eq!(resolver_addr().ip().to_string(), RESOLVER_BIND);
     }
 
     /// A rendered front door with two hosts and whatever node list the caller wants.
@@ -1768,7 +1857,7 @@ mod tests {
     /// search domain and could take the node's whole DNS with it.
     #[test]
     fn the_linux_route_is_routing_only_and_names_the_resolvers_port() {
-        let drop_in = linux_plan::resolved_drop_in(DOMAIN, resolver_addr());
+        let drop_in = linux_plan::resolved_drop_in(domain(), resolver_addr());
         assert!(drop_in.contains("Domains=~adi\n"), "{drop_in}");
         assert!(!drop_in.contains("Domains=adi"), "{drop_in}");
 

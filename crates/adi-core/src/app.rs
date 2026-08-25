@@ -8,6 +8,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use adi_config::Flavor;
 use adi_ports_manager::Ports;
 
 use crate::dns::sibling_binary;
@@ -15,7 +16,9 @@ use crate::paths;
 use crate::service::Service;
 use crate::status::DaemonStatus;
 
-pub(crate) const LABEL: &str = "family.adi.app.control-panel";
+pub(crate) fn label() -> String {
+    Flavor::current().label("control-panel")
+}
 
 /// The ports-manager lease the agent binds and the front door proxies to.
 const PORT_SERVICE: &str = "app";
@@ -67,7 +70,7 @@ impl Service for App {
         "App"
     }
     fn label(&self) -> String {
-        LABEL.to_string()
+        label()
     }
 
     /// The control panel writes no status file — its liveness is probed by [`is_running`](Self::is_running).

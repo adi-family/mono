@@ -22,7 +22,15 @@ use crate::version::Version;
 /// Where the app bundle lives on a provisioned Mac; override with `ADI_UPDATE_APP`
 /// (used by tests and non-standard installs). On Linux and Windows there is no bundle —
 /// the updater replaces the binaries beside the running executable, or `ADI_UPDATE_BIN_DIR`.
-pub const DEFAULT_APP_PATH: &str = "/Applications/ADI.app";
+///
+/// Named after the flavour rather than fixed at `ADI.app`: writing that path from a process
+/// that is not the release install means overwriting a *different* install than the one that
+/// asked. `adi-core` will not even register the updater outside the release flavour, so this
+/// is the second of two locks on the same door.
+#[must_use]
+pub fn default_app_path() -> String {
+    format!("/Applications/{}.app", adi_config::Flavor::current().app_name)
+}
 
 /// The Apple Developer Team ID every genuine ADI release is signed with; a downloaded
 /// bundle signed by anyone else is rejected. Override with `ADI_UPDATE_TEAM_ID`.

@@ -23,22 +23,36 @@ use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use adi_config::Flavor;
+
 use crate::dns::sibling_binary;
 use crate::paths;
 use crate::service::Service;
 use crate::status::DaemonStatus;
 
-pub(crate) const LABEL: &str = "family.adi.app.dashboards";
+pub(crate) fn label() -> String {
+    Flavor::current().label("dashboards")
+}
 
 /// The store module this supervisor lives in, and the config it runs.
 const MODULE: &str = "dashboards";
 const CONFIG_FILE: &str = "hive.yaml";
 
 /// The supervisor's own bind address. It serves nothing — adi-hive just refuses to start with
-/// no bindable address — so this is deliberately outside the ports manager's `8000..=9999`
+/// no bindable address — so the port is deliberately outside the ports manager's `8000..=9999`
 /// allocation range, where no lease can ever land on it, and nowhere near the `adi daemon` band.
-const BIND: &str = "127.0.0.1:45099";
-const BIND_PORT: u16 = 45099;
+///
+/// Per flavour, and not for decoration: this is the one port in the stack that is not leased
+/// from the store, so two installs sharing it is the one collision a separate store does not
+/// already prevent. Sharing it means the second install's supervisor never starts, and — worse
+/// — the first one's answers its probe, so it reports itself healthy while running nothing.
+fn bind_port() -> u16 {
+    Flavor::current().supervisor_port
+}
+
+fn bind() -> String {
+    format!("127.0.0.1:{}", bind_port())
+}
 
 /// How long the running-probe waits for a TCP connect before deciding it is down.
 const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
@@ -47,7 +61,9 @@ const PROBE_TIMEOUT: Duration = Duration::from_millis(300);
 ///
 /// `$ADI_DASHBOARDS_DIR` / `$ADI_PROJECTS_DIR` are expanded by adi-hive's import loader, so the
 /// file is store-relative and needs no rewriting when `$ADI_DIR` moves.
-const SUPERVISOR_CONFIG: &str = r#"# The per-user service supervisor — the ONE hive that RUNS things.
+fn supervisor_config() -> String {
+    format!(
+        r#"# The per-user service supervisor — the ONE hive that RUNS things.
 #
 # Written by `adi-mono up`; edit freely, it is not regenerated once it exists.
 #
@@ -66,7 +82,7 @@ version: "1"
 
 proxy:
   bind:
-    - "127.0.0.1:45099"
+    - "{bind}"
 
 # A `*` is one directory level: a config has a fixed home (`<id>/.adi/hive.yaml`, or the id's own
 # dir), so these lines name it rather than searching for it. The search form (`**`) costs a walk of
@@ -76,7 +92,10 @@ imports:
   - $ADI_DASHBOARDS_DIR/*/hive.yaml
   - $ADI_PROJECTS_DIR/*/.adi/hive.yaml
   - $ADI_PROJECTS_DIR/*/hive.yaml
-"#;
+"#,
+        bind = bind()
+    )
+}
 
 /// The config path within the store.
 fn config_path() -> PathBuf {
@@ -116,7 +135,7 @@ impl Dashboards {
             eprintln!("adi: could not create {}: {e}", dir.display());
             return;
         }
-        if let Err(e) = std::fs::write(&path, SUPERVISOR_CONFIG) {
+        if let Err(e) = std::fs::write(&path, supervisor_config()) {
             eprintln!("adi: could not write {}: {e}", path.display());
         }
     }
@@ -130,7 +149,7 @@ impl Service for Dashboards {
         "Dashboards"
     }
     fn label(&self) -> String {
-        LABEL.to_string()
+        label()
     }
 
     /// adi-hive writes its own status file beside the config it was given.
@@ -159,7 +178,7 @@ impl Service for Dashboards {
     /// but the port is the cheaper and more direct question.
     fn is_running(&self) -> bool {
         TcpStream::connect_timeout(
-            &SocketAddr::from((Ipv4Addr::LOCALHOST, BIND_PORT)),
+            &SocketAddr::from((Ipv4Addr::LOCALHOST, bind_port())),
             PROBE_TIMEOUT,
         )
         .is_ok()
@@ -168,6 +187,7 @@ impl Service for Dashboards {
     /// Name what it is supervising, not the address it binds — the address is an implementation
     /// detail nobody connects to, while the dashboard count is the thing an operator wants.
     fn detail(&self, _status: Option<&DaemonStatus>) -> String {
+        let bind = bind();
         let dashboards = std::fs::read_dir(adi_config::Config::open().module(MODULE).dir())
             .map(|entries| {
                 entries
@@ -177,9 +197,9 @@ impl Service for Dashboards {
             })
             .unwrap_or(0);
         match dashboards {
-            0 => format!("Running · {BIND} · no dashboards yet"),
-            1 => format!("Running · {BIND} · 1 dashboard"),
-            n => format!("Running · {BIND} · {n} dashboards"),
+            0 => format!("Running · {bind} · no dashboards yet"),
+            1 => format!("Running · {bind} · 1 dashboard"),
+            n => format!("Running · {bind} · {n} dashboards"),
         }
     }
 }
@@ -194,7 +214,7 @@ mod tests {
     #[test]
     fn the_supervisor_config_runs_dashboards_and_routes_nothing() {
         let hive: serde_yaml_ng::Value =
-            serde_yaml_ng::from_str(SUPERVISOR_CONFIG).expect("the shipped config parses");
+            serde_yaml_ng::from_str(&supervisor_config()).expect("the shipped config parses");
 
         let imports = hive["imports"].as_sequence().expect("imports");
         let imports: Vec<&str> = imports.iter().filter_map(serde_yaml_ng::Value::as_str).collect();
@@ -215,7 +235,7 @@ mod tests {
         let binds = hive["proxy"]["bind"].as_sequence().expect("a bind address");
         assert_eq!(binds.len(), 1, "one throwaway address, not a front door");
         let bind = binds[0].as_str().expect("bind is a string");
-        assert_eq!(bind, BIND, "the config and the probe must agree");
+        assert_eq!(bind, super::bind(), "the config and the probe must agree");
         let port: u16 = bind.rsplit(':').next().expect("port").parse().expect("numeric");
         assert!(
             !(8000..=9999).contains(&port),

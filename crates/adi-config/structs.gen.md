@@ -4,12 +4,13 @@
 
 > The adi configurator: per-module settings directories with typed TOML config files and raw file storage under the ~/.adi/mono namespace. Pure library.
 
-3 structs · 1 enum · 1 type alias across 4 files.
+5 structs · 1 enum · 1 type alias across 5 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/file.rs`](#srcfilers) — `ConfigFile`
+- [`src/flavor.rs`](#srcflavorrs) — `Flavor`, `Preset`
 - [`src/lib.rs`](#srclibrs) — `Config`
 - [`src/module.rs`](#srcmodulers) — `Module`
 
@@ -57,6 +58,48 @@ A handle to one TOML config file. The type parameter `T` is the config shape it 
 pub struct ConfigFile<T> {
     path: PathBuf,
     _marker: PhantomData<fn() -> T>,
+}
+```
+
+---
+
+## `src/flavor.rs`
+
+### struct `Flavor`
+
+One ADI installation's identity: everything two installs on the same machine must not share. Resolve it with `Flavor::current`.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Flavor {
+    pub id: String,
+    pub app_name: String,
+    pub bundle_id: String,
+    pub domain: String,
+    pub label_prefix: String,
+    pub dir_name: String,
+    pub resolver_port: u16,
+    pub frontdoor_addr: Ipv4Addr,
+    pub supervisor_port: u16,
+    pub auto_update: bool,
+}
+```
+
+### struct `Preset`
+
+The per-id defaults, before any explicit override is applied.
+
+```rust
+struct Preset {
+    app_name: String,
+    bundle_id: String,
+    domain: String,
+    label_prefix: String,
+    dir_name: String,
+    resolver_port: u16,
+    frontdoor_addr: Ipv4Addr,
+    supervisor_port: u16,
+    auto_update: bool,
 }
 ```
 

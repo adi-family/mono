@@ -82,10 +82,27 @@
 <div class=vig></div>
 <div class=foot></div>
 <div class=bar>
-  <div class=name>ADI<span class=chip>Universal</span></div>
+  <div class=name id=name>ADI<span class=chip id=chip>Universal</span></div>
   <div class=meta>macOS 13 or later</div>
 </div>
-<div class=cta>Drag <b>ADI</b> onto <b>Applications</b></div>
+<div class=cta>Drag <b id=cta-name>ADI</b> onto <b>Applications</b></div>
 <div class="card l"></div><div class="card r"></div>
 <div class=arrow></div>
 <svg class=noise width="680" height="440" xmlns="http://www.w3.org/2000/svg"><filter id=n><feTurbulence type=fractalNoise baseFrequency=".8" numOctaves="4" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect x="0" y="0" width="100%" height="100%" filter="url(#n)"/></svg>
+<script>
+  // make-assets.sh renders this file once per flavour and passes the identity in the URL, so
+  // the art and the volume it lands on cannot disagree about which install this is. A
+  // non-release build also swaps the chip from "Universal" to its own id, because two disk
+  // images that differ only in a word of the title are two disk images people confuse.
+  const q = new URLSearchParams(location.search);
+  const name = q.get('name');
+  const chip = q.get('chip');
+  if (name) {
+    document.getElementById('name').firstChild.nodeValue = name;
+    // The instruction names the icon the reader is about to drag, so it has to be the bundle's
+    // name too -- "Drag ADI onto Applications" under an icon labelled "ADI Dev" reads as a
+    // disk image someone forgot to update.
+    document.getElementById('cta-name').textContent = name;
+  }
+  if (chip) document.getElementById('chip').textContent = chip;
+</script>

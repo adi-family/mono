@@ -14,7 +14,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::engine::{DEFAULT_APP_PATH, Error};
+use crate::engine::{Error, default_app_path};
 use crate::shell;
 use crate::state;
 
@@ -53,7 +53,7 @@ impl Payload {
         match self {
             Self::Bundle => std::env::var_os("ADI_UPDATE_APP")
                 .filter(|v| !v.is_empty())
-                .map_or_else(|| PathBuf::from(DEFAULT_APP_PATH), PathBuf::from),
+                .map_or_else(|| PathBuf::from(default_app_path()), PathBuf::from),
             Self::Archive => std::env::var_os("ADI_UPDATE_BIN_DIR")
                 .filter(|v| !v.is_empty())
                 .map(PathBuf::from)

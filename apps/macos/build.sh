@@ -12,11 +12,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-APP_NAME="ADI"
+# Which install this bundle will be. `release` is the real one; `dev` builds "ADI Dev.app",
+# serving .adi-dev from its own store, ports and launchd namespace, so it can be installed and
+# run beside the real one instead of over it. Any other id works too — see `adi-mono flavor`.
+#
+# The identity itself is NOT defined here. build.sh asks the CLI it just built (below), so the
+# presets have one definition, in Rust, rather than a second copy in a build script that
+# nothing keeps in step with it.
+FLAVOR="${FLAVOR:-release}"
+if [ "${1:-}" = "--flavor" ]; then
+    FLAVOR="${2:?--flavor needs an id}"
+    shift 2
+fi
+
 DEPLOY_TARGET="13.0"
 BUILD="$SCRIPT_DIR/build"
-APP="$BUILD/$APP_NAME.app"
-ICNS="$SCRIPT_DIR/$APP_NAME.icns"
+ICNS="$SCRIPT_DIR/ADI.icns"
 
 # Build a universal (arm64 + x86_64) app so it runs on both Apple Silicon and
 # Intel Macs. A single-arch build fails to launch on the other arch with
@@ -27,16 +38,16 @@ SWIFT_ARCHES=(arm64 x86_64)
 
 # Regenerate the app icon from icon-gen.swift (matches Sources/ADILogo.swift), then exit.
 if [ "${1:-}" = "--regen-icon" ]; then
-    echo "==> regenerating $APP_NAME.icns"
+    echo "==> regenerating ADI.icns"
     TMP="$(mktemp -d)"
     trap 'rm -rf "$TMP"' EXIT
     swift "$SCRIPT_DIR/icon-gen.swift" "$TMP/icon_1024.png"
-    mkdir -p "$TMP/$APP_NAME.iconset"
+    mkdir -p "$TMP/ADI.iconset"
     for s in 16 32 128 256 512; do
-        sips -z "$s" "$s" "$TMP/icon_1024.png" --out "$TMP/$APP_NAME.iconset/icon_${s}x${s}.png" >/dev/null
-        sips -z "$((s*2))" "$((s*2))" "$TMP/icon_1024.png" --out "$TMP/$APP_NAME.iconset/icon_${s}x${s}@2x.png" >/dev/null
+        sips -z "$s" "$s" "$TMP/icon_1024.png" --out "$TMP/ADI.iconset/icon_${s}x${s}.png" >/dev/null
+        sips -z "$((s*2))" "$((s*2))" "$TMP/icon_1024.png" --out "$TMP/ADI.iconset/icon_${s}x${s}@2x.png" >/dev/null
     done
-    iconutil -c icns "$TMP/$APP_NAME.iconset" -o "$ICNS"
+    iconutil -c icns "$TMP/ADI.iconset" -o "$ICNS"
     echo "    wrote $ICNS"
     exit 0
 fi
@@ -78,6 +89,14 @@ for name in adi-dns adi-hive adi-app adi-mono; do
     done
 done
 
+# The identity, straight from the binary that will enforce it at runtime. Read it from the
+# host slice — the per-triple builds are identical here, and this runs before `lipo`.
+HOST_TRIPLE="$([ "$(uname -m)" = "arm64" ] && echo aarch64-apple-darwin || echo x86_64-apple-darwin)"
+eval "$("$ROOT/target/$HOST_TRIPLE/release/adi-mono" --flavor "$FLAVOR" flavor --env)"
+APP_NAME="$ADI_APP_NAME"
+APP="$BUILD/$APP_NAME.app"
+echo "    flavor:  $ADI_FLAVOR ($APP_NAME, .$ADI_DOMAIN, ~/$ADI_DIR)"
+
 echo "==> assembling $APP_NAME.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -85,9 +104,18 @@ cp "$SCRIPT_DIR/Info.plist" "$APP/Contents/Info.plist"
 plutil -replace CFBundleShortVersionString -string "$VERSION" "$APP/Contents/Info.plist"
 plutil -replace CFBundleVersion -string "$VERSION" "$APP/Contents/Info.plist"
 echo "    version: $VERSION"
+# Info.plist ships the release identity; every flavour restamps it. ADIFlavor is the one the
+# app reads back at runtime (Sources/Core.swift) to pin the CLI it launches — without it a dev
+# bundle would drive the real install, because both ship the same adi-mono.
+plutil -replace CFBundleName -string "$APP_NAME" "$APP/Contents/Info.plist"
+plutil -replace CFBundleDisplayName -string "$APP_NAME" "$APP/Contents/Info.plist"
+plutil -replace CFBundleIdentifier -string "$ADI_BUNDLE_ID" "$APP/Contents/Info.plist"
+plutil -replace CFBundleExecutable -string "$APP_NAME" "$APP/Contents/Info.plist"
+plutil -replace ADIFlavor -string "$ADI_FLAVOR" "$APP/Contents/Info.plist"
 # App icon (Info.plist references it via CFBundleIconFile = ADI). Regenerate with
 # `build.sh --regen-icon`.
 [ -f "$ICNS" ] && cp "$ICNS" "$APP/Contents/Resources/$APP_NAME.icns"
+plutil -replace CFBundleIconFile -string "$APP_NAME" "$APP/Contents/Info.plist"
 # adi-mono resolves adi-dns/adi-hive/adi-app as siblings, so they all live side by side
 # in Resources (adi-hive runs adi-app as the app.adi front-door service). Fuse the
 # per-arch builds into one universal Mach-O each.
@@ -142,7 +170,7 @@ else
 fi
 
 echo "==> building DMG"
-"$SCRIPT_DIR/dmg/make-dmg.sh" "$APP" "$BUILD/$APP_NAME.dmg"
+"$SCRIPT_DIR/dmg/make-dmg.sh" "$APP" "$BUILD/$APP_NAME.dmg" "$ADI_FLAVOR"
 
 echo
 echo "==> done"

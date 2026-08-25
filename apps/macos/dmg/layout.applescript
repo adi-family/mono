@@ -7,6 +7,7 @@
 -- lose the contrast the whole design is built to guarantee.
 on run argv
     set volName to item 1 of argv
+    set appName to item 2 of argv
     tell application "Finder"
         tell disk volName
             open
@@ -33,7 +34,10 @@ on run argv
             set shows item info of opts to false
             set background picture of opts to file ".background:background.tiff"
 
-            set position of item "ADI.app" of container window to {176, 210}
+            -- Finder keys the position on the item's NAME, so this has to be the name the
+            -- bundle actually ships under -- "ADI Dev.app" for a dev build. Position it by
+            -- the wrong name and Finder silently leaves the icon wherever it lands.
+            set position of item appName of container window to {176, 210}
             set position of item "Applications" of container window to {504, 210}
 
             update without registering applications

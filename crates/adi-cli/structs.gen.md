@@ -756,6 +756,8 @@ pub(crate) enum BaseCommand {
 #[derive(Debug, Parser)]
 #[command(name = "adi-mono", about = "Control the adi platform.", version = VERSION)]
 struct Cli {
+    #[arg(long, global = true, value_name = "ID")]
+    flavor: Option<String>,
     #[command(subcommand)]
     command: Command,
 }
@@ -766,6 +768,12 @@ struct Cli {
 ```rust
 #[derive(Debug, Subcommand)]
 enum Command {
+    Flavor {
+        #[arg(long)]
+        json: bool,
+        #[arg(long, conflicts_with = "json")]
+        env: bool,
+    },
     Up,
     Enable,
     Disable,

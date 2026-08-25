@@ -22,5 +22,10 @@
     <string>13.0</string>
     <key>NSHumanReadableCopyright</key>
     <string>adi-family</string>
+    <!-- Which install this bundle drives. Restamped per flavour by build.sh; Sources/Core.swift
+         reads it back and pins every adi-mono it launches, so ADI Dev.app cannot reach into the
+         real install's store, ports or launchd namespace. -->
+    <key>ADIFlavor</key>
+    <string>release</string>
 </dict>
 </plist>

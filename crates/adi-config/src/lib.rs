@@ -35,6 +35,7 @@
 
 mod error;
 mod file;
+mod flavor;
 mod fsutil;
 mod launch;
 mod layout;
@@ -44,6 +45,7 @@ use std::path::{Path, PathBuf};
 
 pub use error::{Error, Result};
 pub use file::{ConfigFile, Timestamped};
+pub use flavor::{DEFAULT_FLAVOR, FLAVOR_ENV, Flavor};
 pub use launch::{augmented_path, launch_env};
 pub use layout::{dir, dir_name, home};
 pub use module::Module;

@@ -36,9 +36,16 @@ pub fn augmented_path() -> String {
     parts.join(":")
 }
 
-/// The environment variables a runner should be launched with: the augmented `PATH`, plus `HOME`
+/// The environment variables a runner should be launched with: the augmented `PATH`, `HOME`
 /// when this process has one (so `~` / `$HOME` in a runner command expand even under a bare launchd
-/// env). Apply them to whatever `Command` type the caller uses (`std` or `tokio`):
+/// env), and the whole resolved [`crate::Flavor`].
+///
+/// The flavour is here for the same reason `PATH` is: a child that resolves it from a bare
+/// environment gets the *default* install, so anything a dev install spawns would reach into the
+/// real install's store. Exporting the resolved identity makes that impossible rather than
+/// unlikely.
+///
+/// Apply them to whatever `Command` type the caller uses (`std` or `tokio`):
 ///
 /// ```no_run
 /// let mut cmd = std::process::Command::new("sh");
@@ -52,5 +59,6 @@ pub fn launch_env() -> Vec<(&'static str, String)> {
     if let Ok(home) = std::env::var("HOME") {
         env.push(("HOME", home));
     }
+    env.extend(crate::Flavor::current().env());
     env
 }
