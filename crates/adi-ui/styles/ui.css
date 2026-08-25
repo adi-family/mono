@@ -91,6 +91,9 @@
   --color-tip: var(--tip);
   --color-tip-edge: var(--tip-edge);
 
+  --color-live: var(--live);
+  --color-live-bg: var(--live-bg);
+  --color-live-edge: var(--live-edge);
   --color-err: var(--err);
   --color-err-btn: var(--err-btn);
   --color-err-bg: var(--err-bg);

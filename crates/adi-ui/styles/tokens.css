@@ -7,8 +7,8 @@
  * only has one.
  *
  * The dark half is the specified palette. **The light half is derived from it** — role by
- * role, keeping the same green-tinted neutrals and the mint accent, darkened where a value
- * has to carry text on white. Those are proposals, not spec: correct any of them here and
+ * role, keeping the same neutrals and the accent, darkened where a value has to carry text
+ * on white. Those are proposals, not spec: correct any of them here and
  * every component follows.
  */
 
@@ -45,19 +45,31 @@
   --faint:       light-dark(#9aa49e, #4e5a55); /* caps labels, arrows */
   --fainter:     light-dark(#adb6b0, #3f4a46);
 
-  /* ---- accent (mint) ------------------------------------------------------------------
-   * The mint reads as "running" on black but is far too light to carry text on white, so
-   * the light half drops to a deep mint. The button fill is one value for both themes —
-   * it is a filled surface, not ink, and it works either way. */
-  --accent:       light-dark(#0e8a63, #3ddc9c);
-  --accent-fill:  #1f7a5c;                     /* the primary button */
-  --on-accent:    #eafff7;                     /* …and its text */
-  --accent-soft:      light-dark(#e4f4ec, #152420);
-  --accent-soft-edge: light-dark(#bfe3d2, #204036);
-  --tip:      light-dark(#eff8f4, #0d1512);    /* a recommendation block */
-  --tip-edge: light-dark(#cfe8dc, #1d3830);
+  /* ---- accent -------------------------------------------------------------------------
+   * #fa5019, the one accent in `docs/design.md`. This file and adi-css used to name two
+   * different ones — mint here, teal there — and the webapp loads both, which meant the
+   * page's accent was decided by which stylesheet happened to win rather than by anyone.
+   *
+   * The two halves are different values, not one used twice: #fa5019 is 5.8:1 on the dark
+   * ground and 3.4:1 on white, so the light half takes a deeper orange. The button fill
+   * follows the same rule, which is why it is no longer a single value for both themes —
+   * a filled surface still has to carry `--on-accent` on top of it. */
+  --accent:       light-dark(#c43a0c, #fa5019);
+  --accent-fill:  light-dark(#c43a0c, #fa5019); /* the primary button */
+  --on-accent:    light-dark(#fffaf8, #26100a); /* …and its text */
+  --accent-soft:      light-dark(#fdeee8, #241310);
+  --accent-soft-edge: light-dark(#f6cdbc, #46231a);
+  --tip:      light-dark(#fdf4f0, #15100e);    /* a recommendation block */
+  --tip-edge: light-dark(#f3d8cb, #38221b);
 
-  /* ---- states ------------------------------------------------------------------------- */
+  /* ---- states -------------------------------------------------------------------------
+   * `live` is a state, not the accent. It used to *be* the accent, which read correctly
+   * only because the accent was mint — the moment the accent became orange, every running
+   * app in the list turned the colour of a warning. Semantic colour is a separate axis
+   * from the accent (`docs/design.md`), and this is why. */
+  --live:       light-dark(#1f7a46, #3ddc9c);
+  --live-bg:    light-dark(#eef7f1, #101a15);
+  --live-edge:  light-dark(#c5e3d1, #1f3a2b);
   --err:        light-dark(#c0322b, #f0645c);
   --err-btn:    light-dark(#d9564e, #f0918a);
   --err-bg:     light-dark(#fdf3f2, #120d0d);

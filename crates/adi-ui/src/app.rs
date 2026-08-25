@@ -36,7 +36,11 @@ impl AppState {
     #[must_use]
     pub fn dot_classes(self) -> &'static str {
         match self {
-            Self::Live => "bg-accent",
+            // `live`, not `accent`. These three are a semantic triple — good, bad, inert —
+            // and the accent is for what is interactive or selected. It was `bg-accent`
+            // while the accent was mint, which happened to read as "running"; against an
+            // orange accent the same rule painted every healthy app the colour of a warning.
+            Self::Live => "bg-live",
             Self::Offline => "bg-err",
             Self::ViewOnly => "bg-faint",
         }

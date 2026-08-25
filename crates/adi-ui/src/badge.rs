@@ -28,7 +28,10 @@ impl BadgeTone {
     pub fn classes(self) -> &'static str {
         match self {
             Self::Neutral => "border-dim bg-card text-meta",
-            Self::Online => "border-accent-soft-edge bg-accent-soft text-accent",
+            // Online is a state and takes the state colour. Tinting it with the accent was
+            // invisible while the accent was mint and became a warning-coloured "running"
+            // badge the moment it was not.
+            Self::Online => "border-live-edge bg-live-bg text-live",
             Self::Warn => "border-queue-edge bg-queue-bg text-queue",
             Self::Down => "border-err-edge bg-err-bg-2 text-err",
             Self::Accent => "border-tip-edge bg-tip text-accent",

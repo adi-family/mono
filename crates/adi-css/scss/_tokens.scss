@@ -6,18 +6,34 @@
 @use "sass:map";
 
 // ---- colour themes -----------------------------------------------------------------
-// Near-neutral greys carry the UI; the accent is reserved for the few things that are
-// genuinely interactive or selected. Surfaces are separated by borders rather than
-// elevation, so `shadow` stays a hairline — depth is a last resort, not the house style.
+// Greys carry the UI; the accent is reserved for the few things that are genuinely
+// interactive or selected. See `docs/design.md` for the language these implement.
+//
+// The greys are warm rather than neutral — every one is its old cool value with red and
+// blue swapped, which leaves the luminance where it was and only changes which way the
+// hue leans. A grey biased toward the accent reads as chosen; a pure one reads as a
+// default nobody looked at.
+//
+// **On depth.** This block used to say "depth is a last resort, not the house style",
+// which overstated a good instinct into a rule that contradicts the design language.
+// The instinct is right for the workbench: a dense list separated by shadows is soup,
+// so `shadow` stays a hairline and borders do the separating. Depth belongs to chrome
+// and to things that float above the page — the top bar already blurs what is behind
+// it — and that is where the language asks for it, not in the lists.
+//
+// The accent differs between themes rather than being one value used twice. #fa5019 is
+// 5.8:1 on the dark ground and 3.4:1 on white, so the light theme takes a deeper orange.
+// The old teal was 3.7:1 on white — under the 4.5:1 bar the language sets, in the theme
+// where it was hardest to read.
 $light: (
-  bg:         #f5f6f8,
+  bg:         #f8f6f5,
   surface:    #ffffff,
-  surface-2:  #edeff3,
-  border:     #e3e6eb,
-  ink:        #0d0f12,
-  muted:      #6b7280,
-  accent:     #0d9488,
-  accent-ink: #0f766e,
+  surface-2:  #f3efed,
+  border:     #ebe6e3,
+  ink:        #120f0d,
+  muted:      #80726b,
+  accent:     #c43a0c,
+  accent-ink: #a8320a,
   on-accent:  #ffffff,
   online:     #16a34a,
   warn:       #d97706,
@@ -26,15 +42,20 @@ $light: (
 );
 
 $dark: (
-  bg:         #0a0b0d,
-  surface:    #101215,
-  surface-2:  #17191d,
-  border:     #23262b,
-  ink:        #e9ecf1,
-  muted:      #8b919c,
-  accent:     #2dd4bf,
-  accent-ink: #5eead4,
-  on-accent:  #04211d,
+  bg:         #0d0b0a,
+  surface:    #151210,
+  surface-2:  #1d1917,
+  border:     #2b2623,
+  ink:        #f1ece9,
+  muted:      #9c918b,
+  accent:     #fa5019,
+  // Both accents are used as fills as well as ink, with `on-accent` on top of them — so
+  // the hover value has to stay legible against the same text, not merely look different.
+  accent-ink: #ff7a4d,
+  // Near-black rather than white: white on #fa5019 is 3.4:1, black is 6.2:1. The fill is
+  // bright here and the text on it is dark, which is the other way round from the light
+  // theme and is what each ground actually wants.
+  on-accent:  #26100a,
   online:     #34d399,
   warn:       #fbbf24,
   down:       #f87171,
