@@ -34,10 +34,12 @@ struct ContentView: View {
             .frame(width: 340)
         }
         .frame(width: 340)
-        .alert("ADI could not move itself", isPresented: .constant(model.moveFailure != nil)) {
-            Button("OK") { model.moveFailure = nil }
+        .alert(model.notice?.title ?? "",
+               isPresented: Binding(get: { model.notice != nil },
+                                    set: { if !$0 { model.notice = nil } })) {
+            Button("OK") { model.notice = nil }
         } message: {
-            Text(model.moveFailure ?? "")
+            Text(model.notice?.body ?? "")
         }
     }
 
@@ -89,18 +91,26 @@ struct ContentView: View {
         // action anyone takes twice, so it is the only prominent control; the state above it
         // is information and has no button at all; and the switch below the rule is a setting,
         // which is what turning a background service on and off actually is.
-        VStack(spacing: 16) {
-            StatusCard(state: model.powerState,
-                       title: model.statusSummary,
-                       detail: model.runningDetail)
+        VStack(spacing: 14) {
+            // The switch sits above the rule with the identity, where a setting belongs, and
+            // everything below the rule is this session: what ADI is doing, and the one thing
+            // to do about it. Grouping by kind rather than by size is what gives the window a
+            // shape — before, four evenly spaced blocks read as a list of unrelated controls.
+            ServicesToggle(isOn: model.servicesOn, busy: model.busy)
 
-            DashboardButton(enabled: model.anyRunning) {
+            // An explicit rule, not `Divider`: the system separator is tuned for lists on an
+            // opaque background and vanishes against the window's vibrancy, which left the
+            // grouping doing nothing at all.
+            Rectangle()
+                .fill(.primary.opacity(0.13))
+                .frame(height: 1)
+                .padding(.vertical, 2)
+
+            StatusCard(state: model.powerState, title: model.statusSummary)
+
+            DashboardButton(busy: model.launching) {
                 model.openDashboard()
             }
-
-            Divider().opacity(0.5)
-
-            ServicesToggle(isOn: model.servicesOn, busy: model.busy)
         }
     }
 }

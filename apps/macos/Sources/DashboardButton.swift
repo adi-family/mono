@@ -12,24 +12,33 @@ import SwiftUI
 /// taking. The power button beside it is a *state* — green when running — and stays the larger
 /// shape without competing for the same colour.
 struct DashboardButton: View {
-    let enabled: Bool
+    /// True while the services are being started on the way to opening it.
+    let busy: Bool
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 7) {
-                Text("Open Dashboard")
-                Image(systemName: "arrow.up.forward")
-                    .font(.system(size: 12, weight: .bold))
-                    // Nudged to sit on the text's optical centre; the glyph's own box is
-                    // bottom-heavy, so aligned by frame it looks like it is sliding off.
-                    .offset(y: -0.5)
+                if busy {
+                    ProgressView().controlSize(.small).tint(.white)
+                }
+                Text(busy ? "Starting ADI…" : "Open Dashboard")
+                if !busy {
+                    Image(systemName: "arrow.up.forward")
+                        .font(.system(size: 12, weight: .bold))
+                        // Nudged to sit on the text's optical centre; the glyph's own box is
+                        // bottom-heavy, so aligned by frame it looks like it is sliding off.
+                        .offset(y: -0.5)
+                }
             }
         }
-        .buttonStyle(Style(enabled: enabled))
-        .disabled(!enabled)
-        .animation(.easeInOut(duration: 0.25), value: enabled)
-        .accessibilityHint(enabled ? "" : "Available once ADI is running")
+        // Never disabled for being "not ready". A greyed-out button is a dead end: it states a
+        // precondition and leaves the person to work out how to satisfy it. Pressing it when
+        // nothing is running starts everything and then opens the dashboard, which is what
+        // pressing it meant in the first place.
+        .buttonStyle(Style(enabled: true))
+        .disabled(busy)
+        .animation(.easeInOut(duration: 0.2), value: busy)
     }
 
     private struct Style: ButtonStyle {

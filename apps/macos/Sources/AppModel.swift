@@ -10,6 +10,25 @@ enum PowerState: Equatable {
     case on
 }
 
+/// How long to wait for the stack to answer before giving up on opening the dashboard.
+/// Generous: a cold start binds ports, reads the store and, on a node, waits for the mesh.
+private let serviceStartTimeout: TimeInterval = 30
+
+/// Poll `adi-mono status` until something is running or the timeout passes.
+///
+/// Free function rather than a static on `AppModel`: the class is `@MainActor`, so anything
+/// declared inside it is actor-isolated and cannot be touched from the detached task doing the
+/// waiting — which is the whole point of doing it off the main thread.
+private func waitForServices() async -> Report? {
+    let deadline = Date().addingTimeInterval(serviceStartTimeout)
+    var latest = Core.report()
+    while !(latest?.anyRunning ?? false), Date() < deadline {
+        try? await Task.sleep(nanoseconds: 400_000_000)
+        latest = Core.report()
+    }
+    return latest
+}
+
 /// The view model: a thin shell over the `adi-mono` CLI. It holds the last status
 /// report and triggers actions; all control logic lives in `adi-core`.
 @MainActor
@@ -20,8 +39,15 @@ final class AppModel: ObservableObject {
 
     private var timer: Timer?
 
-    /// A failed move, to show instead of silently doing nothing.
-    @Published var moveFailure: String?
+    /// Something the person needs to be told, shown as an alert. One channel rather than a
+    /// flag per failure, so a new one does not mean a new modifier on the view.
+    struct Notice: Identifiable {
+        let id = UUID()
+        let title: String
+        let body: String
+    }
+
+    @Published var notice: Notice?
     /// Set once the stack has been auto-started, so it happens once per launch and not on
     /// every two-second poll that happens to arrive after the last permission is granted.
     private var didAutoStart = false
@@ -66,7 +92,8 @@ final class AppModel: ObservableObject {
                 await MainActor.run { InstallLocation.relaunch(at: destination) }
             } catch {
                 await MainActor.run {
-                    self.moveFailure = error.localizedDescription
+                    self.notice = Notice(title: "ADI could not move itself",
+                                         body: error.localizedDescription)
                     self.moving = false
                 }
             }
@@ -104,9 +131,52 @@ final class AppModel: ObservableObject {
     /// Grant the front door — one admin prompt.
     func grantNetwork() { perform(["dns", "grant-network"]) }
 
-    /// Open the dashboard, which is the whole point of the app being on.
+    /// True while services are being started on the way to the dashboard.
+    @Published private(set) var launching = false
+
+    /// Open the dashboard, starting ADI first if it is not up.
+    ///
+    /// The button used to grey out when nothing was running, which is a dead end: it states a
+    /// precondition and leaves the person to work out how to satisfy it. Pressing it always
+    /// means "take me to the dashboard", so when nothing is running that means starting
+    /// everything and then going there.
+    ///
+    /// It waits for the services to actually answer rather than opening straight after
+    /// `enable` returns — launchd accepting a job is not the same as the front door serving,
+    /// and a browser tab that fails to load would look like ADI is broken.
     func openDashboard() {
-        guard let url = URL(string: "http://app.\(Core.domain)/") else { return }
+        guard !launching else { return }
+        if anyRunning {
+            Self.open(domain: Core.domain)
+            return
+        }
+        launching = true
+        Task.detached(priority: .userInitiated) {
+            _ = Core.run(["enable"])
+            // `settled` is a `let`: the polling loop's mutable var stays inside the free
+            // function. Reading a captured `var` from concurrently-executing code is an error
+            // in Swift 6 and, as the timer above records, the kind of thing that compiles here
+            // and fails on a CI runner with a different toolchain.
+            let settled = await waitForServices()
+            let cameUp = settled?.anyRunning ?? false
+            await MainActor.run {
+                if let settled { self.report = settled }
+                self.launching = false
+                if cameUp {
+                    Self.open(domain: Core.domain)
+                } else {
+                    self.notice = Notice(
+                        title: "ADI did not start",
+                        body: "The services were asked to start but nothing is answering yet. "
+                            + "Try again, or check the logs in Console."
+                    )
+                }
+            }
+        }
+    }
+
+    private static func open(domain: String) {
+        guard let url = URL(string: "http://app.\(domain)/") else { return }
         NSWorkspace.shared.open(url)
     }
 
@@ -154,17 +224,6 @@ final class AppModel: ObservableObject {
         Binding(get: { self.isOn }, set: { _ in self.togglePower() })
     }
 
-    /// The line under the status word: which services this is about.
-    ///
-    /// Names rather than a count, because "3 services" tells you nothing you can act on and
-    /// "DNS · App · Dashboards" tells you what would stop if you turned it off.
-    var runningDetail: String {
-        let running = report.services.filter(\.running).map(\.name)
-        if !running.isEmpty { return running.joined(separator: " · ") }
-        if report.services.isEmpty { return "No services installed" }
-        if isOn { return "Waiting for services to come up" }
-        return report.services.map(\.name).joined(separator: " · ")
-    }
 
     /// Poll `adi-mono status --json` off the main thread; publish on the main actor.
     func refresh() {
