@@ -32,6 +32,11 @@ pub(crate) const MESH_ZONE: &str = "n.adi";
 /// The service label of a node's own control panel — the one thing pairing grants by default.
 pub(crate) const APP_SERVICE: &str = "app";
 
+/// The zone a node's own services answer in locally, which is what [`service_name`] strips to get
+/// the name the mesh addresses them by (`docs/fleet.md` §1, and `adi-mesh`'s `gateway::LOCAL_ZONE`
+/// on the other side of the same mapping).
+pub(crate) const LOCAL_ZONE: &str = "adi";
+
 /// How long a small control-plane call may take. A relayed mesh round trip is a third of a second
 /// before any payload (`docs/fleet.md` §9), so this is generous for a listing and short enough that
 /// an unreachable node does not hold a page open.
@@ -76,18 +81,25 @@ pub(crate) fn local_key() -> Option<String> {
         .ok()
 }
 
-/// The first label of a hostname — `nosh.adi` → `nosh`. That label is both a grant's scope and the
-/// name a dashboard answers to on its own machine.
-pub(crate) fn host_label(host: Option<&str>) -> Option<String> {
-    let label = host?.trim().trim_end_matches('.').split('.').next()?.trim();
-    (!label.is_empty()).then(|| label.to_ascii_lowercase())
+/// A local hostname with its zone taken off — `nosh.adi` → `nosh`, `app.nosh.adi` → `app.nosh`.
+/// That name is both a grant's scope and what a dashboard answers to on its own machine.
+///
+/// Everything left of `.adi` is kept, because a node's own hosts are not all one label: a project
+/// at `app.nosh.adi` sits beside the `nosh.adi` it belongs to, and truncating to the first label
+/// would name a *different* service (or none). A host outside the local zone — a dashboard
+/// published under a real domain — yields nothing rather than a guess: it answers where it is
+/// published, not on the node's front door, so no mesh name reaches it.
+pub(crate) fn service_name(host: Option<&str>) -> Option<String> {
+    let host = host?.trim().trim_end_matches('.').to_ascii_lowercase();
+    let name = host.strip_suffix(&format!(".{LOCAL_ZONE}"))?;
+    adi_mesh::protocol::is_service_name(name).then(|| name.to_string())
 }
 
-/// Where to open one of a node's services from *this* machine: its label under the node's mesh
+/// Where to open one of a node's services from *this* machine: its name under the node's mesh
 /// zone. `None` when there is no routable name over there, in which case there is nothing on this
 /// side to link to either.
 pub(crate) fn mesh_url(node: &str, host: Option<&str>) -> Option<String> {
-    host_label(host).map(|label| format!("http://{label}.{node}.{MESH_ZONE}/"))
+    service_name(host).map(|name| format!("http://{name}.{node}.{MESH_ZONE}/"))
 }
 
 /// The `Authorization` header value for a node's Basic-auth gate, defaulting the user to the one
@@ -272,16 +284,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_dashboard_host_becomes_a_label_and_a_mesh_url() {
-        assert_eq!(host_label(Some("nosh.adi")).as_deref(), Some("nosh"));
-        assert_eq!(host_label(Some("NOSH.adi.")).as_deref(), Some("nosh"));
-        assert_eq!(host_label(None), None);
-        assert_eq!(host_label(Some("  ")), None);
+    fn a_dashboard_host_becomes_a_service_name_and_a_mesh_url() {
+        assert_eq!(service_name(Some("nosh.adi")).as_deref(), Some("nosh"));
+        assert_eq!(service_name(Some("NOSH.adi.")).as_deref(), Some("nosh"));
+        // Kept whole: `app.nosh.adi` is its own service, not `app`'s and not `nosh`'s.
+        assert_eq!(service_name(Some("app.nosh.adi")).as_deref(), Some("app.nosh"));
+        assert_eq!(service_name(None), None);
+        assert_eq!(service_name(Some("  ")), None);
+        // Outside the node's own zone there is no name the mesh could route.
+        assert_eq!(service_name(Some("nosh.guide")), None);
+        assert_eq!(service_name(Some("adi")), None);
 
         // The node cannot know what we call it, so the viewer builds the name it will type.
         assert_eq!(
             mesh_url("laptop-b", Some("nosh.adi")).as_deref(),
             Some("http://nosh.laptop-b.n.adi/")
+        );
+        assert_eq!(
+            mesh_url("laptop-b", Some("app.nosh.adi")).as_deref(),
+            Some("http://app.nosh.laptop-b.n.adi/")
         );
         // No routable name over there means no link over here — never `http://.laptop-b.n.adi/`.
         assert_eq!(mesh_url("laptop-b", None), None);

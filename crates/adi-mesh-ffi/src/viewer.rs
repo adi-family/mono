@@ -301,8 +301,8 @@ impl Viewer {
     /// If the node is not paired, or no loopback port can be bound.
     pub fn open(&self, node: &str, service: &str) -> anyhow::Result<u16> {
         anyhow::ensure!(
-            protocol::is_dns_label(service),
-            "{service:?} is not a service label (lowercase, 1..=63, no leading/trailing `-`)"
+            protocol::is_service_name(service),
+            "{service:?} is not a service name (one or more lowercase DNS labels, `app.nosh`)"
         );
         let route = (node.to_string(), service.to_string());
         if let Some(port) = self

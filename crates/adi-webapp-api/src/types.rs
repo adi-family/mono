@@ -2844,12 +2844,12 @@ pub struct DashboardTransferred {
     /// The dashboard as the node now reports it — its id, its host *there*, its ports once the
     /// node's supervisor has leased them.
     pub dashboard: Dashboard,
-    /// Where to open it from here: `http://<label>.<node>.n.adi/`, or `None` when the node gave
+    /// Where to open it from here: `http://<service>.<node>.n.adi/`, or `None` when the node gave
     /// the copy no routable name.
     #[serde(default)]
     pub url: Option<String>,
     /// Whether the node was also asked to let this machine reach the new dashboard
-    /// (`http:<label>`), and said yes. `false` means the transfer worked but the link above will
+    /// (`http:<service>`), and said yes. `false` means the transfer worked but the link above will
     /// answer *not authorized* until somebody grants it on the node.
     #[serde(default)]
     pub granted: bool,
@@ -2919,8 +2919,9 @@ pub struct NodeDashboard {
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
-    /// The service label to open, from the single host the dashboard declares (§4): `nosh.adi` →
-    /// `nosh`. `None` when it declares none, so there is nothing the mesh could route to.
+    /// The service name to open, from the single host the dashboard declares (§4) with its local
+    /// zone taken off: `nosh.adi` → `nosh`, `app.nosh.adi` → `app.nosh`. `None` when it declares
+    /// none, or declares one outside that zone, so there is nothing the mesh could route to.
     #[serde(default)]
     pub service: Option<String>,
     /// Whether the node's supervisor has the page's own server up. A dashboard that is down is
@@ -2956,7 +2957,8 @@ pub struct UnlockNode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeServiceRef {
     pub node: String,
-    /// The service label to be granted `http:<service>` on — a dashboard's own label.
+    /// The service to be granted `http:<service>` on — a dashboard's own host minus the local
+    /// zone, which is one label (`nosh`) or several (`app.nosh`).
     pub service: String,
 }
 

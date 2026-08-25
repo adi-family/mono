@@ -482,7 +482,9 @@ proxy:
   # one label: `*.n.adi` covers <node>.n.adi but never <service>.<node>.n.adi, so each node needs
   # its own `*.<node>.n.adi` on the leaf. A node missing from this list is therefore still
   # reachable over http:// immediately; only https:// warns, until the next front-door start
-  # re-mints the certificate. Pairing appends here.
+  # re-mints the certificate. Pairing appends here. An entry may also be dotted
+  # (`nosh.<node>`) to cover a service name deeper than one label, e.g. app.nosh.<node>.n.adi —
+  # nothing writes those automatically, since pairing learns a petname and not the node's hosts.
 {mesh_nodes}
   # Route what is imported below; never launch it. Stated rather than inferred: adi-hive used to
   # decide this from the effective uid (root == front door), which is true on macOS and false on

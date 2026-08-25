@@ -90,6 +90,9 @@ pub struct ProxyBinds {
     /// node. It exists because a wildcard label matches exactly one level, so `<service>.<node>.n.adi`
     /// needs a *per-node* wildcard in the certificate (see [`crate::tls`]); pairing appends the
     /// petname here so the next start mints a leaf that covers it.
+    ///
+    /// An entry may be dotted (`nosh.laptop-b`) to cover a service name deeper than one label —
+    /// the same wildcard limit applies one level further down. See [`crate::tls`]'s `mesh_sans`.
     #[serde(default)]
     pub mesh_nodes: Vec<String>,
 }
@@ -910,9 +913,10 @@ pub fn is_mesh_host(host: &str) -> bool {
     key == MESH_ZONE || key.ends_with(MESH_SUFFIX)
 }
 
-/// The node label out of `<service>.<node>.n.adi`, for the error page that has to name it. The
-/// front door deliberately learns nothing else from the name: which peer key a node maps to, and
-/// which service label it exposes, are the gateway's business (docs/fleet.md §3).
+/// The node label out of `<service>.<node>.n.adi`, for the error page that has to name it — the
+/// last label before the zone, so a service that is itself several labels (`app.nosh`) still
+/// names its node. The front door deliberately learns nothing else from the name: which peer key
+/// a node maps to, and which service it exposes, are the gateway's business (docs/fleet.md §3).
 #[must_use]
 pub fn mesh_node(host: &str) -> Option<String> {
     let key = host_key(host);

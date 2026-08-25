@@ -110,7 +110,8 @@ pub(crate) enum MeshCommand {
         /// The node's petname.
         petname: String,
     },
-    /// Let a node reach one more thing here (`http:nosh`, `http:*`, `tcp:127.0.0.1:22`, `ctl:read`).
+    /// Let a node reach one more thing here (`http:nosh`, `http:app.nosh`, `http:*`,
+    /// `tcp:127.0.0.1:22`, `ctl:read`).
     Grant {
         /// The node's petname.
         petname: String,

@@ -144,6 +144,14 @@ fn san_list(hosts: &[String], mesh: Option<&[String]>) -> Vec<String> {
 /// records the petname, and the next start mints a leaf that covers it. The zone wildcard
 /// [`MESH_ZONE_SAN`] is added alongside so a node's own apex is covered even before any service on
 /// it is named.
+///
+/// **A service name deeper than one label needs an entry of its own.** `docs/fleet.md` §1 allows
+/// `app.nosh.<node>.n.adi`, and the same one-label rule that defeats `*.*.n.adi` defeats
+/// `*.<node>.n.adi` there. An entry may therefore carry dots — `nosh.laptop-b` mints
+/// `*.nosh.laptop-b.n.adi`, covering every service under that name — which is the manual escape
+/// hatch for https to a deep name. Nothing populates those automatically: pairing learns a
+/// petname, never the shape of the hosts the node happens to serve. Over plain http a deep name
+/// needs none of this and works as soon as it is granted.
 fn mesh_sans(nodes: &[String]) -> Vec<String> {
     let mut out = vec![MESH_ZONE_SAN.to_string()];
     out.extend(
@@ -397,6 +405,16 @@ mod tests {
         assert!(matches_wildcard("*.n.adi", "laptop-b.n.adi"));
         assert!(!matches_wildcard("*.n.adi", "nosh.laptop-b.n.adi"));
         assert!(matches_wildcard("*.laptop-b.n.adi", "nosh.laptop-b.n.adi"));
+
+        // …and one label short again for a deep service name, which is why a dotted entry is
+        // allowed: it moves the same single wildcard one level further down.
+        assert!(!matches_wildcard("*.laptop-b.n.adi", "app.nosh.laptop-b.n.adi"));
+        let deep = mesh_sans(&["nosh.laptop-b".into()]);
+        assert_eq!(deep, vec!["*.n.adi", "*.nosh.laptop-b.n.adi"]);
+        assert!(matches_wildcard(
+            "*.nosh.laptop-b.n.adi",
+            "app.nosh.laptop-b.n.adi"
+        ));
 
         assert!(
             !sans.iter().any(|s| s.matches('*').count() > 1),

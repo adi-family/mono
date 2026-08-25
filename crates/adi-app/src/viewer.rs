@@ -13,7 +13,7 @@
 //! behind the node's Basic-auth gate (§5), and it already publishes `GET /api/dashboards`.
 //!
 //! **Listing may also grant.** Pairing hands out `http:app` and nothing else, so a list on its own
-//! would be a list of rows that all refuse to open. [`allow`] asks the node for `http:<label>`, and
+//! would be a list of rows that all refuse to open. [`allow`] asks the node for `http:<service>`, and
 //! that escalates nothing: `http:app` plus the password *is* the control panel, which can already
 //! create dashboards, move ports and run tasks. The grant adds reach, not authority — the browser
 //! gets the page on its own origin (§4) instead of driving it through the panel.
@@ -325,7 +325,7 @@ fn assemble(petname: &str, dashboards: Vec<Dashboard>, grants: &[Grant]) -> Vec<
         .into_iter()
         .filter(|d| !d.is_archived())
         .map(|d| {
-            let service = node::host_label(d.host.as_deref());
+            let service = node::service_name(d.host.as_deref());
             let allowed = service
                 .as_deref()
                 .is_some_and(|label| grants.iter().any(|g| g.allows(Target::Http(label))));

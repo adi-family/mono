@@ -99,8 +99,8 @@ pub(crate) async fn transfer_dashboard(
     // Reaching it from here needs a grant on the node, and pairing hands out only `http:app`
     // (`docs/fleet.md` §8). Best-effort by design: the dashboard is already running over there,
     // so a grant we could not add is a link that 502s, not a transfer that failed.
-    let granted = match node::host_label(remote.host.as_deref()) {
-        Some(label) => viewer::grant_self(&node, &auth, &label).await.is_ok(),
+    let granted = match node::service_name(remote.host.as_deref()) {
+        Some(name) => viewer::grant_self(&node, &auth, &name).await.is_ok(),
         None => false,
     };
 

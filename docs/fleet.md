@@ -21,6 +21,18 @@ service. Local services keep their existing `<service>.adi`, so the two can neve
 - `app.laptop-b.n.adi` — that node's control panel (adi-app)
 - On the node itself the same service is also reachable locally as `nosh.adi`.
 
+**`<node>` is one label; `<service>` is one *or more*.** The node label is always the one
+immediately before `n.adi`, and everything to its left is the service — which is exactly the
+node's own hostname with its `.adi` zone taken off. A machine's local hosts are not all two
+labels deep (`app.nosh.adi` and `ivr-analytics.nosh.adi` sit beside `nosh.adi`), so a name that
+carried only the first label would address a *different* service, or none:
+
+- `app.nosh.zomro-de1.n.adi` — the service at `app.nosh.adi` on node `zomro-de1`
+- the wire header carries `app.nosh`, and the node resolves `app.nosh.adi` against its own
+  front-door route table — the same lookup the one-label case makes
+- the grant that opens it is `http:app.nosh`; `http:nosh` is a different service and does not
+  cover it
+
 `adi-dns` already resolves this: it suffix-matches with `zone_of` (`adi-dns/src/main.rs:206`),
 so every `*.adi` name of any depth lands on the front door. No DNS change is required for
 resolution — the work is in the front door and the gateway.
@@ -66,7 +78,7 @@ browser → local adi-hive (front door)
   covers every node; there is no per-node route and no per-service local port.
 - The gateway parses the host into `(service, node)`, resolves `node` → key through the local
   fleet registry, and opens one bi-stream on a **pooled** connection to that peer.
-- **Over the mesh the route is the peer key plus the service label.** The host suffix is not
+- **Over the mesh the route is the peer key plus the service name.** The host suffix is not
   used for routing on the far side, because the node cannot know what *you* call it. This is
   also why the `Host` header is never rewritten: rewriting it would send the node's absolute
   redirects to a same-named host on the viewer's machine.
@@ -398,7 +410,8 @@ Each item ships with unit tests in the same file.
 - [x] B3 Pairing: accept a nickname, resolve collisions by suggestion, never fail on a clash.
 - [x] B4 Pinning: a changed nickname is reported, never applied silently.
 - [x] B5 Local rename, and lookup by petname and by key.
-- [x] B6 Grants: default-deny, `http:<service>` / `http:*` / `tcp:<addr>:<port>` / `ctl:*`.
+- [x] B6 Grants: default-deny, `http:<service>` (a service name, so `http:app.nosh` too) /
+      `http:*` / `tcp:<addr>:<port>` / `ctl:*`.
 
 ### C — gateway (`adi-mesh`)
 
@@ -406,7 +419,8 @@ Each item ships with unit tests in the same file.
 - [x] C2 Status byte encode/decode, with a reason string per status.
 - [x] C3 Basic auth: parse the header, salted-SHA-256 verify, constant-time compare, 401 with
       `WWW-Authenticate`; applies to upgrade requests too.
-- [x] C4 Host parsing: `<service>.<node>.n.adi` → `(service, node)`, rejecting anything else.
+- [x] C4 Host parsing: `<service>.<node>.n.adi` → `(service, node)`, with `<service>` one or
+      more labels and `<node>` the label before the zone; rejecting anything else.
 - [x] C5 Connection pool: one iroh connection per peer, a bi-stream per request, reconnect with
       backoff.
 - [x] C6 The node side: resolve the service label against the node's hive route table, honour

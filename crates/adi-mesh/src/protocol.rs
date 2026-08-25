@@ -12,11 +12,12 @@
 //!
 //! **[`HTTP_ALPN`] — `adi/mesh/http/1`, the fleet HTTP gateway** (`docs/fleet.md` §7). One
 //! bi-stream is one HTTP connection. The caller sends a
-//! [variable-length header](write_http_request) naming a **service label**, the node answers
-//! with one [`HttpStatus`] byte, and on [`HttpStatus::Ok`] the raw HTTP bytes flow in both
-//! directions untouched — the `Host` header included, because the node cannot know what the
-//! viewer calls it. A label rather than a port, because the mapping from a service name to a
-//! local port belongs to the node's own route table, not to the caller.
+//! [variable-length header](write_http_request) naming a **service** — one or more DNS labels,
+//! see [`is_service_name`] — the node answers with one [`HttpStatus`] byte, and on
+//! [`HttpStatus::Ok`] the raw HTTP bytes flow in both directions untouched — the `Host` header
+//! included, because the node cannot know what the viewer calls it. A name rather than a port,
+//! because the mapping from a service name to a local port belongs to the node's own route
+//! table, not to the caller.
 //!
 //! The two status bytes are deliberately **sibling types, not one shared enum**. The
 //! discriminants collide but the meanings do not: byte 1 is "port not allow-listed" for a
@@ -27,8 +28,8 @@
 //!
 //! [`parse_fleet_host`] lives here for the same reason: which hostnames name a remote node,
 //! and how one splits into `(service, node)`, is part of this wire contract — the `service`
-//! it yields is exactly the label that goes into the `adi/mesh/http/1` header — and it shares
-//! [`is_dns_label`] with the header validator, so the two can never drift apart.
+//! it yields is exactly the name that goes into the `adi/mesh/http/1` header — and it shares
+//! [`is_service_name`] with the header validator, so the two can never drift apart.
 
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
 
@@ -153,9 +154,15 @@ pub const HTTP_ALPN: &[u8] = b"adi/mesh/http/1";
 /// The gateway request header version, mirrored in the header's first byte.
 const HTTP_VERSION: u8 = 1;
 
-/// The longest a service label may be — the DNS label limit, and the reason `service_len`
-/// fits in a `u8` with room to spare.
+/// The longest a single DNS label may be — the DNS limit, which is what bounds a petname and
+/// each label of a service name.
 pub const MAX_LABEL_LEN: usize = 63;
+
+/// The longest a **service name** may be. A service name is one or more labels
+/// ([`is_service_name`]), so the ceiling is the DNS *name* limit rather than the label one —
+/// still inside the `u8` the header's `service_len` byte carries, which is what keeps the frame
+/// shape unchanged now that the field holds more than one label.
+pub const MAX_SERVICE_LEN: usize = 253;
 
 /// The reserved suffix that marks a hostname as addressing a *remote* node rather than a
 /// local service (`docs/fleet.md` §1). Local services keep `<service>.adi`, so the two
@@ -199,36 +206,52 @@ pub fn is_dns_label(label: &str) -> bool {
         && bytes.iter().all(|&b| alnum(b) || b == b'-')
 }
 
+/// Is this a **service name** — one or more [DNS labels](is_dns_label) joined by dots, at most
+/// [`MAX_SERVICE_LEN`] bytes overall?
+///
+/// A service name is a node's own hostname with its local zone taken off, and those are not
+/// always one label: a project may sit at `app.nosh.adi` beside the `nosh.adi` it belongs to
+/// (`docs/fleet.md` §1). The name that reaches such a service over the mesh is therefore
+/// `app.nosh.<node>.n.adi`, and the label the node resolves is the whole `app.nosh` — which is
+/// why this, not [`is_dns_label`], is what the wire accepts.
+///
+/// Every label is still validated individually, so the name stays lowercase, hyphen-safe and
+/// free of empty labels; nothing that would be an illegal hostname passes here.
+#[must_use]
+pub fn is_service_name(name: &str) -> bool {
+    name.len() <= MAX_SERVICE_LEN && !name.is_empty() && name.split('.').all(is_dns_label)
+}
+
 /// Write the gateway request header — `[version][service_len][service]` — then flush, so the
 /// node can start resolving the service while the caller is still reading the HTTP head.
 ///
 /// # Errors
-/// [`std::io::ErrorKind::InvalidInput`] if `service` is not a valid DNS label (a local
+/// [`std::io::ErrorKind::InvalidInput`] if `service` is not a valid service name (a local
 /// programming error: emitting the frame anyway would only make the peer reject it);
 /// otherwise any write error on the stream.
 pub async fn write_http_request<W: AsyncWrite + Unpin>(
     w: &mut W,
     service: &str,
 ) -> std::io::Result<()> {
-    if !is_dns_label(service) {
+    if !is_service_name(service) {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
-            format!("{service:?} is not a valid service label"),
+            format!("{service:?} is not a valid service name"),
         ));
     }
-    // Infallible after the check above: a valid label is 1..=63 bytes.
+    // Infallible after the check above: a valid name is 1..=253 bytes.
     let len = u8::try_from(service.len()).unwrap_or(u8::MAX);
     w.write_all(&[HTTP_VERSION, len]).await?;
     w.write_all(service.as_bytes()).await?;
     w.flush().await
 }
 
-/// Read and validate the gateway request header, returning the requested service label.
+/// Read and validate the gateway request header, returning the requested service name.
 ///
 /// # Errors
 /// [`std::io::ErrorKind::InvalidData`] if the version is unknown, the length is zero or over
-/// [`MAX_LABEL_LEN`], the bytes are not UTF-8, or the label is not a DNS label; otherwise any
-/// read error.
+/// [`MAX_SERVICE_LEN`], the bytes are not UTF-8, or the name is not a valid service name;
+/// otherwise any read error.
 pub async fn read_http_request<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Result<String> {
     let mut head = [0u8; 2];
     r.read_exact(&mut head).await?;
@@ -244,18 +267,18 @@ pub async fn read_http_request<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Resu
     }
     // Refuse before allocating or reading: an over-long length is a broken peer, and the
     // stream is closed either way, so there is nothing to resynchronise with.
-    if len > MAX_LABEL_LEN {
+    if len > MAX_SERVICE_LEN {
         return Err(invalid_data(format!(
-            "mesh http service label is {len} bytes, over the {MAX_LABEL_LEN}-byte limit"
+            "mesh http service name is {len} bytes, over the {MAX_SERVICE_LEN}-byte limit"
         )));
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf).await?;
     let service = String::from_utf8(buf)
-        .map_err(|_| invalid_data("mesh http service label is not valid utf-8".into()))?;
-    if !is_dns_label(&service) {
+        .map_err(|_| invalid_data("mesh http service name is not valid utf-8".into()))?;
+    if !is_service_name(&service) {
         return Err(invalid_data(format!(
-            "mesh http service label {service:?} is not a valid dns label"
+            "mesh http service name {service:?} is not a dotted run of dns labels"
         )));
     }
     Ok(service)
@@ -284,14 +307,20 @@ pub async fn read_http_status<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Resul
 }
 
 /// Split a `Host` header value in the reserved namespace into `(service, node)`:
-/// `nosh.laptop-b.n.adi` → `("nosh", "laptop-b")`.
+/// `nosh.laptop-b.n.adi` → `("nosh", "laptop-b")`, `app.nosh.laptop-b.n.adi` →
+/// `("app.nosh", "laptop-b")`.
 ///
-/// Returns `None` for everything that is not *exactly* four labels ending in
-/// [`FLEET_SUFFIX`] — `n.adi`, `foo.n.adi` and `a.b.c.n.adi` are all not fleet hosts, and a
-/// front door must fall through to its ordinary local routing for them rather than guess.
-/// An optional `:port` is stripped and the name is lowercased first, since a `Host` header
-/// carries whatever case the address bar happened to hold; a single trailing root dot is
-/// tolerated, because a fully-qualified `Host` is legal.
+/// **The node is always the label immediately before [`FLEET_SUFFIX`]; everything to its left
+/// is the service**, however many labels that is. A node's own hostnames are not all one label
+/// — `app.nosh.adi` is an ordinary local host beside `nosh.adi` — and the service name here is
+/// exactly that host minus its local zone, so a deep name has to survive the split intact
+/// rather than be refused as "one label too many".
+///
+/// Returns `None` for everything that is not at least four labels ending in [`FLEET_SUFFIX`] —
+/// `n.adi` and `foo.n.adi` name no service, and a front door must fall through to its ordinary
+/// local routing for them rather than guess. An optional `:port` is stripped and the name is
+/// lowercased first, since a `Host` header carries whatever case the address bar happened to
+/// hold; a single trailing root dot is tolerated, because a fully-qualified `Host` is legal.
 #[must_use]
 pub fn parse_fleet_host(host: &str) -> Option<(String, String)> {
     let host = host.trim();
@@ -308,14 +337,17 @@ pub fn parse_fleet_host(host: &str) -> Option<(String, String)> {
     };
     let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
 
+    // The pattern needs a node label on top of the suffix's own two, so `n.adi` never matches;
+    // `foo.n.adi` — a node with nothing on it — falls out on the emptiness check below.
     let labels: Vec<&str> = name.split('.').collect();
-    let [service, node, "n", "adi"] = labels[..] else {
+    let [service @ .., node, "n", "adi"] = labels.as_slice() else {
         return None;
     };
-    if !is_dns_label(service) || !is_dns_label(node) {
+    if service.is_empty() || !is_dns_label(node) {
         return None;
     }
-    Some((service.to_string(), node.to_string()))
+    let service = service.join(".");
+    is_service_name(&service).then(|| (service, node.to_string()))
 }
 
 fn invalid_data(message: String) -> std::io::Error {
@@ -396,13 +428,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn http_request_round_trips_the_longest_legal_label() {
-        let service = "a".repeat(MAX_LABEL_LEN);
+    async fn http_request_round_trips_the_longest_legal_name() {
+        // 253 bytes as labels of 63: the length ceiling is the *name* limit, not the label one.
+        let service = std::iter::repeat_n("a".repeat(MAX_LABEL_LEN), 4)
+            .collect::<Vec<_>>()
+            .join(".")[..MAX_SERVICE_LEN]
+            .trim_end_matches('.')
+            .to_string();
         let mut buf = Vec::new();
         write_http_request(&mut buf, &service).await.expect("write");
 
         let mut cursor = std::io::Cursor::new(buf);
         assert_eq!(read_http_request(&mut cursor).await.expect("read"), service);
+    }
+
+    #[tokio::test]
+    async fn http_request_round_trips_a_multi_label_service() {
+        // `app.nosh.adi` on the node is `app.nosh` on the wire — a service name, not a label.
+        let mut buf = Vec::new();
+        write_http_request(&mut buf, "app.nosh").await.expect("write");
+        assert_eq!(buf, b"\x01\x08app.nosh".to_vec());
+
+        let mut cursor = std::io::Cursor::new(buf);
+        assert_eq!(read_http_request(&mut cursor).await.expect("read"), "app.nosh");
     }
 
     #[tokio::test]
@@ -421,19 +469,28 @@ mod tests {
 
     #[tokio::test]
     async fn http_request_rejects_an_over_long_service() {
-        let service = vec![b'a'; MAX_LABEL_LEN + 1];
+        let service = vec![b'a'; MAX_SERVICE_LEN + 1];
         let len = u8::try_from(service.len()).expect("fits");
         let mut frame = http_frame(HTTP_VERSION, len, &service);
         let err = read_http_request(&mut frame).await.expect_err("too long");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
 
-        // The writer refuses the same label locally rather than emitting a doomed frame.
+        // The writer refuses the same name locally rather than emitting a doomed frame.
         let mut buf = Vec::new();
-        let err = write_http_request(&mut buf, &"a".repeat(MAX_LABEL_LEN + 1))
+        let err = write_http_request(&mut buf, &"a".repeat(MAX_SERVICE_LEN + 1))
             .await
             .expect_err("too long");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
-        assert!(buf.is_empty(), "nothing is written for a rejected label");
+        assert!(buf.is_empty(), "nothing is written for a rejected name");
+
+        // A single label is still capped at the label limit, inside a legal-length name.
+        let mut buf = Vec::new();
+        assert!(
+            write_http_request(&mut buf, &"a".repeat(MAX_LABEL_LEN + 1))
+                .await
+                .is_err(),
+            "one over-long label is not a service name however short the whole is"
+        );
     }
 
     #[tokio::test]
@@ -445,7 +502,11 @@ mod tests {
 
     #[tokio::test]
     async fn http_request_rejects_a_non_label_service() {
-        for bad in ["-nosh", "nosh-", "no sh", "No.sh", "NOSH", "no_sh", "no.sh"] {
+        // `no.sh` is absent on purpose: a dot now separates labels rather than disqualifying
+        // the name. What is still refused is a *label* that breaks the rule, wherever it sits.
+        for bad in [
+            "-nosh", "nosh-", "no sh", "No.sh", "NOSH", "no_sh", ".nosh", "nosh.", "app..nosh",
+        ] {
             let len = u8::try_from(bad.len()).expect("fits");
             let mut frame = http_frame(HTTP_VERSION, len, bad.as_bytes());
             let err = read_http_request(&mut frame).await.expect_err("not a label");
@@ -517,6 +578,35 @@ mod tests {
     }
 
     #[test]
+    fn the_node_is_the_last_label_before_the_suffix_however_deep_the_service() {
+        // `app.nosh.adi` and `ivr-analytics.nosh.adi` are ordinary hosts on the node; the whole
+        // name to the left of the node label is the service the node resolves.
+        assert_eq!(
+            parse_fleet_host("app.nosh.laptop-b.n.adi"),
+            Some(("app.nosh".into(), "laptop-b".into()))
+        );
+        assert_eq!(
+            parse_fleet_host("ivr-analytics.nosh.zomro-de1.n.adi"),
+            Some(("ivr-analytics.nosh".into(), "zomro-de1".into()))
+        );
+        assert_eq!(
+            parse_fleet_host("a.b.c.d.laptop-b.n.adi"),
+            Some(("a.b.c.d".into(), "laptop-b".into()))
+        );
+    }
+
+    #[test]
+    fn service_names_are_one_or_more_labels() {
+        for good in ["a", "nosh", "app.nosh", "ivr-analytics.nosh", "a.b.c.d"] {
+            assert!(is_service_name(good), "{good:?} is a valid service name");
+        }
+        for bad in ["", ".", "app.", ".nosh", "app..nosh", "App.nosh", "app.no sh"] {
+            assert!(!is_service_name(bad), "{bad:?} is not a valid service name");
+        }
+        assert!(!is_service_name(&"a".repeat(MAX_SERVICE_LEN + 1)));
+    }
+
+    #[test]
     fn fleet_host_strips_the_port_and_normalises_case() {
         for host in [
             "nosh.laptop-b.n.adi:8443",
@@ -539,7 +629,6 @@ mod tests {
             "",
             "n.adi",              // the suffix alone names no node
             "foo.n.adi",          // a node with no service
-            "a.b.c.n.adi",        // one label too many
             "nosh.laptop-b.adi",  // the local namespace, not the fleet one
             "nosh.laptop-b.n.test",
             "nosh.adi",
@@ -549,6 +638,7 @@ mod tests {
             "[::1]:8000",
             ".laptop-b.n.adi",    // empty service label
             "nosh..n.adi",        // empty node label
+            "app..nosh.laptop-b.n.adi", // an empty label inside the service name
             "-nosh.laptop-b.n.adi",
             "nosh.laptop-.n.adi",
             "no_sh.laptop-b.n.adi",
@@ -561,13 +651,12 @@ mod tests {
 
     #[test]
     fn a_fleet_host_service_is_wire_legal() {
-        // The label the host yields is the one that goes on the wire, so the writer must
+        // The name the host yields is the one that goes on the wire, so the writer must
         // always accept it — this is the invariant that keeps the two validators in step.
-        let (service, node) = parse_fleet_host("app.laptop-b.n.adi").expect("fleet host");
-        assert!(is_dns_label(&service) && is_dns_label(&node));
-        assert_eq!(
-            format!("{service}.{node}.{FLEET_SUFFIX}"),
-            "app.laptop-b.n.adi"
-        );
+        for host in ["app.laptop-b.n.adi", "app.nosh.laptop-b.n.adi"] {
+            let (service, node) = parse_fleet_host(host).expect("fleet host");
+            assert!(is_service_name(&service) && is_dns_label(&node), "{host}");
+            assert_eq!(format!("{service}.{node}.{FLEET_SUFFIX}"), host);
+        }
     }
 }

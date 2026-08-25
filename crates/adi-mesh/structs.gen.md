@@ -104,7 +104,7 @@ pub struct Daemon {
 
 ### enum `Scope`
 
-A grant's subject: one specific label, or `*` for every label in that family.
+A grant's subject: one specific name, or `*` for every name in that family.
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Eq)]

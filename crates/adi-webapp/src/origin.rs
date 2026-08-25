@@ -56,10 +56,12 @@ fn mapped_url_via(url: &str, node: Option<&str>) -> Option<String> {
 /// The hostname `host` answers to from where this page is being read, or `None` when it answers to
 /// nothing here.
 ///
-/// Viewed locally that is the host itself. Viewed through a node, a bare `<label>.adi` becomes
-/// `<label>.<node>.n.adi`; any *other* `.adi` name is refused rather than guessed, because it would
-/// resolve on the viewer's front door and open whatever that machine happens to run under it. A
-/// name outside the `.adi` zone is a real domain and means the same thing from anywhere.
+/// Viewed locally that is the host itself. Viewed through a node, a `.adi` name becomes that same
+/// name with the node label spliced in before the zone — `nosh.adi` → `nosh.<node>.n.adi`,
+/// `app.nosh.adi` → `app.nosh.<node>.n.adi`, however many labels the service is. A name already in
+/// the reserved `n.adi` zone is refused rather than re-pointed: it names a third machine, which is
+/// one hop more than the gateway routes. A name outside `.adi` is a real domain and means the same
+/// thing from anywhere.
 fn service_host(host: &str) -> Option<String> {
     service_host_via(host, viewing_node().as_deref())
 }
@@ -73,19 +75,27 @@ fn service_host_via(host: &str, node: Option<&str>) -> Option<String> {
     let Some(node) = node else {
         return Some(host.to_string());
     };
-    match host.split('.').collect::<Vec<_>>()[..] {
-        [label, "adi"] if !label.is_empty() => Some(format!("{label}.{node}.n.adi")),
-        // `a.b.adi`, `x.y.n.adi`, or `adi` alone. The fleet namespace is exactly one service label
-        // under one node label, so none of these has an address from here — and a chain of nodes is
-        // not something the gateway will route.
-        [.., "adi"] => None,
-        _ => Some(host.to_string()),
+    let labels: Vec<&str> = host.split('.').collect();
+    let [service @ .., "adi"] = labels.as_slice() else {
+        // Not a `.adi` name at all: a real domain, which answers where it is published.
+        return Some(host.to_string());
+    };
+    match service {
+        // `adi` alone, or a name already in the fleet zone — a chain of nodes the gateway will
+        // not route. Neither has an address from here.
+        [] | [.., "n"] => None,
+        // An empty label would splice into `.<node>.n.adi`, which resolves to the node's apex
+        // rather than to nothing — refuse it here rather than build a link to the wrong place.
+        _ if service.iter().any(|label| label.is_empty()) => None,
+        _ => Some(format!("{}.{node}.n.adi", service.join("."))),
     }
 }
 
-/// The node label in a fleet hostname — `app.zomro-de1.n.adi` → `zomro-de1`.
+/// The node label in a fleet hostname — `app.zomro-de1.n.adi` → `zomro-de1`, and
+/// `app.nosh.zomro-de1.n.adi` → `zomro-de1` too: the node is always the label just before the
+/// zone, whatever is to its left.
 ///
-/// `None` for anything that is not exactly `<service>.<node>.n.adi`, which is the same shape
+/// `None` for anything that is not a `<service>.<node>.n.adi`, which is the same shape
 /// `adi_mesh::protocol::parse_fleet_host` accepts on the routing side. An `:port` is dropped and a
 /// trailing root dot tolerated, since a location's host carries whatever was typed at it.
 fn node_of(view_host: &str) -> Option<String> {
@@ -93,10 +103,10 @@ fn node_of(view_host: &str) -> Option<String> {
     let name = name.split(':').next()?;
     let name = name.strip_suffix('.').unwrap_or(name).to_ascii_lowercase();
     let labels: Vec<&str> = name.split('.').collect();
-    let [service, node, "n", "adi"] = labels[..] else {
+    let [service @ .., node, "n", "adi"] = labels.as_slice() else {
         return None;
     };
-    (!service.is_empty() && !node.is_empty()).then(|| node.to_string())
+    (!service.is_empty() && !node.is_empty()).then(|| (*node).to_string())
 }
 
 #[cfg(test)]
@@ -109,6 +119,11 @@ mod tests {
         assert_eq!(node_of("APP.Laptop-B.N.ADI").as_deref(), Some("laptop-b"));
         assert_eq!(node_of("app.laptop-b.n.adi.").as_deref(), Some("laptop-b"));
         assert_eq!(node_of("app.laptop-b.n.adi:8443").as_deref(), Some("laptop-b"));
+        // The node is the label before the zone, however deep the service name is.
+        assert_eq!(
+            node_of("app.nosh.zomro-de1.n.adi").as_deref(),
+            Some("zomro-de1")
+        );
     }
 
     #[test]
@@ -119,7 +134,6 @@ mod tests {
             "127.0.0.1:8000",
             "n.adi",              // the suffix alone names no node
             "app.n.adi",          // a node with no service
-            "a.b.c.n.adi",        // one label too many
             "app.laptop-b.n.adi.example.com", // a lookalike that is not in the zone
         ] {
             assert_eq!(node_of(host), None, "{host} is not a fleet host");
@@ -151,12 +165,17 @@ mod tests {
             service_host_via("status.example.com", Some("laptop-b")).as_deref(),
             Some("status.example.com")
         );
+        // A node's own hosts are not all one label; the whole name moves into its zone.
+        assert_eq!(
+            service_host_via("app.nosh.adi", Some("zomro-de1")).as_deref(),
+            Some("app.nosh.zomro-de1.n.adi")
+        );
     }
 
     #[test]
     fn an_unmappable_adi_name_gets_no_link_from_a_node() {
         // Each of these would resolve on the *viewer's* front door and open the wrong thing.
-        for host in ["a.b.adi", "nosh.other.n.adi", "adi"] {
+        for host in ["nosh.other.n.adi", "app.nosh.other.n.adi", "adi", ".adi"] {
             assert_eq!(service_host_via(host, Some("laptop-b")), None, "{host}");
         }
     }

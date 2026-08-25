@@ -362,7 +362,12 @@ fn transferred_message(done: &adi_webapp_api::types::DashboardTransferred, movin
             "{verb} \u{201c}{}\u{201d} to {node}. {url} will refuse until {node} grants this \
              machine http:{} \u{2014} add it from {node}'s own Fleet page.",
             done.dashboard.name,
-            done.dashboard.host.as_deref().unwrap_or("<label>").split('.').next().unwrap_or(""),
+            // The grant names the host minus its local zone, so it matches what the node parses.
+            done.dashboard
+                .host
+                .as_deref()
+                .and_then(|host| host.trim_end_matches('.').strip_suffix(".adi"))
+                .unwrap_or("<service>"),
         )
     }
 }
@@ -541,7 +546,7 @@ fn routable_host(d: &Dashboard) -> Option<&str> {
 /// there. Without this the row is simply an archived dashboard, and "why did this stop?" is a
 /// question the page can answer but doesn't.
 ///
-/// The link is the same `<label>.<node>.n.adi` name the transfer reported. It only resolves while
+/// The link is the same `<service>.<node>.n.adi` name the transfer reported. It only resolves while
 /// the node is reachable and has granted this machine the dashboard — the transfer asks for that
 /// grant, and says so when it could not get it. It is also a name only *this* machine holds, so
 /// read through a node there is no link at all and the row says only where the dashboard went.
@@ -549,10 +554,12 @@ fn moved_marker(d: &Dashboard) -> AnyView {
     let Some(node) = d.moved_to.clone() else {
         return ().into_any();
     };
+    // The host as the node routes it, minus its local zone: `app.nosh.adi` moves as `app.nosh`,
+    // not as `app`, which over there would be a different service or none at all.
     let there = routable_host(d)
-        .and_then(|host| host.split('.').next())
-        .filter(|label| !label.is_empty())
-        .and_then(|label| crate::origin::service_url(&format!("{label}.{node}.n.adi")));
+        .and_then(|host| host.trim_end_matches('.').strip_suffix(".adi"))
+        .filter(|service| !service.is_empty())
+        .and_then(|service| crate::origin::service_url(&format!("{service}.{node}.n.adi")));
     view! {
         <div class="adi-muted">
             "moved to "

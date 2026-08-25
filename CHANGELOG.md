@@ -20,6 +20,22 @@ extraction script cares about.
 
 ## Unreleased
 
+## 0.3.2 — 2026-08-26
+
+### Fixed
+
+- **A node's deeper hostnames are reachable over the fleet.** `<service>.<node>.n.adi` used to
+  mean exactly four labels, so only a service whose name was one label had an address from
+  another machine: `nosh.zomro-de1.n.adi` worked and `app.nosh.zomro-de1.n.adi` — the very same
+  machine's `app.nosh.adi` — was answered with *not a fleet hostname*. The node label is now
+  simply the one before `n.adi`, and everything to its left is the service, which is exactly
+  that machine's own hostname with its `.adi` taken off. Grants name the whole thing
+  (`http:app.nosh`), and the control panel's links, transfers and dashboard rows follow.
+  Both machines need this version: a node running an older one refuses the name on the wire.
+  Plain `http://` works as soon as it is granted; `https://` to a name that deep needs a
+  dotted `proxy.mesh_nodes` entry (`nosh.<node>`) on the viewer's front door, because one
+  wildcard label covers one level.
+
 ## 0.3.1 — 2026-08-21
 
 ### Fixed

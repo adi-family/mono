@@ -113,8 +113,12 @@ const RELOAD_INTERVAL: Duration = Duration::from_secs(5);
 const ACCEPT_ERROR_BACKOFF: Duration = Duration::from_millis(100);
 
 /// The zone a node's own services live in locally (`nosh.adi`), and therefore the host a service
-/// *label* off the wire is resolved as. `docs/fleet.md` §1: the same service the fleet addresses
+/// *name* off the wire is resolved as. `docs/fleet.md` §1: the same service the fleet addresses
 /// as `nosh.laptop-b.n.adi` is `nosh.adi` on the node itself.
+///
+/// A name, not a label: the wire carries everything left of the node label, so `app.nosh` off
+/// `app.nosh.laptop-b.n.adi` resolves as `app.nosh.adi` — a host the node's front door already
+/// routes, and the reason nothing here has to know how deep the name is.
 const LOCAL_ZONE: &str = "adi";
 
 /// The gateway's default listen address.
@@ -269,6 +273,10 @@ impl Routes {
 
     /// The loopback address serving `service` for `target`, or `None` when this node serves no
     /// such service.
+    ///
+    /// `service` may be several labels (`app.nosh`), because a node's own hostnames are: the
+    /// question asked of the table is always "who serves `<service>.adi`?", and the front door
+    /// answers it the same way whether that host is two labels deep or four.
     ///
     /// `target` is the raw request target, so a service that claims a path prefix on another's
     /// host (a dashboard's `/api` backend, `docs/fleet.md` §4) resolves the same way here as at
@@ -755,7 +763,20 @@ async fn handle_client(mut tcp: TcpStream, gateway: &Arc<Gateway>) -> anyhow::Re
     };
 
     protocol::write_http_request(&mut send, &service).await?;
-    match protocol::read_http_status(&mut recv).await? {
+    let status = match protocol::read_http_status(&mut recv).await {
+        Ok(status) => status,
+        Err(e) => {
+            // The node hung up on the frame instead of answering it. The one way that happens
+            // to a well-formed request is a node too old for the name: a service of more than
+            // one label was not legal on the wire until this version, and such a peer closes
+            // the stream rather than replying. Without this the browser gets an empty response
+            // and nothing to act on.
+            warn!(%host, %node, %service, error = %e, "gateway: the node did not answer the frame");
+            let page = unanswered_page(&host, &node, &service, &e.to_string());
+            return Ok(respond(&mut tcp, 502, "Bad Gateway", &page).await?);
+        }
+    };
+    match status {
         HttpStatus::Ok => {
             // The head verbatim otherwise, `Host` and target untouched — see the module docs.
             send.write_all(&head).await?;
@@ -1158,6 +1179,28 @@ fn refused_page(host: &str, node: &str, node_key: &str, reason: &str) -> String 
     )
 }
 
+/// The page for a node that took the request and then said nothing — the stream closed before a
+/// status byte arrived.
+///
+/// It names the version gap first because that is what it almost always is: a service name of more
+/// than one label (`app.nosh`) became legal on the wire only in this version, and a node running an
+/// older one refuses the frame by hanging up rather than by answering. Every other cause — a
+/// connection lost mid-frame — reads the same from here, so the detail is carried too rather than
+/// asserted away.
+#[must_use]
+fn unanswered_page(host: &str, node: &str, service: &str, detail: &str) -> String {
+    page(
+        host,
+        "the node did not answer",
+        &format!(
+            "`{node}` accepted the connection but closed it without answering. If `{service}` is \
+             more than one label, that node's adi is older than this one — deep service names are \
+             not legal on its wire — so update it. Otherwise the connection was lost mid-request."
+        ),
+        &[("service asked for", service), ("detail", detail)],
+    )
+}
+
 /// The page for a request that never named a fleet host — somebody talking to the gateway port
 /// directly, or a front door forwarding more than `*.n.adi`.
 #[must_use]
@@ -1165,8 +1208,9 @@ fn bad_request_page(host: &str) -> String {
     page(
         host,
         "not a fleet hostname",
-        "The mesh gateway answers hostnames of the form `<service>.<node>.n.adi` only. Nothing else \
-         reaches a remote node, and nothing local is served here.",
+        "The mesh gateway answers hostnames of the form `<service>.<node>.n.adi` only — where \
+         `<service>` may itself be several labels, as `app.nosh` is in `app.nosh.<node>.n.adi`. \
+         Nothing else reaches a remote node, and nothing local is served here.",
         &[],
     )
 }
@@ -1536,6 +1580,34 @@ mod tests {
         assert_eq!(table.resolve("nothing", "/"), None);
     }
 
+    #[test]
+    fn a_multi_label_service_resolves_as_the_host_it_is_on_the_node() {
+        // `app.nosh.<node>.n.adi` carries `app.nosh`, which is `app.nosh.adi` over there — a
+        // separate service from `nosh.adi`, and neither one is a prefix of the other's routing.
+        let table = routes(&[
+            ("nosh", "nosh.adi", None, 8010),
+            ("app-nosh", "app.nosh.adi", None, 8020),
+        ]);
+        assert_eq!(
+            table.resolve("app.nosh", "/"),
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8020)))
+        );
+        assert_eq!(
+            table.resolve("nosh", "/"),
+            Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8010)))
+        );
+        assert_eq!(table.resolve("app", "/"), None, "`app.adi` is not routed here");
+    }
+
+    #[test]
+    fn a_grant_names_a_multi_label_service_in_full() {
+        let key = some_key();
+        let node = StubNode::new(routes(&[("app-nosh", "app.nosh.adi", None, 8020)]))
+            .with_peer(key, peer_named("laptop-a", &["http:app.nosh"], "igor", "pw"));
+        let (_, addr) = admit(&node, &key, "app.nosh").expect("granted and routed");
+        assert_eq!(addr, SocketAddr::from((Ipv4Addr::LOCALHOST, 8020)));
+    }
+
     // -- C6: the stream, end to end -------------------------------------------------------
 
     #[tokio::test]
@@ -1559,6 +1631,34 @@ mod tests {
             head,
             "the head is forwarded byte for byte — `Host` and target untouched"
         );
+    }
+
+    #[tokio::test]
+    async fn a_deep_fleet_host_reaches_its_service_end_to_end() {
+        // The whole path for `app.nosh.<node>.n.adi`, from the name the browser typed: split it
+        // the way the calling side does, put *that* on the wire, and let the node resolve it.
+        let key = some_key();
+        let (listener, port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[
+            ("nosh", "nosh.adi", None, 1),
+            ("app-nosh", "app.nosh.adi", None, port),
+        ]))
+        .with_peer(key, peer_named("laptop-a", &["http:app.nosh"], "igor", "hunter2"));
+
+        let host = "app.nosh.laptop-b.n.adi";
+        let (service, petname) = protocol::parse_fleet_host(host).expect("a fleet host");
+        assert_eq!((service.as_str(), petname.as_str()), ("app.nosh", "laptop-b"));
+
+        let head = get_head(host, "/", &basic("igor", "hunter2"));
+        let (reply, upstream) = negotiate_over(&node, key, &service, &head).await;
+
+        assert_eq!(reply, vec![HttpStatus::Ok as u8]);
+        assert!(upstream.is_some(), "the local service was handed over");
+
+        let (mut served, _) = listener.accept().await.expect("the service was connected");
+        let mut got = vec![0u8; head.len()];
+        served.read_exact(&mut got).await.expect("the head arrived");
+        assert_eq!(String::from_utf8_lossy(&got), head);
     }
 
     #[tokio::test]
@@ -2014,11 +2114,27 @@ mod tests {
             not_paired_page(hostile, hostile, "key"),
             unreachable_page(hostile, hostile, "key", hostile),
             refused_page(hostile, hostile, "key", "why"),
+            unanswered_page(hostile, hostile, hostile, hostile),
             bad_request_page(hostile),
         ] {
             assert!(!page.contains("<script>"), "escaped: {page}");
             assert!(page.contains("&lt;script&gt;"));
         }
+    }
+
+    #[test]
+    fn a_node_that_hangs_up_on_the_frame_says_which_name_it_was_asked_for() {
+        // The shape of a viewer on this version talking to a node on an older one: it is the
+        // deep service name that is refused, so the page has to name it and say why.
+        let page = unanswered_page(
+            "app.nosh.laptop-b.n.adi",
+            "laptop-b",
+            "app.nosh",
+            "early eof",
+        );
+        assert!(page.contains("app.nosh"), "the name that was refused");
+        assert!(page.contains("older than this one"), "the likely cause");
+        assert!(page.contains("early eof"), "and what actually happened");
     }
 
     #[test]

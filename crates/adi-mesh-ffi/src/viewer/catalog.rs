@@ -192,8 +192,8 @@ pub async fn allow(
     credential: (&str, &str),
 ) -> anyhow::Result<String> {
     anyhow::ensure!(
-        protocol::is_dns_label(service),
-        "{service:?} is not a service label, so no grant could name it"
+        protocol::is_service_name(service),
+        "{service:?} is not a service name, so no grant could name it"
     );
 
     let fleet = request(shared, key, credential, "GET", "/api/fleet", None).await?;
@@ -421,15 +421,15 @@ fn assemble(dashboards: Vec<RawDashboard>, grants: &[Grant]) -> Vec<DashboardInf
         .collect()
 }
 
-/// The service label inside a dashboard's host: `nosh.adi` → `nosh`.
+/// The service name inside a dashboard's host: `nosh.adi` → `nosh`, `app.nosh.adi` → `app.nosh`.
 ///
-/// Exactly two labels, the second being the local zone, because that is what the node's gateway
-/// resolves — it asks its route table for `<service>.adi` (`adi-mesh/src/gateway.rs`, `resolve`).
-/// A dashboard published under a real domain answers there, not here, so it gets no label rather
-/// than a guess that would route to nothing.
+/// Everything left of the local zone, because that is what the node's gateway resolves — it asks
+/// its route table for `<service>.adi` (`adi-mesh/src/gateway.rs`, `resolve`), and a node's own
+/// hosts are not all one label. A dashboard published under a real domain answers there, not here,
+/// so it gets no name rather than a guess that would route to nothing.
 fn service_label(host: &str) -> Option<String> {
-    let (label, zone) = host.split_once('.')?;
-    (zone == LOCAL_ZONE && protocol::is_dns_label(label)).then(|| label.to_string())
+    let name = host.strip_suffix(LOCAL_ZONE)?.strip_suffix('.')?;
+    protocol::is_service_name(name).then(|| name.to_string())
 }
 
 #[cfg(test)]
@@ -516,6 +516,8 @@ mod tests {
     fn a_host_yields_the_label_the_node_routes_on() {
         assert_eq!(service_label("nosh.adi").as_deref(), Some("nosh"));
         assert_eq!(service_label("app.adi").as_deref(), Some("app"));
+        // A node's own hosts are not all one label, and the whole name is what it resolves.
+        assert_eq!(service_label("app.nosh.adi").as_deref(), Some("app.nosh"));
         // A real domain answers at its own front door, not over the mesh's local zone.
         assert_eq!(service_label("nosh.example.com"), None);
         // Neither a bare name nor an upper-case one is a label a gateway would resolve.

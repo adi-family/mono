@@ -118,12 +118,12 @@ fn numbered(base: &str, n: u32) -> String {
 // B6 — grants
 // ---------------------------------------------------------------------------------------
 
-/// A grant's subject: one specific label, or `*` for every label in that family.
+/// A grant's subject: one specific name, or `*` for every name in that family.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Scope {
-    /// `*` — any label.
+    /// `*` — any name.
     Any,
-    /// Exactly this label (validated with [`valid_name`]).
+    /// Exactly this name.
     One(String),
 }
 
@@ -137,14 +137,31 @@ impl Scope {
         }
     }
 
+    /// A scope over one DNS label — what a `ctl:` grant names.
     fn parse(raw: &str) -> anyhow::Result<Self> {
+        Self::parse_with(
+            raw,
+            valid_name,
+            "a valid label (lowercase, 1..=63, no leading/trailing `-`)",
+        )
+    }
+
+    /// A scope over a **service name**, which is one or more labels: a node serves `app.nosh.adi`
+    /// beside `nosh.adi`, and `http:app.nosh` is the grant that names it (`docs/fleet.md` §5).
+    /// A single label still parses, so every grant written before deep names existed still does.
+    fn parse_service(raw: &str) -> anyhow::Result<Self> {
+        Self::parse_with(
+            raw,
+            crate::protocol::is_service_name,
+            "a valid service name (one or more lowercase DNS labels, `app.nosh`)",
+        )
+    }
+
+    fn parse_with(raw: &str, valid: fn(&str) -> bool, expected: &str) -> anyhow::Result<Self> {
         if raw == "*" {
             return Ok(Self::Any);
         }
-        ensure!(
-            valid_name(raw),
-            "{raw:?} is neither `*` nor a valid label (lowercase, 1..=63, no leading/trailing `-`)"
-        );
+        ensure!(valid(raw), "{raw:?} is neither `*` nor {expected}");
         Ok(Self::One(raw.to_string()))
     }
 }
@@ -165,7 +182,8 @@ impl fmt::Display for Scope {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum Grant {
-    /// An HTTP service label served here (`http:nosh`), or every one of them (`http:*`).
+    /// An HTTP service served here by name (`http:nosh`, `http:app.nosh`), or every one of
+    /// them (`http:*`).
     Http(Scope),
     /// A raw TCP forward to exactly this local address (`tcp:127.0.0.1:22`).
     Tcp(SocketAddr),
@@ -210,7 +228,7 @@ impl FromStr for Grant {
             .split_once(':')
             .with_context(|| format!("grant {raw:?} is missing its `<family>:` prefix"))?;
         match family {
-            "http" => Ok(Self::Http(Scope::parse(rest)?)),
+            "http" => Ok(Self::Http(Scope::parse_service(rest)?)),
             "ctl" => Ok(Self::Ctl(Scope::parse(rest)?)),
             "tcp" => Ok(Self::Tcp(rest.parse().with_context(|| {
                 format!("grant {raw:?}: {rest:?} is not an `<ip>:<port>` address")
@@ -1302,6 +1320,8 @@ grants = ["ftp:*"]
         for raw in [
             "http:*",
             "http:nosh",
+            // A service is a *name*, so a node's `app.nosh.adi` is grantable as itself.
+            "http:app.nosh",
             "tcp:127.0.0.1:22",
             "tcp:[::1]:5432",
             "ctl:read",
@@ -1316,13 +1336,26 @@ grants = ["ftp:*"]
             "",
             "http:",
             "http:NOSH",
-            "http:no.sh",
+            "http:app..nosh",
+            "http:.nosh",
+            // The control plane's scopes are single words, not names.
+            "ctl:read.write",
             "ftp:*",
             "tcp:127.0.0.1",
             "tcp:*",
         ] {
             assert!(raw.parse::<Grant>().is_err(), "{raw:?} should not parse");
         }
+    }
+
+    #[test]
+    fn a_deep_service_grant_covers_only_that_name() {
+        let mut record = NodeRecord::default();
+        record.grant("http:app.nosh".parse().expect("a valid grant"));
+        assert!(record.allows(Target::Http("app.nosh")));
+        // Not its parent, and not a sibling: `nosh.adi` and `app.nosh.adi` are two services.
+        assert!(!record.allows(Target::Http("nosh")));
+        assert!(!record.allows(Target::Http("app")));
     }
 
     // -- B2/B6: the stored credential ----------------------------------------------------
