@@ -48,12 +48,27 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// True while the bundle is being copied, so the button can say so.
+    @Published private(set) var moving = false
+
     /// Copy the app into Applications and relaunch from there. Never returns on success.
+    ///
+    /// Off the main thread: this copies the whole bundle, usually off a compressed disk image,
+    /// and running it inline froze the window until it finished — indistinguishable from a
+    /// button that did nothing.
     func moveToApplications() {
-        do {
-            try InstallLocation.moveToApplications()
-        } catch {
-            moveFailure = error.localizedDescription
+        guard !moving else { return }
+        moving = true
+        Task.detached(priority: .userInitiated) {
+            do {
+                let destination = try InstallLocation.copyToApplications()
+                await MainActor.run { InstallLocation.relaunch(at: destination) }
+            } catch {
+                await MainActor.run {
+                    self.moveFailure = error.localizedDescription
+                    self.moving = false
+                }
+            }
         }
     }
 

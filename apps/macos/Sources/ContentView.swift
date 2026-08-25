@@ -44,19 +44,8 @@ struct ContentView: View {
     // MARK: step 1 — be somewhere durable
 
     private var moveStep: some View {
-        VStack(spacing: 14) {
-            Text("Move ADI to Applications")
-                .font(.title3.weight(.semibold))
-            Text(InstallLocation.current().reason)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button("Move to Applications") { model.moveToApplications() }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(model.busy)
+        MoveStep(reason: InstallLocation.current().reason, moving: model.moving) {
+            model.moveToApplications()
         }
     }
 
@@ -119,8 +108,54 @@ struct ContentView: View {
     }
 }
 
+/// Step one, driven by plain values rather than by the model.
+///
+/// Split out for the same reason `PermissionRow` is: a view that takes `moving` as an argument
+/// can be rendered in both states without a running app, which is the only way to actually look
+/// at the in-progress state — the copy it reports on finishes in a second or two and then
+/// relaunches the process out from under you.
+struct MoveStep: View {
+    let reason: String
+    let moving: Bool
+    let move: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text("Move ADI to Applications")
+                .font(.title3.weight(.semibold))
+            Text(reason)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // The spinner sits inside the button rather than beside it, so the layout does not
+            // jump at the moment the user is watching it.
+            Button(action: move) {
+                HStack(spacing: 8) {
+                    if moving {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(moving ? "Moving to Applications…" : "Move to Applications")
+                }
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(moving)
+
+            if moving {
+                Text("Copying the app, then reopening it from Applications.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+            }
+        }
+    }
+}
+
 /// One permission: what it is for, and a button that becomes a checkmark once it is granted.
-private struct PermissionRow: View {
+struct PermissionRow: View {
     let title: String
     let detail: String
     let granted: Bool
@@ -143,10 +178,13 @@ private struct PermissionRow: View {
                     .foregroundStyle(.green)
                     .font(.title3)
                     .accessibilityLabel("\(title) granted")
+            } else if busy {
+                // Something is running — probably this grant, and the moment after the password
+                // prompt is dismissed is exactly when there is otherwise nothing to look at.
+                ProgressView().controlSize(.small)
             } else {
                 Button("Allow", action: grant)
                     .buttonStyle(.bordered)
-                    .disabled(busy)
             }
         }
         .padding(12)

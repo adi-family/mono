@@ -64,13 +64,16 @@ enum InstallLocation {
         }
     }
 
-    /// Copy this bundle into Applications, launch the copy, and quit.
+    /// Copy this bundle into Applications and return where it landed.
+    ///
+    /// File work only — no UI and no relaunch — and deliberately *not* `@MainActor`, so the
+    /// caller runs it off the main thread. Copying a bundle out of a compressed disk image is
+    /// seconds of work, and doing it on the main actor froze the whole window for the duration:
+    /// the button looked stuck rather than busy.
     ///
     /// Falls back to `~/Applications` when `/Applications` is not writable, which is the case
-    /// for a standard (non-admin) account. Never returns on success — the process is replaced by
-    /// the copy.
-    @MainActor
-    static func moveToApplications() throws {
+    /// for a standard (non-admin) account.
+    static func copyToApplications() throws -> URL {
         let source = Bundle.main.bundleURL
         let name = source.lastPathComponent
         let manager = FileManager.default
@@ -88,8 +91,7 @@ enum InstallLocation {
                 }
                 try manager.copyItem(at: source, to: destination)
                 clearQuarantine(destination)
-                relaunch(destination)
-                return
+                return destination
             } catch {
                 lastFailure = error
             }
@@ -119,8 +121,9 @@ enum InstallLocation {
         xattr.waitUntilExit()
     }
 
+    /// Launch the copy and quit this one. Never returns in the normal case.
     @MainActor
-    private static func relaunch(_ url: URL) {
+    static func relaunch(at url: URL) {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.createsNewApplicationInstance = true
         NSWorkspace.shared.openApplication(at: url, configuration: configuration) { _, _ in
