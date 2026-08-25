@@ -59,13 +59,7 @@ if [ -n "${AC_USER:-}" ] && [ -n "${AC_PASS:-}" ]; then
     xcrun stapler staple "$APP"
 
     echo "==> repackaging the DMG around the stapled app"
-    DMGROOT="$SCRIPT_DIR/build/dmgroot"
-    rm -rf "$DMGROOT"; mkdir -p "$DMGROOT"
-    cp -R "$APP" "$DMGROOT/"
-    ln -s /Applications "$DMGROOT/Applications"
-    rm -f "$DMG"
-    hdiutil create -volname "$APP_NAME" -srcfolder "$DMGROOT" -ov -format UDZO "$DMG" >/dev/null
-    rm -rf "$DMGROOT"
+    "$SCRIPT_DIR/dmg/make-dmg.sh" "$APP" "$DMG"
     codesign --force --sign "$SIGN_ID" --timestamp "$DMG"
 
     echo "==> notarizing the DMG (uploads to Apple; waits for the result)"

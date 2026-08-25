@@ -142,15 +142,7 @@ else
 fi
 
 echo "==> building DMG"
-DMGROOT="$BUILD/dmgroot"
-rm -rf "$DMGROOT"
-mkdir -p "$DMGROOT"
-cp -R "$APP" "$DMGROOT/"
-ln -s /Applications "$DMGROOT/Applications"
-rm -f "$BUILD/$APP_NAME.dmg"
-hdiutil create -volname "$APP_NAME" -srcfolder "$DMGROOT" \
-    -ov -format UDZO "$BUILD/$APP_NAME.dmg" >/dev/null
-rm -rf "$DMGROOT"
+"$SCRIPT_DIR/dmg/make-dmg.sh" "$APP" "$BUILD/$APP_NAME.dmg"
 
 echo
 echo "==> done"

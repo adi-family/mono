@@ -29,12 +29,52 @@ apps/macos/build.sh
 
 Produces `apps/macos/build/ADI.app` and `apps/macos/build/ADI.dmg`. The script builds
 the release Rust binaries, compiles the Swift sources with `swiftc` (no Xcode
-project), assembles the `.app`, code-signs it, and packages a DMG with `hdiutil`.
+project), assembles the `.app`, code-signs it, and packages the DMG via
+`dmg/make-dmg.sh` (see **Disk image** below).
 Requirements: Xcode command-line toolchain, `cargo`.
 
 Signing is **ad-hoc** by default (fine for local use). Set `SIGN_ID` to a
 "Developer ID Application" identity to sign for distribution (hardened runtime +
 secure timestamp).
+
+## Disk image
+
+`dmg/make-dmg.sh <ADI.app> <out.dmg>` packages the install window: the app, the
+`/Applications` symlink, the background picture, the committed Finder layout and the
+volume icon. `build.sh` and `release.sh` both call it, so the design cannot drift between
+a local build and a notarized one.
+
+```
+dmg/background.html      the art; rendered headless, this is what to edit
+dmg/background.tiff      committed, 1x + 2x in one file so Retina is sharp
+dmg/layout.applescript   the Finder view settings (window size, icon positions, bars off)
+dmg/layout.DS_Store      committed, baked from the above by driving Finder once
+dmg/check-contrast.py    the readability guardrail
+dmg/make-assets.sh       regenerates background.tiff, and layout.DS_Store with --bake-layout
+```
+
+The layout is baked once and committed rather than applied at build time, because
+applying it means driving Finder over AppleScript — slow, and needing an automation
+permission the CI runner does not have.
+
+Three things about the design are load-bearing and easy to break:
+
+- **The cards exist for contrast, not decoration.** Finder writes each icon label onto the
+  background — black under Light appearance, white under Dark — and a disk image cannot
+  override either. Only luminance 0.175–0.183 clears 4.5:1 against both; `#6E7684` is
+  0.178. `make-assets.sh` renders the exact glyphs Finder will draw and refuses to ship art
+  whose worst pixel under the text misses. It is not a formality: a draft that measured
+  4.60:1 as a flat colour really shipped 3.42:1 once a texture went over it.
+- **Nothing load-bearing goes below y=340.** The Finder path bar follows a *global* user
+  preference; when on it takes ~28pt off the icon view and clips the background with it.
+  `layout.applescript` turns it off per-window, but a viewer can switch it back on.
+- **Names and coordinates are paired across files.** `layout.DS_Store` stores positions
+  against the item names `ADI.app` and `Applications`, and the background against the path
+  `.background/background.tiff`. Rename any of them, or move an icon without moving its
+  card in `background.html`, and the window opens wrong with no error anywhere.
+
+To change the art: edit `dmg/background.html`, run `dmg/make-assets.sh`, and re-bake the
+layout too (`--bake-layout`) if any geometry moved.
 
 ## Release (signed + notarized)
 

@@ -1,0 +1,91 @@
+<!doctype html><meta charset=utf-8>
+<title>ADI disk image background</title>
+<!--
+  Source of apps/macos/dmg/background.tiff. Rendered headless at 1x and 2x by make-assets.sh;
+  the .tiff is what ships, this file is what it gets regenerated from.
+
+  Three constraints shape this layout, none of them obvious from looking at it:
+
+  1. Finder writes each icon label straight onto the background -- black under Light
+     appearance, white under Dark -- and a disk image cannot override either. So the pixels
+     under the labels must clear 4.5:1 against BOTH, which pins them to luminance
+     0.175..0.183. That is what the cards are: #6E7684 is 0.178, giving 4.58:1 either way.
+     make-assets.sh measures the rendered pixels and refuses to ship a miss.
+
+  2. Nothing load-bearing goes below y=340. The Finder path bar is a global user preference,
+     not a per-window one, and when it is on it takes ~28pt off the bottom of the icon view
+     and clips the background with it. layout.applescript turns it off for this window, but
+     a viewer can switch it back on while the window is open. An earlier draft put the
+     instruction in a bar along the bottom, where it was invisible on any Mac with the path
+     bar showing.
+
+  3. Geometry is paired with layout.DS_Store. Icons sit at (176,210) and (504,210) at 128pt,
+     which is the centre of each card. Move one and you must move the other, or the icons
+     drift off their surfaces and take the contrast guarantee with them.
+-->
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{width:680px;height:440px;overflow:hidden}
+  body{background:#15161A;position:relative;
+    font-family:-apple-system,"SF Pro Text","Helvetica Neue",sans-serif;
+    -webkit-font-smoothing:antialiased}
+
+  /* depth from a few wide, heavily blurred sources rather than a gradient sweep */
+  .field{position:absolute;inset:-120px;filter:blur(72px)}
+  .field b{position:absolute;display:block;border-radius:50%}
+  .b1{left:40px;top:20px;width:420px;height:340px;background:rgba(250,80,25,.19)}
+  .b2{right:0;bottom:0;width:460px;height:380px;background:rgba(86,116,190,.22)}
+  .b3{left:280px;top:-40px;width:340px;height:300px;background:rgba(255,255,255,.055)}
+  .vig{position:absolute;inset:0;
+    background:radial-gradient(120% 100% at 50% 38%,transparent 40%,rgba(0,0,0,.45))}
+  /* a soft foot instead of a bar: if the path bar clips it, nothing reads as broken */
+  .foot{position:absolute;left:0;right:0;bottom:0;height:120px;
+    background:linear-gradient(180deg,transparent,rgba(0,0,0,.30))}
+  /* 3% noise -- wide blurred fields band badly on 8-bit displays without it. Kept under
+     the cards: laid over them it spread their luminance and cost 0.2 of the contrast. */
+  .noise{position:absolute;z-index:1;inset:0;opacity:.045;mix-blend-mode:overlay}
+
+  /* chrome: the only translucent surface in the window, and the only text on glass */
+  .bar{position:absolute;z-index:3;left:0;right:0;top:0;height:60px;
+    background:rgba(24,26,31,.52);-webkit-backdrop-filter:blur(30px) saturate(180%);
+    backdrop-filter:blur(30px) saturate(180%);border-bottom:1px solid rgba(255,255,255,.10);
+    display:flex;align-items:center;justify-content:space-between;padding:0 24px}
+  .name{font-size:15px;font-weight:600;letter-spacing:.01em;color:#F1F2F4;
+    display:flex;align-items:center;gap:10px}
+  .chip{font-size:10.5px;font-weight:600;letter-spacing:.04em;color:#FFD9C9;
+    background:rgba(250,80,25,.20);border:1px solid rgba(250,80,25,.42);
+    padding:2px 7px;border-radius:6px}
+  .meta{font-size:11.5px;color:rgba(255,255,255,.46)}
+
+  .cta{position:absolute;z-index:3;left:0;right:0;top:82px;text-align:center;
+    font-size:13px;color:rgba(255,255,255,.68);letter-spacing:.005em}
+  .cta b{color:rgba(255,255,255,.95);font-weight:600}
+
+  /* content: opaque, because Finder's label text lands on it */
+  .card{position:absolute;z-index:3;top:122px;width:180px;height:208px;margin-left:-90px;
+    border-radius:14px;background:#6E7684;overflow:hidden;
+    box-shadow:0 14px 34px rgba(0,0,0,.42),0 2px 6px rgba(0,0,0,.30),
+      inset 0 1px 0 rgba(255,255,255,.20),inset 0 0 0 1px rgba(255,255,255,.06)}
+  /* top-lit, but the gradient stops well above the label band so it stays flat */
+  .card::before{content:"";position:absolute;left:0;right:0;top:0;height:42%;
+    background:linear-gradient(180deg,rgba(255,255,255,.11),rgba(255,255,255,0))}
+  .card.l{left:176px} .card.r{left:504px}
+
+  /* the one accent hit that isn't the chip, at the only place the eye has to travel */
+  .arrow{position:absolute;z-index:3;left:310px;top:209px;width:60px;height:2px;
+    background:rgba(250,80,25,.9);border-radius:2px}
+  .arrow::after{content:"";position:absolute;right:-1px;top:-4px;width:10px;height:10px;
+    border-top:2px solid rgba(250,80,25,.9);border-right:2px solid rgba(250,80,25,.9);
+    transform:rotate(45deg);border-radius:1px}
+</style>
+<div class=field><b class=b1></b><b class=b2></b><b class=b3></b></div>
+<div class=vig></div>
+<div class=foot></div>
+<div class=bar>
+  <div class=name>ADI<span class=chip>Universal</span></div>
+  <div class=meta>macOS 13 or later</div>
+</div>
+<div class=cta>Drag <b>ADI</b> onto <b>Applications</b></div>
+<div class="card l"></div><div class="card r"></div>
+<div class=arrow></div>
+<svg class=noise width="680" height="440" xmlns="http://www.w3.org/2000/svg"><filter id=n><feTurbulence type=fractalNoise baseFrequency=".8" numOctaves="4" stitchTiles="stitch"/><feColorMatrix type="saturate" values="0"/></filter><rect x="0" y="0" width="100%" height="100%" filter="url(#n)"/></svg>
