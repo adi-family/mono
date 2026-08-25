@@ -3,10 +3,12 @@
 @use "../../adi-css/scss/adi";
 
 // ---- root onboarding (`/`) ----------------------------------------------------------
-// The front door is a guided setup: a slim top bar (brand · extended) over a centred
-// onboarding wizard. Step 1 sets up the adi agent. Built on the design tokens, so it follows
-// the user's light/dark theme like the rest of the app — but with its own airy, single-column
-// layout that is deliberately unlike the dense `/extended` workbench.
+// The front door is a guided setup: a centred onboarding wizard, with nothing over it — the
+// bar that used to run across the top is now the floating mark and its menu (`src/launcher.rs`),
+// which is drawn over this screen rather than inside it. Step 1 sets up the adi agent. Built on
+// the design tokens, so it follows the user's light/dark theme like the rest of the app — but
+// with its own airy, single-column layout that is deliberately unlike the dense `/extended`
+// workbench.
 .adi-onb {
   min-height: 100dvh;
   display: flex;
@@ -15,54 +17,9 @@
   color: var(--ink);
   font-family: var(--font-sans), sans-serif;
 
-  // --- top bar: [ adi. | space | extended → ] --------------------------------------
-  &__bar {
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    height: 56px;
-    padding: 0 var(--space-5);
-    border-bottom: 1px solid var(--border);
-    background: var(--glass-2);
-    -webkit-backdrop-filter: var(--glass-filter);
-    backdrop-filter: var(--glass-filter);
-  }
-  &__brand {
-    font-family: var(--font-mono), monospace;
-    font-weight: 600;
-    font-size: var(--text-lg);
-    letter-spacing: -.03em;
-    color: var(--ink);
-  }
+  // The accent full stop that closes the wizard's own "Welcome to adi." heading. All that is
+  // left of the bar this screen used to wear.
   &__dot { color: var(--accent); }
-  // Used on both an <a> (extended →) and <button>s (reconfigure, install), so it resets the
-  // button chrome the UA would otherwise supply.
-  &__ext {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 13px;
-    border-radius: var(--radius-pill);
-    border: 1px solid var(--border);
-    background: none;
-    cursor: pointer;
-    font-family: var(--font-mono), monospace;
-    font-size: var(--text-sm);
-    text-decoration: none;
-    color: var(--muted);
-    transition: color var(--transition), border-color var(--transition), background var(--transition);
-
-    &:hover {
-      color: var(--ink);
-      border-color: var(--accent);
-      background: var(--surface-2);
-    }
-  }
-  &__ext-arrow { transition: transform var(--transition); }
-  &__ext:hover &__ext-arrow { transform: translateX(3px); }
 
   // --- centred wizard column --------------------------------------------------------
   &__body {
@@ -422,8 +379,10 @@
 }
 
 // ---- chat home (`/` once the root agent exists) ------------------------------------
-// The app is the chat: a fixed-height frame (slim bar + three columns) that fills the viewport,
-// each column scrolling on its own. Sessions left, conversation centre, dashboards right.
+// The app is the chat: a fixed-height frame of three columns that fills the viewport, each
+// column scrolling on its own. Sessions left, conversation centre, dashboards right. Nothing
+// above them — what a bar would have carried is in the floating mark's menu
+// (`src/launcher.rs`), which is drawn over this frame rather than inside it.
 .adi-chome-root {
   height: 100dvh;
   display: flex;

@@ -4,11 +4,12 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-56 structs · 7 enums · 1 type alias across 21 files.
+59 structs · 7 enums · 1 type alias across 22 files.
 
 ## Index
 
 - [`src/icons.rs`](#srciconsrs) — `Icon`
+- [`src/launcher.rs`](#srclauncherrs) — `Launcher`, `Drag`, `Action`
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
@@ -65,6 +66,52 @@ pub(crate) enum Icon {
     Upgrade,
     Chart,
     Contrast,
+}
+```
+
+---
+
+## `src/launcher.rs`
+
+### struct `Launcher`
+
+The floating mark and everything the menu behind it needs to remember.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct Launcher {
+    open: RwSignal<bool>,
+    pos: RwSignal<Option<(f64, f64)>>,
+    query: RwSignal<String>,
+    cursor: RwSignal<usize>,
+    drag: RwSignal<Option<Drag>>,
+    swallow: RwSignal<bool>,
+}
+```
+
+### struct `Drag`
+
+A press on the mark, from `pointerdown` until it is released.
+
+```rust
+#[derive(Clone, Copy)]
+struct Drag {
+    start: (f64, f64),
+    from: (f64, f64),
+    moved: bool,
+}
+```
+
+### struct `Action`
+
+One row of the menu.
+
+```rust
+pub(crate) struct Action {
+    label: String,
+    hint: String,
+    icon: icons::Icon,
+    run: Callback<()>,
 }
 ```
 

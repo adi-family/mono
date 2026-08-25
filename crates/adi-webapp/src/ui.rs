@@ -515,7 +515,7 @@ fn document_element() -> Option<web_sys::Element> {
 /// The origin's `localStorage`, when there is one. `None` covers private mode and a disabled
 /// origin — and, off wasm, the absence of a browser at all, which is what lets the unit tests
 /// build a [`TableState`] without reaching for a `window` that isn't there.
-fn storage() -> Option<web_sys::Storage> {
+pub(crate) fn storage() -> Option<web_sys::Storage> {
     #[cfg(target_arch = "wasm32")]
     {
         web_sys::window()?.local_storage().ok().flatten()

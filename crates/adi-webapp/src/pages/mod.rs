@@ -3,7 +3,7 @@
 
 mod agents;
 mod analytics;
-mod dashboards;
+pub(crate) mod dashboards;
 mod db;
 mod facts;
 mod fleet;

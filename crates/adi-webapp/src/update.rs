@@ -30,6 +30,7 @@ use adi_webapp_api::types::UpdateState;
 
 use crate::fetch;
 use crate::icons;
+use crate::launcher::Action;
 
 /// The base tick. `/api/update` reads two small files, so this is cheap — but it is still a
 /// request per tab, and the answer changes about twice a day.
@@ -150,6 +151,65 @@ impl UpdateWatch {
             }
             self.busy.set(false);
         });
+    }
+}
+
+/// The version, as a row in the root screens' menu.
+///
+/// The bar this replaced said the version *and*, when there was one to take, offered it in a
+/// button beside the chip. A menu row is one thing, so the two are one row that changes what
+/// it says: normally the installed version, clicking to re-ask the manifest; while a release
+/// is actually available, the offer.
+///
+/// Nothing is short-circuited on the way to an install — the row opens *What's new* exactly
+/// as the button did, and the notes are still the only door to it. See the module header for
+/// why that matters.
+pub(crate) fn action(watch: UpdateWatch) -> Action {
+    let Some(u) = watch.state.get() else {
+        // Before the first answer we do not know the version, so the row offers the one thing
+        // that is true regardless: ask.
+        return Action::new(
+            "Check for updates",
+            "",
+            icons::Icon::Box,
+            move || watch.check(),
+        );
+    };
+    if u.installing {
+        return Action::new(
+            "Updating\u{2026}",
+            "The stack is restarting onto the new version",
+            icons::Icon::Upgrade,
+            move || watch.check(),
+        );
+    }
+    match u.latest.clone().filter(|_| u.update_available) {
+        Some(latest) => Action::new(
+            format!("Update to {latest}"),
+            "See what is in it, then install",
+            icons::Icon::Upgrade,
+            move || watch.offer.set(true),
+        ),
+        None => Action::new(
+            format!("adi v{}", u.installed),
+            "Check for a newer release",
+            icons::Icon::Box,
+            move || watch.check(),
+        ),
+    }
+}
+
+/// *What's new*, mounted on its own.
+///
+/// [`version_pill`] carries this dialog inside it; the root screens have no pill any more, so
+/// they mount it beside the menu whose row opens it. Same dialog either way — the offer is
+/// one place, however it was reached.
+pub(crate) fn offer_dialog(watch: UpdateWatch) -> impl IntoView {
+    move || {
+        watch.state.get().and_then(|u| {
+            (u.update_available && !u.installing)
+                .then(|| whats_new(watch, u.latest.clone().unwrap_or_default(), u.notes.clone()))
+        })
     }
 }
 

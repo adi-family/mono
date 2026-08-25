@@ -15,6 +15,7 @@ use std::collections::BTreeMap;
 mod attach;
 mod fetch;
 mod icons;
+mod launcher;
 mod live;
 mod origin;
 mod pages;
@@ -30,6 +31,7 @@ mod voice;
 // rest of the screen is still the `adi-*` layer, and the two share a page by load order
 // (see `styles/tailwind.css`).
 use adi_ui::{Button, ButtonSize, ButtonVariant, Crumb, Crumbs, TopBar, Tree, TreeNode, TreeState};
+use launcher::{Action, Launcher};
 use adi_webapp_api::types::{
     AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
     MeshState, MetaState,
@@ -114,9 +116,12 @@ fn boot_splash() -> AnyView {
 
 /// The root (`/`). It opens on the wordmark ([`boot_splash`]) and commits to a shape only once
 /// `/api/meta` answers: before the root agent exists, a guided onboarding wizard (welcome,
-/// stepper, setup form) behind a slim `adi. · extended →` bar; **once the agent exists the app is
-/// the chat** — its sessions on the left, the conversation in the centre, dashboards on the right
-/// (see [`chat_home_view`]). The bar's "reconfigure" returns to the setup form to change the agent.
+/// stepper, setup form); **once the agent exists the app is the chat** — its sessions on the
+/// left, the conversation in the centre, dashboards on the right (see [`chat_home_view`]).
+///
+/// Neither of those wears a bar. Both are drawn under the floating mark instead ([`launcher`]),
+/// which is where everything that is about the app rather than about the screen now lives —
+/// the way back to the setup form among them ([`root_actions`]).
 #[component]
 fn Home() -> impl IntoView {
     let state = State::fresh();
@@ -283,146 +288,168 @@ fn Home() -> impl IntoView {
     })
     .forget();
 
-    // Bar "reconfigure": seed the setup form from the stored agent, then flip into reconfigure mode
-    // so the centred wizard shows in place of the chat.
-    let start_reconfigure = move || {
-        if let Some(m) = meta.get_untracked() {
-            start_onb_reconfigure(onb, &m);
-        }
-    };
+    // The mark and the menu behind it, in place of the bar these two screens used to wear.
+    // Built out here so it is one object across the switch between them: dragging it on the
+    // wizard and finding it moved on the chat is the whole point of a position that persists.
+    let launcher = Launcher::new();
 
-    move || {
-        // Three doors, decided by what we actually know. Reads only `meta`/`reconfiguring`, so a
-        // poll never rebuilds the tree.
-        //   * `/api/meta` hasn't answered yet ⇒ the wordmark splash. We can't tell a first run
-        //     from a set-up stack, so we say nothing rather than guess "welcome".
-        //   * the agent exists (and we're not mid-reconfigure) ⇒ the chat.
-        //   * no agent, or reconfiguring ⇒ the wizard.
-        let Some(m) = meta.get() else {
-            return boot_splash();
-        };
-        if m.agent.is_some() && !onb.reconfiguring.get() {
-            view! {
-                <div class="adi-chome-root">
-                    // No `home` on the mark: this page *is* home, and a link to where you
-                    // already are is a control that does nothing. It still has somewhere to
-                    // put you — this screen as it opened, with no conversation selected — so
-                    // the mark does that instead, the way the rail's "+ New" does.
-                    <TopBar
-                        class="adi-ui-type"
-                        logo="adi"
-                        on_home=Callback::new(move |()| reset_chat_home(state, watch))
-                        actions=move || {
-                            view! {
-                                {update::version_pill(updates)}
-                                {install_pill(can_install)}
-                                <Button
-                                    size=ButtonSize::Small
-                                    variant=ButtonVariant::Ghost
-                                    on:click=move |_| start_reconfigure()
-                                >
-                                    "reconfigure agent"
-                                </Button>
-                                {analytics_link()}
-                                {extended_link()}
-                            }
-                            .into_any()
-                        }
-                    />
-                    {chat_home_view(state, watch)}
-                </div>
+    view! {
+        {move || {
+            // Three doors, decided by what we actually know. Reads only `meta`/`reconfiguring`,
+            // so a poll never rebuilds the tree.
+            //   * `/api/meta` hasn't answered yet ⇒ the wordmark splash. We can't tell a first
+            //     run from a set-up stack, so we say nothing rather than guess "welcome".
+            //   * the agent exists (and we're not mid-reconfigure) ⇒ the chat.
+            //   * no agent, or reconfiguring ⇒ the wizard.
+            let Some(m) = meta.get() else {
+                return boot_splash();
+            };
+            if m.agent.is_some() && !onb.reconfiguring.get() {
+                view! {
+                    <div class="adi-chome-root">{chat_home_view(state, watch)}</div>
+                }
+                .into_any()
+            } else {
+                view! {
+                    <div class="adi-onb">
+                        <main class="adi-onb__body">
+                            <div class="adi-onb__panel">{onboarding_view(state, onb, m)}</div>
+                        </main>
+                    </div>
+                }
+                .into_any()
             }
-            .into_any()
-        } else {
-            view! {
-                <div class="adi-onb">
-                    <TopBar
-                        class="adi-ui-type"
-                        logo="adi"
-                        actions=move || {
-                            view! {
-                                {update::version_pill(updates)}
-                                {install_pill(can_install)}
-                                {analytics_link()}
-                                {extended_link()}
-                            }
-                            .into_any()
-                        }
-                    />
-                    <main class="adi-onb__body">
-                        <div class="adi-onb__panel">{onboarding_view(state, onb, m)}</div>
-                    </main>
-                </div>
-            }
-            .into_any()
-        }
+        }}
+
+        // Over whichever of those is up, rather than inside any one of them — the mark is the
+        // one thing on these screens that does not belong to the screen. Held back until
+        // `/api/meta` answers, so the boot splash stays the single wordmark it was drawn as
+        // and the menu never opens onto rows that are about an agent we do not know exists.
+        {move || {
+            meta.get().is_some().then(|| {
+                view! {
+                    {launcher::launcher(launcher, move || {
+                        root_actions(state, watch, onb, updates, can_install)
+                    })}
+                    // *What's new*: the version pill used to carry this dialog, and the menu
+                    // row that replaced the pill only opens it. So it is mounted here, where
+                    // nothing rebuilds it mid-read.
+                    {update::offer_dialog(updates)}
+                }
+            })
+        }}
     }
 }
 
-/// The way to the [`Route::Analytics`] page: what every agent on this machine has actually run,
-/// which of them are working, and which have never been launched at all.
+/// Everything the two root screens offer, as menu rows, in the order the menu reads them.
 ///
-/// A plain link rather than a modal like the FAQ beside it, because it is a *page* — it lives in
-/// the control panel's own explorer too, and a screen that answers a question about forty agents
-/// wants the width. Same document as `extended →`, so this is the one dialog-free control here
-/// that navigates.
-fn analytics_link() -> impl IntoView {
-    view! {
-        <a
-            class="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-mini font-medium \
-                   text-meta no-underline hover:bg-card hover:text-ink hover:no-underline"
-            href=Route::Analytics.path()
-            title="What every agent has run — and which have never been launched"
-        >
-            <svg
-                class="size-3 shrink-0"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-                inner_html=icons::Icon::Chart.path()
-            ></svg>
-            <span>"Global Analytics"</span>
-        </a>
-    }
-}
+/// Rebuilt on every draw (see [`launcher::launcher`]), which is what lets it be honest about
+/// the moment: the dashboards it lists are the ones that are up *now*, and the version row
+/// says what the last poll said. Reading signals here is therefore deliberate — it is what
+/// makes the menu track them.
+fn root_actions(
+    state: State,
+    watch: AgentsWatch,
+    onb: OnboardingForm,
+    updates: update::UpdateWatch,
+    can_install: RwSignal<bool>,
+) -> Vec<Action> {
+    // The wizard is a screen with no agent behind it (or one being replaced), so the rows that
+    // act on a conversation would act on nothing. Everything below that line is true either way.
+    let chatting = state.meta.get().is_some_and(|m| m.agent.is_some()) && !onb.reconfiguring.get();
+    let mut rows = Vec::new();
 
-/// The way through to the control panel. A plain link, not a route: `/extended` is a
-/// different document, and the wasm bundle decides which of the two it is at boot.
-fn extended_link() -> impl IntoView {
-    view! {
-        <a
-            class="inline-flex h-6 items-center gap-1 rounded-sm px-2 text-mini font-medium \
-                   text-meta no-underline hover:bg-card hover:text-ink hover:no-underline"
-            href="/extended"
-        >
-            <span>"extended"</span>
-            <span aria-hidden="true">"\u{2192}"</span>
-        </a>
+    if chatting {
+        // What clicking the wordmark used to do. It was the bar's one navigation and it had
+        // nowhere else to go, so it leads the menu.
+        rows.push(Action::new(
+            "New chat",
+            "Back to the start, nothing selected",
+            icons::Icon::Spark,
+            move || reset_chat_home(state, watch),
+        ));
+        rows.push(Action::new(
+            "Reconfigure agent",
+            "Change its model, prompt or backend",
+            icons::Icon::Agent,
+            move || {
+                if let Some(m) = state.meta.get_untracked() {
+                    start_onb_reconfigure(onb, &m);
+                }
+            },
+        ));
     }
-}
 
-/// The root bar's "install app" pill, styled like its `extended →` neighbour. Rendered only
-/// while the browser actually has an install to offer, so it's absent once the app is
-/// installed and on origins that can't install at all — see [`pwa`].
-fn install_pill(can_install: RwSignal<bool>) -> impl IntoView {
-    move || {
-        can_install.get().then(|| {
-            view! {
-                <button class="adi-onb__ext" type="button"
-                    title="Install adi as an app in its own window"
-                    on:click=move |_| pwa::install()>
-                    <span aria-hidden="true">"\u{2913}"</span>
-                    <span>"install app"</span>
-                </button>
+    rows.push(Action::link(
+        "Global Analytics",
+        "What every agent has run",
+        icons::Icon::Chart,
+        Route::Analytics.path(),
+    ));
+    rows.push(Action::link(
+        "Extended",
+        "The control panel",
+        icons::Icon::Layers,
+        "/extended",
+    ));
+    rows.push(Action::link(
+        "Manage dashboards",
+        "Create, archive, transfer",
+        icons::Icon::Dashboard,
+        Route::Dashboards.path(),
+    ));
+
+    // One row per dashboard that is actually up, so the menu is a way *into* them and not a
+    // list of names. A dashboard with no address is down, and a row that opens nothing is
+    // worse than no row — the Manage row above is the way to those.
+    if let Some(ds) = state.dashboards.get() {
+        for d in ds.dashboards.iter().filter(|d| !d.is_archived()) {
+            if let Some(href) = pages::dashboards::open_url(d) {
+                rows.push(Action::tab(
+                    d.name.clone(),
+                    "Dashboard",
+                    icons::Icon::Dashboard,
+                    href,
+                ));
             }
-        })
+        }
     }
-}
+    // And the fleet's, under the same rule the rail applies to them: a node's dashboard is
+    // reachable only when it is running, when this machine has actually been granted it, and
+    // when the address the node gave resolves from here (see [`origin::mapped_url`]). The node
+    // is the hint, because on a fleet the same dashboard name is on more than one machine.
+    if let Some(fleet) = state.fleet_dashboards.get() {
+        for node in &fleet.nodes {
+            for d in node.dashboards.iter().filter(|d| d.running && d.allowed) {
+                if let Some(href) = d.url.as_deref().and_then(origin::mapped_url) {
+                    rows.push(Action::tab(
+                        d.name.clone(),
+                        node.node.clone(),
+                        icons::Icon::Dashboard,
+                        href,
+                    ));
+                }
+            }
+        }
+    }
 
+    rows.push(Action::new(
+        "Toggle theme",
+        "Light or dark",
+        icons::Icon::Contrast,
+        toggle_theme,
+    ));
+    if can_install.get() {
+        rows.push(Action::new(
+            "Install app",
+            "Run adi in its own window",
+            icons::Icon::Download,
+            pwa::install,
+        ));
+    }
+    rows.push(update::action(updates));
+    rows
+}
 
 /// The chrome-less dashboard-agent embed (`/embed/dashboard-agent?dashboard=<id>`): the one global
 /// `adi-agent` chat, opened from a dashboard's launcher. It reuses the agent live view, points it at
