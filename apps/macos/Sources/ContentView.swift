@@ -82,19 +82,11 @@ struct ContentView: View {
     // MARK: step 3 — the app
 
     private var readyStep: some View {
-        VStack(spacing: 18) {
-            // The dashboard is what someone opened this app to reach, so it is the loudest
-            // thing in the window. The power switch is maintenance and sits under it.
-            Button {
-                model.openDashboard()
-            } label: {
-                Label("Open Dashboard", systemImage: "arrow.up.forward.app")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-            .disabled(!model.anyRunning)
-
+        // Power first, then what it says about itself, then what to do next. The switch is the
+        // larger shape and reads as the state; the dashboard is the smaller one and reads as
+        // the action, which is the right way round for something that is on far more often
+        // than it is being turned on.
+        VStack(spacing: 20) {
             VStack(spacing: 12) {
                 PowerButton(state: model.powerState) {
                     model.togglePower()
@@ -103,6 +95,10 @@ struct ContentView: View {
                     .font(.callout.weight(.medium))
                     .foregroundStyle(model.isOn ? .primary : .secondary)
                     .contentTransition(.opacity)
+            }
+
+            DashboardButton(enabled: model.anyRunning) {
+                model.openDashboard()
             }
         }
     }
