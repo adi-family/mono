@@ -82,24 +82,25 @@ struct ContentView: View {
     // MARK: step 3 — the app
 
     private var readyStep: some View {
-        // Power first, then what it says about itself, then what to do next. The switch is the
-        // larger shape and reads as the state; the dashboard is the smaller one and reads as
-        // the action, which is the right way round for something that is on far more often
-        // than it is being turned on.
-        VStack(spacing: 20) {
-            VStack(spacing: 12) {
-                PowerButton(state: model.powerState) {
-                    model.togglePower()
-                }
-                Text(model.statusSummary)
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(model.isOn ? .primary : .secondary)
-                    .contentTransition(.opacity)
-            }
+        // One thing to read, one thing to press, one thing to change — in that order.
+        //
+        // Two large controls of equal weight was the problem: neither read as the answer, so
+        // the window asked a question instead of offering one. The dashboard is the only
+        // action anyone takes twice, so it is the only prominent control; the state above it
+        // is information and has no button at all; and the switch below the rule is a setting,
+        // which is what turning a background service on and off actually is.
+        VStack(spacing: 16) {
+            StatusCard(state: model.powerState,
+                       title: model.statusSummary,
+                       detail: model.runningDetail)
 
             DashboardButton(enabled: model.anyRunning) {
                 model.openDashboard()
             }
+
+            Divider().opacity(0.5)
+
+            ServicesToggle(isOn: model.servicesOn, busy: model.busy)
         }
     }
 }

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 
 /// What the power button shows: dim when off, blue while a command runs or the service
 /// is still coming up, orange once it's running.
@@ -141,9 +142,28 @@ final class AppModel: ObservableObject {
         return "Off"
     }
 
-    /// The big On/Off button: enable or disable the whole platform.
+    /// Enable or disable the whole platform.
     func togglePower() {
         perform([isOn ? "disable" : "enable"])
+    }
+
+    /// The switch's binding. Reads the real state and writes by running the command — never by
+    /// setting a local flag, so the control can only ever show what the services are actually
+    /// doing, including when the command fails.
+    var servicesOn: Binding<Bool> {
+        Binding(get: { self.isOn }, set: { _ in self.togglePower() })
+    }
+
+    /// The line under the status word: which services this is about.
+    ///
+    /// Names rather than a count, because "3 services" tells you nothing you can act on and
+    /// "DNS · App · Dashboards" tells you what would stop if you turned it off.
+    var runningDetail: String {
+        let running = report.services.filter(\.running).map(\.name)
+        if !running.isEmpty { return running.joined(separator: " · ") }
+        if report.services.isEmpty { return "No services installed" }
+        if isOn { return "Waiting for services to come up" }
+        return report.services.map(\.name).joined(separator: " · ")
     }
 
     /// Poll `adi-mono status --json` off the main thread; publish on the main actor.
