@@ -4,7 +4,7 @@
 
 > Core shared library for the adi-family workspace.
 
-13 structs · 2 enums across 9 files.
+13 structs · 3 enums across 10 files.
 
 ## Index
 
@@ -12,6 +12,7 @@
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
 - [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `MeshNodeChange`, `Dns`
+- [`src/install.rs`](#srcinstallrs) — `Location`
 - [`src/proc.rs`](#srcprocrs) — `Output`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectRenamed`
 - [`src/service.rs`](#srcservicers) — `Action`, `ServiceReport`
@@ -104,6 +105,23 @@ The DNS command surface (`adi.dns.*`) — a zero-sized facade; all state lives o
 ```rust
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Dns;
+```
+
+---
+
+## `src/install.rs`
+
+### enum `Location`
+
+Where the running executable lives, judged only by whether services may reference it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Location {
+    Durable(PathBuf),
+    Volume(PathBuf),
+    Translocated(PathBuf),
+}
 ```
 
 ---

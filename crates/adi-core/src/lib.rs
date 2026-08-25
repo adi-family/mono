@@ -6,6 +6,7 @@ pub mod app;
 mod commands;
 pub mod dashboards;
 pub mod dns;
+pub mod install;
 pub mod launchd;
 pub mod paths;
 mod proc;
@@ -17,6 +18,7 @@ pub mod update;
 pub use app::App;
 pub use commands::{Adi, Report};
 pub use dns::Dns;
+pub use install::Location;
 pub use service::{Action, Service, ServiceReport};
 pub use update::{RunOutcome, Update, Updater};
 

@@ -33,5 +33,20 @@ struct ContentView: View {
             .frame(width: 320)
         }
         .frame(width: 320)
+        // Asked before anything else, because until it is answered nothing has been installed:
+        // the launch bootstrap is skipped in exactly this state. Not dismissible by clicking
+        // away — the app genuinely cannot do its job from here.
+        .alert("Move ADI to Applications?", isPresented: .constant(model.installLocation.needsMoving)) {
+            Button("Move to Applications") { model.moveToApplications() }
+            Button("Not Now", role: .cancel) { model.proceedWithoutMoving() }
+        } message: {
+            Text(model.installLocation.reason)
+        }
+        .alert("ADI could not move itself",
+               isPresented: .constant(model.moveFailure != nil)) {
+            Button("OK") { model.moveFailure = nil }
+        } message: {
+            Text(model.moveFailure ?? "")
+        }
     }
 }

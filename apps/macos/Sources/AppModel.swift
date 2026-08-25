@@ -18,13 +18,26 @@ final class AppModel: ObservableObject {
 
     private var timer: Timer?
 
+    /// Set when the app is running somewhere its services must not point at, which is what the
+    /// window asks about before doing anything else.
+    @Published private(set) var installLocation = InstallLocation.current()
+    /// A failed move, to show instead of silently doing nothing.
+    @Published var moveFailure: String?
+
     init() {
         refresh()
         // Bring the whole stack up on launch (`adi-mono up`): idempotent and it never
         // restarts a running service, so on a machine that's already up it's a no-op, while
         // on a fresh one it installs + starts everything (one admin prompt for the DNS
         // route + front door). This is what makes services autostart when the app opens.
-        perform(["up"])
+        //
+        // Not from a disk image or a translocated copy. `adi-core` refuses those anyway, but
+        // this is the launch that would otherwise hit the refusal on every single open —
+        // double-clicking the app inside the downloaded .dmg is the most common first run
+        // there is, and the honest response to it is the move prompt, not a no-op.
+        if !installLocation.needsMoving {
+            perform(["up"])
+        }
         // Unwrap *before* the Task, so it captures an immutable binding rather than the
         // outer closure's mutable optional. Reading a captured `var` from concurrently
         // executing code is rejected outright by Swift 5.10 ("reference to captured var
@@ -34,6 +47,23 @@ final class AppModel: ObservableObject {
             guard let self else { return }
             Task { @MainActor in self.refresh() }
         }
+    }
+
+    /// Copy the app into Applications and relaunch from there. Never returns on success.
+    func moveToApplications() {
+        do {
+            try InstallLocation.moveToApplications()
+        } catch {
+            moveFailure = error.localizedDescription
+        }
+    }
+
+    /// Carry on without moving: bring the stack up anyway, accepting that the services will
+    /// break when the volume goes. Offered because refusing to do anything at all is worse than
+    /// letting someone who knows what they are doing proceed.
+    func proceedWithoutMoving() {
+        installLocation = .durable
+        perform(["up"])
     }
 
     /// On == at least one service is enabled (the big button's state).

@@ -8,6 +8,7 @@ use adi_config::Flavor;
 use crate::app::App;
 use crate::dashboards::Dashboards;
 use crate::dns::Dns;
+use crate::install;
 use crate::service::{Service, ServiceReport};
 use crate::update::{Update, Updater};
 
@@ -140,7 +141,15 @@ impl Adi {
     }
 
     /// Enable every service (`adi.enable()`).
+    ///
+    /// Refuses outright when this build is running somewhere a service must not point at — a
+    /// mounted disk image, or Gatekeeper's randomised copy. See [`crate::install`]: the paths
+    /// written into the services would be gone by the next boot, and installing them anyway
+    /// produces a stack that looks installed and never starts.
     pub fn enable(self) {
+        if !install::allow_install() {
+            return;
+        }
         for svc in self.services() {
             svc.enable();
         }
@@ -151,6 +160,11 @@ impl Adi {
     /// starts everything (one admin prompt for the privileged DNS route/front door); on a
     /// machine where the stack is already up it's a no-op that never interrupts the DNS.
     pub fn ensure_enabled(self) {
+        // The app runs this on every launch, which makes it the path someone actually hits
+        // after double-clicking the app inside the mounted disk image.
+        if !install::allow_install() {
+            return;
+        }
         for svc in self.services() {
             svc.ensure_enabled();
         }
