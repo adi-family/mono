@@ -55,8 +55,9 @@ repoint). Use a pattern that includes the trailing arg — the old
 `pgrep -af '<pattern>'` first to confirm it hits exactly the app-service and never
 `adi-hive`.
 
-**The one exception is ADI DNS (`adi.hive`)** — never restart it (see the hard rule
-above). Everything here is about the `app` / front-door services.
+**The one exception is ADI DNS (`adi.hive`)** — never stop, kill, or restart it; if a
+task seems to require that, ask first. Everything here is about the `app` /
+front-door services.
 
 ## Finding duplicated code: `adi-mono indexer clones`
 
