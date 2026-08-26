@@ -477,16 +477,19 @@ async fn stop_child(child: &mut Child, pid: u32) {
 /// leader, so a negative pid reaches the whole tree — but that only holds while it *is* the
 /// leader (a shell can move itself), so the process itself is signalled too when the group form
 /// finds nothing. Missing either one is how a `sleep` inside a killed loop keeps running.
+///
+/// The `--` before the negative pid is load-bearing: without it procps-ng `kill` keeps only the
+/// pid's *first digit*, so a seven-figure Linux pid starting with `1` turns the group kill into
+/// `kill(-1, ...)` — every process the user owns, the `systemd --user` manager included. It
+/// reports success while doing so, so the fallback below never fires to reveal it.
 #[cfg(unix)]
 fn signal_group(pid: u32, signal: &str) {
-    let group = std::process::Command::new("kill")
-        .arg(format!("-{signal}"))
-        .arg(format!("-{pid}"))
+    let group = std::process::Command::new("/bin/kill")
+        .args([format!("-{signal}"), "--".into(), format!("-{pid}")])
         .status();
     if !matches!(group, Ok(status) if status.success()) {
-        let _ = std::process::Command::new("kill")
-            .arg(format!("-{signal}"))
-            .arg(pid.to_string())
+        let _ = std::process::Command::new("/bin/kill")
+            .args([format!("-{signal}"), "--".into(), pid.to_string()])
             .status();
     }
 }

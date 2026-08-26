@@ -243,9 +243,8 @@ mod tests {
         let job = start(&dir, "conv-1", &shell, &dir, "sleep 30").expect("start");
 
         // SIGKILL the group: the wrapper gets no chance to run its last act, by design.
-        let _ = Command::new("kill")
-            .arg("-9")
-            .arg(format!("-{}", job.pid))
+        let _ = Command::new("/bin/kill")
+            .args(["-9".to_string(), "--".to_string(), format!("-{}", job.pid)])
             .status();
         for _ in 0..100 {
             if !Command::new("kill")

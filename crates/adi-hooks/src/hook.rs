@@ -552,9 +552,8 @@ pub(crate) mod tests {
         assert_eq!(hooks.status("slow"), HookRunStatus::Running);
         // The run is detached in its own process group (pgid = pid); reap it so the test
         // suite doesn't leave a 30s sleeper behind.
-        let _ = Command::new("kill")
-            .arg("-TERM")
-            .arg(format!("-{}", run.pid))
+        let _ = Command::new("/bin/kill")
+            .args(["-TERM".to_string(), "--".to_string(), format!("-{}", run.pid)])
             .status();
     }
 }

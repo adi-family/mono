@@ -265,11 +265,16 @@ async fn stop_child(child: &mut Child, pid: Option<u32>) {
 }
 
 /// Send a signal to a whole process group (the runner leads its group, so a negative pid targets it).
+///
+/// The `--` is load-bearing. procps-ng `kill` reads a bare `-1352905` as only its *first digit*, so
+/// on Linux — where pids reach seven figures — every group kill of a pid beginning with `1` became
+/// `kill(-1, ...)`: a broadcast to every process the user owns. Reloading one service therefore
+/// SIGTERMed the whole `systemd --user` session, taking the control panel, DNS and the manager
+/// itself down with it. `--` makes the pid a pid again; verified against procps-ng 4.0.4.
 #[cfg(unix)]
 fn signal_group(pid: u32, signal: &str) {
-    let _ = std::process::Command::new("kill")
-        .arg(format!("-{signal}"))
-        .arg(format!("-{pid}"))
+    let _ = std::process::Command::new("/bin/kill")
+        .args([format!("-{signal}"), "--".into(), format!("-{pid}")])
         .status();
 }
 
