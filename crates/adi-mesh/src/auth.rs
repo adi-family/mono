@@ -44,6 +44,20 @@ const DIGEST_LEN: usize = 32;
 /// well-formed.
 const FALLBACK_REALM: &str = "adi";
 
+/// The header this machine's stored mesh credential travels in.
+///
+/// Deliberately **not** `Authorization`: that one belongs to whatever the node is fronting. An
+/// app behind the mesh that authenticates its own callers — every SPA sending
+/// `Authorization: Bearer <jwt>` from its `fetch` — would otherwise have its token read by this
+/// gate, fail `Basic` parsing, and draw a `401` challenge that pops the browser's password
+/// prompt on an ordinary API call. One header, two owners, and the app is not the one holding
+/// the password. So the mesh takes a header of its own and strips it before the request reaches
+/// the service.
+pub const MESH_AUTH_HEADER: &str = "X-Adi-Authorization";
+
+/// [`MESH_AUTH_HEADER`] lowercased, for [`parse_basic_credentials_in`].
+pub const MESH_AUTH_HEADER_LOWER: &[u8] = b"x-adi-authorization";
+
 /// The body of the challenge response. Short and plain: a browser shows its own password
 /// prompt, and only a non-browser client ever reads this.
 const CHALLENGE_BODY: &str = "401 Unauthorized: this adi node requires a username and password.\n";
@@ -152,6 +166,15 @@ impl Credential {
 /// UTF-8, or carries no `:` separating user from password.
 #[must_use]
 pub fn parse_basic_credentials(head: &[u8]) -> Option<(String, String)> {
+    parse_basic_credentials_in(head, b"authorization")
+}
+
+/// [`parse_basic_credentials`], but reading a header of your choosing — [`MESH_AUTH_HEADER`]
+/// for the mesh's own credential.
+///
+/// `name` is matched case-insensitively and must be given in lowercase.
+#[must_use]
+pub fn parse_basic_credentials_in(head: &[u8], name: &[u8]) -> Option<(String, String)> {
     let mut found: Option<&[u8]> = None;
     // `skip(1)` drops the request line; a header can never be the first line.
     for line in head.split(|&b| b == b'\n').skip(1) {
@@ -162,13 +185,13 @@ pub fn parse_basic_credentials(head: &[u8]) -> Option<(String, String)> {
         let Some(colon) = line.iter().position(|&b| b == b':') else {
             continue; // Not a header line at all.
         };
-        let (name, value) = line.split_at(colon);
-        if name.iter().any(u8::is_ascii_whitespace) {
+        let (header_name, value) = line.split_at(colon);
+        if header_name.iter().any(u8::is_ascii_whitespace) {
             continue; // Not a well-formed header line (obs-fold, or a padded name).
         }
-        if name.eq_ignore_ascii_case(b"authorization") {
+        if header_name.eq_ignore_ascii_case(name) {
             if found.is_some() {
-                return None; // Two Authorization headers: ambiguous, so refuse both.
+                return None; // Two of them: ambiguous, so refuse both.
             }
             found = Some(&value[1..]); // Past the ':'.
         }
@@ -195,15 +218,21 @@ pub fn parse_basic_credentials(head: &[u8]) -> Option<(String, String)> {
 /// an early exit, so the time this takes does not reveal which entry matched.
 #[must_use]
 pub fn is_authorized(head: &[u8], credentials: &[Credential]) -> bool {
-    let Some((user, password)) = parse_basic_credentials(head) else {
-        return false;
-    };
-    credentials
-        .iter()
-        .fold(Choice::from(0u8), |seen, c| {
+    // Both headers, not the first that parses: [`MESH_AUTH_HEADER`] holds the caller machine's
+    // stored password and `Authorization` whatever a person typed at the browser's prompt, and a
+    // stale stored one is exactly when the typed one has to be reachable.
+    [
+        parse_basic_credentials_in(head, MESH_AUTH_HEADER_LOWER),
+        parse_basic_credentials(head),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(Choice::from(0u8), |seen, (user, password)| {
+        credentials.iter().fold(seen, |seen, c| {
             seen | c.verify_choice(&user, &password)
         })
-        .into()
+    })
+    .into()
 }
 
 /// The `401` challenge to send when [`is_authorized`] says no.
@@ -252,6 +281,48 @@ fn sanitize_realm(realm: &str) -> String {
     }
 }
 
+/// The head with every `name` header line removed, and everything else byte for byte.
+///
+/// Used to take [`MESH_AUTH_HEADER`] back out once it has done its job, so the service behind the
+/// node never sees this machine's password. Stops at the blank line for the reason
+/// [`parse_basic_credentials`] does: past it is body, where a line that looks like a header is
+/// just bytes.
+///
+/// `name` is matched case-insensitively and must be given in lowercase.
+#[must_use]
+pub fn strip_header(head: &[u8], name: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(head.len());
+    let mut rest = head;
+    let mut past_request_line = false;
+    let mut in_headers = true;
+    while let Some(nl) = rest.iter().position(|&b| b == b'\n') {
+        let (line, tail) = rest.split_at(nl + 1);
+        rest = tail;
+        if in_headers && past_request_line {
+            let trimmed = strip_cr(&line[..line.len() - 1]);
+            if trimmed.is_empty() {
+                in_headers = false; // End of the head — the body is copied untouched.
+            } else if is_header_named(trimmed, name) {
+                continue;
+            }
+        }
+        past_request_line = true;
+        out.extend_from_slice(line);
+    }
+    out.extend_from_slice(rest);
+    out
+}
+
+/// Whether a header line names `name`, by the same rules [`parse_basic_credentials_in`] matches
+/// by — so a line it would have read is a line this removes.
+fn is_header_named(line: &[u8], name: &[u8]) -> bool {
+    let Some(colon) = line.iter().position(|&b| b == b':') else {
+        return false;
+    };
+    let header_name = &line[..colon];
+    !header_name.iter().any(u8::is_ascii_whitespace) && header_name.eq_ignore_ascii_case(name)
+}
+
 fn strip_cr(line: &[u8]) -> &[u8] {
     match line {
         [rest @ .., b'\r'] => rest,
@@ -276,6 +347,55 @@ mod tests {
     use super::*;
 
     /// A request head with the given header lines, terminated like a real one.
+    /// The header split, end to end: the mesh's own credential admits a request whose
+    /// `Authorization` belongs to the app behind the node — the case that used to draw a `401`
+    /// challenge and pop the browser's password prompt on an ordinary `fetch`.
+    #[test]
+    fn a_mesh_credential_admits_a_request_carrying_an_apps_own_token() {
+        let creds = [Credential::from_password("igor", "hunter2")];
+        let head = head(&[
+            &mesh_basic("igor", "hunter2"),
+            "Authorization: Bearer app.jwt.token",
+        ]);
+        assert!(is_authorized(&head, &creds));
+    }
+
+    /// The healing path, which reading only the first header that parses would have broken: the
+    /// front door keeps attaching a stored password that has gone stale, so the one a person typed
+    /// at the prompt must still be reached — or the prompt returns forever.
+    #[test]
+    fn a_typed_password_still_gets_in_past_a_stale_stored_one() {
+        let creds = [Credential::from_password("igor", "hunter2")];
+        let healed = head(&[
+            &mesh_basic("igor", "the-old-one"),
+            &basic("igor", "hunter2"),
+        ]);
+        assert!(is_authorized(&healed, &creds), "the typed one is tried too");
+
+        let neither = head(&[
+            &mesh_basic("igor", "the-old-one"),
+            &basic("igor", "also-wrong"),
+        ]);
+        assert!(!is_authorized(&neither, &creds), "two wrong ones are still wrong");
+    }
+
+    /// The mesh credential is the node's business and no one else's: it never reaches the service.
+    #[test]
+    fn the_mesh_header_is_stripped_and_nothing_else_is() {
+        let head = head(&[
+            &mesh_basic("igor", "hunter2"),
+            "Authorization: Bearer app.jwt.token",
+            "Accept: */*",
+        ]);
+        let out = strip_header(&head, MESH_AUTH_HEADER_LOWER);
+        let text = String::from_utf8(out).expect("still text");
+        assert!(!text.contains("X-Adi-Authorization"), "gone: {text}");
+        assert!(text.contains("Authorization: Bearer app.jwt.token"), "kept: {text}");
+        assert!(text.contains("Accept: */*"), "kept: {text}");
+        assert!(text.starts_with("GET /ws HTTP/1.1\r\n"), "request line intact: {text}");
+        assert!(text.ends_with("\r\n\r\n"), "head still terminated: {text}");
+    }
+
     fn head(lines: &[&str]) -> Vec<u8> {
         let mut out = String::from("GET /ws HTTP/1.1\r\nHost: nosh.laptop-b.n.adi\r\n");
         for line in lines {
@@ -288,6 +408,14 @@ mod tests {
 
     fn basic(user: &str, password: &str) -> String {
         format!("Authorization: Basic {}", B64.encode(format!("{user}:{password}")))
+    }
+
+    /// [`basic`], but in the mesh's own header.
+    fn mesh_basic(user: &str, password: &str) -> String {
+        format!(
+            "{MESH_AUTH_HEADER}: Basic {}",
+            B64.encode(format!("{user}:{password}"))
+        )
     }
 
     // --- header parsing ------------------------------------------------------------------

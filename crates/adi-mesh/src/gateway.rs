@@ -18,9 +18,10 @@
 //! what the viewer calls it, so a rewritten `Host` would send its absolute redirects to a
 //! same-named host on the *viewer's* machine, and a rewritten path would make a dashboard's `/api`
 //! answer at a URL the page never asked for (`docs/fleet.md` §3, §4). What the gateway matched and
-//! what the service reads are the same bytes. One header is *added* — the password this machine
-//! already holds for the node, when the client sent none ([`prefill_auth`]) — which is a different
-//! act: nothing that was in the head changes, and a client that authenticated itself is left alone.
+//! what the service reads are the same bytes. Headers are *added* — the password this machine
+//! already holds for the node ([`prefill_auth`]) — which is a different act: nothing that was in
+//! the head changes, and the client's own `Authorization` is left alone. The password travels in
+//! [`auth::MESH_AUTH_HEADER`], and the node strips it again before the service sees it.
 //!
 //! **Authorization comes before resolution.** [`admit`] asks "may this peer have `nosh`?" before
 //! it asks "do we serve `nosh`?", so an unpaired peer learns nothing about which services exist
@@ -610,6 +611,11 @@ where
         head
     };
 
+    // The credential has done its job at the gate. The service behind this node has no business
+    // seeing this machine's password, and dropping the header here is also what leaves the
+    // request's own `Authorization` — a fronted app's `Bearer` token — arriving untouched.
+    let head = auth::strip_header(&head, auth::MESH_AUTH_HEADER_LOWER);
+
     upstream.write_all(&head).await?;
     Ok(Some(Admitted {
         upstream,
@@ -659,8 +665,23 @@ fn admit<N: NodeSide + ?Sized>(
 /// `Upgrade` — so a WebSocket handshake is gated by *not* adding an exception (`docs/fleet.md`
 /// §5). Default-deny: a peer with no password configured authenticates nobody.
 fn authenticated(head: &[u8], peer: &Peer) -> bool {
-    auth::parse_basic_credentials(head)
-        .is_some_and(|(user, password)| peer.record.verify_password(&user, &password))
+    // Both headers are tried, not the first one that parses. [`auth::MESH_AUTH_HEADER`] carries
+    // the caller machine's stored password and `Authorization` whatever a person typed at the
+    // browser's prompt — and it is precisely when the stored one has gone *stale* that the typed
+    // one is the only way in. Falling through only on a missing header would leave a stale store
+    // re-prompting forever, since the front door keeps attaching it.
+    //
+    // Folded rather than short-circuited, for the reason `verify_password` is: a caller must not
+    // learn from the timing which of the two it was that matched.
+    [
+        auth::parse_basic_credentials_in(head, auth::MESH_AUTH_HEADER_LOWER),
+        auth::parse_basic_credentials(head),
+    ]
+    .into_iter()
+    .flatten()
+    .fold(false, |seen, (user, password)| {
+        peer.record.verify_password(&user, &password) | seen
+    })
 }
 
 /// The plain `502` a node sends when a path-routed upstream turns out to be dead *after* the
@@ -1032,15 +1053,24 @@ fn header_value(head: &[u8], name: &str) -> Option<String> {
 }
 
 /// The request head as it should reach `node`: this machine's stored password attached, when it
-/// holds one and the client sent none.
+/// holds one.
 ///
 /// This is the one thing the calling side puts into a head, and it *adds* rather than rewrites —
 /// `Host` and the target still arrive byte for byte, which is the invariant the module docs are
-/// about. Two rules make it safe to do at all:
+/// about. Three rules make it safe to do at all:
 ///
-/// **A client that authenticated itself wins.** A stored password that has gone stale therefore
-/// heals itself: the node answers `401`, the browser prompts, and from then on the browser's own
-/// header rides every request and is never overwritten.
+/// **The password rides [`auth::MESH_AUTH_HEADER`], not `Authorization`.** It used to ride
+/// `Authorization`, and be skipped whenever the client had filled that header itself. That read
+/// every client credential as an answer to *this* gate, which a fronted app's is not: a page
+/// sending `Authorization: Bearer <jwt>` to its own API suppressed the mesh password, drew a
+/// `401 WWW-Authenticate: Basic` from the node, and the browser popped a password prompt on an
+/// ordinary `fetch`. Two owners, one header. Now the mesh has its own.
+///
+/// **The client's `Authorization` is never overwritten.** It is still *read* by the node as a
+/// fallback, so a stale stored password heals the way it always did — the node answers `401`, the
+/// browser prompts, and what a person typed rides every request afterwards. `Authorization` is
+/// filled from the store only when the client sent none, which is what keeps a node from before
+/// the split authenticating this machine at all.
 ///
 /// **Only the first head of a connection is ours to edit** — the rest is a byte splice. That is
 /// enough, because the node side reads one head per stream too: it authenticates the request it
@@ -1057,13 +1087,21 @@ fn prefill_auth(
     let Some(credentials) = credentials else {
         return head;
     };
-    if header_value(&head, "authorization").is_some() {
+    if header_value(&head, auth::MESH_AUTH_HEADER).is_some() {
         return head;
     }
     let Some(value) = credentials.authorization(node) else {
         return head;
     };
     debug!(%node, "gateway: attaching this machine's stored credential");
+    let head = with_header(&head, auth::MESH_AUTH_HEADER, &value);
+    // And in `Authorization` too, but only when the client sent none — a node from before the
+    // split reads that header and nothing else, so this is what keeps a mixed fleet working. The
+    // *client's* header is never overwritten: it may be the browser's answer to a challenge, and
+    // on a fronted app it is far more often a token that is none of the mesh's business.
+    if header_value(&head, "authorization").is_some() {
+        return head;
+    }
     with_header(&head, "Authorization", &value)
 }
 
@@ -2042,9 +2080,11 @@ mod tests {
         let text = String::from_utf8(out).expect("still text");
         assert_eq!(
             text,
-            "GET /x HTTP/1.1\r\nAuthorization: Basic held\r\nHost: app.laptop-b.n.adi\r\n\
+            "GET /x HTTP/1.1\r\nAuthorization: Basic held\r\n\
+             X-Adi-Authorization: Basic held\r\nHost: app.laptop-b.n.adi\r\n\
              Accept: */*\r\n\r\nbody",
-            "one header added below the request line; Host, target and body byte for byte"
+            "both headers added below the request line — the mesh's own, and `Authorization` for \
+             a node from before the split; Host, target and body byte for byte"
         );
     }
 
@@ -2054,7 +2094,52 @@ mod tests {
         // and what the person typed must survive this function or the prompt returns forever.
         let head = b"GET / HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\nAuthorization: Basic typed\r\n\r\n";
         let out = prefill_auth(Some(&held()), "laptop-b", head.to_vec());
-        assert_eq!(out, head, "the client's own credential stands");
+        let text = String::from_utf8(out).expect("still text");
+        assert!(
+            text.contains("Authorization: Basic typed"),
+            "the client's own credential stands: {text}"
+        );
+        // Counted by whole header line, not substring: `X-Adi-Authorization: Basic held` ends in
+        // one, and the node refuses a head bearing two `Authorization` headers as ambiguous.
+        let authorization_lines = text
+            .split("\r\n")
+            .filter(|line| line.starts_with("Authorization:"))
+            .count();
+        assert_eq!(
+            authorization_lines, 1,
+            "and is not joined by a second `Authorization`: {text}"
+        );
+    }
+
+    /// The bug this header exists for: a fronted app's own `Authorization` used to suppress the
+    /// mesh credential entirely, so an ordinary `fetch` carrying a `Bearer` token drew a `401`
+    /// challenge from the gate and popped the browser's password prompt on an API call.
+    #[test]
+    fn an_apps_bearer_token_no_longer_suppresses_the_mesh_credential() {
+        let head = b"GET /_v2/companies HTTP/1.1\r\nHost: app.nosh.laptop-b.n.adi\r\n\
+                     Authorization: Bearer app.jwt.token\r\n\r\n";
+        let out = prefill_auth(Some(&held()), "laptop-b", head.to_vec());
+        let text = String::from_utf8(out.clone()).expect("still text");
+        assert!(
+            text.contains("X-Adi-Authorization: Basic held"),
+            "the mesh credential rides its own header: {text}"
+        );
+        assert!(
+            text.contains("Authorization: Bearer app.jwt.token"),
+            "and the app's token is left for the app: {text}"
+        );
+        // What the node makes of it: authorized by the mesh header, and the app's token survives
+        // the strip that follows.
+        let stripped = auth::strip_header(&out, auth::MESH_AUTH_HEADER_LOWER);
+        let stripped = String::from_utf8(stripped).expect("still text");
+        assert!(
+            !stripped.contains("X-Adi-Authorization"),
+            "the password never reaches the service: {stripped}"
+        );
+        assert!(
+            stripped.contains("Authorization: Bearer app.jwt.token"),
+            "but its own token does: {stripped}"
+        );
     }
 
     #[test]
