@@ -20,6 +20,16 @@ extraction script cares about.
 
 ## Unreleased
 
+## 0.3.3 — 2026-08-26
+
+### Fixed
+
+- **Linux and Windows have builds again** — 0.3.2 shipped for macOS alone. `domain`,
+  `frontdoor_addr` and `frontdoor_label` became accessors in an earlier commit and only the
+  macOS paths were updated with them; the Linux and Windows ones sit behind `#[cfg]`, which a
+  Mac never compiles, so the tree looked green everywhere except the release builder. 0.3.2's
+  fleet fix reaches a node with this release.
+
 ## 0.3.2 — 2026-08-26
 
 ### Fixed

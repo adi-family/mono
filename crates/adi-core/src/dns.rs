@@ -177,7 +177,7 @@ fn frontdoor_plist_stage() -> PathBuf {
 // the root-owned step down to `cp` + `chmod`, with nothing to quote and nothing to interpolate.
 #[cfg(target_os = "linux")]
 fn stage_path() -> PathBuf {
-    service_dir().join(format!("resolved-{domain}.conf"))
+    service_dir().join(format!("resolved-{}.conf", domain()))
 }
 #[cfg(target_os = "linux")]
 fn resolver_file() -> PathBuf {
@@ -949,7 +949,9 @@ fn run_privileged(what: &str, steps: &[String]) -> bool {
 #[cfg(target_os = "linux")]
 fn report_frontdoor_blocked() {
     eprintln!(
-        "adi: the .{domain} front door cannot start — adi-hive may not bind {frontdoor_addr}:{FRONTDOOR_PORT} as this user."
+        "adi: the .{} front door cannot start — adi-hive may not bind {}:{FRONTDOOR_PORT} as this user.",
+        domain(),
+        frontdoor_addr()
     );
     eprintln!(
         "adi: grant it once (or use {}), then re-run `{} dns install-route`:",
@@ -1143,7 +1145,7 @@ impl Dns {
     #[cfg(target_os = "linux")]
     #[must_use]
     pub fn front_door_installed(self) -> bool {
-        launchd::unit_path(frontdoor_label()).exists()
+        launchd::unit_path(&frontdoor_label()).exists()
     }
 
     /// Whether the `.adi` NRPT route + front-door task are installed (marker written on install).
@@ -1164,7 +1166,7 @@ impl Dns {
     #[cfg(windows)]
     #[must_use]
     pub fn front_door_installed(self) -> bool {
-        launchd::is_loaded(frontdoor_label())
+        launchd::is_loaded(&frontdoor_label())
     }
 
     /// The one privileged step: install the `/etc/resolver` route AND the root front-door daemon in a single admin prompt.
@@ -1293,7 +1295,7 @@ impl Dns {
         let stage = stage_path();
         let drop_in = resolver_file();
         run_privileged(
-            &format!("routing .{domain} to the local resolver"),
+            &format!("routing .{} to the local resolver", domain()),
             &linux_plan::route_install_steps(
                 &stage.to_string_lossy(),
                 &drop_in.to_string_lossy(),
@@ -1326,6 +1328,7 @@ impl Dns {
         install_frontdoor_task();
         // Idempotent NRPT install: drop any existing `.adi` rule, then add ours pointing the
         // whole `.adi` namespace at the local resolver, and flush the client cache.
+        let domain = domain();
         let ps = format!(
             "$ErrorActionPreference='Stop';\n\
              Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -eq '.{domain}' }} | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue;\n\
@@ -1384,7 +1387,7 @@ impl Dns {
     #[cfg(windows)]
     pub fn update_frontdoor(self) {
         install_frontdoor_task();
-        launchd::kickstart(frontdoor_label());
+        launchd::kickstart(&frontdoor_label());
     }
 
     /// Tear down both privileged bits, best-effort (incl. the `lo0` alias).
@@ -1413,10 +1416,10 @@ impl Dns {
     /// privileged ports on a machine whose operator has just said they do not want it to.
     #[cfg(target_os = "linux")]
     pub fn remove_route(self) {
-        launchd::disable(frontdoor_label());
+        launchd::disable(&frontdoor_label());
         let drop_in = resolver_file();
         run_privileged(
-            &format!("removing the .{domain} route"),
+            &format!("removing the .{} route", domain()),
             &linux_plan::route_remove_steps(&drop_in.to_string_lossy()),
         );
         run_privileged(
@@ -1428,7 +1431,8 @@ impl Dns {
     /// Tear down the NRPT route (one UAC prompt) and the front-door task, best-effort.
     #[cfg(windows)]
     pub fn remove_route(self) {
-        launchd::disable(frontdoor_label());
+        launchd::disable(&frontdoor_label());
+        let domain = domain();
         let ps = format!(
             "Get-DnsClientNrptRule | Where-Object {{ $_.Namespace -eq '.{domain}' }} | Remove-DnsClientNrptRule -Force -ErrorAction SilentlyContinue;\n\
              Clear-DnsClientCache;\n"
@@ -1503,7 +1507,7 @@ impl Service for Dns {
             report_frontdoor_blocked();
             return;
         }
-        if launchd::is_loaded(frontdoor_label()) {
+        if launchd::is_loaded(&frontdoor_label()) {
             if !frontdoor_config_current() {
                 self.update_frontdoor();
             }
@@ -1544,7 +1548,7 @@ impl Service for Dns {
                 s.port,
                 linux_plan::detail_suffix(
                     resolver_file().exists(),
-                    launchd::unit_path(frontdoor_label()).exists(),
+                    launchd::unit_path(&frontdoor_label()).exists(),
                 )
             )
         })
