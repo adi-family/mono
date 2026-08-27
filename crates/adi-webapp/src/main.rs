@@ -17,6 +17,7 @@ mod fetch;
 mod icons;
 mod launcher;
 mod live;
+mod menu;
 mod origin;
 mod pages;
 mod pwa;
@@ -348,12 +349,14 @@ fn Home() -> impl IntoView {
     }
 }
 
-/// Everything the two root screens offer, as menu rows, in the order the menu reads them.
+/// What the two root screens add to the menu: the rows that act on the conversation in front of
+/// you, which the control panel has no equivalent of. Everything else they offer is
+/// [`menu::rows`] — the same list the panel's own menu is built from, so the two can never come
+/// to disagree about what this app can do.
 ///
 /// Rebuilt on every draw (see [`launcher::launcher`]), which is what lets it be honest about
-/// the moment: the dashboards it lists are the ones that are up *now*, and the version row
-/// says what the last poll said. Reading signals here is therefore deliberate — it is what
-/// makes the menu track them.
+/// the moment. Reading signals here is therefore deliberate — it is what makes the menu track
+/// them.
 fn root_actions(
     state: State,
     watch: AgentsWatch,
@@ -387,74 +390,7 @@ fn root_actions(
         ));
     }
 
-    rows.push(Action::link(
-        "Global Analytics",
-        "What every agent has run",
-        icons::Icon::Chart,
-        Route::Analytics.path(),
-    ));
-    rows.push(Action::link(
-        "Extended",
-        "The control panel",
-        icons::Icon::Layers,
-        "/extended",
-    ));
-    rows.push(Action::link(
-        "Manage dashboards",
-        "Create, archive, transfer",
-        icons::Icon::Dashboard,
-        Route::Dashboards.path(),
-    ));
-
-    // One row per dashboard that is actually up, so the menu is a way *into* them and not a
-    // list of names. A dashboard with no address is down, and a row that opens nothing is
-    // worse than no row — the Manage row above is the way to those.
-    if let Some(ds) = state.dashboards.get() {
-        for d in ds.dashboards.iter().filter(|d| !d.is_archived()) {
-            if let Some(href) = pages::dashboards::open_url(d) {
-                rows.push(Action::tab(
-                    d.name.clone(),
-                    "Dashboard",
-                    icons::Icon::Dashboard,
-                    href,
-                ));
-            }
-        }
-    }
-    // And the fleet's, under the same rule the rail applies to them: a node's dashboard is
-    // reachable only when it is running, when this machine has actually been granted it, and
-    // when the address the node gave resolves from here (see [`origin::mapped_url`]). The node
-    // is the hint, because on a fleet the same dashboard name is on more than one machine.
-    if let Some(fleet) = state.fleet_dashboards.get() {
-        for node in &fleet.nodes {
-            for d in node.dashboards.iter().filter(|d| d.running && d.allowed) {
-                if let Some(href) = d.url.as_deref().and_then(origin::mapped_url) {
-                    rows.push(Action::tab(
-                        d.name.clone(),
-                        node.node.clone(),
-                        icons::Icon::Dashboard,
-                        href,
-                    ));
-                }
-            }
-        }
-    }
-
-    rows.push(Action::new(
-        "Toggle theme",
-        "Light or dark",
-        icons::Icon::Contrast,
-        toggle_theme,
-    ));
-    if can_install.get() {
-        rows.push(Action::new(
-            "Install app",
-            "Run adi in its own window",
-            icons::Icon::Download,
-            pwa::install,
-        ));
-    }
-    rows.push(update::action(updates));
+    rows.extend(menu::rows(menu::Shell::Root, state, updates, can_install));
     rows
 }
 
@@ -841,6 +777,13 @@ fn App() -> impl IntoView {
     {
         replace_state(route.get_untracked().path());
     }
+    // Arrived here by pressing "Pair new device" on the root screen? Then raise the QR, rather
+    // than landing beside the button and leaving it to be found (see [`menu::consume_pair_intent`]).
+    menu::consume_pair_intent(state, fleet_form, route);
+
+    // The same floating mark the root screens wear, and the same rows behind it. Without it, ⌘K
+    // would stop answering on the very page it was used to reach.
+    let launcher = Launcher::workbench();
 
     // The explorer navigates: a node's id encodes its destination. Guarded on `Some`, so the
     // initial (empty) selection never navigates on load.
@@ -849,13 +792,7 @@ fn App() -> impl IntoView {
             return;
         };
         match node_target(&id) {
-            Some(Nav::Global(target)) => {
-                state.current_project.set(String::new());
-                state.files.reset();
-                routing::push_state(target.path());
-                route.set(target);
-                routing::scroll_top();
-            }
+            Some(Nav::Global(target)) => routing::go_global(state, route, target),
             Some(Nav::Project(project, section)) => {
                 open_project_section(state, route, project, section);
             }
@@ -1219,6 +1156,19 @@ fn App() -> impl IntoView {
             <span>{move || route.get().title()}</span>
         </footer>
         </div>
+
+        // Outside the workbench rather than inside it: the mark is fixed to the viewport and
+        // belongs to no column of the frame. *What's new* is not mounted beside it here — the
+        // version pill in the bar above already carries that dialog, and a second copy would
+        // open two.
+        {launcher::launcher(launcher, move || {
+            menu::rows(
+                menu::Shell::Panel { route, fleet: fleet_form },
+                state,
+                updates,
+                can_install,
+            )
+        })}
     }
 }
 

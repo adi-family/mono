@@ -6,7 +6,7 @@ mod analytics;
 pub(crate) mod dashboards;
 mod db;
 mod facts;
-mod fleet;
+pub(crate) mod fleet;
 mod hive;
 mod knowledge;
 mod mesh;

@@ -55,6 +55,31 @@ pub(crate) enum Route {
 }
 
 impl Route {
+    /// Every page that can be opened by name alone, in the order the explorer lists them.
+    ///
+    /// This is what the ⌘K menu navigates by (see [`crate::menu`]) and the one place to add a page
+    /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
+    /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
+    /// would open an error rather than a page.
+    pub(crate) const NAV: [Route; 16] = [
+        Route::Meta,
+        Route::Analytics,
+        Route::Projects,
+        Route::Tasks,
+        Route::Agents,
+        Route::Tools,
+        Route::Secrets,
+        Route::Knowledge,
+        Route::Facts,
+        Route::Database,
+        Route::Triggers,
+        Route::Dashboards,
+        Route::Hive,
+        Route::PortsManager,
+        Route::Mesh,
+        Route::Fleet,
+    ];
+
     /// The page for a URL path; `/` and anything unknown resolve to Projects.
     pub(crate) fn from_path(path: &str) -> Self {
         if project_id_from_path(path).is_some() {
@@ -138,6 +163,34 @@ impl Route {
             Route::Mesh => "Mesh",
             Route::Fleet => "Fleet",
             Route::StoreFile => "File",
+        }
+    }
+
+    /// One line about what is on the page, shown dim beside its name in the ⌘K menu.
+    ///
+    /// Also *searched* — the menu filters on this as well as on the title (see
+    /// [`crate::launcher::Action`]) — so each line spends its words on what somebody would type
+    /// while looking for the page without remembering what we called it: "keys" for Secrets,
+    /// "sql" for Database, "device" for Fleet.
+    pub(crate) fn blurb(self) -> &'static str {
+        match self {
+            Route::Meta => "The default adi-agent — its model and prompt",
+            Route::Analytics => "What every agent has run, and what it cost",
+            Route::Projects | Route::ProjectDetail => "Every project on this machine",
+            Route::Tasks => "The task tree, across every project",
+            Route::Agents | Route::AgentDetail => "Agent definitions, backends and prompts",
+            Route::Tools => "The CLIs an agent may run",
+            Route::Secrets => "Encrypted keys and API keys",
+            Route::Knowledge => "Notes, searched by meaning",
+            Route::Facts => "Sentences, and the pairs still to decide",
+            Route::Database => "Browse the store's tables, run SQL",
+            Route::Triggers => "What runs when something happens",
+            Route::Dashboards => "Create, archive, transfer",
+            Route::Hive => "Services, and the .adi names in front of them",
+            Route::PortsManager => "Reserved ports and what holds them",
+            Route::Mesh => "Peers, allowed ports and forwards",
+            Route::Fleet => "Paired devices and what they may reach",
+            Route::StoreFile => "One file from the ADI store",
         }
     }
 }
@@ -404,11 +457,27 @@ pub(crate) fn open_project_section(
     scroll_top();
 }
 
-/// Navigate back to the projects list.
-pub(crate) fn go_projects(state: State, route: RwSignal<Route>) {
+/// Navigate to a page that is not about a particular project — anything in [`Route::NAV`].
+///
+/// Dropping the open project is the point: leaving its id set would leave the explorer
+/// highlighting a project you are no longer looking at, and the file browser standing in its
+/// directory. Every way into a global page goes through here — the explorer's tree, the ⌘K
+/// menu, and [`go_projects`] — so none of them can grow its own idea of what a page change
+/// clears.
+pub(crate) fn go_global(state: State, route: RwSignal<Route>, target: Route) {
     state.current_project.set(String::new());
     state.files.reset();
-    push_state(Route::Projects.path());
-    route.set(Route::Projects);
+    // No history entry for the page you are already on: Back would then be a press that
+    // visibly does nothing, which is worse than no entry at all.
+    if route.get_untracked() == target {
+        return;
+    }
+    push_state(target.path());
+    route.set(target);
     scroll_top();
+}
+
+/// Navigate back to the projects list.
+pub(crate) fn go_projects(state: State, route: RwSignal<Route>) {
+    go_global(state, route, Route::Projects);
 }

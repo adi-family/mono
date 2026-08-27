@@ -9,7 +9,12 @@
 //! anywhere and that stays where it was put, on this browser, across visits. Clicking it
 //! opens the menu; so does `⌘K`. Everything the bar carried is a row in there, alongside
 //! whatever else is worth reaching from a keyboard: every dashboard this machine can open,
-//! here or on a paired node, the way into the control panel, the theme.
+//! here or on a paired node, every page of the control panel, the theme.
+//!
+//! The control panel carries the same mark, and both are given their rows by [`crate::menu`] —
+//! one list, so the two menus cannot come to disagree about what this app can do. A palette that
+//! stopped working on the page you had just used it to reach would be one nobody learned to
+//! trust; that is the whole reason it is on both.
 //!
 //! It is the Trefoil ([`adi_ui::Mark`]) and nothing else — a 44px square carrying the same mark
 //! as the Dock icon and the browser tab. Deliberately *without* the `adi.` wordmark beside it: a
@@ -69,6 +74,11 @@ const EDGE: f64 = 8.0;
 const MARK_W: f64 = 44.0;
 const MARK_H: f64 = 44.0;
 
+/// The height of the workbench's status strip (`.adi-statusbar` in `adi-css`), which the control
+/// panel's mark has to start clear of. Stated rather than measured, like [`MARK_H`]: the bar is a
+/// fixed height, and the default corner is drawn before there is anything on screen to read.
+const STATUS_STRIP: f64 = 28.0;
+
 /// The floating mark and everything the menu behind it needs to remember.
 ///
 /// Built once per mounted screen and passed to [`launcher`]. It is `Copy`, so the branch that
@@ -90,6 +100,11 @@ pub(crate) struct Launcher {
     cursor: RwSignal<usize>,
     /// The press in progress, if any. See [`Drag`].
     drag: RwSignal<Option<Drag>>,
+    /// How far above the foot of the viewport the mark sits *before anybody has moved it*. The
+    /// workbench wears a status strip along that edge and the root screens do not, so the two
+    /// start the mark in different corners. Only the default: a dragged mark is wherever its
+    /// reader dropped it, and that position is one both screens share.
+    floor: f64,
     /// Whether the click that a finished drag is about to produce should be thrown away. See
     /// [`launcher`] for why the two are separate events in the first place.
     swallow: RwSignal<bool>,
@@ -119,6 +134,16 @@ impl Launcher {
             cursor: RwSignal::new(0),
             drag: RwSignal::new(None),
             swallow: RwSignal::new(false),
+            floor: EDGE,
+        }
+    }
+
+    /// The same, for the control panel: its default corner clears the status strip along the
+    /// bottom of the workbench, which the mark would otherwise be dropped on top of.
+    pub(crate) fn workbench() -> Self {
+        Self {
+            floor: STATUS_STRIP + EDGE,
+            ..Self::new()
         }
     }
 
@@ -261,7 +286,7 @@ pub(crate) fn launcher(
                 Some((x, y)) => format!("left:{x}px;top:{y}px"),
                 // The corner it starts in, stated as a corner rather than as coordinates —
                 // no measurement, and it survives a resize by itself.
-                None => format!("left:{EDGE}px;bottom:{EDGE}px"),
+                None => format!("left:{EDGE}px;bottom:{}px", l.floor),
             }
             title=move || format!("Menu — {}K, or drag to move", mod_glyph())
             aria-label="Open the menu"

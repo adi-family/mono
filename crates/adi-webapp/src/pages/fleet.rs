@@ -579,7 +579,13 @@ fn countdown(state: State, form: FleetForm) -> Option<String> {
 /// Written out rather than run through [`apply_mutation`] for two reasons: a success here has no
 /// flash — the code appearing *is* the answer, and a second "done" line above it would be noise —
 /// and the deadline has to be captured from `ttl_secs` at the moment the answer lands.
-fn mint(state: State, form: FleetForm) {
+///
+/// Reachable from outside this page because the ⌘K menu's **Pair new device** row is the same
+/// press as the button above: it lands on this page and raises the QR, rather than navigating
+/// near it and leaving the button to be found. The caller has to arrive here *first* — the shell
+/// clears the invite whenever the route is not Fleet, so a mint that ran before the navigation
+/// would be swept away by it (see [`crate::menu::Shell::pair`]).
+pub(crate) fn mint(state: State, form: FleetForm) {
     if form.minting.get_untracked() {
         return;
     }
