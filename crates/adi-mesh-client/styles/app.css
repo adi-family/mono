@@ -97,6 +97,9 @@ button:disabled { opacity: 0.5; cursor: default; }
 
 .add { display: grid; gap: 0.6rem; }
 .add label { font-weight: 600; font-size: 0.95rem; }
+/* Scan beside Pair, not above it: it is the accelerator and Pair is the flow that always works. */
+.actions { display: flex; gap: 0.6rem; }
+.actions .primary { flex: 1; }
 
 textarea, input {
   font: 15px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -118,6 +121,44 @@ input.rename { flex: 1; }
 
 footer { margin-top: 2.5rem; border-top: 1px solid var(--line); padding-top: 1.25rem; display: grid; gap: 0.5rem; }
 footer .key { font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+
+/* --- the camera ---------------------------------------------------------------------------- */
+
+/* Full-bleed and black, because it is a viewfinder: everything on top of it is white on the
+   picture, and the picture is the only thing being read. */
+.scanner { position: fixed; inset: 0; z-index: 10; background: #000; }
+.scanner video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+/* The square `scan::Reader` actually decodes is the centre of the frame; this is what says so.
+   The huge spread shadow is the dimming around it — one box, no second element. */
+.scanner .reticle {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 70vmin;
+  height: 70vmin;
+  transform: translate(-50%, -50%);
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  border-radius: 1rem;
+  box-shadow: 0 0 0 100vmax rgba(0, 0, 0, 0.35);
+  /* A tap anywhere on the picture is the retry for a video that would not autoplay, and this sits
+     over most of it. */
+  pointer-events: none;
+}
+
+.scanner .scanbar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  gap: 0.75rem;
+  justify-items: center;
+  padding: 1.5rem 1.25rem max(1.25rem, env(safe-area-inset-bottom));
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
+}
+.scanner .hint { margin: 0; color: #fff; font-size: 0.95rem; text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
+.scanner .scanbar button { min-width: 9rem; color: #fff; background: rgba(255, 255, 255, 0.18); border-color: rgba(255, 255, 255, 0.35); }
 
 /* --- a node's panel ------------------------------------------------------------------------ */
 

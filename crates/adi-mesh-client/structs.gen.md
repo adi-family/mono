@@ -4,7 +4,7 @@
 
 > The browser mesh client: a tab that is its own iroh peer, pairs with adi nodes and serves each one's control panel from its own origin.
 
-20 structs · 4 enums · 1 type alias across 8 files.
+21 structs · 4 enums · 1 type alias across 9 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/invite.rs`](#srcinviters) — `Invite`, `JoinRequest`, `Accepted`, `JoinReply`
 - [`src/mesh.rs`](#srcmeshrs) — `Result`, `Mesh`, `Stream`, `Writer`, `Reader`
 - [`src/probe.rs`](#srcprobers) — `Options`, `Case`, `Mark`, `Report`, `Clock`
+- [`src/scan.rs`](#srcscanrs) — `Reader`
 - [`src/store.rs`](#srcstorers) — `NodeRecord`
 - [`src/ui.rs`](#srcuirs) — `Screen`
 - [`src/ws.rs`](#srcwsrs) — `Opcode`, `Message`
@@ -308,6 +309,23 @@ A clock that stamps observations from one origin.
 struct Clock {
     started: f64,
     marks: Vec<Mark>,
+}
+```
+
+---
+
+## `src/scan.rs`
+
+### struct `Reader`
+
+A canvas kept off the page, and the buffer frames are decoded out of.
+
+```rust
+#[derive(Debug)]
+pub struct Reader {
+    canvas: HtmlCanvasElement,
+    context: CanvasRenderingContext2d,
+    grey: Vec<u8>,
 }
 ```
 

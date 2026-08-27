@@ -57,6 +57,18 @@ web-sys = { version = "0.3", features = [
     # The clipboard is how a pairing token gets from the node's terminal into a phone.
     "Clipboard",
     "Storage",
+    # The QR scanner (`src/scan.rs`): a camera, a video element to run it into, and an off-page
+    # canvas to read frames back out of. `HtmlMediaElement` is not used by name — it is where
+    # `srcObject`, `muted` and `play()` live, and `HtmlVideoElement` cannot reach them without it.
+    "MediaDevices",
+    "MediaStream",
+    "MediaStreamConstraints",
+    "MediaStreamTrack",
+    "HtmlMediaElement",
+    "HtmlVideoElement",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
 ] }
 console_error_panic_hook = "0.1"
 
@@ -67,6 +79,10 @@ console_error_panic_hook = "0.1"
 tracing = { workspace = true }
 wasm-tracing = "2.1"
 
+# Reads a QR code out of a camera frame (`src/scan.rs`). Pure Rust over a grayscale buffer, which
+# is the point: the browser's own `BarcodeDetector` is Chromium-only, and this client is for iPhones.
+quircs = { workspace = true }
+
 base64 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -75,6 +91,12 @@ anyhow = { workspace = true }
 # Randomness for the websocket masking key and the client's own nonces. Reaches
 # `crypto.getRandomValues` on wasm, the same source `iroh::SecretKey::generate` draws from.
 rand = { workspace = true }
+
+[dev-dependencies]
+# The other half of the pairing flow, so `src/scan.rs` can be tested against the code the CLI
+# actually prints (`adi-cli/src/qr.rs` draws it with the same settings). Encoder only, and dev-only:
+# this client never makes a QR, it only reads them.
+qrcode = { workspace = true }
 
 [lints]
 workspace = true

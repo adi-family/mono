@@ -43,6 +43,9 @@ adi-knowledge = { workspace = true }
 adi-facts = { workspace = true }
 
 clap = { workspace = true }
+# `mesh invite` draws its token as a QR (see `src/qr.rs`). Encoder only — the decoder is the
+# browser client's problem, and this binary never reads an image.
+qrcode = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 
@@ -50,6 +53,12 @@ serde_json = { workspace = true }
 # runtime is built inside that one arm rather than wrapping `main`, and only the drivers that
 # handshake needs are compiled in.
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time"] }
+
+[dev-dependencies]
+# A QR nobody scanned is an untested feature. `src/qr.rs`'s test reads the exact characters this
+# command prints back into a bitmap and decodes them — with the same decoder the browser client
+# points its camera through, so both halves of the pairing flow are checked against one reader.
+quircs = { workspace = true }
 
 [lints]
 workspace = true

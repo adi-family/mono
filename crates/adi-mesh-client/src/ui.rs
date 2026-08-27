@@ -14,12 +14,18 @@
 //!   the `/n/<petname>/` path its panel is served under, so it must stay one DNS label.
 //! * **Removing a node forgets a password, it does not unpair.** The node still holds a record for
 //!   this browser's key until its operator removes it, and the sentence on the button says so.
+//!
+//! The one screen that is not a list is the camera overlay, and the rule there is that it is an
+//! accelerator and never a gate: **the paste field keeps working when the camera is refused,
+//! absent, or pointed at nothing** ([`crate::scan`]).
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use web_sys::HtmlVideoElement;
 
 use crate::invite;
 use crate::mesh::Mesh;
+use crate::scan;
 use crate::store::{self, NodeRecord};
 
 /// What the shell is showing.
@@ -153,7 +159,7 @@ fn NodeList(
                 <p class="empty">
                     "No machines yet. On the machine you want to reach, run "
                     <code>"adi-mono mesh invite"</code>
-                    " and paste what it prints below."
+                    " — then scan the code it draws, or paste the token below."
                 </p>
             </Show>
             <ul class="nodes">
@@ -231,8 +237,14 @@ fn AddNode(
 ) -> impl IntoView {
     let token = RwSignal::new(String::new());
     let busy = RwSignal::new(false);
+    // The camera overlay: whether it is up, and the one line of words under the picture. `hint`
+    // is deliberately separate from `problem` — a scanner that has not found anything yet is not
+    // an error on the page behind it, and it disappears with the overlay.
+    let scanning = RwSignal::new(false);
+    let hint = RwSignal::new(String::new());
+    let camera: NodeRef<leptos::html::Video> = NodeRef::new();
 
-    let pair = move |_| {
+    let pair = move || {
         if busy.get_untracked() {
             return;
         }
@@ -259,6 +271,17 @@ fn AddNode(
         });
     };
 
+    // A scanning session lives exactly as long as the `<video>` does. It is started from an effect
+    // on the element and not from the click on Scan, because a stream cannot be attached to an
+    // element that is not in the document yet — and because the effect re-runs when the reference
+    // changes, which is what makes a *second* scan after a Cancel work rather than open a dead
+    // camera. `spawn_local` and not a `Resource`: this is a loop with a camera on the end of it,
+    // not a value the view waits for.
+    Effect::new(move |_| {
+        let Some(video) = camera.get() else { return };
+        spawn_local(scan_session(video, scanning, hint, token, pair));
+    });
+
     view! {
         <section class="add">
             <label for="invite">"Add a machine"</label>
@@ -271,14 +294,146 @@ fn AddNode(
                 prop:value=move || token.get()
                 on:input=move |ev| token.set(event_value(&ev))
             ></textarea>
-            <button class="primary" disabled=move || busy.get() || !ready.get() || token.get().trim().is_empty() on:click=pair>
-                {move || if busy.get() { "Pairing…" } else { "Pair" }}
-            </button>
+            <div class="actions">
+                // Absent, rather than present and inert, where there is no camera API to call —
+                // over plain http, say. Everything below it still pairs a machine.
+                <Show when=scan::available>
+                    <button
+                        id="scan"
+                        class="ghost"
+                        disabled=move || busy.get() || scanning.get()
+                        on:click=move |_| {
+                            hint.set("Starting the camera…".into());
+                            scanning.set(true);
+                        }
+                    >
+                        "Scan"
+                    </button>
+                </Show>
+                <button class="primary" disabled=move || busy.get() || !ready.get() || token.get().trim().is_empty() on:click=move |_| pair()>
+                    {move || if busy.get() { "Pairing…" } else { "Pair" }}
+                </button>
+            </div>
             <p class="note">
-                "Run "<code>"adi-mono mesh invite"</code>" on that machine. The token is good once, \
-                 for fifteen minutes."
+                "Run "<code>"adi-mono mesh invite"</code>" on that machine: it prints a QR code and \
+                 the token itself. Scan the one or paste the other — either is good once, for \
+                 fifteen minutes."
             </p>
         </section>
+
+        <Show when=move || scanning.get()>
+            <div class="scanner">
+                // `playsinline` and `muted` are set in `scan::open`, not here: the `muted`
+                // *attribute* maps to `defaultMuted` and would leave an element the DOM built at
+                // runtime unmuted — and an unmuted video may not autoplay. The click is the retry
+                // for an engine that refused to start the picture on its own.
+                <video
+                    node_ref=camera
+                    on:click=move |_| {
+                        if let Some(video) = camera.get_untracked() {
+                            let _ = video.play();
+                        }
+                    }
+                ></video>
+                <div class="reticle"></div>
+                <div class="scanbar">
+                    <p class="hint">{move || hint.get()}</p>
+                    <button class="ghost" on:click=move |_| scanning.set(false)>"Cancel"</button>
+                </div>
+            </div>
+        </Show>
+    }
+}
+
+/// Hold the camera open until it reads an invite, or until the reader gives up.
+///
+/// The whole session is one task and one owner of the stream, which is what makes "stop the camera
+/// on every path out" a thing that can be read rather than a thing to remember: every exit falls
+/// through to the same [`scan::stop`]. Cancelling flips `scanning`, and the loop notices within a
+/// frame — cheaper than a channel, and it also ends the session if the shell unmounts underneath
+/// it, because a disposed signal reads as `None`.
+///
+/// A code that is not an invite does **not** end the session. Somebody pointing a phone across a
+/// desk will sweep past a parcel label, and a scanner that quit on one would be worse than useless.
+async fn scan_session<P: Fn()>(
+    video: HtmlVideoElement,
+    scanning: RwSignal<bool>,
+    hint: RwSignal<String>,
+    token: RwSignal<String>,
+    pair: P,
+) {
+    let mut reader = match scan::Reader::new() {
+        Ok(reader) => reader,
+        Err(e) => return hint.set(e),
+    };
+    // The overlay stays up on a refusal, holding the sentence that says why. Cancel is the way out
+    // of it, and the paste field is behind it either way.
+    let stream = match scan::open(&video).await {
+        Ok(stream) => stream,
+        Err(e) => return hint.set(e),
+    };
+
+    let started = crate::now_ms();
+    let mut wrong_code = false;
+    // Cancelled while the permission prompt was up: the loop is skipped and the camera that has
+    // just been granted is handed straight back.
+    while scanning.try_get().unwrap_or(false) {
+        match reader.read(&video) {
+            Ok(Some(text)) => {
+                // Checked with the decoder that will spend it, so anything reaching the field is
+                // an invite this build can actually read. The text itself is never logged or shown
+                // — it is a live credential for somebody's machine.
+                if invite::decode_invite(&text).is_ok() {
+                    scan::stop(&stream, &video);
+                    token.set(text);
+                    scanning.set(false);
+                    pair();
+                    return;
+                }
+                wrong_code = true;
+                hint.set(
+                    "That is a QR code, but not an adi invite. Run `adi-mono mesh invite` on the \
+                     machine you want to reach."
+                        .into(),
+                );
+            }
+            Ok(None) => {
+                if !wrong_code {
+                    let next = waiting(&video, started);
+                    // Only when it changes: this runs eight times a second, and re-rendering the
+                    // same sentence would keep the overlay busy for nothing.
+                    if hint.with_untracked(|shown| shown != next) {
+                        hint.set(next.to_string());
+                    }
+                }
+            }
+            Err(e) => {
+                hint.set(e);
+                break;
+            }
+        }
+        n0_future::time::sleep(scan::FRAME_INTERVAL).await;
+    }
+    scan::stop(&stream, &video);
+}
+
+/// What to say while nothing has been found yet.
+///
+/// Three different situations, and the difference between them is the whole value of the line: a
+/// camera that never started is somebody's autoplay policy, a camera that is running and sees
+/// nothing is somebody's aim, and neither of them is worth a spinner.
+fn waiting(video: &HtmlVideoElement, started_ms: f64) -> &'static str {
+    let waited = crate::now_ms() - started_ms;
+    if !scan::has_frame(video) {
+        if waited > 4000.0 {
+            "The camera has not started. Tap the picture, or use the paste field instead."
+        } else {
+            "Starting the camera…"
+        }
+    } else if waited > 8000.0 {
+        "Nothing yet. Fill the frame with the code and hold still — or paste the token instead."
+    } else {
+        "Point this at the QR code your machine is showing."
     }
 }
 

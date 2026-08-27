@@ -6,8 +6,11 @@
 /harness/pkg
 /harness/report.json
 /harness/report-*.json
-# The URL the harness last opened — it carries a live pairing token.
+# The URL the harness last opened — it carries a live pairing token. So does what `mesh invite`
+# printed, and so — readably, as a QR — does the video the fake camera plays back.
 /harness/*-url.txt
+/harness/invite.txt
+/harness/camera.y4m
 /harness/browser.pem
 /harness/.chrome-profile*
 /harness/.chrome-e2e*

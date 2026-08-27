@@ -232,6 +232,14 @@ and pastes the token into the client. The node then files the tab's key with `ht
 its password, which is exactly the record the browser needs — and nothing about the handshake
 changed to allow it.
 
+**A token is 953 characters, so it is also drawn as a QR code.** At a terminal `mesh invite` prints
+one under the token (`--no-qr` suppresses it, `--qr` forces one into a redirect, and `--json` never
+carries one), and the browser client's **Scan** button reads it with the camera. The QR holds the
+token and nothing else — not a URL, so it never reaches an address bar or a history entry, and a
+phone's own camera app will only offer to copy it. Nothing about the protocol changes: it is the
+same string, taking a shorter path from one screen to another. The paste field is not going
+anywhere, because a camera can be refused and an invite that cannot be typed is a dead end.
+
 **A pairing is not usable the instant it is accepted.** The node's gateway serves from an in-memory
 snapshot of `fleet.toml` and re-reads it every `RELOAD_INTERVAL` — five seconds
 (`adi-mesh/src/gateway.rs`). The join handshake writes the file and answers immediately, so for up

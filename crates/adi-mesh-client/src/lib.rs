@@ -25,6 +25,7 @@ pub mod http;
 pub mod invite;
 pub mod mesh;
 pub mod probe;
+pub mod scan;
 pub mod store;
 pub mod ui;
 pub mod ws;

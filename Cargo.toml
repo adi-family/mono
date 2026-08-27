@@ -152,6 +152,19 @@ rustls = { version = "0.23", default-features = false, features = ["std", "ring"
 serde_yaml_ng = "0.10"
 # Randomness: per-credential salts and the join nonce/password (adi-mesh).
 rand = "0.10"
+# The two halves of QR pairing (ADI-33). `qrcode` renders an invite in a terminal
+# (`adi-mono mesh invite`); `quircs` reads one back out of a camera frame in the browser client.
+# `default-features = false` on the encoder because its defaults are file IO through `image` and
+# there is no file here — it writes half-blocks to a tty.
+#
+# `quircs` rather than the browser's own `BarcodeDetector`, which is Chromium-only: the client this
+# is for runs on iOS Safari, where a scanner built on that API is a button that does nothing. And
+# rather than `rqrr`, the other pure-Rust reader: measured on this bundle rqrr costs 92 KB brotli
+# against quircs' 22 KB, and what that buys — adaptive rather than whole-frame thresholding — is
+# worth most on paper under a shadow. This decoder is pointed at a lit screen, and
+# `scan.rs`'s tests hold it to a photograph of one lit from a single side.
+qrcode = { version = "0.14", default-features = false }
+quircs = "0.10"
 # Mints the front door's local CA and leaf in-process, so a fresh machine needs no openssl/mkcert.
 rcgen = "0.14"
 # Scratch directories for tests.

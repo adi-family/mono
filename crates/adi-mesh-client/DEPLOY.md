@@ -18,7 +18,7 @@ scripts/build-mesh-client.sh          # → crates/adi-mesh-client/dist/
 | Build command | `scripts/build-mesh-client.sh` (or `cd crates/adi-mesh-client && trunk build --release`) |
 | Output directory | `crates/adi-mesh-client/dist` |
 | Environment variables | none |
-| Size, as of 2026-08-27 | **3.55 MB raw / 1.06 MB brotli** wasm, plus 62 KB JS, 5 KB CSS and the icons — 3.6 MB on disk |
+| Size, as of 2026-08-27 | **3.64 MB raw / 1.09 MB brotli** wasm, plus 64 KB JS, 6 KB CSS and the icons — 3.7 MB on disk |
 
 ## Three requirements the host has to meet
 

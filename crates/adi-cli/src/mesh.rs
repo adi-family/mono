@@ -78,6 +78,12 @@ pub(crate) enum MeshCommand {
         /// Minutes the invite stays valid. One machine may spend it, once, within this window.
         #[arg(long, default_value_t = join::DEFAULT_TTL.as_secs() / 60)]
         ttl: u64,
+        /// Draw the token as a QR code even when the output is not a terminal.
+        #[arg(long)]
+        qr: bool,
+        /// Never draw the QR code, however the output is going.
+        #[arg(long, conflicts_with = "qr")]
+        no_qr: bool,
         #[arg(long)]
         json: bool,
     },
@@ -168,7 +174,12 @@ pub(crate) enum MeshCommand {
 /// Any store, token, or handshake failure, as a message the caller prints.
 pub(crate) fn run_mesh(command: MeshCommand) -> Result<(), String> {
     match command {
-        MeshCommand::Invite { ttl, json } => invite(ttl, json),
+        MeshCommand::Invite {
+            ttl,
+            qr,
+            no_qr,
+            json,
+        } => invite(ttl, qr, no_qr, json),
         MeshCommand::Join { token, json } => join_fleet(&token, json),
         MeshCommand::Fleet { json } | MeshCommand::List { json } => list(json),
         MeshCommand::Rename { from, to } => rename(&from, &to),
@@ -188,7 +199,19 @@ pub(crate) fn run_mesh(command: MeshCommand) -> Result<(), String> {
 // -- pairing ---------------------------------------------------------------------------------
 
 /// Mint an invite and print it with the one instruction the operator needs next.
-fn invite(ttl_minutes: u64, json: bool) -> Result<(), String> {
+///
+/// The QR code is on by default at a terminal and off everywhere else, because the flow it exists
+/// for is *point your phone at your laptop* and a flag to be remembered would put back the friction
+/// it removes. Off when the output is redirected is what keeps every script that greps this command
+/// working byte for byte — `harness/e2e.sh` in the mesh client is one of them — and `--json` never
+/// carries a QR at all. `--qr` forces one anyway, which is how you get one into a file; `--no-qr`
+/// suppresses it at a terminal, for a window too short to hold it.
+///
+/// The token is always printed as text as well. A code the camera cannot read is a dead end unless
+/// there is something to copy, and some terminals render half-blocks with seams.
+fn invite(ttl_minutes: u64, qr: bool, no_qr: bool, json: bool) -> Result<(), String> {
+    use std::io::IsTerminal as _;
+
     let token = join::mint_invite(Duration::from_secs(ttl_minutes.saturating_mul(60)))
         .map_err(|e| e.to_string())?;
     // Read the expiry back out of the token we just minted rather than recomputing it, so what is
@@ -207,6 +230,29 @@ fn invite(ttl_minutes: u64, json: bool) -> Result<(), String> {
     }
     println!("{token}");
     println!();
+    if qr || (!no_qr && std::io::stdout().is_terminal()) {
+        // A failure here is a QR that could not be drawn, not an invite that was not minted — the
+        // token above is already good. Say so on stderr and carry on to the instructions.
+        match crate::qr::terminal(&token) {
+            Ok(code) => {
+                println!(
+                    "Point the client's Scan button at this — a phone's own camera app will only \
+                     offer to copy it:"
+                );
+                print!("{}", code.text);
+                // The size, because an invite draws at 85 columns and a terminal window still
+                // opens at 80: the code then wraps into something no camera will read, and the
+                // only clue in the picture is that it looks wrong. Naming the number is what turns
+                // that into "widen the window".
+                println!(
+                    "({} columns by {} rows — resize this window if the code came out broken up)",
+                    code.columns, code.rows
+                );
+                println!();
+            }
+            Err(e) => eprintln!("note: {e}"),
+        }
+    }
     println!("Run this on the node — it dials out, so nothing has to be open there:");
     println!("  adi-mono mesh join {token}");
     println!(
@@ -557,14 +603,21 @@ mod tests {
     fn invite_defaults_its_ttl_to_the_libraries_default() {
         let expected = join::DEFAULT_TTL.as_secs() / 60;
         match parse(&["invite"]) {
-            MeshCommand::Invite { ttl, json } => {
+            MeshCommand::Invite {
+                ttl,
+                qr,
+                no_qr,
+                json,
+            } => {
                 assert_eq!(ttl, expected);
-                assert!(!json);
+                // Neither flag set is the interesting default: whether a QR is drawn is then
+                // decided by whether stdout is a terminal, which is not clap's business.
+                assert!(!qr && !no_qr && !json);
             }
             other => panic!("expected invite, got {other:?}"),
         }
         match parse(&["invite", "--ttl", "60", "--json"]) {
-            MeshCommand::Invite { ttl, json } => {
+            MeshCommand::Invite { ttl, json, .. } => {
                 assert_eq!(ttl, 60);
                 assert!(json);
             }
@@ -572,6 +625,8 @@ mod tests {
         }
         rejects(&["invite", "--ttl"]);
         rejects(&["invite", "--ttl", "soon"]);
+        // Asking for a QR and refusing one in the same breath has no answer, so it is not accepted.
+        rejects(&["invite", "--qr", "--no-qr"]);
     }
 
     #[test]
@@ -610,7 +665,10 @@ mod tests {
         }
         match parse(&["grant", "laptop-b", "http:nosh"]) {
             MeshCommand::Grant { petname, grant } => {
-                assert_eq!((petname.as_str(), grant.as_str()), ("laptop-b", "http:nosh"));
+                assert_eq!(
+                    (petname.as_str(), grant.as_str()),
+                    ("laptop-b", "http:nosh")
+                );
             }
             other => panic!("expected grant, got {other:?}"),
         }
@@ -621,7 +679,10 @@ mod tests {
             }
             other => panic!("expected revoke, got {other:?}"),
         }
-        assert!(matches!(parse(&["unpair", "desk"]), MeshCommand::Unpair { .. }));
+        assert!(matches!(
+            parse(&["unpair", "desk"]),
+            MeshCommand::Unpair { .. }
+        ));
         rejects(&["rename", "only-one"]);
         rejects(&["grant", "laptop-b"]);
         rejects(&["unpair"]);
@@ -655,7 +716,14 @@ mod tests {
             other => panic!("expected passwd, got {other:?}"),
         }
 
-        match parse(&["passwd", "laptop-b", "--password", "s3cret", "--username", "igor"]) {
+        match parse(&[
+            "passwd",
+            "laptop-b",
+            "--password",
+            "s3cret",
+            "--username",
+            "igor",
+        ]) {
             MeshCommand::Passwd {
                 password, username, ..
             } => {

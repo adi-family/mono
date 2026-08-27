@@ -11,6 +11,7 @@ things that cost a day to find out.
 scripts/build-mesh-client.sh          # → dist/, the deployable artefact
 harness/run.sh                        # the long-lived-stream measurement, against a real node
 harness/e2e.sh                        # pair → list → open → use, driven in a real browser
+harness/e2e.sh --scan                 # the same, with the invite arriving through a camera
 ```
 
 ## What is in here
@@ -22,6 +23,7 @@ harness/e2e.sh                        # pair → list → open → use, driven i
 | `src/http.rs` | HTTP/1.1 as a client, with the body delivered as chunks rather than read to end |
 | `src/ws.rs` | an RFC 6455 client, spoken by the tab over the same QUIC stream |
 | `src/invite.rs` | pairing, from the side that dials (`docs/fleet.md` §8) |
+| `src/scan.rs` | the camera, and reading an invite out of it — the other end of `mesh invite --qr` |
 | `src/store.rs` | IndexedDB: the browser's secret key, and one record per node |
 | `src/bridge.rs` | answering the service worker's `fetch` and a panel's `new WebSocket()` |
 | `src/ui.rs` | the shell: a list, a text box, and an iframe |
@@ -68,6 +70,38 @@ real UI: pair from an `adi-invite:` in **2.5 s**, panel rendered at **2.8 s**, t
 root-absolute `/api` answered at **3.0 s**, its own `new WebSocket()` answered in the same tick.
 With `APP_PORT=8000 REAL=1` — pointing the node's `app` service at a real `adi-app` — the actual
 control panel rendered through the client in **7.5 s** from a cold page load.
+
+**Pairing by camera**, `harness/e2e.sh --scan`, same run with nobody typing anything. The QR that
+`adi-mono mesh invite --qr` printed is rendered into a video (`harness/qr-y4m.py`) and handed to
+Chrome *as its camera*; the page is never told the token. Measured 2026-08-27: Scan pressed at
+**203 ms**, camera open at **512 ms**, paired and listed at **2.6 s** — and afterwards every track
+the scanner opened reads `ended`, which is asserted rather than eyeballed.
+
+## The scanner, and what is not proven about it
+
+Pairing means getting a **953-character** token onto a phone, so `src/scan.rs` reads it off the
+screen instead. The paste field stays exactly as it was: the camera is an accelerator on a flow
+that has to keep working when it is refused, absent, or pointed at nothing.
+
+- **The decoder is `quircs`, not `BarcodeDetector`.** That API is Chromium-only — a scanner built
+  on it is a button that does nothing on an iPhone, which is the device this whole client is for.
+- **Not `rqrr` either**, the other pure-Rust reader: measured on this bundle it costs 92 KB brotli
+  against quircs' 22 KB, and what the extra buys is adaptive rather than whole-frame thresholding,
+  which matters most on paper under a shadow. This one is pointed at a lit screen. `scan.rs`'s unit
+  tests hold it to a photograph of a screen lit from one side, at four pixels a module.
+- **The Scan button is not drawn where `navigator.mediaDevices` does not exist** (an insecure
+  origin). Present-and-inert would be worse than absent.
+
+**What has not been tested: a real iPhone, in Safari or as an installed home-screen app.** There is
+no device on the machine this was built on. What was done instead: the whole flow in headless
+Chrome through a fake camera (above); the decoder itself against synthetic photographs, natively;
+and the printed QR decoded by **Apple's own Vision framework**, which is the detector iOS's Camera
+app uses — so what the CLI draws is known to be readable by the reader that matters, even though
+the browser holding the camera has not been the one on an iPhone. The iOS-specific hazards are
+handled in code and commented where they are (`playsinline`, `muted` as a property and not an
+attribute, `facingMode: {ideal}` rather than `exact`), but they are reasoned, not observed. A
+refusal inside an installed app is remembered by iOS with no second prompt — which is the reason
+every failure message ends by pointing at the paste field.
 
 ## Three things that cost a day
 

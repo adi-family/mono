@@ -12,6 +12,7 @@ mod facts;
 mod knowledge;
 mod mesh;
 mod projects;
+mod qr;
 mod reader;
 mod secrets;
 mod events;

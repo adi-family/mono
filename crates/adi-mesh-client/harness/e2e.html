@@ -75,16 +75,42 @@ try {
   mark(`this tab's key is ${key}`);
 
   // --- 3. pairing, by pressing the button ------------------------------------------------
-  const invite = q.get("invite") || "";
-  if (!invite) throw new Error("no invite was passed to this page");
-  field.value = invite;
-  field.dispatchEvent(new Event("input", { bubbles: true }));
-  const pair = await waitFor(
-    () => { const b = document.querySelector("button.primary"); return b && !b.disabled ? b : null; },
-    "the Pair button to become live",
-  );
-  pair.click();
-  mark("pressed Pair");
+  //
+  // Two ways in, and they are the two ways a person has: paste the token, or scan it. `?scan=1` is
+  // the second, and the token is deliberately **not** passed to this page in that mode — the only
+  // thing that knows it is the video Chrome is playing as its camera (`qr-y4m.py`), so a pass
+  // means the bytes came in through the lens.
+  const scanning = q.get("scan") === "1";
+  let stream = null;
+  if (scanning) {
+    // Chrome registers its fake capture device a little after the browser starts, and a
+    // `getUserMedia` that lands first does not fail — it hangs, with `SharedImageStub: Unable to
+    // create shared image` the only trace in the log. This bit the harness in one run out of three
+    // because it presses Scan 200ms into a cold page; nobody holding a phone is ever that quick.
+    for (let i = 0; i < 100; i += 1) {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      if (devices.some((d) => d.kind === "videoinput")) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    mark("a camera is enumerated");
+    (await waitFor(() => document.querySelector("#scan"), "the Scan button")).click();
+    mark("pressed Scan");
+    const camera = await waitFor(() => document.querySelector(".scanner video"), "the viewfinder");
+    stream = await waitFor(() => camera.srcObject, "the camera to open", 30000);
+    report.findings.camera_tracks = stream.getTracks().length;
+    mark(`the camera is open (${report.findings.camera_tracks} track(s))`);
+  } else {
+    const invite = q.get("invite") || "";
+    if (!invite) throw new Error("no invite was passed to this page");
+    field.value = invite;
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+    const pair = await waitFor(
+      () => { const b = document.querySelector("button.primary"); return b && !b.disabled ? b : null; },
+      "the Pair button to become live",
+    );
+    pair.click();
+    mark("pressed Pair");
+  }
 
   const row = await waitFor(
     () => {
@@ -97,6 +123,18 @@ try {
   );
   report.findings.petname = row.querySelector(".name").textContent;
   mark(`paired, and the list now holds "${report.findings.petname}"`);
+
+  if (scanning) {
+    // A camera light left on after the overlay closes is the failure nobody sees in a screenshot,
+    // so it is asserted rather than eyeballed: every track the scanner opened has to be `ended`.
+    report.findings.camera_released = stream.getTracks().every((t) => t.readyState === "ended");
+    report.findings.overlay_closed = !document.querySelector(".scanner");
+    // The field is cleared by a pairing that worked; what matters is that nothing typed into it.
+    report.findings.nothing_was_typed = field.value === "";
+    mark(`camera released: ${report.findings.camera_released}, overlay closed: ${report.findings.overlay_closed}`);
+    if (!report.findings.camera_released) throw new Error("the camera was left running");
+    if (!report.findings.overlay_closed) throw new Error("the scanner overlay stayed up");
+  }
 
   // --- 4. open it -------------------------------------------------------------------------
   row.click();
