@@ -20,7 +20,91 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.0.0 — 2026-08-27
+
+The first release under a stable version number. Two things are in it: a browser tab can now be
+paired with a machine and render its control panel with nothing listening in between, and five
+security fixes — one of which closed a path from any web page the operator happened to visit to
+code running as root on their machine.
+
+**One thing to do after updating.** This release replaces the local certificate authority (see
+below), so `https://app.adi` will warn until you trust the new one. On macOS:
+`sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain
+~/.adi/mono/hive/tls/ca.pem`. The old root is inert from here and worth removing from your trust
+store. Plain `http://` is unaffected, and the front door logs the instruction on every start
+until it is done.
+
+### Security
+
+- **A web page you visit can no longer drive this machine's control panel.** The panel has no
+  login: it listens on loopback and treats everything that reaches it as the operator. But `.adi`
+  resolves machine-wide, so `http://app.adi/api/*` was an address any page open in the operator's
+  browser could post to — and because the panel reads JSON out of a body whatever its type claims,
+  a `text/plain` POST was a CORS *simple* request: no preflight, nothing to consent to, the side
+  effect just happens. The end of that chain was root, `POST /api/fs/write` being jailed to a
+  directory that holds the `hive.yaml` the root front door re-reads every three seconds and runs.
+  Every `/api/*` request is now refused unless its `Origin` is absent or names the host it was
+  sent to. This is not authentication and does not pretend to be — it stops a web page driving the
+  panel; a process already on this machine can still send whatever it likes.
+
+- **The root front door launches nothing at all.** The rule that strips service runners from a
+  hive running as root was applied only to *imported* hives, leaving the top-level file's own
+  `run:` exactly where it was — and the file that got the exemption is the one that needed the
+  rule, since the root daemon is pointed at a store file that is user-owned by design. A `run:`
+  written there was executing as root within three seconds, no restart needed. The decision moved
+  to the accessor the supervisor actually calls, which as root now returns nothing and names the
+  services it dropped.
+
+- **A root daemon will not run a program an ordinary user can rewrite.** Installing the front door
+  resolved its program as a sibling of whichever binary was doing the installing, so `adi enable`
+  from a repo build was enough to put a `target/release` path into a root plist — after which a
+  plain `cargo build --release` became root within about a minute, with no prompt. Installation
+  now refuses if that program, or any directory above it, is owned by a non-root user or is
+  group- or other-writable, and names the component at fault before anything is written.
+
+- **The local certificate authority may only vouch for this machine's own names.** The CA you are
+  asked to install as a system trust root was bounded only in path length — nothing constrained
+  *names*, so it could sign a certificate for `google.com`, for a bank, or for your own SSO, and
+  every browser on the machine would have accepted it. It is now constrained to the `adi` DNS
+  subtree, `localhost` and `127.0.0.0/8`, which is exactly what the front door serves. Because the
+  copy in your trust store is not the copy on disk, an existing CA is replaced outright rather
+  than quietly rebuilt — hence the re-trust above.
+
+- **The store is written owner-only.** Every file it held landed at whatever the umask said, which
+  is `0644` on a stock macOS account. That included this node's long-term mesh identity key, and
+  the invite nonce and ticket that are together a *complete* invitation to join. macOS puts every
+  local account in `staff`, so a second account on the machine could read all of it, and every
+  backup and sync carried the same bytes. New files are opened `0600` and directories `0700`;
+  existing ones are repaired as they are read, keeping the owner's own bits so a tool script stays
+  executable.
+
 ### Added
+
+- **A browser tab is its own peer, and it pairs by dialling.** `mono-mesh-client.withadi.dev` is a
+  page that holds its own key, dials the machines it has been paired with, and renders each one's
+  control panel — no server, no open port, nothing listening behind it. Everything on the screen
+  came over QUIC from a machine that is not reachable from the internet. Long-lived streams work
+  both ways, so the panel's live channel, its event streams and its websockets all run through it.
+  Pair by running `adi-mono mesh invite` **on the machine you want to reach** and giving the token
+  to the page.
+
+- **Pairing a phone is pointing it at a code.** An invite is around a thousand characters, and
+  getting that onto a phone was the whole friction. `adi-mono mesh invite` now draws it as a QR at
+  a terminal; the Fleet page has a **Show pairing QR** button that mints one and counts down its
+  ten minutes; and the browser client has a **Scan** button that reads one. The code carries the
+  token rather than a URL, so a phone's own camera app will only offer to copy it — the page says
+  so, because that failure is silent and looks like a broken code. Redirected output is unchanged,
+  so scripts that read this command keep working.
+
+- **A phone sees what each machine runs, not just its panel.** Under every paired machine are the
+  dashboards that machine is running, read from the node itself. A row your pairing did not grant
+  says **Allow**, and the first tap asks the node for it.
+
+- **⌘K answers on the page it just took you to.** The palette was mounted only inside one shell,
+  so using it, jumping somewhere, and pressing it again did nothing — it stopped working exactly
+  where you had started trusting it. Both shells now take their rows from one list, so they cannot
+  come to disagree about what the app can do, and **Pair new device** is one of those rows: it
+  lands on Fleet and raises the QR.
 
 - **The chat's right rail says who you are talking to, and where.** Chat Analytics counted what a
   conversation cost and what went wrong in it, and never named the agent having it — the name was
@@ -40,6 +124,53 @@ extraction script cares about.
   sessions of interactive agents beside them, since those keep no run history to appear in.
   The times climb while you watch, and when nothing is running the panel says so rather than
   vanishing, which reads the same as a page that hasn't loaded.
+
+- **An agent is edited on its own page**, at `/agents/new` and `/agents/<name>/edit`, rather than
+  in a form that opened under the list. The page paints filled, survives a refresh, a deep link
+  and Back, and a rename leaves the URL pointing at what is in the form. Settings in a chat's
+  Agent panel opens that agent's editor rather than the list you were already past.
+
+### Changed
+
+- **The `tcp:` and `ctl:` grant families are withdrawn from the fleet page and the CLI.** Both were
+  offered as examples and neither was ever enforced: what actually gates the raw-forward path is a
+  different list entirely, and nothing anywhere consumed `ctl:`. This failed *closed*, so it was
+  never exploitable — but an operator who added `tcp:127.0.0.1:22` believed they had opened
+  something and had not, and one who removed it believed they had closed something and had not.
+  Both beliefs are worth correcting. They still parse and load, so existing `fleet.toml` files are
+  unaffected; `ctl:` is explicitly reserved.
+
+### Fixed
+
+- **A Linux node stops taking its whole session down with one runner.** `kill` on procps-ng keeps
+  only the *first digit* of a bare negative pid, so stopping one hive runner was a `SIGTERM`
+  broadcast to every process the caller owned — control panel, dashboards, DNS and the session
+  manager itself. Linux pids reach seven figures and a node's all begin with `1`, so this fired
+  every time. It read for weeks as "the node keeps losing its linger and dying"; losing the linger
+  was the aftermath, not the cause. macOS parses the same argument correctly, which is why it only
+  ever surfaced on Linux.
+
+- **A fronted app keeps its own `Authorization` header.** The stored mesh password rode
+  `Authorization`, attached whenever the client had sent none — so a page sending its own bearer
+  token to its own API suppressed the password, drew a challenge from the node, and popped the
+  browser's native password prompt on an ordinary `fetch`. The document itself carried no such
+  header, so the page always loaded and only its AJAX calls prompted, which looked like a site
+  asking for a password at random. The password now rides `X-Adi-Authorization` and is stripped at
+  the gate, so it never reaches the service and the app's own header arrives untouched. A node
+  from before the split still works.
+
+- **A release will not ship a panel with no layout.** The dev server writes the same directory the
+  release build embeds, so its partial output could land between the two and ship an `index.html`
+  from one build beside the assets of another. Nothing failed — the missing stylesheet hit the
+  single-page fallback and was served as HTML with a `200` — and the panel came up with its markup
+  intact and no styling at all. Every asset the page asks for is now checked to be present, after
+  the UI build and again after the binary has embedded it.
+
+### Performance
+
+- **The store no longer flushes every write to disk.** Making the store owner-only had replaced a
+  plain write with one that also fsynced, which was a durability change smuggled in under a
+  permissions one and paid on every task, manifest and run record the app saved.
 
 ## 0.3.3 — 2026-08-26
 
