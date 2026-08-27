@@ -60,6 +60,10 @@ pub(crate) struct State {
     pub(crate) tasks: RwSignal<Option<TasksState>>,
     /// Agent definitions (`/api/agents`), shown on the Agents page.
     pub(crate) agents: RwSignal<Option<AgentsState>>,
+    /// The agent whose editor is open (`/agents/<name>/edit`), the way `current_project` carries
+    /// the open project. Empty both when no editor is open and on `/agents/new`, where the
+    /// definition being written has no name until it is saved.
+    pub(crate) current_agent: RwSignal<String>,
     /// Every agent's run history (`/api/agents/runs/all`) — the data behind the cross-agent
     /// "All chats" index shown above the Agents list and the single-agent live view.
     pub(crate) all_chats: RwSignal<Option<AllAgentRuns>>,
@@ -291,6 +295,7 @@ impl State {
             current_section: RwSignal::new(ProjectSection::Overview),
             tasks: RwSignal::new(None),
             agents: RwSignal::new(None),
+            current_agent: RwSignal::new(String::new()),
             all_chats: RwSignal::new(None),
             tools: RwSignal::new(None),
             secrets: RwSignal::new(None),
@@ -1586,13 +1591,11 @@ pub(crate) fn subscriptions(
             set_if_changed(s.all_chats, c);
         }));
     }
-    if route == Route::Agents {
+    // The editor page needs the same three: the definitions (its own agent, and the backend
+    // schema the form is built from), and the tool/secret checkboxes.
+    if matches!(route, Route::Agents | Route::AgentDetail) {
         subs.push(Sub::get("/api/agents", move |a: AgentsState| {
             set_if_changed(s.agents, a);
-        }));
-        // The cross-agent "All chats" index at the top of the Agents page.
-        subs.push(Sub::get("/api/agents/runs/all", move |c: AllAgentRuns| {
-            set_if_changed(s.all_chats, c);
         }));
         // The agent form's per-tool and per-secret checkboxes (metadata only — a secret's value
         // is never fetched here).
@@ -1818,13 +1821,11 @@ pub(crate) async fn load(s: State) {
     {
         set_if_changed(s.meta, m);
     }
-    if path == Route::Agents.path() {
+    // The list, and an agent's editor page — which is reached by its own URL, so it is matched by
+    // shape rather than against `Route::Agents.path()`.
+    if path == Route::Agents.path() || crate::routing::agent_form_from_path(&path).is_some() {
         if let Ok(a) = fetch::agents().await {
             set_if_changed(s.agents, a);
-        }
-        // The cross-agent "All chats" index at the top of the Agents page.
-        if let Ok(c) = fetch::all_agent_runs(None).await {
-            set_if_changed(s.all_chats, c);
         }
         // The agent form's per-tool checkboxes are populated from the tools list.
         if let Ok(t) = fetch::tools().await {

@@ -438,6 +438,54 @@ $runlog-dim: #8b93a1;
   }
 }
 
+// The standing advice above every workbench page: ask the agent, these panels are the careful
+// case. A quiet line on the page's own surface rather than a coloured callout — it is a
+// recommendation, not a problem, and a banner that shouts gets dismissed on sight instead of read.
+.adi-advice {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: 7px 12px;
+  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--text-sm);
+  color: var(--muted);
+
+  // Wraps on a narrow pane; the two controls stay on the first line, hard against the right.
+  &__text {
+    flex: 1;
+    min-width: 0;
+
+    strong { color: var(--ink); font-weight: 600; }
+  }
+
+  &__link {
+    flex: none;
+    color: var(--accent-ink);
+    text-decoration: none;
+    white-space: nowrap;
+
+    &:hover { text-decoration: underline; }
+  }
+
+  // Not `.adi-btn--link`: every one of those reddens on hover, which reads as destructive, and
+  // hiding a note is the least destructive thing on the page.
+  &__hide {
+    flex: none;
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    color: var(--muted);
+    font-size: var(--text-sm);
+    line-height: 1;
+    cursor: pointer;
+
+    &:hover { color: var(--ink); }
+  }
+}
+
 .adi-logo {
   font-family: var(--font-mono), monospace;
   font-weight: 600;

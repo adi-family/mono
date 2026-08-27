@@ -48,9 +48,9 @@ use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    FactsConsole, OnboardingForm, agents_view, analytics_view, chat_home_view, dashboards_view,
-    database_view, facts_view, fleet_view,
-    hive_view, knowledge_view, live_view, load_dir, load_store_file,
+    FactsConsole, OnboardingForm, agent_detail_view, agents_view, analytics_view, chat_home_view,
+    dashboards_view, database_view, facts_view, fleet_view,
+    hive_view, knowledge_view, live_view, load_agent_into_form, load_dir, load_store_file,
     mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
     seed_onboarding, start_onb_reconfigure, store_file_view,
@@ -659,6 +659,9 @@ fn App() -> impl IntoView {
     let current_project = RwSignal::new(project_id_from_path(&current_path()).unwrap_or_default());
     // Which section of that project is showing; the bare project path is its overview.
     let current_section = RwSignal::new(project_section_from_path(&current_path()));
+    // The agent whose editor is open ("" on /agents/new, and when no editor is open).
+    let current_agent =
+        RwSignal::new(routing::agent_form_from_path(&current_path()).unwrap_or_default());
     // True once the browser will let us offer "install as an app" (see [`pwa`]).
     let can_install = pwa::installable();
     // The version pill's watcher — one per mounted app, since it owns a timer.
@@ -680,6 +683,7 @@ fn App() -> impl IntoView {
         current_section,
         tasks,
         agents,
+        current_agent,
         all_chats,
         tools,
         secrets,
@@ -820,6 +824,10 @@ fn App() -> impl IntoView {
     // function re-runs on each route render, and a signal made inside one forgets on every redraw.
     let analytics_spend = RwSignal::new(false);
 
+    // Whether the standing "ask adi-agent" line has been dismissed on this browser. Seeded from
+    // storage rather than defaulting to shown, so a reload doesn't undo the dismissal.
+    let advice_hidden = RwSignal::new(ui::advice_hidden());
+
     // The active page, derived from the URL path. Unknown paths (including `/`) resolve to
     // Projects; canonicalize the address bar so a refresh lands on the same page.
     let route = RwSignal::new(Route::from_path(&current_path()));
@@ -828,7 +836,7 @@ fn App() -> impl IntoView {
     // `/files/<path>` to `/files` and lose the file before it is ever read.
     if !matches!(
         route.get_untracked(),
-        Route::ProjectDetail | Route::StoreFile
+        Route::ProjectDetail | Route::StoreFile | Route::AgentDetail
     ) && current_path() != route.get_untracked().path()
     {
         replace_state(route.get_untracked().path());
@@ -860,6 +868,7 @@ fn App() -> impl IntoView {
         let path = current_path();
         current_project.set(project_id_from_path(&path).unwrap_or_default());
         current_section.set(project_section_from_path(&path));
+        current_agent.set(routing::agent_form_from_path(&path).unwrap_or_default());
         // A /files/<path> entry carries the file, so history navigation reloads it. Only when
         // it actually changes, or Back onto the page you are on would discard your edits.
         match routing::store_path_from_path(&path) {
@@ -943,6 +952,7 @@ fn App() -> impl IntoView {
                 | Route::ProjectDetail
                 | Route::Tasks
                 | Route::Agents
+                | Route::AgentDetail
                 | Route::Tools
                 | Route::Secrets
                 | Route::Triggers
@@ -1000,6 +1010,28 @@ fn App() -> impl IntoView {
             files.reset();
             files.loaded_for.set(id.clone());
             spawn_local(load_dir(state, id, String::new()));
+        }
+    });
+
+    // Fill the agent editor when the page is *arrived at* rather than clicked into — a deep link,
+    // a refresh, or Back onto `/agents/<name>/edit`. Clicking Edit has already loaded the form, so
+    // the guard on `editing` makes this a no-op there, and it also stops the 4s refresh of
+    // `state.agents` from writing over an edit in progress.
+    Effect::new(move |_| {
+        if !matches!(route.get(), Route::AgentDetail) {
+            return;
+        }
+        let name = current_agent.get();
+        if name.is_empty() || agents_form.editing.get_untracked().as_deref() == Some(name.as_str())
+        {
+            return;
+        }
+        if let Some(a) = state
+            .agents
+            .get()
+            .and_then(|s| s.agents.into_iter().find(|a| a.name == name))
+        {
+            load_agent_into_form(agents_form, &a);
         }
     });
 
@@ -1120,10 +1152,16 @@ fn App() -> impl IntoView {
             <main class="adi-main"
                 class:adi-main--flush=move || matches!(route.get(), Route::StoreFile)>
                 <div class="adi-container">
+                    {move || agent_advice(advice_hidden, route.get())}
+
                     {move || match route.get() {
                         // These pages render their own headings — no generic page title.
                         // StoreFile is a full-bleed editor: its head carries the file path.
-                        Route::PortsManager | Route::ProjectDetail | Route::StoreFile => None,
+                        // The agent editor's head names the agent and links back to the list.
+                        Route::PortsManager
+                        | Route::ProjectDetail
+                        | Route::StoreFile
+                        | Route::AgentDetail => None,
                         other => Some(view! {
                             <header class="adi-bar">
                                 <h1 class="adi-bar__title">{other.title()}</h1>
@@ -1138,7 +1176,8 @@ fn App() -> impl IntoView {
                         Route::ProjectDetail => project_detail_view(state, route, triggers_log, agents_watch, agents_form, hook_log, term_watch, tool_editor, tool_run, knowledge),
                         Route::StoreFile => store_file_view(state),
                         Route::Tasks => tasks_view(state, tasks_form),
-                        Route::Agents => agents_view(state, agents_form, agents_watch, agents_sim),
+                        Route::Agents => agents_view(state, agents_form, agents_watch, agents_sim, route),
+                        Route::AgentDetail => agent_detail_view(state, agents_form, route),
                         Route::Tools => tools_view(state, tools_form, tool_editor, tool_run),
                         Route::Secrets => secrets_view(state, secrets_form),
                         Route::Knowledge => knowledge_view(state, knowledge),
@@ -1176,6 +1215,39 @@ fn App() -> impl IntoView {
         </footer>
         </div>
     }
+}
+
+/// The workbench's standing advice, one line above every page: the ordinary way to change this
+/// machine is to ask the agent, and these panels are the careful case.
+///
+/// It is worth saying on the panels themselves because that is where somebody is when they are
+/// about to do it the long way. Dismissible, and the dismissal sticks (see [`ui::hide_advice`]) —
+/// a recommendation that cannot be turned off is a nag.
+///
+/// Absent on the full-bleed editor, whose container gives its whole height to one child and has
+/// no room for a line above it.
+fn agent_advice(hidden: RwSignal<bool>, route: Route) -> Option<AnyView> {
+    if hidden.get() || matches!(route, Route::StoreFile) {
+        return None;
+    }
+    Some(
+        view! {
+            <div class="adi-advice">
+                <span class="adi-advice__text">
+                    <strong>"Recommended: "</strong>
+                    "let " <strong>"adi-agent"</strong> " manage this — say what you want in chat
+                     and it sets up projects, services, tools and secrets the way this store
+                     expects. These panels are for the careful case: seeing exactly what is there,
+                     or changing one thing precisely."
+                </span>
+                <a class="adi-advice__link" href="/" title="ask the agent instead">"Open chat"</a>
+                <button class="adi-advice__hide" type="button" aria-label="Hide this recommendation"
+                    title="hide this — it stays hidden on this browser"
+                    on:click=move |_| ui::hide_advice(hidden)>"\u{2715}"</button>
+            </div>
+        }
+        .into_any(),
+    )
 }
 
 /// The global scopes, each with the sections that live inside it. Kept beside the project

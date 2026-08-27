@@ -18,7 +18,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::routing::scroll_top;
+use crate::routing::{Route, agent_form_path, scroll_top};
 use crate::state::{
     AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionMenu, State,
     refresh_fleet_dashboards,
@@ -2182,6 +2182,9 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                     }}
                 </adi_ui::Rail>
                 }}
+
+                // The foot of the column, under whichever rail is showing.
+                {chat_donate()}
             </aside>
 
             // The rail's right-click menu, drawn once here rather than per row: only one is ever
@@ -2191,6 +2194,26 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
         </div>
     }
     .into_any()
+}
+
+/// Where the donate button goes. Off this machine, so it is written out in full rather than as a
+/// path — every other link in this screen is local, and one of them is not.
+const DONATE_URL: &str = "https://withadi.dev/mono-donate";
+
+/// The donate button at the foot of the right rail, under the Agent panel and whichever rail is
+/// showing. adi runs on this machine and asks for nothing to do it, so this is the one place it
+/// asks at all.
+///
+/// A new tab, not a navigation: leaving would take the open conversation off the screen to read a
+/// page that has nothing to do with it.
+fn chat_donate() -> impl IntoView {
+    view! {
+        <a class="adi-chome__donate island bg-panel" href=DONATE_URL
+            target="_blank" rel="noopener noreferrer"
+            title="support adi — opens withadi.dev/mono-donate in a new tab">
+            "Donate"
+        </a>
+    }
 }
 
 /// Whether the right rail is currently the open conversation's analytics rather than the dashboards.
@@ -2441,6 +2464,20 @@ fn chat_agent_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
     // somewhere else at launch, and it keeps that directory for every reply after.
     let cwd = peek.as_ref().map(|p| p.cwd.clone()).unwrap_or_default();
 
+    // Settings opens *this* agent's editor rather than the list — the panel is already about one
+    // agent, so the list was a step the reader had to retrace. A conversation whose agent has since
+    // been deleted has no editor to open, so that one still goes to the list.
+    //
+    // A plain href, not an SPA navigation: this panel lives in the `Home` mount, and the editor is
+    // a route of the `App` shell (see `main`), so reaching it is a real page load either way.
+    let (settings_href, settings_title) = match def.as_ref() {
+        Some(d) => (agent_form_path(&d.name), "edit this agent's definition"),
+        None => (
+            Route::Agents.path().to_string(),
+            "define and configure agents",
+        ),
+    };
+
     Some(
         view! {
             <section class="adi-chome__about island bg-panel">
@@ -2449,8 +2486,8 @@ fn chat_agent_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
                     // same size and weight rather than nearly so.
                     <h2 class="m-0 text-sub font-semibold text-ink">"Agent"</h2>
                     <span class="adi-spacer"></span>
-                    <a class="adi-chome__side-link" href="/extended/agents"
-                        title="define and configure agents">"Settings"</a>
+                    <a class="adi-chome__side-link" href=settings_href
+                        title=settings_title>"Settings"</a>
                 </header>
                 <div class="adi-chome__about-body">
                     <div class="adi-chome__agent">

@@ -25,6 +25,10 @@ pub(crate) enum Route {
     Tasks,
     /// Agent definitions (`/agents`).
     Agents,
+    /// One agent's editor — the full definition form on a page of its own, rather than under the
+    /// list (`/agents/new`, `/agents/<name>/edit`). Which agent lives in `State::current_agent`,
+    /// empty for a definition that doesn't exist yet.
+    AgentDetail,
     /// Tool definitions — user CLIs (`/tools`).
     Tools,
     /// Encrypted secrets — global & per-project key-values (`/secrets`).
@@ -59,6 +63,9 @@ impl Route {
         if store_path_from_path(path).is_some() {
             return Route::StoreFile;
         }
+        if agent_form_from_path(path).is_some() {
+            return Route::AgentDetail;
+        }
         // Match the remainder after the `/extended` prefix, so the arms stay the short,
         // canonical names. A path without the prefix falls through to Projects.
         match path.strip_prefix(BASE).unwrap_or(path) {
@@ -91,7 +98,8 @@ impl Route {
             Route::Analytics => "/extended/analytics",
             Route::Projects | Route::ProjectDetail => "/extended/projects",
             Route::Tasks => "/extended/tasks",
-            Route::Agents => "/extended/agents",
+            // The editor's real path carries the agent name; this base is only used for nav.
+            Route::Agents | Route::AgentDetail => "/extended/agents",
             Route::Tools => "/extended/tools",
             Route::Secrets => "/extended/secrets",
             Route::Knowledge => "/extended/knowledge",
@@ -117,6 +125,7 @@ impl Route {
             Route::ProjectDetail => "Project",
             Route::Tasks => "Tasks",
             Route::Agents => "Agents",
+            Route::AgentDetail => "Agent",
             Route::Tools => "Tools",
             Route::Secrets => "Secrets",
             Route::Knowledge => "Knowledge",
@@ -219,9 +228,12 @@ pub(crate) fn project_href(id: &str) -> String {
     ProjectSection::Overview.path(id)
 }
 
-/// Handle a click on a nav link: navigate client-side for a plain left-click, but let
-/// modified clicks (new tab/window, etc.) fall through to a normal browser navigation.
-pub(crate) fn spa_click(ev: &web_sys::MouseEvent, route: RwSignal<Route>, target: Route) {
+/// Whether a click on a link should be taken over and navigated client-side. A modified click
+/// (new tab, new window, download) is left to the browser, which is why these links are real
+/// `<a href>`s rather than buttons — so `href` still means what it means everywhere else.
+///
+/// Calling it *consumes* the click (`preventDefault`) when it returns `true`.
+pub(crate) fn spa_nav(ev: &web_sys::MouseEvent) -> bool {
     if ev.default_prevented()
         || ev.button() != 0
         || ev.meta_key()
@@ -229,9 +241,18 @@ pub(crate) fn spa_click(ev: &web_sys::MouseEvent, route: RwSignal<Route>, target
         || ev.shift_key()
         || ev.alt_key()
     {
-        return;
+        return false;
     }
     ev.prevent_default();
+    true
+}
+
+/// Handle a click on a nav link: navigate client-side for a plain left-click, but let
+/// modified clicks (new tab/window, etc.) fall through to a normal browser navigation.
+pub(crate) fn spa_click(ev: &web_sys::MouseEvent, route: RwSignal<Route>, target: Route) {
+    if !spa_nav(ev) {
+        return;
+    }
     if route.get_untracked() != target {
         push_state(target.path());
         route.set(target);
@@ -284,6 +305,34 @@ pub(crate) fn project_id_from_path(path: &str) -> Option<String> {
         .and_then(|p| p.strip_prefix("/projects/"))?;
     let id = rest.split('/').next().unwrap_or_default();
     (!id.is_empty()).then(|| id.to_string())
+}
+
+/// The agent an editor URL names: `Some("")` for `/agents/new` — a definition that doesn't exist
+/// yet — and `Some(name)` for `/agents/<name>/edit`. `None` for anything else, including the bare
+/// `/agents` list.
+///
+/// Create and edit are told apart by *shape* rather than by reserving a word, so an agent actually
+/// named `new` still edits at `/agents/new/edit` instead of reopening the create form.
+pub(crate) fn agent_form_from_path(path: &str) -> Option<String> {
+    let rest = path
+        .strip_prefix(BASE)
+        .and_then(|p| p.strip_prefix("/agents/"))?;
+    let mut segs = rest.split('/').filter(|seg| !seg.is_empty());
+    match (segs.next(), segs.next(), segs.next()) {
+        (Some("new"), None, None) => Some(String::new()),
+        (Some(name), Some("edit"), None) => Some(name.to_string()),
+        _ => None,
+    }
+}
+
+/// The editor URL for an agent — the create page when `name` is empty, that agent's edit page
+/// otherwise. No escaping: an agent name is one segment of letters, digits, `.`, `-` and `_`
+/// (`adi_agents::Error::InvalidName`), all of which stand for themselves in a path.
+pub(crate) fn agent_form_path(name: &str) -> String {
+    match name.trim() {
+        "" => format!("{BASE}/agents/new"),
+        name => format!("{BASE}/agents/{name}/edit"),
+    }
 }
 
 /// The store-relative file path in a `/files/<path>` URL, or `None` for any other path. Each

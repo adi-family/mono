@@ -185,7 +185,7 @@ pub(crate) fn route_icon(route: Route) -> Icon {
         Route::Analytics => Icon::Chart,
         Route::Projects | Route::ProjectDetail => Icon::List,
         Route::Tasks => Icon::Tasks,
-        Route::Agents => Icon::Agent,
+        Route::Agents | Route::AgentDetail => Icon::Agent,
         Route::Tools => Icon::Wrench,
         Route::Secrets => Icon::Key,
         Route::Knowledge => Icon::Book,

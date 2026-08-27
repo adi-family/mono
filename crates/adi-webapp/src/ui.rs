@@ -512,6 +512,30 @@ fn document_element() -> Option<web_sys::Element> {
     web_sys::window()?.document()?.document_element()
 }
 
+// ---- the workbench's standing advice (persisted dismissal) --------------------------
+
+/// Where the dismissal of the "ask adi-agent" line is remembered. Per browser rather than per
+/// machine, like the theme beside it: it is a preference about how this person reads the page,
+/// not a fact about the stack, and the store has no business holding it.
+const ADVICE_KEY: &str = "adi-advice-hidden";
+
+/// Whether the advice line above every workbench page has been hidden on this browser.
+pub(crate) fn advice_hidden() -> bool {
+    storage()
+        .and_then(|s| s.get_item(ADVICE_KEY).ok().flatten())
+        .is_some_and(|v| v == "1")
+}
+
+/// Hide the advice line, and remember it. Hiding something that comes back on the next page load
+/// is not hiding it, so this outlives the tab — `adi-advice-hidden` in `localStorage`, which is
+/// also how it is undone.
+pub(crate) fn hide_advice(hidden: RwSignal<bool>) {
+    hidden.set(true);
+    if let Some(s) = storage() {
+        let _ = s.set_item(ADVICE_KEY, "1");
+    }
+}
+
 /// The origin's `localStorage`, when there is one. `None` covers private mode and a disabled
 /// origin — and, off wasm, the absence of a browser at all, which is what lets the unit tests
 /// build a [`TableState`] without reaching for a `window` that isn't there.

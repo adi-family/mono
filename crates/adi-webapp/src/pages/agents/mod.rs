@@ -1,8 +1,11 @@
-//! The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
-//! pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
-//! params. ▶ Run starts either an interactive pty session or a headless background process;
-//! deeper orchestration is future work. The form adapts its params to the chosen backend, and
-//! for the `harness:adi` backend also to its chosen provider.
+//! The Agents page: the list of agent definitions (docs/adi-agents.md §5), with delete and the
+//! launch actions on each row. ▶ Run starts either an interactive pty session or a headless
+//! background process; deeper orchestration is future work.
+//!
+//! Writing a definition — a backend (`executor:what`), a system prompt, a CLI command scope, and
+//! the backend-specific params — happens in [`agent_detail_view`], on the agent's own page: New
+//! agent and Edit navigate there rather than filling a form under the list. The form adapts its
+//! params to the chosen backend, and for the `harness:adi` backend also to its chosen provider.
 
 use std::collections::BTreeMap;
 
@@ -12,6 +15,9 @@ use adi_ui::{Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
+use crate::routing::{
+    Route, agent_form_path, push_state, replace_state, scroll_top, spa_click, spa_nav,
+};
 use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State};
 use crate::ui::{
     flash_view, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, updated_text,
@@ -37,19 +43,70 @@ pub(crate) use form::{
 };
 use form::{agent_form_fields, clear_agent_form};
 
-/// The Agents page: create, edit, delete, and launch agent definitions (docs/adi-agents.md §5) —
-/// pick a backend (`executor:what`), a system prompt, a CLI command scope, and backend-specific
-/// params. ▶ Run starts either an interactive pty session or a headless background process;
-/// deeper orchestration is future work. The form adapts its params to the chosen backend, and
-/// for the `harness:adi` backend also to its chosen provider.
+/// The Agents page: every agent defined on this machine, with the live view above it and the
+/// per-row launch/delete actions. Editing one, or writing a new one, opens [`agent_detail_view`]
+/// on that agent's own URL — the definition form is not part of this page.
 pub(crate) fn agents_view(
     state: State,
     form: AgentsForm,
     watch: AgentsWatch,
     sim: Simulate,
+    route: RwSignal<Route>,
 ) -> AnyView {
     let agents = state.agents;
     let secs_since = state.secs_since;
+    view! {
+        // Above everything, when it is open: taking the model's seat is the whole screen, not a
+        // panel beside the list of agents you could take it in.
+        {move || simulate::simulate_view(state, sim)}
+
+        {move || live_view(state, watch)}
+
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <span class="adi-chip adi-mono" title="Agents defined">
+                    {move || agents.get().map_or_else(|| "\u{2014}".to_string(),
+                        |a| a.agents.len().to_string())}
+                </span>
+                {run_limit_view(state)}
+                <span class="adi-spacer"></span>
+                <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
+                <a class="adi-btn adi-btn--primary" href=agent_form_path("")
+                    on:click=move |ev| if spa_nav(&ev) {
+                        open_agent_editor(state, route, form, None);
+                    }>
+                    "New agent"
+                </a>
+            </div>
+
+            <Table state=state.tables.agents>{move || agent_rows(state, form, watch, sim, route)}</Table>
+            {flash_view(state.flash)}
+            // What the row actions do. It sat under the create form before that moved to a page
+            // of its own; it belongs with the buttons it explains, which are in the table above.
+            <div class="adi-hint">
+                "▶ Run launches pty backends in an interactive " <code>"adi-agent-<name>"</code>
+                " session you type into. A "<code>"process"</code>" backend is a template: ▶ Run…
+                 starts an independent one-shot run from a task you give it — one "<code>"--print"</code>
+                " turn, never continued — and several can run at once. A "<code>"harness"</code>"
+                 backend instead starts an answerable "<strong>"conversation"</strong>": ▶ Chat…
+                 sends a first message, the agent answers, and you reply to continue the same thread.
+                 Each run/conversation keeps its own log + transcript under "
+                <code>"~/.adi/mono/sessions/{process,harness}/<agent>/"</code>
+                ", browsable as history in ● View."
+            </div>
+        </section>
+    }
+    .into_any()
+}
+
+/// One agent's editor, on a page of its own (`/agents/new`, `/agents/<name>/edit`) rather than
+/// under the list: the whole schema-driven definition form — backend params, tools, knowledge,
+/// secrets, run environment — for the agent named by [`State::current_agent`], or a blank one.
+///
+/// The form's signals are the same [`AgentsForm`] the list page used to hold, so what fills it is
+/// unchanged: Edit loads the agent before navigating, and [`main`] covers the arrive-directly case.
+pub(crate) fn agent_detail_view(state: State, form: AgentsForm, route: RwSignal<Route>) -> AnyView {
+    let agents = state.agents;
     let flash = state.flash;
     let AgentsForm {
         name,
@@ -63,42 +120,43 @@ pub(crate) fn agents_view(
         busy,
         ..
     } = form;
+    // A URL naming an agent the list doesn't have: a stale link, or one deleted from under this
+    // tab. Say so rather than opening a create form prefilled with nothing, which would silently
+    // turn "edit" into "make a second agent".
+    let missing = move || {
+        let open = state.current_agent.get();
+        !open.is_empty()
+            && agents
+                .get()
+                .is_some_and(|s| !s.agents.iter().any(|a| a.name == open))
+    };
     view! {
-        // Above everything, when it is open: taking the model's seat is the whole screen, not a
-        // panel beside the list of agents you could take it in.
-        {move || simulate::simulate_view(state, sim)}
+        // Its own head, the way a project's detail page has one: what is being edited, and the
+        // way back up to the list — laid out as `parent_link` lays out a sub-project's.
+        <div class="adi-bar">
+            <h1 class="adi-bar__title">
+                {move || match editing.get() {
+                    Some(n) => n,
+                    None => "New agent".to_string(),
+                }}
+            </h1>
+            <a class="adi-btn adi-btn--link" href=Route::Agents.path() title="back to every agent"
+                on:click=move |ev| spa_click(&ev, route, Route::Agents)>"\u{2191} Agents"</a>
+        </div>
 
-        {all_chats_view(state, watch, None)}
+        {move || missing().then(|| view! {
+            <section class="adi-panel">
+                <div class="adi-empty">
+                    {format!("No agent named “{}” — it may have been deleted or renamed.",
+                        state.current_agent.get())}
+                </div>
+            </section>
+        })}
 
-        {move || live_view(state, watch)}
-
+        // The form stays mounted either way: rebuilding it whenever the polled agents list lands
+        // would drop focus mid-edit, and a form still holding a deleted agent is how you put it
+        // back.
         <section class="adi-panel">
-            <div class="adi-panel__head">
-                <span class="adi-chip adi-mono" title="Agents defined">
-                    {move || agents.get().map_or_else(|| "\u{2014}".to_string(),
-                        |a| a.agents.len().to_string())}
-                </span>
-                {run_limit_view(state)}
-                <span class="adi-spacer"></span>
-                <span class="adi-updated">{move || updated_text(agents, secs_since)}</span>
-            </div>
-
-            <Table state=state.tables.agents>{move || agent_rows(state, form, watch, sim)}</Table>
-        </section>
-
-        <section class="adi-panel">
-            <div class="adi-panel__head">
-                <h2 class="adi-panel__title">
-                    {move || match editing.get() {
-                        Some(n) => format!("Editing “{n}”"),
-                        None => "New agent".to_string(),
-                    }}
-                </h2>
-                <span class="adi-spacer"></span>
-                <button class="adi-btn adi-btn--link" type="button"
-                    on:click=move |_| clear_agent_form(form)>"New agent"</button>
-            </div>
-
             <form class="adi-form" on:submit=move |ev| {
                 ev.prevent_default();
                 let nm = name.get().trim().to_string();
@@ -158,7 +216,12 @@ pub(crate) fn agents_view(
                     // Editing with the name field changed is a rename, not a second agent.
                     rename_from: editing.get(),
                 };
+                // Optimistic, like `editing` beside it: a create (or a rename) moves this page to
+                // the saved agent's own URL, so a refresh lands back on what is in the form rather
+                // than on `new` or on the name it used to have.
                 editing.set(Some(nm.clone()));
+                state.current_agent.set(nm.clone());
+                replace_state(&agent_form_path(&nm));
                 apply_agents(state, Some(busy), format!("Saved agent “{nm}”."), fetch::save_agent(body));
             }>
                 {move || agent_form_fields(state, form)}
@@ -171,20 +234,31 @@ pub(crate) fn agents_view(
                 </button>
             </form>
             {flash_view(flash)}
-            <div class="adi-hint">
-                "▶ Run launches pty backends in an interactive " <code>"adi-agent-<name>"</code>
-                " session you type into. A "<code>"process"</code>" backend is a template: ▶ Run…
-                 starts an independent one-shot run from a task you give it — one "<code>"--print"</code>
-                " turn, never continued — and several can run at once. A "<code>"harness"</code>"
-                 backend instead starts an answerable "<strong>"conversation"</strong>": ▶ Chat…
-                 sends a first message, the agent answers, and you reply to continue the same thread.
-                 Each run/conversation keeps its own log + transcript under "
-                <code>"~/.adi/mono/sessions/{process,harness}/<agent>/"</code>
-                ", browsable as history in ● View."
-            </div>
         </section>
     }
     .into_any()
+}
+
+/// Open an agent's editor on its own page: load `agent` into the form — or clear it, for a
+/// definition that doesn't exist yet — then navigate to `/agents/<name>/edit` (or `/agents/new`).
+///
+/// Loading before navigating is what makes the editor render filled on the first paint. A project's
+/// Agents panel lands here too, so Edit means the same thing wherever it is clicked.
+pub(crate) fn open_agent_editor(
+    state: State,
+    route: RwSignal<Route>,
+    form: AgentsForm,
+    agent: Option<&AgentDto>,
+) {
+    match agent {
+        Some(a) => load_agent_into_form(form, a),
+        None => clear_agent_form(form),
+    }
+    let name = agent.map(|a| a.name.clone()).unwrap_or_default();
+    state.current_agent.set(name.clone());
+    push_state(&agent_form_path(&name));
+    route.set(Route::AgentDetail);
+    scroll_top();
 }
 
 /// The per-agent tool checkboxes: one toggle per registered (active) tool — system or user — that
@@ -466,11 +540,17 @@ fn agent_secret_checkboxes(state: State, form: AgentsForm) -> AnyView {
 }
 
 /// Render the agents table body: a loading/empty placeholder, or one row per agent with Run or
-/// View (live session), Edit (loads it into the form), and Delete actions.
-fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, sim: Simulate) -> AnyView {
+/// View (live session), Edit (opens the agent's own editor page), and Delete actions.
+fn agent_rows(
+    state: State,
+    form: AgentsForm,
+    watch: AgentsWatch,
+    sim: Simulate,
+    route: RwSignal<Route>,
+) -> AnyView {
     let table = state.tables.agents;
     let mut agents =
-        match rows_or_placeholder(table, state.agents.get().map(|v| v.agents), "No agents yet — define one below.") {
+        match rows_or_placeholder(table, state.agents.get().map(|v| v.agents), "No agents yet — “New agent” starts one.") {
             Ok(rows) => rows,
             Err(placeholder) => return placeholder,
         };
@@ -486,7 +566,9 @@ fn agent_rows(state: State, form: AgentsForm, watch: AgentsWatch, sim: Simulate)
             // Run/View/Stop stay inline (the live controls); Edit and the destructive Delete
             // move into the kebab.
             let items = vec![
-                menu_item(state, "Edit", false, move || load_agent_into_form(form, &a_edit)),
+                menu_item(state, "Edit", false, move || {
+                    open_agent_editor(state, route, form, Some(&a_edit));
+                }),
                 // Take the model's seat in a run of this agent. In the kebab rather than inline
                 // because it is not a way of *running* the agent — it is a way of reading what the
                 // agent is told, and it opens a screen rather than starting work.

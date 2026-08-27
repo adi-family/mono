@@ -6,9 +6,9 @@ use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::pages::agents::{
-    agent_actions, agent_cell, agent_key, load_agent_into_form, project_run_limit_view,
+    agent_actions, agent_cell, agent_key, open_agent_editor, project_run_limit_view,
 };
-use crate::routing::{ProjectSection, Route, push_state, scroll_top};
+use crate::routing::{ProjectSection, Route};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
 use crate::ui::{
     Key, TextField, apply_mutation, menu_item, row_actions, sort_rows,
@@ -179,14 +179,11 @@ fn project_agent_rows(
             // the cell builder is called per column, so it renders the marker rather than
             // consuming one.
             let owner = scope.owner(a.project.as_deref());
-            // The full 49-field form lives on the Agents page; Edit loads this agent into it and
-            // takes you there, rather than duplicating the schema-driven form in this panel.
+            // The full 49-field form lives on the agent's own editor page; Edit takes you there,
+            // rather than duplicating the schema-driven form in this panel.
             let a_edit = a.clone();
             let edit = menu_item(state, "Edit", false, move || {
-                load_agent_into_form(edit_form, &a_edit);
-                push_state(Route::Agents.path());
-                route.set(Route::Agents);
-                scroll_top();
+                open_agent_editor(state, route, edit_form, Some(&a_edit));
             });
             let actions = row_actions(state, format!("agent:{}", a.name),
                 agent_actions(state, watch, &a), vec![edit]);

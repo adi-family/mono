@@ -1064,6 +1064,34 @@
     height: auto;
     min-height: 0;
   }
+
+  // The same correction, but for the whole right column rather than only the pair: the donate
+  // button below means the rail *always* shares this column now, with or without the Agent panel
+  // above it, so `h-full` would overrun by the button's height whenever no conversation is open.
+  &__side--right > aside {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+  }
+
+  // The foot of the right column: one button, under whichever rail is showing. `flex: none` keeps
+  // the spare height with the rail — this stays exactly as tall as its own text.
+  &__donate {
+    flex: none;
+    margin-top: var(--space-3);
+    padding: 9px 14px;
+    text-align: center;
+    color: var(--ink);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    text-decoration: none;
+
+    &:hover {
+      color: var(--on-accent);
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+  }
   &__about-head {
     display: flex;
     align-items: center;
