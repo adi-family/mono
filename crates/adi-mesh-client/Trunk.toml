@@ -1,0 +1,19 @@
+# Trunk build settings for the mesh client. `dist/` is the deployable artefact — static files, no
+# server — and `scripts/build-mesh-client.sh` is what produces it.
+#
+# There is no `[[proxy]]` here and there never will be: this client has no backend. Everything it
+# shows it fetched itself over QUIC from a machine that is listening on nothing.
+[build]
+target = "index.html"
+dist = "dist"
+
+[watch]
+watch = ["src", "js", "styles", "index.html", "sw.js", "manifest.webmanifest"]
+ignore = ["dist", "harness"]
+
+[serve]
+# Loopback is a *secure context*, so service workers and the install prompt work here exactly as
+# they do over HTTPS in production — which is what makes local iteration on this client possible
+# at all. A LAN address would not: neither would be offered.
+addresses = ["127.0.0.1"]
+port = 9081

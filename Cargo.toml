@@ -1,10 +1,15 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-# adi-webapp and adi-ui target wasm32 and are built by Trunk, never by a native
-# `cargo build`. Keep them out of the default set so `cargo build`/`cargo test` (no
+# adi-webapp, adi-ui and adi-mesh-client target wasm32 and are built by Trunk, never by a
+# native `cargo build`. Keep them out of the default set so `cargo build`/`cargo test` (no
 # `--workspace`) skip them; they stay members so they still inherit workspace
 # metadata/lints and build with `-p … --target wasm32-unknown-unknown`.
+#
+# adi-mesh-client has one more rule: it carries its own `.cargo/config.toml`, because `ring`
+# compiles C for wasm and needs a clang with that backend. Cargo reads config from the current
+# directory upward, so a build started at the repo root never sees it — build that crate from
+# its own directory, or through `scripts/build-mesh-client.sh`.
 default-members = [
     "crates/adi-agents",
     "crates/adi-app",

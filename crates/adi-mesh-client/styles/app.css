@@ -1,0 +1,134 @@
+/* The client's own screen. Hand-written and small on purpose: it is a list, a text box and a
+   button, and the interesting surface is the node's panel filling the viewport underneath.
+
+   Everything here is sized for a thumb — 44 px is Apple's own minimum touch target and nothing
+   tappable is under it — and the safe-area insets are what keep the list clear of a notch and the
+   home indicator when this is installed and running full-bleed. */
+
+:root {
+  --bg: #f5f6f8;
+  --fg: #14161a;
+  --muted: #6b7280;
+  --line: #dfe3e8;
+  --card: #ffffff;
+  --accent: #2f6fed;
+  --danger: #b42318;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101215;
+    --fg: #e8eaed;
+    --muted: #98a2b3;
+    --line: #262b31;
+    --card: #191c21;
+    --accent: #6ea0ff;
+    --danger: #f97066;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  /* A tap that also selects text feels broken on a phone; inputs opt back in below. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+code, .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.shell {
+  max-width: 34rem;
+  margin: 0 auto;
+  padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(1.25rem, env(safe-area-inset-bottom));
+}
+
+header h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.02em; }
+header .sub { margin: 0.15rem 0 1.5rem; color: var(--muted); font-size: 0.95rem; }
+
+.problem {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+  color: var(--danger);
+  border-radius: 0.6rem;
+  padding: 0.75rem 0.9rem;
+  font-size: 0.9rem;
+  /* An error from a node is a sentence, sometimes with a key in it; let it wrap rather than clip. */
+  overflow-wrap: anywhere;
+}
+
+.empty { color: var(--muted); font-size: 0.95rem; }
+
+.nodes { list-style: none; margin: 0 0 1.75rem; padding: 0; display: grid; gap: 0.6rem; }
+.nodes li { display: flex; gap: 0.5rem; align-items: stretch; }
+
+button {
+  font: inherit;
+  border-radius: 0.7rem;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--fg);
+  min-height: 44px;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+}
+button:disabled { opacity: 0.5; cursor: default; }
+
+.node {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+}
+.node .name { font-weight: 600; }
+.node .meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+
+.ghost { color: var(--muted); background: transparent; }
+.danger { color: var(--danger); background: transparent; border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
+.primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; font-weight: 600; }
+
+.add { display: grid; gap: 0.6rem; }
+.add label { font-weight: 600; font-size: 0.95rem; }
+
+textarea, input {
+  font: 15px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+  width: 100%;
+  padding: 0.7rem 0.8rem;
+  border-radius: 0.7rem;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--fg);
+  -webkit-user-select: text;
+  user-select: text;
+  /* Under 16 px iOS zooms the page on focus and never zooms back out. */
+  font-size: 16px;
+}
+input.rename { flex: 1; }
+
+.note { color: var(--muted); font-size: 0.85rem; margin: 0; }
+.label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.3rem; }
+
+footer { margin-top: 2.5rem; border-top: 1px solid var(--line); padding-top: 1.25rem; display: grid; gap: 0.5rem; }
+footer .key { font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+
+/* --- a node's panel ------------------------------------------------------------------------ */
+
+.panel { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
+.panel .bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: max(0.4rem, env(safe-area-inset-top)) 0.6rem 0.4rem;
+  border-bottom: 1px solid var(--line);
+}
+.panel .back { border: 0; background: transparent; color: var(--accent); padding-left: 0.4rem; }
+.panel .title { font-weight: 600; font-size: 0.95rem; }
+.panel iframe { flex: 1; width: 100%; border: 0; background: var(--card); }

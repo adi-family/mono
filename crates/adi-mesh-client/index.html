@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<!-- `viewport-fit=cover` plus the safe-area insets in the stylesheet: installed on an iPhone this
+     runs full-bleed, and without both the list ends under the home indicator. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f5f6f8">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>adi · mesh client</title>
+
+<link data-trunk rel="rust" data-wasm-opt="z" />
+<link data-trunk rel="css" href="styles/app.css" />
+<link data-trunk rel="copy-file" href="manifest.webmanifest" />
+<link data-trunk rel="copy-file" href="sw.js" />
+<!-- Served at `/__adi/panel-shim.js`, which `sw.js` injects into every panel it answers. It is a
+     plain script and not part of the wasm bundle on purpose: it has to run inside the *panel's*
+     document, which is another machine's app, before any of that app's own scripts. -->
+<link data-trunk rel="copy-file" href="js/panel-shim.js" data-target-path="__adi" />
+<link data-trunk rel="copy-dir" href="assets" />
+
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/assets/favicon.png">
+<link rel="apple-touch-icon" href="/assets/apple-touch-icon.png">
+</head>
+<body>
+<script>
+// The service worker is what turns a node's control panel into a page in this browser, so it is
+// registered here rather than from wasm: it must be installing while the bundle is still
+// downloading, and on a first-ever load the page has to be claimed before any panel is opened.
+//
+// It is also what makes this installable. `beforeinstallprompt` fires once, early, before wasm is
+// running, and the saved event is the only handle that can open the install dialog afterwards —
+// so it is parked on `window.__adiPwa`, the same bridge the control panel uses
+// (`adi-webapp/src/pwa.rs`), and read from Rust later.
+window.__adiPwa = { canInstall: false, standalone: false, onchange: null, install: () => {} };
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((e) => console.error("sw:", e));
+  });
+}
+
+const media = window.matchMedia("(display-mode: standalone)");
+window.__adiPwa.standalone = media.matches || window.navigator.standalone === true;
+
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  window.__adiPwa.canInstall = true;
+  window.__adiPwa.install = () => event.prompt();
+  if (window.__adiPwa.onchange) window.__adiPwa.onchange();
+});
+window.addEventListener("appinstalled", () => {
+  window.__adiPwa.canInstall = false;
+  if (window.__adiPwa.onchange) window.__adiPwa.onchange();
+});
+</script>
+</body>
+</html>

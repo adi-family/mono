@@ -1,0 +1,20 @@
+# `ring` (iroh's `tls-ring` crypto provider, and the only one the tree uses) compiles C for every
+# target it supports, wasm32-unknown-unknown included. Apple's `clang` is built without the wasm
+# backend, so cc-rs fails with:
+#
+#     error: unable to create target: 'No available targets are compatible with triple
+#     "wasm32-unknown-unknown"'
+#
+# Homebrew's LLVM has that backend. Pointing cc-rs at it is the whole fix — no wasi-sdk, no
+# emscripten, no patched ring. This is the one piece of host setup a browser build of anything
+# iroh needs on a Mac.
+#
+# It lives here rather than in the workspace's own `.cargo/config.toml` because cargo reads config
+# from the *current directory* upward: the file at the repo root is what a build run from the root
+# sees, and a Homebrew path hardcoded there would be wrong on every Linux machine and inert on
+# every other crate. The consequence is worth knowing — **`cargo build -p adi-mesh-client` run
+# from the repo root does not see this file and fails in `ring`.** Build from this directory, or
+# through `scripts/build-mesh-client.sh`, which cd's here first.
+[env]
+CC_wasm32-unknown-unknown = "/opt/homebrew/opt/llvm/bin/clang"
+AR_wasm32-unknown-unknown = "/opt/homebrew/opt/llvm/bin/llvm-ar"

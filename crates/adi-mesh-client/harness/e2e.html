@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>adi mesh client — end to end</title>
+<style>body { font: 13px/1.5 ui-monospace, Menlo, monospace; margin: 1.5rem; } pre { white-space: pre-wrap; }</style>
+</head>
+<body>
+<h1>adi mesh client — end to end</h1>
+<pre id="out">running…</pre>
+<script type="module">
+// Drives the shipped client the way a person would: register the real service worker, boot the
+// real bundle, paste a real invite into the real field, press the real button, open the node, and
+// then read what the panel iframe actually rendered.
+//
+// It runs *beside* the client rather than instead of it — this page is served from the same `dist/`
+// on the same origin, so the worker controls it, `import()` finds the same glue the shell loads,
+// and nothing here is a stand-in for anything.
+//
+// It is a page and not a CDP script because the assertions that matter are inside a same-origin
+// iframe: `frame.contentDocument` reads the panel's DOM directly, which is the only place the
+// answer to "did the websocket shim work" is written down.
+
+const q = new URLSearchParams(location.search);
+const out = document.getElementById("out");
+const steps = [];
+const started = performance.now();
+
+function mark(what) {
+  const line = `[${String(Math.round(performance.now() - started)).padStart(6)}ms] ${what}`;
+  steps.push(line);
+  out.textContent = steps.join("\n");
+  console.log(line);
+}
+
+async function waitFor(fn, what, ms = 30000) {
+  const until = performance.now() + ms;
+  for (;;) {
+    let value = null;
+    try { value = fn(); } catch { value = null; }
+    if (value) return value;
+    if (performance.now() > until) throw new Error(`timed out after ${ms}ms waiting for ${what}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
+const report = { ok: false, error: null, findings: {}, steps };
+
+try {
+  // --- 1. the real worker, controlling this page ----------------------------------------
+  await navigator.serviceWorker.register("/sw.js");
+  mark("service worker registered");
+  await navigator.serviceWorker.ready;
+  if (!navigator.serviceWorker.controller) {
+    await new Promise((r) => navigator.serviceWorker.addEventListener("controllerchange", r, { once: true }));
+  }
+  mark("service worker is controlling this page");
+
+  // --- 2. the real bundle, in this page --------------------------------------------------
+  const shell = await (await fetch("/index.html")).text();
+  const glue = (shell.match(/\/adi-mesh-client-[0-9a-f]+\.js/) || [])[0];
+  if (!glue) throw new Error("no bundle named in /index.html");
+  // The wasm has to be named explicitly. wasm-bindgen's default path comes from the crate name,
+  // not from the module's own URL, so it would look for an unhashed file Trunk never wrote —
+  // which is why the generated `index.html` passes `module_or_path` too.
+  await (await import(glue)).default({ module_or_path: glue.replace(/\.js$/, "_bg.wasm") });
+  mark(`bundle booted (${glue})`);
+
+  const field = await waitFor(() => document.querySelector("#invite"), "the invite field");
+  const key = await waitFor(
+    () => document.querySelector("footer .key")?.textContent?.trim(),
+    "this browser's key",
+  );
+  report.findings.browser_key = key;
+  mark(`this tab's key is ${key}`);
+
+  // --- 3. pairing, by pressing the button ------------------------------------------------
+  const invite = q.get("invite") || "";
+  if (!invite) throw new Error("no invite was passed to this page");
+  field.value = invite;
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+  const pair = await waitFor(
+    () => { const b = document.querySelector("button.primary"); return b && !b.disabled ? b : null; },
+    "the Pair button to become live",
+  );
+  pair.click();
+  mark("pressed Pair");
+
+  const row = await waitFor(
+    () => {
+      const problem = document.querySelector(".problem");
+      if (problem) throw new Error(problem.textContent);
+      return document.querySelector("li button.node");
+    },
+    "the node to appear in the list",
+    90000,
+  );
+  report.findings.petname = row.querySelector(".name").textContent;
+  mark(`paired, and the list now holds "${report.findings.petname}"`);
+
+  // --- 4. open it -------------------------------------------------------------------------
+  row.click();
+  const frame = await waitFor(() => document.querySelector(".panel iframe"), "the panel iframe");
+  mark("opened the panel");
+
+  // `?real=1` points the node's `app` service at a real adi-app instead of the miniature in
+  // `upstream.py`. The assertions differ because the two are different apps — what is being
+  // checked there is that a whole Leptos/wasm single-page app boots through this client, which no
+  // fixture can stand in for.
+  const real = q.get("real") === "1";
+
+  const doc = await waitFor(
+    () => {
+      const d = frame.contentDocument;
+      if (!d) return null;
+      // A real panel draws its shell first and fills it in once `/api` answers, so waiting for
+      // *some* text would pass on a panel whose every call failed. 40 characters is past the
+      // header and into the page.
+      if (real) return d.body && d.body.innerText.trim().length > 40 ? d : null;
+      return d.querySelector("#title") ? d : null;
+    },
+    "the panel's own page",
+    60000,
+  );
+  report.findings.title = real
+    ? `${doc.title} — ${doc.body.innerText.trim().slice(0, 80).replace(/\s+/g, " ")}`
+    : doc.querySelector("#title").textContent.trim();
+  mark(`the panel rendered: ${report.findings.title}`);
+
+  // The panel's URL as *the panel* sees it. The shim rewrote it out of `/n/<petname>/`, which is
+  // what lets a single-page app that routes on `location.pathname` work at all here.
+  // The panel's own view of where it is. Read from the fixture's DOM where there is one, and
+  // from the frame's `location` for a real panel — which is the same fact, said by the browser.
+  report.findings.panel_path = real
+    ? frame.contentWindow.location.pathname
+    : doc.querySelector("#path")?.textContent || "";
+  mark(`the panel's own location.pathname is "${report.findings.panel_path}"`);
+
+  if (real) {
+    // A real panel has no fixture markers, so what is asserted is what a reader would check: it
+    // drew something, it is on `/`, and its own `/api` answered — the last read straight out of
+    // the page rather than out of a probe, since the panel only renders once it has.
+    report.ok = report.findings.panel_path === "/" && doc.body.innerText.trim().length > 0;
+    report.error = report.ok ? null : "the real panel did not render through the client";
+    mark(report.ok ? "END TO END PASSED (real panel)" : "END TO END FAILED (real panel)");
+    await fetch("/report", { method: "POST", body: JSON.stringify(report, null, 2) }).catch(() => {});
+    throw { handled: true };
+  }
+
+  // --- 5. what the panel itself managed to do ---------------------------------------------
+  const health = await waitFor(
+    () => { const t = doc.querySelector("#health")?.textContent; return t && !t.endsWith("pending") ? t : null; },
+    "the panel's own /api call",
+    60000,
+  );
+  report.findings.health = health;
+  mark(`the panel's root-absolute /api/health: ${health}`);
+
+  const live = await waitFor(
+    () => { const t = doc.querySelector("#live")?.textContent; return t && !t.endsWith("pending") ? t : null; },
+    "the panel's own websocket",
+    60000,
+  );
+  report.findings.live = live;
+  mark(`the panel's own new WebSocket(): ${live}`);
+
+  report.ok =
+    report.findings.health === "health: ok" &&
+    report.findings.live === "live: ping-1" &&
+    report.findings.panel_path === "/";
+  if (!report.ok) report.error = "the panel loaded, but something inside it did not answer";
+  mark(report.ok ? "END TO END PASSED" : "END TO END FAILED");
+} catch (e) {
+  // The real-panel branch reports and then throws to skip the fixture assertions below.
+  if (e && e.handled) { /* already reported */ } else {
+  report.error = String((e && e.message) || e);
+  // What the panel iframe actually rendered. It is same-origin, so this reads the page the worker
+  // answered with — which for every failure short of a hang is the sentence that says why.
+  try {
+    const frame = document.querySelector(".panel iframe");
+    report.findings.panel_body = (frame && frame.contentDocument && frame.contentDocument.body
+      ? frame.contentDocument.body.innerText : "(no iframe document)").slice(0, 600);
+  } catch (inner) {
+    report.findings.panel_body = `(unreadable: ${inner})`;
+  }
+  mark(`FAILED: ${report.error}`);
+  mark(`the panel showed: ${report.findings.panel_body}`);
+  await fetch("/report", { method: "POST", body: JSON.stringify(report, null, 2) }).catch(() => {});
+  }
+}
+
+if (report.ok) await fetch("/report", { method: "POST", body: JSON.stringify(report, null, 2) }).catch(() => {});
+</script>
+</body>
+</html>

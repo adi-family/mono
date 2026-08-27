@@ -1,0 +1,12 @@
+# Build output and probe artefacts. `dist/` is what gets deployed and is rebuilt by
+# `scripts/build-mesh-client.sh`; `harness/pkg/` is wasm-pack's, for the probe page only.
+/dist
+/harness/pkg
+/harness/report.json
+/harness/report-*.json
+# The URL the harness last opened — it carries a live pairing token.
+/harness/*-url.txt
+/harness/browser.pem
+/harness/.chrome-profile*
+/harness/.chrome-e2e*
+/harness/*.log

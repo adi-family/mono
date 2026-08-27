@@ -1,0 +1,20 @@
+{
+  "id": "/",
+  "name": "adi · mesh client",
+  "short_name": "adi mesh",
+  "description": "Reach your own machines over the adi mesh. This browser is its own peer: it dials the machines you paired it with and opens each one's control panel. Nothing is stored anywhere but here.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui", "browser"],
+  "orientation": "portrait-primary",
+  "theme_color": "#f5f6f8",
+  "background_color": "#f5f6f8",
+  "categories": ["developer", "productivity", "utilities"],
+  "icons": [
+    { "src": "/assets/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/assets/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "/assets/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

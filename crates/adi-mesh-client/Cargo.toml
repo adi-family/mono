@@ -1,0 +1,80 @@
+[package]
+name = "adi-mesh-client"
+description = "The browser mesh client: a tab that is its own iroh peer, pairs with adi nodes and serves each one's control panel from its own origin."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+# `cdylib` because the artifact is a wasm module, `rlib` so the unit tests in here can be run
+# natively (`cargo test -p adi-mesh-client` reaches everything that is not behind `wasm_bindgen`).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# The version the tree pins. Pinned exactly, for the reason the spike pinned it: what this
+# version does in a browser is the whole premise, and iroh's browser support is a cfg its own
+# build.rs sets (`wasm_browser`) rather than a feature anyone can ask for.
+iroh = { version = "=1.0.3", default-features = false, features = ["tls-ring"] }
+
+# `src/protocol.rs` is `#[path]`-included from adi-mesh and is written against tokio's IO traits.
+# `io-util` is the one feature that carries them and the one that builds for wasm32-unknown-unknown
+# (`net`, `time`, `fs` and the runtime do not — nothing here asks for them).
+tokio = { workspace = true, features = ["io-util"] }
+
+# Timeouts in a browser. `tokio::time` does not exist on wasm32-unknown-unknown; n0-future is
+# iroh's own answer to that and is already in the graph.
+n0-future = "0.3"
+
+leptos = { version = "0.8", features = ["csr"] }
+
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = [
+    "console",
+    "Window",
+    "Performance",
+    "Navigator",
+    "Location",
+    "Document",
+    "Element",
+    "HtmlElement",
+    "HtmlInputElement",
+    "HtmlIFrameElement",
+    "EventTarget",
+    "Event",
+    "KeyboardEvent",
+    "HtmlTextAreaElement",
+    "MessageEvent",
+    "MessagePort",
+    "MessageChannel",
+    "ServiceWorker",
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    # The clipboard is how a pairing token gets from the node's terminal into a phone.
+    "Clipboard",
+    "Storage",
+] }
+console_error_panic_hook = "0.1"
+
+# iroh logs the relay handshake and the QUIC path through `tracing`; without a subscriber a failed
+# dial is a bare error string with no story behind it. Kept in the shipped bundle at INFO, because
+# the browser console is the only debugger this transport has and a reader's failed dial is the
+# one we will never be able to reproduce.
+tracing = { workspace = true }
+wasm-tracing = "2.1"
+
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+anyhow = { workspace = true }
+# Randomness for the websocket masking key and the client's own nonces. Reaches
+# `crypto.getRandomValues` on wasm, the same source `iroh::SecretKey::generate` draws from.
+rand = { workspace = true }
+
+[lints]
+workspace = true

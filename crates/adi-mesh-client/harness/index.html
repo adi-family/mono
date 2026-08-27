@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>adi mesh client — long-lived stream probe</title>
+<style>
+  body { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 2rem; }
+  pre  { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>adi mesh client — long-lived stream probe</h1>
+<pre id="out">running…</pre>
+<script type="module">
+// Everything the tab needs comes off the query string: `run.sh` writes the node's key, its relay
+// and the credential there after starting a node that already authorizes this tab's key. Nothing
+// is hard-coded, so the same page can be pointed at a real node by hand.
+import init, { probe } from './pkg/adi_mesh_client.js';
+
+const q = new URLSearchParams(location.search);
+const out = document.getElementById('out');
+
+const options = {
+  secret: q.get('secret') ?? '',
+  node: q.get('node') ?? '',
+  relay: q.get('relay') ?? '',
+  service: q.get('service') ?? 'probe',
+  username: q.get('user') ?? 'adi',
+  password: q.get('pass') ?? '',
+  sse_path: q.get('sse') ?? '/sse',
+  ws_path: q.get('ws') ?? '/ws',
+  sse_events: Number(q.get('events') ?? 5),
+};
+
+let report;
+try {
+  await init();
+  report = await probe(JSON.stringify(options));
+} catch (e) {
+  // A panic or a failed `init` never reaches the Rust reporter, and a probe that dies silently is
+  // worse than one that fails — so the exception becomes a report of the same shape.
+  report = JSON.stringify({ ok: false, error: `the page threw: ${e}`, cases: [] }, null, 2);
+}
+
+out.textContent = report;
+// The harness reads this file rather than the console: a headless browser's console is not
+// something a shell can wait on, and a POST is.
+await fetch('/report', { method: 'POST', body: report }).catch(() => {});
+</script>
+</body>
+</html>
