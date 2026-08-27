@@ -49,6 +49,8 @@ async fn main() -> anyhow::Result<()> {
         );
     }
 
+    warn_if_config_is_user_writable(&path);
+
     let mut hive = if path.exists() {
         info!(path = %path.display(), "loading hive config");
         Hive::load(&path)?
@@ -304,6 +306,50 @@ async fn bind_tls(
         }
     }
 }
+
+/// Say so when a **root** hive is reading a config an ordinary user can write.
+///
+/// A warning and not a refusal, deliberately. sshd, sudo and cron all refuse in this situation,
+/// and refusing is the stronger fix — but the config a root front door is pointed at *is*
+/// `~/.adi/mono/hive/hive.yaml`, which is the user's own store file by design, so refusing would
+/// take `:80` and `:443` down on every machine already installed until somebody moved or chowned
+/// it. The thing that made this urgent is fixed where it belongs instead: a root hive no longer
+/// launches anything the file asks for ([`Hive::runners`]). What is left is that whoever can write
+/// the file can still re-point a *route* — worth knowing about, not worth going dark over.
+#[cfg(unix)]
+fn warn_if_config_is_user_writable(path: &Path) {
+    use std::os::unix::fs::MetadataExt as _;
+
+    // SAFETY: POSIX `geteuid` takes no arguments, cannot fail, and reads no caller memory.
+    #[allow(unsafe_code)]
+    let root = unsafe {
+        unsafe extern "C" {
+            fn geteuid() -> u32;
+        }
+        geteuid() == 0
+    };
+    if !root {
+        return;
+    }
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+    // Ownership *or* a group/other write bit: the owner can grant themselves the mode, so
+    // `0644 alice` is as writable by alice as `0666` is by everyone.
+    let (uid, mode) = (meta.uid(), meta.mode() & 0o7777);
+    if uid == 0 && mode & 0o022 == 0 {
+        return;
+    }
+    warn!(
+        path = %path.display(), uid, mode = format!("{mode:04o}"),
+        "running as root from a config a non-root user can write — they cannot make this daemon \
+         launch anything (runners are dropped when root), but they can re-point any route it serves"
+    );
+}
+
+/// Windows has no root front door, so there is no privilege boundary to warn about.
+#[cfg(not(unix))]
+fn warn_if_config_is_user_writable(_path: &Path) {}
 
 /// Upper bound on how long shutdown waits for all runners to stop.
 const TERM_TIMEOUT: Duration = Duration::from_secs(20);

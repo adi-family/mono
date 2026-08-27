@@ -13,8 +13,9 @@
 //!
 //! It is deliberately a *second* hive, not the front door:
 //!
-//! - It runs **unprivileged**, so it may launch user code. `adi-hive` strips imported runners
-//!   when it runs as root, which is exactly why the root front door can only route.
+//! - It runs **unprivileged**, so it may launch user code. A root `adi-hive` launches *nothing* —
+//!   not an imported runner and not one of its own — which is exactly why the root front door can
+//!   only route.
 //! - It owns **no routes**. Routing dashboards is the front door's job, through the same
 //!   imports. This instance exists to run processes, and binds one throwaway loopback port only
 //!   because adi-hive requires an address to start.
@@ -67,9 +68,9 @@ fn supervisor_config() -> String {
 #
 # Written by `adi-mono up`; edit freely, it is not regenerated once it exists.
 #
-# Runs UNPRIVILEGED, which is the point: adi-hive strips imported runners only when it runs as
-# root, so this instance — unlike the root front door — keeps them and actually launches every
-# dashboard's bun servers and every project's services. The front door only ROUTES.
+# Runs UNPRIVILEGED, which is the point: a root adi-hive launches nothing at all — not an imported
+# runner, not one of its own — so this instance, unlike the root front door, is what actually
+# launches every dashboard's bun servers and every project's services. The front door only ROUTES.
 #
 # It owns no routes of its own. adi-hive still requires one bindable address to start, so it gets
 # a harmless loopback port, deliberately outside the ports manager's 8000-9999 range so a future
