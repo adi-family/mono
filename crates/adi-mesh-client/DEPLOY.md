@@ -1,9 +1,11 @@
 # Deploying `mono-mesh-client.withadi.dev`
 
-> **Deployed 2026-08-27.** Cloudflare Pages project **`mono-mesh-client`**, live and verified at
-> <https://mono-mesh-client.pages.dev>. The custom domain is attached on the Pages side and is
-> `pending` on one thing only — a DNS record this machine's token may not write. See
-> *[The last step](#the-last-step-a-dns-record-this-machine-cannot-write)*.
+> **Live 2026-08-27** on both <https://mono-mesh-client.withadi.dev> and
+> <https://mono-mesh-client.pages.dev>. Cloudflare Pages project **`mono-mesh-client`**; the DNS
+> record was added by the operator and the certificate issued.
+>
+> **One thing is still wrong on the custom domain**, and it is a zone setting rather than anything
+> in this build — see *[The zone overrides `_headers`](#the-zone-overrides-_headers-on-the-custom-domain)*.
 
 The artefact is `crates/adi-mesh-client/dist/` — **static files, no server, no build step on the
 host, no environment variables.** Everything the client shows it fetched itself over QUIC from a
@@ -73,7 +75,40 @@ Requirements 2 and 3 are **no longer manual**: the build now writes `dist/_heade
 and are copied by the `copy-file` links in `index.html`, so every build carries them — nothing has
 to be re-entered in the dashboard after a deploy.
 
-## The last step: a DNS record this machine cannot write
+## The zone overrides `_headers` on the custom domain
+
+**Measured 2026-08-27, on the same deployment, one minute apart:**
+
+| | `/sw.js` | `/__adi/panel-shim.js` |
+| --- | --- | --- |
+| `mono-mesh-client.pages.dev` | `cache-control: no-cache` | `no-cache` |
+| `mono-mesh-client.withadi.dev` | **`max-age=14400`** | **`max-age=14400`** |
+
+Same files, same build, same `_headers`. The difference is that the custom domain is **proxied
+through the `withadi.dev` zone** and `pages.dev` is not, so the zone's *Browser Cache TTL* — four
+hours, Cloudflare's long-standing default — is applied on top of what Pages sends. `_headers` is
+not being ignored; it is being overridden downstream.
+
+Why it matters, and why it is not a crisis: browsers largely bypass the HTTP cache when they check
+a **service worker** script for updates (`updateViaCache` defaults to `"imports"`), so `sw.js`
+mostly escapes. `/__adi/panel-shim.js` does not — it is an ordinary subresource, and it is injected
+into every panel by the worker. The two are written to move together; a four-hour window where a
+new worker meets an old shim is exactly what the `_headers` rule exists to prevent.
+
+**The fix is a zone setting and needs a browser** — the wrangler OAuth token cannot even *read*
+zone settings (`10000 Authentication error` on `GET /zones/<zone>/settings/browser_cache_ttl`), let
+alone write them:
+
+- *withadi.dev* → **Caching** → **Configuration** → **Browser Cache TTL** → **Respect Existing
+  Headers**. Zone-wide, one setting, and it is the correct posture for a zone that serves builds
+  whose filenames already carry a content hash.
+- Or, if something else on the zone wants that TTL, a **Cache Rule** matching
+  `http.host eq "mono-mesh-client.withadi.dev" and (http.request.uri.path eq "/sw.js" or
+  http.request.uri.path contains "/__adi/")` with *Browser TTL → Respect origin*.
+
+Verify with the table above: both rows should read `no-cache`.
+
+## Attaching the custom domain — done, and what it took
 
 Attaching the custom domain is two separate things, and only the first one worked from here.
 
@@ -85,8 +120,10 @@ POST /client/v4/accounts/<account>/pages/projects/mono-mesh-client/domains
      {"name":"mono-mesh-client.withadi.dev"}          → success, status "initializing"
 ```
 
-**Not done** — the `CNAME`. The zone `withadi.dev` (`7dcdc690ed524a9d1ede599897066c0f`) is on the
-same account and active, but **Pages did not create the record**, and creating it by hand fails:
+**Needed a human** — the `CNAME`. (Added by the operator on 2026-08-27; the domain went `active`
+and the certificate issued. Recorded because the next deploy to a new hostname will hit it again.)
+The zone `withadi.dev` (`7dcdc690ed524a9d1ede599897066c0f`) is on the same account and active, but
+**Pages did not create the record**, and creating it by hand fails:
 
 ```
 POST /client/v4/zones/<zone>/dns_records   → 10000 Authentication error
