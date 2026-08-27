@@ -1,5 +1,5 @@
-//! The Global Analytics page (`/extended/analytics`): one screen answering "what has actually run
-//! on this machine, and what hasn't?".
+//! The Global Analytics page (`/extended/analytics`): one screen answering "what is running on this
+//! machine right now, what has actually run on it, and what hasn't?".
 //!
 //! Every number here is derived on the client from two listings the panel already carries —
 //! `/api/agents` (what is *defined*) and `/api/agents/runs/all` (what was *done*) — so the page
@@ -12,7 +12,7 @@
 //! in front of you.
 
 use adi_ui::{EmptyRow, Row as TableRow, Table};
-use adi_webapp_api::types::AgentRunInfo;
+use adi_webapp_api::types::{AgentDto, AgentRunInfo};
 use leptos::prelude::*;
 
 use crate::state::State;
@@ -38,14 +38,16 @@ pub(crate) const BUSIEST_FIRST: Sort = Sort {
 /// How many days the activity chart covers, today included.
 const ACTIVITY_DAYS: i64 = 14;
 
-/// The Global Analytics page: the totals across every agent, the last fortnight of activity, a
-/// per-agent breakdown, the agents nothing has ever run, and how the runs that finished ended.
+/// The Global Analytics page: what is working at this moment, the totals across every agent, the
+/// last fortnight of activity, a per-agent breakdown, the agents nothing has ever run, and how the
+/// runs that finished ended.
 ///
 /// `spend` is the daily chart's mode — false counts runs, true adds up what they cost. It is owned
 /// by the shell rather than made here, like every other page's view state: this function re-runs on
 /// a route change, and a signal made inside it would put the chart back on runs each time.
 pub(crate) fn analytics_view(state: State, spend: RwSignal<bool>) -> AnyView {
     view! {
+        {move || running_view(state)}
         {move || overview_view(state)}
         {move || activity_view(state, spend)}
         {agents_panel(state)}
@@ -53,6 +55,209 @@ pub(crate) fn analytics_view(state: State, spend: RwSignal<bool>) -> AnyView {
         {move || outcomes_view(state)}
     }
     .into_any()
+}
+
+// ---- what is running right now -------------------------------------------------------------------
+
+/// One thing this machine is doing at this moment: a run that has not stopped, or an interactive
+/// agent's live session.
+///
+/// The two share a list because a reader asking "what is running?" does not care which of them an
+/// answer came from — but they are not the same object, and `session` is what says so: a pty
+/// session has no run behind it, so it carries neither a task nor a start.
+#[derive(Clone)]
+struct Busy {
+    agent: String,
+    backend: String,
+    project: String,
+    /// The task the run was launched with, already cut to a title by the server. Empty for a live
+    /// session — the session *is* the conversation, and it was never handed one.
+    task: String,
+    /// When the run started; 0 for a live session, whose start nothing in the listing carries.
+    started_at: u64,
+    /// When it last said something; 0 until it has said anything at all.
+    last_activity: u64,
+    session: bool,
+}
+
+/// Everything in flight, most recently active first.
+///
+/// This is exactly what the Overview's "working right now" counts — [`AgentStats::busy`] — which is
+/// why it sits above it: the tile says how many, and this says which. The two read the same two
+/// listings for the same reason, so a machine cannot be told it has three agents working and then
+/// shown two.
+fn busy_now(state: State) -> Vec<Busy> {
+    let defined = state.agents.get().map(|a| a.agents).unwrap_or_default();
+    let history = state.all_chats.get().map(|c| c.agents).unwrap_or_default();
+    let of = |d: Option<&AgentDto>| match d {
+        None => (String::new(), String::new()),
+        Some(d) => (
+            d.backend.clone(),
+            d.project
+                .as_deref()
+                .map(|p| project_label(state, p))
+                .unwrap_or_default(),
+        ),
+    };
+
+    let mut rows: Vec<Busy> = Vec::new();
+    for ar in &history {
+        let (backend, project) = of(defined.iter().find(|d| d.name == ar.name));
+        for r in ar.runs.iter().filter(|r| r.running) {
+            rows.push(Busy {
+                agent: ar.name.clone(),
+                backend: backend.clone(),
+                project: project.clone(),
+                task: r.message.clone(),
+                started_at: r.started_at,
+                last_activity: r.last_activity,
+                session: false,
+            });
+        }
+    }
+    // A pty backend keeps no run history, so its live session is in none of the rows above — the
+    // agent's own flag is the only thing that reports one. An agent that already has a run in
+    // flight is skipped: for a headless backend the flag and that run are the same work, and
+    // listing it twice would say two things are happening where one is.
+    for d in defined.iter().filter(|d| d.running) {
+        if rows.iter().any(|b| b.agent == d.name) {
+            continue;
+        }
+        let (backend, project) = of(Some(d));
+        rows.push(Busy {
+            agent: d.name.clone(),
+            backend,
+            project,
+            task: String::new(),
+            started_at: 0,
+            last_activity: 0,
+            session: true,
+        });
+    }
+    // Most recently active first: of several things running, the one that just spoke is the one
+    // being watched. A run that has said nothing yet is ordered by its start, and ties fall back
+    // to the name so the list doesn't reshuffle under the reader between polls.
+    rows.sort_by(|a, b| {
+        b.last_activity
+            .max(b.started_at)
+            .cmp(&a.last_activity.max(a.started_at))
+            .then_with(|| a.agent.cmp(&b.agent))
+    });
+    rows
+}
+
+/// What is running right now, at the top of the page: a line per run in flight, with the task it
+/// was given and how long it has been at it.
+///
+/// It leads because everything below it is history — a page that opens on a fortnight of bars says
+/// what this machine has done and nothing at all about what it is doing.
+///
+/// It renders even when nothing is running. On the one panel that answers "is anything happening?",
+/// a panel that disappears and a page that hasn't loaded look identical, and the quiet answer is
+/// worth saying in as many words.
+fn running_view(state: State) -> AnyView {
+    let loading = state.agents.get().is_none() && state.all_chats.get().is_none();
+    let rows = busy_now(state);
+    let count = rows.len();
+    let body = match (loading, rows.is_empty()) {
+        (true, _) => view! { <div class="adi-empty">"Loading…"</div> }.into_any(),
+        (_, true) => {
+            view! { <div class="adi-empty">"Nothing is running right now."</div> }.into_any()
+        }
+        _ => view! {
+            <div class="adi-panel__body">
+                {rows.into_iter().map(|b| busy_row(state, b)).collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any(),
+    };
+    view! {
+        <section class="adi-panel">
+            <div class="adi-panel__head">
+                <h2 class="adi-panel__title">"Running now"</h2>
+                <span class="adi-chip adi-mono" title="runs in flight, plus live interactive sessions">
+                    {if loading { "\u{2014}".to_string() } else { count.to_string() }}
+                </span>
+                <span class="adi-spacer"></span>
+                // Its own island, like the Overview's: `updated_text` reads the seconds ticker, and
+                // read out here it would rebuild every row once a second to redraw one label.
+                <span class="adi-updated">
+                    {move || updated_text(state.all_chats, state.secs_since)}
+                </span>
+            </div>
+            {body}
+        </section>
+    }
+    .into_any()
+}
+
+/// One line: what it is doing, who is doing it, on what, and for how long.
+///
+/// The elapsed times are their own reactive island so they climb while the page sits still. A live
+/// run's listing only changes when it *says* something, and a run can think for minutes — without
+/// the ticker, "for 3m" would still read "for 3m" ten minutes later, on the one panel whose whole
+/// claim is that it is current.
+fn busy_row(state: State, b: Busy) -> AnyView {
+    let Busy {
+        agent,
+        backend,
+        project,
+        task,
+        started_at,
+        last_activity,
+        session,
+    } = b;
+    let state_word = if session {
+        "\u{25CF} live session"
+    } else {
+        "\u{25CF} running"
+    };
+    // A pty session was never given a task, and a headless run whose message the server couldn't
+    // carry is the same shape of nothing. Neither is an empty cell, which would read as an agent
+    // sitting there doing nothing.
+    let untasked = task.trim().is_empty();
+    let (hover, shown) = match untasked {
+        true => (String::new(), "no task — an interactive session".to_string()),
+        false => (task.clone(), task),
+    };
+    let started_title = match started_at {
+        0 => String::new(),
+        ms => format!("started {}", fmt_date(ms / 1000)),
+    };
+    view! {
+        <div class="adi-nowrow">
+            <span class="adi-nowrow__state">{state_word}</span>
+            <span class="adi-nowrow__name font-mono" title=backend>{agent}</span>
+            {(!project.is_empty())
+                .then(|| view! { <span class="adi-chip adi-mono">{project}</span> })}
+            <span class="adi-nowrow__task font-mono" class:adi-muted=untasked title=hover>
+                {shown}
+            </span>
+            <span class="adi-nowrow__meta text-meta" title=started_title>
+                {move || {
+                    state.secs_since.track();
+                    busy_meta(started_at, last_activity, session)
+                }}
+            </span>
+        </div>
+    }
+    .into_any()
+}
+
+/// The right-hand end of a row: how long this has been going, and how long since it last spoke.
+///
+/// A live session gets neither — the listing carries no start for one — so it says what it is
+/// rather than printing two dashes.
+fn busy_meta(started_at: u64, last_activity: u64, session: bool) -> String {
+    if session || started_at == 0 {
+        return "live now".to_string();
+    }
+    let going = format!("for {}", dur(now_ms().saturating_sub(started_at) / 1000));
+    match last_activity {
+        // A run that has not said anything yet: its start is the only moment it has.
+        0 => going,
+        ms => format!("{going} · last said {}", ago(ms)),
+    }
 }
 
 // ---- the numbers -------------------------------------------------------------------------------
@@ -124,21 +329,6 @@ impl AgentStats {
 fn agent_stats(state: State) -> Vec<AgentStats> {
     let defined = state.agents.get().map(|a| a.agents).unwrap_or_default();
     let history = state.all_chats.get().map(|c| c.agents).unwrap_or_default();
-    // An agent is filed under a project *id*, and several of those here are UUIDs. Resolving
-    // them to names is not only friendlier: a 36-character cell pushes half the table off the
-    // right edge, so the id would cost the reader the columns it was meant to sit beside.
-    let project_name = |id: &str| -> String {
-        state
-            .projects
-            .get()
-            .and_then(|p| {
-                p.projects
-                    .iter()
-                    .find(|p| p.id == id)
-                    .map(|p| p.name.clone())
-            })
-            .unwrap_or_else(|| id.to_string())
-    };
 
     let mut rows: Vec<AgentStats> = defined
         .iter()
@@ -151,7 +341,11 @@ fn agent_stats(state: State) -> Vec<AgentStats> {
             let mut s = AgentStats {
                 name: d.name.clone(),
                 backend: d.backend.clone(),
-                project: d.project.as_deref().map(&project_name).unwrap_or_default(),
+                project: d
+                    .project
+                    .as_deref()
+                    .map(|p| project_label(state, p))
+                    .unwrap_or_default(),
                 defined: true,
                 interactive: d.executor == "pty",
                 live_session: d.running,
@@ -193,6 +387,23 @@ fn agent_stats(state: State) -> Vec<AgentStats> {
         rows.push(s);
     }
     rows
+}
+
+/// A project's *name*, given the id an agent is filed under. Several of those here are UUIDs, and
+/// resolving them is not only friendlier: a 36-character cell pushes half a table off the right
+/// edge, so the id would cost the reader the columns it was meant to sit beside. It is still the
+/// fallback — a project the listing hasn't got is better named badly than not at all.
+fn project_label(state: State, id: &str) -> String {
+    state
+        .projects
+        .get()
+        .and_then(|p| {
+            p.projects
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| p.name.clone())
+        })
+        .unwrap_or_else(|| id.to_string())
 }
 
 /// Add one agent's run history into its row.
@@ -706,6 +917,18 @@ fn ago(ms: u64) -> String {
     }
 }
 
+/// A coarse elapsed time for something still going: seconds up to a minute, then minutes, then
+/// hours and days. Deliberately not [`ago`]'s wording — "12m ago" names a moment in the past, and a
+/// run that has been working for twelve minutes is not one.
+fn dur(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3_600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h {:02}m", s / 3_600, (s % 3_600) / 60),
+        s => format!("{}d {}h", s / 86_400, (s % 86_400) / 3_600),
+    }
+}
+
 /// Micro-dollars as money, for a cell that may have nothing to report. Anything under a cent reads
 /// as `<$0.01` rather than `$0.00`, which would say "free" about a run that wasn't.
 fn fmt_cost(micro: u64) -> String {
@@ -736,6 +959,28 @@ mod tests {
         assert_eq!(fmt_cost(9_999), "<$0.01");
         assert_eq!(fmt_cost(10_000), "$0.01");
         assert_eq!(fmt_cost(1_500_000), "$1.50");
+    }
+
+    /// An elapsed time reads as a duration, and never as a moment: a run eleven minutes in has
+    /// been going "11m", which is not the same sentence as "11m ago".
+    #[test]
+    fn an_elapsed_time_reads_as_a_duration() {
+        assert_eq!(dur(0), "0s");
+        assert_eq!(dur(59), "59s");
+        assert_eq!(dur(60), "1m");
+        assert_eq!(dur(3_599), "59m");
+        assert_eq!(dur(3_600), "1h 00m");
+        assert_eq!(dur(7_380), "2h 03m");
+        assert_eq!(dur(86_400), "1d 0h");
+        assert_eq!(dur(180_000), "2d 2h");
+    }
+
+    /// A live session has no start to count from, so the row says what it is instead of counting
+    /// from the epoch — which would report a pty session as having run for 56 years.
+    #[test]
+    fn a_session_without_a_start_is_not_timed() {
+        assert_eq!(busy_meta(0, 0, true), "live now");
+        assert_eq!(busy_meta(0, 0, false), "live now");
     }
 
     /// A day that cost nothing costs `$0.00`; only a *cell* with nothing to report gets the dash.

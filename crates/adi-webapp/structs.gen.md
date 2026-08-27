@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-59 structs · 7 enums · 1 type alias across 22 files.
+60 structs · 7 enums · 1 type alias across 22 files.
 
 ## Index
 
@@ -13,7 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
 - [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
-- [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `AgentStats`, `Day`
+- [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
 - [`src/pages/knowledge.rs`](#srcpagesknowledgers) — `Scope`
@@ -245,6 +245,23 @@ struct SessionRef {
 ---
 
 ## `src/pages/analytics.rs`
+
+### struct `Busy`
+
+One thing this machine is doing at this moment: a run that has not stopped, or an interactive agent's live session.
+
+```rust
+#[derive(Clone)]
+struct Busy {
+    agent: String,
+    backend: String,
+    project: String,
+    task: String,
+    started_at: u64,
+    last_activity: u64,
+    session: bool,
+}
+```
 
 ### struct `AgentStats`
 

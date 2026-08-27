@@ -1576,9 +1576,50 @@
 
 
 // ---- global analytics (`/extended/analytics`) ---------------------------------------
-// Three shapes, all page-local: a row of stat tiles, a fortnight of daily bars, and the
-// "how runs ended" breakdown. None of them is a component — each exists once, on one page,
-// and a component library earns its place by being used twice.
+// Four shapes, all page-local: the "running now" list, a row of stat tiles, a fortnight of
+// daily bars, and the "how runs ended" breakdown. None of them is a component — each exists
+// once, on one page, and a component library earns its place by being used twice.
+
+// One row per thing in flight: a state word, whose agent it is, the task, and how long it has
+// been going. Only the task flexes, and it is the only thing here allowed to be long — a run
+// launched with three paragraphs truncates in place rather than pushing the elapsed time off
+// the end of the row, which is the number the row is read for.
+.adi-nowrow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+
+  &__state {
+    flex: 0 0 auto;
+    font-size: var(--text-sm);
+    color: var(--online);
+    white-space: nowrap;
+  }
+
+  &__name {
+    flex: 0 0 auto;
+    font-size: var(--text-sm);
+    font-weight: 550;
+    color: var(--ink);
+  }
+
+  &__task {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: var(--text-sm);
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  &__meta {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+}
 
 // The tiles. The 1px gap over a border-coloured ground draws the rules between them, so a
 // tile needs no border of its own and the row can reflow to any count without ever doubling

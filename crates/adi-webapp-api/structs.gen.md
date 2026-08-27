@@ -1940,6 +1940,8 @@ pub struct AgentPeek {
     pub run_id: String,
     #[serde(default)]
     pub answerable: bool,
+    #[serde(default)]
+    pub cwd: String,
     #[serde(default = "default_caps")]
     pub caps: AgentCapabilities,
     #[serde(default, skip_serializing_if = "Option::is_none")]
