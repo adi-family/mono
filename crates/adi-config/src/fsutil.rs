@@ -93,9 +93,10 @@ pub(crate) fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)?;
-    file.sync_all()
+    // `write_all`, and deliberately no `sync_all`: this replaces a `std::fs::write`, and adding an
+    // fsync to every write in the store would be a durability change smuggled in under a
+    // permissions one — paid on every task, manifest and run record the app saves.
+    options.open(path)?.write_all(bytes)
 }
 
 /// Leave a directory owner-only (`0700`). Best-effort: a directory somebody else owns — the root

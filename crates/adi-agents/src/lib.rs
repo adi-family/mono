@@ -3641,8 +3641,14 @@ mod tests {
         std::fs::write(
             &bin,
             format!(
-                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n<<<ARG>>>\\n' \"$a\"; done > '{}'\n",
-                argv.display()
+                // Written to a temp name and renamed, so `engine_argv` below sees either nothing
+                // or the whole command line. Redirecting straight at `argv` made the file
+                // non-empty from the first argument on, and the reader — which polls for
+                // non-empty — could return a command line that was still being written. That is
+                // a flake under load, and it reads as a real assertion failure about argument
+                // order rather than as a half-read file.
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n<<<ARG>>>\\n' \"$a\"; done > '{argv}.part'\nmv '{argv}.part' '{argv}'\n",
+                argv = argv.display()
             ),
         )
         .expect("write the fake engine");
