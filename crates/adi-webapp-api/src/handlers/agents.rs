@@ -234,6 +234,7 @@ pub fn peek_run(store: &Agents, body: &[u8]) -> Response {
         interactive: peek.interactive,
         run_id: run_id.to_string(),
         answerable: caps.answerable,
+        cwd: run_dir(store, &agent, run_id),
         caps,
         pending_question: store
             .pending_question(&agent.name, run_id)
@@ -538,6 +539,7 @@ fn conversation_snapshot(store: &Agents, agent: &StoredAgent, run_id: &str) -> R
         interactive: peek.interactive,
         run_id: run_id.to_string(),
         answerable: true,
+        cwd: run_dir(store, agent, run_id),
         // The one capability asked of *this run* rather than of the agent's backend: a simulated
         // conversation is a person in the model's seat and has nowhere to show a picture, however
         // capable the engine behind the agent is. Deciding it from the backend would offer a
@@ -1381,12 +1383,23 @@ fn peek_response(store: &Agents, agent: &StoredAgent) -> Response {
         // registered against a conversation, and there is none here to have registered any.
         pending_question: None,
         awaits: Vec::new(),
-        // A name-based peek isn't scoped to a run, so it carries no transcript. The progress feed is
-        // driven by the run-scoped `peek_run` / `reply_run` above.
+        // A name-based peek isn't scoped to a run, so it carries no transcript, and no directory
+        // either: a working directory is pinned to a conversation. The progress feed is driven by
+        // the run-scoped `peek_run` / `reply_run` above.
         answerable: false,
+        cwd: String::new(),
         caps: agent_caps(agent),
         turns: Vec::new(),
     })
+}
+
+/// Where one conversation runs, as a string for the wire — empty for a run the store has no
+/// directory for, which is what a session recorded before it kept one looks like.
+fn run_dir(store: &Agents, agent: &StoredAgent, run_id: &str) -> String {
+    store
+        .run_cwd(agent, run_id)
+        .map(|p| p.display().to_string())
+        .unwrap_or_default()
 }
 
 /// Flatten a stored agent into its wire [`AgentDto`], computing adapter and live run state.

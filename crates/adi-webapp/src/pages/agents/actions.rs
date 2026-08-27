@@ -2146,6 +2146,12 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
 
             <aside class="adi-chome__side adi-chome__side--right adi-chome__side--flush adi-ui-type"
                 class:is-open=move || state.chat_drawer.get() == Some(ChatDrawer::Right)>
+                // Who is running this conversation, where, and how — its own island above the
+                // rail, because it is what the conversation *is* rather than what it has come
+                // to. Absent while no conversation is open, which is when the rail below is the
+                // dashboards and there is nothing for this to be about.
+                {move || chat_agent_panel(state, watch)}
+
                 // Rebuilt when the title changes, which is the same moment the body does:
                 // this rail is either the dashboards or the open conversation's counts, and
                 // it swaps both at once.
@@ -2346,8 +2352,266 @@ fn collect_stats(turns: &[AgentTurn]) -> ChatStats {
     s
 }
 
-/// The analytics rail: what the open conversation has added up to so far — how much was said, how
-/// much work the agent did to say it, and what went wrong on the way.
+/// **Who** is running this conversation, **where**, and **how** — the block above Chat Analytics in
+/// the right rail.
+///
+/// Its own island rather than a band inside the analytics rail, because it is not analytics: those
+/// counts are what this conversation has added up to, and this is what it *is*. The two answer
+/// different questions and only one of them changes as you talk.
+///
+/// Three readings, in the order they get asked: which agent this is and what it is doing; where the
+/// conversation runs and how long it has been going; and what the agent was configured with — the
+/// settings that explain behaviour you are looking at, without going to another page to find them.
+///
+/// Everything here is already in hand — the watch's signals and the listings the shell polls — so
+/// the block costs no endpoint of its own. It renders before the first turn lands, too, which is
+/// exactly when "which agent am I talking to, and where" is worth answering and when the counts
+/// below it have nothing to show.
+///
+/// The state word is ranked the way the sessions rail ranks it — a question outranks a turn in
+/// flight, and a wake yields to both (see [`chat_session_row`]) — so one conversation is never
+/// described two ways by two surfaces looking at it.
+fn chat_agent_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
+    let name = watch.name.get()?;
+    let run_id = watch.run_id.get()?;
+    // The agent's own history when the per-agent poll has filled it, the cross-agent listing
+    // otherwise — the same precedence, and the same fallback, as the sessions rail beside this
+    // one (see [`session_bands`]). On the chat screen only the second of the two is fetched,
+    // and taking the first alone would leave this card timeless there.
+    let run = watch
+        .runs
+        .get()
+        .into_iter()
+        .find(|r| r.run_id == run_id)
+        .or_else(|| {
+            state.all_chats.get().and_then(|all| {
+                all.agents
+                    .into_iter()
+                    .find(|a| a.name == name)
+                    .and_then(|a| a.runs.into_iter().find(|r| r.run_id == run_id))
+            })
+        });
+    let peek = watch.peek.get();
+    let answerable = watch.answerable.get();
+    let def = state
+        .agents
+        .get()
+        .and_then(|a| a.agents.into_iter().find(|d| d.name == name));
+
+    // The peek is a second behind nothing — it is the socket the centre pane is drawing from — so
+    // it decides "is it running" when the listing hasn't caught up to a conversation this young.
+    let running = peek.as_ref().is_some_and(|p| p.running);
+    let waiting = peek.as_ref().is_some_and(|p| p.pending_question.is_some())
+        || run.as_ref().is_some_and(|r| r.pending_question.is_some());
+    let word = match (waiting, &run) {
+        (true, _) => "\u{25CF} waiting on you",
+        (false, Some(r)) => run_status(answerable, r),
+        (false, None) if running => "\u{25CF} running",
+        (false, None) => "idle",
+    };
+    let tone = match (waiting, running) {
+        (true, _) => "waiting",
+        (_, true) => "working",
+        _ => "quiet",
+    };
+
+    // What the agent is *made of*, on one line: the backend that runs it and the model it runs on.
+    // Both are the agent's definition rather than the run's, so they are absent for a conversation
+    // whose agent has since been deleted — the run stays readable, it just can't say what ran it.
+    let made_of = def.as_ref().map(|d| {
+        let model = d
+            .arguments
+            .get("model")
+            .and_then(|m| m.as_str())
+            .unwrap_or_default();
+        if model.is_empty() {
+            d.backend.clone()
+        } else {
+            format!("{} \u{00b7} {model}", d.backend)
+        }
+    });
+    let project = def
+        .as_ref()
+        .and_then(|d| d.project.clone())
+        .map(|id| crate::pages::hive::project_path(&projects_of(state), &id));
+    let (started, last) = run
+        .as_ref()
+        .map_or((0, 0), |r| (r.started_at, r.last_activity));
+    // The conversation's own directory, which is not always the agent's: a run can be pointed
+    // somewhere else at launch, and it keeps that directory for every reply after.
+    let cwd = peek.as_ref().map(|p| p.cwd.clone()).unwrap_or_default();
+
+    Some(
+        view! {
+            <section class="adi-chome__about island bg-panel">
+                <header class="adi-chome__about-head">
+                    // The rail's own title classes, so the two headers in this column are the
+                    // same size and weight rather than nearly so.
+                    <h2 class="m-0 text-sub font-semibold text-ink">"Agent"</h2>
+                    <span class="adi-spacer"></span>
+                    <a class="adi-chome__side-link" href="/extended/agents"
+                        title="define and configure agents">"Settings"</a>
+                </header>
+                <div class="adi-chome__about-body">
+                    <div class="adi-chome__agent">
+                        <span class="adi-chome__agent-name adi-mono">{name}</span>
+                        <span class="adi-chome__agent-state" data-state=tone>{word}</span>
+                    </div>
+                    {made_of.map(|m| view! { <div class="adi-chome__group-note">{m}</div> })}
+                    {project.map(|p| view! {
+                        <div class="adi-chiprow">
+                            <span class="adi-chip adi-mono"
+                                title="the project this agent is filed under">{p}</span>
+                        </div>
+                    })}
+
+                    <div class="adi-chome__about-sec">
+                        <div class="adi-chome__about-sec-head">"Chat"</div>
+                        <div class="adi-chome__about-grid">
+                            {(!cwd.is_empty())
+                                .then(|| meta_row("Dir", short_path(&cwd), cwd.clone(), true))}
+                            // Its own island: the ages are read off the clock rather than off
+                            // the data, so without the ticker "started 3m ago" would still say
+                            // 3m long after it wasn't.
+                            {(started > 0).then(|| view! {
+                                <span class="adi-chome__meta-key">"Started"</span>
+                                <span class="adi-chome__meta-val">
+                                    {move || {
+                                        state.secs_since.track();
+                                        if last > started {
+                                            format!("{} \u{00b7} last said {}",
+                                                run_age(started), run_age(last))
+                                        } else {
+                                            run_age(started)
+                                        }
+                                    }}
+                                </span>
+                            })}
+                            {meta_row("Run", run_id.clone(), run_id, true)}
+                        </div>
+                    </div>
+
+                    {def.map(|d| chat_agent_settings(&d))}
+                </div>
+            </section>
+        }
+        .into_any(),
+    )
+}
+
+/// The settings that explain the behaviour in front of you: how freely the agent may act, what it
+/// carries, and what it remembers. Read off the definition, so it is the same answer the Agents
+/// page would give.
+///
+/// Only what is *set* is drawn. An agent with no secrets attached has nothing to say about secrets,
+/// and a row reading "Secrets 0" would take a line to say so in a rail this narrow — the same rule
+/// the analytics rail below follows when it names only the exceptions.
+fn chat_agent_settings(d: &AgentDto) -> AnyView {
+    let arg = |key: &str| {
+        d.arguments
+            .get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string()
+    };
+    // Two backends spell the same idea differently, and an agent carries whichever its own one
+    // reads — so the row is drawn from the first that is set rather than from a single key that is
+    // right for `claude-sdk` and blank for everything else.
+    let permissions = [arg("permission_mode"), arg("approval_policy"), arg("sandbox")]
+        .into_iter()
+        .find(|v| !v.is_empty());
+    /// `1 tool`, `41 tools` — a count that reads as a phrase, since this row is a sentence of
+    /// them rather than a column of numbers.
+    fn many(n: usize, noun: &str) -> String {
+        match n {
+            1 => format!("1 {noun}"),
+            n => format!("{n} {noun}s"),
+        }
+    }
+    let mut carries: Vec<String> = Vec::new();
+    if !d.bin_tools.is_empty() {
+        carries.push(many(d.bin_tools.len(), "tool"));
+    }
+    if !d.knowledge.is_empty() {
+        carries.push(many(d.knowledge.len(), "knowledge base"));
+    }
+    if !d.secrets.is_empty() {
+        carries.push(many(d.secrets.len(), "secret"));
+    }
+    if d.memory {
+        carries.push("memory".to_string());
+    }
+    if permissions.is_none() && carries.is_empty() && !d.unattended {
+        return ().into_any();
+    }
+    view! {
+        <div class="adi-chome__about-sec">
+            <div class="adi-chome__about-sec-head">"Settings"</div>
+            <div class="adi-chome__about-grid">
+                {permissions.map(|p| meta_row("Permissions", p.clone(), p, false))}
+                {(!carries.is_empty()).then(|| {
+                    let all = carries.join(" \u{00b7} ");
+                    meta_row("Carries", all.clone(), all, false)
+                })}
+                // Unattended changes what the agent *does* — its Ask refuses rather than stopping
+                // the work on a question nobody is there to answer — so it is said outright rather
+                // than left to be inferred from a missing row.
+                {d.unattended.then(|| meta_row(
+                    "Runs".to_string(),
+                    "unattended".to_string(),
+                    "the Ask tool refuses; the run decides and says what it assumed".to_string(),
+                    false,
+                ))}
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// One `key   value` pair of the block — two cells of the grid around it, rather than a row of its
+/// own, so every key column in a section is the width of its longest key and the values line up
+/// without a magic number to keep in step with the labels.
+///
+/// `hover` is the whole of a value the rail is too narrow to show. `ident` marks a value that must
+/// not wrap — a path or a run id, which is one string and reads as nonsense broken over two lines;
+/// everything else wraps rather than hiding its tail behind an ellipsis nobody thinks to hover.
+fn meta_row(key: impl Into<String>, value: String, hover: impl Into<String>, ident: bool) -> AnyView {
+    view! {
+        <span class="adi-chome__meta-key">{key.into()}</span>
+        <span class="adi-chome__meta-val adi-mono" class:adi-chome__meta-val--id=ident
+            title=hover.into()>{value}</span>
+    }
+    .into_any()
+}
+
+/// A path cut to its last few segments — `…/mono/projects/bugbounty` — for a rail about a third the
+/// width of the paths it shows.
+///
+/// The tail is what is kept because the tail is what distinguishes: every directory on this machine
+/// starts with the same home, and an ellipsis at the end would leave a column of rows that all read
+/// `/Users/someone/…`. The whole path is a hover away.
+fn short_path(path: &str) -> String {
+    const KEEP: usize = 3;
+    const FITS: usize = 24;
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    if path.len() <= FITS || segments.len() <= KEEP {
+        return path.to_string();
+    }
+    format!("\u{2026}/{}", segments[segments.len() - KEEP..].join("/"))
+}
+
+/// The projects listing, or an empty one while it is still loading — what a name path is resolved
+/// against.
+fn projects_of(state: State) -> Vec<adi_webapp_api::types::Project> {
+    state
+        .projects
+        .get()
+        .map(|p| p.projects)
+        .unwrap_or_default()
+}
+
+/// What the open conversation has added up to so far — how much was said, how much work the agent
+/// did to say it, and what went wrong on the way.
 ///
 /// The counts come off [`AgentPeek::turns`], the transcript the centre pane already polls each
 /// second, so the panel is live without an endpoint or a poll of its own. What it costs to *itemize*

@@ -93,7 +93,7 @@ struct Source {
 /// An id the listing doesn't hold falls back to the id itself, so a row never renders blank
 /// while the projects list is still loading. The walk is bounded by the number of projects, so a
 /// `parent` cycle (a hand-edited manifest) can't hang the render.
-fn project_path(projects: &[Project], id: &str) -> String {
+pub(crate) fn project_path(projects: &[Project], id: &str) -> String {
     let mut steps: Vec<String> = Vec::new();
     let mut cursor = Some(id.to_string());
     while let Some(current) = cursor {

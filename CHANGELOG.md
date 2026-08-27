@@ -20,6 +20,27 @@ extraction script cares about.
 
 ## Unreleased
 
+### Added
+
+- **The chat's right rail says who you are talking to, and where.** Chat Analytics counted what a
+  conversation cost and what went wrong in it, and never named the agent having it — the name was
+  on the session row you clicked to get here and nowhere on the screen you landed on. Above it
+  there is now an **Agent** block of its own: the agent's name and what it is doing right now
+  (waiting on you, answering, running, awaiting a wake, idle), the backend and model behind it and
+  the project it is filed under; the conversation's **working directory**, when it started and
+  when it last said something; and the settings that explain the behaviour in front of you — its
+  permission mode, how many tools, knowledge bases and secrets it carries, whether it keeps a
+  memory, and whether it runs unattended. It appears before the first turn lands, which is when
+  the counts below it have nothing to show yet.
+
+- **Analytics opens with what is running right now.** The page led with a fortnight of history,
+  so it could tell you what this machine had done and nothing about what it was doing. A panel
+  above the totals now names every run in flight — the agent, the project it is filed under, the
+  task it was given, how long it has been at it and when it last said something — and the live
+  sessions of interactive agents beside them, since those keep no run history to appear in.
+  The times climb while you watch, and when nothing is running the panel says so rather than
+  vanishing, which reads the same as a page that hasn't loaded.
+
 ## 0.3.3 — 2026-08-26
 
 ### Fixed

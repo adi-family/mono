@@ -1753,6 +1753,16 @@ pub struct AgentPeek {
     /// Mirrors `caps.answerable`.
     #[serde(default)]
     pub answerable: bool,
+    /// Where this conversation runs — the directory pinned to it when it was created and re-used by
+    /// every turn since, which is what its shell commands and its relative paths are resolved
+    /// against. Empty for a snapshot that is not of one run (an interactive agent's live session),
+    /// and for a run recorded before the store kept this.
+    ///
+    /// A property of the *conversation*, not of the agent: one run can be pointed somewhere other
+    /// than the agent's usual home, and then reading the agent's definition would name the wrong
+    /// directory with complete confidence.
+    #[serde(default)]
+    pub cwd: String,
     /// The backend's capability profile — drives the progress feed (which columns) for this run.
     #[serde(default = "default_caps")]
     pub caps: AgentCapabilities,
