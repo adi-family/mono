@@ -4,8 +4,8 @@
 //! [`Mesh`](crate::mesh::Mesh) this tab holds. The division of labour is worth stating, because it
 //! is the whole architecture in three sentences:
 //!
-//! * The **service worker** decides *which node* a request belongs to and turns the answer back
-//!   into a `Response`. It holds no endpoint — a worker the browser stops and starts at will is the
+//! * The **service worker** decides *which node, and which of its services* a request belongs to
+//!   ([`split_target`]) and turns the answer back into a `Response`. It holds no endpoint — a worker the browser stops and starts at will is the
 //!   wrong owner for a QUIC session, and a panel whose connection died on an idle timer would be a
 //!   panel that breaks after lunch.
 //! * **This module** does the dialling, the HTTP and the RFC 6455, and streams the result back a
@@ -26,13 +26,39 @@ use crate::mesh::{Mesh, Writer};
 use crate::store::NodeRecord;
 use crate::ws::{self, Opcode};
 
-/// The one service a paired browser may reach: the node's own control panel.
+/// The service a bare petname means: the node's own control panel.
 ///
-/// `docs/fleet.md` §8 makes `http:app` the default grant, and ADI-13 decided v1 renders that and
-/// nothing else — a dashboard on this origin would share storage with the key and the passwords
-/// that open every node in the list. Arbitrary services want an origin each, which wants a wildcard
-/// domain, which is not v1.
+/// `docs/fleet.md` §8 makes `http:app` the default grant — the one thing pairing hands out, and
+/// therefore the one thing a node is certain to open. Everything else a node runs is reached by
+/// naming it ([`split_target`]), and only ever with a grant its operator's own panel gave.
 pub const PANEL_SERVICE: &str = "app";
+
+/// Which node, and which of its services, a `/n/<target>/` path names.
+///
+/// The token is a node's mesh hostname with the fleet zone taken off — `<service>.<petname>`, the
+/// same shape `docs/fleet.md` §1 addresses as `nosh.laptop-b.n.adi` — and a bare `<petname>` is
+/// the node's own panel, [`PANEL_SERVICE`]. The **last** label is the node and everything before
+/// it is the service, because a service name is not always one label: a project at `app.nosh.adi`
+/// sits beside the `nosh.adi` it belongs to, and reading the first label instead would name a
+/// different service, or none.
+///
+/// `None` for anything that is not a hostname, which is the only validation this side owes: the
+/// petname is looked up in this browser's own store and the service is checked by the node.
+#[must_use]
+pub fn split_target(target: &str) -> Option<(String, String)> {
+    let labels: Vec<&str> = target.trim().split('.').collect();
+    let [service @ .., node] = labels.as_slice() else {
+        return None;
+    };
+    if !crate::protocol::is_dns_label(node) {
+        return None;
+    }
+    if service.is_empty() {
+        return Some((PANEL_SERVICE.to_string(), (*node).to_string()));
+    }
+    let service = service.join(".");
+    crate::protocol::is_service_name(&service).then(|| (service, (*node).to_string()))
+}
 
 #[wasm_bindgen(module = "/js/bridge.js")]
 extern "C" {
@@ -91,21 +117,21 @@ pub fn install(mesh: Rc<Mesh>, nodes: Vec<NodeRecord>) {
 
     let handlers = Object::new();
     let fetch = Closure::<dyn Fn(String, String, String, String, Option<Vec<u8>>, Sink)>::new(
-        |node: String,
+        |target: String,
          method: String,
          path: String,
          headers: String,
          body: Option<Vec<u8>>,
          sink: Sink| {
             spawn_local(async move {
-                if let Err(e) = serve(&node, &method, &path, &headers, body, &sink).await {
+                if let Err(e) = serve(&target, &method, &path, &headers, body, &sink).await {
                     sink.fail(e);
                 }
             });
         },
     );
     let socket = Closure::<dyn Fn(String, String, SocketSink) -> Socket>::new(
-        |node: String, path: String, sink: SocketSink| open_socket(node, path, sink),
+        |target: String, path: String, sink: SocketSink| open_socket(target, path, sink),
     );
     let _ = Reflect::set(&handlers, &JsValue::from_str("fetch"), fetch.as_ref());
     let _ = Reflect::set(&handlers, &JsValue::from_str("socket"), socket.as_ref());
@@ -152,21 +178,23 @@ pub fn endpoint() -> Option<Rc<Mesh>> {
 // One intercepted fetch
 // ---------------------------------------------------------------------------------------
 
-/// Fetch `path` from `node`'s panel and stream the answer into `sink`.
+/// Fetch `path` from the service `target` names and stream the answer into `sink`.
 async fn serve(
-    node: &str,
+    target: &str,
     method: &str,
     path: &str,
     headers: &str,
     body: Option<Vec<u8>>,
     sink: &Sink,
 ) -> Result<(), String> {
-    let record = node_named(node).ok_or_else(|| {
-        format!("this browser is not paired with a node called {node:?} — pair it again")
+    let (service, petname) = split_target(target)
+        .ok_or_else(|| format!("{target:?} does not name a machine and a service"))?;
+    let record = node_named(&petname).ok_or_else(|| {
+        format!("this browser is not paired with a node called {petname:?} — pair it again")
     })?;
     let mesh = endpoint().ok_or("the mesh endpoint is not up in this tab")?;
 
-    let mut stream = mesh.open(&record.addr()?, PANEL_SERVICE).await?;
+    let mut stream = mesh.open(&record.addr()?, &service).await?;
     let mut request = Request {
         method: method.to_string(),
         target: path.to_string(),
@@ -316,8 +344,8 @@ fn pump(outbox: &Rc<RefCell<Outbox>>) {
     });
 }
 
-/// Open a websocket to `path` on `node`'s panel, and pump its frames into `sink`.
-fn open_socket(node: String, path: String, sink: SocketSink) -> Socket {
+/// Open a websocket to `path` on the service `target` names, and pump its frames into `sink`.
+fn open_socket(target: String, path: String, sink: SocketSink) -> Socket {
     let outbox = Rc::new(RefCell::new(Outbox {
         queue: VecDeque::new(),
         writer: None,
@@ -328,7 +356,7 @@ fn open_socket(node: String, path: String, sink: SocketSink) -> Socket {
     };
 
     spawn_local(async move {
-        match connect(&node, &path).await {
+        match connect(&target, &path).await {
             Ok(stream) => {
                 let (writer, mut reader) = stream.split();
                 outbox.borrow_mut().writer = Some(writer);
@@ -383,11 +411,13 @@ fn open_socket(node: String, path: String, sink: SocketSink) -> Socket {
 }
 
 /// Dial, admit, and complete the RFC 6455 handshake.
-async fn connect(node: &str, path: &str) -> Result<crate::mesh::Stream, String> {
-    let record = node_named(node)
-        .ok_or_else(|| format!("this browser is not paired with a node called {node:?}"))?;
+async fn connect(target: &str, path: &str) -> Result<crate::mesh::Stream, String> {
+    let (service, petname) = split_target(target)
+        .ok_or_else(|| format!("{target:?} does not name a machine and a service"))?;
+    let record = node_named(&petname)
+        .ok_or_else(|| format!("this browser is not paired with a node called {petname:?}"))?;
     let mesh = endpoint().ok_or("the mesh endpoint is not up in this tab")?;
-    let mut stream = mesh.open(&record.addr()?, PANEL_SERVICE).await?;
+    let mut stream = mesh.open(&record.addr()?, &service).await?;
     let request = Request::get(path)
         .with_basic_auth(&record.username, &record.password)
         // The panel's `/api/ws` has no guard but this one: a websocket handshake is exempt from
@@ -396,4 +426,46 @@ async fn connect(node: &str, path: &str) -> Result<crate::mesh::Stream, String> 
         .with("Origin", "http://127.0.0.1");
     ws::handshake(&mut stream, request).await?;
     Ok(stream)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PANEL_SERVICE, split_target};
+
+    #[test]
+    fn a_bare_petname_is_the_node_s_own_panel() {
+        assert_eq!(
+            split_target("laptop-b"),
+            Some((PANEL_SERVICE.to_string(), "laptop-b".to_string()))
+        );
+    }
+
+    #[test]
+    fn everything_before_the_last_label_is_the_service() {
+        assert_eq!(
+            split_target("nosh.laptop-b"),
+            Some(("nosh".to_string(), "laptop-b".to_string()))
+        );
+        // The deep name is the case reading the *first* label would get wrong: `app.nosh` is a
+        // service of its own beside `nosh`, and both live on the node called `laptop-b`.
+        assert_eq!(
+            split_target("app.nosh.laptop-b"),
+            Some(("app.nosh".to_string(), "laptop-b".to_string()))
+        );
+    }
+
+    #[test]
+    fn nothing_that_is_not_a_hostname_names_anything() {
+        for target in [
+            "",
+            ".",
+            "laptop-b.",
+            ".laptop-b",
+            "LAPTOP",
+            "a b",
+            "-x.node",
+        ] {
+            assert_eq!(split_target(target), None, "{target:?}");
+        }
+    }
 }

@@ -104,7 +104,9 @@ rm -f "$STORE/mesh/invites.toml"
 
 if [[ -z "${APP_PORT:-}" ]]; then
   say "starting the node's local service on 127.0.0.1:$SERVICE_PORT"
-  python3 "$HERE/upstream.py" "$SERVICE_PORT" >"$HERE/upstream.log" 2>&1 &
+  # The registry's path goes with it: standing in for the panel means answering `/api/fleet` from
+  # the node's real `fleet.toml` and writing a grant back into it — see upstream.py.
+  python3 "$HERE/upstream.py" "$SERVICE_PORT" "$STORE/mesh/fleet.toml" >"$HERE/upstream.log" 2>&1 &
   pids+=($!)
 else
   say "the node's \`app\` service points at 127.0.0.1:$APP_PORT (not started by this script)"

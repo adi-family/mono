@@ -1,29 +1,37 @@
-//! The client's own screen: a list of nodes, a way to add one, and a panel.
+//! The client's own screen: the machines this browser has paired with, what each of them runs, and
+//! the one action that adds another.
 //!
-//! Deliberately small. Everything a reader does here is on a phone, one-handed, usually to get to
-//! the panel — so the shell is a list and a button, and the interesting surface is the node's own
-//! control panel rendered full-bleed in an iframe (`sw.js` is what makes that iframe a page from
-//! another machine).
+//! Everything a reader does here is on a phone, one-handed, and almost always to get to something
+//! a machine of theirs is serving — so the shell is a list and one button, and the interesting
+//! surface is that machine's own page rendered full-bleed in an iframe (`sw.js` is what makes that
+//! iframe a page from another machine).
 //!
-//! Three things on this screen are not decoration:
+//! What is on this screen, and what is deliberately not:
 //!
-//! * **This browser's key**, shown at the bottom. It is the identity of record (`docs/fleet.md`
-//!   §2), it is what a node's operator sees in their fleet list, and it is the only thing a reader
-//!   can quote when a node refuses them.
+//! * **Scanning is the primary action**, and pasting a token is behind a disclosure. A pairing
+//!   token is 953 characters; the QR is how it gets onto a phone, and the field is the fallback for
+//!   when the camera is refused, absent, or pointed at nothing ([`crate::scan`]). The disclosure
+//!   opens itself where there is no camera API to call, so the fallback is never *hidden* — it is
+//!   only quiet.
+//! * **A node's dashboards are rows under it**, not a thing to go looking for behind its panel:
+//!   what a machine runs is the reason to open it at all (`docs/fleet.md` §11, [`crate::dashboards`]).
+//! * **This browser's key is behind a disclosure.** It is the identity of record (§2) and the only
+//!   thing a reader can quote when a node refuses them — which makes it a thing to find when
+//!   something is wrong, not a thing to read every time the page opens.
 //! * **The petname is local.** Renaming a node here tells the node nothing (§2 rule 5); it is also
-//!   the `/n/<petname>/` path its panel is served under, so it must stay one DNS label.
+//!   the `/n/<petname>/` path its pages are served under, so it must stay one DNS label.
 //! * **Removing a node forgets a password, it does not unpair.** The node still holds a record for
 //!   this browser's key until its operator removes it, and the sentence on the button says so.
-//!
-//! The one screen that is not a list is the camera overlay, and the rule there is that it is an
-//! accelerator and never a gate: **the paste field keeps working when the camera is refused,
-//! absent, or pointed at nothing** ([`crate::scan`]).
+
+use std::collections::HashMap;
 
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use web_sys::HtmlVideoElement;
 
+use crate::dashboards::{self, Board};
 use crate::invite;
+use crate::mark::Mark;
 use crate::mesh::Mesh;
 use crate::scan;
 use crate::store::{self, NodeRecord};
@@ -31,10 +39,39 @@ use crate::store::{self, NodeRecord};
 /// What the shell is showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Screen {
-    /// The node list.
+    /// The machine list.
     Nodes,
-    /// One node's control panel, in an iframe.
-    Panel(String),
+    /// One page from one machine, in an iframe.
+    Page(Open),
+}
+
+/// A page being shown: what to fetch it under, and what to call it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Open {
+    /// The `/n/<target>/` token — `<petname>` for a node's own panel, `<service>.<petname>` for
+    /// one of its dashboards (`crate::bridge::split_target`).
+    target: String,
+    /// What the bar says: the dashboard's name, or the machine's.
+    title: String,
+    /// The machine it is running on, when the title is not already that.
+    under: Option<String>,
+}
+
+/// What this browser knows about what each node runs, keyed by the node's **key** — never its
+/// petname, which is local and can be renamed out from under an answer that is still arriving.
+type Boards = HashMap<String, NodeBoards>;
+
+/// One node's answer to "what do you run?".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NodeBoards {
+    /// Being asked. Draws nothing: a row of skeletons for a list that is usually two entries long
+    /// is more movement than information.
+    Asking,
+    /// Answered — possibly with nothing, which is a true answer for a node that runs no dashboard.
+    Answered(dashboards::Listing),
+    /// The node's own sentence. Shown quietly under the machine, because it is the reason its rows
+    /// are missing and it is usually also why tapping the machine itself would fail.
+    Failed(String),
 }
 
 /// Mount the client.
@@ -48,6 +85,7 @@ fn App() -> impl IntoView {
     let nodes = RwSignal::new(Vec::<NodeRecord>::new());
     let screen = RwSignal::new(Screen::Nodes);
     let problem = RwSignal::new(String::new());
+    let boards = RwSignal::new(Boards::new());
     // Whether the endpoint is bound. A flag and not the endpoint itself: an `Rc<Mesh>` is neither
     // `Send` nor `Sync`, and a signal is. The endpoint lives in [`crate::bridge`], which is where
     // the browser's own callbacks reach it from anyway.
@@ -65,32 +103,57 @@ fn App() -> impl IntoView {
         }
     });
 
+    // One place asks the nodes what they run, and it runs again whenever the list changes — after
+    // the endpoint comes up, after a pairing, after a rename. Each node is asked once: a node
+    // already in the map is one that has been asked, and re-asking on every render would be a
+    // fresh dial per node per keystroke in the rename field.
+    Effect::new(move |_| {
+        if !ready.get() {
+            return;
+        }
+        for record in nodes.get() {
+            let known = boards.with_untracked(|all| all.contains_key(&record.key));
+            if !known {
+                survey(record, boards);
+            }
+        }
+    });
+
     move || match screen.get() {
-        // The panel is mounted and unmounted rather than hidden: an iframe left in the tree keeps
+        // The page is mounted and unmounted rather than hidden: an iframe left in the tree keeps
         // its websocket and its polling alive, and a reader who went back to the list has said
         // they are done with it.
-        Screen::Panel(petname) => view! { <Panel petname screen /> }.into_any(),
+        Screen::Page(open) => view! { <Page open screen /> }.into_any(),
         Screen::Nodes => view! {
             <main class="shell">
                 <header>
-                    <h1>"adi"</h1>
-                    <p class="sub">"Your machines, over the mesh."</p>
+                    <Mark />
+                    <div class="brand">
+                        <h1>"adi"</h1>
+                        <p class="sub">"Your machines, over the mesh."</p>
+                    </div>
                 </header>
 
                 <Show when=move || !problem.get().is_empty()>
                     <p class="problem">{move || problem.get()}</p>
                 </Show>
 
-                <NodeList nodes screen ready=ready.into() />
+                <NodeList nodes screen boards ready=ready.into() />
                 <AddNode nodes ready problem />
 
                 <footer>
-                    <p class="label">"this browser's key"</p>
-                    <code class="key">{move || key.get()}</code>
-                    <p class="note">
-                        "Your key and every node password live in this browser and nowhere else. \
-                         Clearing site data for this site deletes them, and you would pair again."
-                    </p>
+                    // Closed by default. What is in here is what a reader needs when a node
+                    // refuses them, and nothing at all on the days it does not.
+                    <details>
+                        <summary>"This browser"</summary>
+                        <p class="label">"this browser's key"</p>
+                        <code class="key">{move || key.get()}</code>
+                        <p class="note">
+                            "Your key and every node password live in this browser and nowhere \
+                             else. Clearing site data for this site deletes them, and you would \
+                             pair again."
+                        </p>
+                    </details>
                 </footer>
             </main>
         }
@@ -106,10 +169,37 @@ async fn boot() -> Result<(std::rc::Rc<Mesh>, Vec<NodeRecord>), String> {
     Ok((std::rc::Rc::new(mesh), nodes))
 }
 
+/// Ask one node what it runs, and file the answer under its key.
+///
+/// A task per node rather than one that walks the list: each is a dial to a different machine over
+/// a relay, and a phone with one sleeping laptop in the list would otherwise wait out that node's
+/// timeout before hearing from any of the others.
+fn survey(record: NodeRecord, boards: RwSignal<Boards>) {
+    let key = record.key.clone();
+    boards.update(|all| {
+        all.insert(key.clone(), NodeBoards::Asking);
+    });
+    spawn_local(async move {
+        let Some(mesh) = crate::bridge::endpoint() else {
+            return;
+        };
+        let answer = match dashboards::list(&mesh, &record).await {
+            Ok(listing) => NodeBoards::Answered(listing),
+            Err(e) => NodeBoards::Failed(e),
+        };
+        // `try_update`: the shell may have gone — a reader who opened a panel while a slow node
+        // was still answering has unmounted every signal this task holds.
+        boards.try_update(|all| {
+            all.insert(key, answer);
+        });
+    });
+}
+
 #[component]
 fn NodeList(
     nodes: RwSignal<Vec<NodeRecord>>,
     screen: RwSignal<Screen>,
+    boards: RwSignal<Boards>,
     ready: Signal<bool>,
 ) -> impl IntoView {
     let renaming = RwSignal::new(String::new());
@@ -154,26 +244,28 @@ fn NodeList(
     };
 
     view! {
-        <section>
+        <section class="machines">
             <Show when=move || nodes.get().is_empty()>
                 <p class="empty">
                     "No machines yet. On the machine you want to reach, run "
                     <code>"adi-mono mesh invite"</code>
-                    " — then scan the code it draws, or paste the token below."
+                    " — then scan the code it draws."
                 </p>
             </Show>
             <ul class="nodes">
                 <For each=move || nodes.get() key=|node| node.key.clone() let:node>
                     {
+                        let record = node.clone();
                         let petname = node.petname.clone();
                         let short = node.short_key();
                         move || {
+                            let record = record.clone();
                             let petname = petname.clone();
                             let short = short.clone();
                             if renaming.get() == petname {
                                 let (old, gone) = (petname.clone(), petname.clone());
                                 view! {
-                                    <li class="editing">
+                                    <li class="machine editing">
                                         <input
                                             class="rename"
                                             value=petname.clone()
@@ -201,22 +293,32 @@ fn NodeList(
                                 .into_any()
                             } else {
                                 let (open, edit) = (petname.clone(), petname.clone());
+                                let title = petname.clone();
                                 view! {
-                                    <li>
-                                        <button
-                                            class="node"
-                                            disabled=move || !ready.get()
-                                            on:click=move |_| screen.set(Screen::Panel(open.clone()))
-                                        >
-                                            <span class="name">{petname.clone()}</span>
-                                            <span class="meta">{short}</span>
-                                        </button>
-                                        <button
-                                            class="ghost"
-                                            on:click=move |_| renaming.set(edit.clone())
-                                        >
-                                            "Edit"
-                                        </button>
+                                    <li class="machine">
+                                        <div class="row">
+                                            <button
+                                                class="node"
+                                                disabled=move || !ready.get()
+                                                on:click=move |_| {
+                                                    screen.set(Screen::Page(Open {
+                                                        target: open.clone(),
+                                                        title: title.clone(),
+                                                        under: None,
+                                                    }));
+                                                }
+                                            >
+                                                <span class="name">{petname.clone()}</span>
+                                                <span class="meta">{short}</span>
+                                            </button>
+                                            <button
+                                                class="more"
+                                                aria-label="Rename or forget this machine"
+                                                on:click=move |_| renaming.set(edit.clone())
+                                                inner_html=MORE
+                                            ></button>
+                                        </div>
+                                        <Boards record screen boards />
                                     </li>
                                 }
                                 .into_any()
@@ -226,6 +328,129 @@ fn NodeList(
                 </For>
             </ul>
         </section>
+    }
+}
+
+/// The dashboards one machine runs, under its row.
+///
+/// A row that this browser holds no grant for is drawn as an offer rather than as a link that
+/// would answer *not authorized*: pairing grants `http:app` and nothing else, so the first tap on
+/// such a row asks the node for `http:<service>` and opens it once the node has taken it up
+/// (`docs/fleet.md` §11, [`dashboards::allow`]). That escalates nothing — this browser already
+/// holds the node's control panel, which *is* the thing that hands out grants.
+#[component]
+fn Boards(record: NodeRecord, screen: RwSignal<Screen>, boards: RwSignal<Boards>) -> impl IntoView {
+    // The service currently being asked for, so its own row can say so. One at a time, because it
+    // is one tap: the node's five-second reload is what it costs, and a second tap during it lands
+    // on a row that is already busy.
+    let asking = RwSignal::new(String::new());
+    let key = record.key.clone();
+
+    let open = move |board: Board, me: Option<String>| {
+        let record = record.clone();
+        let target = format!("{}.{}", board.service, record.petname);
+        let show = Screen::Page(Open {
+            target,
+            title: board.name.clone(),
+            under: Some(record.petname.clone()),
+        });
+        if board.granted {
+            screen.set(show);
+            return;
+        }
+        if !asking.get_untracked().is_empty() {
+            return;
+        }
+        asking.set(board.service.clone());
+        spawn_local(async move {
+            let Some(mesh) = crate::bridge::endpoint() else {
+                return;
+            };
+            match dashboards::allow(&mesh, &record, me.as_deref(), &board.service).await {
+                Ok(()) => {
+                    // Remembered on the row rather than re-listed: the node has just told us it
+                    // holds the grant, and a second round trip to be told again is a second wait.
+                    boards.try_update(|all| {
+                        if let Some(NodeBoards::Answered(listing)) = all.get_mut(&record.key) {
+                            for row in &mut listing.boards {
+                                if row.service == board.service {
+                                    row.granted = true;
+                                }
+                            }
+                        }
+                    });
+                    asking.try_set(String::new());
+                    screen.try_set(show);
+                }
+                Err(e) => {
+                    boards.try_update(|all| {
+                        all.insert(record.key.clone(), NodeBoards::Failed(e));
+                    });
+                    asking.try_set(String::new());
+                }
+            }
+        });
+    };
+
+    move || match boards.get().get(&key).cloned() {
+        None | Some(NodeBoards::Asking) => ().into_any(),
+        Some(NodeBoards::Failed(why)) => view! { <p class="quiet">{why}</p> }.into_any(),
+        Some(NodeBoards::Answered(listing)) => {
+            let me = listing.me.clone();
+            // A clone per render, because the `<For>` body owns what it uses and this closure has
+            // to stay callable for the next one.
+            let open = open.clone();
+            view! {
+                <ul class="boards">
+                    <For
+                        each=move || listing.boards.clone()
+                        key=|board| (board.service.clone(), board.granted)
+                        let:board
+                    >
+                        {
+                            let (row, service) = (board.clone(), board.service.clone());
+                            let me = me.clone();
+                            let open = open.clone();
+                            view! {
+                                <li>
+                                    <button
+                                        class="board"
+                                        disabled=move || {
+                                            !asking.get().is_empty() && asking.get() != service
+                                        }
+                                        on:click=move |_| open(row.clone(), me.clone())
+                                    >
+                                        <span class="name">{board.name.clone()}</span>
+                                        {tag(board.clone(), asking)}
+                                    </button>
+                                </li>
+                            }
+                        }
+                    </For>
+                </ul>
+            }
+            .into_any()
+        }
+    }
+}
+
+/// The one word beside a dashboard's name, or nothing.
+///
+/// Nothing is the common case and the point: a dashboard that is running and granted is a row with
+/// a name on it. The two words that do appear are the two things a reader would otherwise learn by
+/// tapping and waiting — that the node will have to be asked first, and that the dashboard is not
+/// up over there.
+fn tag(board: Board, asking: RwSignal<String>) -> impl IntoView {
+    let service = board.service;
+    let (granted, running) = (board.granted, board.running);
+    move || {
+        if asking.get() == service {
+            return Some(view! { <span class="tag">"Asking…"</span> });
+        }
+        if !granted {
+            return Some(view! { <span class="tag">"Allow"</span> });
+        }
+        (!running).then(|| view! { <span class="tag off">"Off"</span> })
     }
 }
 
@@ -284,41 +509,49 @@ fn AddNode(
 
     view! {
         <section class="add">
-            <label for="invite">"Add a machine"</label>
-            <textarea
-                id="invite"
-                rows="3"
-                placeholder="adi-invite:…"
-                autocapitalize="off"
-                spellcheck="false"
-                prop:value=move || token.get()
-                on:input=move |ev| token.set(event_value(&ev))
-            ></textarea>
-            <div class="actions">
-                // Absent, rather than present and inert, where there is no camera API to call —
-                // over plain http, say. Everything below it still pairs a machine.
-                <Show when=scan::available>
-                    <button
-                        id="scan"
-                        class="ghost"
-                        disabled=move || busy.get() || scanning.get()
-                        on:click=move |_| {
-                            hint.set("Starting the camera…".into());
-                            scanning.set(true);
-                        }
-                    >
-                        "Scan"
-                    </button>
-                </Show>
-                <button class="primary" disabled=move || busy.get() || !ready.get() || token.get().trim().is_empty() on:click=move |_| pair()>
+            // Absent, rather than present and inert, where there is no camera API to call — over
+            // plain http, say. The disclosure below opens itself in that case, so the flow that
+            // always works is the one on screen.
+            <Show when=scan::available>
+                <button
+                    id="scan"
+                    class="cta"
+                    disabled=move || busy.get() || scanning.get() || !ready.get()
+                    on:click=move |_| {
+                        hint.set("Starting the camera…".into());
+                        scanning.set(true);
+                    }
+                >
+                    <span class="glyph" inner_html=VIEWFINDER></span>
+                    "Scan a pairing code"
+                </button>
+            </Show>
+
+            <details class="paste" open=!scan::available()>
+                <summary>"Paste a token instead"</summary>
+                <textarea
+                    id="invite"
+                    rows="3"
+                    placeholder="adi-invite:…"
+                    autocapitalize="off"
+                    spellcheck="false"
+                    prop:value=move || token.get()
+                    on:input=move |ev| token.set(event_value(&ev))
+                ></textarea>
+                <button
+                    class="primary"
+                    disabled=move || {
+                        busy.get() || !ready.get() || token.get().trim().is_empty()
+                    }
+                    on:click=move |_| pair()
+                >
                     {move || if busy.get() { "Pairing…" } else { "Pair" }}
                 </button>
-            </div>
-            <p class="note">
-                "Run "<code>"adi-mono mesh invite"</code>" on that machine: it prints a QR code and \
-                 the token itself. Scan the one or paste the other — either is good once, for \
-                 fifteen minutes."
-            </p>
+                <p class="note">
+                    "Run "<code>"adi-mono mesh invite"</code>" on that machine: it prints a QR code \
+                     and the token itself. Either is good once, for fifteen minutes."
+                </p>
+            </details>
         </section>
 
         <Show when=move || scanning.get()>
@@ -338,12 +571,37 @@ fn AddNode(
                 <div class="reticle"></div>
                 <div class="scanbar">
                     <p class="hint">{move || hint.get()}</p>
-                    <button class="ghost" on:click=move |_| scanning.set(false)>"Cancel"</button>
+                    <button class="ghost" on:click=move |_| scanning.set(false)>
+                        "Cancel"
+                    </button>
                 </div>
             </div>
         </Show>
     }
 }
+
+/// The Scan button's glyph: a viewfinder with a scan line across it.
+///
+/// Inner markup rather than an asset, for the reason [`crate::mark`] is: this client fetches
+/// nothing from anywhere, and an icon file would be a second request on a cold phone.
+const VIEWFINDER: &str = concat!(
+    r##"<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" "##,
+    r##"stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">"##,
+    r##"<path d="M4 9V6.5A2.5 2.5 0 0 1 6.5 4H9"/>"##,
+    r##"<path d="M15 4h2.5A2.5 2.5 0 0 1 20 6.5V9"/>"##,
+    r##"<path d="M20 15v2.5a2.5 2.5 0 0 1-2.5 2.5H15"/>"##,
+    r##"<path d="M9 20H6.5A2.5 2.5 0 0 1 4 17.5V15"/>"##,
+    r##"<path d="M4 12h16"/>"##,
+    r##"</svg>"##,
+);
+
+/// The glyph on a machine's second button — rename, or forget.
+const MORE: &str = concat!(
+    r##"<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">"##,
+    r##"<circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/>"##,
+    r##"<circle cx="19" cy="12" r="1.6"/>"##,
+    r##"</svg>"##,
+);
 
 /// Hold the camera open until it reads an invite, or until the reader gives up.
 ///
@@ -494,21 +752,30 @@ fn relay_of(addr: &iroh::EndpointAddr) -> String {
 }
 
 #[component]
-fn Panel(petname: String, screen: RwSignal<Screen>) -> impl IntoView {
-    let title = petname.clone();
+fn Page(open: Open, screen: RwSignal<Screen>) -> impl IntoView {
+    let Open {
+        target,
+        title,
+        under,
+    } = open;
     view! {
         <div class="panel">
             <div class="bar">
-                <button class="back" on:click=move |_| screen.set(Screen::Nodes)>"‹ Machines"</button>
-                <span class="title">{title}</span>
+                <button class="back" on:click=move |_| screen.set(Screen::Nodes)>
+                    "‹ Machines"
+                </button>
+                <span class="title">
+                    {title}
+                    {under.map(|node| view! { <span class="under">{node}</span> })}
+                </span>
             </div>
-            // `src` is the reserved path the service worker recognises; everything the panel loads
-            // from then on is answered from the same node by client id, whatever its path.
+            // `src` is the reserved path the service worker recognises; everything the page loads
+            // from then on is answered from the same service by client id, whatever its path.
             <iframe
-                src=format!("/n/{petname}/")
-                // A panel is the node's own control plane and needs its full run of the platform.
-                // The one thing withheld is `allow-top-navigation`: a page from a machine should
-                // not be able to replace the tab that is holding the mesh open.
+                src=format!("/n/{target}/")
+                // A node's own page needs its full run of the platform. The one thing withheld is
+                // `allow-top-navigation`: a page from a machine should not be able to replace the
+                // tab that is holding the mesh open.
                 sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
             ></iframe>
         </div>

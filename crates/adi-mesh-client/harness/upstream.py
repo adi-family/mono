@@ -3,7 +3,7 @@
 
 The node's gateway resolves a service label to a local port and then splices raw bytes
 (`adi-mesh/src/tunnel.rs`). So whatever this answers with is what the browser tab sees, and the
-three shapes below are the three the client has to be able to carry:
+shapes below are the ones the client has to be able to carry:
 
     GET /            a page with a Content-Length            — the case the spike already proved
     GET /sse         text/event-stream, one event a second   — a response that never ends
@@ -14,6 +14,21 @@ three shapes below are the three the client has to be able to carry:
 calls its own `/api/*` with a **root-absolute** URL and opens a websocket at another one. Serving it
 is what proves the service worker really is routing a whole app to one node rather than one page.
 
+Three more paths stand in for the part of a *real* panel the client asks about a machine
+(`docs/fleet.md` §11), and they are the reason this fixture knows where the node's registry is:
+
+    GET  /api/dashboards      what this machine runs — one entry, `probe.adi`, which the
+                              harness's hive.yaml serves from this same port
+    GET  /api/fleet           the node's own registry, so the client can find itself by key and
+                              read what it has been granted
+    POST /api/fleet/grants/add   add one grant to a peer and write `fleet.toml` back, which is
+                              what makes a row that was `Allow` a row that opens
+
+The last one is a real write to the real registry: the node re-reads that file every five seconds,
+so the browser's second dial — to `probe`, a service pairing never granted — is admitted by the
+node itself rather than by anything here. Answering the first two with fixtures and faking the
+third would prove nothing at all.
+
 Deliberately hand-rolled on top of the stdlib rather than a framework: the point is to be
 unambiguous about what goes on the wire and when it is flushed. A framework that buffered would
 make the node look like it was buffering.
@@ -21,11 +36,15 @@ make the node look like it was buffering.
 
 import base64
 import hashlib
+import json
+import os
+import re
 import socketserver
 import struct
 import sys
 import threading
 import time
+import tomllib
 
 # How many events /sse emits before it stops, and how far apart. The probe's verdict is the
 # *spread* of arrival times, so the gap is the signal: a buffered stream delivers all of them at
@@ -61,6 +80,86 @@ socket.onerror = () => { document.getElementById("live").textContent = "live: fa
 
 HEALTH = b'{"status":"ok","service":"node-local"}'
 
+# What this machine "runs". `probe.adi` is a real service in the harness's `hive.yaml`, pointed at
+# this same port — so the row the client draws is a row that opens, and what it opens is this
+# fixture answering as a second service. Shaped like `adi_webapp_api::types::Dashboard`, with the
+# fields the client reads carrying the values that matter.
+DASHBOARDS = json.dumps(
+    {
+        "dashboards": [
+            {
+                "id": "probe",
+                "name": "Probe",
+                "host": "probe.adi",
+                "frontend_running": True,
+                "backend_running": True,
+                "modules": [],
+                "routes": [],
+            }
+        ]
+    }
+).encode()
+
+# Where the node keeps its registry. Passed in rather than derived, because this fixture has no
+# other reason to know anything about the store — see `e2e.sh`.
+FLEET = None
+
+
+def fleet_state():
+    """The node's registry in the shape `GET /api/fleet` answers with.
+
+    Read on every request rather than cached: the file is the node's, a pairing writes it while
+    this is running, and a listing that predated the pairing would name nobody.
+    """
+    try:
+        with open(FLEET, "rb") as file:
+            parsed = tomllib.load(file)
+    except (OSError, ValueError, TypeError):
+        return {"nodes": []}
+    nodes = []
+    for petname, record in (parsed.get("nodes") or {}).items():
+        nodes.append(
+            {
+                "petname": petname,
+                "key": record.get("key", ""),
+                "nickname": record.get("nickname", ""),
+                "paired_at": record.get("paired_at", 0),
+                "grants": record.get("grants", []),
+                "has_password": "auth" in record,
+            }
+        )
+    return {"nodes": nodes}
+
+
+def add_grant(petname, grant):
+    """Give one peer one more grant, by editing the node's `fleet.toml` in place.
+
+    A line edit and not a re-serialisation: `tomllib` reads and does not write, and rewriting the
+    whole file from a parse would drop the auth table's formatting and, worse, would be this
+    fixture deciding what a registry looks like. Only the one `grants = [...]` line moves.
+    """
+    with open(FLEET, "r", encoding="utf-8") as file:
+        lines = file.readlines()
+    section = f"[nodes.{petname}]"
+    inside = False
+    for index, line in enumerate(lines):
+        if line.strip() == section:
+            inside = True
+            continue
+        # The peer's own `[nodes.<petname>.auth]` table is a *deeper* section, so only a sibling
+        # `[nodes.…]` ends the run of keys this edit may touch.
+        if inside and line.startswith("[") and not line.startswith(f"[nodes.{petname}."):
+            break
+        if inside and line.strip().startswith("grants"):
+            held = re.findall(r'"([^"]*)"', line)
+            if grant not in held:
+                held.append(grant)
+            lines[index] = "grants = [" + ", ".join(f'"{g}"' for g in held) + "]\n"
+            with open(FLEET, "w", encoding="utf-8") as file:
+                file.writelines(lines)
+            say(f"fleet: {petname} now holds {held}")
+            return True
+    return False
 
 
 class Handler(socketserver.StreamRequestHandler):
@@ -94,6 +193,12 @@ class Handler(socketserver.StreamRequestHandler):
             return False
         if target.startswith("/api/health"):
             self.json(HEALTH)
+        elif target.startswith("/api/dashboards"):
+            self.json(DASHBOARDS)
+        elif target.startswith("/api/fleet/grants/add"):
+            self.grant(self.read_body(headers))
+        elif target.startswith("/api/fleet"):
+            self.json(json.dumps(fleet_state()).encode())
         else:
             self.page()
         # `Connection: close` is honoured, which is what the probe's first case asks for.
@@ -102,8 +207,12 @@ class Handler(socketserver.StreamRequestHandler):
     # --- reading -------------------------------------------------------------------------
 
     def read_head(self):
-        """Everything up to the blank line. Raw, because the body (if any) is never read here."""
-        data = b""
+        """Everything up to the blank line, with whatever came after it kept for `read_body`.
+
+        Starts from that leftover, so a pipelined second request on this kept-alive connection is
+        read rather than waited for.
+        """
+        data = getattr(self, "rest", b"")
         while b"\r\n\r\n" not in data:
             chunk = self.connection.recv(4096)
             if not chunk:
@@ -111,7 +220,26 @@ class Handler(socketserver.StreamRequestHandler):
             data += chunk
             if len(data) > 64 * 1024:
                 raise ValueError("request head too long")
-        return data.split(b"\r\n\r\n", 1)[0].decode("latin-1")
+        head, self.rest = data.split(b"\r\n\r\n", 1)
+        return head.decode("latin-1")
+
+    def read_body(self, headers):
+        """Exactly `Content-Length` bytes, starting with what the head's read already swallowed.
+
+        The leftover is the whole reason this exists: a small POST arrives in one packet with its
+        head, so a body read that started at the socket would wait for bytes that are already in
+        hand — and this connection is kept alive, so a body left unread would be parsed as the next
+        request's head.
+        """
+        length = int(headers.get("content-length") or 0)
+        body = getattr(self, "rest", b"")[:length]
+        self.rest = getattr(self, "rest", b"")[length:]
+        while len(body) < length:
+            chunk = self.connection.recv(length - len(body))
+            if not chunk:
+                break
+            body += chunk
+        return body
 
     @staticmethod
     def parse_headers(head):
@@ -131,12 +259,26 @@ class Handler(socketserver.StreamRequestHandler):
             b"Content-Length: " + str(len(PAGE)).encode() + b"\r\n\r\n" + PAGE
         )
 
-    def json(self, payload):
+    def json(self, payload, status=b"200 OK"):
         self.connection.sendall(
-            b"HTTP/1.1 200 OK\r\n"
+            b"HTTP/1.1 " + status + b"\r\n"
             b"Content-Type: application/json\r\n"
             b"Content-Length: " + str(len(payload)).encode() + b"\r\n\r\n" + payload
         )
+
+    def grant(self, body):
+        """`POST /api/fleet/grants/add`, answered the way the real panel answers it: the registry
+        is edited and the fresh listing comes back."""
+        try:
+            asked = json.loads(body or b"{}")
+        except ValueError:
+            asked = {}
+        petname, grant = asked.get("petname", ""), asked.get("grant", "")
+        if not petname or not grant or not add_grant(petname, grant):
+            say(f"fleet: refusing to grant {grant!r} to {petname!r}")
+            self.json(b'{"error":"no such node here"}', b"404 Not Found")
+            return
+        self.json(json.dumps(fleet_state()).encode())
 
     def event_stream(self):
         """A response with no length that does not end — and one flush per event.
@@ -251,8 +393,11 @@ def say(message):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 45081
+    FLEET = sys.argv[2] if len(sys.argv) > 2 else os.path.expanduser(
+        "~/.adi-mesh-spike/mono/mesh/fleet.toml"
+    )
     with Server(("127.0.0.1", port), Handler) as server:
-        say(f"upstream on 127.0.0.1:{port} — / /sse /ws")
+        say(f"upstream on 127.0.0.1:{port} — / /sse /ws /api/* (fleet: {FLEET})")
         threading.Thread(target=server.serve_forever, daemon=True).start()
         while True:
             time.sleep(3600)

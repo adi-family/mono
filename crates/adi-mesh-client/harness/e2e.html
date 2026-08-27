@@ -202,10 +202,41 @@ try {
   report.findings.live = live;
   mark(`the panel's own new WebSocket(): ${live}`);
 
+  // --- 6. a second service on the same machine ---------------------------------------------
+  //
+  // The row under the machine comes from the node's own `/api/dashboards` — `probe.adi`, which the
+  // harness's hive.yaml serves. Pairing did **not** grant it, so tapping it is what asks the node
+  // for `http:probe` and opens it once the node has taken the grant up. This is `docs/fleet.md`
+  // §11 from a phone: list, allow, and reach something pairing never gave.
+  document.querySelector(".panel .back").click();
+  const board = await waitFor(() => document.querySelector("li button.board"), "the dashboard row");
+  report.findings.dashboard = board.querySelector(".name").textContent;
+  report.findings.dashboard_tag = board.querySelector(".tag")?.textContent || "";
+  mark(`the machine lists "${report.findings.dashboard}" (${report.findings.dashboard_tag})`);
+
+  board.click();
+  // Waits out the node's own five-second reload of `fleet.toml`, which is what makes the grant
+  // usable — the same wait a pairing pays (`invite::wait_until_admitted`).
+  const second = await waitFor(
+    () => {
+      const f = document.querySelector(".panel iframe");
+      if (!f || !f.getAttribute("src").startsWith("/n/probe.")) return null;
+      const d = f.contentDocument;
+      return d && d.querySelector("#title") ? d : null;
+    },
+    "the dashboard's own page",
+    60000,
+  );
+  report.findings.dashboard_opened = second.querySelector("#title").textContent.trim();
+  mark(`the dashboard rendered: ${report.findings.dashboard_opened}`);
+
   report.ok =
     report.findings.health === "health: ok" &&
     report.findings.live === "live: ping-1" &&
-    report.findings.panel_path === "/";
+    report.findings.panel_path === "/" &&
+    report.findings.dashboard === "Probe" &&
+    report.findings.dashboard_tag === "Allow" &&
+    report.findings.dashboard_opened.length > 0;
   if (!report.ok) report.error = "the panel loaded, but something inside it did not answer";
   mark(report.ok ? "END TO END PASSED" : "END TO END FAILED");
 } catch (e) {

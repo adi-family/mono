@@ -1,5 +1,6 @@
 //! **The browser mesh client** — a tab that is its own iroh peer, pairs with adi nodes, and opens
-//! each node's control panel from its own origin (`docs/fleet.md`, ADI-13).
+//! each node's control panel and the dashboards it runs from its own origin (`docs/fleet.md` §12,
+//! ADI-13).
 //!
 //! There is no server here. The page is static files; everything it shows it fetched itself over
 //! QUIC, from a machine that is listening on nothing. What that costs and what it buys:
@@ -14,15 +15,20 @@
 //! * **Everything is relayed** for the whole session, because a browser has no UDP socket. The
 //!   relay is therefore a hard precondition and not a latency question — [`mesh::HOME_RELAY`].
 //!
-//! The panel is served by intercepting `fetch` in a service worker and answering from the mesh
-//! ([`bridge`]), plus a shim for the one thing a service worker cannot see: `new WebSocket()`
-//! ([`ws`]).
+//! A machine's pages are served by intercepting `fetch` in a service worker and answering from the
+//! mesh ([`bridge`]), plus a shim for the one thing a service worker cannot see: `new WebSocket()`
+//! ([`ws`]). Which of a machine's services a page belongs to is in the path the worker keys on, and
+//! what it runs is asked of the machine itself ([`dashboards`]).
 
 use wasm_bindgen::prelude::*;
 
 pub mod bridge;
+pub mod dashboards;
 pub mod http;
 pub mod invite;
+/// Private: the mark is drawn by this shell and by nothing else, and a component exported from a
+/// wasm bundle is a component with an API to keep.
+mod mark;
 pub mod mesh;
 pub mod probe;
 pub mod scan;

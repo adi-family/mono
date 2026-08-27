@@ -1,29 +1,42 @@
-/* The client's own screen. Hand-written and small on purpose: it is a list, a text box and a
-   button, and the interesting surface is the node's panel filling the viewport underneath.
+/* The client's own screen. Hand-written and small on purpose: it is a list, one button and a
+   viewfinder, and the interesting surface is a machine's own page filling the viewport underneath.
 
-   Everything here is sized for a thumb — 44 px is Apple's own minimum touch target and nothing
+   Everything here is sized for a thumb — 44px is Apple's own minimum touch target and nothing
    tappable is under it — and the safe-area insets are what keep the list clear of a notch and the
-   home indicator when this is installed and running full-bleed. */
+   home indicator when this is installed and running full-bleed.
+
+   The palette is the brand's, not a generic one: `--accent` is `#FA5019`, the same colour the
+   middle lobe of the mark carries in every renderer of it (`src/mark.rs`), and the two inks are
+   the design tokens' own rather than whatever a system label happens to be. */
 
 :root {
-  --bg: #f5f6f8;
-  --fg: #14161a;
+  --bg: #f6f6f7;
+  --surface: #ffffff;
+  --fg: #17140f;
   --muted: #6b7280;
-  --line: #dfe3e8;
-  --card: #ffffff;
-  --accent: #2f6fed;
+  --line: #e5e5e8;
+  --accent: #fa5019;
+  --on-accent: #ffffff;
   --danger: #b42318;
+  --radius: 0.9rem;
+  /* Two shadows, because one cannot be both: a hairline that keeps a white card off a white
+     ground, and a soft lift under it. */
+  --lift: 0 1px 2px rgba(16, 18, 22, 0.05), 0 10px 24px -16px rgba(16, 18, 22, 0.35);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #101215;
-    --fg: #e8eaed;
-    --muted: #98a2b3;
-    --line: #262b31;
-    --card: #191c21;
-    --accent: #6ea0ff;
+    --bg: #0e0f11;
+    --surface: #17191d;
+    --fg: #ede7da;
+    --muted: #99a1ac;
+    --line: #262a30;
+    /* Lifted off `#FA5019` for a dark ground: the brand value is what the *mark* keeps — it is one
+       drawing in both themes — but as a fill behind white text it needs the extra luminance. */
+    --accent: #ff6a3d;
+    --on-accent: #1a0d06;
     --danger: #f97066;
+    --lift: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -18px rgba(0, 0, 0, 0.9);
   }
 }
 
@@ -44,41 +57,81 @@ html, body {
 code, .key { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 
 .shell {
-  max-width: 34rem;
+  max-width: 30rem;
   margin: 0 auto;
-  padding: max(1.25rem, env(safe-area-inset-top)) 1.25rem max(1.25rem, env(safe-area-inset-bottom));
+  padding: max(1.25rem, env(safe-area-inset-top)) 1.15rem max(2rem, env(safe-area-inset-bottom));
 }
 
-header h1 { margin: 0; font-size: 1.6rem; letter-spacing: -0.02em; }
-header .sub { margin: 0.15rem 0 1.5rem; color: var(--muted); font-size: 0.95rem; }
+/* --- the brand ------------------------------------------------------------------------------ */
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+/* The mark is `currentColor` ink with one accented lobe, so it takes the page's ink and needs no
+   second drawing for dark mode. */
+.mark { width: 2.15rem; height: 2.15rem; flex: none; }
+header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+header .sub { margin: 0.1rem 0 0; color: var(--muted); font-size: 0.85rem; }
+
+/* --- what went wrong ------------------------------------------------------------------------ */
 
 .problem {
   background: color-mix(in srgb, var(--danger) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
   color: var(--danger);
-  border-radius: 0.6rem;
+  border-radius: var(--radius);
   padding: 0.75rem 0.9rem;
   font-size: 0.9rem;
   /* An error from a node is a sentence, sometimes with a key in it; let it wrap rather than clip. */
   overflow-wrap: anywhere;
 }
 
-.empty { color: var(--muted); font-size: 0.95rem; }
+.empty {
+  color: var(--muted);
+  font-size: 0.92rem;
+  margin: 0 0 1.25rem;
+}
+.empty code { font-size: 0.85em; }
 
-.nodes { list-style: none; margin: 0 0 1.75rem; padding: 0; display: grid; gap: 0.6rem; }
-.nodes li { display: flex; gap: 0.5rem; align-items: stretch; }
+/* --- the machines --------------------------------------------------------------------------- */
+
+.nodes { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.75rem; }
+
+/* One machine is one card: its own row, then whatever it runs, under one border. Two cards read
+   as two machines at a glance, which a flat list of mixed rows does not. */
+.machine {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--lift);
+  overflow: hidden;
+}
+.machine .row { display: flex; align-items: stretch; }
 
 button {
   font: inherit;
   border-radius: 0.7rem;
   border: 1px solid var(--line);
-  background: var(--card);
+  background: var(--surface);
   color: var(--fg);
   min-height: 44px;
   padding: 0.6rem 0.9rem;
   cursor: pointer;
 }
 button:disabled { opacity: 0.5; cursor: default; }
+
+/* Inside a card the buttons are the card, so they carry no border of their own. */
+.machine button { border: 0; border-radius: 0; background: transparent; }
+.machine button:active { background: color-mix(in srgb, var(--fg) 6%, transparent); }
 
 .node {
   flex: 1;
@@ -87,19 +140,119 @@ button:disabled { opacity: 0.5; cursor: default; }
   justify-content: space-between;
   gap: 0.75rem;
   text-align: left;
+  padding: 0.85rem 0.4rem 0.85rem 1rem;
+  min-width: 0;
 }
-.node .name { font-weight: 600; }
-.node .meta { color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.8rem; }
+.node .name { font-weight: 600; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+.node .meta {
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.72rem;
+  flex: none;
+}
+
+.more { flex: none; width: 2.75rem; color: var(--muted); padding: 0; }
+.more svg { width: 1.15rem; height: 1.15rem; display: block; margin: 0 auto; }
+
+/* --- what a machine runs -------------------------------------------------------------------- */
+
+.boards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid var(--line);
+}
+.boards li + li { border-top: 1px solid var(--line); }
+.board {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  text-align: left;
+  padding: 0.6rem 1rem;
+  min-height: 44px;
+  font-size: 0.92rem;
+}
+.board .name { overflow-wrap: anywhere; }
+
+/* One word, and only when there is one to say: a dashboard that is running and granted is a row
+   with a name on it and nothing else. */
+.tag {
+  flex: none;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15rem 0.45rem;
+  border-radius: 0.4rem;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.tag.off { color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent); }
+
+/* Why a machine's rows are missing, in its own words. Under the row it belongs to, quiet enough
+   that a sleeping laptop does not read as a broken page. */
+.quiet {
+  margin: 0;
+  padding: 0.55rem 1rem 0.75rem;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+/* --- adding a machine ------------------------------------------------------------------------ */
+
+.add { display: grid; gap: 0.5rem; margin-top: 1.5rem; }
+
+/* Scanning is the action. A 953-character token gets onto a phone through a lens, and the field
+   below is the fallback — so this is the one accent-coloured thing on the screen. */
+.cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  width: 100%;
+  min-height: 3.25rem;
+  border: 0;
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 1rem;
+  font-weight: 600;
+  box-shadow: var(--lift);
+}
+.cta:active { transform: translateY(1px); }
+.cta .glyph { display: flex; }
+.cta svg { width: 1.35rem; height: 1.35rem; }
+
+.paste { font-size: 0.9rem; }
+.paste summary {
+  color: var(--muted);
+  cursor: pointer;
+  padding: 0.6rem 0.25rem;
+  text-align: center;
+  list-style: none;
+}
+.paste summary::-webkit-details-marker { display: none; }
+.paste[open] summary { text-align: left; }
+.paste > *:not(summary) { margin-top: 0.5rem; }
+
+.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+  width: 100%;
+  font-weight: 600;
+}
 
 .ghost { color: var(--muted); background: transparent; }
-.danger { color: var(--danger); background: transparent; border-color: color-mix(in srgb, var(--danger) 35%, transparent); }
-.primary { background: var(--accent); border-color: var(--accent); color: #fff; width: 100%; font-weight: 600; }
-
-.add { display: grid; gap: 0.6rem; }
-.add label { font-weight: 600; font-size: 0.95rem; }
-/* Scan beside Pair, not above it: it is the accelerator and Pair is the flow that always works. */
-.actions { display: flex; gap: 0.6rem; }
-.actions .primary { flex: 1; }
+.danger {
+  color: var(--danger);
+  background: transparent;
+  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
+}
 
 textarea, input {
   font: 15px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -107,22 +260,58 @@ textarea, input {
   padding: 0.7rem 0.8rem;
   border-radius: 0.7rem;
   border: 1px solid var(--line);
-  background: var(--card);
+  background: var(--surface);
   color: var(--fg);
   -webkit-user-select: text;
   user-select: text;
-  /* Under 16 px iOS zooms the page on focus and never zooms back out. */
+  /* Under 16px iOS zooms the page on focus and never zooms back out. */
   font-size: 16px;
 }
-input.rename { flex: 1; }
+textarea:focus-visible, input:focus-visible, button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
-.note { color: var(--muted); font-size: 0.85rem; margin: 0; }
-.label { color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 0.3rem; }
+.machine.editing { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem; }
+.machine.editing input.rename { flex: 1; }
+.machine.editing .danger { border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent); }
 
-footer { margin-top: 2.5rem; border-top: 1px solid var(--line); padding-top: 1.25rem; display: grid; gap: 0.5rem; }
-footer .key { font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; -webkit-user-select: text; user-select: text; }
+.note { color: var(--muted); font-size: 0.82rem; margin: 0; }
+.label {
+  color: var(--muted);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 0.3rem;
+}
 
-/* --- the camera ---------------------------------------------------------------------------- */
+/* --- this browser ---------------------------------------------------------------------------- */
+
+/* Closed by default, and it holds the two facts a reader needs only when something has gone wrong:
+   which key a node is refusing, and where the passwords live. */
+footer { margin-top: 2rem; border-top: 1px solid var(--line); padding-top: 0.5rem; }
+footer summary {
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  padding: 0.6rem 0.25rem;
+  list-style: none;
+}
+footer summary::-webkit-details-marker { display: none; }
+footer summary::before { content: "▸ "; font-size: 0.75em; }
+footer details[open] summary::before { content: "▾ "; }
+footer .key {
+  display: block;
+  font-size: 0.76rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+  -webkit-user-select: text;
+  user-select: text;
+  margin-bottom: 0.5rem;
+}
+footer details > *:not(summary) { padding: 0 0.25rem; }
+
+/* --- the camera ------------------------------------------------------------------------------ */
 
 /* Full-bleed and black, because it is a viewfinder: everything on top of it is white on the
    picture, and the picture is the only thing being read. */
@@ -157,10 +346,21 @@ footer .key { font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; 
   padding: 1.5rem 1.25rem max(1.25rem, env(safe-area-inset-bottom));
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.65));
 }
-.scanner .hint { margin: 0; color: #fff; font-size: 0.95rem; text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
-.scanner .scanbar button { min-width: 9rem; color: #fff; background: rgba(255, 255, 255, 0.18); border-color: rgba(255, 255, 255, 0.35); }
+.scanner .hint {
+  margin: 0;
+  color: #fff;
+  font-size: 0.95rem;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+.scanner .scanbar button {
+  min-width: 9rem;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.35);
+}
 
-/* --- a node's panel ------------------------------------------------------------------------ */
+/* --- a machine's page ------------------------------------------------------------------------ */
 
 .panel { position: fixed; inset: 0; display: flex; flex-direction: column; background: var(--bg); }
 .panel .bar {
@@ -169,7 +369,18 @@ footer .key { font-size: 0.78rem; color: var(--muted); overflow-wrap: anywhere; 
   gap: 0.5rem;
   padding: max(0.4rem, env(safe-area-inset-top)) 0.6rem 0.4rem;
   border-bottom: 1px solid var(--line);
+  background: var(--surface);
 }
 .panel .back { border: 0; background: transparent; color: var(--accent); padding-left: 0.4rem; }
-.panel .title { font-weight: 600; font-size: 0.95rem; }
-.panel iframe { flex: 1; width: 100%; border: 0; background: var(--card); }
+.panel .title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Which machine this page is running on — the fact that is not in its name. */
+.panel .title .under { color: var(--muted); font-weight: 400; }
+.panel .title .under::before { content: " · "; }
+.panel iframe { flex: 1; width: 100%; border: 0; background: var(--surface); }

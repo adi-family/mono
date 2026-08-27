@@ -4,18 +4,19 @@
 
 > The browser mesh client: a tab that is its own iroh peer, pairs with adi nodes and serves each one's control panel from its own origin.
 
-21 structs · 4 enums · 1 type alias across 9 files.
+28 structs · 5 enums · 2 type aliases across 10 files.
 
 ## Index
 
 - [`src/bridge.rs`](#srcbridgers) — `State`, `Socket`, `Outbox`
+- [`src/dashboards.rs`](#srcdashboardsrs) — `Board`, `Listing`, `DashboardsState`, `Dashboard`, `FleetState`, `FleetPeer`
 - [`src/http.rs`](#srchttprs) — `Request`, `Head`, `Framing`, `Body`
 - [`src/invite.rs`](#srcinviters) — `Invite`, `JoinRequest`, `Accepted`, `JoinReply`
 - [`src/mesh.rs`](#srcmeshrs) — `Result`, `Mesh`, `Stream`, `Writer`, `Reader`
 - [`src/probe.rs`](#srcprobers) — `Options`, `Case`, `Mark`, `Report`, `Clock`
 - [`src/scan.rs`](#srcscanrs) — `Reader`
 - [`src/store.rs`](#srcstorers) — `NodeRecord`
-- [`src/ui.rs`](#srcuirs) — `Screen`
+- [`src/ui.rs`](#srcuirs) — `Screen`, `Open`, `Boards`, `NodeBoards`
 - [`src/ws.rs`](#srcwsrs) — `Opcode`, `Message`
 
 ---
@@ -55,6 +56,85 @@ struct Outbox {
     queue: VecDeque<Vec<u8>>,
     writer: Option<Writer>,
     pumping: bool,
+}
+```
+
+---
+
+## `src/dashboards.rs`
+
+### struct `Board`
+
+One dashboard on a node, as a row on this screen.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Board {
+    pub service: String,
+    pub name: String,
+    pub running: bool,
+    pub granted: bool,
+}
+```
+
+### struct `Listing`
+
+What a node answered when asked what it runs.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Listing {
+    pub boards: Vec<Board>,
+    pub me: Option<String>,
+}
+```
+
+### struct `DashboardsState`
+
+`GET /api/dashboards` — `adi_webapp_api::types::DashboardsState`, read rather than shared: that crate reaches the store and the filesystem, and every field this client does not name is one more thing a node running a newer panel could break by changing.
+
+```rust
+#[derive(Debug, Deserialize)]
+struct DashboardsState {
+    dashboards: Vec<Dashboard>,
+}
+```
+
+### struct `Dashboard`
+
+```rust
+#[derive(Debug, Deserialize)]
+struct Dashboard {
+    name: String,
+    #[serde(default)]
+    host: Option<String>,
+    #[serde(default)]
+    frontend_running: bool,
+    #[serde(default)]
+    archived_at: Option<u64>,
+}
+```
+
+### struct `FleetState`
+
+`GET /api/fleet` — enough of `adi_webapp_api::types::FleetState` to find this browser in it.
+
+```rust
+#[derive(Debug, Deserialize)]
+struct FleetState {
+    nodes: Vec<FleetPeer>,
+}
+```
+
+### struct `FleetPeer`
+
+```rust
+#[derive(Debug, Deserialize)]
+struct FleetPeer {
+    key: String,
+    petname: String,
+    #[serde(default)]
+    grants: Vec<String>,
 }
 ```
 
@@ -363,7 +443,41 @@ What the shell is showing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Screen {
     Nodes,
-    Panel(String),
+    Page(Open),
+}
+```
+
+### struct `Open`
+
+A page being shown: what to fetch it under, and what to call it.
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Open {
+    target: String,
+    title: String,
+    under: Option<String>,
+}
+```
+
+### type `Boards`
+
+What this browser knows about what each node runs, keyed by the node's **key** — never its petname, which is local and can be renamed out from under an answer that is still arriving.
+
+```rust
+type Boards = HashMap<String, NodeBoards>;
+```
+
+### enum `NodeBoards`
+
+One node's answer to "what do you run?".
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NodeBoards {
+    Asking,
+    Answered(dashboards::Listing),
+    Failed(String),
 }
 ```
 

@@ -460,12 +460,20 @@ This is `apps/ios` on a desktop, and the reasoning is the phone's
 by key, speaks `adi/mesh/http/1`, and renders each node's control panel. It is a **reader**, not a
 machine in the fleet — there is no node behind it, nothing dials it, and it serves nothing.
 
-- **It reaches `app` and nothing else.** That is §8's default grant, and it is deliberate rather
-  than unfinished: this origin's IndexedDB holds the browser's secret key *and* every node's
-  password, so anything it renders can read the credentials for every machine in the list. On a Mac
-  each service gets its own hostname and on iOS its own loopback port; a browser has one origin.
-  Arbitrary dashboards therefore want a sub-origin per `(node, service)` under a wildcard domain,
-  with the key store staying on the parent — not v1.
+- **It reaches `app` by default, and a node's dashboards when the reader asks for them.** `http:app`
+  is §8's default grant and the only thing a pairing hands out, so it is the one service a node is
+  certain to open. What a machine *runs* comes from that panel's own `GET /api/dashboards`, exactly
+  as §11's fleet rail reads it, and each row is opened by naming the service in the path the worker
+  keys on: `/n/<service>.<petname>/`, the same `<service>.<node>` shape §1 addresses. A row the
+  browser holds no grant for asks the node for `http:<service>` on the first tap (§11's "listing may
+  also grant") and opens once the node's five-second registry reload has taken it up.
+- **That shares one origin with the key store, and it is the client's weakest point.** This origin's
+  IndexedDB holds the browser's secret key *and* every node's password, so anything rendered here
+  can read the credentials for every machine in the list. On a Mac each service gets its own
+  hostname and on iOS its own loopback port; a browser has one origin. Two things bound it rather
+  than fix it: the code is the operator's own, on the operator's own machines, and nothing is
+  reached that a tap did not ask a node to allow. The fix is still **I8** — a sub-origin per
+  `(node, service)` under a wildcard domain, with the key store staying on the parent.
 - **A node's app is served at the origin root, and the client id says which node.** A panel fetches
   everything with root-absolute URLs (§4 requires that it never learn its own address), so it cannot
   be mounted under a path. The client opens it at the reserved `/n/<petname>/`, the service worker
@@ -603,11 +611,17 @@ Each item ships with unit tests in the same file.
       and wait out the node's registry reload before reporting success (§8).
 - [x] I5 IndexedDB: the browser's secret key and one record per node — endpoint id, relay, petname,
       username, password, grants.
-- [x] I6 The service worker: `/n/<petname>/` opens a panel, the client id decides which node every
-      later request belongs to, and the shim gives the panel back `/`.
+- [x] I6 The service worker: `/n/<petname>/` opens a panel and `/n/<service>.<petname>/` one of that
+      node's dashboards, the client id decides which node *and service* every later request belongs
+      to, and the shim gives the page back `/`.
 - [x] I7 An installable PWA — manifest, icons, offline shell — sized for a phone.
+- [x] I10 What a machine runs, under it in the list: the node's own `GET /api/dashboards` read over
+      `app`, its grants read from `GET /api/fleet` by key, and a row that is not yet granted asking
+      for `http:<service>` when it is opened (§11 from a phone). End to end in `harness/e2e.sh`,
+      which pairs, lists, allows and opens a second service against a real node.
 - [ ] I8 A sub-origin per `(node, service)` under a wildcard domain, so a dashboard can be opened
       without sharing an origin with the key store. Needs a wildcard certificate and a postMessage
-      bridge; ADI-13's origin-isolation recommendation, deliberately not v1.
+      bridge; ADI-13's origin-isolation recommendation. **Still open, and now load-bearing**: I10
+      renders another machine's dashboard on the origin that holds the key and every password.
 - [ ] I9 A backgrounded tab: what a phone's browser does to a relayed QUIC session while the
       screen is off, and whether the reconnect path is enough. Untested.

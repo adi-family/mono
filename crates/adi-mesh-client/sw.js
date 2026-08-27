@@ -6,8 +6,9 @@
 // each node a real origin without a wildcard domain and a certificate per fleet. So the app is
 // served at the origin root and the *client id* decides which node it belongs to.
 //
-//   1. The shell opens an iframe at `/n/<petname>/`.
-//   2. This worker sees a navigation there, remembers `resultingClientId -> petname`, and answers
+//   1. The shell opens an iframe at `/n/<petname>/` — or `/n/<service>.<petname>/` for one of the
+//      dashboards that node runs, which is the same app served from the same origin root.
+//   2. This worker sees a navigation there, remembers `resultingClientId -> target`, and answers
 //      it from the node — with `js/panel-shim.js` injected into the head.
 //   3. That shim immediately rewrites the iframe's URL to `/`, so the panel's own router, its
 //      pushState and the browser's back button behave exactly as they do at `app.adi`.
@@ -27,16 +28,20 @@ const CACHE = "adi-mesh-client-v1";
 // hashed wasm/js names are not known here — they land in the cache on first load instead.
 const SHELL = ["/", "/manifest.webmanifest", "/__adi/panel-shim.js"];
 
-// `/n/<petname>/…` is the one reserved path on this origin: it names a node, and a node's petname
-// is one DNS label (`docs/fleet.md` §2).
-const PANEL = /^\/n\/([a-z0-9][a-z0-9-]{0,62})(\/.*)?$/;
+// `/n/<target>/…` is the one reserved path on this origin. The target is a node's mesh hostname
+// with the fleet zone taken off — `<service>.<petname>`, the same shape `docs/fleet.md` §1
+// addresses as `nosh.laptop-b.n.adi` — and a bare `<petname>` means that node's own control panel.
+// Every label is a DNS label (§2); which of them is the node is decided in `src/bridge.rs`, since
+// a service name may itself be several (`app.nosh`).
+const PANEL = /^\/n\/([a-z0-9][a-z0-9-]{0,62}(?:\.[a-z0-9][a-z0-9-]{0,62})*)(\/.*)?$/;
 
 // The other reserved path: this client's own files that a *panel* has to be able to load. A node
 // that happened to serve something under this prefix would find it shadowed here, which is the
 // trade — one path name, in exchange for the shim being reachable from inside a panel at all.
 const RESERVED = "/__adi/";
 
-// clientId -> petname, for panels already open. Mirrored into IndexedDB below.
+// clientId -> `<service>.<petname>` (or a bare petname), for pages already open. Mirrored into
+// IndexedDB below.
 const nodeFor = new Map();
 
 // The port the host page answers mesh requests on. One at a time: whichever tab last announced

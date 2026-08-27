@@ -1,10 +1,11 @@
 # The client is one page at `/`, so every path that is not a real file has to serve it.
 #
-# `/n/<petname>/` is the route that opens a machine's panel in an iframe. The service worker
-# answers it before the network is ever consulted — but on the very first load, before the worker
-# is installed, that URL goes to the host, and a 404 there puts the browser into a dead frame on
-# exactly the request that matters. Serving the page is correct: the worker takes over from there.
+# `/n/<petname>/` — and `/n/<service>.<petname>/` for one of that machine's dashboards — is the
+# route that opens a machine's page in an iframe. The service worker answers it before the network
+# is ever consulted — but on the very first load, before the worker is installed, that URL goes to
+# the host, and a 404 there puts the browser into a dead frame on exactly the request that matters.
+# Serving the page is correct: the worker takes over from there.
 #
-# `200` is a rewrite, not a redirect: the URL the client sees stays `/n/<petname>/`, which is what
-# the worker keys on to know which node it is answering for.
+# `200` is a rewrite, not a redirect: the URL the client sees stays `/n/<target>/`, which is what
+# the worker keys on to know which node and which of its services it is answering for.
 /*    /index.html    200
