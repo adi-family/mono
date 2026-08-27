@@ -4,12 +4,11 @@
 use adi_webapp_api::types::{MeshForward, MeshForwardRef, MeshState};
 use leptos::prelude::*;
 use adi_ui::{Row as TableRow, Table};
-use wasm_bindgen::JsCast;
 
 use crate::fetch;
 use crate::state::{MeshForm, State};
 use crate::ui::{
-    apply_mutation, Key, rows_or_placeholder, sort_rows, TextField,
+    apply_mutation, copy_row, Key, rows_or_placeholder, sort_rows, TextField,
 };
 
 /// The exposed-ports table: one port per row, with a Remove control. A single named column, so
@@ -343,50 +342,3 @@ fn short_id(s: &str) -> String {
     }
 }
 
-/// A read-only field with a Copy button (the mesh id/ticket rows): selects on focus and copies to
-/// the clipboard. `node` lets the button reach the input's live text.
-fn copy_row(
-    node: NodeRef<leptos::html::Input>,
-    value: impl Fn() -> String + Send + 'static,
-) -> impl IntoView {
-    view! {
-        <div class="adi-copyrow">
-            <input class="adi-input adi-input--wide adi-mono" readonly=true node_ref=node
-                prop:value=value
-                on:focus=move |ev| select_target(&ev) />
-            <button class="adi-btn adi-btn--ghost" type="button"
-                on:click=move |_| copy_field(node)>"Copy"</button>
-        </div>
-    }
-}
-
-/// Copy a read-only field's text to the clipboard: select it (a visible affordance and a
-/// manual-copy fallback), then write it via `navigator.clipboard` on wasm. Best-effort.
-fn copy_field(node: NodeRef<leptos::html::Input>) {
-    if let Some(input) = node.get() {
-        input.select();
-        #[cfg(target_arch = "wasm32")]
-        clipboard_write(&input.value());
-    }
-}
-
-/// One-click clipboard write via `navigator.clipboard.writeText`, as a tiny JS shim — so it
-/// needs neither the unstable web-sys Clipboard API nor its cfg flag. wasm target only.
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen(
-    inline_js = "export function adiClipboardWrite(t){ try { if (navigator.clipboard) navigator.clipboard.writeText(t); } catch (e) {} }"
-)]
-extern "C" {
-    #[wasm_bindgen(js_name = adiClipboardWrite)]
-    fn clipboard_write(text: &str);
-}
-
-/// Select all text of the focused input, so clicking the id/ticket field readies a manual copy.
-fn select_target(ev: &web_sys::FocusEvent) {
-    if let Some(input) = ev
-        .target()
-        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-    {
-        input.select();
-    }
-}

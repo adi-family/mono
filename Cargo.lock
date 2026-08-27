@@ -483,6 +483,8 @@ dependencies = [
  "adi-triggers",
  "adi-update",
  "base64 0.22.1",
+ "qrcode",
+ "quircs",
  "reqwest",
  "rustls",
  "serde",

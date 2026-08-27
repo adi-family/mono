@@ -129,6 +129,13 @@ pub async fn fleet() -> Result<FleetState, String> {
     get("/api/fleet").await
 }
 
+/// Mint a pairing invite and get it back drawn as a QR. The one fleet call that does *not* answer
+/// with a `FleetState`: nothing about the registry has changed — a node appears in it only once
+/// somebody spends this.
+pub async fn fleet_invite() -> Result<adi_webapp_api::types::FleetInvite, String> {
+    post("/api/fleet/invite", &()).await
+}
+
 pub async fn fleet_rename(petname: String, to: String) -> Result<FleetState, String> {
     post("/api/fleet/rename", &FleetRename { petname, to }).await
 }

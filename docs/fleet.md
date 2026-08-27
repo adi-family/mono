@@ -240,6 +240,24 @@ phone's own camera app will only offer to copy it. Nothing about the protocol ch
 same string, taking a shorter path from one screen to another. The paste field is not going
 anywhere, because a camera can be refused and an invite that cannot be typed is a dead end.
 
+**Minting is not a terminal-only act.** The control panel's Fleet page mints one too — `POST
+/api/fleet/invite`, through the same `join::mint_invite_for`, so there is one way an invite comes
+into existence and one book recording its nonce. It answers with the token, its expiry, and the
+token already drawn as an `<svg>`, which is why the panel's wasm carries no QR encoder. Three
+differences from the CLI, all deliberate:
+
+- **Ten minutes, not fifteen.** The flow here is *show a QR, scan it, done*, which takes seconds.
+  The CLI's longer default is for the other shape of pairing, where a token is carried to a
+  cloud-init file and a machine is booted with it.
+- **The code comes down when it expires,** and the token is dropped from the page's memory with it
+  — as it is when the operator navigates away. An invite is a bearer credential until it is spent,
+  and a dead code left on screen is an offer to scan something that cannot work.
+- **Anything that can reach the panel can mint.** Locally that is loopback; over the mesh it is the
+  node's password plus an `http:app` grant. §5 already makes the equivalent argument for grants — a
+  peer that can ask for one can already create a dashboard here and run a task on this machine — so
+  a panel reached over the mesh may mint, and the gate is the grant that let it in rather than a
+  second one at this endpoint.
+
 **A pairing is not usable the instant it is accepted.** The node's gateway serves from an in-memory
 snapshot of `fleet.toml` and re-reads it every `RELOAD_INTERVAL` — five seconds
 (`adi-mesh/src/gateway.rs`). The join handshake writes the file and answers immediately, so for up
@@ -542,6 +560,11 @@ Each item ships with unit tests in the same file.
 - [x] E2 `apps/linux/build.sh` — static musl package with the five binaries.
 - [x] E3 Pull-only bootstrap: one-time pairing token, node dials out, no inbound ssh needed.
 - [x] E4 Fleet page in the control panel: nodes, status, grants, audit.
+- [x] E5 Pairing *from* the panel (§8): `POST /api/fleet/invite` mints through the same
+      `join::mint_invite_for` the CLI uses and answers with the token already drawn as an SVG, and
+      the Fleet page shows it as a QR with a countdown, the token under it, and where to point a
+      phone. Until this, the only way to see the code was a terminal — which is exactly how the
+      operator failed to find it.
 
 ### G — moving a dashboard to a node (§10)
 

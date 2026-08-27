@@ -648,6 +648,9 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         // already holds open rather than reaching for `~/.adi/mono` a second time — which is also
         // what lets the handlers be tested against a temp root.
         ("GET", "/api/fleet") => handlers::fleet(projects.config()),
+        // Minting is a POST with no body: it takes nothing and it is not a read — every call
+        // writes a fresh nonce into the invite book.
+        ("POST", "/api/fleet/invite") => handlers::fleet_invite(projects.config()),
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
         ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
         ("POST", "/api/fleet/grants/add") => handlers::fleet_grant(projects.config(), &req.body),

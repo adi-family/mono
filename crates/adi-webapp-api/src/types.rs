@@ -334,6 +334,40 @@ pub struct FleetGrantRef {
     pub grant: String,
 }
 
+/// Where a pairing QR is meant to be pointed: the browser mesh client (`docs/fleet.md` §12).
+///
+/// The code carries the token and nothing else — not a URL, so it never reaches an address bar or
+/// a history entry — which means a phone's own camera app will only offer to copy it. Somebody has
+/// to be told to open the scanner first, or the QR is a puzzle rather than an instruction.
+pub const MESH_CLIENT_URL: &str = "https://mono-mesh-client.withadi.dev";
+
+/// A freshly minted pairing invite — the answer to `POST /api/fleet/invite`.
+///
+/// **Every field of this is the same secret.** The token is a bearer credential until it is spent,
+/// and [`svg`](Self::svg) is that token drawn: a decoder turns one back into the other. So it is
+/// shown and then dropped — never routed to, never logged, never stored, and cleared from the page
+/// when the operator navigates away.
+///
+/// Both clocks are here on purpose. [`expires`](Self::expires) is what the *minter* will check the
+/// nonce against, and [`ttl_secs`](Self::ttl_secs) is how long that is from the moment this was
+/// answered — so a page counting down can do it against its own clock and never show a token as
+/// dead because the machine reading the panel is a few seconds ahead of the one that minted it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetInvite {
+    /// The `adi-invite:` token itself, for the camera that will not cooperate and for the headless
+    /// node that is pairing by `adi-mono mesh join <token>`.
+    pub token: String,
+    /// Unix seconds after which the minting side refuses the nonce.
+    pub expires: u64,
+    /// Seconds from the answer to that expiry. A duration and not a timestamp, so `u32` holds it
+    /// with room to spare — and a page can turn it into a deadline on its own clock without a
+    /// lossy widening on the way.
+    pub ttl_secs: u32,
+    /// The token as an `<svg>` element, ready to inline. Self-contained: no prolog, no script, no
+    /// external reference, and an opaque background so a dark page cannot invert it.
+    pub svg: String,
+}
+
 // ---- projects (metadata manifests under ~/.adi/mono/projects) -----------------------
 
 /// One registered project, flattened for the wire: the id (its directory name) plus the

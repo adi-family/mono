@@ -1313,10 +1313,10 @@ pub(crate) struct MeshForm {
     pub(crate) ticket_ref: NodeRef<leptos::html::Input>,
 }
 
-/// The Fleet page's local signals: the grant form's node picker and grant text, plus a shared
-/// busy flag. Renaming and unpairing are row actions rather than form fields — they name their
-/// node by the row you clicked — so nothing here holds a petname of its own. `Copy`, so it
-/// threads into the page view and its handlers.
+/// The Fleet page's local signals: the grant form's node picker and grant text, the pairing invite
+/// on screen, plus a shared busy flag. Renaming and unpairing are row actions rather than form
+/// fields — they name their node by the row you clicked — so nothing here holds a petname of its
+/// own. `Copy`, so it threads into the page view and its handlers.
 #[derive(Clone, Copy)]
 pub(crate) struct FleetForm {
     /// Which node the grant lands on (a petname, empty until picked).
@@ -1324,6 +1324,18 @@ pub(crate) struct FleetForm {
     /// The grant in its string form: `http:*`, `http:nosh`, `tcp:127.0.0.1:22`, `ctl:read`.
     pub(crate) grant: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    /// The invite being shown, or `None` when none is. A bearer token until it is spent, so it
+    /// lives here for exactly as long as it is on the screen — [`clear_invite`](Self::clear_invite)
+    /// takes it away when the page is left, and the page itself drops it once it expires.
+    pub(crate) invite: RwSignal<Option<adi_webapp_api::types::FleetInvite>>,
+    /// When that invite dies, in `Date.now()` milliseconds on *this* browser's clock, captured
+    /// from `ttl_secs` as the answer landed. Counting down to the server's absolute `expires`
+    /// instead would show a live token as dead on a machine whose clock runs a little ahead —
+    /// this panel is reachable over the mesh, so the two clocks need not be the same one.
+    pub(crate) invite_until: RwSignal<f64>,
+    /// Whether an invite is being minted, kept apart from [`busy`](Self::busy) so the grant form
+    /// is not disabled by a click on the pairing button.
+    pub(crate) minting: RwSignal<bool>,
 }
 
 impl FleetForm {
@@ -1332,7 +1344,19 @@ impl FleetForm {
             grant_node: RwSignal::new(String::new()),
             grant: RwSignal::new(String::new()),
             busy: RwSignal::new(false),
+            invite: RwSignal::new(None),
+            invite_until: RwSignal::new(0.0),
+            minting: RwSignal::new(false),
         }
+    }
+
+    /// Forget the invite on screen — called when leaving the page, so a live pairing token never
+    /// lingers in memory across a navigation. The same rule [`SecretsForm::clear_revealed`] keeps
+    /// for a revealed secret, and for the same reason: it is a credential, and the screen showing
+    /// it is the only place it was ever meant to be.
+    pub(crate) fn clear_invite(self) {
+        self.invite.set(None);
+        self.invite_until.set(0.0);
     }
 }
 

@@ -17,20 +17,29 @@
 //! Basic-auth credential — the second, human-scoped half of the gate, without which the mesh grant
 //! alone lets *any* process on a paired machine through.
 //!
-//! Nothing here can add a node: pairing is a two-machine act (`adi-mono mesh invite` here,
-//! `adi-mono mesh join <token>` there), so the page states that instead of pretending to a button
-//! it cannot honour. That panel is most of the first-run experience and is shown whether or not
-//! anything is paired.
+//! **Pairing starts here.** A node arrives by spending an invite this machine minted (§8), and the
+//! panel at the foot of the page is where one is minted: a button, then the token drawn as a QR to
+//! point a phone at, the text underneath for the camera that will not cooperate, and the two
+//! commands for a headless machine that has no camera to point. It is shown whether or not anything
+//! is paired, because with nothing paired it is the whole page and with a fleet running it is still
+//! how the next node arrives.
+//!
+//! An invite is a **bearer token until it is spent**, which is what the countdown and
+//! [`FleetForm::clear_invite`] are about: it comes down when it expires rather than sitting there
+//! as a code somebody keeps scanning, and it is dropped when the page is left.
+//!
+//! [`FleetForm::clear_invite`]: crate::state::FleetForm::clear_invite
 
-use adi_webapp_api::types::{FleetNode, FleetState, GRANT_PLACEHOLDER};
+use adi_webapp_api::types::{FleetNode, FleetState, GRANT_PLACEHOLDER, MESH_CLIENT_URL};
 use leptos::prelude::*;
 use adi_ui::{Row as TableRow, Table};
+use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
-use crate::state::{FleetForm, State};
+use crate::state::{Flash, FleetForm, State};
 use crate::ui::{
-    apply_mutation, confirm, fmt_date, Key, menu_item, prompt, row_actions, rows_or_placeholder,
-    sort_rows, TextField, updated_text,
+    apply_mutation, confirm, copy_row, fmt_date, Key, menu_item, prompt, row_actions,
+    rows_or_placeholder, sort_rows, TextField, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -40,6 +49,18 @@ pub(crate) const COLS: &[&str] = &["Node", "Key", "Grants", "Password", "Paired"
 /// The Fleet page: pending name changes, the paired nodes with their grants, and how to pair one.
 pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
     let fleet = state.fleet;
+    // The countdown is also what takes the code down. An expired invite is refused by the minter,
+    // so leaving it on screen is an offer to scan something that cannot work — and the token has no
+    // reason to stay in memory a moment longer. Tracks the shell's one-second tick and nothing
+    // else: reading the invite here too would make this effect its own trigger.
+    Effect::new(move |_| {
+        let _ = state.secs_since.get();
+        if form.invite.with_untracked(Option::is_some)
+            && js_sys::Date::now() >= form.invite_until.get_untracked()
+        {
+            form.clear_invite();
+        }
+    });
     view! {
         {move || state.flash.get().map(|f| view! {
             <div class="adi-flash adi-flash--card" data-kind=f.kind>{f.msg}</div>
@@ -93,7 +114,7 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
             </div>
         </section>
 
-        {pairing_panel(state)}
+        {pairing_panel(state, form)}
     }
     .into_any()
 }
@@ -179,7 +200,7 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
 fn node_rows(state: State) -> AnyView {
     let table = state.tables.fleet;
     let mut nodes =
-        match rows_or_placeholder(table, state.fleet.get().map(|v| v.nodes), "No nodes paired yet — see “Pair a node” below.") {
+        match rows_or_placeholder(table, state.fleet.get().map(|v| v.nodes), "No nodes paired yet — press “Show pairing QR” below.") {
             Ok(rows) => rows,
             Err(placeholder) => return placeholder,
         };
@@ -435,10 +456,10 @@ fn node_picker(state: State, form: FleetForm) -> AnyView {
     .into_any()
 }
 
-/// How a node joins: the two commands, in the order they are run and on the machine each is run
-/// on. Always shown — with nothing paired it is the whole page, and with a fleet already running
-/// it is still how the next node arrives.
-fn pairing_panel(state: State) -> AnyView {
+/// How a node joins: a button that mints an invite and shows it as a QR, and under it the two
+/// commands for a machine with no camera. Always shown — with nothing paired it is the whole page,
+/// and with a fleet already running it is still how the next node arrives.
+fn pairing_panel(state: State, form: FleetForm) -> AnyView {
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
@@ -448,23 +469,35 @@ fn pairing_panel(state: State) -> AnyView {
                         _ => "Pair another node",
                     }}
                 </h2>
+                <span class="adi-spacer"></span>
+                {move || countdown(state, form).map(|left| view! {
+                    <span class="adi-chip adi-mono"
+                        title="A pairing code is single-use and short-lived. When it runs out, mint another.">
+                        {format!("expires in {left}")}
+                    </span>
+                })}
+                <button class="adi-btn adi-btn--primary" type="button"
+                    title="Mint a single-use invite and show it as a QR code to point a phone at."
+                    prop:disabled=move || form.minting.get()
+                    on:click=move |_| mint(state, form)>
+                    {move || if form.invite.with(Option::is_some) {
+                        "New code"
+                    } else {
+                        "Show pairing QR"
+                    }}
+                </button>
             </div>
             <div class="adi-panel__body">
+                {move || invite_view(form)}
                 <div class="adi-field">
-                    <label class="adi-field__label">"1. On this machine — mint a token"</label>
+                    <label class="adi-field__label">"No camera? Pair from a terminal instead"</label>
                     <div class="adi-mono">"adi-mono mesh invite"</div>
                     <div class="adi-field__note">
-                        "The token carries this machine's key and how to reach it. It is
-                         single-use and expires — hand it over the way you would a password."
-                    </div>
-                </div>
-                <div class="adi-field">
-                    <label class="adi-field__label">"2. On the node — redeem it"</label>
-                    <div class="adi-mono">"adi-mono mesh join <token>"</div>
-                    <div class="adi-field__note">
-                        "The node dials out; nothing needs to be open on it. It offers a nickname,
-                         and if that name is free here it becomes the petname — a clash is answered
-                         with a suggestion, never a refused connection."
+                        "The same token this button mints, printed on this machine. Then, on the
+                         node: "<span class="adi-mono">"adi-mono mesh join <token>"</span>" — it
+                         dials out, so nothing needs to be open on it. It offers a nickname, and if
+                         that name is free here it becomes the petname; a clash is answered with a
+                         suggestion, never a refused connection."
                     </div>
                 </div>
             </div>
@@ -477,6 +510,97 @@ fn pairing_panel(state: State) -> AnyView {
         </section>
     }
     .into_any()
+}
+
+/// The minted invite: the code to point a phone at, what to point at it, and the token itself.
+///
+/// Renders nothing until something is minted — the panel is an instruction either way, and a QR
+/// drawn before it is asked for would be a live credential on screen for anyone who walked past.
+fn invite_view(form: FleetForm) -> AnyView {
+    let Some(invite) = form.invite.get() else {
+        return ().into_any();
+    };
+    // A node ref per render, and a fresh one per invite: it only ever reaches the input rendered
+    // beside it, which is the field holding the token now on screen.
+    let field = NodeRef::new();
+    let token = invite.token.clone();
+    view! {
+        <div class="adi-pair">
+            // The server drew this, from the token, as a self-contained <svg> with no script and
+            // no external reference — see `adi-webapp-api`'s `handlers::qr`. Inlined rather than
+            // dropped in an <img src="data:…">, so it scales with the page and costs no request.
+            <div class="adi-qr" inner_html=invite.svg></div>
+            <div class="adi-pair__say">
+                <p class="adi-pair__lede">
+                    "On the phone, open "
+                    <a href=MESH_CLIENT_URL target="_blank" rel="noreferrer">
+                        "mono-mesh-client.withadi.dev"</a>
+                    ", press "<strong>"Scan"</strong>", and point it at this code."
+                </p>
+                <div class="adi-field__note">
+                    // Said out loud because the failure is silent and looks like a broken QR: the
+                    // code carries the token and not a URL, on purpose — a URL would put a live
+                    // credential in an address bar and a history entry.
+                    "A phone's own camera app will only offer to copy this — it has to be the
+                     client's own Scan button."
+                </div>
+                <div class="adi-field">
+                    <label class="adi-field__label">"Or hand over the token"</label>
+                    {copy_row(field, move || token.clone())}
+                    <div class="adi-field__note">
+                        "Single-use, and good for one machine only \u{2014} hand it over the way you
+                         would a password."
+                    </div>
+                </div>
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+/// Time left on the invite on screen as `m:ss`, or `None` when there is none to count.
+///
+/// Subscribes to the shell's one-second tick, which is what makes it tick at all, and measures
+/// against `invite_until` — this browser's clock, captured when the answer landed.
+fn countdown(state: State, form: FleetForm) -> Option<String> {
+    let _ = state.secs_since.get();
+    form.invite.with(Option::is_some).then_some(())?;
+    // Whole seconds, rounded up, so a fresh ten-minute invite reads `10:00` rather than `9:59`.
+    let left = ((form.invite_until.get() - js_sys::Date::now()) / 1000.0).ceil();
+    if left <= 0.0 {
+        return None;
+    }
+    let (mins, secs) = ((left / 60.0).floor(), left % 60.0);
+    Some(format!("{mins:.0}:{secs:02.0}"))
+}
+
+/// Mint an invite and put it on screen.
+///
+/// Written out rather than run through [`apply_mutation`] for two reasons: a success here has no
+/// flash — the code appearing *is* the answer, and a second "done" line above it would be noise —
+/// and the deadline has to be captured from `ttl_secs` at the moment the answer lands.
+fn mint(state: State, form: FleetForm) {
+    if form.minting.get_untracked() {
+        return;
+    }
+    form.minting.set(true);
+    spawn_local(async move {
+        match fetch::fleet_invite().await {
+            Ok(invite) => {
+                // The deadline is captured here, from the TTL, rather than read from the token's
+                // absolute `expires`: the panel may be being read over the mesh from a machine
+                // whose clock is not this one's, and a countdown must never call a live invite dead.
+                form.invite_until
+                    .set(js_sys::Date::now() + f64::from(invite.ttl_secs) * 1000.0);
+                form.invite.set(Some(invite));
+                // A previous refusal ("the mesh is not running here") is answered by this code
+                // existing; leaving it above would contradict what the page now shows.
+                state.flash.set(None);
+            }
+            Err(e) => state.flash.set(Some(Flash::err(e))),
+        }
+        form.minting.set(false);
+    });
 }
 
 /// Run a fleet mutation: set the returned state and a success flash, or an error flash; toggles

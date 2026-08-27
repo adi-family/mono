@@ -32,6 +32,9 @@ mod mesh;
 mod meta;
 mod ports;
 mod projects;
+/// Drawing a pairing invite as a QR code. Private: nothing outside answers with one, and the
+/// module is a renderer rather than an endpoint.
+mod qr;
 mod response;
 mod secrets;
 mod services;

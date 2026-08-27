@@ -33,13 +33,24 @@
 //!
 //! [`NodeRecord::auth`]: adi_mesh::fleet::NodeRecord::auth
 
+use std::time::Duration;
+
 use adi_config::Config;
 use adi_mesh::fleet::{FleetRegistry, Grant};
+use adi_mesh::{join, ticket};
 use serde::de::DeserializeOwned;
 
-use crate::types::{FleetGrantRef, FleetNode, FleetRef, FleetRename, FleetState};
+use crate::types::{FleetGrantRef, FleetInvite, FleetNode, FleetRef, FleetRename, FleetState};
 
 use super::response::{Response, error, ok_json};
+
+/// How long an invite minted from the panel stays spendable.
+///
+/// Ten minutes, not the CLI's fifteen: this is the flow `adi-mesh-ffi`'s `viewer::INVITE_TTL`
+/// already sized for — show a QR, scan it, done — which takes seconds, and an invite is a bearer
+/// token until it is spent. The CLI's longer default is for the other shape of pairing, where the
+/// token is carried to a cloud-init file and a machine is booted with it.
+const INVITE_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// `GET /api/fleet` — every node paired with this machine, in petname order.
 ///
@@ -51,6 +62,62 @@ pub fn fleet(store: &Config) -> Response {
         Ok(state) => ok_json(&state),
         Err(e) => error(500, &e),
     }
+}
+
+/// `POST /api/fleet/invite` — mint a single-use pairing invite and draw it as a QR code.
+///
+/// The other half of pairing, and the only endpoint here that *adds* a node rather than editing
+/// one already filed. It mints through [`join::mint_invite_for`] — the same call `adi-mono mesh
+/// invite` makes — so there is one way an invite comes into existence and one book recording it.
+///
+/// **Anything that can reach this panel can mint an invite, and that is deliberate.** The panel
+/// binds loopback locally; over the mesh it sits behind the node's password *and* an `http:app`
+/// grant, and `docs/fleet.md` §5 already argues the equivalent for grants — a peer that can ask
+/// for a grant can already create a dashboard here and run a task on this machine, so refusing it
+/// an invite protects nothing it could not reach the long way round. A panel reached over the mesh
+/// may therefore mint; the gate is the grant that let it in, not a second one here.
+///
+/// The token is a bearer credential until it is spent, so it is answered and never kept: nothing
+/// logs it, nothing routes to it, and the only copy that outlives the response is the one on the
+/// operator's screen.
+///
+/// # Errors
+/// 409 when the mesh is not running here (a token nobody is listening behind cannot work), 500 if
+/// the invite book cannot be written or the token cannot be drawn.
+#[must_use]
+pub fn fleet_invite(store: &Config) -> Response {
+    match mint(store, ticket::published(), adi_config::now_unix()) {
+        Ok(invite) => ok_json(&invite),
+        Err(response) => response,
+    }
+}
+
+/// [`fleet_invite`] with the endpoint and the clock passed in — the seam the tests mint through,
+/// since [`ticket::published`] reads the real store whatever store the handler was given.
+fn mint(store: &Config, endpoint: Option<String>, now: u64) -> Result<FleetInvite, Response> {
+    let Some(endpoint) = endpoint else {
+        return Err(error(
+            409,
+            "the mesh is not running here, so a node would have nothing to dial \u{2014} start it \
+             on the Mesh page and try again",
+        ));
+    };
+    let token = join::mint_invite_for(&endpoint, INVITE_TTL, store, now)
+        .map_err(|e| error(500, &format!("minting an invite: {e}")))?;
+    // Read the expiry back out of the token rather than recomputing it, so the page counts down to
+    // what the minter will actually check the nonce against.
+    let expires = join::decode_invite(&token, now)
+        .map_err(|e| error(500, &format!("the invite just minted does not decode: {e}")))?
+        .expires;
+    let svg = super::qr::svg(&token).map_err(|e| error(500, &e))?;
+    Ok(FleetInvite {
+        token,
+        expires,
+        // Saturating rather than wrapping: a clock that has jumped is a reason to answer a short
+        // TTL, never a 136-year one.
+        ttl_secs: u32::try_from(expires.saturating_sub(now)).unwrap_or(u32::MAX),
+        svg,
+    })
 }
 
 /// `POST /api/fleet/rename` — rename a node **locally**, with no involvement from the far side
@@ -689,6 +756,56 @@ mod tests {
         let store = temp_store();
         let v = ok_body(&fleet(&store));
         assert!(v["nodes"].as_array().unwrap().is_empty());
+    }
+
+    /// An `adimesh:` ticket of the shape [`ticket::published`] hands back — the endpoint an invite
+    /// carries, and the reason a minted token is 953 characters rather than 200.
+    fn sample_endpoint() -> String {
+        format!("adimesh:{}", key_of('e'))
+    }
+
+    #[test]
+    fn minting_answers_a_spendable_token_with_its_expiry_and_its_qr() {
+        let store = temp_store();
+        let now = 1_700_000_000;
+
+        let invite = mint(&store, Some(sample_endpoint()), now).expect("the mesh is running");
+
+        // Ten minutes, and the expiry is the token's own — not a number computed twice.
+        assert_eq!(u64::from(invite.ttl_secs), INVITE_TTL.as_secs());
+        assert_eq!(invite.expires, now + INVITE_TTL.as_secs());
+        let decoded = adi_mesh::join::decode_invite(&invite.token, now).expect("a live invite");
+        assert_eq!(decoded.expires, invite.expires);
+        assert_eq!(decoded.endpoint, sample_endpoint());
+
+        // The nonce was recorded, so exactly one node can spend it. Without this the token is a
+        // string the minter has never heard of and every join is refused.
+        let book = adi_mesh::join::InviteBook::load_from(&store).expect("the book");
+        assert!(
+            book.invites.iter().any(|i| i.nonce == decoded.nonce),
+            "the minted nonce is not in the book: {:?}",
+            book.invites
+        );
+
+        // The QR is the token, not a description of it.
+        assert!(invite.svg.starts_with("<svg "), "{}", &invite.svg[..40]);
+        assert!(!invite.svg.contains(&invite.token), "an SVG is not a text field");
+
+        // A second call is a second invite: minting is never idempotent, or two nodes would race
+        // for one nonce and the second would be told it was replayed.
+        let again = mint(&store, Some(sample_endpoint()), now).expect("mint again");
+        assert_ne!(again.token, invite.token);
+    }
+
+    #[test]
+    fn minting_without_a_running_mesh_is_refused_rather_than_answered_with_a_dead_token() {
+        let store = temp_store();
+        let response = mint(&store, None, 1_700_000_000).expect_err("nothing to dial");
+        assert_eq!(response.status, 409, "{}", response.body);
+        assert!(response.body.contains("mesh is not running"), "{}", response.body);
+        // And nothing was written: a refusal must not leave a nonce behind.
+        let book = adi_mesh::join::InviteBook::load_from(&store).expect("the book");
+        assert!(book.invites.is_empty());
     }
 
     /// The two renderings the page needs, kept beside the wire they are derived from.

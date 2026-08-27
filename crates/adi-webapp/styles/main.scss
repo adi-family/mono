@@ -1891,3 +1891,49 @@
   flex-wrap: wrap;
   gap: var(--space-1);
 }
+
+// ---- pairing a node (Fleet page) -----------------------------------------------------
+// A minted invite: the QR beside what to do with it. Side by side while there is room and stacked
+// when there is not — a code a phone has to read at arm's length has a floor on its size that a
+// two-column layout does not get to argue with.
+.adi-pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: var(--space-4);
+
+  &__say {
+    flex: 1 1 260px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+  }
+
+  &__lede {
+    margin: 0;
+    font-size: var(--text-base);
+  }
+}
+
+// The code itself. Its light modules are painted into the SVG rather than inherited, because this
+// panel is dark half the time and a QR drawn on a dark background is an inverted one that many
+// cameras refuse; the white here is the quiet zone's frame around that, for the same reason.
+.adi-qr {
+  flex: 0 0 auto;
+  // Measured, not chosen by eye: a v15 code (77 modules) rendered at 220 CSS px is about 5 device
+  // pixels a module on a Retina panel, and Apple Vision would not find it at that size — at 260 it
+  // does. So the floor has real headroom above what decoded, and the ceiling is as much of the
+  // panel as the code can have without crowding the sentence beside it.
+  width: clamp(260px, 38vw, 320px);
+  padding: var(--space-2);
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+
+  svg {
+    display: block;
+    width: 100%;
+    height: auto;
+  }
+}

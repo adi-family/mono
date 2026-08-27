@@ -52,6 +52,9 @@ server = [
     # API key stays on this side and never reaches the page.
     "dep:reqwest",
     "dep:rustls",
+    # Pairing mints an invite here and answers with it drawn as a QR, so the encoder is a server
+    # dependency and the page stays a `<svg>` it inlines.
+    "dep:qrcode",
 ]
 
 [dependencies]
@@ -85,6 +88,15 @@ serde_json = { workspace = true }
 serde_yaml_ng = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 uuid = { workspace = true, optional = true }
+# `POST /api/fleet/invite` draws its token as an SVG (see `handlers::qr`), so the panel's wasm
+# never carries an encoder. Encoder only — nothing here reads an image.
+qrcode = { workspace = true, optional = true }
+
+[dev-dependencies]
+# A QR nobody scanned is an untested feature. `handlers::qr`'s test parses the SVG this crate
+# serves back into a module grid and decodes it — with the same reader the browser client points
+# its camera through, so both halves of the pairing flow are checked against one decoder.
+quircs = { workspace = true }
 
 [lints]
 workspace = true

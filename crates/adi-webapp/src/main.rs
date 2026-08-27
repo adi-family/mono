@@ -996,6 +996,11 @@ fn App() -> impl IntoView {
         if !matches!(route.get(), Route::Secrets | Route::ProjectDetail) {
             secrets_form.clear_revealed();
         }
+        // Same rule for a pairing invite: it is a bearer token until it is spent, and the screen
+        // it was drawn on is the only place it was meant to exist.
+        if !matches!(route.get(), Route::Fleet) {
+            fleet_form.clear_invite();
+        }
     });
 
     // Load the project file browser (from the root) whenever the open project changes to one
