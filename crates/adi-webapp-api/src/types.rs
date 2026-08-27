@@ -226,6 +226,22 @@ pub struct FleetState {
     pub nodes: Vec<FleetNode>,
 }
 
+/// The grant families an operator is offered, because they are the ones something enforces.
+///
+/// The set the fleet page and `adi-mono mesh grant` advertise, kept here rather than written into
+/// each page's copy: the two surfaces used to offer `tcp:` and `ctl:` alongside `http:`, and
+/// nothing consulted either. That fails *closed*, so it was never exploitable — but an operator
+/// who adds `tcp:127.0.0.1:22` believes they opened something and they did not, and one who
+/// removes it believes they closed something and they did not.
+///
+/// Pinned against `adi_mesh::fleet::Grant::is_enforced` by a test in this crate, so a family that
+/// starts being enforced (or stops) cannot be advertised out of step with the code.
+pub const ENFORCED_GRANT_FAMILIES: [&str; 1] = ["http"];
+
+/// The example grants an operator is shown in the grant field — every one of them a family from
+/// [`ENFORCED_GRANT_FAMILIES`].
+pub const GRANT_PLACEHOLDER: &str = "http:* — or http:nosh, http:app.nosh";
+
 /// One paired node: all three of its names (`docs/fleet.md` §2) and what it may reach here (§5).
 ///
 /// **The verifier never leaves the machine.** The registry stores each node's Basic-auth
@@ -246,7 +262,11 @@ pub struct FleetNode {
     /// Unix seconds at which petname→key was pinned (trust on first use).
     pub paired_at: u64,
     /// What this node may reach here, in the string form an operator types: `http:*`,
-    /// `http:nosh`, `tcp:127.0.0.1:22`, `ctl:read`. **Empty denies everything.**
+    /// `http:nosh`, `http:app.nosh`. **Empty denies everything.**
+    ///
+    /// A record may also carry a `tcp:<ip>:<port>` or `ctl:<scope>` grant, which still parses and
+    /// still round-trips but which **nothing enforces** — see [`ENFORCED_GRANT_FAMILIES`]. Neither
+    /// is offered any more; both fail closed, so one already written grants exactly nothing.
     pub grants: Vec<String>,
     /// Whether a Basic-auth credential is configured for this node — the password its requests
     /// into *this* machine must carry, and the human-scoped half of §5's gate (the grant above is
@@ -3409,4 +3429,66 @@ pub struct Transcript {
     /// The engine that produced it, echoed back so the panel can say where the words came from
     /// even if the choice changed while the clip was in flight.
     pub engine: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Everything the grant field shows an operator is a family something enforces.
+    ///
+    /// Runs without the `server` feature — the wasm frontend builds this crate that way, and this
+    /// is the half of the pin that a bare `cargo test -p adi-webapp-api` can still make.
+    #[test]
+    fn the_grant_placeholder_only_offers_families_that_are_enforced() {
+        let offered: Vec<&str> = GRANT_PLACEHOLDER
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|word| word.contains(':'))
+            .map(|word| word.split(':').next().unwrap_or_default())
+            .collect();
+        assert!(
+            !offered.is_empty(),
+            "{GRANT_PLACEHOLDER:?} offers no grant at all"
+        );
+        for family in &offered {
+            assert!(
+                ENFORCED_GRANT_FAMILIES.contains(family),
+                "the grant field offers `{family}:`, which nothing enforces"
+            );
+        }
+    }
+
+    /// The other half: the list this crate advertises is exactly the list `adi-mesh` acts on.
+    ///
+    /// Behind the `server` feature because that is where `adi-mesh` is in the graph at all. It
+    /// runs under `cargo test --workspace` (adi-app turns the feature on), which is the gate that
+    /// matters — a family that starts being enforced, or stops, fails here rather than drifting.
+    #[cfg(feature = "server")]
+    #[test]
+    fn the_advertised_families_are_the_ones_adi_mesh_enforces() {
+        use adi_mesh::fleet::Grant;
+        use std::str::FromStr as _;
+
+        assert_eq!(
+            ENFORCED_GRANT_FAMILIES,
+            Grant::ENFORCED_FAMILIES,
+            "the operator-facing list and the enforcement path disagree"
+        );
+
+        // Not a comparison of two constants that were copied from each other: ask real grants.
+        for (raw, enforced) in [
+            ("http:*", true),
+            ("http:nosh", true),
+            ("tcp:127.0.0.1:22", false),
+            ("ctl:read", false),
+        ] {
+            let grant = Grant::from_str(raw).expect("a grant that must still parse");
+            assert_eq!(grant.is_enforced(), enforced, "{raw}");
+            assert_eq!(
+                ENFORCED_GRANT_FAMILIES.contains(&grant.family()),
+                enforced,
+                "{raw} is advertised out of step with what enforces it"
+            );
+        }
+    }
 }

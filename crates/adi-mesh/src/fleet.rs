@@ -179,15 +179,36 @@ impl fmt::Display for Scope {
 ///
 /// The string form is what lives in `fleet.toml` and what an operator types:
 /// `http:*`, `http:nosh`, `tcp:127.0.0.1:22`, `ctl:read`, `ctl:*`.
+///
+/// # Only `http:` is enforced
+///
+/// [`Grant::Tcp`] and [`Grant::Ctl`] parse, round-trip and are answered by [`Grant::allows`], and
+/// **nothing consults either**. They are no longer offered by the UI or the CLI; they remain here
+/// so that a `fleet.toml` already carrying one still loads. See [`Grant::is_enforced`], which is
+/// the single place that says which is which, and the test that pins the UI's list to it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub enum Grant {
     /// An HTTP service served here by name (`http:nosh`, `http:app.nosh`), or every one of
-    /// them (`http:*`).
+    /// them (`http:*`). **The only family anything enforces**, in
+    /// [`gateway::admit`](crate::gateway).
     Http(Scope),
     /// A raw TCP forward to exactly this local address (`tcp:127.0.0.1:22`).
+    ///
+    /// **Recorded, never consulted.** What actually gates the raw-forward path is a separate list:
+    /// [`HostConfig`](crate::config::HostConfig)'s `authorized_peers` for the peer and `allow` for
+    /// the port, checked in [`host::peer_authorized`](crate::host). The two mean different things
+    /// — a fleet grant names a *local address*, `host.allow` names a *port* — so wiring this one
+    /// into that path is a design decision about a live authorization path, not a hookup, and it
+    /// deserves its own task rather than a quiet edit here.
     Tcp(SocketAddr),
     /// A control-plane scope (`ctl:read`), or every one of them (`ctl:*`).
+    ///
+    /// **Reserved.** There is no control plane behind it: nothing in the workspace constructs
+    /// [`Target::Ctl`] outside tests, so this cannot be wired up — only withdrawn or kept for the
+    /// day a per-peer control surface exists. Kept, because a grant family that is parsed and
+    /// round-tripped is cheaper to keep than to re-introduce, and because live `fleet.toml` files
+    /// may already carry one.
     Ctl(Scope),
 }
 
@@ -206,7 +227,40 @@ pub enum Target<'a> {
 }
 
 impl Grant {
+    /// The grant families anything on this machine actually acts on — the set an operator should
+    /// be offered, and the set this crate is answerable for.
+    ///
+    /// One entry, and it is the point of the constant: the UI and the CLI used to offer three,
+    /// two of which granted nothing. That fails *closed*, so it was never exploitable — but an
+    /// operator who adds `tcp:127.0.0.1:22` believes they opened something and they did not, and
+    /// one who removes it believes they closed something and they did not. Both beliefs are worth
+    /// correcting.
+    pub const ENFORCED_FAMILIES: [&'static str; 1] = ["http"];
+
+    /// This grant's `<family>:` prefix.
+    #[must_use]
+    pub fn family(&self) -> &'static str {
+        match self {
+            Self::Http(_) => "http",
+            Self::Tcp(_) => "tcp",
+            Self::Ctl(_) => "ctl",
+        }
+    }
+
+    /// Whether anything checks a grant of this family before letting a peer through.
+    ///
+    /// The one place that answers the question, so a family cannot be enforced in one file and
+    /// advertised in another — [`Self::ENFORCED_FAMILIES`] is derived from the same fact, and
+    /// `adi_webapp_api::types` pins the operator-facing list against it.
+    #[must_use]
+    pub fn is_enforced(&self) -> bool {
+        Self::ENFORCED_FAMILIES.contains(&self.family())
+    }
+
     /// Does this single grant cover `target`?
+    ///
+    /// Answers for all three families. That a `Tcp` or `Ctl` grant can be *satisfied* here says
+    /// nothing about whether anything asks: see [`Self::is_enforced`].
     #[must_use]
     pub fn allows(&self, target: Target<'_>) -> bool {
         match (self, target) {
@@ -804,6 +858,55 @@ mod tests {
         match registry.pair(key, nickname) {
             Pairing::Paired { petname } => petname,
             other => panic!("expected a fresh pairing, got {other:?}"),
+        }
+    }
+
+    /// `http:` is the only family anything acts on, and the other two must keep *parsing* — there
+    /// are live `fleet.toml` files, and a record that fails to load takes a node's whole
+    /// authorization with it.
+    #[test]
+    fn only_http_is_enforced_and_the_withdrawn_families_still_load() {
+        for raw in ["http:*", "http:nosh", "http:app.nosh"] {
+            let grant: Grant = raw.parse().expect(raw);
+            assert!(grant.is_enforced(), "{raw}");
+            assert_eq!(grant.family(), "http");
+            assert_eq!(String::from(grant), raw, "{raw} must round-trip");
+        }
+        for raw in ["tcp:127.0.0.1:22", "ctl:read", "ctl:*"] {
+            let grant: Grant = raw.parse().expect(raw);
+            assert!(!grant.is_enforced(), "{raw} is enforced by nothing");
+            assert_eq!(String::from(grant), raw, "{raw} must still round-trip");
+        }
+        assert_eq!(Grant::ENFORCED_FAMILIES, ["http"]);
+    }
+
+    /// A whole registry carrying a withdrawn grant loads, keeps it, and writes it back untouched
+    /// — which is what stops this change quietly editing somebody's `fleet.toml`.
+    #[test]
+    fn a_record_carrying_a_withdrawn_grant_survives_a_load_and_save() {
+        let toml = "\
+            [nodes.laptop-b]\n\
+            key = \"aa\"\n\
+            nickname = \"laptop-b\"\n\
+            paired_at = 1\n\
+            grants = [\"http:app\", \"tcp:127.0.0.1:22\", \"ctl:read\"]\n\
+            [nodes.laptop-b.auth]\n\
+            user = \"adi\"\n\
+            salt = \"\"\n\
+            digest = \"\"\n";
+        let registry: FleetRegistry = toml::from_str(toml).expect("an existing fleet.toml loads");
+        let record = &registry.nodes["laptop-b"];
+        assert_eq!(record.grants.len(), 3, "nothing is dropped on the way in");
+        assert!(record.allows(Target::Http("app")));
+        assert_eq!(
+            record.grants.iter().filter(|g| g.is_enforced()).count(),
+            1,
+            "and only one of the three means anything"
+        );
+
+        let written = toml::to_string(&registry).expect("save");
+        for raw in ["http:app", "tcp:127.0.0.1:22", "ctl:read"] {
+            assert!(written.contains(raw), "{raw} must survive the round trip");
         }
     }
 

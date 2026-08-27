@@ -110,8 +110,11 @@ pub(crate) enum MeshCommand {
         /// The node's petname.
         petname: String,
     },
-    /// Let a node reach one more thing here (`http:nosh`, `http:app.nosh`, `http:*`,
-    /// `tcp:127.0.0.1:22`, `ctl:read`).
+    /// Let a node reach one more thing here (`http:nosh`, `http:app.nosh`, `http:*`).
+    ///
+    /// `http:` is the only family anything enforces. A `tcp:<ip>:<port>` or `ctl:<scope>` grant
+    /// still parses, so an existing `fleet.toml` loads, but it opens nothing — see
+    /// `adi_mesh::fleet::Grant`.
     Grant {
         /// The node's petname.
         petname: String,

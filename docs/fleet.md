@@ -125,7 +125,16 @@ is true of the legacy raw-forward list too: an empty `authorized_peers` now admi
 reachable through a public relay was an open door to anyone who learned the id. Nothing was lost by
 closing it: pairing writes a fleet record, never this list, so "empty" never meant "the peers I
 paired" — it meant everyone. A grant names what the peer may
-reach (`http:*`, `http:app`, `tcp:127.0.0.1:22`, `ctl:read`). An unknown key is refused before it
+reach: `http:*`, `http:app`, `http:app.nosh` — and **`http:` is the only family anything enforces**.
+`tcp:<ip>:<port>` and `ctl:<scope>` still parse, so a `fleet.toml` already carrying one loads, but
+no code path consults either: `Target::Http` has exactly one enforcement call site
+(`gateway::admit`) and `Target::Tcp` / `Target::Ctl` have none outside tests. What actually gates
+the raw-forward path is the separate legacy list described just above — `authorized_peers` for the
+peer, `host.allow` for the port. Neither withdrawn family is offered by the fleet page or by
+`adi-mono mesh grant` any more, because a grant that grants nothing is worse than no grant at all:
+it makes an operator believe they opened (or closed) something they did not. `ctl:` is *reserved*
+rather than deleted — there is no control plane behind it yet to wire it to.
+An unknown key is refused before it
 reaches anything local — but say where, because it is not where this doc used to claim. There is no
 `after_handshake` hook anywhere in the tree: the raw-forward check runs in `host::handle_connection`
 *after* `accept_bi`, and the HTTP one in `gateway::admit` on the accepted stream. The stream is
@@ -232,8 +241,9 @@ viewer → node     { "result":"accepted", "petname":"laptop-b", "username":"adi
   browser asks for it. Re-pairing a known key keeps the pinned petname and rotates the password,
   because a lost password is precisely why you re-invite.
 - **The default grant is `http:app`** — the node's control panel and nothing else. Not `http:*`
-  (no dashboard is exposed until it is named), and never `tcp:`, which would splice a raw socket
-  past the HTTP password layer entirely.
+  (no dashboard is exposed until it is named), and never `tcp:`, which is not offered at all now
+  (§5) and which, if it ever *is* wired up, would splice a raw socket past the HTTP password layer
+  entirely.
 
 ## 9. Relay and offline
 
@@ -410,8 +420,9 @@ Each item ships with unit tests in the same file.
 - [x] B3 Pairing: accept a nickname, resolve collisions by suggestion, never fail on a clash.
 - [x] B4 Pinning: a changed nickname is reported, never applied silently.
 - [x] B5 Local rename, and lookup by petname and by key.
-- [x] B6 Grants: default-deny, `http:<service>` (a service name, so `http:app.nosh` too) /
-      `http:*` / `tcp:<addr>:<port>` / `ctl:*`.
+- [x] B6 Grants: default-deny, `http:<service>` (a service name, so `http:app.nosh` too) and
+      `http:*`. `tcp:<addr>:<port>` and `ctl:*` parse and round-trip, and nothing enforces either
+      — withdrawn from the UI and the CLI, kept so existing files load (§5).
 
 ### C — gateway (`adi-mesh`)
 

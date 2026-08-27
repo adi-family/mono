@@ -22,7 +22,7 @@
 //! it cannot honour. That panel is most of the first-run experience and is shown whether or not
 //! anything is paired.
 
-use adi_webapp_api::types::{FleetNode, FleetState};
+use adi_webapp_api::types::{FleetNode, FleetState, GRANT_PLACEHOLDER};
 use leptos::prelude::*;
 use adi_ui::{Row as TableRow, Table};
 
@@ -77,7 +77,7 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
                     fetch::fleet_grant(node, grant));
             }>
                 {node_picker(state, form)}
-                <TextField id="fleet-grant" label="Grant" placeholder="http:* — or http:nosh, tcp:127.0.0.1:22, ctl:read"
+                <TextField id="fleet-grant" label="Grant" placeholder=GRANT_PLACEHOLDER
                     wide=true mono=true field_class="adi-field--grow" value=form.grant />
                 <button class="adi-btn adi-btn--primary" type="submit"
                     prop:disabled=move || form.busy.get()>
@@ -87,9 +87,9 @@ pub(crate) fn fleet_view(state: State, form: FleetForm) -> AnyView {
             <div class="adi-hint">
                 "A paired node reaches nothing here until a grant says otherwise. "
                 <span class="adi-mono">"http:<service>"</span>" opens one service (or "
-                <span class="adi-mono">"http:*"</span>" all of them), "
-                <span class="adi-mono">"tcp:<ip>:<port>"</span>" one raw forward, "
-                <span class="adi-mono">"ctl:<scope>"</span>" the control plane."
+                <span class="adi-mono">"http:*"</span>" all of them), and that is the whole of it — "
+                <span class="adi-mono">"tcp:"</span>" and "<span class="adi-mono">"ctl:"</span>
+                " still parse for old files but nothing enforces them, so neither opens anything."
             </div>
         </section>
 
