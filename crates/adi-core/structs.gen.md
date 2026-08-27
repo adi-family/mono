@@ -4,14 +4,14 @@
 
 > Core shared library for the adi-family workspace.
 
-14 structs · 3 enums across 10 files.
+14 structs · 4 enums across 10 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `App`
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
-- [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `MeshNodeChange`, `Dns`
+- [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `Unsafe`, `MeshNodeChange`, `Dns`
 - [`src/install.rs`](#srcinstallrs) — `Location`
 - [`src/proc.rs`](#srcprocrs) — `Output`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectRenamed`
@@ -97,6 +97,19 @@ Simple, user-editable settings for the always-on front door: the `.adi` hosts pr
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FrontdoorSettings {
     hosts: Vec<String>,
+}
+```
+
+### enum `Unsafe`
+
+Why one component of a program path leaves a **root** daemon only as privileged as an ordinary user.
+
+```rust
+#[cfg(any(target_os = "macos", all(test, unix)))]
+#[derive(Debug, PartialEq, Eq)]
+enum Unsafe {
+    OwnedBy(u32),
+    Writable(u32),
 }
 ```
 

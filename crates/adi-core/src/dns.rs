@@ -22,6 +22,31 @@
 //! The privileged/routing surface (`install_route`, `update_frontdoor`, `remove_route`,
 //! `route_installed`) is split per-OS; the config/YAML rendering below it is shared and unit-tested.
 //!
+//! # What the root daemon is allowed to run
+//!
+//! Only the macOS front door is a **root** daemon, and a root daemon is worth no more than the
+//! file it executes: whoever can rewrite that program — or rename a different file over it, which
+//! needs only a writable *directory* — runs code as root. Here that is not even a race to win.
+//! [`frontdoor_env`] sets `ADI_WATCH_SELF=1` so the running front door polls its own inode and
+//! exits when the file changes, and `KeepAlive` starts the replacement: a plain
+//! `cargo build --release -p adi-hive`, an npm postinstall, or a drive-by that can write one file
+//! is root within about sixty seconds, with no prompt.
+//!
+//! [`hive_binary_path`] resolves the program as a sibling of whatever binary is doing the
+//! installing, so running `adi enable` from a repo build is all it takes to put
+//! `~/…/target/release/adi-hive` into a root plist. So [`write_frontdoor_artifacts`] now refuses
+//! to stage a plist whose program, or any directory above it, is owned by a non-root user or is
+//! group/other-writable. It names the offending component and stops before the Authorization
+//! prompt: nothing is written and nothing is asked for.
+//!
+//! Refuse, never rewrite. Silently substituting the bundle path would surprise a developer who
+//! repointed the daemon on purpose, which is a documented workflow (`CLAUDE.md`). The escape hatch
+//! is [`ALLOW_UNSAFE_PROGRAM_ENV`] and has to be asked for by name — `ADI_HIVE_BIN` chooses the
+//! path, which is a different decision from accepting that an ordinary user may rewrite it.
+//!
+//! **This applies to root daemons only.** The Linux user unit and the Windows per-user task run as
+//! the same account that owns the binary, which is no boundary at all, and they never call this.
+//!
 //! The split is per **`target_os`**, not `unix`. Linux *is* unix: while the macOS branch carried
 //! `#[cfg(unix)]` a Linux build compiled it and then shelled out to an `osascript`, a `launchctl`
 //! and a `/Library/LaunchDaemons` that do not exist there — and because `proc::run_admin`'s result
@@ -580,9 +605,109 @@ fn frontdoor_user_log() -> PathBuf {
     paths::logs_dir().join(name)
 }
 
+// MARK: what a root daemon may be asked to run (pure predicate + a walk, unit-tested)
+
+/// Why one component of a program path leaves a **root** daemon only as privileged as an ordinary
+/// user.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+#[derive(Debug, PartialEq, Eq)]
+enum Unsafe {
+    /// Owned by somebody who is not root, and so replaceable by them whenever they like.
+    OwnedBy(u32),
+    /// Writable by a group, or by everyone.
+    Writable(u32),
+}
+
+#[cfg(any(target_os = "macos", all(test, unix)))]
+impl std::fmt::Display for Unsafe {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::OwnedBy(uid) => write!(f, "is owned by uid {uid}, not by root"),
+            Self::Writable(mode) => write!(f, "is writable beyond its owner (mode {mode:04o})"),
+        }
+    }
+}
+
+/// The verdict on one component of a program path, from its owner and its mode alone.
+///
+/// Ownership first, because it is the stronger statement: a file's owner can grant themselves any
+/// mode they like, so `0755 alice` is exactly as replaceable as `0777 alice` and the mode says
+/// nothing extra about it.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn component_verdict(uid: u32, mode: u32) -> Option<Unsafe> {
+    if uid != 0 {
+        return Some(Unsafe::OwnedBy(uid));
+    }
+    // 0o022 — group-write and other-write. Root may own the file and still have handed the right
+    // to replace it to the `admin` group, which on macOS is every administrator account.
+    (mode & 0o022 != 0).then_some(Unsafe::Writable(mode & 0o7777))
+}
+
+/// The first component of `program` — the file itself, then each directory above it — that a
+/// non-root user could use to put different code in a root daemon's way.
+///
+/// A directory counts as much as the file: whoever may write `…/release/` may replace `adi-hive`
+/// inside it with a `rename(2)`, whatever the old file's own mode was. The walk is over the
+/// canonical path when there is one, so a symlink is judged by what it points at rather than by
+/// the link's own (meaningless) mode.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn first_unsafe_component(program: &std::path::Path) -> Option<(PathBuf, Unsafe)> {
+    use std::os::unix::fs::MetadataExt as _;
+
+    let resolved = std::fs::canonicalize(program).unwrap_or_else(|_| program.to_path_buf());
+    resolved.ancestors().find_map(|component| {
+        let meta = std::fs::metadata(component).ok()?;
+        component_verdict(meta.uid(), meta.mode()).map(|verdict| (component.to_path_buf(), verdict))
+    })
+}
+
+/// Set this to install the root front door anyway, over the objection below.
+///
+/// Deliberately its own variable rather than something inferred from `ADI_HIVE_BIN`: pointing the
+/// daemon at another binary and accepting that an ordinary user may rewrite it are two different
+/// decisions, and only the second one is dangerous.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+const ALLOW_UNSAFE_PROGRAM_ENV: &str = "ADI_ALLOW_UNSAFE_ROOT_PROGRAM";
+
+/// Whether a **root** daemon may be pointed at `program`, or the sentence explaining why not.
+///
+/// See this module's header for the reasoning; the short version is that a root daemon whose
+/// program a user can rewrite is not a root daemon, it is that user with a root-shaped hole in
+/// front of them — and `ADI_WATCH_SELF` makes the hole open itself within the minute.
+#[cfg(any(target_os = "macos", all(test, unix)))]
+fn root_program_objection(program: &std::path::Path) -> Option<String> {
+    let (component, verdict) = first_unsafe_component(program)?;
+    if std::env::var_os(ALLOW_UNSAFE_PROGRAM_ENV).is_some_and(|v| !v.is_empty()) {
+        eprintln!(
+            "adi: installing a root daemon that runs {} even though {} {verdict} — \
+             {ALLOW_UNSAFE_PROGRAM_ENV} is set, so anyone who can write that can run code as root",
+            program.display(),
+            component.display(),
+        );
+        return None;
+    }
+    Some(format!(
+        "refusing to install a root daemon that runs {program}: {component} {verdict}, so \
+         anyone who can write it can run code as root — and ADI_WATCH_SELF makes the daemon \
+         adopt a replacement within a minute, with no prompt.\n  \
+         Point it at a root-owned copy (ADI_HIVE_BIN=/path/to/adi-hive, or `sudo chown root:wheel` \
+         the component named above), or set {ALLOW_UNSAFE_PROGRAM_ENV}=1 to install it anyway.",
+        program = program.display(),
+        component = component.display(),
+    ))
+}
+
 /// Stage the front-door daemon's config + plist (unprivileged); pins `HOME`/`ADI_DIR` to the installing user's, since the root daemon would otherwise use `/var/root/.adi`.
+///
+/// `Err` when the binary this would put in a **root** daemon's `ProgramArguments` is one an
+/// ordinary user may rewrite. Nothing is staged in that case and no prompt is raised: the three
+/// privileged entry points below all start here, so this is the one gate they share.
 #[cfg(target_os = "macos")]
-fn write_frontdoor_artifacts() {
+fn write_frontdoor_artifacts() -> Result<(), String> {
+    let hive = hive_binary_path();
+    if let Some(objection) = root_program_objection(std::path::Path::new(&hive)) {
+        return Err(objection);
+    }
     write_frontdoor_config();
     // The front door is the one root piece the updater can't kickstart without a password, so
     // it watches its own binary and exits when the bundle is swapped — launchd's KeepAlive
@@ -594,14 +719,12 @@ fn write_frontdoor_artifacts() {
     ));
     let plist = launchd::plist_xml(
         &frontdoor_label(),
-        &[
-            hive_binary_path(),
-            frontdoor_config_path().to_string_lossy().into_owned(),
-        ],
+        &[hive, frontdoor_config_path().to_string_lossy().into_owned()],
         &frontdoor_log(),
         &env,
     );
     let _ = std::fs::write(frontdoor_plist_stage(), plist);
+    Ok(())
 }
 
 /// True when the installed root daemon plist is the standard one we manage — it runs
@@ -1180,7 +1303,13 @@ impl Dns {
             stage_path(),
             format!("nameserver {RESOLVER_BIND}\nport {port}\n"),
         );
-        write_frontdoor_artifacts();
+        if let Err(objection) = write_frontdoor_artifacts() {
+            // Before the prompt, so the operator is not asked for a password to install something
+            // that would then be refused — and before `/etc/resolver`, so the route and the front
+            // door are still installed together or not at all.
+            eprintln!("adi: {objection}");
+            return;
+        }
 
         let stage = stage_path();
         let stage = stage.to_string_lossy();
@@ -1238,7 +1367,10 @@ impl Dns {
     pub fn install_front_door(self) {
         let frontdoor_label = frontdoor_label();
         let frontdoor_plist = frontdoor_plist();
-        write_frontdoor_artifacts();
+        if let Err(objection) = write_frontdoor_artifacts() {
+            eprintln!("adi: {objection}");
+            return;
+        }
         let plist_stage = frontdoor_plist_stage();
         let plist_stage = plist_stage.to_string_lossy();
         let shell = format!(
@@ -1349,7 +1481,13 @@ impl Dns {
     pub fn update_frontdoor(self) {
         let frontdoor_label = frontdoor_label();
         let frontdoor_plist = frontdoor_plist();
-        write_frontdoor_artifacts();
+        if let Err(objection) = write_frontdoor_artifacts() {
+            // A refresh that would rewrite the daemon's program to something user-writable is
+            // refused for the same reason a first install is — and leaving the running front door
+            // alone is the safe half of the two.
+            eprintln!("adi: {objection}");
+            return;
+        }
         let plist_stage = frontdoor_plist_stage();
         let plist_stage = plist_stage.to_string_lossy();
         // A plist change (env, args) only takes effect through bootout → bootstrap;
@@ -2152,5 +2290,76 @@ mod tests {
             linux_plan::detail_suffix(false, false),
             " · no front door, .adi not routed locally"
         );
+    }
+
+    // What a root daemon may be asked to run. The verdict is a pure function of an owner and a
+    // mode precisely so it can be tested without a root-owned file to point at — the walk below
+    // then only has to prove that it looks at every component and stops at the first bad one.
+
+    #[cfg(unix)]
+    #[test]
+    fn only_a_root_owned_component_that_nobody_else_may_write_is_accepted() {
+        assert_eq!(component_verdict(0, 0o755), None);
+        assert_eq!(component_verdict(0, 0o700), None);
+        // Sticky and setuid bits are none of this check's business.
+        assert_eq!(component_verdict(0, 0o1755), None);
+
+        // An ordinary user's file, whatever its mode says: the owner can change the mode.
+        assert_eq!(component_verdict(501, 0o755), Some(Unsafe::OwnedBy(501)));
+        assert_eq!(component_verdict(501, 0o700), Some(Unsafe::OwnedBy(501)));
+
+        // Root-owned, but handed to a group or to the world — on macOS `root:admin 0775` means
+        // every administrator account on the machine.
+        assert_eq!(component_verdict(0, 0o775), Some(Unsafe::Writable(0o775)));
+        assert_eq!(component_verdict(0, 0o757), Some(Unsafe::Writable(0o757)));
+    }
+
+    /// A directory above the program counts as much as the program: whoever may write it can
+    /// rename a different file into place.
+    #[cfg(unix)]
+    #[test]
+    fn a_user_owned_program_or_parent_is_refused_and_named() {
+        let dir = std::env::temp_dir().join(format!("adi-dns-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let program = dir.join("adi-hive");
+        std::fs::write(&program, b"#!/bin/sh\n").unwrap();
+
+        // A temp dir belongs to the user running the tests, so this is the user-owned case.
+        let (component, verdict) = first_unsafe_component(&program).expect("must object");
+        assert!(matches!(verdict, Unsafe::OwnedBy(_)), "{verdict:?}");
+        // The first offending component going *up* is the program itself.
+        assert_eq!(component, std::fs::canonicalize(&program).unwrap());
+
+        let objection = root_program_objection(&program).expect("must refuse");
+        assert!(objection.contains("adi-hive"), "{objection}");
+        assert!(objection.contains(ALLOW_UNSAFE_PROGRAM_ENV), "{objection}");
+        assert!(objection.contains("run code as root"), "{objection}");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The path the check is meant to accept: root-owned all the way up, writable by nobody else.
+    /// `/bin/sh` is `root:wheel 0555` on macOS and root-owned `0755` on every Linux this builds on.
+    #[cfg(unix)]
+    #[test]
+    fn a_root_owned_program_is_accepted() {
+        assert_eq!(first_unsafe_component(std::path::Path::new("/bin/sh")), None);
+        assert_eq!(root_program_objection(std::path::Path::new("/bin/sh")), None);
+    }
+
+    /// A path that does not exist yet is judged by the directories above it — which is the case
+    /// that matters, since a writable directory is where a missing program comes from.
+    #[cfg(unix)]
+    #[test]
+    fn a_missing_program_is_judged_by_its_parents() {
+        assert_eq!(
+            first_unsafe_component(std::path::Path::new("/bin/adi-hive-not-here")),
+            None
+        );
+        let home = std::env::var("HOME").expect("a home directory");
+        let (component, _) =
+            first_unsafe_component(&PathBuf::from(home).join("adi-hive-not-here"))
+                .expect("a user's home is not root-owned");
+        assert!(component.exists(), "{} must be a real component", component.display());
     }
 }
