@@ -12,6 +12,7 @@ mod awaits;
 mod http;
 mod live;
 mod node;
+mod origin;
 mod projects;
 mod scan;
 mod transfer;
@@ -364,6 +365,22 @@ async fn handle(mut stream: TcpStream, app: &Arc<App>) -> anyhow::Result<()> {
         return Ok(());
     };
     debug!(method = %req.method, path = %req.path, "request");
+
+    // Before anything is routed: this panel has no login, so a page on another site must not be
+    // able to drive it (see [`origin`]). Ahead of the websocket branch on purpose — the handshake
+    // is the one route where this check is the only guard that can ever exist.
+    if req.route_path().starts_with("/api")
+        && let Err(refusal) = origin::check(&req)
+    {
+        warn!(
+            path = %req.path,
+            origin = req.header("origin").unwrap_or("-"),
+            status = refusal.status,
+            "refused a request from another site",
+        );
+        let response = handlers::error(refusal.status, &refusal.message);
+        return http::write_json(&mut stream, response.status, &response.body).await;
+    }
 
     // The live channel leaves HTTP behind entirely: past the handshake this connection is a
     // websocket for as long as the page is open, not a request and a response.

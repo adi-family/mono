@@ -4,7 +4,7 @@
 
 > The adi app: a Rust HTTP backend serving a control-panel SPA at / and a JSON API at /api, fronted by adi-hive at app.adi.
 
-14 structs · 1 enum · 2 type aliases across 8 files.
+15 structs · 1 enum · 2 type aliases across 9 files.
 
 ## Index
 
@@ -13,6 +13,7 @@
 - [`src/live.rs`](#srclivers) — `Watch`, `Topic`, `Inner`, `Hub`
 - [`src/main.rs`](#srcmainrs) — `App`, `MeshCtl`, `Reads`
 - [`src/node.rs`](#srcnoders) — `CallError`
+- [`src/origin.rs`](#srcoriginrs) — `Refusal`
 - [`src/scan.rs`](#srcscanrs) — `Proc`, `ProcessTable`
 - [`src/viewer.rs`](#srcviewerrs) — `Credential`, `Credentials`, `HeldCredentials`
 - [`src/ws.rs`](#srcwsrs) — `Frame`, `Reader`
@@ -169,6 +170,22 @@ A failed call to a node, already phrased for the operator and carrying the statu
 pub(crate) struct CallError {
     pub(crate) status: u16,
     pub(crate) message: String,
+}
+```
+
+---
+
+## `src/origin.rs`
+
+### struct `Refusal`
+
+A request that will not be routed: the status to answer with, and the sentence to say.
+
+```rust
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub status: u16,
+    pub message: String,
 }
 ```
 
