@@ -1,4 +1,9 @@
-# Deploying `mesh-client.withadi.dev`
+# Deploying `mono-mesh-client.withadi.dev`
+
+> **Deployed 2026-08-27.** Cloudflare Pages project **`mono-mesh-client`**, live and verified at
+> <https://mono-mesh-client.pages.dev>. The custom domain is attached on the Pages side and is
+> `pending` on one thing only — a DNS record this machine's token may not write. See
+> *[The last step](#the-last-step-a-dns-record-this-machine-cannot-write)*.
 
 The artefact is `crates/adi-mesh-client/dist/` — **static files, no server, no build step on the
 host, no environment variables.** Everything the client shows it fetched itself over QUIC from a
@@ -34,19 +39,19 @@ for it is correct and harmless.
 
 ## Cloudflare Pages — what to click
 
-**This has not been done, and it cannot be done from this machine.** There are no Cloudflare
-credentials in the secret store, `wrangler` is installed but unauthenticated, and connecting Pages
-to a repository is a dashboard OAuth flow between Cloudflare and GitHub that no API token replaces
-(the same wall `projects/adi-landing/DEPLOY.md` hit).
-
-Dashboard → **Workers & Pages → Create → Pages**. Either route works:
-
-*Direct upload* — fastest, and enough to try it on a phone today:
+**`wrangler` is authenticated on this machine** — an OAuth token for `ihor@withadi.dev`, account
+`5b81c76ca545338aa9e85215c001a768`, carrying `pages (write)`. (An earlier draft of this file said
+deploying was impossible from here, which was true when `projects/adi-landing/DEPLOY.md` hit the
+same wall and is no longer true.) So a deploy is two commands:
 
 ```
+scripts/build-mesh-client.sh
 cd crates/adi-mesh-client
-wrangler pages deploy dist --project-name adi-mesh-client
+wrangler pages deploy dist --project-name mono-mesh-client --branch main
 ```
+
+`--branch main` is what makes it a *production* deploy rather than a preview; without it the build
+lands on a preview URL and the custom domain keeps serving the previous one.
 
 *Connect to Git* — the steady state, so a deploy is a push:
 
@@ -63,21 +68,54 @@ that has the backend. Either add a `rustup`/`apt` preamble to the build command,
 use direct upload. Direct upload is the honest choice for now — the toolchain is the reason, not
 laziness.
 
-Add these to the project's **Headers** (Pages reads `dist/_headers`, which this build does not yet
-write):
+Requirements 2 and 3 are **no longer manual**: the build now writes `dist/_headers` and
+`dist/_redirects`, and Pages reads both (it names them as it uploads). They live at the crate root
+and are copied by the `copy-file` links in `index.html`, so every build carries them — nothing has
+to be re-entered in the dashboard after a deploy.
+
+## The last step: a DNS record this machine cannot write
+
+Attaching the custom domain is two separate things, and only the first one worked from here.
+
+**Done** — the domain is registered against the Pages project. `wrangler` has no command for it, so
+it goes through the API with the token wrangler already holds:
 
 ```
-/sw.js
-  Cache-Control: no-cache
-/__adi/*
-  Cache-Control: no-cache
+POST /client/v4/accounts/<account>/pages/projects/mono-mesh-client/domains
+     {"name":"mono-mesh-client.withadi.dev"}          → success, status "initializing"
 ```
 
-Then attach `mesh-client.withadi.dev` in **Custom domains**.
+**Not done** — the `CNAME`. The zone `withadi.dev` (`7dcdc690ed524a9d1ede599897066c0f`) is on the
+same account and active, but **Pages did not create the record**, and creating it by hand fails:
+
+```
+POST /client/v4/zones/<zone>/dns_records   → 10000 Authentication error
+```
+
+The wrangler OAuth token carries **`zone (read)`**, not DNS edit, and no `pages (write)` call
+creates a record on your behalf with it. Until the record exists the custom domain stays `pending`,
+no certificate is issued, and the name does not resolve at all. **This is the one step that needs a
+human at a browser** — and the reason to write it down is that it looks like a Pages problem and is
+not one.
+
+Either fix works:
+
+- **Dashboard** → *Workers & Pages* → `mono-mesh-client` → *Custom domains* → *Set up a custom
+  domain*. A dashboard session has the permission the token lacks and creates both halves at once.
+- **Or** the record by hand: *withadi.dev* → *DNS* → add `CNAME`, name `mono-mesh-client`, target
+  `mono-mesh-client.pages.dev`, **proxied**. The Pages side is already waiting for it and flips to
+  `active` on its own, usually within a minute or two.
+- **Or**, to make this scriptable next time, mint an API token with *Zone → DNS → Edit* on
+  `withadi.dev`, store it as `adi-mono secrets set CLOUDFLARE_DNS_TOKEN`, and the whole deploy
+  becomes unattended.
 
 ## Verify, in this order
 
-1. `curl -sI https://mesh-client.withadi.dev/sw.js | grep -i cache-control` — `no-cache`.
+0. Until the DNS record above exists, verify against `https://mono-mesh-client.pages.dev` — the
+   deploy is complete and the client fully works there; only the vanity name is missing.
+1. `curl -sI https://mono-mesh-client.withadi.dev/sw.js | grep -i cache-control` — `no-cache`. Check
+   `content-type` is `application/javascript` too: if it comes back `text/html`, the `/*` rule in
+   `_redirects` has swallowed a real asset and the worker will never install.
 2. Open it on a phone. The page should show *"No machines yet"* and, at the bottom, **this
    browser's key** — a 64-character hex string. If the key is missing, IndexedDB is refusing the
    write (private browsing does this) and nothing else will work.

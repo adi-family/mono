@@ -29,6 +29,9 @@ rustc-ice-*.txt
 .env.*
 !.env.example
 
+# wrangler writes this beside wherever it is run, including the repo root.
+.wrangler/
+
 # Editor / OS
 .DS_Store
 .idea/

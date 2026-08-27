@@ -1,6 +1,8 @@
 # Build output and probe artefacts. `dist/` is what gets deployed and is rebuilt by
 # `scripts/build-mesh-client.sh`; `harness/pkg/` is wasm-pack's, for the probe page only.
 /dist
+# wrangler's own scratch state, written next to whatever directory it is invoked from.
+/.wrangler
 /harness/pkg
 /harness/report.json
 /harness/report-*.json

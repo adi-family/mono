@@ -1,0 +1,16 @@
+# Response headers for a static host that reads this file (Cloudflare Pages, Netlify).
+#
+# Both rules exist for the same reason: a cached copy of either file is how a stale build outlives
+# a deploy, and both are the parts that decide what a *panel* sees. The hashed wasm/JS/CSS carry
+# their digest in the filename and are meant to be cached hard, so they are deliberately absent.
+
+# The service worker is the whole client — it is what turns another machine's control panel into a
+# page in this browser. A browser will keep serving a cached worker, so a stale one here means a
+# deploy that never arrives.
+/sw.js
+  Cache-Control: no-cache
+
+# `/__adi/panel-shim.js` runs inside the panel's own document, ahead of that app's scripts. Same
+# argument: it is injected by the worker, so the two have to move together or not at all.
+/__adi/*
+  Cache-Control: no-cache
