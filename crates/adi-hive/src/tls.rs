@@ -17,14 +17,52 @@
 //!
 //! Nothing here shells out: no `openssl`, no `mkcert`. A fresh machine gets working TLS from the
 //! binary alone, and the only manual step left is trusting `ca.pem` once.
+//!
+//! # The CA may only vouch for this machine's own names
+//!
+//! [`trust_hint`] asks the user to install `ca.pem` as a **system trust root**, which is a large
+//! thing to ask: an unconstrained root may sign a certificate for `google.com`, for a bank, or for
+//! the operator's own SSO, and every browser on the machine will accept it. `ca-key.pem` is kept
+//! `0600` and that is not the point — the point is what a future key compromise, a backup, or a
+//! root-level bug would be *worth*. Unconstrained, it is worth the whole machine's TLS.
+//!
+//! So [`ca_params`] carries X.509 **name constraints** (RFC 5280 §4.2.1.10) permitting exactly the
+//! names the front door serves: the DNS subtree `adi` (which subsumes `app.adi`, `*.n.adi` and
+//! every `<service>.<node>.n.adi`), the DNS name `localhost`, and the IP subtree `127.0.0.0/8`
+//! (which covers both [`BASE_SANS`] addresses). A certificate this CA signs for any other name is
+//! rejected by the verifier, not merely frowned upon: Apple's Security framework and NSS both
+//! enforce constraints, and `a_leaf_for_an_outside_name_is_refused_by_the_platform` proves it
+//! against the real platform verifier rather than assuming it.
+//!
+//! There are deliberately **no `excluded_subtrees`.** A default-deny reads like the right
+//! belt-and-braces addition, but RFC 5280 gives exclusion precedence over permission — a name
+//! matching an excluded subtree "is rejected regardless of information in permittedSubtrees" — and
+//! the empty DNS name matches *every* DNS name. Excluding it would reject the permitted subtrees
+//! along with everything else. A permitted subtree with no exclusions is already default-deny for
+//! its own name type, which is the whole mechanism.
+//!
+//! The trade, stated plainly: this root can never be reused to sign anything outside `.adi`, and
+//! somebody will eventually want to. That is what it is for. Signing a name outside the front
+//! door's own zone needs a different CA, not a wider one.
+//!
+//! ## Which is why the CA is versioned
+//!
+//! [`load_or_create_ca`] rebuilds the CA certificate from [`ca_params`] on every start, so
+//! changing those parameters changes the certificate — and the copy the user trusted is the one in
+//! their keychain, which does not change with it. A silently mismatched pair is the worst outcome
+//! available: HTTPS keeps working, signed by a root whose *trusted* copy still permits every name
+//! on the internet. So the parameters carry [`CA_PARAMS_VERSION`], recorded in `ca.json` beside
+//! them, and a CA written under an older version is **replaced** — new key, new certificate — with
+//! the re-trust instruction logged at `warn`. Bump that constant with any future change to
+//! `ca_params`, and the same migration happens by itself.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use rcgen::{
-    BasicConstraints, CertificateParams, CertifiedIssuer, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose,
+    BasicConstraints, CertificateParams, CertifiedIssuer, CidrSubnet, DnType,
+    ExtendedKeyUsagePurpose, GeneralSubtree, IsCa, KeyPair, KeyUsagePurpose, NameConstraints,
 };
 use rustls::ServerConfig;
 use rustls::pki_types::pem::PemObject as _;
@@ -48,6 +86,34 @@ const CA_DAYS: i64 = 3650;
 /// Hosts every leaf carries regardless of config, so the front door is reachable by name and by
 /// address over TLS even before any service is routed.
 const BASE_SANS: [&str; 3] = ["localhost", "127.0.0.1", "127.0.0.53"];
+
+/// The name types the CA may vouch for, as X.509 name constraints — see this module's header.
+///
+/// The DNS entry is the zone label with **no leading dot**: RFC 5280 §4.2.1.10 defines a DNS
+/// constraint as matching the name itself plus anything built by adding labels to its left, so
+/// `adi` covers `app.adi` and `nosh.laptop-b.n.adi` alike. A leading `.adi` is a widespread
+/// convention that several verifiers accept and the RFC does not define; the plain label is the
+/// form every verifier agrees on.
+const PERMITTED_DNS: [&str; 2] = ["adi", "localhost"];
+
+/// The loopback block the front door's addresses live in — `127.0.0.1` and `127.0.0.53`, i.e. both
+/// of [`BASE_SANS`]' addresses, and the flavour-derived one a second install binds.
+const PERMITTED_IPV4: ([u8; 4], u8) = ([127, 0, 0, 0], 8);
+
+/// The revision of [`ca_params`]. A CA on disk recorded under an older number is replaced rather
+/// than rebuilt from parameters it does not match — see this module's header.
+///
+/// * `1` — no name constraints (implicit: nothing recorded a version).
+/// * `2` — name constraints for [`PERMITTED_DNS`] and [`PERMITTED_IPV4`].
+const CA_PARAMS_VERSION: u32 = 2;
+
+/// What the CA on disk was minted under, written beside it as `ca.json` — the same trick
+/// [`LeafMeta`] uses to avoid an X.509 parser in the dependency tree.
+#[derive(Debug, Serialize, Deserialize)]
+struct CaMeta {
+    /// [`CA_PARAMS_VERSION`] at the time it was generated.
+    params_version: u32,
+}
 
 /// The mesh zone's own wildcard, added whenever a mesh gateway is configured. It covers the
 /// three-label `<node>.n.adi` — the node itself — and **not** the four-label service names below;
@@ -89,7 +155,7 @@ pub fn prepare(dir: &Path, hosts: &[String], mesh: Option<&[String]>) -> anyhow:
 
     let (ca, ca_is_new) = load_or_create_ca(dir)?;
     let wanted = san_list(hosts, mesh);
-    let (chain, key) = load_or_create_leaf(dir, &wanted, &ca)?;
+    let (chain, key) = load_or_create_leaf(dir, &wanted, &ca, ca_is_new)?;
 
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut config = ServerConfig::builder_with_provider(provider)
@@ -173,17 +239,30 @@ fn mesh_sans(nodes: &[String]) -> Vec<String> {
 fn load_or_create_ca(dir: &Path) -> anyhow::Result<(CertifiedIssuer<'static, KeyPair>, bool)> {
     let cert_path = dir.join("ca.pem");
     let key_path = dir.join("ca-key.pem");
+    let meta_path = dir.join("ca.json");
 
     // Both halves must be present; one without the other is a broken state worth replacing.
     if cert_path.exists() && key_path.exists() {
-        let key_pem = read_key(&key_path)?;
-        let key = KeyPair::from_pem(&key_pem).context("parsing the CA key")?;
-        // rcgen can't load a certificate back from PEM, so re-derive it from the same parameters
-        // and key. Deterministic in everything that matters: the public key, and therefore the
-        // subject key identifier and signature the leaf chains to, all come from `key`.
-        let ca = CertifiedIssuer::self_signed(ca_params()?, key)
-            .context("rebuilding the CA certificate from its key")?;
-        return Ok((ca, false));
+        if ca_params_version(&meta_path) == CA_PARAMS_VERSION {
+            let key_pem = read_key(&key_path)?;
+            let key = KeyPair::from_pem(&key_pem).context("parsing the CA key")?;
+            // rcgen can't load a certificate back from PEM, so re-derive it from the same
+            // parameters and key. Deterministic in everything that matters: the public key, and
+            // therefore the subject key identifier and signature the leaf chains to, all come
+            // from `key`.
+            let ca = CertifiedIssuer::self_signed(ca_params()?, key)
+                .context("rebuilding the CA certificate from its key")?;
+            return Ok((ca, false));
+        }
+        // Replaced rather than rebuilt: the certificate this CA would now produce is not the one
+        // sitting in the user's trust store, and quietly signing leaves with a root whose trusted
+        // copy still permits every name on the internet is the outcome worth avoiding most.
+        warn!(
+            ca = %cert_path.display(),
+            "replacing the local CA: the one on disk predates this build's certificate parameters \
+             (it vouches for every name, not only this machine's). HTTPS will warn until you trust \
+             the new one, and the old root is now inert — remove it from your trust store"
+        );
     }
 
     let key = KeyPair::generate().context("generating the CA key")?;
@@ -193,8 +272,25 @@ fn load_or_create_ca(dir: &Path) -> anyhow::Result<(CertifiedIssuer<'static, Key
         CertifiedIssuer::self_signed(ca_params()?, key).context("generating the CA certificate")?;
     write_public(&cert_path, &ca.pem())?;
     write_key(&key_path, &key_pem)?;
+    write_public(
+        &meta_path,
+        &serde_json::to_string_pretty(&CaMeta {
+            params_version: CA_PARAMS_VERSION,
+        })
+        .unwrap_or_default(),
+    )?;
     info!(path = %cert_path.display(), "generated a local certificate authority");
     Ok((ca, true))
+}
+
+/// Which revision of [`ca_params`] the CA on disk was written under. An absent or unreadable
+/// `ca.json` reads as `1` — every CA generated before the file existed is unconstrained, which is
+/// exactly what version 1 means.
+fn ca_params_version(meta_path: &Path) -> u32 {
+    std::fs::read_to_string(meta_path)
+        .ok()
+        .and_then(|raw| serde_json::from_str::<CaMeta>(&raw).ok())
+        .map_or(1, |meta| meta.params_version)
 }
 
 /// The CA's parameters. Must stay byte-stable across releases: [`load_or_create_ca`] rebuilds the
@@ -209,6 +305,19 @@ fn ca_params() -> anyhow::Result<CertificateParams> {
         dn
     };
     params.is_ca = IsCa::Ca(BasicConstraints::Constrained(0));
+    // A *path-length* constraint bounds how many CAs may chain below this one and says nothing
+    // about names; the name constraints below are what stop it vouching for `google.com`. See this
+    // module's header for why there are no `excluded_subtrees` to go with them.
+    params.name_constraints = Some(NameConstraints {
+        permitted_subtrees: PERMITTED_DNS
+            .iter()
+            .map(|name| GeneralSubtree::DnsName((*name).to_string()))
+            .chain(std::iter::once(GeneralSubtree::IpAddress(
+                CidrSubnet::from_v4_prefix(PERMITTED_IPV4.0, PERMITTED_IPV4.1),
+            )))
+            .collect(),
+        excluded_subtrees: Vec::new(),
+    });
     params.key_usages = vec![
         KeyUsagePurpose::KeyCertSign,
         KeyUsagePurpose::CrlSign,
@@ -227,12 +336,13 @@ fn load_or_create_leaf(
     dir: &Path,
     wanted: &[String],
     ca: &CertifiedIssuer<'_, KeyPair>,
+    ca_is_new: bool,
 ) -> anyhow::Result<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)> {
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
     let meta_path = dir.join("cert.json");
 
-    if let Some(reason) = reissue_reason(&cert_path, &key_path, &meta_path, wanted) {
+    if let Some(reason) = reissue_reason(&cert_path, &key_path, &meta_path, wanted, ca_is_new) {
         info!(hosts = ?wanted, %reason, "issuing a front-door certificate");
         let key = KeyPair::generate().context("generating the leaf key")?;
         let mut params =
@@ -276,7 +386,13 @@ fn reissue_reason(
     key_path: &Path,
     meta_path: &Path,
     wanted: &[String],
+    ca_is_new: bool,
 ) -> Option<&'static str> {
+    // First, and before the file checks: a leaf signed by the CA we just replaced chains to a root
+    // nothing holds, so keeping it would serve a certificate no browser can build a path for.
+    if ca_is_new {
+        return Some("the certificate authority was replaced");
+    }
     if !cert_path.exists() || !key_path.exists() {
         return Some("no certificate yet");
     }
@@ -500,6 +616,193 @@ mod tests {
             leaf_pem,
             std::fs::read_to_string(dir.join("cert.pem")).unwrap(),
             "a changed host set must produce a new leaf"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A CA generated before the name constraints existed is *replaced*, not rebuilt from
+    /// parameters it does not match — and the leaf goes with it, or it would chain to a root
+    /// nothing holds.
+    #[test]
+    fn a_ca_from_an_older_parameter_set_is_replaced_along_with_its_leaf() {
+        let dir = std::env::temp_dir().join(format!("adi-hive-tls-mig-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let hosts = vec!["app.adi".to_string()];
+
+        prepare(&dir, &hosts, None).expect("first prepare");
+        let ca_pem = std::fs::read_to_string(dir.join("ca.pem")).unwrap();
+        let ca_key = std::fs::read_to_string(dir.join("ca-key.pem")).unwrap();
+        let leaf_pem = std::fs::read_to_string(dir.join("cert.pem")).unwrap();
+
+        // Exactly what an install written by an older build looks like: no marker beside the CA.
+        std::fs::remove_file(dir.join("ca.json")).expect("drop the marker");
+        let migrated = prepare(&dir, &hosts, None).expect("prepare over an old CA");
+
+        assert!(migrated.ca_is_new, "an unversioned CA must be replaced");
+        assert_ne!(
+            ca_key,
+            std::fs::read_to_string(dir.join("ca-key.pem")).unwrap(),
+            "replacing means a new key, not a re-signed certificate over the old one"
+        );
+        assert_ne!(ca_pem, std::fs::read_to_string(dir.join("ca.pem")).unwrap());
+        assert_ne!(
+            leaf_pem,
+            std::fs::read_to_string(dir.join("cert.pem")).unwrap(),
+            "a leaf signed by the replaced CA chains to a root nothing holds"
+        );
+        assert_eq!(ca_params_version(&dir.join("ca.json")), CA_PARAMS_VERSION);
+
+        // And the next start settles down again — the migration must not repeat forever.
+        let settled = prepare(&dir, &hosts, None).expect("prepare again");
+        assert!(!settled.ca_is_new, "a current CA is reused, not replaced");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An absent marker is version 1 — every CA generated before `ca.json` existed is the
+    /// unconstrained kind, which is what version 1 means.
+    #[test]
+    fn an_unmarked_ca_reads_as_the_first_parameter_set() {
+        let dir = std::env::temp_dir().join(format!("adi-hive-tls-ver-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let meta = dir.join("ca.json");
+
+        assert_eq!(ca_params_version(&meta), 1, "no file at all");
+        std::fs::write(&meta, "not json").unwrap();
+        assert_eq!(ca_params_version(&meta), 1, "unreadable");
+        std::fs::write(&meta, r#"{"params_version":7}"#).unwrap();
+        assert_eq!(ca_params_version(&meta), 7);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The constraints cover every name a leaf can actually carry — asserted against
+    /// [`san_list`]'s own output rather than a hand-copied list, so a new base SAN that the CA
+    /// may not vouch for fails here instead of in a browser.
+    #[test]
+    fn every_name_a_leaf_carries_is_inside_the_permitted_subtrees() {
+        let sans = san_list(
+            &["app.adi".into(), "nosh.adi".into()],
+            Some(&["laptop-b".to_string(), "nosh.zomro-de1".to_string()]),
+        );
+        for san in &sans {
+            let permitted = san.parse::<std::net::Ipv4Addr>().map_or_else(
+                |_| {
+                    PERMITTED_DNS
+                        .iter()
+                        .any(|zone| san == zone || san.ends_with(&format!(".{zone}")))
+                },
+                |ip| ip.octets()[0] == PERMITTED_IPV4.0[0],
+            );
+            assert!(permitted, "{san} is not inside the CA's permitted subtrees");
+        }
+        // The list is not vacuously satisfied: an outside name must fail the same check.
+        assert!(!sans.iter().any(|s| s.ends_with(".example.com")));
+    }
+
+    /// The constraints are *enforced*, not merely present — asked of the real platform verifier,
+    /// which is the only authority on the question that matters.
+    ///
+    /// macOS only: `security verify-cert` is Security.framework, the same evaluation Safari and
+    /// Chrome perform. `-r` supplies the root for this evaluation alone, so nothing is added to
+    /// any keychain and the test needs no privilege. Skipped, not failed, where `security` is not
+    /// on PATH — a Linux builder has nothing to say about Apple's verifier.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_leaf_for_an_outside_name_is_refused_by_the_platform() {
+        use std::process::Command;
+
+        let dir = std::env::temp_dir().join(format!("adi-hive-tls-nc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let ca_key = KeyPair::generate().expect("ca key");
+        let ca = CertifiedIssuer::self_signed(ca_params().expect("ca params"), ca_key).expect("ca");
+        let ca_path = dir.join("ca.pem");
+        std::fs::write(&ca_path, ca.pem()).unwrap();
+
+        // Two leaves off the same root, differing only in the name they claim.
+        let mint = |host: &str| {
+            let key = KeyPair::generate().expect("leaf key");
+            let mut params = CertificateParams::new(vec![host.to_string()]).expect("leaf params");
+            params.is_ca = IsCa::NoCa;
+            params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+            params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+            let now = OffsetDateTime::now_utc();
+            params.not_before = now - TimeDuration::hours(1);
+            params.not_after = now + TimeDuration::days(LEAF_DAYS);
+            let cert = params.signed_by(&key, &ca).expect("sign");
+            let path = dir.join(format!("{host}.pem"));
+            std::fs::write(&path, cert.pem()).unwrap();
+            path
+        };
+
+        let verify = |leaf: &Path, host: &str| {
+            Command::new("security")
+                .args(["verify-cert", "-p", "ssl", "-s", host, "-c"])
+                .arg(leaf)
+                .arg("-r")
+                .arg(&ca_path)
+                .output()
+        };
+
+        let inside = mint("app.adi");
+        let Ok(ok) = verify(&inside, "app.adi") else {
+            let _ = std::fs::remove_dir_all(&dir);
+            return; // no `security` on this box — nothing to ask
+        };
+        assert!(
+            ok.status.success(),
+            "the front door's own name must still validate: {}{}",
+            String::from_utf8_lossy(&ok.stdout),
+            String::from_utf8_lossy(&ok.stderr),
+        );
+
+        let outside = mint("www.example.com");
+        let refused = verify(&outside, "www.example.com").expect("verify-cert");
+        assert!(
+            !refused.status.success(),
+            "a name outside the permitted subtrees must be refused, but the platform accepted it: \
+             {}{}",
+            String::from_utf8_lossy(&refused.stdout),
+            String::from_utf8_lossy(&refused.stderr),
+        );
+
+        // The control, without which the assertion above proves nothing: the *same* outside name,
+        // off a root identical but for the constraints, must verify. Otherwise the refusal could
+        // be anything — a policy, an expiry, a key usage — dressed up as a win.
+        let mut open_params = ca_params().expect("ca params");
+        open_params.name_constraints = None;
+        let open_ca = CertifiedIssuer::self_signed(open_params, KeyPair::generate().expect("key"))
+            .expect("unconstrained ca");
+        let open_ca_path = dir.join("open-ca.pem");
+        std::fs::write(&open_ca_path, open_ca.pem()).unwrap();
+        let key = KeyPair::generate().expect("leaf key");
+        let mut params =
+            CertificateParams::new(vec!["www.example.com".to_string()]).expect("leaf params");
+        params.is_ca = IsCa::NoCa;
+        params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
+        let now = OffsetDateTime::now_utc();
+        params.not_before = now - TimeDuration::hours(1);
+        params.not_after = now + TimeDuration::days(LEAF_DAYS);
+        let control = params.signed_by(&key, &open_ca).expect("sign");
+        let control_path = dir.join("control.pem");
+        std::fs::write(&control_path, control.pem()).unwrap();
+        let accepted = Command::new("security")
+            .args(["verify-cert", "-p", "ssl", "-s", "www.example.com", "-c"])
+            .arg(&control_path)
+            .arg("-r")
+            .arg(&open_ca_path)
+            .output()
+            .expect("verify-cert");
+        assert!(
+            accepted.status.success(),
+            "the control must pass, or the refusal above is not about name constraints: {}{}",
+            String::from_utf8_lossy(&accepted.stdout),
+            String::from_utf8_lossy(&accepted.stderr),
         );
 
         let _ = std::fs::remove_dir_all(&dir);

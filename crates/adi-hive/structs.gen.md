@@ -4,7 +4,7 @@
 
 > adi-family reverse proxy: routes inbound HTTP by Host header to a local upstream (nginx-style), run in the foreground under a supervisor
 
-20 structs · 2 enums across 5 files.
+21 structs · 2 enums across 5 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/proxy.rs`](#srcproxyrs) — `Route`, `Decision`, `Router`
 - [`src/runner.rs`](#srcrunnerrs) — `Running`, `Supervisor`
 - [`src/status.rs`](#srcstatusrs) — `Status`
-- [`src/tls.rs`](#srctlsrs) — `LeafMeta`, `Tls`
+- [`src/tls.rs`](#srctlsrs) — `CaMeta`, `LeafMeta`, `Tls`
 
 ---
 
@@ -311,6 +311,17 @@ pub struct Status {
 ---
 
 ## `src/tls.rs`
+
+### struct `CaMeta`
+
+What the CA on disk was minted under, written beside it as `ca.json` — the same trick `LeafMeta` uses to avoid an X.509 parser in the dependency tree.
+
+```rust
+#[derive(Debug, Serialize, Deserialize)]
+struct CaMeta {
+    params_version: u32,
+}
+```
 
 ### struct `LeafMeta`
 
