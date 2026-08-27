@@ -1,37 +1,27 @@
 //! Thin fetch layer over the `/api/*` endpoints, deserializing into the shared DTOs.
 
 use adi_webapp_api::types::{
-    AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted, AgentRunResult, AgentRuns,
-    AgentSimBlock, AgentSimState, AgentSimTurn, AgentTokens,
-    AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard, DashboardRef,
-    DashboardTransferred,
-    DashboardsState, DbExecResult,
-    DbQuery, DbQueryResult, DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent,
-    FilesRef, FleetDashboards, FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent,
-    FsCreate, FsListing, FsRef, FsWrite, Health, HideRun, HiveState, IgnoreAwait,
-    KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed,
-    KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState, LeaseRef,
-    LinkTool, MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState,
-    NewDashboard, NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService,
-    NewTask, NewTool, NewWorkspace,
-    NodeServiceRef,
-    PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
-    ProjectRenamed, RenameProject,
-    GoalsOf, ProjectsState, ReleaseResponse, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun,
-    SimulateAgent, SimulateTurn,
-    RunAgent, RunRef,
-    RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject,
-    SetGoal, SetOAuthSecret, SetRunLimit, SetSecret, StarRun, StartResult, StartService, StopResult,
-    TaskRef,
-    TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, TransferDashboard,
-    TriggerFireResult, TriggerLog,
-    Transcript,
-    TriggerRef, TriggersState, UnlockNode, UnqueueFromRun, UpdateState, UsedPorts,
-    WorkspaceCreateResult,
-    WorkspaceRef,
-    VoiceState,
-    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
-    WriteToolScript,
+    AgentAttachment, AgentAwaits, AgentGoals, AgentKeys, AgentPeek, AgentRef, AgentReviewStarted,
+    AgentRunOverrides, AgentRunResult, AgentRuns, AgentSimBlock, AgentSimState, AgentSimTurn,
+    AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
+    DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
+    DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent, FilesRef, FleetDashboards,
+    FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing, FsRef,
+    FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait, KnowledgeBaseRef, KnowledgeNoteDto,
+    KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved,
+    KnowledgeSearch, KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, MeshForwardRef,
+    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
+    NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
+    NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
+    RenameProject, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent, RunRef,
+    RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
+    SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent, SimulateTurn, StarRun, StartResult,
+    StartService, StopResult, TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
+    Transcript, TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
+    UnlockNode, UnqueueFromRun, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult,
+    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
+    WorkspacesState, WriteFile, WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -395,12 +385,14 @@ pub async fn delete_agent(name: String) -> Result<AgentsState, String> {
 }
 
 /// Launch a run. `working_dir` is the composer's optional "run here" — blank means "run this agent
-/// as defined", so it starts where its manifest and its project say. `force` launches past a full
-/// concurrency limit — what the "Run anyway" affordance sends.
+/// as defined", so it starts where its manifest and its project say. `overrides` is the rest of the
+/// same panel: the agent's own settings this one run replaces, `None` for a launch that changes
+/// nothing. `force` launches past a full concurrency limit — what the "Run anyway" affordance sends.
 pub async fn run_agent(
     name: String,
     message: String,
     working_dir: Option<String>,
+    overrides: Option<AgentRunOverrides>,
     force: bool,
     attachments: Vec<String>,
 ) -> Result<AgentRunResult, String> {
@@ -410,12 +402,17 @@ pub async fn run_agent(
             name,
             message,
             working_dir,
+            overrides,
             force,
             attachments,
             // The composer launches what a person typed; a pre-run is something a launcher that
             // already knows the agent's first move sends (the CLI's `--pre-run`, a filer's API
             // call). Nothing in this form offers one, so it sends none.
             pre_run: Vec::new(),
+            // Somebody pressed Send. Stated rather than left to the endpoint's default, because
+            // this is the one caller that can be sure of it — and it is what puts the session in
+            // the rail's "started by me".
+            launched_by: Some(LAUNCHED_BY_HUMAN.to_string()),
         },
     )
     .await
@@ -632,7 +629,11 @@ pub async fn ignore_agent_await(
     run_id: String,
     id: String,
 ) -> Result<AgentAwaits, String> {
-    post("/api/agents/await/ignore", &IgnoreAwait { name, run_id, id }).await
+    post(
+        "/api/agents/await/ignore",
+        &IgnoreAwait { name, run_id, id },
+    )
+    .await
 }
 
 /// Drop the message at `index` from a conversation's queue, returning the fresh snapshot.

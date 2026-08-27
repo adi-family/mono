@@ -267,6 +267,17 @@
 
       &:hover { background: color-mix(in srgb, var(--down) 12%, transparent); }
     }
+
+    // The chosen one, where the menu is a set to pick from rather than a list of actions.
+    &.is-on { color: var(--accent); }
+  }
+
+  // The tick column of such a menu. A fixed width whether or not it is carrying the mark, so the
+  // labels start on the same line down the menu and picking a different one moves nothing.
+  &__tick {
+    display: inline-block;
+    width: 13px;
+    color: var(--accent);
   }
 }
 

@@ -9,19 +9,17 @@ use adi_agents::StoredAgent;
 use adi_agents::contains_json_null;
 
 use crate::types::{
-    AgentAsk, AgentAttachment, AgentBackendOption, AgentCapabilities, AgentChoice, AgentDto,
-    AgentFormField,
-    AgentFormFieldKind, AgentFormOption, AgentFormSpec, AgentKeys, AgentNearDup, AgentPeek,
-    AgentQuestion, AgentRef, AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo,
-    AgentRunOutcome, AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentStep, AgentTokenSite,
-    AgentTokenSource, AgentTokenSplit, AgentTokens, AgentToolStatus, AgentTurn, AgentTurnMetrics,
-    AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimResult, AgentSimSection,
-    AgentSimState, AgentSimTool, AgentSimTurn, AgentToken, AgentsState, AgentAwait, AgentAwaits,
-    AgentGoal, AgentGoals,
-    AllAgentRuns, AnswerRun, CloseGoal, GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks,
-    ProjectRunLimit,
-    ReplyToRun, ReviewRun, RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit,
-    SimulateAgent, SimulateTurn, StarRun, UnqueueFromRun,
+    AgentAsk, AgentAttachment, AgentAwait, AgentAwaits, AgentBackendOption, AgentCapabilities,
+    AgentChoice, AgentDto, AgentFormField, AgentFormFieldKind, AgentFormOption, AgentFormSpec,
+    AgentGoal, AgentGoals, AgentKeys, AgentNearDup, AgentPeek, AgentQuestion, AgentRef,
+    AgentRepeat, AgentRepeatShape, AgentReviewStarted, AgentRunInfo, AgentRunOutcome,
+    AgentRunResult, AgentRuns, AgentSetupPreset, AgentSetupSecret, AgentSimBlock, AgentSimField,
+    AgentSimFieldKind, AgentSimResult, AgentSimSection, AgentSimState, AgentSimTool, AgentSimTurn,
+    AgentStep, AgentToken, AgentTokenSite, AgentTokenSource, AgentTokenSplit, AgentTokens,
+    AgentToolStatus, AgentTurn, AgentTurnMetrics, AgentsState, AllAgentRuns, AnswerRun, CloseGoal,
+    GoalsOf, HideRun, IgnoreAwait, PendingAsk, PendingAsks, ProjectRunLimit, ReplyToRun, ReviewRun,
+    RunAgent, RunRef, SaveAgent, SecretRef, SetGoal, SetRunLimit, SimulateAgent, SimulateTurn,
+    StarRun, UnqueueFromRun,
 };
 
 use super::response::{FromBody, Response, clean, error, mutate, ok_json, parse_body};
@@ -108,7 +106,12 @@ pub fn set_run_limit(store: &Agents, body: &[u8]) -> Response {
             "expected JSON body { \"max_concurrent_runs\": <number>, \"project\"?: \"…\" } — 0 lifts the limit",
         );
     };
-    let stored = match req.project.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+    let stored = match req
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
         Some(project) => store.set_project_limit(project, req.max_concurrent_runs),
         None => {
             let mut limits = store.limits();
@@ -153,6 +156,20 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
         .as_deref()
         .map(str::trim)
         .filter(|d| !d.is_empty());
+    // Absent is a person: this endpoint is what the control panel presses, and everything else that
+    // launches an agent has its own path (the CLI, which reads its caller from the environment).
+    let launched_by = req
+        .launched_by
+        .as_deref()
+        .map(str::trim)
+        .filter(|by| !by.is_empty())
+        .unwrap_or(adi_agents::launcher::HUMAN);
+    // What this one run runs the agent *as* — see `adi_agents::overrides` for why an absent key and
+    // an empty one mean different things. Nothing sent is the ordinary launch.
+    let overrides = req.overrides.as_ref().map(|o| adi_agents::RunOverrides {
+        arguments: o.arguments.clone(),
+        unattended: o.unattended,
+    });
     // `force` is the human's "run it anyway" after a refusal — the only way past the concurrency
     // limit, and never something an automatic launch sends.
     let launch = store.launch(
@@ -163,6 +180,8 @@ pub fn run_agent(store: &Agents, body: &[u8]) -> Response {
             force: req.force,
             image_ids: &req.attachments,
             pre_run: &req.pre_run,
+            launched_by: Some(launched_by),
+            overrides: overrides.as_ref(),
         },
     );
     let launch = match launch {
@@ -403,7 +422,17 @@ pub fn review_run(store: &Agents, body: &[u8]) -> Response {
         Err(e) => return Response::from(&e),
     };
 
-    let launch = match store.run_in(&reviewer.name, &review.brief, working_dir.as_deref()) {
+    // A person pressed Review. The brief is machine-written, but the run is theirs — and it is
+    // their rail it has to be findable in afterwards.
+    let launch = match store.launch(
+        &reviewer.name,
+        &review.brief,
+        &adi_agents::LaunchOptions {
+            working_dir: working_dir.as_deref(),
+            launched_by: Some(adi_agents::launcher::HUMAN),
+            ..adi_agents::LaunchOptions::default()
+        },
+    ) {
         Ok(launch) => launch,
         Err(e) => return Response::from(&e),
     };
@@ -454,12 +483,7 @@ pub fn reply_run(store: &Agents, body: &[u8]) -> Response {
 /// typed. What it stores belongs to nobody until a message actually carries it; an upload that is
 /// never sent is swept a day later.
 #[must_use]
-pub fn store_attachment(
-    store: &Agents,
-    media_type: &str,
-    filename: &str,
-    body: &[u8],
-) -> Response {
+pub fn store_attachment(store: &Agents, media_type: &str, filename: &str, body: &[u8]) -> Response {
     // The header arrives as `image/png` or `image/png; charset=…`; only the type is ours to keep.
     let media_type = media_type
         .split(';')
@@ -706,14 +730,14 @@ pub fn close_agent_goal(store: &Agents, body: &[u8]) -> Response {
         adi_agents::goals::give_up(store, goal_id, &req.note)
     };
     match closed {
-        Ok(adi_agents::store::GoalClosed::Unknown) => {
-            error(404, &format!("No goal “{goal_id}”."))
-        }
-        Ok(adi_agents::store::GoalClosed::Now(goal) | adi_agents::store::GoalClosed::Already(goal)) => {
-            ok_json(&goals_response(&adi_agents::goals::of_conversation(
-                store, &goal.agent, &goal.conv,
-            )))
-        }
+        Ok(adi_agents::store::GoalClosed::Unknown) => error(404, &format!("No goal “{goal_id}”.")),
+        Ok(
+            adi_agents::store::GoalClosed::Now(goal) | adi_agents::store::GoalClosed::Already(goal),
+        ) => ok_json(&goals_response(&adi_agents::goals::of_conversation(
+            store,
+            &goal.agent,
+            &goal.conv,
+        ))),
         Err(e) => Response::from(&e),
     }
 }
@@ -1001,6 +1025,8 @@ fn runs_response_with(
                 running: r.running,
                 hidden: r.hidden,
                 starred: r.starred,
+                launched_by: r.launched_by,
+                overrides: r.overrides,
                 outcome: r.outcome.map(agent_run_outcome),
             })
             .collect(),
@@ -1247,7 +1273,10 @@ pub fn save_agent(store: &Agents, body: &[u8]) -> Response {
         // mentioned them fails at its next run, somewhere else entirely.
         secrets: match req.secrets {
             Some(secrets) => secrets.into_iter().filter_map(secret_attachment).collect(),
-            None => stored.as_ref().map(|m| m.secrets.clone()).unwrap_or_default(),
+            None => stored
+                .as_ref()
+                .map(|m| m.secrets.clone())
+                .unwrap_or_default(),
         },
         // Extra `PATH` dirs and env vars: what the request states, else what the agent already had.
         // Blank entries are dropped here so an empty line left in a textarea can't put an empty dir
@@ -1510,7 +1539,13 @@ const CLAUDE_TOOLS: &[&str] = &[
 const CLAUDE_CLI_MODELS: &[&str] = &["opus", "sonnet", "haiku", "fable"];
 const CLAUDE_SDK_MODELS: &[&str] = &["claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"];
 const CODEX_MODELS: &[&str] = &["gpt-5-codex"];
-const ADI_MODELS: &[&str] = &["kimi-k3", "kimi-k2.6", "glm-5.2", "glm-4.7", "gemini-2.5-pro"];
+const ADI_MODELS: &[&str] = &[
+    "kimi-k3",
+    "kimi-k2.6",
+    "glm-5.2",
+    "glm-4.7",
+    "gemini-2.5-pro",
+];
 
 /// Static backend/form metadata for the Agents page. This lives server-side so the API defines
 /// both the selectable backends and the field shape the client renders. Backends are
@@ -1563,7 +1598,7 @@ fn agent_form_spec() -> AgentFormSpec {
     model.hint = "tap a suggestion for the chosen backend, or type any model".into();
     model.mono = true;
     model.wide = true;
-    fields.push(model);
+    fields.push(overridable(model));
 
     // ---- claude engines (any executor) ----
     let mut permission = field_ids(
@@ -1581,10 +1616,10 @@ fn agent_form_spec() -> AgentFormSpec {
         ("dontAsk", "dontAsk"),
         ("plan", "plan"),
     ]);
-    fields.push(permission);
+    fields.push(overridable(permission));
 
     fields.push(for_providers(
-        sel_field(
+        overridable(sel_field(
             "effort",
             "Effort",
             CLAUDE_BACKENDS,
@@ -1597,7 +1632,7 @@ fn agent_form_spec() -> AgentFormSpec {
                 ("max", "max"),
             ]),
             "thinking / reasoning depth",
-        ),
+        )),
         &["anthropic"],
     ));
 
@@ -1644,10 +1679,10 @@ fn agent_form_spec() -> AgentFormSpec {
     );
     append.placeholder = "Appended after the default system prompt…".into();
     append.wide = true;
-    fields.push(append);
+    fields.push(overridable(append));
 
     // ---- codex engines (any executor) ----
-    fields.push(sel_field(
+    fields.push(overridable(sel_field(
         "sandbox",
         "Sandbox",
         CODEX_BACKENDS,
@@ -1658,9 +1693,9 @@ fn agent_form_spec() -> AgentFormSpec {
             ("danger-full-access", "danger-full-access"),
         ]),
         "filesystem / exec sandbox policy",
-    ));
+    )));
 
-    fields.push(sel_field(
+    fields.push(overridable(sel_field(
         "approval",
         "Approval",
         CODEX_BACKENDS,
@@ -1671,10 +1706,10 @@ fn agent_form_spec() -> AgentFormSpec {
             ("never", "never"),
         ]),
         "when to ask before running a command",
-    ));
+    )));
 
     fields.push(for_providers(
-        sel_field(
+        overridable(sel_field(
             "reasoning_effort",
             "Reasoning effort",
             CODEX_BACKENDS,
@@ -1685,7 +1720,7 @@ fn agent_form_spec() -> AgentFormSpec {
                 ("high", "high"),
             ]),
             "reasoning depth",
-        ),
+        )),
         &["openai"],
     ));
 
@@ -1882,7 +1917,7 @@ fn agent_form_spec() -> AgentFormSpec {
     max_turns.placeholder = "optional".into();
     max_turns.hint = "harness cap on agent turns per run".into();
     max_turns.numeric = true;
-    fields.push(max_turns);
+    fields.push(overridable(max_turns));
 
     let mut api_key_env = field_ids(
         "api_key_env",
@@ -1922,7 +1957,7 @@ fn agent_form_spec() -> AgentFormSpec {
     unattended.hint = "nobody is watching this one, so it may not stop to ask — the Ask tool \
                        refuses and tells the run to decide for itself and say what it assumed"
         .into();
-    fields.push(unattended);
+    fields.push(overridable(unattended));
 
     let mut tags = agent_field("tags", "Tags", AgentFormFieldKind::Text);
     tags.placeholder = "comma-separated (dispatch / filtering)".into();
@@ -2130,6 +2165,7 @@ fn agent_field(name: &str, label: &str, kind: AgentFormFieldKind) -> AgentFormFi
         wide: false,
         numeric: false,
         required: false,
+        run_override: false,
     }
 }
 
@@ -2160,6 +2196,19 @@ fn field_executors(
 ) -> AgentFormField {
     let mut f = agent_field(name, label, kind);
     f.executors = strings(executors);
+    f
+}
+
+/// Mark a field as one a single run may be launched with set to something else — the composer's run
+/// settings then offer it (see [`AgentRunOverrides`]).
+///
+/// Kept to the *dials*: what the engine is (its model), how freely it may act (permission mode,
+/// sandbox, approval), how hard it thinks (effort), how long it may go on (max turns), and a line of
+/// instruction for this job alone. Everything else stays part of what the agent is — a run that
+/// could re-point its own provider, rename itself, or hand itself a secret would not be that agent
+/// running differently, it would be a different agent with its name.
+fn overridable(mut f: AgentFormField) -> AgentFormField {
+    f.run_override = true;
     f
 }
 
@@ -2263,8 +2312,7 @@ impl From<&AgentStoreError> for Response {
 }
 
 impl FromBody for SaveAgent {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"name\": \"…\", \"backend\": \"…\", … } with a non-empty name and backend";
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"backend\": \"…\", … } with a non-empty name and backend";
 
     fn is_complete(&self) -> bool {
         !self.name.trim().is_empty() && !self.backend.trim().is_empty()
@@ -2289,8 +2337,7 @@ impl FromBody for RunAgent {
 }
 
 impl FromBody for RunRef {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id";
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\" } with a non-empty name and run_id";
 
     fn is_complete(&self) -> bool {
         !self.name.trim().is_empty() && !self.run_id.trim().is_empty()
@@ -2350,13 +2397,11 @@ impl FromBody for UnqueueFromRun {
 }
 
 impl FromBody for AnswerRun {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"ask\"?: \"…\", \"replies\": [\"…\"] }";
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"ask\"?: \"…\", \"replies\": [\"…\"] }";
 }
 
 impl FromBody for SetGoal {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"text\": \"…\", \"goal\"?: \"…\" }";
+    const EXPECTED: &'static str = "expected JSON body { \"name\": \"…\", \"run_id\": \"…\", \"text\": \"…\", \"goal\"?: \"…\" }";
 }
 
 impl FromBody for CloseGoal {
@@ -2439,6 +2484,15 @@ mod tests {
 
     fn saved(store: &Agents) -> AgentManifest<adi_agents::RawAgentArguments> {
         store.get("solver").expect("get").expect("agent").manifest
+    }
+
+    /// The page cannot link `adi_agents`, so the one word of the launcher vocabulary that crosses
+    /// the wire is written down twice. This is the only place both copies are in scope: if the
+    /// store ever calls a person something else, the rail's "started by me" would quietly filter
+    /// everything out, and nothing else would say so.
+    #[test]
+    fn the_wire_and_the_store_agree_on_what_a_person_is_called() {
+        assert_eq!(crate::types::LAUNCHED_BY_HUMAN, adi_agents::launcher::HUMAN);
     }
 
     /// The run environment is edited by the full agent form alone. Every *other* form — the meta
@@ -2646,7 +2700,12 @@ mod tests {
         let sessions =
             adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
         let run = sessions
-            .create("solver", adi_agents::Backend::from("harness:adi"), "/tmp", "go")
+            .create(
+                "solver",
+                adi_agents::Backend::from("harness:adi"),
+                "/tmp",
+                "go",
+            )
             .expect("create")
             .id;
 
@@ -2701,7 +2760,12 @@ mod tests {
         let sessions =
             adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
         let run = sessions
-            .create("solver", adi_agents::Backend::from("harness:adi"), "/tmp", "go")
+            .create(
+                "solver",
+                adi_agents::Backend::from("harness:adi"),
+                "/tmp",
+                "go",
+            )
             .expect("create")
             .id;
 
@@ -2758,12 +2822,10 @@ mod tests {
         assert_eq!(listed(&body).len(), 1, "and it is still pending");
 
         // …and from its own conversation it goes, with the remainder for an answer.
-        let mine =
-            serde_json::json!({ "name": "solver", "run_id": run, "id": registered.id });
+        let mine = serde_json::json!({ "name": "solver", "run_id": run, "id": registered.id });
         let response = ignore_await(&store, mine.to_string().as_bytes());
         assert_eq!(response.status, 200);
-        let left: crate::types::AgentAwaits =
-            serde_json::from_str(&response.body).expect("json");
+        let left: crate::types::AgentAwaits = serde_json::from_str(&response.body).expect("json");
         assert!(left.awaits.is_empty(), "nothing is left to wait on");
         assert!(listed(&body).is_empty(), "and the listing agrees");
 
@@ -2846,7 +2908,11 @@ mod tests {
                 preset.id,
                 preset.backend
             );
-            let provider = preset.arguments.get("provider").cloned().unwrap_or_default();
+            let provider = preset
+                .arguments
+                .get("provider")
+                .cloned()
+                .unwrap_or_default();
             for name in preset.fields.iter().chain(preset.arguments.keys()) {
                 assert!(
                     field_applies(&spec, name, &preset.backend, &provider),
@@ -2880,11 +2946,18 @@ mod tests {
 
         let kimi = preset("kimi");
         assert_eq!(kimi.backend, ADI_HARNESS);
-        assert_eq!(kimi.arguments.get("provider").map(String::as_str), Some("monshoot"));
+        assert_eq!(
+            kimi.arguments.get("provider").map(String::as_str),
+            Some("monshoot")
+        );
         // The loop refuses to start without a model, so the preset arrives with one — in the box,
         // where it can still be changed.
         assert!(kimi.arguments.contains_key("model"), "{:?}", kimi.arguments);
-        assert!(kimi.fields.iter().any(|f| f == "model"), "{:?}", kimi.fields);
+        assert!(
+            kimi.fields.iter().any(|f| f == "model"),
+            "{:?}",
+            kimi.fields
+        );
         let key = kimi.secret.expect("an API key is required");
         assert_eq!(key.env, "MOONSHOT_API_KEY");
         assert!(key.required, "there is no login for this one");
@@ -2892,7 +2965,10 @@ mod tests {
         // The GLM route is the Kimi route with a different provider behind it.
         let glm = preset("glm");
         assert_eq!(glm.backend, ADI_HARNESS);
-        assert_eq!(glm.arguments.get("provider").map(String::as_str), Some("zai"));
+        assert_eq!(
+            glm.arguments.get("provider").map(String::as_str),
+            Some("zai")
+        );
         assert!(glm.arguments.contains_key("model"), "{:?}", glm.arguments);
         assert!(glm.fields.iter().any(|f| f == "model"), "{:?}", glm.fields);
         let key = glm.secret.expect("an API key is required");
@@ -2930,6 +3006,8 @@ mod tests {
                     running: false,
                     hidden: false,
                     starred: false,
+                    launched_by: String::new(),
+                    overrides: String::new(),
                     pending_question: None,
                     awaits: Vec::new(),
                     outcome: None,
@@ -3033,11 +3111,17 @@ mod tests {
             let save = serde_json::json!({ "name": name, "backend": "harness:adi" });
             assert_eq!(save_agent(&store, save.to_string().as_bytes()).status, 200);
         }
-        let sessions = adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
+        let sessions =
+            adi_agents::store::SessionStore::new(store.config().module("sessions").dir());
         for i in 0..5 {
             let agent = if i % 2 == 0 { "solver" } else { "looper" };
             sessions
-                .create(agent, adi_agents::Backend::from("harness:adi"), "/tmp", "go")
+                .create(
+                    agent,
+                    adi_agents::Backend::from("harness:adi"),
+                    "/tmp",
+                    "go",
+                )
                 .expect("open a session");
         }
 
@@ -3258,9 +3342,9 @@ fn sim_state_of(
     // And it is the *open* turn that is asked, not the run: after a person answers as themselves the
     // seat is theirs again with nothing in it, and reporting the previous turn's reason there would
     // put a stale claim above an empty staging area.
-    let emitted = turns.last().is_some_and(|t| {
-        t.role != "user" && (!t.steps.is_empty() || !t.text.trim().is_empty())
-    });
+    let emitted = turns
+        .last()
+        .is_some_and(|t| t.role != "user" && (!t.steps.is_empty() || !t.text.trim().is_empty()));
     let stop_reason = if !peek.running {
         adi_agents::STOP_END_TURN.to_string()
     } else if emitted {

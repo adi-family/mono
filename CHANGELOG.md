@@ -20,6 +20,39 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.0.1 — 2026-08-27
+
+### Added
+
+- **The chat rail can be narrowed to the conversations you started.** A fleet starts most of its
+  own work — an agent launches a helper, a trigger fires one on an event, a script runs one on a
+  schedule — so a rail of four hundred conversations mixed the handful a person actually had in
+  with everything the machine had spawned for itself, and nothing recorded the difference. Every
+  run now writes down who asked for it at the one moment that is known, the launch: a person,
+  another agent by name, or automation with nobody watching. The Sessions head gains a filter box
+  offering **All sessions**, **Only starred** and **Only started by me** — the first two being the
+  starred-only toggle that was there before, now one option among three. Two cases worth knowing:
+  a conversation opened before this release is attributed to nobody and deliberately does *not*
+  count as yours, because a filter that read every unattributed session as a person's would show
+  a year of agent-spawned runs under your name; and whatever is on screen stays visible whichever
+  filter is on, since a filter must never hide the conversation you are reading.
+
+- **One run can be launched on a different model, or with its permissions loosened, without
+  editing the agent.** An agent definition is a template and editing it is usually the right way
+  to change what a run does — the exception is the launch that is deliberately unlike the others:
+  try this task on the big model, run this one under `bypassPermissions` because it is a scratch
+  checkout. Doing that by editing the agent means remembering to edit it back, and forgetting is
+  how an agent ends up permanently on settings somebody chose for one afternoon. The composer
+  gains a run-settings panel, and `adi-mono agents run` takes `--set model=opus`,
+  `--set permission_mode=bypassPermissions`, `--set unattended=true`, repeatable. `--set <key>=`
+  with nothing after the `=` *unsets* what the agent pins for this run, back to the engine's own
+  default, which is the only way to say "the agent fixes this and this run should not". The
+  override travels with the launch and is re-applied on every later turn of that conversation, so
+  a chat cannot answer its second message as a different agent than its first. Settings only: a
+  run cannot grant itself a tool, a secret or a knowledge base its agent was not given, because
+  those are the agent's identity rather than its dials. The panel remembers what you set per
+  agent in this browser, beside the working directory it already kept.
+
 ## 1.0.0 — 2026-08-27
 
 The first release under a stable version number. Two things are in it: a browser tab can now be

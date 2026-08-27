@@ -35,38 +35,35 @@ use adi_ui::{
     Button, ButtonSize, ButtonVariant, Crumb, Crumbs, Mark, MarkVariant, TopBar, Tree, TreeNode,
     TreeState,
 };
-use launcher::{Action, Launcher};
 use adi_webapp_api::types::{
-    AgentsState, DashboardsState, DbState, FleetState, Health, HiveState,
-    MeshState, MetaState,
-    PortsState, ProjectDetail, ProjectsState, SecretsState, TasksState, ToolsState,
-    TriggersState, UsedPorts, WorkspacesState,
+    AgentsState, DashboardsState, DbState, FleetState, Health, HiveState, MeshState, MetaState,
+    PortsState, ProjectDetail, ProjectsState, SecretsState, TasksState, ToolsState, TriggersState,
+    UsedPorts, WorkspacesState,
 };
 use gloo_timers::callback::Interval;
+use launcher::{Action, Launcher};
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use wasm_bindgen_futures::spawn_local;
 
 use pages::{
-    FactsConsole, OnboardingForm, agent_detail_view, agents_view, analytics_view, chat_home_view,
-    dashboards_view, database_view, facts_view, fleet_view,
+    FactsConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
+    analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
     hive_view, knowledge_view, live_view, load_agent_into_form, load_dir, load_store_file,
     mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
     ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
-    seed_onboarding, start_onb_reconfigure, store_file_view,
-    tasks_view, tools_view, triggers_view,
+    seed_onboarding, start_onb_reconfigure, store_file_view, tasks_view, tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
     project_section_from_path, query_param, replace_state, spa_click,
 };
 use state::{
-    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, FleetForm, Simulate,
-    Flash, Form, HookLogView, KnowledgeConsole,
-    MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm, State, Status, TasksForm, TermWatch,
-    ToolEditor, ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load,
-    refresh_fleet_dashboards,
+    AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, FleetForm, Form,
+    HookLogView, KnowledgeConsole, MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm,
+    SessionFilter, Simulate, State, Status, TasksForm, TermWatch, ToolEditor, ToolRunView,
+    ToolsForm, TriggersForm, TriggersLogView, load, refresh_fleet_dashboards,
 };
 use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
@@ -177,6 +174,10 @@ fn Home() -> impl IntoView {
                         watch.interactive.set(interactive);
                     }
                     if watched.is_none() {
+                        // Whatever this browser last set this agent up to run as — see
+                        // `adopt_run_settings`. Here as well as in `point_watch`, because the first
+                        // agent the chat lands on is never picked: it is the one it opens with.
+                        adopt_run_settings(watch, &on);
                         watch.name.set(Some(on));
                         poll_watch(watch);
                     }
@@ -243,6 +244,7 @@ fn Home() -> impl IntoView {
                     watch.interactive.set(interactive);
                 }
                 if watched.is_none() {
+                    adopt_run_settings(watch, &on);
                     watch.name.set(Some(on));
                 }
             }
@@ -427,6 +429,9 @@ fn EmbedDashboardAgent() -> impl IntoView {
                 && let Some(board) = boards.dashboards.iter().find(|d| d.id == id)
                 && !board.dir.is_empty()
             {
+                // Set outright, and this embed deliberately never calls `adopt_run_settings`: the
+                // directory here is not a preference somebody left on, it is which dashboard this
+                // chat is *for*, and restoring a saved one over it would edit the wrong files.
                 watch.run_dir.set(board.dir.clone());
                 watch.context_prefix.set(format!(
                     "[Context: you are editing dashboard {id}, and this chat already runs in its \
@@ -502,8 +507,8 @@ fn receive_picks(watch: AgentsWatch, dashboard: String) {
         return;
     };
     let announce = dashboard.clone();
-    let on_message = Closure::<dyn Fn(web_sys::MessageEvent)>::new(
-        move |ev: web_sys::MessageEvent| {
+    let on_message =
+        Closure::<dyn Fn(web_sys::MessageEvent)>::new(move |ev: web_sys::MessageEvent| {
             let data = ev.data();
             let field = |key: &str| {
                 js_sys::Reflect::get(&data, &wasm_bindgen::JsValue::from_str(key))
@@ -520,13 +525,12 @@ fn receive_picks(watch: AgentsWatch, dashboard: String) {
             };
             // The reply box exists only under an open answerable conversation; anywhere else the
             // composer on screen is the one that starts a new one.
-            let composer = if watch.run_id.get_untracked().is_some()
-                && watch.answerable.get_untracked()
-            {
-                watch.reply
-            } else {
-                watch.input
-            };
+            let composer =
+                if watch.run_id.get_untracked().is_some() && watch.answerable.get_untracked() {
+                    watch.reply
+                } else {
+                    watch.input
+                };
             // Appended, so picking a second element adds to the request being written rather than
             // throwing away the first — pointing at two things and asking to align them is the
             // ordinary case, not an edge one.
@@ -536,8 +540,7 @@ fn receive_picks(watch: AgentsWatch, dashboard: String) {
                 }
                 held.push_str(&text);
             });
-        },
-    );
+        });
     let _ = window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref());
     on_message.forget();
 
@@ -639,7 +642,8 @@ fn App() -> impl IntoView {
         row_menu: RwSignal::new(None),
         session_menu: RwSignal::new(None),
         show_hidden: RwSignal::new(false),
-        starred_only: RwSignal::new(false),
+        session_filter: RwSignal::new(SessionFilter::default()),
+        session_filter_menu: RwSignal::new(None),
         // No sessions rail on the workbench shell either — its "All chats" table reads the whole
         // index, so nothing here pages. The field exists because `State` is one shape.
         rail_limit: RwSignal::new(state::SESSION_PAGE),

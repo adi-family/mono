@@ -935,6 +935,15 @@ pub struct AgentFormField {
     pub numeric: bool,
     #[serde(default)]
     pub required: bool,
+    /// Whether a single run may be launched with this field set to something else — what the
+    /// composer's run settings offer (see [`AgentRunOverrides`]).
+    ///
+    /// Server-owned like the rest of this spec, and for the same reason: which dials are safe and
+    /// useful to turn for one job is backend knowledge, and a client that hardcoded the list would
+    /// drift from the backends the moment one gained a knob. Off by default — a field is part of
+    /// what the agent *is* until somebody decides otherwise.
+    #[serde(default)]
+    pub run_override: bool,
 }
 
 /// A select option for a form field.
@@ -1164,7 +1173,9 @@ pub struct AgentRef {
 /// template — each launch is an independent run from those settings, never a continuation. Headless
 /// backends (`process` / `harness`) run one `--print` turn with `message` as the prompt (required
 /// there — see the handler); interactive (pty) backends ignore it and type into the session.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+// Not `Eq`: an override's value is arbitrary JSON, whose float case has no total equality. Nothing
+// compares two launch requests anyway — a launch is made, not diffed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunAgent {
     pub name: String,
     #[serde(default)]
@@ -1197,6 +1208,41 @@ pub struct RunAgent {
     /// subprocess on it than a model turn.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub pre_run: Vec<String>,
+    /// Settings this one run replaces in the agent's definition — a different model, a looser
+    /// permission mode — without editing the agent. Applied to the launch *and* to every later turn
+    /// of the conversation it opens, so a chat cannot answer its second message as a different agent
+    /// than its first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<AgentRunOverrides>,
+    /// Who is asking, in the vocabulary of `adi_agents::launcher` — recorded on the session and
+    /// read back by the rail's "started by me" filter.
+    ///
+    /// Absent means `human`, because this endpoint's caller is the control panel and somebody is
+    /// looking at it. A caller that is *not* a person — a script, another agent's tool — says so
+    /// here rather than leaving a person's name on the run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launched_by: Option<String>,
+}
+
+/// What one launch replaces in its agent's definition — the wire form of `adi_agents::RunOverrides`.
+///
+/// Three states per key, and the middle one is the reason this is a map of optional values rather
+/// than a copy of the agent's arguments: **absent** inherits what the agent is defined with,
+/// **empty string** unsets the argument for this run (back to the engine's default), and anything
+/// else replaces it. A control the user never touched sends nothing at all.
+///
+/// Deliberately settings only — a model, a permission mode, an effort. A run cannot grant itself a
+/// tool, a secret or a knowledge base it was not given: those are the agent's identity rather than
+/// its dials.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct AgentRunOverrides {
+    /// Backend arguments to replace, by the same names [`AgentFormField::name`] uses.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arguments: BTreeMap<String, serde_json::Value>,
+    /// Whether this run is unattended, when the launch means to differ from the agent. `None`
+    /// inherits, which is not the same as `Some(false)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattended: Option<bool>,
 }
 
 /// Request naming one specific run of an agent — `POST /api/agents/run/peek` and `/run/stop`.
@@ -1588,6 +1634,13 @@ pub struct AgentCapabilities {
     pub images: bool,
 }
 
+/// The value of [`AgentRunInfo::launched_by`] that means a person asked for the run.
+///
+/// Stated here because the page reads it and cannot link `adi_agents` — the launcher vocabulary is
+/// native-only, and this is the one word of it that crosses the wire into a filter. Kept equal to
+/// `adi_agents::launcher::HUMAN` by a test in `handlers::agents`, where both are in scope.
+pub const LAUNCHED_BY_HUMAN: &str = "human";
+
 /// One entry in a headless agent's run history: an independent run spawned from the agent's settings.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRunInfo {
@@ -1619,6 +1672,23 @@ pub struct AgentRunInfo {
     /// that says why a very old conversation is still here.
     #[serde(default)]
     pub starred: bool,
+    /// Who asked for this run: `human` (a person, at the panel or a terminal), `agent:<name>`
+    /// (another agent's run started it), `automation` (a trigger or a script), or empty for a
+    /// session opened before the store began writing it down. Mirrors `adi_agents::launcher`.
+    ///
+    /// Carried by the *listing* because it is what the rail's "started by me" filter reads, and a
+    /// rail cannot ask four hundred conversations one at a time. An empty value is deliberately
+    /// **not** a person: a filter that swept in everything unattributed would show a year of
+    /// agent-spawned history under a person's name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub launched_by: String,
+    /// How this run differs from its agent's definition, on one line — `model=opus`, `sandbox
+    /// unset`. Empty for the overwhelming majority, which run the agent as defined.
+    ///
+    /// A sentence rather than the map, because this is what a *listing* needs: the values are the
+    /// conversation's own business, and a rail is scanned for which row was run on something else.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub overrides: String,
     /// The question this conversation is waiting on a person for, if it is waiting on one.
     ///
     /// Carried by the *listing* and not only by the open chat, because "which of these needs me?"

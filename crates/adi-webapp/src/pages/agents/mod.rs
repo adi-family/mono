@@ -9,9 +9,9 @@
 
 use std::collections::BTreeMap;
 
+use adi_ui::{Row as TableRow, Table};
 use adi_webapp_api::types::{AgentDto, SaveAgent, SecretDto, SecretRef, ToolDto};
 use leptos::prelude::*;
-use adi_ui::{Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
@@ -20,7 +20,7 @@ use crate::routing::{
 };
 use crate::state::{AgentsForm, AgentsWatch, Flash, Simulate, State};
 use crate::ui::{
-    flash_view, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, updated_text,
+    Key, flash_view, menu_item, row_actions, rows_or_placeholder, sort_rows, updated_text,
 };
 
 /// The Agents page's columns; the trailing blank one holds Run / View / Stop and the kebab.
@@ -32,8 +32,9 @@ mod simulate;
 
 use actions::apply_agents;
 pub(crate) use actions::{
-    CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, agent_actions, all_chats_view,
-    chat_home_view, live_view, poll_watch, project_run_limit_view, reset_chat_home, run_limit_view,
+    CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS, adopt_run_settings, agent_actions,
+    all_chats_view, chat_home_view, live_view, poll_watch, project_run_limit_view, reset_chat_home,
+    run_limit_view,
 };
 // The onboarding wizard renders the same fields from the same schema, so its half of the form
 // lives here rather than as a second copy of these renderers.
@@ -549,11 +550,14 @@ fn agent_rows(
     route: RwSignal<Route>,
 ) -> AnyView {
     let table = state.tables.agents;
-    let mut agents =
-        match rows_or_placeholder(table, state.agents.get().map(|v| v.agents), "No agents yet — “New agent” starts one.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut agents = match rows_or_placeholder(
+        table,
+        state.agents.get().map(|v| v.agents),
+        "No agents yet — “New agent” starts one.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(&mut agents, table.sort.get(), agent_key, |a| {
         Key::text(&a.name)
     });
@@ -581,11 +585,20 @@ fn agent_rows(
                     );
                 }),
                 menu_item(state, "Delete", true, move || {
-                    apply_agents(state, None, format!("Deleted {del_name}."),
-                        fetch::delete_agent(del_name.clone()));
+                    apply_agents(
+                        state,
+                        None,
+                        format!("Deleted {del_name}."),
+                        fetch::delete_agent(del_name.clone()),
+                    );
                 }),
             ];
-            let actions = row_actions(state, format!("agent:{}", a.name), agent_actions(state, watch, &a), items);
+            let actions = row_actions(
+                state,
+                format!("agent:{}", a.name),
+                agent_actions(state, watch, &a),
+                items,
+            );
             view! {
                 <TableRow state=table cell=move |col| agent_cell(col, &a) actions=actions/>
             }

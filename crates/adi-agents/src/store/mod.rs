@@ -33,8 +33,8 @@
 mod attachments;
 mod db;
 mod goals;
-mod queue;
 mod questions;
+mod queue;
 mod record;
 mod session;
 mod transcript;
@@ -48,10 +48,10 @@ use crate::progress::TurnContent;
 pub use attachments::{Attachment, MAX_BYTES as MAX_ATTACHMENT_BYTES, MEDIA_TYPES, is_supported};
 pub use db::now_ms;
 pub use goals::{Closed as GoalClosed, Goal, GoalState, SetBy};
-pub use queue::QueuedMessage;
 pub use questions::{
     Answer, AnsweredBy, Ask, Choice, MAX_QUESTIONS, Question, Request as AskRequest,
 };
+pub use queue::QueuedMessage;
 pub use record::{RunOutcome, SessionRecord};
 pub use session::SessionRef;
 pub use transcript::{Turn, assistant_turn, user_turn, user_turn_with};
@@ -69,7 +69,8 @@ const DB_FILE: &str = "sessions.db";
 
 /// The columns of a record, in the order [`record::from_row`] reads them.
 const RECORD_COLUMNS: &str = "agent, id, backend, cwd, message, started_at, last_activity, \
-                              hidden, runner_state, outcome, runner, starred";
+                              hidden, runner_state, outcome, runner, starred, launched_by, \
+                              overrides";
 
 /// The sessions under one root.
 ///
@@ -183,7 +184,7 @@ impl SessionStore {
         cwd: impl Into<PathBuf>,
         message: &str,
     ) -> Result<SessionRecord> {
-        self.create_as(agent, backend, None, cwd, message)
+        self.create_as(agent, backend, None, cwd, message, "")
     }
 
     /// [`create`](Self::create), naming the runner that is going to drive it.
@@ -197,6 +198,9 @@ impl SessionStore {
     /// `None` records nothing and reads back as "whatever runs its backend", which is what every
     /// session opened before this existed was.
     ///
+    /// `launched_by` is who asked for the run ([`crate::launcher`]); `""` records nothing, which is
+    /// what a caller that cannot tell should say rather than guessing.
+    ///
     /// # Errors
     /// Returns directory-creation and database errors.
     pub fn create_as(
@@ -206,6 +210,7 @@ impl SessionStore {
         runner: Option<crate::runner::RunnerKind>,
         cwd: impl Into<PathBuf>,
         message: &str,
+        launched_by: &str,
     ) -> Result<SessionRecord> {
         // The agent's directory is made here rather than at first spawn: a runner is handed
         // `log_path` and expects to be able to open it.
@@ -223,14 +228,19 @@ impl SessionStore {
             message: message.to_string(),
             hidden: false,
             starred: false,
+            launched_by: launched_by.to_string(),
+            // Set by [`set_overrides`](Self::set_overrides) immediately after, on the rare launch
+            // that has any — a session is opened by far more callers than can have an opinion here.
+            overrides: None,
             runner_state: None,
             outcome: None,
         };
         self.conn()?
             .execute(
                 "INSERT INTO sessions
-                   (agent, id, backend, cwd, message, started_at, last_activity, hidden, runner)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8)",
+                   (agent, id, backend, cwd, message, started_at, last_activity, hidden, runner,
+                    launched_by)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 0, ?8, ?9)",
                 rusqlite::params![
                     session.agent,
                     session.id,
@@ -240,6 +250,7 @@ impl SessionStore {
                     session.started_at,
                     session.last_activity,
                     session.runner.as_ref().map(|k| k.as_str().to_string()),
+                    session.launched_by,
                 ],
             )
             .map_err(|e| db::sql_err("open a session in", e))?;
@@ -339,6 +350,32 @@ impl SessionStore {
                 rusqlite::params![agent, id, i64::from(starred)],
             )
             .map_err(|e| db::sql_err("star a session in", e))?;
+        Ok(changed > 0)
+    }
+
+    /// Record what this session replaces in its agent's definition, so every later turn of it runs
+    /// the way its first one did (see [`SessionRecord::overrides`]).
+    ///
+    /// Written once, right after the session is opened, and never revised: an override is part of
+    /// what the conversation *is*, and one that could be edited mid-thread would leave a transcript
+    /// whose earlier answers came from settings nothing records any more.
+    ///
+    /// # Errors
+    /// Returns serialization and database errors.
+    pub fn set_overrides(
+        &self,
+        agent: &str,
+        id: &str,
+        overrides: &crate::RunOverrides,
+    ) -> Result<bool> {
+        let json = serde_json::to_string(overrides).map_err(|e| Error::Arguments(e.to_string()))?;
+        let changed = self
+            .conn()?
+            .execute(
+                "UPDATE sessions SET overrides = ?3 WHERE agent = ?1 AND id = ?2",
+                rusqlite::params![agent, id, json],
+            )
+            .map_err(|e| db::sql_err("record a session's overrides in", e))?;
         Ok(changed > 0)
     }
 
@@ -471,12 +508,7 @@ impl SessionStore {
     /// # Errors
     /// Returns [`Error::Arguments`] for an unsupported media type or an oversized body, plus I/O and
     /// database errors.
-    pub fn put_attachment(
-        &self,
-        name: &str,
-        media_type: &str,
-        bytes: &[u8],
-    ) -> Result<Attachment> {
+    pub fn put_attachment(&self, name: &str, media_type: &str, bytes: &[u8]) -> Result<Attachment> {
         let conn = self.conn()?;
         attachments::sweep_unclaimed(&conn, &self.dir, db::now_ms());
         attachments::put(&conn, &self.dir, name, media_type, bytes)
@@ -821,12 +853,7 @@ impl SessionStore {
         live: Option<TurnContent>,
         running: bool,
     ) -> Vec<Turn> {
-        transcript::view(
-            self.turns(agent, id),
-            live,
-            running,
-            self.queued(agent, id),
-        )
+        transcript::view(self.turns(agent, id), live, running, self.queued(agent, id))
     }
 }
 
@@ -946,7 +973,10 @@ mod tests {
 
         let listed = store.list("solver");
         assert_eq!(
-            listed[0].outcome.as_ref().and_then(|o| o.terminal_reason.as_deref()),
+            listed[0]
+                .outcome
+                .as_ref()
+                .and_then(|o| o.terminal_reason.as_deref()),
             Some("completed"),
         );
     }
@@ -961,7 +991,12 @@ mod tests {
             .create("solver", Backend::HarnessAdi, "/tmp/work", "first task")
             .expect("create");
         let second = store
-            .create("solver", Backend::ProcessClaude, "/tmp/other", "second task")
+            .create(
+                "solver",
+                Backend::ProcessClaude,
+                "/tmp/other",
+                "second task",
+            )
             .expect("create");
         assert_ne!(first.id, second.id, "each session gets its own id");
 
@@ -1017,7 +1052,10 @@ mod tests {
         assert!(!store.dir().join("process").exists());
         assert_eq!(
             store.log_path("solver", &harness.id),
-            store.dir().join("solver").join(format!("{}.log", harness.id)),
+            store
+                .dir()
+                .join("solver")
+                .join(format!("{}.log", harness.id)),
         );
 
         let _ = std::fs::remove_dir_all(store.dir());
@@ -1033,7 +1071,14 @@ mod tests {
         seed(&store, "talker", &id, "some task");
         let spoke = now - 1_800_000;
         store
-            .append_turn("talker", &id, Turn { at: spoke, ..user_turn("said then") })
+            .append_turn(
+                "talker",
+                &id,
+                Turn {
+                    at: spoke,
+                    ..user_turn("said then")
+                },
+            )
             .expect("append");
 
         let before = store.get("talker", &id).expect("listed");
@@ -1057,7 +1102,9 @@ mod tests {
         assert!(store.set_hidden("talker", &id, false).expect("unhide"));
         assert!(!store.get("talker", &id).expect("listed").hidden);
         assert!(
-            !store.set_hidden("talker", "0000000000001-0000", true).expect("absent"),
+            !store
+                .set_hidden("talker", "0000000000001-0000", true)
+                .expect("absent"),
             "a session that isn't there is nothing to flag",
         );
 
@@ -1075,7 +1122,14 @@ mod tests {
         seed(&store, "talker", &id, "some task");
         let spoke = now - 1_800_000;
         store
-            .append_turn("talker", &id, Turn { at: spoke, ..user_turn("said then") })
+            .append_turn(
+                "talker",
+                &id,
+                Turn {
+                    at: spoke,
+                    ..user_turn("said then")
+                },
+            )
             .expect("append");
 
         let before = store.get("talker", &id).expect("listed");
@@ -1104,7 +1158,9 @@ mod tests {
         assert!(!unstarred.starred);
         assert!(unstarred.hidden, "unstarring left the other flag alone");
         assert!(
-            !store.set_starred("talker", "0000000000001-0000", true).expect("absent"),
+            !store
+                .set_starred("talker", "0000000000001-0000", true)
+                .expect("absent"),
             "a session that isn't there is nothing to flag",
         );
 
@@ -1144,7 +1200,11 @@ mod tests {
         assert_eq!(listed[0].message, "an old chat");
         assert!(!listed[0].starred, "a row nobody could have starred is not");
 
-        assert!(store.set_starred("solver", &listed[0].id, true).expect("star"));
+        assert!(
+            store
+                .set_starred("solver", &listed[0].id, true)
+                .expect("star")
+        );
         assert!(store.get("solver", &listed[0].id).expect("get").starred);
 
         db::forget_connections();
@@ -1160,7 +1220,12 @@ mod tests {
         // Two past the cap, so the two oldest are what ages out. Ids carry their own start time, so
         // seeding them in order is what makes one of them the oldest.
         for i in 0..MAX_SESSIONS + 2 {
-            seed(&store, "solver", &format!("{:013}-0001", 1_000_000 + i), "task");
+            seed(
+                &store,
+                "solver",
+                &format!("{:013}-0001", 1_000_000 + i),
+                "task",
+            );
         }
         let oldest = format!("{:013}-0001", 1_000_000);
         let next_oldest = format!("{:013}-0001", 1_000_001);
@@ -1168,8 +1233,14 @@ mod tests {
 
         let removed = store.prune_old("solver", |_| false);
         assert_eq!(removed, 1, "only the unstarred one aged out");
-        assert!(store.get("solver", &oldest).is_some(), "the starred one stayed");
-        assert!(store.get("solver", &next_oldest).is_none(), "the other did not");
+        assert!(
+            store.get("solver", &oldest).is_some(),
+            "the starred one stayed"
+        );
+        assert!(
+            store.get("solver", &next_oldest).is_none(),
+            "the other did not"
+        );
 
         // And unstarring gives it back to the cap.
         store.set_starred("solver", &oldest, false).expect("unstar");
@@ -1192,19 +1263,36 @@ mod tests {
         seed(&store, "talker", &quiet, "old but busy");
         let spoke = now - 60_000;
         store
-            .append_turn("talker", &quiet, Turn { at: spoke, ..user_turn("still here") })
+            .append_turn(
+                "talker",
+                &quiet,
+                Turn {
+                    at: spoke,
+                    ..user_turn("still here")
+                },
+            )
             .expect("append");
 
         // An id claiming to start in an hour: what it said is already older than that.
         let future = format!("{:013}-0002", now + 3_600_000);
         seed(&store, "talker", &future, "from the future");
         store
-            .append_turn("talker", &future, Turn { at: now, ..user_turn("said now") })
+            .append_turn(
+                "talker",
+                &future,
+                Turn {
+                    at: now,
+                    ..user_turn("said now")
+                },
+            )
             .expect("append");
 
         let busy = store.get("talker", &quiet).expect("listed");
         assert_eq!(busy.started_at, now - 3_600_000, "start comes from the id");
-        assert_eq!(busy.last_activity, spoke, "activity is the turn's own moment");
+        assert_eq!(
+            busy.last_activity, spoke,
+            "activity is the turn's own moment"
+        );
 
         let odd = store.get("talker", &future).expect("listed");
         assert_eq!(
@@ -1227,12 +1315,21 @@ mod tests {
         seed(&store, "talker", &id, "answered a while back");
         let answered = now - 1_800_000;
         store
-            .append_turn("talker", &id, Turn { at: answered, ..user_turn("what is it") })
+            .append_turn(
+                "talker",
+                &id,
+                Turn {
+                    at: answered,
+                    ..user_turn("what is it")
+                },
+            )
             .expect("append");
 
         std::fs::write(record::log_path(&dir, &id), "the engine spooling").unwrap();
         std::fs::write(dir.join(format!("{id}.invented-later")), "a runner's own").unwrap();
-        store.enqueue("talker", &id, "waiting", &[]).expect("enqueue");
+        store
+            .enqueue("talker", &id, "waiting", &[])
+            .expect("enqueue");
         store.set_hidden("talker", &id, true).expect("hide");
         store
             .set_runner_state("talker", &id, serde_json::json!({ "pid": 4711 }))
@@ -1245,7 +1342,14 @@ mod tests {
         );
 
         store
-            .append_turn("talker", &id, Turn { at: now, ..user_turn("still there?") })
+            .append_turn(
+                "talker",
+                &id,
+                Turn {
+                    at: now,
+                    ..user_turn("still there?")
+                },
+            )
             .expect("append");
         assert_eq!(store.get("talker", &id).expect("listed").last_activity, now);
 
@@ -1269,9 +1373,13 @@ mod tests {
             std::fs::write(record::log_path(&dir, id), "output").unwrap();
             // A sidecar invented by some runner: swept by prefix, unknown to this module.
             std::fs::write(dir.join(format!("{id}.invented-later")), "{}\n").unwrap();
-            store.append_turn("chat", id, user_turn("said")).expect("append");
+            store
+                .append_turn("chat", id, user_turn("said"))
+                .expect("append");
         }
-        store.enqueue("chat", &doomed.id, "waiting", &[]).expect("enqueue");
+        store
+            .enqueue("chat", &doomed.id, "waiting", &[])
+            .expect("enqueue");
 
         assert!(store.delete("chat", &doomed.id).expect("delete"));
         for path in [
@@ -1282,7 +1390,8 @@ mod tests {
         }
         assert!(store.get("chat", &doomed.id).is_none());
         assert!(
-            store.turns("chat", &doomed.id).is_empty() && store.queued("chat", &doomed.id).is_empty(),
+            store.turns("chat", &doomed.id).is_empty()
+                && store.queued("chat", &doomed.id).is_empty(),
             "its messages cascade off the row",
         );
 
@@ -1356,9 +1465,20 @@ mod tests {
         assert_eq!(store.queue_len("chat", &a.id), 0);
         assert!(store.dequeue("chat", &a.id).expect("dequeue").is_none());
 
-        assert_eq!(store.enqueue("chat", &a.id, "one", &[]).expect("enqueue"), 1);
-        assert_eq!(store.enqueue("chat", &a.id, "two", &[]).expect("enqueue"), 2);
-        assert_eq!(store.enqueue("chat", &b.id, "elsewhere", &[]).expect("enqueue"), 1);
+        assert_eq!(
+            store.enqueue("chat", &a.id, "one", &[]).expect("enqueue"),
+            1
+        );
+        assert_eq!(
+            store.enqueue("chat", &a.id, "two", &[]).expect("enqueue"),
+            2
+        );
+        assert_eq!(
+            store
+                .enqueue("chat", &b.id, "elsewhere", &[])
+                .expect("enqueue"),
+            1
+        );
         assert_eq!(store.queue_len("chat", &a.id), 2);
         assert_eq!(texts(store.queued("chat", &a.id)), ["one", "two"]);
         assert_eq!(
@@ -1368,12 +1488,19 @@ mod tests {
         );
 
         assert_eq!(
-            store.dequeue("chat", &a.id).expect("dequeue").map(|m| m.text).as_deref(),
+            store
+                .dequeue("chat", &a.id)
+                .expect("dequeue")
+                .map(|m| m.text)
+                .as_deref(),
             Some("one"),
         );
         assert_eq!(texts(store.queued("chat", &a.id)), ["two"]);
 
-        assert_eq!(store.enqueue("chat", &a.id, "three", &[]).expect("enqueue"), 2);
+        assert_eq!(
+            store.enqueue("chat", &a.id, "three", &[]).expect("enqueue"),
+            2
+        );
         assert!(store.unqueue("chat", &a.id, 0).expect("unqueue"));
         assert_eq!(texts(store.queued("chat", &a.id)), ["three"]);
         assert!(!store.unqueue("chat", &a.id, 9).expect("past the end"));
@@ -1404,12 +1531,19 @@ mod tests {
             .expect("the opening question");
 
         assert!(
-            store.take_queued_as_turn("chat", id).expect("empty").is_none(),
+            store
+                .take_queued_as_turn("chat", id)
+                .expect("empty")
+                .is_none(),
             "nothing waiting is not an error",
         );
 
-        store.enqueue("chat", id, "also handle CRLF", &[]).expect("enqueue");
-        store.enqueue("chat", id, "and add a test", &[]).expect("enqueue");
+        store
+            .enqueue("chat", id, "also handle CRLF", &[])
+            .expect("enqueue");
+        store
+            .enqueue("chat", id, "and add a test", &[])
+            .expect("enqueue");
         assert_eq!(
             store
                 .take_queued_as_turn("chat", id)
@@ -1465,15 +1599,22 @@ mod tests {
             }],
             metrics: None,
         };
-        store.enqueue("chat", id, "and restart it", &[]).expect("enqueue");
-        store.enqueue("chat", id, "then tell me", &[]).expect("enqueue");
+        store
+            .enqueue("chat", id, "and restart it", &[])
+            .expect("enqueue");
+        store
+            .enqueue("chat", id, "then tell me", &[])
+            .expect("enqueue");
 
         let view = store.transcript("chat", id, Some(live.clone()), true);
         assert_eq!(view.len(), 4);
         assert!(view[1].pending, "the answer is still being written");
         assert_eq!(view[1].text, "looking");
         assert_eq!(
-            view[2..].iter().map(|t| t.text.as_str()).collect::<Vec<_>>(),
+            view[2..]
+                .iter()
+                .map(|t| t.text.as_str())
+                .collect::<Vec<_>>(),
             ["and restart it", "then tell me"],
         );
         assert!(view[2..].iter().all(|t| t.queued));
@@ -1496,7 +1637,9 @@ mod tests {
         assert!(store.turns("chat", &other.id).is_empty());
         assert!(store.delete("chat", id).expect("delete"));
         assert!(
-            store.append_turn("chat", id, user_turn("too late")).is_err(),
+            store
+                .append_turn("chat", id, user_turn("too late"))
+                .is_err(),
             "a deleted session is not resurrected by a late turn",
         );
         assert!(store.turns("chat", id).is_empty());
@@ -1524,8 +1667,12 @@ mod tests {
             store.sessions_with_queue("chat").is_empty(),
             "no queues anywhere is the common answer, and it costs one query",
         );
-        store.enqueue("chat", &busy.id, "one", &[]).expect("enqueue");
-        store.enqueue("chat", &busy.id, "two", &[]).expect("enqueue");
+        store
+            .enqueue("chat", &busy.id, "one", &[])
+            .expect("enqueue");
+        store
+            .enqueue("chat", &busy.id, "two", &[])
+            .expect("enqueue");
         assert_eq!(
             store.sessions_with_queue("chat"),
             std::collections::HashSet::from([busy.id.clone()]),
@@ -1583,7 +1730,9 @@ mod tests {
         assert!(!store.set_hidden("solver", id, true).expect("hide"));
         assert!(!store.delete("solver", id).expect("delete"));
         assert!(
-            store.set_runner_state("solver", id, serde_json::json!({})).is_err(),
+            store
+                .set_runner_state("solver", id, serde_json::json!({}))
+                .is_err(),
             "and a runner writing into it is told, not quietly given a row",
         );
 

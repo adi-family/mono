@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-4 structs · 22 enums across 16 files.
+5 structs · 22 enums across 17 files.
 
 ## Index
 
@@ -19,6 +19,7 @@
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/mesh.rs`](#srcmeshrs) — `MeshCommand`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectsCommand`, `WorkspaceCommand`, `HookCommand`, `WorkspaceRow`, `HookRow`
+- [`src/qr.rs`](#srcqrrs) — `Rendered`
 - [`src/secrets.rs`](#srcsecretsrs) — `SecretsCommand`
 - [`src/tasks.rs`](#srctasksrs) — `TasksCommand`
 - [`src/tools.rs`](#srctoolsrs) — `ToolsCommand`
@@ -118,6 +119,8 @@ pub(crate) enum AgentsCommand {
         pre_run: Vec<String>,
         #[arg(long, value_name = "PATH")]
         dir: Option<String>,
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
         #[arg(long)]
         force: bool,
         #[arg(long, conflicts_with = "wait")]
@@ -889,6 +892,10 @@ pub(crate) enum MeshCommand {
         #[arg(long, default_value_t = join::DEFAULT_TTL.as_secs() / 60)]
         ttl: u64,
         #[arg(long)]
+        qr: bool,
+        #[arg(long, conflicts_with = "qr")]
+        no_qr: bool,
+        #[arg(long)]
         json: bool,
     },
     Join {
@@ -1072,6 +1079,23 @@ struct HookRow {
     status: &'static str,
     exit_code: Option<i32>,
     last_run_at: Option<u64>,
+}
+```
+
+---
+
+## `src/qr.rs`
+
+### struct `Rendered`
+
+A drawn code, and the window it needs.
+
+```rust
+#[derive(Debug)]
+pub(crate) struct Rendered {
+    pub text: String,
+    pub columns: usize,
+    pub rows: usize,
 }
 ```
 

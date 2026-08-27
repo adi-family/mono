@@ -64,6 +64,21 @@ pub struct SessionRecord {
     /// never swept by [`prune_old`](super::SessionStore::prune_old). Starring a conversation that
     /// the cap then deleted out from under it would be the one thing the mark is *for*, undone.
     pub starred: bool,
+    /// Who asked for this run — see [`launcher`](crate::launcher) for the vocabulary
+    /// (`human`, `agent:<name>`, `automation`).
+    ///
+    /// Empty means nobody wrote it down: every session opened before the column existed, and any
+    /// launcher that declines to say. It is deliberately *not* backfilled — "started by a person"
+    /// is the one thing a listing filters on, and inferring it after the fact would put somebody's
+    /// name on runs an agent spawned.
+    pub launched_by: String,
+    /// What this run replaces in its agent's definition — a model, a permission mode — or `None`
+    /// when it runs the agent exactly as defined, which is nearly every session.
+    ///
+    /// Kept on the session because a conversation is answered by whatever *started* it: the agent is
+    /// re-read on every later turn, so an override that lived only in the launch call would quietly
+    /// lapse on the second message. See [`overrides`](crate::overrides).
+    pub overrides: Option<crate::RunOverrides>,
     /// The runner's own scratch space — runner-written, store-opaque, never interpreted here.
     ///
     /// A local-process runner keeps its pid in it, a pty runner its session name, and a runner whose
@@ -178,6 +193,12 @@ pub(super) fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SessionRecor
         last_activity: row.get(6)?,
         hidden: row.get::<_, i64>(7)? != 0,
         starred: row.get::<_, i64>(11)? != 0,
+        launched_by: row.get(12)?,
+        // As with the two slots below: overrides written by a newer build must not make an older
+        // one unable to list the session. Unreadable reads as "none", i.e. the agent as defined.
+        overrides: row
+            .get::<_, Option<String>>(13)?
+            .and_then(|t| serde_json::from_str(&t).ok()),
         // A slot that will not parse reads as empty rather than failing the row: it belongs to a
         // runner, and a listing has no stake in what is in it.
         runner_state: state.and_then(|t| serde_json::from_str(&t).ok()),

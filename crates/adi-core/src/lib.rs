@@ -32,17 +32,15 @@ pub use adi_update::BUILT_VERSION as VERSION;
 pub use adi_agents::arguments::AgentSummaryArguments;
 pub use adi_agents::awaits;
 pub use adi_agents::goals;
+pub use adi_agents::launcher;
 pub use adi_agents::store::{Ask, Goal, GoalClosed, GoalState, SetBy};
 pub use adi_agents::{
     Agent, AgentManifest, Agents, Backend, DEFAULT_MAX_CONCURRENT_RUNS, Error as AgentsError,
-    Launch, LaunchOptions, RawAgentArguments, RunInfo, RunLimits, SecretAttachment, Sent,
-    StoredAgent,
-    StoredAgentManifest, contains_json_null, event_catalog,
+    Launch, LaunchOptions, RawAgentArguments, RunInfo, RunLimits, RunOverrides, SecretAttachment,
+    Sent, StoredAgent, StoredAgentManifest, contains_json_null, event_catalog,
 };
 
-pub use adi_db::{
-    ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo,
-};
+pub use adi_db::{ColumnInfo, Db, DbInfo, Error as DbError, ExecResult, QueryResult, TableInfo};
 
 pub use adi_knowledge::{
     Access as KnowledgeAccess, Base as KnowledgeBase, BaseId, BaseStatus, Error as KnowledgeError,
@@ -78,8 +76,8 @@ pub use adi_events::{
 
 pub use adi_triggers::{
     Error as TriggersError, Firing, KIND_BACKGROUND, KIND_EVENT, KIND_WEBHOOK, RUNTIME_SH,
-    clean_trigger_on,
-    RUNTIME_TS, RunState, Trigger, TriggerManifest, Triggers, presets as trigger_presets,
+    RUNTIME_TS, RunState, Trigger, TriggerManifest, Triggers, clean_trigger_on,
+    presets as trigger_presets,
 };
 
 /// The CLI binary name — the single Rust-side source of truth for user-facing messages.

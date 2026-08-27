@@ -539,10 +539,12 @@
     padding: 3px 10px;
     font-size: var(--text-sm);
   }
-  // The rail's "starred only" toggle, left of "+ New". A quiet glyph until it is on, when it fills
-  // and takes the accent — the list below is then showing less than everything, and the only thing
-  // saying so is this.
-  &__starred {
+  // The rail's filter button, left of "+ New": a funnel that opens the menu of narrowings (all
+  // sessions / only starred / only started by me). A quiet glyph until one is on, when it takes the
+  // accent — the list below is then showing less than everything, and this is the only thing here
+  // saying so. Sized to the "+ New" beside it rather than to the glyph, so the head reads as a row
+  // of controls and not as a stray mark.
+  &__filter {
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -553,10 +555,10 @@
     border-radius: var(--radius-sm);
     background: none;
     color: var(--muted);
-    font-size: 14px;
-    line-height: 1;
     cursor: pointer;
     transition: color var(--transition), background var(--transition);
+
+    svg { width: 14px; height: 14px; }
 
     &:hover { color: var(--ink); background: var(--surface-2); }
     &.is-on { color: var(--accent); }
@@ -1708,6 +1710,141 @@
   padding: 10px 14px;
   border-top: 1px solid var(--border);
   background: var(--surface-2);
+
+  // The run-settings control in the composer's button row. Sized and shaped like the microphone
+  // beside it — they are the same kind of control (something you press while composing, not to
+  // send), and one of them being a different size would read as a different kind of thing.
+  &__settings {
+    position: relative;
+    display: grid;
+    place-items: center;
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--surface);
+    color: var(--text-meta);
+    cursor: pointer;
+    transition: color 0.1s, border-color 0.1s;
+
+    &:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    // Something is overridden. The accent is doing real work here: these settings persist
+    // between launches, so this is what stops an agent quietly running somewhere else for a
+    // week because a directory was typed once.
+    &.is-set {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+  }
+
+  &__settings-icon {
+    width: 16px;
+    height: 16px;
+  }
+
+  // How many settings differ, on the button itself. In the corner rather than beside the icon
+  // so the button keeps the square footprint the row is built on.
+  &__settings-count {
+    position: absolute;
+    right: -4px;
+    bottom: -4px;
+    min-width: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 9px;
+    line-height: 14px;
+    text-align: center;
+  }
+}
+
+// ---- the composer's run settings (the gear's panel) ---------------------------------
+// What this launch does differently from the agent's definition: where it starts, and which of
+// the agent's own settings it replaces. Above the composer rather than over it — the panel is as
+// tall as the settings the chosen backend takes, and a layer floating over the box would cover
+// the message being typed on the one screen where the message is the point.
+.adi-runset {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: 10px 12px;
+
+  &__head {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+  }
+
+  &__title {
+    margin: 0;
+    font-size: var(--text-sub);
+    font-weight: 600;
+    color: var(--text-ink);
+  }
+
+  // Which agent these belong to. Said out loud because the settings are *per agent* and the
+  // panel outlives the picker above it: a directory left on one agent must never look like a
+  // directory left on the one now chosen.
+  &__for {
+    font-size: var(--text-sm);
+    color: var(--text-meta);
+  }
+
+  &__close {
+    border: 0;
+    background: none;
+    padding: 0 2px;
+    color: var(--text-meta);
+    cursor: pointer;
+
+    &:hover { color: var(--text-ink); }
+  }
+
+  // A two-column grid of controls that collapses to one when there is no room — the same shape
+  // the agent editor's own field grid takes, since these are the same fields.
+  &__body {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+  }
+
+  &__field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1 1 200px;
+    min-width: 0;
+
+    &--wide { flex: 1 1 100%; }
+  }
+
+  &__label {
+    font-size: var(--text-sm);
+    color: var(--text-meta);
+  }
+
+  &__hint {
+    margin: 0;
+    font-size: var(--text-mini);
+    color: var(--text-meta);
+  }
+
+  &__foot {
+    display: flex;
+    align-items: baseline;
+    gap: var(--space-2);
+    font-size: var(--text-mini);
+    color: var(--text-meta);
+
+    span { flex: 1 1 auto; }
+  }
 }
 
 

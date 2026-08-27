@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use adi_core::{
-    Adi, AgentManifest, Agents, AgentSummaryArguments, AgentsError, Launch, LaunchOptions, RunInfo,
-    SecretAttachment, StoredAgent, awaits,
+    Adi, AgentManifest, AgentSummaryArguments, Agents, AgentsError, Launch, LaunchOptions, RunInfo,
+    RunOverrides, SecretAttachment, StoredAgent, awaits, launcher,
 };
 use clap::Subcommand;
 
@@ -172,6 +172,16 @@ pub(crate) enum AgentsCommand {
         /// directory. For pointing one agent at a different target each run.
         #[arg(long, value_name = "PATH")]
         dir: Option<String>,
+        /// A setting this run replaces in the agent's definition — `--set model=opus`,
+        /// `--set permission_mode=bypassPermissions`, `--set unattended=true`. Repeatable.
+        ///
+        /// For the launch that is deliberately unlike the others, without editing the agent and
+        /// having to edit it back. `--set <key>=` (nothing after the `=`) *unsets* the agent's own
+        /// value for this run, back to the engine's default. The conversation keeps whatever is set
+        /// here for every later turn, so a chat cannot answer its second message as a different
+        /// agent than its first.
+        #[arg(long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
         /// Launch even when as many runs are already live as the store allows. The deliberate
         /// override of the concurrency limit — for a human who wants this one now.
         #[arg(long)]
@@ -462,7 +472,11 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             let manifest = AgentManifest {
                 backend: backend.into(),
                 arguments,
-                tags: kept(no_tag, stated(tags, clean_tags), old.map(|m| m.tags.clone())),
+                tags: kept(
+                    no_tag,
+                    stated(tags, clean_tags),
+                    old.map(|m| m.tags.clone()),
+                ),
                 starred: flag(starred, no_starred, old.is_some_and(|m| m.starred)),
                 // The costliest of the five to get wrong: an agent's project decides which
                 // database, secrets, and knowledge bases its runs reach, so a save that dropped it
@@ -474,7 +488,11 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     clean(project).map(Some),
                     old.map(|m| m.project.clone()),
                 ),
-                bin_tools: kept(no_tool, stated(tools, clean_tags), old.map(|m| m.bin_tools.clone())),
+                bin_tools: kept(
+                    no_tool,
+                    stated(tools, clean_tags),
+                    old.map(|m| m.bin_tools.clone()),
+                ),
                 secrets: kept(
                     no_secret,
                     stated(secrets, parse_secret_attachments),
@@ -532,10 +550,13 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             message,
             pre_run,
             dir,
+            set,
             force,
             no_await,
             wait,
         } => {
+            let by = launched_by();
+            let overrides = RunOverrides::parse_pairs(&set)?;
             let launch = store
                 .launch(
                     &name,
@@ -544,6 +565,8 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                         working_dir: dir.as_deref(),
                         force,
                         pre_run: &pre_run,
+                        launched_by: Some(&by),
+                        overrides: (!overrides.is_empty()).then_some(&overrides),
                         ..LaunchOptions::default()
                     },
                 )
@@ -577,9 +600,15 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     }
                     println!("Started agent {name} as background process {pid}.");
                     println!("  run:     {run_id}");
+                    // Said back, because a launch that differs from the agent is the one worth
+                    // being sure about — and `--set` is typed, so it is also the one worth checking.
+                    if !overrides.is_empty() {
+                        println!("  as:      {}", overrides.summary());
+                    }
                     println!("  command: {command}");
                     println!("  log:     {}", log.display());
-                    if !no_await && let Some(note) = follow_the_run(&store, &name, &run_id, &message)
+                    if !no_await
+                        && let Some(note) = follow_the_run(&store, &name, &run_id, &message)
                     {
                         println!();
                         println!("{note}");
@@ -638,11 +667,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 }
             }
         }
-        AgentsCommand::Limit {
-            max,
-            project,
-            json,
-        } => {
+        AgentsCommand::Limit { max, project, json } => {
             let limits = match (max, project.as_deref()) {
                 (Some(max), Some(project)) => store
                     .set_project_limit(project, max)
@@ -676,10 +701,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                     );
                 }
                 for (id, max) in &limits.projects {
-                    println!(
-                        "  {id}: at most {max} ({} running)",
-                        load.in_project(id)
-                    );
+                    println!("  {id}: at most {max} ({} running)", load.in_project(id));
                 }
             }
         }
@@ -712,9 +734,9 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
                 .map_err(|e| e.to_string())?;
             match sent {
                 adi_core::Sent::Started(_) => println!("Answered — {name} is working on it."),
-                adi_core::Sent::Queued { place } => println!(
-                    "Answered — {place} in line behind what {name} is already saying."
-                ),
+                adi_core::Sent::Queued { place } => {
+                    println!("Answered — {place} in line behind what {name} is already saying.")
+                }
             }
         }
         AgentsCommand::Stop { name } => {
@@ -1030,6 +1052,25 @@ fn print_agent(agent: &StoredAgent) {
 /// The exit status is the *agent's*, not this command's: a turn the engine reported as failed exits
 /// non-zero, so `adi-mono agents run … --wait && deploy` means what it looks like. A run that
 /// answered nothing is a failure too — there is no result to have composed anything out of.
+/// Who this `agents run` is being typed by, in the vocabulary of [`adi_agents::launcher`].
+///
+/// The same three-way answer [`follow_the_run`] already depends on, asked one step earlier: a
+/// command run inside an agent's conversation carries it in the environment, so that is an agent's
+/// launch. Otherwise it comes down to whether anybody is there — a terminal means a person typed
+/// this, and no terminal means a trigger, a cron or a script did, with nobody to call it theirs.
+fn launched_by() -> String {
+    use std::io::IsTerminal as _;
+
+    launcher::by_caller().unwrap_or_else(|| {
+        if std::io::stdin().is_terminal() {
+            launcher::HUMAN
+        } else {
+            launcher::AUTOMATION
+        }
+        .to_string()
+    })
+}
+
 /// The wake that reports a launched run back to whoever launched it.
 ///
 /// This is the whole of "starting an agent is not a dead end". Before it, a run that launched
@@ -1133,8 +1174,8 @@ fn run_awaits(store: &Agents, command: AwaitsCommand) -> Result<(), String> {
                 check,
                 expires_in_seconds: expires_in,
             };
-            let changed = awaits::update(&pending, &agent, &conv, &id, &change)
-                .map_err(|e| e.to_string())?;
+            let changed =
+                awaits::update(&pending, &agent, &conv, &id, &change).map_err(|e| e.to_string())?;
             println!("Await {} now wakes you {}.", changed.id, changed.describe());
         }
     }
@@ -1163,7 +1204,7 @@ fn awaits_address(
         .ok_or_else(|| {
             "no conversation: pass --session, or run this from inside a turn where $ADI_RUN_ID is \
              set"
-                .to_string()
+            .to_string()
         })?;
     Ok((agent, conv))
 }
@@ -1243,14 +1284,19 @@ mod tests {
         let stored = || Some(vec!["bugbounty".to_string(), "v2".to_string()]);
 
         // Unmentioned — clap hands back an empty Vec, which must not read as "empty it".
-        assert_eq!(kept(false, stated(vec![], clean_tags), stored()), vec!["bugbounty", "v2"]);
+        assert_eq!(
+            kept(false, stated(vec![], clean_tags), stored()),
+            vec!["bugbounty", "v2"]
+        );
         // Stated wins.
         assert_eq!(
             kept(false, stated(vec!["one".into()], clean_tags), stored()),
             vec!["one"]
         );
         // `--no-…` is the only way to actually clear it.
-        assert!(kept::<Vec<String>>(true, stated(vec!["one".into()], clean_tags), stored()).is_empty());
+        assert!(
+            kept::<Vec<String>>(true, stated(vec!["one".into()], clean_tags), stored()).is_empty()
+        );
         // Nothing stated and nothing stored is empty, not a panic.
         assert!(kept::<Vec<String>>(false, stated(vec![], clean_tags), None).is_empty());
     }
@@ -1266,7 +1312,11 @@ mod tests {
             kept(false, Some(Some("other".to_string())), filed()),
             Some("other".to_string())
         );
-        assert_eq!(kept::<Option<String>>(true, None, filed()), None, "--no-project makes it global");
+        assert_eq!(
+            kept::<Option<String>>(true, None, filed()),
+            None,
+            "--no-project makes it global"
+        );
         // An agent that was already global stays global rather than becoming a phantom project.
         assert_eq!(kept::<Option<String>>(false, None, Some(None)), None);
     }

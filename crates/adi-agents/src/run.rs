@@ -57,6 +57,15 @@ pub struct LaunchOptions<'a> {
     /// `adi-mono tasks show <id>`'s real output here instead of writing an instruction the agent
     /// spends a whole turn obeying.
     pub pre_run: &'a [String],
+    /// Who asked for this run, in the vocabulary of [`crate::launcher`] — `human`, `agent:<name>`,
+    /// `automation`. `None` records nothing, which is what a caller that cannot tell should say:
+    /// a listing reads the absence as "unknown", never as a person.
+    pub launched_by: Option<&'a str>,
+    /// Settings this run replaces in the agent's definition — a different model, a looser permission
+    /// mode — for this launch and every later turn of the conversation it opens. See
+    /// [`overrides`](crate::overrides), which is also where the "leave it alone" / "unset it"
+    /// distinction lives.
+    pub overrides: Option<&'a crate::RunOverrides>,
 }
 
 /// What became of a message said into a conversation. One turn runs at a time, so a message sent
@@ -112,6 +121,16 @@ pub struct RunInfo {
     /// otherwise ordered by recency alone. The mark also exempts it from the per-agent session cap,
     /// so unlike `hidden` this is not purely a view's business.
     pub starred: bool,
+    /// Who asked for this run — `human`, `agent:<name>`, `automation`, or empty for a session
+    /// opened before anybody wrote it down. See [`crate::launcher`].
+    pub launched_by: String,
+    /// How this run differs from its agent's definition, on one line — `model=opus`. Empty for the
+    /// overwhelming majority, which run the agent as defined.
+    ///
+    /// A sentence rather than the map itself, because a listing is *read*: what a reader wants from
+    /// forty rows is which one was run on something else, and anything that wants the values has the
+    /// session to ask. See [`crate::overrides`].
+    pub overrides: String,
     /// What became of it, once it has stopped. `None` while it runs, and for runs that ended
     /// before the store began keeping this.
     pub outcome: Option<RunOutcome>,
@@ -187,7 +206,10 @@ impl Session for Pane {
 /// The engine is irrelevant here: `pty:claude` and `pty:codex` differ only in the command they open
 /// a pane *with*, and typing into one or reading its screen is the same act either way. So this asks
 /// one terminal runner and lets [`crate::runner::Runner::as_terminal`] answer for all of them.
-fn with_pane<T>(agent_name: &str, f: impl FnOnce(&dyn crate::runner::Terminal, &Pane) -> T) -> Option<T> {
+fn with_pane<T>(
+    agent_name: &str,
+    f: impl FnOnce(&dyn crate::runner::Terminal, &Pane) -> T,
+) -> Option<T> {
     let runner = runner_for(&Backend::PtyClaude)?;
     let terminal = runner.as_terminal()?;
     let pane = Pane {

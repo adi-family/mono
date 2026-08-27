@@ -239,7 +239,11 @@ pub fn brief(evidence: &Evidence<'_>, path: &Path) -> String {
         "Under review: agent `{}`, session `{}`, on `{}`.",
         evidence.agent.name, evidence.run_id, evidence.agent.manifest.backend
     );
-    let _ = writeln!(out, "Opened with: {}", quote_line(&evidence.record.message, 160));
+    let _ = writeln!(
+        out,
+        "Opened with: {}",
+        quote_line(&evidence.record.message, 160)
+    );
 
     let mut counts = vec![format!(
         "{} ({} you, {} it)",
@@ -643,7 +647,11 @@ fn context_waste(out: &mut String, e: &Evidence<'_>) {
             r.wasted
         );
         for rep in r.repeats.iter().take(8) {
-            let hint = rep.shape.hint().map(|h| format!(" — {h}")).unwrap_or_default();
+            let hint = rep
+                .shape
+                .hint()
+                .map(|h| format!(" — {h}"))
+                .unwrap_or_default();
             let _ = writeln!(
                 out,
                 "- ×{} · ~{} tokens wasted · {}{hint}\n  - `{}`\n  - sent from: {}",
@@ -714,14 +722,21 @@ fn across_sessions(out: &mut String, e: &Evidence<'_>) {
     }
 
     if !h.by_tool.is_empty() {
-        let _ = writeln!(out, "\n**Which tools it actually uses, and which ones work**:\n");
+        let _ = writeln!(
+            out,
+            "\n**Which tools it actually uses, and which ones work**:\n"
+        );
         for (name, calls, bad) in h.by_tool.iter().take(12) {
             let rate = if *bad > 0 {
                 format!(" · {} failed ({}%)", bad, bad * 100 / calls.max(&1))
             } else {
                 String::new()
             };
-            let _ = writeln!(out, "- `{name}` — {}{rate}", plural(*calls, "call", "calls"));
+            let _ = writeln!(
+                out,
+                "- `{name}` — {}{rate}",
+                plural(*calls, "call", "calls")
+            );
         }
     }
     if !h.blocked.is_empty() {
@@ -922,7 +937,9 @@ fn turn_block(n: usize, turn: &Turn) -> String {
                 let tail = match status {
                     ToolStatus::Ok => String::new(),
                     ToolStatus::Running => " → still running".to_string(),
-                    ToolStatus::Unanswered => " → *never returned* (the run ended first)".to_string(),
+                    ToolStatus::Unanswered => {
+                        " → *never returned* (the run ended first)".to_string()
+                    }
                     ToolStatus::Error => format!(" → **failed**: {}", clip(&one_line(output), 160)),
                 };
                 let _ = writeln!(out, "- `{name}` {}{tail}", clip(&one_line(input), 140));
@@ -980,11 +997,7 @@ fn sites(list: &[analytics::Site]) -> String {
 /// code block is ordinary, and a three-backtick fence around one closes on the first line of it —
 /// spilling the rest of the prompt into the document as if it were the document's own.
 fn fence_for(body: &str) -> String {
-    let longest = body
-        .split(|c| c != '`')
-        .map(str::len)
-        .max()
-        .unwrap_or(0);
+    let longest = body.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     "`".repeat(longest.max(2) + 1)
 }
 
@@ -1102,6 +1115,8 @@ mod tests {
             last_activity: 2_000,
             hidden: false,
             starred: false,
+            launched_by: String::new(),
+            overrides: None,
             runner_state: None,
             outcome: None,
         }
@@ -1303,7 +1318,11 @@ mod tests {
             ),
             Options::default(),
         );
-        assert!(doc.len() <= Options::default().budget, "{} bytes", doc.len());
+        assert!(
+            doc.len() <= Options::default().budget,
+            "{} bytes",
+            doc.len()
+        );
         assert!(doc.contains("turns in the middle omitted"), "{doc}");
         assert!(doc.contains("really_quite_a_long_test_name_0\n"), "{doc}");
         assert!(doc.contains("really_quite_a_long_test_name_599\n"), "{doc}");
@@ -1361,7 +1380,11 @@ mod tests {
             ),
             Options::default(),
         );
-        assert!(doc.len() <= Options::default().budget, "{} bytes", doc.len());
+        assert!(
+            doc.len() <= Options::default().budget,
+            "{} bytes",
+            doc.len()
+        );
         assert!(doc.contains("calls in the middle omitted"), "{doc}");
         assert!(doc.contains("### Turn 2 — agent"), "{doc}");
         assert!(doc.contains("test_name_number_0\n"), "{doc}");
@@ -1395,7 +1418,10 @@ mod tests {
             ),
             Path::new("/tmp/sessions/solver/0000000000000-0001.review.md"),
         );
-        assert!(brief.contains("/tmp/sessions/solver/0000000000000-0001.review.md"), "{brief}");
+        assert!(
+            brief.contains("/tmp/sessions/solver/0000000000000-0001.review.md"),
+            "{brief}"
+        );
         assert!(brief.contains("2 tool calls"), "{brief}");
         assert!(brief.contains("1 of them failed"), "{brief}");
         assert!(brief.contains("Change nothing else"), "{brief}");
@@ -1479,7 +1505,10 @@ mod tests {
             Options::default(),
         );
         assert!(off.contains("- memory: **no**"), "{off}");
-        assert!(off.contains("knowledge bases it is pointed at: none"), "{off}");
+        assert!(
+            off.contains("knowledge bases it is pointed at: none"),
+            "{off}"
+        );
 
         agent.manifest.memory = true;
         agent.manifest.knowledge = vec!["global/runbooks".to_string()];

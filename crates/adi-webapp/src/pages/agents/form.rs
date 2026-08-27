@@ -408,7 +408,7 @@ fn option_view(opt: AgentFormOption) -> impl IntoView {
 /// Whether a schema field is visible for the chosen backend. A field with no filters is always
 /// visible; otherwise it shows on a backend-id match, an executor match, or — for the adi
 /// harness only — a match on its chosen provider.
-fn field_applies(field: &AgentFormField, backend: &str, provider: &str) -> bool {
+pub(crate) fn field_applies(field: &AgentFormField, backend: &str, provider: &str) -> bool {
     if field.backend_ids.is_empty() && field.executors.is_empty() && field.providers.is_empty() {
         return true;
     }
@@ -448,7 +448,7 @@ fn field_class(field: &AgentFormField) -> String {
     class
 }
 
-fn field_placeholder(
+pub(crate) fn field_placeholder(
     field: &AgentFormField,
     backends: &[AgentBackendOption],
     backend: &str,

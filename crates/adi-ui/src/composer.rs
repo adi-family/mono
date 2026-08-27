@@ -71,6 +71,16 @@ pub fn Composer(
     /// app that embeds it. The composer only lends the corner.
     #[prop(optional, into)]
     mic: Option<ViewFn>,
+    /// A control for what the message is sent *with* — this tree hangs the run's settings (the
+    /// directory it starts in, the agent fields this one run overrides) off it.
+    ///
+    /// Furthest from Send, beside the microphone, for the same reason that one is: both are pressed
+    /// while composing rather than when finishing, and a settings button under the thumb that goes
+    /// for Send is a settings button pressed by accident. A slot, not a flag — what a message can be
+    /// configured with is the app's question, and a component library that answered it would be
+    /// deciding for everything that embeds this.
+    #[prop(optional, into)]
+    settings: Option<ViewFn>,
     /// Images this message may carry — the tray, the paperclip, and the paste/drop handling. Absent
     /// (the default) the composer takes text and nothing else, and pasting a picture into it does
     /// what it did before: nothing.
@@ -229,6 +239,7 @@ pub fn Composer(
                     .filter(|a| a.can_attach.get())
                     .map(|attach| view! { <AttachButton attach=attach/> })
             }}
+            {settings.map(|settings| settings.run())}
             {mic.map(|mic| mic.run())}
             // Stop sits to the left of send, so send keeps the corner the hand already goes to
             // and the row does not shuffle under it when a turn starts.

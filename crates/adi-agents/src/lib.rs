@@ -38,11 +38,13 @@ mod events;
 pub mod goals;
 mod knowledge;
 mod launch;
+pub mod launcher;
 mod limits;
 mod memo;
+pub mod overrides;
 mod prelude;
-pub mod questions;
 pub mod progress;
+pub mod questions;
 pub mod review;
 mod run;
 pub mod runner;
@@ -72,18 +74,16 @@ pub use events::{
     AgentSaved, event_catalog, event_types,
 };
 pub use limits::{DEFAULT_MAX_CONCURRENT_RUNS, RunLimits, RunLoad};
-pub use progress::{
-    BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities,
-};
+pub use overrides::RunOverrides;
+pub use progress::{BackendCapabilities, Step, ToolStatus, TurnContent, TurnMetrics, capabilities};
 pub use run::{
     Launch, LaunchOptions, Peek, RunInfo, Sent, Turn, capture_pane, is_runnable, running_sessions,
     send_keys, session_name,
 };
 
 use agent::validate_name;
-use knowledge::rescope_base;
-use workspace::CONV_ENV;
 use backends::adi_events as turn_events;
+use knowledge::rescope_base;
 use runner::{
     ImageDelivery, RunEvent, RunSpec, Runner, Session, human::HumanRunner, runner_for, runner_of,
 };
@@ -91,6 +91,7 @@ use store::{
     Answer, AnsweredBy, Ask, SessionRecord, SessionRef, SessionStore, assistant_turn, now_ms,
     user_turn,
 };
+use workspace::CONV_ENV;
 
 const AGENTS_MODULE: &str = "agents";
 const SESSIONS_MODULE: &str = "sessions";
@@ -135,6 +136,20 @@ pub struct Agents {
 impl Default for Agents {
     fn default() -> Self {
         Self::open()
+    }
+}
+
+/// The agent as one conversation runs it: its definition with that session's own
+/// [overrides](overrides) laid over it.
+///
+/// Every turn re-reads the manifest — that is deliberate, and it is what lets an edit to an agent
+/// reach a chat already open — so this is the one place the difference between "the agent" and "the
+/// agent this run was started as" is restored. Borrowed for a session that overrides nothing, which
+/// is nearly all of them.
+fn as_run<'a>(agent: &'a StoredAgent, record: &SessionRecord) -> std::borrow::Cow<'a, StoredAgent> {
+    match &record.overrides {
+        Some(overrides) => overrides.apply(agent),
+        None => std::borrow::Cow::Borrowed(agent),
     }
 }
 
@@ -543,7 +558,15 @@ impl Agents {
     /// # Errors
     /// Returns [`Error::NotFound`], [`Error::TooManyRunning`], or backend launch errors.
     pub fn run_in(&self, name: &str, message: &str, working_dir: Option<&str>) -> Result<Launch> {
-        self.launch_run(name, message, working_dir, false, &[], &[])
+        self.launch_run(
+            name,
+            message,
+            &LaunchOptions {
+                working_dir,
+                ..LaunchOptions::default()
+            },
+            &[],
+        )
     }
 
     /// A launch whose opening message carries images — a conversation started from a screenshot.
@@ -593,14 +616,7 @@ impl Agents {
             return Err(images_unsupported());
         }
         let images = self.sessions().resolve_attachments(options.image_ids);
-        self.launch_run(
-            name,
-            message,
-            options.working_dir,
-            options.force,
-            &images,
-            options.pre_run,
-        )
+        self.launch_run(name, message, options, &images)
     }
 
     /// The backend an agent is currently defined to run on.
@@ -627,27 +643,56 @@ impl Agents {
         message: &str,
         working_dir: Option<&str>,
     ) -> Result<Launch> {
-        self.launch_run(name, message, working_dir, true, &[], &[])
+        self.launch_run(
+            name,
+            message,
+            &LaunchOptions {
+                working_dir,
+                force: true,
+                ..LaunchOptions::default()
+            },
+            &[],
+        )
     }
 
     /// The one launch path: resolve the agent, weigh the cap unless `force`, open a session,
     /// pre-run what the launch already knows to run, send, announce.
-    #[allow(clippy::too_many_arguments)]
+    ///
+    /// `images` are already resolved from [`LaunchOptions::image_ids`] by the caller — the options
+    /// name attachments by id, and only [`Self::launch`] holds the store to resolve them against.
     fn launch_run(
         &self,
         name: &str,
         message: &str,
-        working_dir: Option<&str>,
-        force: bool,
+        options: &LaunchOptions<'_>,
         images: &[store::Attachment],
-        pre_run: &[String],
     ) -> Result<Launch> {
-        let agent = self
+        let LaunchOptions {
+            working_dir,
+            force,
+            pre_run,
+            launched_by,
+            overrides,
+            ..
+        } = *options;
+        let stored = self
             .get(name)?
             .ok_or_else(|| Error::NotFound(name.to_string()))?;
-        if !force
-            && let Some(full) = self.full_cap_for(&agent, &self.limits(), &self.run_load())
-        {
+        // Everything below this line reads the agent *this run* is, not the agent as defined —
+        // spec, backend, cap. Applied before the cap check for the reason it is applied before the
+        // spec: an override that only reached half the launch would be a run configured two ways.
+        let overrides = overrides.filter(|o| !o.is_empty());
+        let agent = match overrides {
+            Some(overrides) => overrides.apply(&stored).into_owned(),
+            None => stored,
+        };
+        // The same validation an edited agent goes through, and it has to run here: an override is
+        // typed into a box like any other setting, and `--set max_turns=lots` should be refused with
+        // the engine's own message rather than spawned and left to fail somewhere unreadable.
+        if overrides.is_some() {
+            arguments::validate_builtin(&agent.manifest)?;
+        }
+        if !force && let Some(full) = self.full_cap_for(&agent, &self.limits(), &self.run_load()) {
             return Err(full);
         }
         let runner = Self::runner_of_agent(&agent)?;
@@ -659,12 +704,20 @@ impl Agents {
         // Fail before anything is written down: a mistyped argument should leave no session behind.
         runner.check(&spec)?;
         let store = self.sessions();
-        let record = store.create(
+        let record = store.create_as(
             &agent.name,
             agent.manifest.backend.clone(),
+            None,
             &spec.cwd,
             message,
+            launched_by.unwrap_or_default(),
         )?;
+        // Written onto the session before its first turn goes out, because from here on the
+        // conversation is what says how it runs: every later turn re-reads the agent, and re-applies
+        // this over it.
+        if let Some(overrides) = overrides {
+            store.set_overrides(&agent.name, &record.id, overrides)?;
+        }
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
         let session = store.session(&agent.name, &record.id);
@@ -693,12 +746,17 @@ impl Agents {
             &ran,
             dropped,
         );
-        self.send_or_note_failure(runner.as_ref(), &spec, &store, &agent.name, &record.id, message)?;
+        self.send_or_note_failure(
+            runner.as_ref(),
+            &spec,
+            &store,
+            &agent.name,
+            &record.id,
+            message,
+        )?;
         // Only now, with this run's own files in place: pruning first would count it as one of the
         // old ones. A run somebody else is still watching is never swept.
-        store.prune_old(&agent.name, |record| {
-            Self::session_is_alive(&store, record)
-        });
+        store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
 
         let launch = launch_of(&agent, runner.as_ref(), &session);
         self.emit(
@@ -1086,7 +1144,8 @@ impl Agents {
         let turns = self.transcript(agent, conv_id);
         if turns.iter().all(|t| t.queued) {
             return Err(Error::Unsupported(
-                "This conversation hasn't said anything yet — there's nothing to review.".to_string(),
+                "This conversation hasn't said anything yet — there's nothing to review."
+                    .to_string(),
             ));
         }
 
@@ -1146,7 +1205,11 @@ impl Agents {
                 tool.manifest.name.clone(),
                 tool.manifest.description.clone().unwrap_or_default(),
             );
-            if enabled { on.push(entry) } else { off.push(entry) }
+            if enabled {
+                on.push(entry)
+            } else {
+                off.push(entry)
+            }
         }
         on.sort();
         off.sort();
@@ -1238,6 +1301,10 @@ impl Agents {
             &live_content(runner, &session, false),
         );
 
+        // The agent as *this conversation* runs it: the definition is re-read every turn, so a run
+        // launched on another model would drift back onto the agent's own from message two.
+        let as_launched = as_run(agent, record);
+        let agent = &*as_launched;
         let mut spec = self.spec_in(agent, session_dir(&self.config, record));
         pin_tool_help(store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
@@ -1305,7 +1372,10 @@ impl Agents {
         outcome.is_error = true;
         // Only the writer announces, as everywhere else an ending is recorded: the record settles
         // the race, so this cannot double up with a watcher that notices the same run.
-        if store.record_outcome(agent, run_id, &outcome).unwrap_or(false) {
+        if store
+            .record_outcome(agent, run_id, &outcome)
+            .unwrap_or(false)
+        {
             self.emit(
                 "adi.agents.run.finished",
                 &AgentRunFinished {
@@ -1353,6 +1423,12 @@ impl Agents {
                 agent.manifest.backend
             )));
         }
+        // This child re-reads the agent from the store, so it is also where a conversation's own
+        // overrides would otherwise be lost — the model it answers on is read right here.
+        let agent = match self.sessions().get(agent_name, conv_id) {
+            Some(record) => as_run(&agent, &record).into_owned(),
+            None => agent,
+        };
         let sessions_dir = self.config.module(SESSIONS_MODULE).dir().to_path_buf();
         backends::harness::run_adi_turn(&agent, &sessions_dir, conv_id, sink)
     }
@@ -1375,11 +1451,14 @@ impl Agents {
         let store = self.sessions();
         // A manifest that has gone missing under a running conversation reads as attended: refusing
         // to let it ask would be the more surprising of the two guesses, and the flag is opt-in.
-        let unattended = self
-            .get(agent)
-            .ok()
-            .flatten()
-            .is_some_and(|a| a.manifest.unattended);
+        // The conversation's own answer, not the definition's: a run launched unattended must have
+        // its Ask refuse for the whole of that run, and this process is where Ask is served from.
+        let record = store.get(agent, conv);
+        let unattended = self.get(agent).ok().flatten().is_some_and(|a| {
+            record
+                .as_ref()
+                .map_or(a.manifest.unattended, |r| as_run(&a, r).manifest.unattended)
+        });
         let stdin = std::io::stdin();
         backends::mcp::serve(
             agent,
@@ -1391,7 +1470,6 @@ impl Agents {
             std::io::stdout().lock(),
         )
     }
-
 
     /// The spec a *fresh* run starts with. `run_dir` is this launch's own working directory, for a
     /// caller pointing one agent at a different target each run; `None` leaves the manifest and the
@@ -1444,9 +1522,10 @@ impl Agents {
                 .filter(|(key, _)| key.as_str() != "PATH")
                 .map(|(key, value)| (key.clone(), value.clone())),
         );
-        let workspace_note =
-            Some(workspace::block(&self.config, agent, &cwd)).filter(|note| !note.trim().is_empty());
-        let knowledge_note = Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
+        let workspace_note = Some(workspace::block(&self.config, agent, &cwd))
+            .filter(|note| !note.trim().is_empty());
+        let knowledge_note =
+            Some(knowledge::block(&knowledge)).filter(|note| !note.trim().is_empty());
         RunSpec {
             cwd,
             path: launch::run_path(bin_dir.as_deref(), &agent.manifest.path),
@@ -1543,6 +1622,8 @@ impl Agents {
                 message: record.message,
                 hidden: record.hidden,
                 starred: record.starred,
+                launched_by: record.launched_by,
+                overrides: record.overrides.as_ref().map(RunOverrides::summary).unwrap_or_default(),
                 outcome: record.outcome,
             })
             .collect()
@@ -1562,7 +1643,10 @@ impl Agents {
     /// settles the race between watchers so the event goes out exactly once.
     fn note_finished(&self, agent: &StoredAgent, runner: &dyn Runner, runs: &mut [RunInfo]) {
         let store = self.sessions();
-        for run in runs.iter_mut().filter(|r| !r.running && r.outcome.is_none()) {
+        for run in runs
+            .iter_mut()
+            .filter(|r| !r.running && r.outcome.is_none())
+        {
             let session = store.session(&agent.name, &run.run_id);
             let content = live_content(runner, &session, false);
             let outcome =
@@ -1686,8 +1770,8 @@ impl Agents {
         }
         let deleted = store.delete(name, run_id)?;
         if deleted {
-            let _ = awaits::Awaits::with_config(self.config.clone())
-                .forget_conversation(name, run_id);
+            let _ =
+                awaits::Awaits::with_config(self.config.clone()).forget_conversation(name, run_id);
             self.emit(
                 "adi.agents.run.deleted",
                 &AgentRunDeleted {
@@ -1833,6 +1917,8 @@ impl Agents {
             Some(runner.kind()),
             &spec.cwd,
             message,
+            // A simulated run is a person in the model's seat, so it is a person's run twice over.
+            launcher::HUMAN,
         )?;
         pin_tool_help(&store, &agent.name, &record.id, &mut spec);
         name_conversation(&mut spec, &record.id);
@@ -1840,9 +1926,7 @@ impl Agents {
         store.append_turn(&agent.name, &record.id, user_turn(message))?;
         // Composes the prompt and opens the seat. No child is spawned.
         runner.send(&spec, &session, message)?;
-        store.prune_old(&agent.name, |record| {
-            Self::session_is_alive(&store, record)
-        });
+        store.prune_old(&agent.name, |record| Self::session_is_alive(&store, record));
 
         let launch = launch_of(&agent, &runner, &session);
         self.emit(
@@ -2153,8 +2237,7 @@ fn with_prelude(message: &str, ran: &[prelude::Ran], dropped: usize) -> String {
 /// Phrased as an instruction rather than a note, because a coding agent that merely *notices* a path
 /// tends to reason about the filename instead of opening it. It says images, and it says read,
 /// because both of those are what make the model reach for the tool that decodes pictures.
-const IMAGE_PREAMBLE: &str =
-    "Images are attached to this message. Read each of these files with your file-reading tool \
+const IMAGE_PREAMBLE: &str = "Images are attached to this message. Read each of these files with your file-reading tool \
      before answering — they are part of what is being asked, not a reference:";
 
 /// The refusal a message with images meets when the engine cannot carry one.
@@ -2247,7 +2330,9 @@ fn settle(store: &SessionStore, agent: &str, id: &str, content: &TurnContent) {
 /// its mtime is the last moment this turn produced anything. `None` when there is no log or the
 /// platform reports no mtime, which reads as "no better answer than now".
 fn finished_at(log: &std::path::Path) -> Option<u64> {
-    let modified = std::fs::metadata(log).and_then(|meta| meta.modified()).ok()?;
+    let modified = std::fs::metadata(log)
+        .and_then(|meta| meta.modified())
+        .ok()?;
     let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
     u64::try_from(since.as_millis()).ok()
 }
@@ -2396,14 +2481,20 @@ mod tests {
             bases: vec!["agent:solver/memory".into()],
         };
 
-        assert_eq!(with_knowledge_tool(&["sys-tasks".into()], &nothing), vec!["sys-tasks"]);
+        assert_eq!(
+            with_knowledge_tool(&["sys-tasks".into()], &nothing),
+            vec!["sys-tasks"]
+        );
 
         assert_eq!(
             with_knowledge_tool(&["sys-tasks".into()], &some),
             vec!["sys-tasks", adi_tools::SYS_KNOWLEDGE]
         );
 
-        let already = vec![adi_tools::SYS_KNOWLEDGE.to_string(), "sys-tasks".to_string()];
+        let already = vec![
+            adi_tools::SYS_KNOWLEDGE.to_string(),
+            "sys-tasks".to_string(),
+        ];
         assert_eq!(with_knowledge_tool(&already, &some), already);
     }
 
@@ -2470,7 +2561,10 @@ mod tests {
         let mut second_run = store.launch_spec(&agent, None);
         second_run.tools.clear();
         pin_tool_help(&sessions, "solver", &next.id, &mut second_run);
-        assert_eq!(second_run.tool_help, None, "nothing to render, nothing kept");
+        assert_eq!(
+            second_run.tool_help, None,
+            "nothing to render, nothing kept"
+        );
     }
 
     /// Every place an agent definition can name a project has to follow the rename, because each
@@ -3020,7 +3114,11 @@ mod tests {
             .expect("seed");
 
         let kb = adi_knowledge::KnowledgeStore::with_config(store.config.clone());
-        for id in ["global/runbooks", "project:acme/notes", "project:other/notes"] {
+        for id in [
+            "global/runbooks",
+            "project:acme/notes",
+            "project:other/notes",
+        ] {
             kb.ensure_base(&id.parse().expect("id")).expect("base");
         }
 
@@ -3060,9 +3158,7 @@ mod tests {
         );
 
         assert!(
-            spec.tools
-                .iter()
-                .any(|t| t.name == "adi-knowledge"),
+            spec.tools.iter().any(|t| t.name == "adi-knowledge"),
             "the knowledge CLI is not among the run's tools"
         );
         assert!(
@@ -3089,12 +3185,21 @@ mod tests {
         adi_tools::Tools::with_config(store.config.clone())
             .seed_system()
             .expect("seed");
-        let agent = agent_with_tools(&store, "plain", "harness:claude-sdk", vec!["sys-tasks".into()]);
+        let agent = agent_with_tools(
+            &store,
+            "plain",
+            "harness:claude-sdk",
+            vec!["sys-tasks".into()],
+        );
 
         let spec = store.spec_in(&agent, store.config.root().to_path_buf());
 
         assert!(spec.knowledge_note.is_none());
-        assert!(spec.env.iter().all(|(k, _)| k != "ADI_MEMORY" && k != "ADI_KNOWLEDGE"));
+        assert!(
+            spec.env
+                .iter()
+                .all(|(k, _)| k != "ADI_MEMORY" && k != "ADI_KNOWLEDGE")
+        );
         assert!(
             !spec.tools.iter().any(|t| t.name == "adi-knowledge"),
             "the knowledge CLI was added to an agent that never asked for it"
@@ -3126,7 +3231,11 @@ mod tests {
             Some("You are a careful operator."),
             "the agent's own instructions travel unmodified"
         );
-        let help = spec.tools.iter().find(|t| t.name == "greet").expect("greet");
+        let help = spec
+            .tools
+            .iter()
+            .find(|t| t.name == "greet")
+            .expect("greet");
         assert!(
             help.help
                 .as_deref()
@@ -3275,7 +3384,12 @@ mod tests {
         let store = scratch("launch-failure");
         let sessions = store.sessions();
         let record = sessions
-            .create("nobody", Backend::from("harness:claude-sdk"), "/tmp", "hello?")
+            .create(
+                "nobody",
+                Backend::from("harness:claude-sdk"),
+                "/tmp",
+                "hello?",
+            )
             .expect("open the conversation");
         sessions
             .append_turn("nobody", &record.id, user_turn("hello?"))
@@ -3311,7 +3425,10 @@ mod tests {
             .find(|r| r.id == record.id)
             .and_then(|r| r.outcome)
             .expect("the run ended, so it has an outcome");
-        assert!(outcome.is_error, "a listing must call this failed, not done");
+        assert!(
+            outcome.is_error,
+            "a listing must call this failed, not done"
+        );
         assert!(
             outcome.is_reported(),
             "an outcome that reports nothing lists as `unknown` — the bug this fixes"
@@ -3417,7 +3534,10 @@ mod tests {
         seed_live_run(&store, "process:claude", "other");
         assert!(
             store.run_in("solver", "go", None).is_ok()
-                || matches!(store.run_in("solver", "go", None), Err(Error::NotRunnable(_))),
+                || matches!(
+                    store.run_in("solver", "go", None),
+                    Err(Error::NotRunnable(_))
+                ),
             "one live run of two is below the cap, so the launch reaches the backend"
         );
 
@@ -3586,7 +3706,10 @@ mod tests {
         assert_eq!(taken.images, [image.clone()]);
         let turns = store.sessions().turns("chatty", &conv);
         assert_eq!(turns.last().expect("a turn").images, [image.clone()]);
-        assert!(store.image(&image.id).is_some(), "the bytes are still there");
+        assert!(
+            store.image(&image.id).is_some(),
+            "the bytes are still there"
+        );
 
         store.delete_run("chatty", &conv).expect("delete");
         assert!(
@@ -3677,7 +3800,69 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(25));
         }
-        panic!("the engine never recorded its command line at {}", path.display());
+        panic!(
+            "the engine never recorded its command line at {}",
+            path.display()
+        );
+    }
+
+    /// An override reaches the engine, and is written down where the *next* turn will find it.
+    ///
+    /// Asserted on the engine's own command line, for the reason the pre-run test below is: every
+    /// layer between the launch and the process is one that could quietly drop it, and a run that
+    /// answered on the agent's model while the panel said otherwise would be a lie nobody could see.
+    /// The record is asserted too, because that — not the launch call — is what a reply re-reads.
+    #[test]
+    #[cfg(unix)]
+    fn a_launch_override_reaches_the_engine_and_is_kept_on_the_session() {
+        let store = scratch("override-launch");
+        let (bin, argv_file) = fake_engine(&store, "claude");
+        let mut m = spec("process:claude");
+        m.path = vec![bin];
+        m.arguments.model = Some("sonnet".to_string());
+        store.save("solver", m).expect("save");
+
+        let mut overrides = RunOverrides::default();
+        overrides
+            .arguments
+            .insert("model".to_string(), serde_json::json!("opus"));
+        let run_id = match store
+            .launch(
+                "solver",
+                "work the task",
+                &LaunchOptions {
+                    overrides: Some(&overrides),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("launch")
+        {
+            Launch::Process { run_id, .. } => run_id,
+            Launch::Pty { .. } => unreachable!("a process backend is not a pane"),
+        };
+
+        let argv = engine_argv(&argv_file);
+        assert!(
+            argv.iter().any(|a| a == "opus"),
+            "the run's own model, not the agent's: {argv:?}"
+        );
+        assert!(
+            !argv.iter().any(|a| a == "sonnet"),
+            "the agent's model must not also be passed: {argv:?}"
+        );
+
+        let record = store
+            .sessions()
+            .get("solver", &run_id)
+            .expect("the session record");
+        assert_eq!(record.overrides.as_ref(), Some(&overrides));
+        // And the definition is untouched: an override is about one run, not an edit made in
+        // passing.
+        let agent = store.get("solver").expect("read").expect("the agent");
+        assert_eq!(
+            agent.manifest.arguments.get("model"),
+            Some(&serde_json::json!("sonnet"))
+        );
     }
 
     /// The whole promise, end to end: a launch that names a command really runs it, and the engine's
@@ -3764,12 +3949,14 @@ mod tests {
         assert_eq!(opening.text, "work the task", "no output in the words");
         assert!(!opening.text.contains("briefing"), "{}", opening.text);
         match opening.steps.as_slice() {
-            [Step::Tool {
-                name,
-                input,
-                status,
-                output,
-            }] => {
+            [
+                Step::Tool {
+                    name,
+                    input,
+                    status,
+                    output,
+                },
+            ] => {
                 assert_eq!(name, "Bash", "recorded as the tool it is");
                 assert_eq!(input, "echo briefing");
                 assert_eq!(*status, ToolStatus::Ok);
@@ -3777,6 +3964,58 @@ mod tests {
             }
             other => panic!("expected one Bash step, got {other:?}"),
         }
+    }
+
+    /// Who asked for a run is written down at the launch and read back by the listing — the whole of
+    /// what the rail's "started by me" filter stands on.
+    ///
+    /// And a launch that says nothing records nothing: the absence has to survive as an absence,
+    /// because a listing reads it as "unknown" and would otherwise be told a person was here.
+    #[test]
+    #[cfg(unix)]
+    fn a_launch_records_who_asked_for_it() {
+        let store = scratch("launched-by");
+        let (bin, _) = fake_engine(&store, "claude");
+        let mut m = spec("process:claude");
+        m.path = vec![bin];
+        store.save("solver", m).expect("save");
+        let agent = store.get("solver").expect("get").expect("present");
+
+        store
+            .launch(
+                "solver",
+                "mine",
+                &LaunchOptions {
+                    launched_by: Some(launcher::HUMAN),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("launch");
+        store
+            .launch(
+                "solver",
+                "spawned",
+                &LaunchOptions {
+                    launched_by: Some("agent:adi-agent"),
+                    ..LaunchOptions::default()
+                },
+            )
+            .expect("launch");
+        store
+            .run_with_message("solver", "unattributed")
+            .expect("launch");
+
+        let by: std::collections::BTreeMap<String, String> = store
+            .runs(&agent)
+            .into_iter()
+            .map(|r| (r.message, r.launched_by))
+            .collect();
+        assert_eq!(by.get("mine").map(String::as_str), Some(launcher::HUMAN));
+        assert_eq!(
+            by.get("spawned").map(String::as_str),
+            Some("agent:adi-agent")
+        );
+        assert_eq!(by.get("unattributed").map(String::as_str), Some(""));
     }
 
     /// The agent's standing prelude runs first, then this launch's own — the order a reader expects
@@ -3859,8 +4098,14 @@ mod tests {
                 "what is wrong here?",
                 std::slice::from_ref(&image),
             );
-            assert!(sent.starts_with("what is wrong here?\n\n"), "{backend}: {sent}");
-            assert!(sent.contains("Read each of these files"), "{backend}: {sent}");
+            assert!(
+                sent.starts_with("what is wrong here?\n\n"),
+                "{backend}: {sent}"
+            );
+            assert!(
+                sent.contains("Read each of these files"),
+                "{backend}: {sent}"
+            );
             assert!(
                 sent.contains(&sessions.attachment_path(&image).display().to_string()),
                 "{backend}: {sent}",
@@ -3875,7 +4120,10 @@ mod tests {
             .turns("printer", &conv)
             .pop()
             .expect("the recorded question");
-        assert_eq!(turn.text, "what is wrong here?", "no paths in the transcript");
+        assert_eq!(
+            turn.text, "what is wrong here?",
+            "no paths in the transcript"
+        );
         assert_eq!(turn.images, [image]);
 
         // The engine that gets its images inline is told nothing extra: its bytes go in the request
@@ -4089,7 +4337,9 @@ mod tests {
             .set_state(live_state())
             .expect("a live turn");
         assert_eq!(
-            store.reply("chatty", &conv, "and restart it").expect("reply"),
+            store
+                .reply("chatty", &conv, "and restart it")
+                .expect("reply"),
             Sent::Queued { place: 1 },
         );
         assert_eq!(
@@ -4173,24 +4423,38 @@ mod tests {
             "an existing run is there to flag",
         );
         assert!(
-            store.runs(&agent).iter().any(|r| r.run_id == first && r.hidden),
+            store
+                .runs(&agent)
+                .iter()
+                .any(|r| r.run_id == first && r.hidden),
             "hiding is a flag, and the run stays in the history",
         );
         assert!(
-            !store.set_run_hidden("recon", "0000000000001-0000", true).expect("absent"),
+            !store
+                .set_run_hidden("recon", "0000000000001-0000", true)
+                .expect("absent"),
             "a run that isn't there is nothing to flag",
         );
 
         // The star is the other flag on the same row, and it travels with the listing the same way.
         assert!(store.set_run_starred("recon", &first, true).expect("star"));
         assert!(
-            store.runs(&agent).iter().any(|r| r.run_id == first && r.starred && r.hidden),
+            store
+                .runs(&agent)
+                .iter()
+                .any(|r| r.run_id == first && r.starred && r.hidden),
             "starring says nothing about hiding, and neither clears the other",
         );
-        assert!(store.set_run_starred("recon", &first, false).expect("unstar"));
+        assert!(
+            store
+                .set_run_starred("recon", &first, false)
+                .expect("unstar")
+        );
         assert!(store.runs(&agent).iter().all(|r| !r.starred));
         assert!(
-            !store.set_run_starred("recon", "0000000000001-0000", true).expect("absent"),
+            !store
+                .set_run_starred("recon", "0000000000001-0000", true)
+                .expect("absent"),
             "a run that isn't there is nothing to flag",
         );
 
@@ -4413,7 +4677,9 @@ mod tests {
         store.save("reviewer", manifest).expect("save");
         let agent = store.get("reviewer").expect("get").expect("present");
 
-        let launch = store.simulate("reviewer", "review the runner").expect("simulate");
+        let launch = store
+            .simulate("reviewer", "review the runner")
+            .expect("simulate");
         let run_id = match &launch {
             Launch::Process { run_id, .. } => run_id.clone(),
             other => panic!("a simulated run is not a pane: {other:?}"),
@@ -4430,8 +4696,14 @@ mod tests {
         let expected = runner::prompt::compose(&real, None).expect("a prompt");
 
         assert_eq!(shown, expected);
-        assert!(shown.contains("You review code."), "the agent's own words: {shown}");
-        assert!(shown.contains("# Where you are"), "and where it is: {shown}");
+        assert!(
+            shown.contains("You review code."),
+            "the agent's own words: {shown}"
+        );
+        assert!(
+            shown.contains("# Where you are"),
+            "and where it is: {shown}"
+        );
     }
 
     /// A call made from the seat is the call the model makes: same table, same executor, same text
@@ -4478,13 +4750,16 @@ mod tests {
         assert_eq!(turn.results[1].name, "Frobnicate");
         assert!(!turn.results[1].ok);
         assert!(
-            turn.results[1].output.starts_with("no tool named Frobnicate"),
+            turn.results[1]
+                .output
+                .starts_with("no tool named Frobnicate"),
             "the model reads the tool's own words: {}",
             turn.results[1].output,
         );
 
         assert!(
-            store.runs(&store.get("hands").expect("get").expect("present"))
+            store
+                .runs(&store.get("hands").expect("get").expect("present"))
                 .iter()
                 .any(|r| r.run_id == *run_id && r.running),
             "a turn that called something leaves the seat occupied",
@@ -4504,7 +4779,11 @@ mod tests {
         };
 
         let turn = store
-            .simulate_turn("talker", run_id, &[SimBlock::Text("Nothing to change.".into())])
+            .simulate_turn(
+                "talker",
+                run_id,
+                &[SimBlock::Text("Nothing to change.".into())],
+            )
             .expect("the turn runs");
         assert_eq!(turn.stop_reason, STOP_END_TURN);
         assert!(turn.results.is_empty());
@@ -4517,14 +4796,22 @@ mod tests {
             .expect("a simulated run is in the run list");
         assert!(!run.running, "the seat is empty once the turn ends");
         assert!(
-            run.outcome.as_ref().is_some_and(store::RunOutcome::is_reported),
+            run.outcome
+                .as_ref()
+                .is_some_and(store::RunOutcome::is_reported),
             "how it ended is recorded: {:?}",
             run.outcome,
         );
 
         let turns = store.transcript(&agent, run_id);
-        assert_eq!(turns.first().map(|t| t.text.as_str()), Some("say something"));
-        assert_eq!(turns.last().map(|t| t.text.as_str()), Some("Nothing to change."));
+        assert_eq!(
+            turns.first().map(|t| t.text.as_str()),
+            Some("say something")
+        );
+        assert_eq!(
+            turns.last().map(|t| t.text.as_str()),
+            Some("Nothing to change.")
+        );
     }
 
     /// Re-pointing an agent at another engine must not lose the runs it already has. The record
@@ -4538,7 +4825,9 @@ mod tests {
             panic!("expected a headless run");
         };
 
-        store.save("drifter", spec("process:claude")).expect("re-point it");
+        store
+            .save("drifter", spec("process:claude"))
+            .expect("re-point it");
         let agent = store.get("drifter").expect("get").expect("present");
 
         let listed = store.runs(&agent);
@@ -4546,7 +4835,10 @@ mod tests {
             .iter()
             .find(|r| r.run_id == *run_id)
             .expect("the run survives its agent being re-pointed");
-        assert!(run.running, "and it is still the person's seat, not the new engine's");
+        assert!(
+            run.running,
+            "and it is still the person's seat, not the new engine's"
+        );
 
         assert!(
             store.simulated_prompt("drifter", run_id).is_ok(),

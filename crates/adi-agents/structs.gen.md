@@ -4,7 +4,7 @@
 
 > Agent definitions and run adapters for the adi platform: reusable executor:engine manifests under ~/.adi/mono/agents, interactive tmux Claude/Codex sessions, and detached headless process Claude/Codex runs.
 
-101 structs · 24 enums · 5 type aliases across 41 files.
+102 structs · 24 enums · 5 type aliases across 42 files.
 
 ## Index
 
@@ -29,6 +29,7 @@
 - [`src/lib.rs`](#srclibrs) — `Agents`, `SimBlock`, `SimResult`, `SimTurn`
 - [`src/limits.rs`](#srclimitsrs) — `RunLimits`, `RunLoad`
 - [`src/memo.rs`](#srcmemors) — `Stamp`, `Entry`, `Memo`
+- [`src/overrides.rs`](#srcoverridesrs) — `RunOverrides`
 - [`src/prelude.rs`](#srcpreluders) — `Ran`
 - [`src/progress.rs`](#srcprogressrs) — `Step`, `ToolStatus`, `TurnMetrics`, `TurnContent`, `BackendCapabilities`
 - [`src/questions.rs`](#srcquestionsrs) — `Settled`
@@ -1351,6 +1352,24 @@ struct Memo<T> {
 
 ---
 
+## `src/overrides.rs`
+
+### struct `RunOverrides`
+
+What one run replaces in its agent's definition.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RunOverrides {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub arguments: BTreeMap<String, serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unattended: Option<bool>,
+}
+```
+
+---
+
 ## `src/prelude.rs`
 
 ### struct `Ran`
@@ -1609,6 +1628,8 @@ pub struct LaunchOptions<'a> {
     pub force: bool,
     pub image_ids: &'a [String],
     pub pre_run: &'a [String],
+    pub launched_by: Option<&'a str>,
+    pub overrides: Option<&'a crate::RunOverrides>,
 }
 ```
 
@@ -1654,6 +1675,8 @@ pub struct RunInfo {
     pub running: bool,
     pub hidden: bool,
     pub starred: bool,
+    pub launched_by: String,
+    pub overrides: String,
     pub outcome: Option<RunOutcome>,
 }
 ```
@@ -2132,6 +2155,8 @@ pub struct SessionRecord {
     pub last_activity: u64,
     pub hidden: bool,
     pub starred: bool,
+    pub launched_by: String,
+    pub overrides: Option<crate::RunOverrides>,
     pub runner_state: Option<serde_json::Value>,
     pub outcome: Option<RunOutcome>,
 }

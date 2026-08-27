@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-60 structs · 7 enums · 1 type alias across 22 files.
+61 structs · 9 enums · 1 type alias across 23 files.
 
 ## Index
 
@@ -12,7 +12,8 @@
 - [`src/launcher.rs`](#srclauncherrs) — `Launcher`, `Drag`, `Action`
 - [`src/live.rs`](#srclivers) — `Apply`, `Sub`, `Live`
 - [`src/main.rs`](#srcmainrs) — `Nav`
-- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
+- [`src/menu.rs`](#srcmenurs) — `Shell`
+- [`src/pages/agents/actions.rs`](#srcpagesagentsactionsrs) — `StoredRunSettings`, `StepRef`, `ChatStats`, `SessionRow`, `SessionRef`
 - [`src/pages/analytics.rs`](#srcpagesanalyticsrs) — `Busy`, `AgentStats`, `Day`
 - [`src/pages/facts.rs`](#srcpagesfactsrs) — `TxView`, `FactsData`, `FactsConsole`
 - [`src/pages/hive.rs`](#srcpageshivers) — `Source`
@@ -27,7 +28,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -66,6 +67,8 @@ pub(crate) enum Icon {
     Upgrade,
     Chart,
     Contrast,
+    Filter,
+    Sliders,
 }
 ```
 
@@ -85,6 +88,7 @@ pub(crate) struct Launcher {
     query: RwSignal<String>,
     cursor: RwSignal<usize>,
     drag: RwSignal<Option<Drag>>,
+    floor: f64,
     swallow: RwSignal<bool>,
 }
 ```
@@ -170,7 +174,40 @@ enum Nav {
 
 ---
 
+## `src/menu.rs`
+
+### enum `Shell`
+
+Which shell is asking for the rows, and how it gets where a row points.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) enum Shell {
+    Root,
+    Panel {
+        route: RwSignal<Route>,
+        fleet: FleetForm,
+    },
+}
+```
+
+---
+
 ## `src/pages/agents/actions.rs`
+
+### struct `StoredRunSettings`
+
+What this browser starts one agent with — the shape kept under `run_settings_key`.
+
+```rust
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct StoredRunSettings {
+    #[serde(default)]
+    dir: String,
+    #[serde(default)]
+    overrides: std::collections::BTreeMap<String, String>,
+}
+```
 
 ### struct `StepRef`
 
@@ -672,7 +709,8 @@ pub(crate) struct State {
     pub(crate) row_menu: RwSignal<Option<RowMenu>>,
     pub(crate) session_menu: RwSignal<Option<SessionMenu>>,
     pub(crate) show_hidden: RwSignal<bool>,
-    pub(crate) starred_only: RwSignal<bool>,
+    pub(crate) session_filter: RwSignal<SessionFilter>,
+    pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
     pub(crate) rail_limit: RwSignal<usize>,
     pub(crate) chat_drawer: RwSignal<Option<ChatDrawer>>,
     pub(crate) tables: Tables,
@@ -724,6 +762,20 @@ pub(crate) struct Tables {
     pub(crate) files: TableState,
     pub(crate) services: TableState,
     pub(crate) subprojects: TableState,
+}
+```
+
+### enum `SessionFilter`
+
+What the chat rail is narrowed to — the Sessions head's filter box.
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum SessionFilter {
+    #[default]
+    All,
+    Starred,
+    Mine,
 }
 ```
 
@@ -1141,6 +1193,8 @@ pub(crate) struct AgentsWatch {
     pub(crate) answering: RwSignal<bool>,
     pub(crate) context_prefix: RwSignal<String>,
     pub(crate) run_dir: RwSignal<String>,
+    pub(crate) run_overrides: RwSignal<BTreeMap<String, String>>,
+    pub(crate) run_settings_open: RwSignal<bool>,
     pub(crate) tokens: RwSignal<Option<AgentTokens>>,
     pub(crate) tokens_of: RwSignal<Option<String>>,
     pub(crate) tokens_busy: RwSignal<bool>,
@@ -1192,7 +1246,7 @@ pub(crate) struct MeshForm {
 
 ### struct `FleetForm`
 
-The Fleet page's local signals: the grant form's node picker and grant text, plus a shared busy flag. Renaming and unpairing are row actions rather than form fields — they name their node by the row you clicked — so nothing here holds a petname of its own. `Copy`, so it threads into the page view and its handlers.
+The Fleet page's local signals: the grant form's node picker and grant text, the pairing invite on screen, plus a shared busy flag. Renaming and unpairing are row actions rather than form fields — they name their node by the row you clicked — so nothing here holds a petname of its own. `Copy`, so it threads into the page view and its handlers.
 
 ```rust
 #[derive(Clone, Copy)]
@@ -1200,6 +1254,9 @@ pub(crate) struct FleetForm {
     pub(crate) grant_node: RwSignal<String>,
     pub(crate) grant: RwSignal<String>,
     pub(crate) busy: RwSignal<bool>,
+    pub(crate) invite: RwSignal<Option<adi_webapp_api::types::FleetInvite>>,
+    pub(crate) invite_until: RwSignal<f64>,
+    pub(crate) minting: RwSignal<bool>,
 }
 ```
 

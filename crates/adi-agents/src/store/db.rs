@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     last_activity INTEGER NOT NULL DEFAULT 0,
     hidden        INTEGER NOT NULL DEFAULT 0,
     starred       INTEGER NOT NULL DEFAULT 0,
+    launched_by   TEXT    NOT NULL DEFAULT '',
+    overrides     TEXT,
     runner_state  TEXT,
     outcome       TEXT,
     tool_help     TEXT,
@@ -161,6 +163,15 @@ const MIGRATIONS: &[&str] = &[
     // A queued message can carry images now. JSON rather than a join table: the queue is read whole
     // or not at all, and a message waiting in line is not something anything queries *by* image.
     "ALTER TABLE queue ADD COLUMN images TEXT",
+    // Who asked for the run. Empty on every session opened before this existed, and that is the
+    // honest answer for them — nobody wrote down who started them, and guessing after the fact
+    // would put a person's name on runs an agent spawned. See `SessionRecord::launched_by`.
+    "ALTER TABLE sessions ADD COLUMN launched_by TEXT NOT NULL DEFAULT ''",
+    // What the run replaced in its agent's definition. Nullable, and NULL is the answer for every
+    // session ever opened: a run overrides nothing unless somebody said so at the launch. JSON for
+    // the reason `outcome` is — the set of settings an engine takes is the engine's business, and a
+    // column per dial would be a table mostly full of nulls. See `SessionRecord::overrides`.
+    "ALTER TABLE sessions ADD COLUMN overrides TEXT",
 ];
 
 // One connection per thread per database.

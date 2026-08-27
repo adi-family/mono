@@ -6,14 +6,11 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
-    AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState, AgentTokens, AgentsState,
-    AllAgentRuns,
-    DashboardsState,
-    DbExecResult, DbQueryResult, DbState, DbTablesState, DirListing, FileEntry, FleetDashboards,
-    FleetState, Health,
-    HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults, KnowledgeState,
-    MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
-    ProjectsState,
+    AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState, AgentTokens,
+    AgentsState, AllAgentRuns, DashboardsState, DbExecResult, DbQueryResult, DbState,
+    DbTablesState, DirListing, FileEntry, FleetDashboards, FleetState, Health, HiveState,
+    KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults, KnowledgeState,
+    MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectsState,
     RunRef, SecretsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState, UsedPorts,
     WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
 };
@@ -113,17 +110,23 @@ pub(crate) struct State {
     /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
     /// a reload closes it again.
     pub(crate) show_hidden: RwSignal<bool>,
-    /// Whether the chat rail is narrowed to the sessions of **starred** agents. **Off** by default:
+    /// How the chat rail is narrowed — see [`SessionFilter`]. [`SessionFilter::All`] by default:
     /// the rail opens on every conversation, because a chat that is missing reads as a chat that is
-    /// gone, and no filter should be the first thing a person has to notice and undo. Turning it on
-    /// is the way to narrow to the shortlist the agent picker draws from.
+    /// gone, and no filter should be the first thing a person has to notice and undo.
     ///
     /// Page state rather than a stored preference, like the two signals around it — a reload comes
     /// back to the full list.
     ///
-    /// The agent currently on screen is exempt while it is on, the same escape hatch the agent
+    /// Whatever is on screen is exempt while a filter is on, the same escape hatch the agent
     /// picker gives itself: a filter must never hide what the centre pane is showing.
-    pub(crate) starred_only: RwSignal<bool>,
+    pub(crate) session_filter: RwSignal<SessionFilter>,
+    /// Where the rail's filter menu is open, in viewport coordinates (the left and top of the
+    /// button it drops from) — `None` while it is closed.
+    ///
+    /// On [`State`] rather than in the view, for the reason [`Self::session_menu`] is: the chat
+    /// home is re-rendered whenever `/api/meta` moves, and a signal created inside it would take
+    /// the open menu with it twice a second.
+    pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
     /// How many sessions the chat rail has asked the backend for — [`SESSION_PAGE`] to begin with,
     /// another page each time its **Load more** is pressed.
     ///
@@ -313,12 +316,66 @@ impl State {
             row_menu: RwSignal::new(None),
             session_menu: RwSignal::new(None),
             show_hidden: RwSignal::new(false),
-            starred_only: RwSignal::new(false),
+            session_filter: RwSignal::new(SessionFilter::default()),
+            session_filter_menu: RwSignal::new(None),
             rail_limit: RwSignal::new(SESSION_PAGE),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
         }
     }
+}
+
+/// What the chat rail is narrowed to — the Sessions head's filter box.
+///
+/// A fleet grows a long tail of one-off and machine-made agents, and their conversations land in
+/// the same flat list as the handful a person actually had. Two narrowings answer that, and they
+/// are different questions: *which agents matter* (the shortlist starred on the Agents page, which
+/// is also what the agent picker draws from), and *which conversations are mine* (the ones a person
+/// started, as against the ones agents spawned for themselves).
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum SessionFilter {
+    /// Every conversation, whoever it belongs to and whoever started it.
+    #[default]
+    All,
+    /// Only sessions of agents starred on the Agents page.
+    Starred,
+    /// Only sessions a person started — `launched_by: "human"` on the run. A session opened before
+    /// the store recorded who started it is *not* one of these: nobody wrote it down, and a filter
+    /// that assumed a person would be showing a year of agent-spawned runs under that name.
+    Mine,
+}
+
+impl SessionFilter {
+    /// The value it rides under in the `<select>`, and what a change event is read back as.
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Starred => "starred",
+            Self::Mine => "mine",
+        }
+    }
+
+    /// The filter for a `<select>` value; anything unrecognised is the unfiltered rail, which is
+    /// the one answer that can never hide a conversation.
+    pub(crate) fn from_key(key: &str) -> Self {
+        match key {
+            "starred" => Self::Starred,
+            "mine" => Self::Mine,
+            _ => Self::All,
+        }
+    }
+
+    /// What the box says while this one is chosen.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::All => "All sessions",
+            Self::Starred => "Only starred",
+            Self::Mine => "Only started by me",
+        }
+    }
+
+    /// Every option the box offers, in the order it offers them.
+    pub(crate) const ALL: [Self; 3] = [Self::All, Self::Starred, Self::Mine];
 }
 
 /// A side rail of the chat home, when it is showing as a drawer over the conversation.
@@ -1180,6 +1237,19 @@ pub(crate) struct AgentsWatch {
     /// normal case; it applies to the launch only, and the conversation then keeps that directory
     /// for its replies.
     pub(crate) run_dir: RwSignal<String>,
+    /// What the *next* run started from this composer replaces in its agent's definition — a model,
+    /// a permission mode. Sparse: a key is here only because somebody set it, since "leave it as the
+    /// agent has it" and "set it to nothing" are different instructions (see `AgentRunOverrides`).
+    ///
+    /// Values are the strings the controls hold; they become typed arguments at send. Kept per agent
+    /// in this browser's `localStorage` alongside `run_dir`, because pointing an agent at a target
+    /// and turning its model up are the same act — this machine's standing way of running that agent
+    /// — and re-typing it on every reload is how it stops being used.
+    pub(crate) run_overrides: RwSignal<BTreeMap<String, String>>,
+    /// Whether the composer's run-settings panel is open. Closed is the normal state: the settings
+    /// are for the launch that is deliberately unlike the others, and every other launch should see
+    /// a composer rather than a form.
+    pub(crate) run_settings_open: RwSignal<bool>,
     /// The open conversation's token itemization: what its context went on, and what it sent twice.
     ///
     /// The one thing in this struct the poll never touches. Everything else here is refreshed each
@@ -1243,6 +1313,8 @@ impl AgentsWatch {
             answering: RwSignal::new(false),
             context_prefix: RwSignal::new(String::new()),
             run_dir: RwSignal::new(String::new()),
+            run_overrides: RwSignal::new(BTreeMap::new()),
+            run_settings_open: RwSignal::new(false),
             tokens: RwSignal::new(None),
             tokens_of: RwSignal::new(None),
             tokens_busy: RwSignal::new(false),
@@ -1286,6 +1358,10 @@ impl AgentsWatch {
         self.await_busy.set(false);
         self.input_files.set(Vec::new());
         self.reply_files.set(Vec::new());
+        // The settings themselves are not cleared — they belong to the agent, and are restored from
+        // this browser next time it is picked. Only the panel closes: a form left standing over a
+        // view that has gone is a form about nothing.
+        self.run_settings_open.set(false);
     }
 }
 

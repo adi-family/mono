@@ -29,9 +29,7 @@ mod workspaces;
 pub(crate) mod columns {
     pub(crate) use super::agents::COLS as AGENT_COLS;
     pub(crate) use super::agents::{CHAT_COLS, CHAT_RUN_COLS, NEWEST_FIRST, RUN_COLS};
-    pub(crate) use super::analytics::{
-        AGENT_COLS as ANALYTICS_AGENT_COLS, BUSIEST_FIRST,
-    };
+    pub(crate) use super::analytics::{AGENT_COLS as ANALYTICS_AGENT_COLS, BUSIEST_FIRST};
     pub(crate) use super::dashboards::COLS as DASHBOARD_COLS;
     pub(crate) use super::db::{SCOPE_COLS as DB_SCOPE_COLS, TABLE_COLS as DB_TABLE_COLS};
     pub(crate) use super::fleet::COLS as FLEET_COLS;
@@ -59,8 +57,8 @@ pub(crate) mod columns {
 }
 
 pub(crate) use agents::{
-    agent_detail_view, agents_view, chat_home_view, live_view, load_agent_into_form, poll_watch,
-    reset_chat_home,
+    adopt_run_settings, agent_detail_view, agents_view, chat_home_view, live_view,
+    load_agent_into_form, poll_watch, reset_chat_home,
 };
 pub(crate) use analytics::analytics_view;
 pub(crate) use dashboards::dashboards_view;

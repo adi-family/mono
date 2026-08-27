@@ -6,26 +6,22 @@
 //! own log, several may be live at once, and the live view is a browsable run history plus a task
 //! composer — never a shared, overwritten slot.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{
     AgentAsk, AgentAwait, AgentDto, AgentGoal, AgentNearDup, AgentRepeat, AgentRepeatShape,
-    AgentRunInfo,
-    AgentRuns, AgentStep, AgentTokenSource,
-    AgentTokens, AgentToolStatus, AgentTurn, AgentsState, Dashboard,
-    FleetDashboards, NodeDashboard, NodeDashboards,
+    AgentRunInfo, AgentRuns, AgentStep, AgentTokenSource, AgentTokens, AgentToolStatus, AgentTurn,
+    AgentsState, Dashboard, FleetDashboards, NodeDashboard, NodeDashboards,
 };
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::{Route, agent_form_path, scroll_top};
 use crate::state::{
-    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionMenu, State,
+    AgentsWatch, ChatDrawer, Flash, ROOT_AGENT, SESSION_PAGE, SessionFilter, SessionMenu, State,
     refresh_fleet_dashboards,
 };
-use crate::ui::{
-    Key, Sort, TableState, apply_mutation, sort_rows,
-};
+use crate::ui::{Key, Sort, TableState, apply_mutation, sort_rows};
 
 use super::send_bar;
 
@@ -126,9 +122,10 @@ fn limit_control(
     // `None` follows the server's value; typing pins a draft until it is saved.
     let draft: RwSignal<Option<String>> = RwSignal::new(None);
     let value = move || {
-        draft
-            .get()
-            .unwrap_or_else(|| load.get().map_or_else(String::new, |(_, max)| max.to_string()))
+        draft.get().unwrap_or_else(|| {
+            load.get()
+                .map_or_else(String::new, |(_, max)| max.to_string())
+        })
     };
     let submit = move || {
         let Ok(max) = value().trim().parse::<u32>() else {
@@ -248,10 +245,33 @@ where
 /// into after it starts. The server supplies the executor-specific success message. `force` is the
 /// human's "run it anyway" past a full concurrency limit.
 fn run_now(state: State, name: String, force: bool) {
+    run_now_with(state, name, force, None, None);
+}
+
+/// [`run_now`], carrying the run settings of the composer that asked for it — a pty session started
+/// from the chat home is started with the same "run here" and the same overrides a headless one
+/// would be. The Agents list's own ▶ Run has no such panel behind it and passes neither: it acts on
+/// a row, which is rarely the agent the composer is pointed at.
+fn run_now_with(
+    state: State,
+    name: String,
+    force: bool,
+    working_dir: Option<String>,
+    overrides: Option<adi_webapp_api::types::AgentRunOverrides>,
+) {
     spawn_local(async move {
         // No task and no attachments: a pty session is typed into after it starts, so there is no
         // message here for a picture to belong to.
-        match fetch::run_agent(name, String::new(), None, force, Vec::new()).await {
+        match fetch::run_agent(
+            name,
+            String::new(),
+            working_dir,
+            overrides,
+            force,
+            Vec::new(),
+        )
+        .await
+        {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -263,20 +283,21 @@ fn run_now(state: State, name: String, force: bool) {
 
 /// Launch a new headless run of the agent with `message` as its task, then select that run in the
 /// panel so its log streams in. Each launch is independent — never a continuation of a prior run.
-/// `working_dir` is the composer's optional "run here"; `None` starts the agent where it is defined.
-/// `force` launches past a full concurrency limit — the composer sends it once the cap is reached,
-/// where the button already reads "Run anyway".
+/// `working_dir` is the run settings' "run here" and `overrides` the rest of that panel; `None` and
+/// `None` start the agent exactly as it is defined. `force` launches past a full concurrency limit —
+/// the composer sends it once the cap is reached, where the button already reads "Run anyway".
 fn launch_agent(
     state: State,
     watch: AgentsWatch,
     name: String,
     message: String,
     working_dir: Option<String>,
+    overrides: Option<adi_webapp_api::types::AgentRunOverrides>,
     force: bool,
     images: Vec<String>,
 ) {
     spawn_local(async move {
-        match fetch::run_agent(name.clone(), message, working_dir, force, images).await {
+        match fetch::run_agent(name.clone(), message, working_dir, overrides, force, images).await {
             Ok(res) => {
                 state.agents.set(Some(res.state));
                 state.flash.set(Some(Flash::ok(res.message)));
@@ -393,6 +414,9 @@ fn point_watch(watch: AgentsWatch, name: String, interactive: bool) {
     watch.answerable.set(false);
     watch.reply.set(String::new());
     watch.interactive.set(interactive);
+    // Before the name is set, so the settings and the agent they belong to land together and the
+    // composer is never briefly showing the last agent's directory under this one's name.
+    adopt_run_settings(watch, &name);
     watch.name.set(Some(name));
     poll_watch(watch);
 }
@@ -549,7 +573,11 @@ pub(crate) fn live_view(state: State, watch: AgentsWatch) -> Option<AnyView> {
 /// under the given project ids (the project detail page passes its project + sub-projects); `None`
 /// includes every agent (the standalone Agents page). Its own reactive island is the table, so the
 /// 1s/4s polls refresh the list in place without rebuilding the panel.
-pub(crate) fn all_chats_view(state: State, watch: AgentsWatch, only: Option<Vec<String>>) -> AnyView {
+pub(crate) fn all_chats_view(
+    state: State,
+    watch: AgentsWatch,
+    only: Option<Vec<String>>,
+) -> AnyView {
     let only_head = only.clone();
     view! {
         <section class="adi-panel">
@@ -681,7 +709,11 @@ fn awaiting_hint(awaits: &[AgentAwait]) -> String {
     match awaits {
         [] => String::new(),
         [one] => said(one),
-        many => format!("waiting on {} wakes. The first: {}", many.len(), said(&many[0])),
+        many => format!(
+            "waiting on {} wakes. The first: {}",
+            many.len(),
+            said(&many[0])
+        ),
     }
 }
 
@@ -846,7 +878,11 @@ fn run_detail_row(
     answerable: bool,
 ) -> AnyView {
     // Conversations read as a chat; one-shot runs as a progress feed of the same shape.
-    let title = if answerable { "\u{25A4} Chat" } else { "\u{25A4} Run" };
+    let title = if answerable {
+        "\u{25A4} Chat"
+    } else {
+        "\u{25A4} Run"
+    };
     view! {
         <tr class="adi-runlog">
             // The padding, tint and wrapping used to come from `.adi-table td.adi-runlog__cell`,
@@ -912,13 +948,21 @@ fn feed_view(state: State, watch: AgentsWatch, answerable: bool) -> AnyView {
     // rebuilt on every poll, so a tool call finishing behind an open question cleared the answer
     // half-typed. It now only rebuilds when the question itself changes.
     let question = Memo::new(move |_| {
-        watch.peek.with(|p| p.as_ref().and_then(|p| p.pending_question.clone()))
+        watch
+            .peek
+            .with(|p| p.as_ref().and_then(|p| p.pending_question.clone()))
     });
     // Likewise: the queue changes when you queue or unqueue something, not when the agent works.
     let queued = Memo::new(move |_| {
         watch.peek.with(|p| {
             p.as_ref()
-                .map(|p| p.turns.iter().filter(|t| t.queued).cloned().collect::<Vec<_>>())
+                .map(|p| {
+                    p.turns
+                        .iter()
+                        .filter(|t| t.queued)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default()
         })
     });
@@ -1070,7 +1114,12 @@ fn feed_turn(at: usize, turn: &AgentTurn) -> Vec<adi_ui::Entry> {
             AgentStep::Thinking { text } => {
                 run.push(ToolCall::new("thinking").param("text", text.clone()));
             }
-            AgentStep::Tool { name, input, status, output } => {
+            AgentStep::Tool {
+                name,
+                input,
+                status,
+                output,
+            } => {
                 let mut call = ToolCall::new(name.clone())
                     .state(match status {
                         AgentToolStatus::Running => ToolState::Running,
@@ -1256,8 +1305,7 @@ fn reply_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let answering = move || watch.peek.get().is_some_and(|p| p.running);
     // What the open conversation's own backend can take — the snapshot's capability profile, not
     // the agent's current settings, because a conversation is answered by whatever started it.
-    let takes_images =
-        Signal::derive(move || watch.peek.get().is_some_and(|p| p.caps.images));
+    let takes_images = Signal::derive(move || watch.peek.get().is_some_and(|p| p.caps.images));
     let attach = crate::attach::attaching(
         state,
         watch.reply_files,
@@ -1519,7 +1567,10 @@ fn await_row(state: State, watch: AgentsWatch, a: AgentAwait) -> AnyView {
     // not firing is nearly always a check that keeps saying "not yet", and the command is the whole
     // of what a person can act on; this is the one place with room to show it.
     let hint = match &a.check {
-        Some(check) => format!("{}\n\nchecks: {check}", awaiting_hint(std::slice::from_ref(&a))),
+        Some(check) => format!(
+            "{}\n\nchecks: {check}",
+            awaiting_hint(std::slice::from_ref(&a))
+        ),
         None => awaiting_hint(std::slice::from_ref(&a)),
     };
     view! {
@@ -1842,9 +1893,8 @@ fn unqueue_message(state: State, watch: AgentsWatch, index: usize) {
 /// equivalent of what the console below shows.
 fn run_log_status(watch: AgentsWatch) -> Option<AnyView> {
     let attach = watch.peek.get().map(|p| p.attach).unwrap_or_default();
-    (!attach.is_empty()).then(|| {
-        view! { <code class="adi-runlog__cmd adi-mono">{attach}</code> }.into_any()
-    })
+    (!attach.is_empty())
+        .then(|| view! { <code class="adi-runlog__cmd adi-mono">{attach}</code> }.into_any())
 }
 
 /// One run row in the history table: when it started, status, its task (or the conversation's first
@@ -1938,16 +1988,17 @@ fn waiting_on_you(state: State) -> usize {
         .unwrap_or(0)
 }
 
-/// The composer that starts a new run/conversation: the same box the reply bar is, plus an
-/// optional directory to run it in. A message is required — the send button is out until one is
-/// typed. Sending launches it and opens its detail: a streaming log for a one-shot run, or the
-/// chat for an answerable conversation you then reply to.
+/// The composer that starts a new run/conversation: the same box the reply bar is, with its run
+/// settings behind the gear in the button row. A message is required — the send button is out until
+/// one is typed. Sending launches it and opens its detail: a streaming log for a one-shot run, or
+/// the chat for an answerable conversation you then reply to.
 ///
-/// The directory box is the answer to "this agent, but against *that* target". Left blank — the
-/// normal case — the run starts where the agent is defined to. It applies to the launch only; a
-/// conversation then keeps the directory it started in for every reply. It sits *under* the
-/// composer, in the mono the design system sets a path in: it is a value, and a rarely-used one,
-/// so it takes a second line rather than a third of the first.
+/// The settings are what this launch does *differently* from the agent's definition — the directory
+/// it starts in, the model it runs on, how freely it may act. They live behind a button rather than
+/// under the box because nearly every launch changes nothing: a permanently visible row of controls
+/// would be a form standing in front of the one thing this screen is for, all day, to serve the
+/// occasional run that is deliberately unlike the others. The gear says when there is something set
+/// (see [`run_settings_button`]), so the state is never invisible — only folded away.
 fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     let placeholder = Signal::derive(move || {
         if watch.answerable.get() {
@@ -1969,9 +2020,6 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
         let Some(name) = watch.name.get_untracked() else {
             return;
         };
-        let dir = watch.run_dir.get_untracked();
-        let dir = dir.trim();
-        let working_dir = (!dir.is_empty()).then(|| dir.to_string());
         let force = at_run_limit(state.agents.get_untracked().as_ref(), &name);
         let images = crate::attach::ready_ids(watch.input_files);
         watch.input.set(String::new());
@@ -1981,7 +2029,8 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
             watch,
             name,
             with_context(watch, message),
-            working_dir,
+            run_dir_of(watch),
+            run_overrides_of(state, watch),
             force,
             images,
         );
@@ -2008,25 +2057,424 @@ fn run_bar(state: State, watch: AgentsWatch) -> impl IntoView {
     );
     view! {
         <div class="adi-runbar adi-ui-type">
+            // Above the box, not over it: this panel is as tall as the settings the backend takes,
+            // and a layer floating over the composer would cover the message being typed on the one
+            // screen where the message is the point. Rendered only while open.
+            {move || run_settings_panel(state, watch)}
             <adi_ui::Composer
                 value=watch.input
                 busy=false
                 placeholder=placeholder
                 attr:title=COMPOSER_HINT
+                settings=move || run_settings_button(watch)
                 mic=move || crate::voice::mic(watch.input)
                 attach=attach
                 on_send=Callback::new(start)
-            />
-            <adi_ui::Input
-                value=watch.run_dir
-                width=adi_ui::InputWidth::Wide
-                placeholder="run here (optional) — /path/to/target"
-                attr:title="Run this launch in a directory other than the agent's own. Blank = as defined."
             />
             <div class="px-1 text-mini text-meta">
                 {move || if at_limit() { "the agent is at its run cap — this starts it anyway" } else { "" }}
             </div>
         </div>
+    }
+}
+
+/// The `localStorage` key holding one agent's run settings in this browser.
+fn run_settings_key(agent: &str) -> String {
+    format!("adi-run-settings.{agent}")
+}
+
+/// The value the override map holds for a control set to "whatever the agent says".
+///
+/// A sentinel rather than the empty string, because on a select the empty string is already a real
+/// answer: the schema's own `— default —` option, which *unsets* the agent's value for this run.
+/// Inherit and unset are different instructions, and a control that spelled them the same way could
+/// not offer both.
+const INHERIT: &str = "__adi_inherit__";
+
+/// What this browser starts one agent with — the shape kept under [`run_settings_key`].
+///
+/// Per browser and per agent, deliberately. Pointing an agent at a target and turning its model up
+/// is *this machine's* standing way of running it, not a fact about the agent: the definition is
+/// what every machine and every trigger gets, and an override typed here must never quietly become
+/// that. The cost of keeping it locally is that another browser does not know about it, which is
+/// also the point.
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct StoredRunSettings {
+    #[serde(default)]
+    dir: String,
+    #[serde(default)]
+    overrides: std::collections::BTreeMap<String, String>,
+}
+
+/// Load `agent`'s stored run settings into the composer — called wherever the watched agent is
+/// *changed*, so the panel and its badge describe the agent now in front of you.
+///
+/// Deliberately not called by the dashboard-agent embed, which sets a directory of its own from the
+/// dashboard it was opened on: restoring over it would point that chat somewhere else entirely.
+pub(crate) fn adopt_run_settings(watch: AgentsWatch, agent: &str) {
+    let stored = crate::ui::storage()
+        .and_then(|s| s.get_item(&run_settings_key(agent)).ok().flatten())
+        .and_then(|raw| serde_json::from_str::<StoredRunSettings>(&raw).ok())
+        .unwrap_or_default();
+    watch.run_dir.set(stored.dir);
+    watch.run_overrides.set(stored.overrides);
+}
+
+/// Write the composer's current settings back, under whichever agent it is pointed at. Called after
+/// every edit — there is no Save button, because a panel with one is a panel you can leave in a
+/// state it does not act on.
+fn save_run_settings(watch: AgentsWatch) {
+    let Some(agent) = watch.name.get_untracked() else {
+        return;
+    };
+    let Some(storage) = crate::ui::storage() else {
+        return;
+    };
+    let key = run_settings_key(&agent);
+    let settings = StoredRunSettings {
+        dir: watch.run_dir.get_untracked(),
+        overrides: watch.run_overrides.get_untracked(),
+    };
+    // Nothing set is nothing kept: an agent run as it is defined should leave no row behind, so the
+    // next reader of this store sees only the agents somebody really configured here.
+    if settings.dir.trim().is_empty() && settings.overrides.is_empty() {
+        let _ = storage.remove_item(&key);
+        return;
+    }
+    if let Ok(json) = serde_json::to_string(&settings) {
+        let _ = storage.set_item(&key, &json);
+    }
+}
+
+/// How many settings this launch differs by — what the gear's badge counts.
+fn run_settings_count(watch: AgentsWatch) -> usize {
+    usize::from(!watch.run_dir.get().trim().is_empty()) + watch.run_overrides.get().len()
+}
+
+/// This launch's directory, or `None` for "as the agent is defined".
+fn run_dir_of(watch: AgentsWatch) -> Option<String> {
+    let dir = watch.run_dir.get_untracked();
+    let dir = dir.trim();
+    (!dir.is_empty()).then(|| dir.to_string())
+}
+
+/// The composer's overrides as the launch endpoint takes them, or `None` when this run changes
+/// nothing.
+///
+/// The controls hold strings; a field the schema calls numeric becomes a number here, exactly as the
+/// agent form does when it saves one. A value that will not parse is sent as it was typed rather
+/// than dropped: the launch is then refused with the engine's own message about it, which is the
+/// answer, where a silently discarded setting would have run something nobody asked for.
+fn run_overrides_of(
+    state: State,
+    watch: AgentsWatch,
+) -> Option<adi_webapp_api::types::AgentRunOverrides> {
+    let set = watch.run_overrides.get_untracked();
+    if set.is_empty() {
+        return None;
+    }
+    let spec = state.agents.get_untracked().map(|s| s.form);
+    let mut out = adi_webapp_api::types::AgentRunOverrides::default();
+    for (key, value) in set {
+        if key == "unattended" {
+            out.unattended = Some(value == "true");
+            continue;
+        }
+        let numeric = spec
+            .as_ref()
+            .is_some_and(|s| s.fields.iter().any(|f| f.name == key && f.numeric));
+        let parsed = match numeric.then(|| value.parse::<f64>()) {
+            Some(Ok(number)) => number.into(),
+            _ => serde_json::Value::String(value),
+        };
+        out.arguments.insert(key, parsed);
+    }
+    Some(out)
+}
+
+/// The composer's run-settings button: the gear in the button row, and the count of what is set.
+///
+/// The count is the whole reason it is a badge and not an icon: settings that persist between
+/// launches — and these do, per agent, in this browser — are settings somebody will forget they
+/// left on. A number on the button is what makes "this agent is pointed somewhere else" visible from
+/// the screen you launch on, rather than one click in.
+fn run_settings_button(watch: AgentsWatch) -> AnyView {
+    let title = move || match run_settings_count(watch) {
+        0 => "Run settings — where this run starts, and what it overrides".to_string(),
+        1 => "Run settings — 1 setting overridden for runs started here".to_string(),
+        n => format!("Run settings — {n} settings overridden for runs started here"),
+    };
+    // Bound out here, not inline: `view!` reads a `>` inside an attribute as the end of the tag, so
+    // a comparison written in place would be parsed as an empty closure and a stray `0`.
+    let is_set = move || run_settings_count(watch) > 0;
+    view! {
+        <button class="adi-runbar__settings" type="button"
+            class:is-set=is_set
+            aria-label="Run settings"
+            aria-expanded=move || watch.run_settings_open.get().to_string()
+            title=title
+            on:click=move |_| {
+                let open = !watch.run_settings_open.get_untracked();
+                watch.run_settings_open.set(open);
+                // Read on open rather than held live: another tab of the same panel may have
+                // written since, and this is the moment somebody is about to trust what it says.
+                if open && let Some(name) = watch.name.get_untracked() {
+                    adopt_run_settings(watch, &name);
+                }
+            }>
+            // The shared icon set's own `<svg>` frame — viewBox, `currentColor`, weight and joins
+            // exactly as every other glyph in the app is drawn, so this button's icon is the same
+            // stroke as the microphone beside it rather than a near miss of it.
+            <svg class="adi-runbar__settings-icon" viewBox="0 0 16 16" fill="none"
+                stroke="currentColor" stroke-width="1.5" stroke-linecap="round"
+                stroke-linejoin="round" aria-hidden="true"
+                inner_html=crate::icons::Icon::Sliders.path()></svg>
+            {move || {
+                let n = run_settings_count(watch);
+                (n > 0).then(|| view! {
+                    <span class="adi-runbar__settings-count">{n.to_string()}</span>
+                })
+            }}
+        </button>
+    }
+    .into_any()
+}
+
+/// The run-settings panel: where this launch starts, and which of the agent's own settings it
+/// replaces.
+///
+/// Two halves, in the order they get asked. **Run here** is the one that applies to every backend —
+/// the answer to "this agent, but against *that* target" — and a conversation keeps the directory it
+/// started in for every reply after. Under it, the settings the *chosen backend* actually takes,
+/// named and scoped by the same server-owned schema the agent editor renders, so this panel gains a
+/// dial the day a backend does and never offers one that engine has never heard of.
+///
+/// Every control starts on "as defined", and what it says there is the agent's own value: an
+/// override is only ever a deliberate departure from something you can see. Nothing here edits the
+/// agent — that is [`agent_form_path`], one link away at the foot of the panel.
+fn run_settings_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
+    if !watch.run_settings_open.get() {
+        return None;
+    }
+    let name = watch.name.get()?;
+    let agents = state.agents.get()?;
+    let def = agents.agents.iter().find(|a| a.name == name).cloned();
+    let backend = def.as_ref().map(|d| d.backend.clone()).unwrap_or_default();
+    let provider = def
+        .as_ref()
+        .and_then(|d| d.arguments.get("provider"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    let fields: Vec<_> = agents
+        .form
+        .fields
+        .iter()
+        .filter(|f| f.run_override && super::form::field_applies(f, &backend, &provider))
+        .cloned()
+        .collect();
+    let backends = agents.form.backends.clone();
+    let editor = agent_form_path(&name);
+    Some(
+        view! {
+            <section class="adi-runset island bg-panel">
+                <header class="adi-runset__head">
+                    <h3 class="adi-runset__title">"Run settings"</h3>
+                    <span class="adi-runset__for adi-mono">{name.clone()}</span>
+                    <span class="adi-spacer"></span>
+                    {move || (run_settings_count(watch) > 0).then(|| view! {
+                        <button class="adi-btn adi-btn--link" type="button"
+                            title="run this agent exactly as it is defined"
+                            on:click=move |_| {
+                                watch.run_dir.set(String::new());
+                                watch.run_overrides.set(std::collections::BTreeMap::new());
+                                save_run_settings(watch);
+                            }>"Reset"</button>
+                    })}
+                    <button class="adi-runset__close" type="button" aria-label="Close"
+                        on:click=move |_| watch.run_settings_open.set(false)>"\u{2715}"</button>
+                </header>
+
+                <div class="adi-runset__body">
+                    <div class="adi-runset__field adi-runset__field--wide">
+                        <label class="adi-runset__label" for="adi-run-dir">"Run here"</label>
+                        <input class="adi-input adi-input--wide adi-mono" id="adi-run-dir"
+                            placeholder="as defined \u{2014} /path/to/target"
+                            prop:value=move || watch.run_dir.get()
+                            on:input=move |ev| {
+                                watch.run_dir.set(event_target_value(&ev));
+                                save_run_settings(watch);
+                            }/>
+                        <p class="adi-runset__hint">
+                            "Where the run starts, instead of the agent's own directory. The \
+                             conversation keeps it for every reply."
+                        </p>
+                    </div>
+                    {fields.into_iter()
+                        .map(|f| run_override_field(watch, f, def.as_ref(), &backends, &backend))
+                        .collect::<Vec<_>>()}
+                </div>
+
+                <footer class="adi-runset__foot">
+                    <span>
+                        "Applies to runs started here, and is kept in this browser \u{2014} the \
+                         agent itself is unchanged."
+                    </span>
+                    <a class="adi-chome__side-link" href=editor
+                        title="change the agent itself, for every run and every machine">"Edit agent"</a>
+                </footer>
+            </section>
+        }
+        .into_any(),
+    )
+}
+
+/// One overridable setting, drawn from the same schema field the agent editor uses.
+///
+/// The control's "as defined" state is what the agent is currently set to, spelled out — a select
+/// leads with it, a text box shows it as its placeholder. That is the whole trick of this panel: you
+/// cannot sensibly override what you cannot see, and the alternative (a blank box beside a label)
+/// reads as though the agent has nothing set at all.
+fn run_override_field(
+    watch: AgentsWatch,
+    field: adi_webapp_api::types::AgentFormField,
+    def: Option<&AgentDto>,
+    backends: &[adi_webapp_api::types::AgentBackendOption],
+    backend: &str,
+) -> AnyView {
+    use adi_webapp_api::types::AgentFormFieldKind;
+
+    let name = field.name.clone();
+    let defined = defined_value(def, &name);
+    let id = format!("adi-run-{}", name.replace('_', "-"));
+    let wide = field.wide || matches!(field.kind, AgentFormFieldKind::Textarea);
+    // Read once per render rather than per control: the map is one signal, and every control here
+    // reads it.
+    let set = {
+        let name = name.clone();
+        move || watch.run_overrides.get().get(&name).cloned()
+    };
+    let write = {
+        let name = name.clone();
+        move |value: String| {
+            watch.run_overrides.update(|map| {
+                if value == INHERIT || value.is_empty() {
+                    map.remove(&name);
+                } else {
+                    map.insert(name.clone(), value);
+                }
+            });
+            save_run_settings(watch);
+        }
+    };
+    // A blank input is "as the agent has it" for a text box, so a *select* has to carry the
+    // difference explicitly: `INHERIT` first, then the schema's own options — whose own empty value
+    // means "unset it for this run", which is a thing only a select can say.
+    let control = match field.kind {
+        AgentFormFieldKind::Select | AgentFormFieldKind::Checkbox => {
+            let boolean = matches!(field.kind, AgentFormFieldKind::Checkbox);
+            let options = if boolean {
+                vec![
+                    adi_webapp_api::types::AgentFormOption {
+                        value: "true".into(),
+                        label: "yes".into(),
+                    },
+                    adi_webapp_api::types::AgentFormOption {
+                        value: "false".into(),
+                        label: "no".into(),
+                    },
+                ]
+            } else {
+                field.options.clone()
+            };
+            let write = write.clone();
+            let (shown, inherited) = (set.clone(), set.clone());
+            view! {
+                <select class="adi-input" id=id.clone()
+                    prop:value=move || shown().unwrap_or_else(|| INHERIT.to_string())
+                    on:change=move |ev| write(event_target_value(&ev))>
+                    <option value=INHERIT
+                        selected=move || inherited().is_none()>{as_defined(&defined)}</option>
+                    {options.into_iter().map(|o| {
+                        let value = o.value.clone();
+                        let chosen = {
+                            let set = set.clone();
+                            move || set().is_some_and(|v| v == value)
+                        };
+                        view! {
+                            <option value=o.value.clone() selected=chosen>{o.label}</option>
+                        }
+                    }).collect::<Vec<_>>()}
+                </select>
+            }
+            .into_any()
+        }
+        AgentFormFieldKind::Textarea => {
+            let write = write.clone();
+            view! {
+                <textarea class="adi-textarea" id=id.clone() rows="2"
+                    placeholder=as_defined(&defined)
+                    prop:value=move || set().unwrap_or_default()
+                    on:input=move |ev| write(event_target_value(&ev))></textarea>
+            }
+            .into_any()
+        }
+        _ => {
+            // Whatever the schema calls it, it is typed in here: the model picker's chips belong to
+            // the editor, where a model is being chosen once, rather than to a panel opened to
+            // change one thing about one run.
+            let placeholder = if defined.is_empty() {
+                super::form::field_placeholder(&field, backends, backend)
+            } else {
+                as_defined(&defined)
+            };
+            let numeric = field.numeric;
+            let write = write.clone();
+            view! {
+                <input class="adi-input adi-mono" id=id.clone()
+                    type=if numeric { "number" } else { "text" }
+                    placeholder=placeholder
+                    prop:value=move || set().unwrap_or_default()
+                    on:input=move |ev| write(event_target_value(&ev))/>
+            }
+            .into_any()
+        }
+    };
+    view! {
+        <div class="adi-runset__field" class:adi-runset__field--wide=wide>
+            <label class="adi-runset__label" for=id>{field.label.clone()}</label>
+            {control}
+            {(!field.hint.is_empty()).then(|| view! {
+                <p class="adi-runset__hint">{field.hint.clone()}</p>
+            })}
+        </div>
+    }
+    .into_any()
+}
+
+/// What the agent is currently set to for `name`, as a string — the value every control in the panel
+/// offers to leave alone. `unattended` is a field of the agent rather than an argument of its
+/// backend, and is the one name read from somewhere other than the argument map.
+fn defined_value(def: Option<&AgentDto>, name: &str) -> String {
+    let Some(def) = def else {
+        return String::new();
+    };
+    if name == "unattended" {
+        return if def.unattended { "yes" } else { "no" }.to_string();
+    }
+    match def.arguments.get(name) {
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+        None => String::new(),
+    }
+}
+
+/// The "leave it alone" label: what the agent says, or that it says nothing.
+fn as_defined(defined: &str) -> String {
+    if defined.trim().is_empty() {
+        "as defined".to_string()
+    } else {
+        format!("as defined \u{2014} {defined}")
     }
 }
 
@@ -2127,7 +2575,7 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                     title="Sessions"
                     actions=move || {
                         view! {
-                            {move || chat_starred_button(state)}
+                            {move || chat_session_filter(state)}
                             {move || chat_new_button(state, watch)}
                             <button class="adi-chome__drawer-close" type="button"
                                 aria-label="Close"
@@ -2191,6 +2639,10 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
             // open, and it is `position: fixed` at the pointer, so where it sits in the tree is
             // immaterial — outside the scrolling rail keeps it from being clipped by it.
             {move || chat_session_menu(state, watch)}
+
+            // The Sessions head's filter menu, drawn here for the same reasons: one at a time, and
+            // it must not be clipped by the rail it hangs off.
+            {move || chat_filter_menu(state)}
         </div>
     }
     .into_any()
@@ -2463,6 +2915,13 @@ fn chat_agent_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
     // The conversation's own directory, which is not always the agent's: a run can be pointed
     // somewhere else at launch, and it keeps that directory for every reply after.
     let cwd = peek.as_ref().map(|p| p.cwd.clone()).unwrap_or_default();
+    // And the rest of what it was launched as. Said here rather than left to be inferred from the
+    // settings below, which are the *agent's*: a chat started on another model would otherwise be
+    // described, in this very panel, by the model it is not running on.
+    let overrides = run
+        .as_ref()
+        .map(|r| r.overrides.clone())
+        .filter(|o| !o.is_empty());
 
     // Settings opens *this* agent's editor rather than the list — the panel is already about one
     // agent, so the list was a step the reader had to retrace. A conversation whose agent has since
@@ -2507,6 +2966,13 @@ fn chat_agent_panel(state: State, watch: AgentsWatch) -> Option<AnyView> {
                         <div class="adi-chome__about-grid">
                             {(!cwd.is_empty())
                                 .then(|| meta_row("Dir", short_path(&cwd), cwd.clone(), true))}
+                            {overrides.map(|o| meta_row(
+                                "Runs as",
+                                o.clone(),
+                                format!("this conversation was launched with {o}, over the agent's \
+                                         own settings"),
+                                false,
+                            ))}
                             // Its own island: the ages are read off the clock rather than off
                             // the data, so without the ticker "started 3m ago" would still say
                             // 3m long after it wasn't.
@@ -2554,9 +3020,13 @@ fn chat_agent_settings(d: &AgentDto) -> AnyView {
     // Two backends spell the same idea differently, and an agent carries whichever its own one
     // reads — so the row is drawn from the first that is set rather than from a single key that is
     // right for `claude-sdk` and blank for everything else.
-    let permissions = [arg("permission_mode"), arg("approval_policy"), arg("sandbox")]
-        .into_iter()
-        .find(|v| !v.is_empty());
+    let permissions = [
+        arg("permission_mode"),
+        arg("approval_policy"),
+        arg("sandbox"),
+    ]
+    .into_iter()
+    .find(|v| !v.is_empty());
     /// `1 tool`, `41 tools` — a count that reads as a phrase, since this row is a sentence of
     /// them rather than a column of numbers.
     fn many(n: usize, noun: &str) -> String {
@@ -2612,7 +3082,12 @@ fn chat_agent_settings(d: &AgentDto) -> AnyView {
 /// `hover` is the whole of a value the rail is too narrow to show. `ident` marks a value that must
 /// not wrap — a path or a run id, which is one string and reads as nonsense broken over two lines;
 /// everything else wraps rather than hiding its tail behind an ellipsis nobody thinks to hover.
-fn meta_row(key: impl Into<String>, value: String, hover: impl Into<String>, ident: bool) -> AnyView {
+fn meta_row(
+    key: impl Into<String>,
+    value: String,
+    hover: impl Into<String>,
+    ident: bool,
+) -> AnyView {
     view! {
         <span class="adi-chome__meta-key">{key.into()}</span>
         <span class="adi-chome__meta-val adi-mono" class:adi-chome__meta-val--id=ident
@@ -2640,11 +3115,7 @@ fn short_path(path: &str) -> String {
 /// The projects listing, or an empty one while it is still loading — what a name path is resolved
 /// against.
 fn projects_of(state: State) -> Vec<adi_webapp_api::types::Project> {
-    state
-        .projects
-        .get()
-        .map(|p| p.projects)
-        .unwrap_or_default()
+    state.projects.get().map(|p| p.projects).unwrap_or_default()
 }
 
 /// What the open conversation has added up to so far — how much was said, how much work the agent
@@ -2818,7 +3289,12 @@ fn text_tile(label: &'static str, value: String, sub: String) -> AnyView {
 /// A section of the rail whose rows go somewhere: the failed calls, the running ones. The count is in
 /// the heading because the rows below it are the same information spelled out, and a reader who only
 /// wants the number should not have to count.
-fn jump_list(label: &'static str, badge: &'static str, status: &'static str, steps: Vec<StepRef>) -> AnyView {
+fn jump_list(
+    label: &'static str,
+    badge: &'static str,
+    status: &'static str,
+    steps: Vec<StepRef>,
+) -> AnyView {
     let n = steps.len();
     view! {
         <div class="adi-chome__group" data-status=status>
@@ -3140,7 +3616,11 @@ fn jump_to(anchor: &str) {
 /// is the gesture a person tries first — the scrim and the ✕ are the other two.
 fn toggle_drawer(state: State, which: ChatDrawer) {
     state.chat_drawer.update(|open| {
-        *open = if *open == Some(which) { None } else { Some(which) };
+        *open = if *open == Some(which) {
+            None
+        } else {
+            Some(which)
+        };
     });
 }
 
@@ -3231,6 +3711,15 @@ fn last_touch(r: &AgentRunInfo) -> u64 {
     r.last_activity.max(r.started_at)
 }
 
+/// Whether a person asked for this run, as the server recorded at its launch.
+///
+/// The word rather than a flag, and matched exactly: everything else the field can hold —
+/// `agent:<name>`, `automation`, and the empty string every session opened before the store began
+/// writing this down carries — is *not* a person. See `adi_agents::launcher`.
+fn launched_by_human(r: &AgentRunInfo) -> bool {
+    r.launched_by == adi_webapp_api::types::LAUNCHED_BY_HUMAN
+}
+
 /// Cut the *watched* agent's own run list to the page the rail is showing, by the rule the backend
 /// pages the cross-agent index with: the newest [`State::rail_limit`], plus every session that is
 /// running, blocked on a person, or starred, whatever its age.
@@ -3259,41 +3748,118 @@ fn paged(runs: Vec<AgentRunInfo>, state: State) -> Vec<AgentRunInfo> {
         .collect()
 }
 
-/// The rail's **starred only** toggle, in the Sessions head beside "+ New".
+/// The rail's **filter box**, in the Sessions head beside "+ New".
 ///
 /// A fleet grows a long tail of one-off and machine-made agents, and their chats land in the same
-/// flat list as the handful of agents actually worked with. This narrows the rail to the agents
-/// starred on the Agents page — the same shortlist the agent picker already draws from, now
-/// answering "show me only the sessions I care about" as well as "which agent does + New start".
+/// flat list as the handful of conversations a person actually had. The box narrows the rail two
+/// ways, because they are different questions: to the agents starred on the Agents page — the same
+/// shortlist the agent picker draws from — or to the sessions a person started, as against the ones
+/// agents spawned for themselves ([`SessionFilter`]).
 ///
-/// Off by default: the rail opens on every conversation, so nothing a person had is missing until
-/// they ask for it to be. The glyph fills and takes the accent while it is on, because a list showing
-/// less than everything has to say so — and it is the only thing here that says it. Clicking it on
-/// narrows the rail for as long as the page is open; the setting is not stored, so a reload comes
-/// back to the full list.
-fn chat_starred_button(state: State) -> AnyView {
-    let on = state.starred_only.get();
-    let (glyph, hint) = if on {
-        ("\u{2605}", "showing starred agents only \u{2014} click to show every session")
-    } else {
-        ("\u{2606}", "show only sessions from starred agents")
+/// [`SessionFilter::All`] by default: the rail opens on every conversation, so nothing a person had
+/// is missing until they ask for it to be. It takes the accent while it is narrowed, because a list
+/// showing less than everything has to say so — and at this size the colour is the whole of what
+/// says it. The choice is not stored, so a reload comes back to the full list.
+///
+/// A funnel button rather than a dropdown in the head: the head already carries "+ New" and a close
+/// ✕ on a 264px rail, and a control wide enough to print "Only started by me" would take the room
+/// they need to say anything at all. What it is narrowed to is read from the menu it opens, and
+/// from the accent in the meantime.
+fn chat_session_filter(state: State) -> AnyView {
+    let current = state.session_filter.get();
+    let hint = match current {
+        SessionFilter::All => "narrow the sessions listed here",
+        SessionFilter::Starred => "showing sessions from starred agents only",
+        SessionFilter::Mine => {
+            "showing sessions a person started \u{2014} not the ones agents started for \
+             themselves. Sessions from before ADI recorded who started a run are not listed here."
+        }
     };
     view! {
-        <button class="adi-chome__starred" class:is-on=on type="button"
-            title=hint aria-label=hint aria-pressed=on.to_string()
-            on:click=move |_| state.starred_only.update(|v| *v = !*v)>{glyph}</button>
+        <button class="adi-chome__filter" class:is-on=current != SessionFilter::All type="button"
+            title=hint aria-label=hint aria-haspopup="menu"
+            aria-expanded=move || state.session_filter_menu.get().is_some().to_string()
+            on:click=move |ev: web_sys::MouseEvent| open_filter_menu(state, &ev)>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                inner_html=crate::icons::Icon::Filter.path()></svg>
+        </button>
     }
     .into_any()
 }
 
+/// Drop the filter menu from under the button that was pressed, rather than from the pointer.
+///
+/// A menu opened at the click lands in a different place each time on a control this small, and
+/// half the time over the button itself. The button's own rect is stable, so the menu is always in
+/// the same place under it — and a second press closes what the first opened.
+fn open_filter_menu(state: State, ev: &web_sys::MouseEvent) {
+    use wasm_bindgen::JsCast as _;
+
+    if state.session_filter_menu.get_untracked().is_some() {
+        state.session_filter_menu.set(None);
+        return;
+    }
+    // The rect of the button, not of whatever inside it took the click: a press on the `<svg>`
+    // reports the glyph's box, which is 5px narrower and would step the menu sideways.
+    let at = ev
+        .current_target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .map(|el: web_sys::Element| {
+            let r = el.get_bounding_client_rect();
+            (r.left() as i32, r.bottom() as i32 + 4)
+        })
+        .unwrap_or((ev.client_x(), ev.client_y()));
+    state.session_filter_menu.set(Some(at));
+}
+
+/// The filter menu itself: the three narrowings, the current one ticked.
+///
+/// The same `adi-menu` the rail's right-click menu is, for the same reason it is: a scrim behind it
+/// makes the next click anywhere a dismiss, which is the gesture a person tries first on a menu
+/// they opened by accident.
+fn chat_filter_menu(state: State) -> Option<AnyView> {
+    let (x, y) = state.session_filter_menu.get()?;
+    let current = state.session_filter.get();
+    Some(
+        view! {
+            <div class="adi-menu__scrim"
+                on:click=move |_| state.session_filter_menu.set(None)></div>
+            <div class="adi-menu" role="menu" style=format!("left:{x}px; top:{y}px")>
+                <div class="adi-menu__head">"Show"</div>
+                {SessionFilter::ALL.into_iter().map(|f| {
+                    let on = f == current;
+                    view! {
+                        <button class="adi-menu__item" class:is-on=on type="button"
+                            role="menuitemradio" aria-checked=on.to_string()
+                            on:click=move |_| {
+                                state.session_filter.set(f);
+                                state.session_filter_menu.set(None);
+                            }>
+                            // A tick in a column of its own, so the labels line up under each
+                            // other whether or not one of them is carrying it.
+                            <span class="adi-menu__tick" aria-hidden="true">
+                                {if on { "\u{2713}" } else { "" }}
+                            </span>
+                            {f.label()}
+                        </button>
+                    }
+                }).collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any(),
+    )
+}
+
 /// Which agents the rail may list, or `None` when it may list them all.
 ///
-/// `Some` only while [`State::starred_only`] is on *and* the agents list has arrived — without it
-/// there is nothing to say which agents are starred, and narrowing on an empty answer would blank
-/// the rail for a beat on every load. The watched agent is always in the set, so the filter can
-/// never hide the conversation the centre pane is showing (the rule [`chat_agent_picker`] follows).
+/// `Some` only while the filter is [`SessionFilter::Starred`] *and* the agents list has arrived —
+/// without it there is nothing to say which agents are starred, and narrowing on an empty answer
+/// would blank the rail for a beat on every load. The watched agent is always in the set, so the
+/// filter can never hide the conversation the centre pane is showing (the rule
+/// [`chat_agent_picker`] follows).
 fn starred_agents(state: State, watched: &str) -> Option<std::collections::HashSet<String>> {
-    if !state.starred_only.get() {
+    if state.session_filter.get() != SessionFilter::Starred {
         return None;
     }
     let list = state.agents.get()?;
@@ -3414,8 +3980,8 @@ fn hotkey_glyph() -> &'static str {
 
 /// Every visible session, whichever agent it belongs to, in the five bands the rail reads them in:
 /// blocked on you, then running, then awaiting a wake, then starred, then the rest — each newest
-/// activity first. The `bool` says whether the ★ *agent* filter is on, which is the difference
-/// between the rail's two emptinesses.
+/// activity first. The [`SessionFilter`] is handed back with them: which of the rail's three
+/// emptinesses an empty answer is depends on which narrowing produced it.
 ///
 /// The watched agent's conversations come from `watch.runs` when it has any — that list is updated
 /// the moment a chat is deleted or hidden, so the rail doesn't go on showing a row that has just
@@ -3427,9 +3993,13 @@ fn hotkey_glyph() -> &'static str {
 /// Split out of the view because [`install_session_hotkeys`] needs the same list, and needs it at
 /// the moment a key is struck rather than the moment the rail was last drawn. One function, so the
 /// number printed on a row and the row that number opens cannot drift apart.
-fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], bool) {
+fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], SessionFilter) {
     let all = state.all_chats.get();
+    let filter = state.session_filter.get();
     let watched = watch.name.get().unwrap_or_default();
+    // The conversation on screen, which no filter may hide — the same escape hatch the ★ gives the
+    // watched agent, narrowed to one session because "mine" is a question about sessions.
+    let open = watch.run_id.get().unwrap_or_default();
     // A pty agent's run history is empty either way; the agents list is what says it's live now.
     let live: std::collections::HashSet<String> = state
         .agents
@@ -3470,7 +4040,11 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], boo
         }
         let runs = if is_watched {
             let own = watch.runs.get();
-            if own.is_empty() { ar.runs.clone() } else { paged(own, state) }
+            if own.is_empty() {
+                ar.runs.clone()
+            } else {
+                paged(own, state)
+            }
         } else {
             ar.runs.clone()
         };
@@ -3507,6 +4081,22 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], boo
             }));
         }
     }
+    // "Started by me": applied here rather than in the two loops above, because it asks about the
+    // session rather than the agent it belongs to and so cannot skip a whole listing the way ★ does.
+    //
+    // A row with no run record is a pty agent's live terminal — nobody wrote down who opened it, and
+    // it is a thing a person opens and sits in front of, so it stays. The conversation on screen
+    // stays whoever started it. Everything else has to say `human`: an unattributed session is one
+    // nobody recorded, not one a person is owed.
+    if filter == SessionFilter::Mine {
+        rows.retain(|row| match &row.run {
+            None => true,
+            Some(r) => {
+                launched_by_human(r)
+                    || (row.agent == watched && !open.is_empty() && r.run_id == open)
+            }
+        });
+    }
     // Most recently updated first. A stable sort, so sessions that last moved at the same instant —
     // the live pty rows, all stamped "now" — keep the order the index listed them in.
     rows.sort_by(|a, b| b.when.cmp(&a.when));
@@ -3518,9 +4108,11 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], boo
     // merely in progress. This is the whole of the "needs you" inbox: the rail is already the
     // cross-agent index, and a second surface fed by a second request would only be a copy of it
     // that could disagree.
-    let (mut waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows
-        .into_iter()
-        .partition(|r| r.run.as_ref().is_some_and(|run| run.pending_question.is_some()));
+    let (mut waiting, rows): (Vec<SessionRow>, Vec<SessionRow>) = rows.into_iter().partition(|r| {
+        r.run
+            .as_ref()
+            .is_some_and(|run| run.pending_question.is_some())
+    });
     let (mut running, rows): (Vec<SessionRow>, Vec<SessionRow>) =
         rows.into_iter().partition(|r| r.running);
     // Then the ones that are coming back on their own. A conversation with a wake registered has
@@ -3556,33 +4148,35 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], boo
     {
         row.hotkey = Some(i + 1);
     }
-    (
-        [waiting, running, awaiting, starred, rest],
-        keep.is_some(),
-    )
+    ([waiting, running, awaiting, starred, rest], filter)
 }
 
 /// The rail's session list: the five bands, or the one line that says why there are none.
 fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
-    let ([waiting, running, awaiting, kept, rest], filtered) = session_bands(state, watch);
+    let ([waiting, running, awaiting, kept, rest], filter) = session_bands(state, watch);
     if waiting.is_empty()
         && running.is_empty()
         && awaiting.is_empty()
         && kept.is_empty()
         && rest.is_empty()
     {
-        // Which of the two emptinesses this is: nothing to show, or nothing left after the filter —
-        // said apart, so the ★ never reads as "you have no chats".
-        let msg = if filtered {
-            "No chats from starred agents — star one on the Agents page, or turn ★ off."
-        } else {
-            "No chats yet — press New to start one."
+        // Which emptiness this is: nothing to show, or nothing left after the filter — said apart,
+        // so a narrowed rail never reads as "you have no chats". Each says how to get back.
+        let msg = match filter {
+            SessionFilter::All => "No chats yet — press New to start one.",
+            SessionFilter::Starred => {
+                "No chats from starred agents — star one on the Agents page, or show all sessions."
+            }
+            SessionFilter::Mine => {
+                "No sessions started by you — the ones agents start for themselves are filtered \
+                 out, as are sessions from before ADI recorded who started a run."
+            }
         };
         return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();
     }
     // Keyed, and that is not tidiness: a row's click handler is bound when the row is
     // *built*, so a plain list that is rebuilt with a different shape — which is exactly what
-    // the ★ does — leaves handlers patched onto rows they no longer belong to, and a click
+    // the filter box does — leaves handlers patched onto rows they no longer belong to, and a click
     // opens the session that used to be in that slot. `For` keys by identity, so a row and
     // its handler move together or not at all.
     //
@@ -3632,7 +4226,14 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
 /// star and a delete ride the row's right edge. The first nine rows also carry the number that opens
 /// them.
 fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyView {
-    let SessionRow { agent, run, when, running, starred, hotkey } = item;
+    let SessionRow {
+        agent,
+        run,
+        when,
+        running,
+        starred,
+        hotkey,
+    } = item;
     let on_this_agent = watch.name.get().as_deref() == Some(agent.as_str());
     let waiting = run.as_ref().is_some_and(|r| r.pending_question.is_some());
     // What it is waiting on the world for. The row says it with the dot and the band it is under,
@@ -3651,11 +4252,20 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
     let (title, sub, run_id) = match run {
         Some(r) => {
             let t = truncate_task(&r.message);
-            let t = if t.trim().is_empty() { "New chat".to_string() } else { t };
+            let t = if t.trim().is_empty() {
+                "New chat".to_string()
+            } else {
+                t
+            };
             (t, format!("{agent} \u{00b7} {}", run_age(when)), r.run_id)
         }
         None => (
-            if running { "Live session" } else { "No live session" }.to_string(),
+            if running {
+                "Live session"
+            } else {
+                "No live session"
+            }
+            .to_string(),
             format!("{agent} \u{00b7} interactive terminal"),
             String::new(),
         ),
@@ -3695,7 +4305,10 @@ fn chat_session_row(state: State, watch: AgentsWatch, item: SessionRow) -> AnyVi
         let (glyph, hint) = if starred {
             ("\u{2605}", "unstar this chat")
         } else {
-            ("\u{2606}", "star this chat \u{2014} it stays in the rail and outlives the session cap")
+            (
+                "\u{2606}",
+                "star this chat \u{2014} it stays in the rail and outlives the session cap",
+            )
         };
         view! {
             <button class="adi-chome__session-star" class:is-on=starred type="button"
@@ -3845,7 +4458,15 @@ impl SessionRef {
 /// and this menu is the whole of their way to one.
 fn chat_session_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
     let menu = state.session_menu.get()?;
-    let SessionMenu { agent, run_id, title, hidden, starred, x, y } = menu;
+    let SessionMenu {
+        agent,
+        run_id,
+        title,
+        hidden,
+        starred,
+        x,
+        y,
+    } = menu;
     let hide_label = if hidden { "Unhide" } else { "Hide" };
     let star_label = if starred { "Unstar" } else { "Star" };
     let head = format!("{title} \u{00b7} {agent}");
@@ -3982,7 +4603,12 @@ fn install_session_hotkeys(state: State, watch: AgentsWatch) {
         };
         // Nothing is claimed unless there really is a row there, so ⌘4 on a three-chat rail stays
         // the browser's to handle rather than being swallowed into a no-op.
-        let Some(row) = session_bands(state, watch).0.into_iter().flatten().nth(n - 1) else {
+        let Some(row) = session_bands(state, watch)
+            .0
+            .into_iter()
+            .flatten()
+            .nth(n - 1)
+        else {
             return;
         };
         ev.prevent_default();
@@ -4064,9 +4690,17 @@ fn chat_hidden_sessions(state: State, watch: AgentsWatch) -> Option<AnyView> {
 /// band is for, so it doesn't hide behind the right-click menu.
 fn chat_hidden_row(state: State, watch: AgentsWatch, agent: &str, r: &AgentRunInfo) -> AnyView {
     let title = truncate_task(&r.message);
-    let title = if title.trim().is_empty() { "New chat".to_string() } else { title };
+    let title = if title.trim().is_empty() {
+        "New chat".to_string()
+    } else {
+        title
+    };
     let sub = format!("{agent} \u{00b7} {}", run_age(last_touch(r)));
-    let dot = if r.running { "adi-chome__dot adi-chome__dot--on" } else { "adi-chome__dot" };
+    let dot = if r.running {
+        "adi-chome__dot adi-chome__dot--on"
+    } else {
+        "adi-chome__dot"
+    };
     let hint = format!("open this hidden chat with {agent}");
     let menu = SessionRef::of(agent, &r.run_id, &title, true, r.starred);
     let (open_name, open_id) = (agent.to_string(), r.run_id.clone());
@@ -4103,8 +4737,9 @@ fn chat_new_button(state: State, watch: AgentsWatch) -> AnyView {
         view! {
             <button class="adi-btn adi-btn--ghost adi-chome__new" type="button"
                 title="start a fresh session"
-                on:click=move |_| run_now(state, name.clone(),
-                    at_run_limit(state.agents.get_untracked().as_ref(), &name))>"+ New"</button>
+                on:click=move |_| run_now_with(state, name.clone(),
+                    at_run_limit(state.agents.get_untracked().as_ref(), &name),
+                    run_dir_of(watch), run_overrides_of(state, watch))>"+ New"</button>
         }
         .into_any()
     } else {
@@ -4157,9 +4792,17 @@ fn chat_center_pty(state: State, watch: AgentsWatch, name: String) -> AnyView {
                                     "Session with "
                                     {move || chat_agent_picker(state, watch)}
                                 </p>
+                                // A terminal agent has no composer, so its run settings hang here —
+                                // beside the one control that starts it, which is the only moment
+                                // "where, and as what" can still be answered.
+                                <p class="adi-chome__pickline">
+                                    {move || run_settings_button(watch)}
+                                </p>
+                                {move || run_settings_panel(state, watch)}
                                 <button class="adi-btn adi-btn--primary" type="button"
-                                    on:click=move |_| run_now(state, name.clone(),
-                                        at_run_limit(state.agents.get_untracked().as_ref(), &name))>
+                                    on:click=move |_| run_now_with(state, name.clone(),
+                                        at_run_limit(state.agents.get_untracked().as_ref(), &name),
+                                        run_dir_of(watch), run_overrides_of(state, watch))>
                                     "\u{25B6} Start session"
                                 </button>
                             </div>
@@ -4313,7 +4956,11 @@ fn chat_local_groups(state: State) -> Vec<AnyView> {
     let Some(ds) = state.dashboards.get() else {
         return Vec::new();
     };
-    let live: Vec<Dashboard> = ds.dashboards.into_iter().filter(|d| !d.is_archived()).collect();
+    let live: Vec<Dashboard> = ds
+        .dashboards
+        .into_iter()
+        .filter(|d| !d.is_archived())
+        .collect();
     if live.is_empty() {
         return Vec::new();
     }
@@ -4407,9 +5054,7 @@ fn chat_fleet_groups(state: State) -> Vec<AnyView> {
     if fleet.nodes.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![
-        view! { <div class="mt-4 border-t border-divider pt-1"></div> }.into_any(),
-    ];
+    let mut out = vec![view! { <div class="mt-4 border-t border-divider pt-1"></div> }.into_any()];
     out.extend(fleet.nodes.iter().map(|n| chat_node_group(state, n)));
     out
 }

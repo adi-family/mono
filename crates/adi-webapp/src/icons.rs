@@ -48,6 +48,17 @@ pub(crate) enum Icon {
     /// A disc filled on one side — the theme toggle. It says "two of these" without
     /// naming either, which is what a toggle between light and dark is.
     Contrast,
+    /// A funnel — a list narrowed to part of itself. The one glyph a person reads as
+    /// "filter" without a label beside it, which is what a 24px control in a rail head has
+    /// room for.
+    Filter,
+    /// Two rails with a knob each, at different positions — dials somebody has set.
+    ///
+    /// Deliberately *not* [`Icon::Gear`], which this app already spends on the Settings scope
+    /// in the rail: a gear says "how this program is configured", and the control this marks
+    /// changes how one run behaves and nothing else. The knobs sitting off-centre are the
+    /// glyph's whole argument — it reads as adjustment rather than administration.
+    Sliders,
 }
 
 impl Icon {
@@ -157,6 +168,16 @@ impl Icon {
             Icon::Contrast => {
                 r#"<circle cx="8" cy="8" r="6.25"/>
                    <path d="M8 1.75a6.25 6.25 0 0 0 0 12.5z" fill="currentColor" stroke="none"/>"#
+            }
+            // Wide mouth, short stem, and the stem's foot cut on the slant a funnel's spout has —
+            // at 14px a symmetrical stem reads as an hourglass instead.
+            Icon::Filter => r#"<path d="M2.25 3.25h11.5l-4.4 5.15v4.1l-2.7 1.5V8.4z"/>"#,
+            // Each rail is drawn as two segments that stop at its knob rather than as one line
+            // behind it: at 16px a stroke crossing the circle fills it in, and two filled discs
+            // on a pair of lines read as a bolt or a hinge, not as a control you can move.
+            Icon::Sliders => {
+                r#"<path d="M2.25 4.75h6M11.75 4.75h2M2.25 11.25h2M7.75 11.25h6"/>
+                   <circle cx="10" cy="4.75" r="1.75"/><circle cx="6" cy="11.25" r="1.75"/>"#
             }
             Icon::Database => {
                 r#"<ellipse cx="8" cy="3.75" rx="5.25" ry="2"/>
