@@ -59,6 +59,8 @@ impl<T: DeserializeOwned> ConfigFile<T> {
     /// [`Error::Io`] if the file cannot be read; [`Error::Parse`] on invalid TOML.
     pub fn load(&self) -> Result<T> {
         let raw = std::fs::read_to_string(&self.path)?;
+        // The repair path for a file written before this store set modes — see [`crate::fsutil`].
+        crate::fsutil::harden_existing(&self.path);
         self.parse(&raw)
     }
 }
@@ -94,7 +96,10 @@ impl<T: DeserializeOwned + Default> ConfigFile<T> {
     /// [`Error::Io`] on a read failure other than not-found; [`Error::Parse`] on invalid TOML.
     pub fn load_or_default(&self) -> Result<T> {
         match std::fs::read_to_string(&self.path) {
-            Ok(raw) => self.parse(&raw),
+            Ok(raw) => {
+                crate::fsutil::harden_existing(&self.path);
+                self.parse(&raw)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(T::default()),
             Err(e) => Err(e.into()),
         }

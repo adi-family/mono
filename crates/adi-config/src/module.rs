@@ -26,7 +26,7 @@ impl Module {
         &self.dir
     }
 
-    /// Create the module directory (and any missing parents), returning it.
+    /// Create the module directory (and any missing parents), returning it — owner-only.
     ///
     /// # Errors
     /// [`Error::Io`](crate::Error::Io) if the directory cannot be created.
@@ -36,6 +36,9 @@ impl Module {
         // the marker, and one an `ADI_DIR` override put somewhere new.
         crate::layout::ensure_root_not_indexed();
         std::fs::create_dir_all(&self.dir)?;
+        // Existing directories too, not only the one this call created: every store already on
+        // disk has its module dirs at the umask default (see [`crate::fsutil`]).
+        crate::fsutil::harden_dir(&self.dir);
         Ok(&self.dir)
     }
 
@@ -78,8 +81,15 @@ impl Module {
     /// # Errors
     /// [`Error::Io`](crate::Error::Io) on any read failure other than not-found.
     pub fn read_raw(&self, name: &str) -> Result<Option<Vec<u8>>> {
-        match std::fs::read(self.raw_path(name)) {
-            Ok(bytes) => Ok(Some(bytes)),
+        let path = self.raw_path(name);
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                // The repair path: a file this store wrote before it set modes is fixed the first
+                // time anything opens it, rather than by a sweep of a tree that is mostly not ours
+                // to sweep. See [`crate::fsutil`].
+                crate::fsutil::harden_existing(&path);
+                Ok(Some(bytes))
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e.into()),
         }
