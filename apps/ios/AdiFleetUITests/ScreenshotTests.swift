@@ -93,13 +93,13 @@ final class ScreenshotTests: XCTestCase {
         // screenshot should show. So: pull to refresh until the dashboard is really there.
         // The first listing does not retry on a timer — it is re-driven by `.refreshable` — so this
         // pulls to refresh rather than waiting harder.
-        let dashboard = app.staticTexts["Hello Reviewer"]
+        let dashboard = app.staticTexts["Demo Shop"]
         for _ in 0..<10 where !dashboard.exists {
             if dashboard.waitForExistence(timeout: 20) { break }
             pullToRefresh(app)
         }
         XCTAssertTrue(dashboard.waitForExistence(timeout: 90),
-                      "the node paired but never listed its dashboards")
+                      "the node paired but never listed Demo Shop")
         // One more beat so the transient error under the row has cleared from the view.
         Thread.sleep(forTimeInterval: 2)
         capture(app, "04-fleet")
@@ -117,7 +117,7 @@ final class ScreenshotTests: XCTestCase {
 
             // The page is a WKWebView; its text is what proves the remote machine answered.
             let greeting = app.webViews.staticTexts.containing(
-                NSPredicate(format: "label CONTAINS[c] 'Hello reviewer'")).firstMatch
+                NSPredicate(format: "label CONTAINS[c] 'Orders today'")).firstMatch
             let rendered = greeting.waitForExistence(timeout: 150)
             // Let the clock tick once so the shot cannot catch the placeholder.
             Thread.sleep(forTimeInterval: 2)

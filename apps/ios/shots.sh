@@ -223,7 +223,20 @@ done
 if [[ ${#missing[@]} -gt 0 ]]; then
   die "missing captures: ${missing[*]} (see $here/.build/shots-$DEVICE.log)"
 fi
-[[ $status -eq 0 ]] || log "the harness reported a failure but every capture is present — see the log"
+# A failed run's captures are SUSPECT, and saying "every file is present" is not the same as
+# saying every file shows what it should. This is not hypothetical: a run that failed on the
+# dashboard step still wrote 05-dashboard.png, and what it held was the node's "refused this
+# service" error — which then went through composition, passed every measurement (they check the
+# field and the type, not what the screenshot depicts) and shipped as a store panel captioned
+# "Open its dashboards". The marker is what stops that happening again; `frames.sh` refuses to
+# compose a marked directory.
+if [[ $status -eq 0 ]]; then
+  rm -f "$out/.harness-failed"
+else
+  date > "$out/.harness-failed"
+  log "the captures are present but the harness FAILED — they are marked suspect."
+  log "look at them, then either re-run or pass --force to frames.sh."
+fi
 
 log "raw captures in $out"
 for f in "$out"/*.png; do

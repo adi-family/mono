@@ -71,11 +71,27 @@ struct ServiceView: View {
             if share {
                 asking = true
                 let refusal = await model.share(service, on: node)
-                asking = false
                 if let refusal {
+                    asking = false
                     failure = refusal
                     return
                 }
+                // The grant is written, and the node still refuses for a moment.
+                //
+                // Its gateway serves from an in-memory snapshot of the registry and re-reads it
+                // every five seconds (`adi-mesh/src/gateway.rs`, `RELOAD_INTERVAL`), so a request
+                // sent the instant the grant lands is judged against a registry that has never
+                // heard of it. `docs/fleet.md` §8 says this in as many words: *a client must wait
+                // out that window before it reports a pairing as done, or the operator pairs
+                // successfully and is then told they are not authorized.*
+                //
+                // Without this wait the page loads, the node answers "this machine holds no grant
+                // for that service", and that error is what stays on screen — the web view has no
+                // reason to retry and the app cannot see the refusal, because it happens inside
+                // the tunnel after `open` has already succeeded. It was a race the phone usually
+                // won and the iPad usually lost, which is the worst kind: it looks like a flake.
+                try? await Task.sleep(for: .seconds(6))
+                asking = false
             }
             do {
                 port = try await Mesh.shared.open(node: node.petname, service: service)

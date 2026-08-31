@@ -32,10 +32,12 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHROME="${CHROME:-/Applications/Google Chrome.app/Contents/MacOS/Google Chrome}"
 DEVICE=both
+FORCE=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --device) DEVICE="$2"; shift 2 ;;
+    --force) FORCE=1; shift ;;
     -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit 0 ;;
     *) echo "error: unknown argument: $1" >&2; exit 2 ;;
   esac
@@ -56,7 +58,7 @@ PANELS=(
   "04-fleet|Every machine you run,
 in your pocket|Pair once, and they are all just there."
   "05-dashboard|Open its dashboards.
-Live, from anywhere.|That clock is the server's, not the phone's."
+Live, from anywhere.|Those are the machine's numbers, moving as it serves them."
   "02-invite|A code pairs it.
 Nothing else.|No sign-up, no cloud, nothing to forget."
   "01-empty|No account.
@@ -94,6 +96,13 @@ for dev in iphone ipad; do
   out="$src/store"
   plates="$out/_plate"
   [ -d "$src" ] || { echo "skip $dev: no raw captures — run shots.sh --device $dev" >&2; continue; }
+  # The captures came from a run that failed, so at least one of them is a picture of the failure.
+  # Composing them produces a store panel of an error message that every later check will pass.
+  if [ -f "$src/.harness-failed" ] && [ "$FORCE" -eq 0 ]; then
+    echo "error: $dev's captures are from a FAILED harness run ($(cat "$src/.harness-failed"))." >&2
+    echo "       Look at $src/*.png first. Re-run shots.sh, or pass --force if they are fine." >&2
+    exit 1
+  fi
   mkdir -p "$out" "$plates"
 
   # The panel is the size of the capture, because those are already the sizes App Store Connect
