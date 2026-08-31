@@ -35,7 +35,11 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: family.adi.fleet
         PRODUCT_NAME: AdiFleet
         INFOPLIST_FILE: AdiFleet/Info.plist
-        CURRENT_PROJECT_VERSION: 1
+        # The build number App Store Connect sees. It must strictly increase across uploads and a
+        # number is never reusable, so this is bumped per upload, not per release. Build 1 was
+        # accepted on 2026-08-05; 2 is the first upload after it. `Info.plist` reads both of these
+        # through $(...) rather than repeating them.
+        CURRENT_PROJECT_VERSION: 2
         MARKETING_VERSION: 0.1.0
         TARGETED_DEVICE_FAMILY: "1,2"
 
@@ -89,6 +93,38 @@ targets:
       - sdk: Security.framework
       - sdk: SystemConfiguration.framework
 
+  # The screenshot harness. It exists because `simctl` can boot, install and screenshot but cannot
+  # **tap** — so without a UI test nothing can navigate to the screen being photographed, and the
+  # only shot obtainable is the launch screen. (The other way round is granting osascript
+  # accessibility and driving Simulator with clicks, which is a manual ritual repeated on every
+  # redesign and cannot be handed to a second language.)
+  #
+  # It is a screenshot harness first and a test second: it asserts only enough to make sure a
+  # green run cannot have photographed an empty or wrong screen.
+  AdiFleetUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: AdiFleetUITests
+    dependencies:
+      - target: AdiFleet
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: family.adi.fleet.uitests
+        # The app target points INFOPLIST_FILE at its own hand-written plist; this one has no plist
+        # and needs none of what is in the app's, so it takes the generated one. Without this the
+        # build fails at signing with "the target does not have an Info.plist file", which reads
+        # like a signing problem and is not one.
+        GENERATE_INFOPLIST_FILE: "YES"
+        # Simulator-only, ad-hoc signed. Nothing here is ever archived or uploaded, so it needs no
+        # profile and deliberately does not carry the app's.
+        CODE_SIGN_STYLE: Automatic
+        DEVELOPMENT_TEAM: 752556J5V6
+        SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
+        EXCLUDED_ARCHS[sdk=iphonesimulator*]: x86_64
+        TEST_TARGET_NAME: AdiFleet
+
 # Declared rather than left to Xcode's autocreation. An autocreated scheme is not written to disk,
 # so `xcodebuild -scheme AdiFleet` gets one with no buildables — which it reports as "Supported
 # platforms … is empty" and then as having no eligible destination at all, naming the SDK as the
@@ -105,3 +141,16 @@ schemes:
     # what makes the mistake survive review.
     archive:
       config: Release
+
+  # A separate scheme, so the release path above is untouched by anything the screenshot harness
+  # needs. `AdiFleet` still builds and archives exactly one target; adding the test target to it
+  # would put a test bundle in the dependency graph of the thing that gets uploaded.
+  AdiFleetShots:
+    build:
+      targets:
+        AdiFleet: all
+        AdiFleetUITests: [test]
+    test:
+      config: Debug
+      targets:
+        - AdiFleetUITests

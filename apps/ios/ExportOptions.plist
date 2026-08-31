@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  How `xcodebuild -exportArchive` turns AdiFleet.xcarchive into the .ipa that goes to App Store
+  Connect. Committed rather than passed as flags, because the export method is part of what a
+  release IS: `app-store-connect` is the only method whose product TestFlight will accept, and a
+  build exported any other way installs and runs locally, which is exactly what makes the mistake
+  survive until an upload rejects it.
+
+  Signing is automatic against the team below, which resolves to the "iOS Team Store Provisioning
+  Profile: family.adi.fleet" already in ~/Library/Developer/Xcode/UserData/Provisioning Profiles.
+-->
+<plist version="1.0">
+<dict>
+    <key>method</key>
+    <string>app-store-connect</string>
+
+    <key>teamID</key>
+    <string>752556J5V6</string>
+
+    <key>signingStyle</key>
+    <string>automatic</string>
+
+    <!-- The app carries no bitcode and Apple stopped accepting it; leaving this true makes the
+         upload slower and the archive larger for something that is discarded. -->
+    <key>uploadBitcode</key>
+    <false/>
+
+    <!-- Symbols are what turns a TestFlight crash into a stack trace with our own function names
+         in it. The Rust staticlib is the half that most needs them. -->
+    <key>uploadSymbols</key>
+    <true/>
+
+    <!-- Answered once in Info.plist (ITSAppUsesNonExemptEncryption), so no upload asks again. -->
+    <key>manageAppVersionAndBuildNumber</key>
+    <false/>
+</dict>
+</plist>

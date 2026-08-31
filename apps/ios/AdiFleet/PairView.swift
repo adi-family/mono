@@ -2,28 +2,69 @@ import CoreImage.CIFilterBuiltins
 import SwiftUI
 import UIKit
 
-/// Pairing, from the viewer's side.
+/// Pairing, from the viewer's side — in both directions.
 ///
-/// Pairing is pull-only (`docs/fleet.md` §8): this device mints an invite, and the *node* dials
-/// back to spend it. So the whole screen is one job — get this token onto the node — and the token
-/// travels by whatever means the person already has open, which is why Copy and Share matter more
-/// than the QR does. Nothing here opens a port, on either side.
+/// The handshake is symmetric and which side dials is a deployment choice (`docs/fleet.md` §8), so
+/// this screen offers both:
+///
+/// - **Invite a machine** — this device mints a token and the machine spends it by running
+///   `adi-mono mesh join`. The whole job is getting the token onto the machine, which is why Copy
+///   and Share matter more than the QR does.
+/// - **Enter an invite** — the machine minted (`adi-mono mesh invite`) and this device dials it.
+///   The direction that works when whoever holds the phone is not sitting at the machine, and the
+///   only one that works when they have no terminal at all.
+///
+/// Nothing here opens a port, in either direction.
 struct PairView: View {
     let model: FleetModel
     @Environment(\.dismiss) private var dismiss
 
+    /// Which way round this pairing is going.
+    ///
+    /// `spend` is first and is the default, because it is the one almost everybody uses: the
+    /// machine draws a code and the phone reads it. `mint` is the other direction — this device
+    /// makes the invite and the machine spends it from a terminal — which is the right way round
+    /// for enrolling a headless box and the wrong way round for a person holding a phone.
+    private enum Direction: String, CaseIterable {
+        case spend = "Scan a code"
+        case mint = "Invite a machine"
+    }
+
+    @State private var direction: Direction = .spend
     @State private var token: String?
     @State private var copied = false
+    /// What has been pasted into the spend field.
+    @State private var typed = ""
+    /// True while the dial is in flight, so the button cannot be pressed twice.
+    @State private var joining = false
+    /// Whether the camera can be used — three states, because "refused" and "there isn't one" read
+    /// identically to the code and completely differently to the person holding the phone.
+    @State private var camera: CameraAccess = .ready
+    /// The paste fallback. Opens itself when there is no camera to scan with.
+    @State private var pasteOpen = false
 
     var body: some View {
         NavigationStack {
-            Group {
-                if let token {
-                    invite(token)
-                } else if model.ready {
-                    ProgressView("Minting an invite…")
-                } else {
-                    waiting
+            VStack(spacing: 0) {
+                Picker("Direction", selection: $direction) {
+                    ForEach(Direction.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
+                switch direction {
+                case .mint:
+                    if let token {
+                        invite(token)
+                    } else if model.ready {
+                        ProgressView("Minting an invite…")
+                            .frame(maxHeight: .infinity)
+                    } else {
+                        waiting
+                    }
+                case .spend:
+                    spend
                 }
             }
             .navigationTitle("Pair a node")
@@ -38,8 +79,9 @@ struct PairView: View {
             guard model.ready else { return }
             token = await model.invite()
         }
-        // The node dials back, so pairing finishes without anything happening on this screen.
-        // Polling is how the sheet notices — a second is well inside "it just worked".
+        // Only the minting direction finishes without anything happening on this screen — the node
+        // dials back whenever it gets round to it. Polling is how the sheet notices; a second is
+        // well inside "it just worked". The spending direction dismisses itself, below.
         .task {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(1))
@@ -51,6 +93,159 @@ struct PairView: View {
                 }
             }
         }
+    }
+
+    /// Spend a token the machine minted — by scanning the code it draws.
+    ///
+    /// **Scanning is the primary action and pasting is behind a disclosure.** That is not a fresh
+    /// call; it is the one the web client already made and wrote down (`adi-mesh-client/src/ui.rs`),
+    /// and the reason is arithmetic: a token is over nine hundred characters, the QR is how it gets
+    /// onto a phone, and a text field is what you fall back to when the camera is refused, absent,
+    /// or pointed at nothing.
+    ///
+    /// An earlier version of this screen was paste-only, and argued in a comment that a camera
+    /// permission would be "bought for nothing". That had it exactly backwards — the phone is the
+    /// device with the camera, and reading the code off the machine's screen is the whole flow.
+    ///
+    /// The disclosure opens itself where there is no camera to call, so the fallback is never
+    /// hidden — only quiet.
+    private var spend: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Run `adi-mono mesh invite` on the machine — or open its Fleet page — then point this phone at the code it draws.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                scanner
+
+                DisclosureGroup("Paste the token instead", isExpanded: $pasteOpen) {
+                    pasteField
+                }
+                .font(.subheadline)
+                .tint(.secondary)
+            }
+            .padding()
+        }
+        .task {
+            camera = await CameraAccess.request()
+            // Where there is no camera, the fallback is the only way through, so it is already open.
+            if camera != .ready { pasteOpen = true }
+        }
+    }
+
+    /// The camera, or the sentence saying why there isn't one.
+    @ViewBuilder private var scanner: some View {
+        switch camera {
+        case .ready:
+            ZStack {
+                ScanView { token in
+                    guard !joining else { return }
+                    Task {
+                        joining = true
+                        defer { joining = false }
+                        if await model.spend(invite: Self.tokenIn(token)) != nil { dismiss() }
+                    }
+                }
+                .frame(height: 300)
+                .clipShape(RoundedRectangle(cornerRadius: 16))
+                // A reticle, so it is obvious what to point at what.
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(.white.opacity(0.9), lineWidth: 3)
+                    .frame(width: 200, height: 200)
+                if joining {
+                    ProgressView().controlSize(.large).tint(.white)
+                }
+            }
+        case .denied:
+            fallbackNote("Camera access is off for adi Fleet, so the code cannot be scanned. Turn it on in Settings, or paste the token below.")
+        case .unavailable:
+            fallbackNote("This device has no camera, so paste the token the machine printed.")
+        }
+    }
+
+    private func fallbackNote(_ text: String) -> some View {
+        Text(text)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+
+    private var pasteField: some View {
+        VStack(alignment: .leading, spacing: 16) {
+                TextEditor(text: $typed)
+                    .font(.system(.caption2, design: .monospaced))
+                    .frame(height: 140)
+                    .padding(6)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .overlay(alignment: .topLeading) {
+                        if typed.isEmpty {
+                            Text("adi-invite:…")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.tertiary)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 14)
+                                .allowsHitTesting(false)
+                        }
+                    }
+
+                HStack(spacing: 12) {
+                    // `PasteButton`, not a plain button reading `UIPasteboard.general.string`.
+                    // Reading the pasteboard in code makes iOS put up "adi Fleet would like to
+                    // paste from …", a modal the person has to agree to before anything happens —
+                    // and this is the screen App Review is walked through, so that alert lands in
+                    // the middle of the one flow that has to go smoothly. A `PasteButton` is
+                    // system-drawn and system-attested: the tap *is* the consent, so there is no
+                    // prompt and the app still never sees the pasteboard it was not given.
+                    //
+                    // The whole `adi-mono mesh join <token>` command is what people copy, so what
+                    // arrives is trimmed to the token by `tokenIn` rather than refused.
+                    PasteButton(payloadType: String.self) { items in
+                        guard let pasted = items.first else { return }
+                        typed = pasted
+                    }
+                    .labelStyle(.titleAndIcon)
+                    .buttonBorderShape(.capsule)
+
+                    Button {
+                        Task {
+                            joining = true
+                            defer { joining = false }
+                            if await model.spend(invite: Self.tokenIn(typed)) != nil { dismiss() }
+                        }
+                    } label: {
+                        Group {
+                            if joining {
+                                ProgressView()
+                            } else {
+                                Label("Pair", systemImage: "link")
+                            }
+                        }
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(joining || Self.tokenIn(typed).isEmpty)
+                }
+        }
+        .padding(.top, 8)
+    }
+
+    /// The `adi-invite:…` token inside whatever was pasted.
+    ///
+    /// `mesh invite` prints a whole command and the QR path yields the bare token, so both shapes
+    /// arrive here. Splitting on whitespace and taking the part that looks like a token accepts
+    /// each of them, and a token with a stray newline around it — which is what a copy off a
+    /// terminal usually is.
+    private static func tokenIn(_ text: String) -> String {
+        text.split(whereSeparator: \.isWhitespace)
+            .first { $0.hasPrefix("adi-invite:") }
+            .map(String.init)
+            ?? text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Shown until the relay session is up. Minting before then would produce a token that only

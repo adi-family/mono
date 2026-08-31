@@ -151,6 +151,32 @@ final class FleetModel {
         }
     }
 
+    /// Spend an invite a machine minted, pairing with it from this side.
+    ///
+    /// The other half of `invite()`. Everything a completed pairing means happens here too, in the
+    /// same order `collectPairings` does it — password to the Keychain first, then the list — so a
+    /// node paired this way is indistinguishable from one that dialled us.
+    ///
+    /// Returns the petname on success so the sheet can dismiss, `nil` when it failed and `failure`
+    /// is carrying the reason.
+    @discardableResult
+    func spend(invite token: String) async -> String? {
+        do {
+            let paired = try await Mesh.shared.join(token: token)
+            Keychain.save(
+                .init(username: paired.username, password: paired.password),
+                for: paired.petname
+            )
+            justPaired = paired.petname
+            await reloadNodes()
+            await listEverything()
+            return paired.petname
+        } catch {
+            failure = error.localizedDescription
+            return nil
+        }
+    }
+
     /// Unpair a node and forget its password.
     func forget(_ node: Node) async {
         do {

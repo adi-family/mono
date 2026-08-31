@@ -335,9 +335,9 @@ impl InviteBook {
     /// Is `nonce` still claimable at `now`? A read-only peek, for status output.
     #[must_use]
     pub fn is_open(&self, nonce: &str, now: u64) -> bool {
-        self.invites
-            .iter()
-            .any(|invite| invite.nonce == nonce && invite.spent_at.is_none() && now < invite.expires)
+        self.invites.iter().any(|invite| {
+            invite.nonce == nonce && invite.spent_at.is_none() && now < invite.expires
+        })
     }
 
     /// Drop entries whose expiry passed more than [`INVITE_KEEP`] ago. Safe against replay by
@@ -379,6 +379,19 @@ pub struct Accepted {
     pub password: String,
     /// What the viewer may reach on this node.
     pub grants: Vec<Grant>,
+    /// What the **minting** side calls itself — the mirror of the dialler's `nickname` in the
+    /// request, and presentation only in exactly the same way (§2 rule 5: a petname is local).
+    ///
+    /// It exists because the dialler otherwise has no name for the machine it just paired with and
+    /// has to invent one from the key — `viewer-25f6795fa6`. That was invisible while only headless
+    /// nodes dialled, and became the first thing a person reads the moment a *phone* started
+    /// spending invites: pairing with `adi-demo` filed it under a hex string, on the screen the
+    /// whole app is.
+    ///
+    /// `Option`, and defaulted, so this is a compatible addition: a minter built before this field
+    /// existed simply omits it and the dialler falls back to the key-derived name as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
 }
 
 /// Redacted by hand rather than derived, because the only copy of the password in the system
@@ -512,6 +525,7 @@ pub fn decide(
         username: PAIR_USER.to_string(),
         password: password.to_string(),
         grants,
+        nickname: Some(node::nickname()),
     })
 }
 
@@ -553,7 +567,16 @@ pub fn record_viewer(
     key: &EndpointId,
     accepted: &Accepted,
 ) -> anyhow::Result<String> {
-    let petname = pair_or_suggest(registry, key, &viewer_nickname(key))?;
+    // The name the far side gave for itself, when it gave one; otherwise the key-derived fallback.
+    // `pair_or_suggest` still resolves a clash, so a second machine calling itself `adi-demo` gets
+    // a suggestion rather than colliding — §2 rule 3.
+    let offered = accepted
+        .nickname
+        .as_deref()
+        .map(crate::fleet::sanitize_name)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| viewer_nickname(key));
+    let petname = pair_or_suggest(registry, key, &offered)?;
     let record = registry
         .get_mut(&petname)
         .with_context(|| format!("the record for {petname:?} vanished mid-pairing"))?;
@@ -752,22 +775,46 @@ fn decide_and_persist(key: &EndpointId, request: &JoinRequest) -> anyhow::Result
 /// If the token is malformed or expired, the identity or registry cannot be read, the viewer
 /// cannot be reached within [`HANDSHAKE_TIMEOUT`], or the viewer refuses.
 pub async fn join(token: &str) -> anyhow::Result<Joined> {
-    let invite = decode_invite(token, adi_config::now_unix())?;
-    let addr = ticket::parse_target(&invite.endpoint)
-        .context("the invite does not name a reachable endpoint")?;
-    let nickname = node::nickname();
     let secret = identity::load_or_create()?;
     let endpoint = Endpoint::builder(presets::N0)
         .secret_key(secret)
         .bind()
         .await?;
 
+    let joined = join_on(&endpoint, token).await;
+    endpoint.close().await;
+    joined
+}
+
+/// [`join`] over an endpoint the caller already has bound.
+///
+/// The seam exists for a viewer that is **already running one** — the iOS app, whose whole process
+/// holds a single live endpoint on this identity. Letting it call [`join`] would bind a *second*
+/// endpoint on the same secret key while the first is still up, and two endpoints sharing a key
+/// race each other for the same relay session: whichever registers last wins, and the loser's
+/// peers quietly stop being able to reach it. On a node that never happens, because `adi-mono mesh
+/// join` is a short-lived process run beside a daemon that is usually not up yet; in an app it
+/// would happen every time.
+///
+/// Nothing else differs. The dialling side is the dialling side whichever machine it is, which is
+/// the point `docs/fleet.md` §8 makes about the protocol being symmetric: the phone spending an
+/// invite a node minted is the same handshake as a node spending one a phone minted, with the
+/// roles the other way round.
+///
+/// # Errors
+/// As [`join`], minus the bind: a malformed or expired token, an unreadable identity or registry,
+/// a viewer that does not answer within [`HANDSHAKE_TIMEOUT`], or a refusal.
+pub async fn join_on(endpoint: &Endpoint, token: &str) -> anyhow::Result<Joined> {
+    let invite = decode_invite(token, adi_config::now_unix())?;
+    let addr = ticket::parse_target(&invite.endpoint)
+        .context("the invite does not name a reachable endpoint")?;
+    let nickname = node::nickname();
+
     let asked = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
-        ask_to_join(&endpoint, addr, &invite.nonce, &nickname),
+        ask_to_join(endpoint, addr, &invite.nonce, &nickname),
     )
     .await;
-    endpoint.close().await;
     let (viewer_key, accepted) = match asked {
         Ok(result) => result?,
         Err(_) => bail!(
@@ -893,7 +940,8 @@ mod tests {
     }
 
     fn sample_ticket() -> String {
-        let addr = iroh::EndpointAddr::new(some_key()).with_ip_addr("127.0.0.1:45080".parse().unwrap());
+        let addr =
+            iroh::EndpointAddr::new(some_key()).with_ip_addr("127.0.0.1:45080".parse().unwrap());
         ticket::encode(&addr).expect("encode a ticket")
     }
 
@@ -969,15 +1017,18 @@ mod tests {
     fn a_token_of_another_version_is_refused() {
         let mut future = invite(&random_nonce(), 2_000);
         future.v = VERSION + 1;
-        let err = decode_invite(&encode_invite(&future).expect("encode"), 1_000)
-            .expect_err("version");
+        let err =
+            decode_invite(&encode_invite(&future).expect("encode"), 1_000).expect_err("version");
         assert!(err.to_string().contains("v1"), "{err}");
     }
 
     #[test]
     fn an_expired_token_is_refused_before_a_dial() {
         let token = encode_invite(&invite(&random_nonce(), 1_000)).expect("encode");
-        assert!(decode_invite(&token, 999).is_ok(), "still live one second out");
+        assert!(
+            decode_invite(&token, 999).is_ok(),
+            "still live one second out"
+        );
         let err = decode_invite(&token, 1_000).expect_err("expired at the boundary");
         assert!(err.to_string().contains("expired"), "{err}");
         assert!(decode_invite(&token, 5_000).is_err(), "long expired");
@@ -1036,7 +1087,11 @@ mod tests {
         let long_after = 1_000 + INVITE_KEEP.as_secs() + 1;
         book.mint(fresh.clone(), long_after + 900, long_after);
 
-        assert_eq!(book.invites.len(), 1, "the minting prune dropped the dead one");
+        assert_eq!(
+            book.invites.len(),
+            1,
+            "the minting prune dropped the dead one"
+        );
         assert_eq!(book.claim(&old, long_after), Err(ClaimError::Unknown));
         assert_eq!(book.claim(&fresh, long_after), Ok(()));
     }
@@ -1112,9 +1167,15 @@ mod tests {
         let record = registry.get("laptop-b").expect("filed under the petname");
         assert_eq!(record.key, key.to_string());
         assert!(record.verify_password(PAIR_USER, "hunter2"));
-        assert!(!record.verify_password(PAIR_USER, "hunter3"), "wrong password");
+        assert!(
+            !record.verify_password(PAIR_USER, "hunter3"),
+            "wrong password"
+        );
         assert!(!record.verify_password("root", "hunter2"), "wrong user");
-        assert!(record.allows(Target::Http("app")), "the default grant is live");
+        assert!(
+            record.allows(Target::Http("app")),
+            "the default grant is live"
+        );
         assert!(!record.allows(Target::Http("nosh")), "and nothing else is");
     }
 
@@ -1183,7 +1244,10 @@ mod tests {
             "pw",
             500,
         );
-        assert!(refusal_of(&replay).contains("already been used"), "{replay:?}");
+        assert!(
+            refusal_of(&replay).contains("already been used"),
+            "{replay:?}"
+        );
         assert_eq!(registry.len(), 1, "no second machine was filed");
         assert!(registry.get("impostor").is_none());
     }
@@ -1216,7 +1280,10 @@ mod tests {
         let mut future = request(&nonce, "a");
         future.v = VERSION + 1;
         let wrong_version = decide(&mut registry, &mut book, &some_key(), &future, "pw", 500);
-        assert!(refusal_of(&wrong_version).contains("join v1"), "{wrong_version:?}");
+        assert!(
+            refusal_of(&wrong_version).contains("join v1"),
+            "{wrong_version:?}"
+        );
         assert!(
             book.is_open(&nonce, 500),
             "a version mismatch must not burn the invite"
@@ -1256,7 +1323,10 @@ mod tests {
         assert_eq!(accepted_of(&reply).petname, "desk");
         let record = registry.get("desk").expect("record");
         assert!(record.verify_password(PAIR_USER, "new"));
-        assert!(!record.verify_password(PAIR_USER, "old"), "the old one is gone");
+        assert!(
+            !record.verify_password(PAIR_USER, "old"),
+            "the old one is gone"
+        );
         assert_eq!(registry.len(), 1);
     }
 
@@ -1305,9 +1375,7 @@ mod tests {
         let password = random_password();
         assert_eq!(password.chars().count(), PASSWORD_LEN);
         assert!(
-            password
-                .bytes()
-                .all(|b| PASSWORD_ALPHABET.contains(&b)),
+            password.bytes().all(|b| PASSWORD_ALPHABET.contains(&b)),
             "{password}"
         );
         assert_ne!(password, random_password());
@@ -1330,7 +1398,10 @@ mod tests {
         let rendered = format!("{accepted:?}");
         assert!(!rendered.contains(secret), "{rendered}");
         assert!(rendered.contains("redacted"), "{rendered}");
-        assert!(rendered.contains("laptop-b"), "the rest still debugs: {rendered}");
+        assert!(
+            rendered.contains("laptop-b"),
+            "the rest still debugs: {rendered}"
+        );
 
         let joined = Joined {
             petname: "laptop-b".into(),
@@ -1343,7 +1414,10 @@ mod tests {
         let rendered = format!("{joined:?}");
         assert!(!rendered.contains(secret), "{rendered}");
         assert!(rendered.contains("redacted"), "{rendered}");
-        assert!(rendered.contains("desk"), "the rest still debugs: {rendered}");
+        assert!(
+            rendered.contains("desk"),
+            "the rest still debugs: {rendered}"
+        );
     }
 
     // -- framing -------------------------------------------------------------------------
@@ -1367,7 +1441,9 @@ mod tests {
         assert_eq!(read, reply);
 
         let refusal = JoinReply::refused("nope");
-        write_frame(&mut writer, &refusal).await.expect("write refusal");
+        write_frame(&mut writer, &refusal)
+            .await
+            .expect("write refusal");
         let read: JoinReply = read_frame(&mut reader).await.expect("read refusal");
         assert_eq!(read, refusal);
     }

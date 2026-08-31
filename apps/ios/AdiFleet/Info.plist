@@ -14,10 +14,14 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- Both taken from the build settings rather than written out again. They used to be literals
+	     here *and* in project.yml, which is two places holding one number: on 2026-08-31 an upload
+	     was rejected as a duplicate of build 1, and bumping project.yml alone would have changed
+	     nothing, because this file is what the built bundle actually carries. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<!-- How a Home Screen shortcut reaches one dashboard. iOS gives an app no way to place an icon
@@ -77,6 +81,12 @@
 	</dict>
 	<!-- iroh looks at local interfaces to find a direct path to a peer before falling back to a
 	     relay. On a shared network that path is the fast one, and iOS asks before allowing it. -->
+	<!-- Pairing. A token is over nine hundred characters, so the machine draws it as a QR and this
+	     phone reads it — the same call the web client made and wrote down: scanning is the primary
+	     action and the paste field is the fallback. The camera is used for nothing else, and the
+	     session is torn down the moment the scanner closes (`ScanView`). -->
+	<key>NSCameraUsageDescription</key>
+	<string>adi Fleet uses the camera only to scan the pairing code a machine shows, so you don't have to type a 900-character invite.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>adi Fleet looks for your machines on this network so it can reach them directly instead of through a relay.</string>
 </dict>

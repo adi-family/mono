@@ -1,0 +1,89 @@
+<!doctype html><meta charset=utf-8>
+<title>adi Fleet — App Store panel</title>
+<!--
+  One App Store panel. Everything variable arrives in the query string, so this file is the
+  composition and `frames.sh` is the only place that knows which shot gets which words:
+
+    panel.html?w=1320&h=2868&shot=../shots/iphone/04-fleet.png
+              &head=Every+machine+you+run,%0Ain+your+pocket
+              &sub=Pair+once.+They+are+all+just+there.
+              &sw=1320&sh=2868&dw=0.80
+
+  `sw`/`sh` are the screenshot's own pixel size — the device's height is derived from them so the
+  frame can never squash the artefact. `dw` is the device width as a fraction of the panel.
+
+  Rendered by Chrome rather than composited in Pillow, and that is not a preference: the field
+  needs a real `filter: blur()` at 12% of frame width and a real `feTurbulence`, and the design
+  decision this implements is stated in CSS values that only a browser evaluates the same way.
+-->
+<link rel=stylesheet href=_frame.css>
+
+<div class=field><b class=b1></b><b class=b2></b><b class=b3></b><b class=b4></b><b class=b5></b></div>
+<div class=vig></div>
+<div class=foot></div>
+<svg class=noise xmlns="http://www.w3.org/2000/svg">
+  <filter id=n>
+    <feTurbulence type=fractalNoise baseFrequency=".8" numOctaves="4" stitchTiles="stitch"/>
+    <feColorMatrix type="saturate" values="0"/>
+  </filter>
+  <rect width="100%" height="100%" filter="url(#n)"/>
+</svg>
+
+<div class=mark><img src=_mark.svg alt=""><span>ADI</span></div>
+
+<div class=copy>
+  <h1></h1>
+  <p></p>
+  <div class=rule></div>
+</div>
+
+<div class=stage>
+  <div class=device>
+    <div class=screen><img alt=""></div>
+    <div class=island></div>
+  </div>
+</div>
+
+<script>
+  const q = new URLSearchParams(location.search);
+  // `mode=plate` renders the composition with the copy removed. It is not a debug view: it is
+  // how contrast gets measured against the real background instead of against the antialiased
+  // edge of the glyph next door, which is what measuring on the full render actually does.
+  if (q.get("mode") === "plate") document.documentElement.classList.add("plate");
+  const root = document.documentElement.style;
+
+  const w = +q.get("w"), h = +q.get("h");
+  root.setProperty("--w", w + "px");
+  root.setProperty("--h", h + "px");
+  root.setProperty("--shot-w", q.get("sw"));
+  root.setProperty("--shot-h", q.get("sh"));
+  root.setProperty("--device-w", q.get("dw") || ".80");
+  // Type is sized off its own base, not off the panel width: the tablet panel is far wider
+  // relative to its height, and type scaled off width ran the subhead into the device.
+  root.setProperty("--tb", (q.get("tb") || w) + "px");
+  root.setProperty("--stage-top", q.get("st") || ".205");
+  root.setProperty("--blur", q.get("bl") || ".092");
+  root.setProperty("--vig", q.get("vg") || ".38");
+
+  // textContent, then newlines become <br>. Set as text first so a headline can never inject
+  // markup — these strings come from a shell script and one stray ampersand should not be able
+  // to rewrite the composition.
+  const h1 = document.querySelector(".copy h1");
+  h1.textContent = q.get("head") || "";
+  h1.innerHTML = h1.innerHTML.replace(/\n/g, "<br>");
+  document.querySelector(".copy p").textContent = q.get("sub") || "";
+
+  // The frame is the device the capture came from — `kind=tablet` swaps the rail, the corner
+  // radius and removes the island. A phone frame around a 4:3 screenshot is an object that does
+  // not exist, and it shipped once.
+  if (q.get("kind") === "tablet") document.querySelector(".device").classList.add("tablet");
+
+  document.querySelector(".screen img").src = q.get("shot");
+
+  // The renderer waits for this. Without it Chrome will happily screenshot the frame before the
+  // screenshot inside it has decoded, and the panel comes out as a black phone — which looks
+  // deliberate enough that it survived two runs the first time this pipeline was built.
+  const img = document.querySelector(".screen img");
+  const done = () => document.documentElement.setAttribute("data-ready", "1");
+  if (img.complete) { done(); } else { img.onload = done; img.onerror = done; }
+</script>

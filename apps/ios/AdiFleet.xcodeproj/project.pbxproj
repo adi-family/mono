@@ -13,21 +13,36 @@
 		2AE770396A73DBCBC45811BC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F738BDAB8A92EFA4D13E943E /* Assets.xcassets */; };
 		4B5A721FD92A11AA1B718B41 /* HomeScreenLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */; };
 		4FF44BF699BB2558112D36D2 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 135E1D5460ED7431969EB180 /* Security.framework */; };
+		5B48B38EA6EBF7E748F3DFA2 /* ScanView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B79D8C3479F11081A748B93 /* ScanView.swift */; };
 		74CF7D5423A371C27830B798 /* NetworkChange.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */; };
 		75E28B5E6570CEF41BC0A80A /* AdiFleetApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE5E4124908EE0786E73BA6 /* AdiFleetApp.swift */; };
 		A43BB4C535DC5ED9898C2BBA /* Keychain.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC93220237C7671FE362AFB6 /* Keychain.swift */; };
 		C811A4995BB1ABDCE2AA4A82 /* FleetModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B455AF868E08BF351E128AE /* FleetModel.swift */; };
+		D26FFD637E3AD03F4911273C /* ScreenshotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 61F3427042990FA8C265C9C8 /* ScreenshotTests.swift */; };
 		F6A40E278675D3FC64C67299 /* ServiceWebView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */; };
 		FB7AB119801270FDC547ED7E /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D074423A31FA51BC8156B3CF /* ContentView.swift */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		4CE9A70F5885D2EF3F952617 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 2716AC82072FC2EDA4FF4E92 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A308822AEA6540132F1D63EA;
+			remoteInfo = AdiFleet;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
+		0EFA7F7106A7E1830AA49041 /* AdiFleetUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = AdiFleetUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		0FE5E4124908EE0786E73BA6 /* AdiFleetApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdiFleetApp.swift; sourceTree = "<group>"; };
 		11F0C3FB658F3828AAC70CA1 /* Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Bridging-Header.h"; sourceTree = "<group>"; };
 		135E1D5460ED7431969EB180 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		1749117E8649A1A160365B69 /* AdiFleet.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = AdiFleet.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		1A0BAF7E8CB2491D979742BC /* HomeScreenLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeScreenLink.swift; sourceTree = "<group>"; };
 		44262FFE6FE69FE791F924BD /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		61F3427042990FA8C265C9C8 /* ScreenshotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenshotTests.swift; sourceTree = "<group>"; };
+		6B79D8C3479F11081A748B93 /* ScanView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScanView.swift; sourceTree = "<group>"; };
 		74AB47C0B6791E8F7657B6C8 /* SystemConfiguration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemConfiguration.framework; path = System/Library/Frameworks/SystemConfiguration.framework; sourceTree = SDKROOT; };
 		77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServiceWebView.swift; sourceTree = "<group>"; };
 		9022E6221D9CC1870992A9F6 /* Mesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Mesh.swift; sourceTree = "<group>"; };
@@ -52,10 +67,19 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		4AF0E43F657C769849323974 /* AdiFleetUITests */ = {
+			isa = PBXGroup;
+			children = (
+				61F3427042990FA8C265C9C8 /* ScreenshotTests.swift */,
+			);
+			path = AdiFleetUITests;
+			sourceTree = "<group>";
+		};
 		686099E9265896403ABF1821 = {
 			isa = PBXGroup;
 			children = (
 				888659CA6CB142B50F620654 /* AdiFleet */,
+				4AF0E43F657C769849323974 /* AdiFleetUITests */,
 				FB4789299EC95ABC0D76C47B /* Frameworks */,
 				816A2B67D83BE78512F7F04F /* Products */,
 			);
@@ -65,6 +89,7 @@
 			isa = PBXGroup;
 			children = (
 				1749117E8649A1A160365B69 /* AdiFleet.app */,
+				0EFA7F7106A7E1830AA49041 /* AdiFleetUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -83,6 +108,7 @@
 				9022E6221D9CC1870992A9F6 /* Mesh.swift */,
 				AB1E9402B2B4DF0D961C68A7 /* NetworkChange.swift */,
 				C479E979A7B9FBAE75B67D4E /* PairView.swift */,
+				6B79D8C3479F11081A748B93 /* ScanView.swift */,
 				77DD2F87D343DBA3317EC8D8 /* ServiceWebView.swift */,
 			);
 			path = AdiFleet;
@@ -119,6 +145,24 @@
 			productReference = 1749117E8649A1A160365B69 /* AdiFleet.app */;
 			productType = "com.apple.product-type.application";
 		};
+		F73C217B40FF17FE9DF48625 /* AdiFleetUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = F2A6804A4763A36FCCF854FD /* Build configuration list for PBXNativeTarget "AdiFleetUITests" */;
+			buildPhases = (
+				4003CC454E6F730D0A17FB80 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				4F10BE2DED2E088AC985E581 /* PBXTargetDependency */,
+			);
+			name = AdiFleetUITests;
+			packageProductDependencies = (
+			);
+			productName = AdiFleetUITests;
+			productReference = 0EFA7F7106A7E1830AA49041 /* AdiFleetUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -131,6 +175,11 @@
 					A308822AEA6540132F1D63EA = {
 						DevelopmentTeam = 752556J5V6;
 						ProvisioningStyle = Automatic;
+					};
+					F73C217B40FF17FE9DF48625 = {
+						DevelopmentTeam = 752556J5V6;
+						ProvisioningStyle = Automatic;
+						TestTargetID = A308822AEA6540132F1D63EA;
 					};
 				};
 			};
@@ -149,6 +198,7 @@
 			projectRoot = "";
 			targets = (
 				A308822AEA6540132F1D63EA /* AdiFleet */,
+				F73C217B40FF17FE9DF48625 /* AdiFleetUITests */,
 			);
 		};
 /* End PBXProject section */
@@ -177,11 +227,28 @@
 				29957511B7645E68FFC80926 /* Mesh.swift in Sources */,
 				74CF7D5423A371C27830B798 /* NetworkChange.swift in Sources */,
 				258DE79A1FE477BEF77454AE /* PairView.swift in Sources */,
+				5B48B38EA6EBF7E748F3DFA2 /* ScanView.swift in Sources */,
 				F6A40E278675D3FC64C67299 /* ServiceWebView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		4003CC454E6F730D0A17FB80 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D26FFD637E3AD03F4911273C /* ScreenshotTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		4F10BE2DED2E088AC985E581 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A308822AEA6540132F1D63EA /* AdiFleet */;
+			targetProxy = 4CE9A70F5885D2EF3F952617 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		6176249DF719ABA4B6BD8270 /* Debug */ = {
@@ -305,13 +372,35 @@
 			};
 			name = Release;
 		};
+		A2858E955DC74AC481F6DBF5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 752556J5V6;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = family.adi.fleet.uitests;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AdiFleet;
+			};
+			name = Debug;
+		};
 		EDCD3242469B8388C5BE75D2 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 752556J5V6;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/../../crates/adi-mesh-ffi/include";
@@ -334,13 +423,35 @@
 			};
 			name = Release;
 		};
+		F54906357711CD3C97CD4EF0 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = 752556J5V6;
+				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = family.adi.fleet.uitests;
+				SDKROOT = iphoneos;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = AdiFleet;
+			};
+			name = Release;
+		};
 		FC82B1343CCC9AFE792D85C3 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 752556J5V6;
 				"EXCLUDED_ARCHS[sdk=iphonesimulator*]" = x86_64;
 				HEADER_SEARCH_PATHS = "$(SRCROOT)/../../crates/adi-mesh-ffi/include";
@@ -381,6 +492,15 @@
 			buildConfigurations = (
 				FC82B1343CCC9AFE792D85C3 /* Debug */,
 				EDCD3242469B8388C5BE75D2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		F2A6804A4763A36FCCF854FD /* Build configuration list for PBXNativeTarget "AdiFleetUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A2858E955DC74AC481F6DBF5 /* Debug */,
+				F54906357711CD3C97CD4EF0 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;

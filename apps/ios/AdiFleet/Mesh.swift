@@ -68,6 +68,20 @@ actor Mesh {
         try Self.call { adi_mesh_invite() }.string("token")
     }
 
+    /// Spend an invite a machine minted with `adi-mono mesh invite`. The mirror of `invite()` —
+    /// see `docs/fleet.md` §8 for why both directions are the same handshake.
+    ///
+    /// Answers the same `Pairing` shape `takePairings()` does, and under the same rule: the
+    /// password inside it exists in plaintext only in this one reply, so the caller must hand it
+    /// to the Keychain and nowhere else.
+    ///
+    /// Blocks for as long as the handshake takes (up to the core's timeout), so it belongs off the
+    /// main actor like every other mesh call that touches the network.
+    func join(token: String) throws -> Pairing {
+        let value = try Self.callRaw { adi_mesh_join(token) }
+        return try JSONDecoder().decode(Pairing.self, from: value)
+    }
+
     /// Every paired node.
     func nodes() throws -> [Node] {
         let value = try Self.callRaw { adi_mesh_nodes() }

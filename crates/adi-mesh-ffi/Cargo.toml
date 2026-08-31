@@ -32,5 +32,10 @@ anyhow = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "macros", "io-util", "sync", "time"] }
 tracing = { workspace = true }
 
+[dev-dependencies]
+# Only for `tests/join_over_live_endpoint.rs`, which pairs for real and so needs a store of its own
+# rather than the developer's fleet.
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

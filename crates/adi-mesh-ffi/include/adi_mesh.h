@@ -31,6 +31,13 @@ char *adi_mesh_status(void);
 // value: {"token": "adi-invite:…"}
 char *adi_mesh_invite(void);
 
+// Spend an invite a MACHINE minted (`adi-mono mesh invite`), pairing from this side — the mirror
+// of adi_mesh_invite, and the direction that works when the person holding the phone is not also
+// sitting at the machine. Carries the plaintext password ONCE, exactly as adi_mesh_take_pairings
+// does: put it in the Keychain, because only a digest of it is kept anywhere else.
+// value: {"petname": "<what this device now calls it>", "username": "…", "password": "…"}
+char *adi_mesh_join(const char *token);
+
 // value: [{"petname", "key", "nickname", "paired_at", "pending_nickname", "services", "any_service"}]
 char *adi_mesh_nodes(void);
 

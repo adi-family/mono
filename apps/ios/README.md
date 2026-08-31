@@ -52,16 +52,39 @@ identifier without Xcode's device machinery. The alternative — a multi-gigabyt
 
 ## Pairing
 
-Pairing is pull-only (`docs/fleet.md` §8), so the phone mints and the node spends:
+The handshake is symmetric and which side dials is a deployment choice (`docs/fleet.md` §8), so the
+sheet offers both directions. They end in the same registry record, and a node paired either way is
+indistinguishable afterwards.
+
+**Invite a machine** — the phone mints, the machine spends. The default, and the right way round
+when you are sitting at the machine:
 
 1. Tap **Pair a node**. The phone mints a single-use invite once its relay session is up.
 2. Copy or AirDrop the command it shows, and run it on the node:
    `adi-mono mesh join adi-invite:…`
 3. The node dials back. The phone files it under a petname and the row appears.
 
-**The password is never typed.** The viewer mints it (§8) and this is the viewer, so the app puts it
-straight into the Keychain — `ThisDeviceOnly`, so it cannot follow an iCloud account onto a device
-that was never paired. Only a rotated password brings up a prompt.
+**Enter an invite** — the machine mints, the phone spends. The right way round when whoever holds
+the phone is not at the machine, or has no terminal to paste into at all:
+
+1. Run `adi-mono mesh invite` on the machine (`--ttl <minutes>` if it will not be spent right away).
+2. Tap **Pair a node → Enter an invite**, paste the token, tap **Pair**.
+3. The phone dials out to the machine. Nothing opens a port, on either side.
+
+It is a paste field and not a camera: the token arrives by whatever channel is already open, and a
+camera permission bought to read a code off a screen you could paste from would be a permission
+bought for nothing. The QR stays on the *minting* screen, where the token is on a terminal and the
+phone is the thing holding a camera.
+
+**The password is never typed**, whichever direction it went. The minting side mints it (§8): in
+the first direction that is this app, and in the second it is the machine, which hands it over once
+in the join reply. Either way it goes straight into the Keychain — `ThisDeviceOnly`, so it cannot
+follow an iCloud account onto a device that was never paired. Only a rotated password brings up a
+prompt.
+
+> An invite is **one machine, once**, whatever its TTL. Two people spending the same token is not a
+> thing that works, and the second one is told the nonce is spent — which matters when handing an
+> invite to someone you cannot talk to, like App Review. Mint one each.
 
 ## Dashboards
 

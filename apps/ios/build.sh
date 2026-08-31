@@ -5,6 +5,7 @@
 #   ./build.sh device       # device build (needs a signing team; see README)
 #   ./build.sh core         # just the Rust staticlibs
 #   ./build.sh project      # just regenerate AdiFleet.xcodeproj from project.yml
+#   ./build.sh --regen-icon # redraw the app icon from the shared Trefoil geometry
 #
 # The Rust half is always built in release. See project.yml for why.
 set -euo pipefail
@@ -54,6 +55,25 @@ core)
 
 project)
 	generate_project
+	;;
+
+--regen-icon)
+	# Redraw AppIcon-1024.png from the *current* Trefoil geometry. This exists because the icon
+	# silently rotted once: it was exported by hand in Aug 2026 and still showed a wireframe
+	# hexagon from before the Trefoil, months after apps/macos regenerated its own. Nothing in
+	# the build looked at it, so nothing noticed. Now one command redraws it from the same
+	# `Sources/Trefoil.swift` the Mac app and the .adi error pages draw from.
+	need swiftc
+	log "regenerating AppIcon-1024.png"
+	tmp="$(mktemp -d)"
+	trap 'rm -rf "$tmp"' EXIT
+	swiftc -parse-as-library -O \
+		"$repo/apps/macos/Sources/Trefoil.swift" "$repo/apps/macos/icon-gen.swift" \
+		-o "$tmp/icon-gen"
+	# --ios: full-bleed and opaque. The system applies the corner mask, and App Store Connect
+	# rejects an icon carrying an alpha channel (ITMS-90717).
+	"$tmp/icon-gen" --ios "$here/AdiFleet/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+	log "wrote AdiFleet/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
 	;;
 
 device)

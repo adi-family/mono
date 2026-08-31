@@ -31,7 +31,7 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{CStr, CString, c_char};
-use std::sync::{OnceLock, RwLock, PoisonError};
+use std::sync::{OnceLock, PoisonError, RwLock};
 
 use serde::Serialize;
 
@@ -154,6 +154,23 @@ pub extern "C" fn adi_mesh_invite() -> *mut c_char {
     with_viewer(|viewer| Ok(serde_json::json!({ "token": viewer.invite()? })))
 }
 
+/// Spend an invite a machine minted with `adi-mono mesh invite`, pairing from this side.
+///
+/// Returns one [`viewer::Paired`] — the same shape [`adi_mesh_take_pairings`] yields for the other
+/// direction, and under the same rule: it carries the plaintext password exactly once, and the
+/// caller's only correct move is to put it straight into the Keychain.
+///
+/// # Safety
+/// `token` must be a valid NUL-terminated C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn adi_mesh_join(token: *const c_char) -> *mut c_char {
+    let token = unsafe { borrow(token) };
+    with_viewer(|viewer| {
+        let token = token.context_missing("token")?;
+        viewer.join(token)
+    })
+}
+
 /// Every paired node, as an array of [`viewer::NodeInfo`].
 #[unsafe(no_mangle)]
 pub extern "C" fn adi_mesh_nodes() -> *mut c_char {
@@ -167,10 +184,7 @@ pub extern "C" fn adi_mesh_nodes() -> *mut c_char {
 /// # Safety
 /// `node` and `service` must be valid NUL-terminated C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn adi_mesh_open(
-    node: *const c_char,
-    service: *const c_char,
-) -> *mut c_char {
+pub unsafe extern "C" fn adi_mesh_open(node: *const c_char, service: *const c_char) -> *mut c_char {
     let (node, service) = unsafe { (borrow(node), borrow(service)) };
     with_viewer(|viewer| {
         let node = node.context_missing("node")?;
@@ -193,8 +207,7 @@ pub unsafe extern "C" fn adi_mesh_dashboards(
     username: *const c_char,
     password: *const c_char,
 ) -> *mut c_char {
-    let (node, username, password) =
-        unsafe { (borrow(node), borrow(username), borrow(password)) };
+    let (node, username, password) = unsafe { (borrow(node), borrow(username), borrow(password)) };
     with_viewer(|viewer| {
         let node = node.context_missing("node")?;
         let username = username.context_missing("username")?;
@@ -293,7 +306,10 @@ mod tests {
 
     /// Reading a reply back the way Swift does, so the shape stays what the header promises.
     fn read(raw: *mut c_char) -> serde_json::Value {
-        let json = unsafe { CStr::from_ptr(raw) }.to_str().expect("utf-8").to_string();
+        let json = unsafe { CStr::from_ptr(raw) }
+            .to_str()
+            .expect("utf-8")
+            .to_string();
         unsafe { adi_mesh_free(raw) };
         serde_json::from_str(&json).expect("valid json")
     }
@@ -317,7 +333,10 @@ mod tests {
             let value = read(reply);
             assert_eq!(value["ok"], false);
             assert!(
-                value["error"].as_str().expect("an error sentence").contains("adi_mesh_start"),
+                value["error"]
+                    .as_str()
+                    .expect("an error sentence")
+                    .contains("adi_mesh_start"),
                 "the error should name the fix, got {value}"
             );
         }

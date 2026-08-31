@@ -30,10 +30,10 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
+use adi_mesh::config::MeshConfig;
 use adi_mesh::fleet::{FleetRegistry, Grant, Scope};
 use adi_mesh::gateway::{IrohDialer, Pool};
 use adi_mesh::protocol::{self, HttpStatus};
-use adi_mesh::config::MeshConfig;
 use adi_mesh::{identity, join, relay, ticket, tunnel};
 use anyhow::Context as _;
 use iroh::endpoint::presets;
@@ -268,6 +268,48 @@ impl Viewer {
         )
     }
 
+    /// Spend an invite a **machine** minted, pairing with it from this side.
+    ///
+    /// The mirror of [`invite`](Self::invite), and the other direction `docs/fleet.md` §8 says the
+    /// protocol allows: there the phone mints and the node dials, here the node mints
+    /// (`adi-mono mesh invite`) and the phone dials. Both end with the same record in the same
+    /// registry, so a node paired this way is indistinguishable afterwards — it appears in
+    /// [`nodes`](Self::nodes) like any other, and the petname it lands under is the `viewer-<hex>`
+    /// form until it is renamed.
+    ///
+    /// This exists because a phone cannot always be dialled *first*: whoever holds the machine may
+    /// be somewhere else, and a person handed a token has no terminal to spend it from. It is also
+    /// what lets a fleet be shown to someone who does not own one yet.
+    ///
+    /// Uses [`join_on`](join::join_on) rather than `join` so the dial goes out over the endpoint
+    /// this viewer already holds. Binding a second one on the same key would race the first for
+    /// its relay session — see that function's note.
+    ///
+    /// Answers a [`Paired`] and not just a name, for the reason that struct exists: the machine
+    /// mints the password in this direction, `record_viewer` keeps only a *digest* of it in
+    /// `fleet.toml`, and the plaintext is never recoverable afterwards. It crosses the FFI once,
+    /// here, and the app's only correct move is to put it in the Keychain — the same contract
+    /// [`take_pairings`](Self::take_pairings) has for the other direction.
+    ///
+    /// # Errors
+    /// If the token is malformed, expired or already spent, if the minting machine cannot be
+    /// reached, or if it refuses.
+    pub fn join(&self, token: &str) -> anyhow::Result<Paired> {
+        let token = token.trim().to_string();
+        let endpoint = self.endpoint.clone();
+        let joined = self
+            .rt
+            .block_on(async move { join::join_on(&endpoint, &token).await })?;
+        Ok(Paired {
+            // `viewer` is what *this* device now calls the machine; `petname` is what the machine
+            // decided to call us. The Keychain is keyed by the former, because that is the name
+            // every later call here passes back in.
+            petname: joined.viewer,
+            username: joined.username,
+            password: joined.password,
+        })
+    }
+
     /// Every node paired with this phone.
     ///
     /// # Errors
@@ -360,8 +402,9 @@ impl Viewer {
         let (key, grants) = paired(node)?;
         let me = self.key();
         let shared = Arc::clone(&self.shared);
-        self.rt
-            .block_on(async move { catalog::fetch(&shared, key, &me, (username, password), &grants).await })
+        self.rt.block_on(async move {
+            catalog::fetch(&shared, key, &me, (username, password), &grants).await
+        })
     }
 
     /// Ask `node` to let this phone open `service`, returning the petname it granted under.
@@ -378,9 +421,9 @@ impl Viewer {
         let (key, _) = paired(node)?;
         let me = self.key();
         let shared = Arc::clone(&self.shared);
-        let petname = self
-            .rt
-            .block_on(async move { catalog::allow(&shared, key, &me, service, (username, password)).await })?;
+        let petname = self.rt.block_on(async move {
+            catalog::allow(&shared, key, &me, service, (username, password)).await
+        })?;
         mirror_grant(node, service);
         Ok(petname)
     }
@@ -730,7 +773,10 @@ mod tests {
             .collect();
         let (services, any) = grantable_services(&wild);
         assert_eq!(services, vec!["app".to_string()]);
-        assert!(any, "http:* means the list is a starting point, not the whole");
+        assert!(
+            any,
+            "http:* means the list is a starting point, not the whole"
+        );
     }
 
     #[test]
