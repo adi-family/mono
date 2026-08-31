@@ -1,5 +1,25 @@
 # adi Fleet — App Store submission
 
+> ## SUBMITTED FOR REVIEW — 2026-08-31
+>
+> Version **0.1.0**, build **3**. Everything the reviewer touches was verified live at the moment
+> of submission: `adi-demo` RUNNING, and `app` / `demo-shop` / `hello-reviewer` all answering 200
+> over the mesh; `https://withadi.dev/privacy` answering 200; four unspent invites in the review
+> notes, valid until **2026-09-14**.
+>
+> **The demo node is the single point of failure for this review.** `adi-demo` is a plain GCE
+> instance in no managed group — nothing restarts it if it stops, and if it is down when the
+> reviewer looks, the app shows an empty fleet and 2.1 comes back. Check it, not the App Store
+> Connect status, if anything goes quiet:
+>
+> ```bash
+> gcloud compute instances describe adi-demo --zone=europe-southwest1-a --project=mono-504617 --format='value(status)'
+> curl -s -o /dev/null -w '%{http_code}\n' -u adi:<pw> http://demo-shop.adi-demo.n.adi/
+> ```
+>
+> Known and shipped anyway: the pairing sheet clips its own buttons on iPad (§2.3). If 2.1 comes
+> back regardless, the fallback is a demo mode that cannot go offline — §2.2 option 2.
+
 What App Store Connect asks for, answered in one place, plus the state of each answer. Drafted
 2026-08-31 against `MARKETING_VERSION 0.1.0` / `CURRENT_PROJECT_VERSION 1`.
 
