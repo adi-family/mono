@@ -4,7 +4,7 @@ Paste-ready. This is only the values; the reasoning behind each one is in `APPST
 things that are still blocked are marked **BLOCKER**.
 
 Work through it in App Store Connect's own order. Everything below is for **adi Fleet**,
-`family.adi.fleet`, version **0.1.0**, build **2** (uploaded 2026-08-31, delivery 2d81a2b2).
+`family.adi.fleet`, version **0.1.0**, build **3** (uploaded 2026-08-31, delivery 409d6e71).
 
 ---
 
@@ -87,7 +87,13 @@ mesh,remote,dashboard,homelab,server,devops,self-hosted,ssh,monitor,localhost,tu
 
 ### Build
 
-Select **0.1.0 (2)**.
+Select **0.1.0 (3)**.
+
+**Not build 2.** It was uploaded earlier the same day and predates the QR scanner: its binary has
+no `ScanView`, its `Info.plist` has no `NSCameraUsageDescription`, and its pairing sheet still
+reads "Enter an invite". It also lacks the fix for the grant race, so a reviewer tapping a
+dashboard would get "The node refused this service" — which is the rejection this whole demo-node
+exercise exists to avoid. Build 3 has all three.
 
 ### What's New
 
@@ -190,7 +196,7 @@ assuming. Getting it wrong is a metadata misrepresentation, which is worse than 
 | | |
 |---|---|
 | Export compliance | Declared in `Info.plist` (`ITSAppUsesNonExemptEncryption = false`). No upload will ask. |
-| Build upload | 0.1.0 (2) is uploaded and processed. Build 1 was uploaded 2026-08-05; numbers are not reusable, so the next one is 3. |
+| Build upload | 0.1.0 (3) is uploaded — the first build with the scanner and the grant fix. Builds 1 and 2 are superseded; numbers are not reusable, so the next one is 4. |
 | App icon | 1024×1024, no alpha, in the build. |
 | iPad orientations | All four declared — validation error 90474 is already fixed. |
 
