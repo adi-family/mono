@@ -1341,6 +1341,7 @@ mod tests {
             username: PAIR_USER.to_string(),
             password: "hunter2".to_string(),
             grants: default_grants(),
+            nickname: None,
         };
 
         let petname = record_viewer(&mut registry, &viewer, &accepted).expect("file the viewer");
@@ -1394,6 +1395,7 @@ mod tests {
             username: "adi".into(),
             password: secret.into(),
             grants: vec![Grant::Http(Scope::One("app".into()))],
+            nickname: None,
         };
         let rendered = format!("{accepted:?}");
         assert!(!rendered.contains(secret), "{rendered}");
@@ -1435,6 +1437,7 @@ mod tests {
             username: PAIR_USER.to_string(),
             password: random_password(),
             grants: default_grants(),
+            nickname: None,
         });
         write_frame(&mut writer, &reply).await.expect("write reply");
         let read: JoinReply = read_frame(&mut reader).await.expect("read reply");
@@ -1486,6 +1489,7 @@ mod tests {
             username: PAIR_USER.to_string(),
             password: "pw".to_string(),
             grants: default_grants(),
+            nickname: None,
         });
         let json = serde_json::to_value(&accepted).expect("encode");
         assert_eq!(json["result"], "accepted");
