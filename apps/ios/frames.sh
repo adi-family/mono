@@ -105,9 +105,16 @@ for dev in iphone ipad; do
   fi
   mkdir -p "$out" "$plates"
 
-  # The panel is the size of the capture, because those are already the sizes App Store Connect
-  # accepts. Resizing a screenshot to fit a frame is how a set gets rejected for wrong dimensions.
-  read -r W H < <(python3 -c "
+  # The panel's canvas is NOT the capture's size, and conflating the two is what put the first set
+  # in front of a rejection. App Store Connect asked this listing for the 6.5-inch slot — 1242x2688
+  # or 1284x2778 — while the simulator these are shot on is a 6.9-inch phone at 1320x2868.
+  #
+  # Nothing has to be re-shot for that. A panel is a composition: the capture sits inside a drawn
+  # device at its own aspect, and the canvas around it is whatever size is being asked for. The
+  # capture is 0.4603 wide-to-tall and the canvas is 0.4622, so the phone in the frame is the same
+  # shape either way. What would be wrong is stretching a screenshot to fill a canvas it does not
+  # fit, and `panel.html` cannot do that: it derives the device's height from the capture's pixels.
+  read -r CW CH < <(python3 -c "
 from PIL import Image
 import glob, sys
 p = sorted(glob.glob('$src/*.png'))[0]
@@ -116,11 +123,11 @@ im = Image.open(p); print(im.size[0], im.size[1])")
   # The phone is narrower on the iPad panel: a 13\" panel is nearly square, so a device at the
   # iPhone panel's fraction would be enormous and the copy would have nowhere to sit.
   case "$dev" in
-    iphone) DW=0.94; KIND=phone;  TB=$W;                  ST=0.205; BL=.092; VG=.38 ;;
-    ipad)   DW=0.76; KIND=tablet; TB=$(( W * 68 / 100 )); ST=0.265; BL=.092; VG=.38 ;;
+    iphone) W=1284; H=2778; DW=0.94; KIND=phone;  TB=$W;                  ST=0.205; BL=.092; VG=.38 ;;
+    ipad)   W=$CW;  H=$CH;  DW=0.76; KIND=tablet; TB=$(( W * 68 / 100 )); ST=0.265; BL=.092; VG=.38 ;;
   esac
 
-  log "$dev — ${W}x${H}, device at ${DW} of the frame"
+  log "$dev — panel ${W}x${H} from ${CW}x${CH} captures, device at ${DW} of the frame"
   i=0
   for spec in "${PANELS[@]}"; do
     i=$((i + 1))

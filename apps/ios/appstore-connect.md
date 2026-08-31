@@ -37,8 +37,8 @@ Work through it in App Store Connect's own order. Everything below is for **adi 
 
 Drag these in, in order. Both sets are required because the app ships for iPhone and iPad.
 
-- **iPhone 6.9"** → `apps/ios/shots/iphone/store/` — `01-fleet.png`, `02-dashboard.png`,
-  `03-invite.png`, `04-empty.png`  (1320×2868)
+- **iPhone 6.5"** → `apps/ios/shots/iphone/store/` — `01-fleet.png`, `02-dashboard.png`,
+  `03-invite.png`, `04-empty.png`  (**1284×2778**, which is what this listing asks for)
 - **iPad 13"** → `apps/ios/shots/ipad/store/` — same four names  (2064×2752)
 
 ### Promotional Text  *(optional, editable without a review)*
