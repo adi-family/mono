@@ -392,6 +392,50 @@ impl Agents {
         Ok(changed)
     }
 
+    /// Follow a tool rename into every definition that has that tool ticked on: each `bin_tools`
+    /// entry naming `from` becomes `to`. Returns how many definitions changed.
+    ///
+    /// Nothing *breaks* without this — the tools registry keeps resolving the old id through its
+    /// alias index, so an untouched definition still gets the same shim. This is about what the
+    /// definition costs to read: `bin_tools` is the densest run of ids in the store (one agent
+    /// lists 49 of them, 1,764 characters of pure identifier) and it is read on every launch, so
+    /// leaving the UUIDs in place would leave the whole reason for the rename on the table.
+    ///
+    /// Definitions are written back in place — no `updated_at` bump, no `adi.agents.saved` — since
+    /// following a rename is not an edit anybody made to the agent, exactly as for
+    /// [`rename_project`](Self::rename_project).
+    ///
+    /// # Errors
+    /// [`Error::Config`] if a manifest can't be written, plus everything [`list`](Self::list) can
+    /// return.
+    pub fn rename_tool(&self, from: &str, to: &str) -> Result<usize> {
+        if from == to {
+            return Ok(0);
+        }
+        let mut changed = 0;
+        for mut agent in self.list()? {
+            let m = &mut agent.manifest;
+            let mut touched = false;
+            for id in &mut m.bin_tools {
+                if id == from {
+                    to.clone_into(id);
+                    touched = true;
+                }
+            }
+            if !touched {
+                continue;
+            }
+            // A definition that listed both ids (the old and the new) would now list the new one
+            // twice. `retain` over a seen-set rather than `dedup`, which only sees neighbours —
+            // the two entries need not have been adjacent before the rewrite.
+            let mut seen = std::collections::HashSet::new();
+            m.bin_tools.retain(|id| seen.insert(id.clone()));
+            self.agent_file(&agent.name).save(m)?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
+
     /// How many runs may be live at once — overall and per project — read from
     /// `sessions/settings.toml`. See [`RunLimits`].
     #[must_use]
@@ -1198,9 +1242,17 @@ impl Agents {
         let Ok(all) = tools.list() else {
             return (Vec::new(), Vec::new());
         };
+        // Through the alias index, for the same reason `sync_agent_bin` goes through it: a
+        // definition may still name a tool by an id it has since given up, and reading that as
+        // "not enabled" would report the agent as lacking a tool it does in fact have on its PATH.
+        let aliases = tools.aliases().unwrap_or_default();
         let (mut on, mut off) = (Vec::new(), Vec::new());
         for tool in all.into_iter().filter(|t| !t.is_archived()) {
-            let enabled = agent.manifest.bin_tools.contains(&tool.id);
+            let enabled = agent
+                .manifest
+                .bin_tools
+                .iter()
+                .any(|id| aliases.target(id).unwrap_or(id) == tool.id);
             let entry = (
                 tool.manifest.name.clone(),
                 tool.manifest.description.clone().unwrap_or_default(),
@@ -1623,7 +1675,11 @@ impl Agents {
                 hidden: record.hidden,
                 starred: record.starred,
                 launched_by: record.launched_by,
-                overrides: record.overrides.as_ref().map(RunOverrides::summary).unwrap_or_default(),
+                overrides: record
+                    .overrides
+                    .as_ref()
+                    .map(RunOverrides::summary)
+                    .unwrap_or_default(),
                 outcome: record.outcome,
             })
             .collect()

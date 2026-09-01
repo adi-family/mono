@@ -13,7 +13,5 @@ adi-config = { workspace = true }
 
 serde = { workspace = true }
 
-uuid = { workspace = true }
-
 [lints]
 workspace = true

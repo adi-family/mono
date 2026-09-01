@@ -299,6 +299,17 @@ pub struct HarnessClaudeSdkArguments {
     /// `Agents::run_in` and `crate::workspace` for the whole precedence.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    /// The engine's own settings, as a path to a JSON file or a JSON string — the CLI's
+    /// `--settings`. It is what lets two agents on this one machine run the *same* engine against
+    /// different accounts: a settings file carries an `env` block, so pointing one agent at
+    /// `~/.claude/settings.glm.json` sends its turns to that file's `ANTHROPIC_BASE_URL` while
+    /// every other agent keeps the default login, with no environment shared between them.
+    ///
+    /// The agent's `[env]` can say the same thing one variable at a time; this says it once, in the
+    /// file the human already maintains for their own CLI. A leading `~`/`$HOME` is expanded here
+    /// because the run is spawned without a shell to do it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<String>,
 }
 
 /// Arguments accepted by the `harness:adi` backend — ADI's own answering loop. `provider` selects

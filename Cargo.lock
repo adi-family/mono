@@ -359,7 +359,6 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "serde",
- "uuid",
 ]
 
 [[package]]
@@ -408,7 +407,6 @@ version = "0.1.0"
 dependencies = [
  "adi-config",
  "serde",
- "uuid",
 ]
 
 [[package]]

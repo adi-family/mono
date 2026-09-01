@@ -16,6 +16,9 @@ pub enum Error {
     InvalidId(String),
     /// No tool with this id is registered.
     NotFound(String),
+    /// Something already occupies this id — a registered tool, a directory somebody made by hand,
+    /// or an id another tool was renamed away from and still answers to.
+    Exists(String),
     /// The runtime string isn't one this build understands (`sh` or `ts`).
     InvalidRuntime(String),
     /// A linked tool points at a path that doesn't exist (or isn't readable) on disk.
@@ -32,16 +35,16 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(e) => write!(f, "tool store error: {e}"),
-            Self::InvalidId(id) => write!(
-                f,
-                "invalid tool id {id:?}: {}",
-                adi_config::NAME_RULE
-            ),
+            Self::InvalidId(id) => write!(f, "invalid tool id {id:?}: {}", adi_config::NAME_RULE),
             Self::NotFound(id) => write!(f, "no such tool: {id}"),
+            Self::Exists(id) => write!(f, "the id {id} is already taken"),
             Self::InvalidRuntime(r) => write!(f, "unknown tool runtime {r:?}: use 'sh' or 'ts'"),
             Self::LinkedMissing(path) => write!(f, "linked tool file not found: {path}"),
             Self::SystemProtected(id) => {
-                write!(f, "{id} is a built-in system tool: archive it instead of deleting")
+                write!(
+                    f,
+                    "{id} is a built-in system tool: archive it instead of deleting"
+                )
             }
             Self::Io(e) => write!(f, "tool store I/O error: {e}"),
             Self::Launch(msg) => write!(f, "could not run tool: {msg}"),
@@ -56,6 +59,7 @@ impl std::error::Error for Error {
             Self::Io(e) => Some(e),
             Self::InvalidId(_)
             | Self::NotFound(_)
+            | Self::Exists(_)
             | Self::InvalidRuntime(_)
             | Self::LinkedMissing(_)
             | Self::SystemProtected(_)

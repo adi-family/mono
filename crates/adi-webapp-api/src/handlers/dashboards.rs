@@ -81,9 +81,20 @@ pub fn create_dashboard(cfg: &Config, ports: &Ports, body: &[u8]) -> Response {
         return error(400, "name must not be empty");
     }
 
-    let id = uuid::Uuid::new_v4().to_string();
-    let dir = cfg.module("dashboards").dir().join(&id);
-    let project = req.project.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    let module = cfg.module("dashboards");
+    // The id is a slug of the name, not a UUID: it is the directory, the port-lease key, and what
+    // a manifest would have to name to install this dashboard on another machine — and a UUID is
+    // unusable as the last of those and expensive as the first two. See `adi_config::mint`.
+    let aliases = adi_config::Aliases::load(&module).unwrap_or_default();
+    let id = adi_config::mint(name, ID_FALLBACK, |candidate| {
+        module.dir().join(candidate).exists() || aliases.is_alias(candidate)
+    });
+    let dir = module.dir().join(&id);
+    let project = req
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
     if let Err(e) = scaffold(
         &dir,
         name,
@@ -221,13 +232,25 @@ pub fn set_dashboard_project(
 /// Resolve a client-supplied dashboard id to its directory, refusing anything that isn't a single
 /// path segment naming an existing dashboard — so the id can never climb out of the dashboards
 /// root.
+///
+/// An id a dashboard no longer has still answers, through the module's alias index
+/// ([`adi_config::Aliases`]): this is the one place a dashboard id is turned into a directory, so
+/// putting the lookup here is what would make a rename safe for every caller at once. Consulted
+/// only on a miss, so the common case is the single `is_dir` it always was.
 fn dashboard_dir(cfg: &Config, id: &str) -> Option<PathBuf> {
     let id = id.trim();
     if id.is_empty() || id == "." || id == ".." || id.contains('/') || id.contains('\\') {
         return None;
     }
-    let dir = cfg.module("dashboards").dir().join(id);
-    dir.is_dir().then_some(dir)
+    let module = cfg.module("dashboards");
+    let dir = module.dir().join(id);
+    if dir.is_dir() {
+        return Some(dir);
+    }
+    let current = module
+        .dir()
+        .join(adi_config::Aliases::load(&module).ok()?.target(id)?);
+    current.is_dir().then_some(current)
 }
 
 /// Parse a [`DashboardRef`] body into its trimmed, non-empty id.
@@ -399,16 +422,22 @@ const MAX_LABEL: usize = 63;
 /// `app` is the control panel, and the rest would shadow infrastructure or read as one.
 const RESERVED_LABELS: &[&str] = &["adi", "api", "app", "dns", "hive", "localhost", "n", "www"];
 
-/// The label used when neither the name nor the id yields a usable one — unreachable in practice
-/// (an id is a UUID, which is already a valid label), but a host must always exist.
+/// The label used when neither the name nor the id yields a usable one — a host must always exist.
 const FALLBACK_LABEL: &str = "dashboard";
+
+/// The word a dashboard's id falls back to when its name has nothing sluggable in it.
+const ID_FALLBACK: &str = "dashboard";
 
 /// The hostname both of a dashboard's services share: `<label>.adi`.
 ///
 /// Deterministic, and derived from what a human already typed: a slug of the dashboard's name,
 /// falling back to its id when the name has nothing DNS-usable in it (all-unicode, punctuation
-/// only), is reserved, or is already claimed by another dashboard. The id is a UUID, so that
-/// fallback is always free — a collision costs you a pretty hostname, never a working one.
+/// only), is reserved, or is already claimed by another dashboard — and then to a numbered
+/// [`FALLBACK_LABEL`]. A collision costs you a pretty hostname, never a working one.
+///
+/// The id fallback is checked against the claimed labels like the name is. It did not have to be
+/// while ids were UUIDs — no dashboard could declare `ec5bd98c-….adi` as its host — but an id is a
+/// slug of the name now, so it can collide with exactly what the name collided with.
 fn dashboard_host(dir: &Path, name: &str) -> String {
     let id = dir
         .file_name()
@@ -423,8 +452,8 @@ fn host_label(dir: &Path, id: &str, name: &str) -> String {
 
     slugify(name)
         .filter(free)
-        .or_else(|| slugify(id).filter(|l| !is_reserved(l)))
-        .unwrap_or_else(|| FALLBACK_LABEL.to_string())
+        .or_else(|| slugify(id).filter(free))
+        .unwrap_or_else(|| adi_config::unique_id(FALLBACK_LABEL, |label| !free(&label.to_string())))
 }
 
 /// Whether `label` is one of the names a dashboard must not take. Compared case-insensitively
@@ -563,8 +592,16 @@ const BACKEND_ENTRY_STAMP: &str = "// adi-backend-entry: 1";
 fn migrate(dir: &Path, name: &str) {
     migrate_hive(dir, name);
     let frontend = dir.join("frontend");
-    restamp_entry_point(&frontend.join("index.ts"), FRONTEND_ENTRY_STAMP, FRONTEND_INDEX_TS);
-    restamp_entry_point(&frontend.join("index.html"), SHELL_STAMP, FRONTEND_INDEX_HTML);
+    restamp_entry_point(
+        &frontend.join("index.ts"),
+        FRONTEND_ENTRY_STAMP,
+        FRONTEND_INDEX_TS,
+    );
+    restamp_entry_point(
+        &frontend.join("index.html"),
+        SHELL_STAMP,
+        FRONTEND_INDEX_HTML,
+    );
     restamp_entry_point(
         &dir.join("backend").join("index.ts"),
         BACKEND_ENTRY_STAMP,
@@ -621,7 +658,10 @@ fn is_one_origin(parsed: &HiveFile) -> bool {
         return false;
     };
     let same_host = !frontend.host.trim().is_empty()
-        && frontend.host.trim().eq_ignore_ascii_case(backend.host.trim());
+        && frontend
+            .host
+            .trim()
+            .eq_ignore_ascii_case(backend.host.trim());
     same_host
         && path_claim(frontend.path.as_deref()).is_none()
         && path_claim(backend.path.as_deref()).as_deref() == Some(API_PATH)
@@ -864,7 +904,11 @@ pub fn import_dashboard(
         &dir,
         &Manifest {
             name: Some(name.to_string()),
-            description: bundle.description.as_deref().map(str::trim).map(str::to_string),
+            description: bundle
+                .description
+                .as_deref()
+                .map(str::trim)
+                .map(str::to_string),
             project,
             // An import is a live dashboard by definition — including one landing on top of a row
             // that had been archived here, which is precisely how you un-retire one.
@@ -1262,7 +1306,10 @@ mod tests {
 
     #[test]
     fn a_display_name_becomes_one_lowercase_dns_label() {
-        assert_eq!(slugify("NakitYok Status").as_deref(), Some("nakityok-status"));
+        assert_eq!(
+            slugify("NakitYok Status").as_deref(),
+            Some("nakityok-status")
+        );
         assert_eq!(slugify("  My  Dash!!  ").as_deref(), Some("my-dash"));
         assert_eq!(slugify("CRM").as_deref(), Some("crm"));
         assert_eq!(slugify("v2.1 metrics").as_deref(), Some("v2-1-metrics"));
@@ -1271,7 +1318,8 @@ mod tests {
     #[test]
     fn a_name_with_nothing_ascii_in_it_slugs_to_nothing() {
         // Transliterating would invent a hostname nobody chose; the id is the honest fallback.
-        for name in ["Панель мониторинга", "ダッシュボード", "—", "  ", "!!!"] {
+        for name in ["Панель мониторинга", "ダッシュボード", "—", "  ", "!!!"]
+        {
             assert_eq!(slugify(name), None, "{name}");
         }
     }
@@ -1420,7 +1468,10 @@ mod tests {
         );
         // The entry points that knew an address are replaced by the current templates.
         let read = |p: PathBuf| std::fs::read_to_string(p).expect("entry point");
-        assert_eq!(read(dir.join("frontend").join("index.ts")), FRONTEND_INDEX_TS);
+        assert_eq!(
+            read(dir.join("frontend").join("index.ts")),
+            FRONTEND_INDEX_TS
+        );
         assert_eq!(
             read(dir.join("frontend").join("index.html")),
             FRONTEND_INDEX_HTML
@@ -1536,7 +1587,11 @@ mod tests {
         let hive = hive_of(&dir);
         assert!(is_one_origin(&hive));
         assert_eq!(
-            hive.services["backend"].proxy.as_ref().expect("backend").host,
+            hive.services["backend"]
+                .proxy
+                .as_ref()
+                .expect("backend")
+                .host,
             "nosh.adi"
         );
     }
@@ -1629,7 +1684,10 @@ mod tests {
         // The panel links this, so it must be the same name the hive file claims — the one the
         // front door routes `/api` on.
         assert_eq!(listed[0].host.as_deref(), Some("nosh.adi"));
-        assert_eq!(listed[0].host.as_deref(), declared_host(&root.join("1234")).as_deref());
+        assert_eq!(
+            listed[0].host.as_deref(),
+            declared_host(&root.join("1234")).as_deref()
+        );
     }
 
     #[test]
@@ -1648,10 +1706,13 @@ mod tests {
 
         let listed = listed(&cfg, &ports);
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0].host, None, "nothing is claimed, so nothing is reported");
+        assert_eq!(
+            listed[0].host, None,
+            "nothing is claimed, so nothing is reported"
+        );
         // Absent, not blank: `null` round-trips as `None`, so a link is never built from "".
-        let json: serde_json::Value = serde_json::from_str(&dashboards(&cfg, &ports, &[]).body)
-            .expect("json");
+        let json: serde_json::Value =
+            serde_json::from_str(&dashboards(&cfg, &ports, &[]).body).expect("json");
         assert!(json["dashboards"][0]["host"].is_null(), "{json}");
     }
 
@@ -1663,8 +1724,11 @@ mod tests {
         let dir = legacy_dashboard(&root, "9abc", "Nosh");
         // Somebody's half-finished edit. The listing visits every dashboard, so a panic here
         // would take out the whole page, not just this row.
-        std::fs::write(dir.join(".adi").join(HIVE_LIVE), "services: [oh no\n  : :\n")
-            .expect("broken hive");
+        std::fs::write(
+            dir.join(".adi").join(HIVE_LIVE),
+            "services: [oh no\n  : :\n",
+        )
+        .expect("broken hive");
 
         let listed = listed(&cfg, &ports);
         assert_eq!(listed.len(), 1);
@@ -1699,11 +1763,11 @@ mod tests {
 
     /// One bundled file's bytes, by path — `None` when the bundle does not carry it.
     fn bundled(bundle: &DashboardBundle, path: &str) -> Option<Vec<u8>> {
-        bundle
-            .files
-            .iter()
-            .find(|f| f.path == path)
-            .map(|f| base64::engine::general_purpose::STANDARD.decode(&f.contents).expect("base64"))
+        bundle.files.iter().find(|f| f.path == path).map(|f| {
+            base64::engine::general_purpose::STANDARD
+                .decode(&f.contents)
+                .expect("base64")
+        })
     }
 
     /// Import `bundle` into `projects`, asserting the node accepted it, and answer with the row it
@@ -1725,8 +1789,11 @@ mod tests {
             "export default () => 42;\n",
         )
         .expect("panel");
-        std::fs::write(dir.join("frontend").join("logo.png"), [0x89, b'P', 0x00, 0xff])
-            .expect("asset");
+        std::fs::write(
+            dir.join("frontend").join("logo.png"),
+            [0x89, b'P', 0x00, 0xff],
+        )
+        .expect("asset");
         dir
     }
 
@@ -1743,10 +1810,17 @@ mod tests {
 
         let bundle = export_bundle(projects.config(), "d1").expect("a bundle");
 
-        assert_eq!(bundle.id, "d1", "the id rides along so a re-transfer updates");
+        assert_eq!(
+            bundle.id, "d1",
+            "the id rides along so a re-transfer updates"
+        );
         assert_eq!(bundle.name, "Nosh");
         assert_eq!(bundle.description.as_deref(), Some("what it is for"));
-        assert_eq!(bundle.host.as_deref(), Some("nosh.adi"), "offered as a preference");
+        assert_eq!(
+            bundle.host.as_deref(),
+            Some("nosh.adi"),
+            "offered as a preference"
+        );
 
         assert_eq!(
             bundled(&bundle, "frontend/modules/mine.ts").as_deref(),
@@ -1760,7 +1834,10 @@ mod tests {
 
         let paths: Vec<&str> = bundle.files.iter().map(|f| f.path.as_str()).collect();
         for generated in [".adi/hive.yaml", "config.toml"] {
-            assert!(!paths.contains(&generated), "{generated} must be rebuilt, not shipped: {paths:?}");
+            assert!(
+                !paths.contains(&generated),
+                "{generated} must be rebuilt, not shipped: {paths:?}"
+            );
         }
         assert!(
             !paths.iter().any(|p| p.starts_with("node_modules/")),
@@ -1770,7 +1847,12 @@ mod tests {
             !paths.contains(&"hosts.link"),
             "a symlink out of the dashboard must never be followed onto the wire: {paths:?}"
         );
-        assert_eq!(export_bundle(projects.config(), "nope").err().map(|e| e.status), Some(404));
+        assert_eq!(
+            export_bundle(projects.config(), "nope")
+                .err()
+                .map(|e| e.status),
+            Some(404)
+        );
     }
 
     #[test]
@@ -1785,19 +1867,32 @@ mod tests {
         // Same dashboard, this machine's paths.
         assert_eq!(landed.id, "d2");
         assert_eq!(landed.name, "Nosh");
-        assert_eq!(landed.host.as_deref(), Some("nosh.adi"), "the label was free here");
+        assert_eq!(
+            landed.host.as_deref(),
+            Some("nosh.adi"),
+            "the label was free here"
+        );
         let dir = root_of(&there).join("d2");
         assert_eq!(landed.dir, dir.display().to_string());
         assert_eq!(landed.modules, ["mine", "status"], "the panels came across");
         assert_eq!(landed.routes, ["status"]);
-        assert!(landed.archived_at.is_none(), "an import is live by definition");
+        assert!(
+            landed.archived_at.is_none(),
+            "an import is live by definition"
+        );
 
         // The hive file is this machine's own — one origin, and a working_dir under *its* store.
         let hive = hive_of(&dir);
         assert!(is_one_origin(&hive));
         let raw = std::fs::read_to_string(dir.join(".adi").join(HIVE_LIVE)).expect("hive");
-        assert!(raw.contains(&format!("working_dir: {}", dir.display())), "{raw}");
-        assert!(!raw.contains("transfer-from"), "no path from the sending machine: {raw}");
+        assert!(
+            raw.contains(&format!("working_dir: {}", dir.display())),
+            "{raw}"
+        );
+        assert!(
+            !raw.contains("transfer-from"),
+            "no path from the sending machine: {raw}"
+        );
 
         // Every authored byte, including the one that is not text.
         assert_eq!(
@@ -1818,30 +1913,48 @@ mod tests {
         let from = authored(&here, "d3", "Nosh");
         let to = root_of(&there).join("d3");
 
-        import(&there, &there_ports, &export_bundle(here.config(), "d3").expect("bundle"));
+        import(
+            &there,
+            &there_ports,
+            &export_bundle(here.config(), "d3").expect("bundle"),
+        );
         // Something the node installed for itself, and a stale panel the next transfer drops.
         std::fs::create_dir_all(to.join("node_modules")).expect("cache dir");
         std::fs::write(to.join("node_modules").join("dep.js"), "cached").expect("cache");
 
         // Edit here: one panel changes, another is deleted.
-        std::fs::write(from.join("frontend").join("modules").join("mine.ts"), "// v2\n")
-            .expect("edit");
+        std::fs::write(
+            from.join("frontend").join("modules").join("mine.ts"),
+            "// v2\n",
+        )
+        .expect("edit");
         std::fs::remove_file(from.join("frontend").join("modules").join("status.ts"))
             .expect("delete a panel");
 
-        let again = import(&there, &there_ports, &export_bundle(here.config(), "d3").expect("bundle"));
+        let again = import(
+            &there,
+            &there_ports,
+            &export_bundle(here.config(), "d3").expect("bundle"),
+        );
 
         // One dashboard, not two — this is what makes "transfer" double as "redeploy".
         let listed = listed(there.config(), &there_ports);
         assert_eq!(listed.len(), 1, "{listed:?}");
-        assert_eq!(again.host.as_deref(), Some("nosh.adi"), "the address did not move");
+        assert_eq!(
+            again.host.as_deref(),
+            Some("nosh.adi"),
+            "the address did not move"
+        );
         assert_eq!(
             std::fs::read_to_string(to.join("frontend").join("modules").join("mine.ts"))
                 .expect("panel"),
             "// v2\n",
         );
         assert!(
-            !to.join("frontend").join("modules").join("status.ts").exists(),
+            !to.join("frontend")
+                .join("modules")
+                .join("status.ts")
+                .exists(),
             "a mirror, not a merge: a panel deleted here stops being served there"
         );
         assert_eq!(
@@ -1867,7 +1980,10 @@ mod tests {
 
         let landed = import(&there, &there_ports, &bundle);
 
-        assert!(landed.archived_at.is_none(), "sending it again is how you un-retire it");
+        assert!(
+            landed.archived_at.is_none(),
+            "sending it again is how you un-retire it"
+        );
         assert!(to.join(".adi").join(HIVE_LIVE).exists(), "supervised again");
         assert!(
             !to.join(".adi").join(HIVE_ARCHIVED).exists(),
@@ -1906,7 +2022,10 @@ mod tests {
 
         // Refused before anything is written: not a byte of the rejected bundle landed, and no
         // dashboard directory was created for it either.
-        assert!(!root.join("d5").exists(), "a refused import left a directory behind");
+        assert!(
+            !root.join("d5").exists(),
+            "a refused import left a directory behind"
+        );
         assert!(!root.parent().is_some_and(|p| p.join("escaped.ts").exists()));
 
         // And an id that is not one path segment is refused just as flatly. (The empty file list
@@ -1941,7 +2060,10 @@ mod tests {
 
         assert_eq!(res.status, 400, "{}", res.body);
         let to = root_of(&there).join("da");
-        assert!(to.join("frontend").join("index.ts").exists(), "the copy over there is intact");
+        assert!(
+            to.join("frontend").join("index.ts").exists(),
+            "the copy over there is intact"
+        );
         assert!(to.join("frontend").join("modules").join("mine.ts").exists());
     }
 
@@ -1966,7 +2088,10 @@ mod tests {
              a pretty one, and two dashboards on one host is a coin-flip",
         );
         // The resident keeps what it had; nothing was quietly re-pointed underneath it.
-        assert_eq!(declared_host(&root_of(&there).join("resident")).as_deref(), Some("nosh.adi"));
+        assert_eq!(
+            declared_host(&root_of(&there).join("resident")).as_deref(),
+            Some("nosh.adi")
+        );
     }
 
     #[test]
@@ -1984,7 +2109,10 @@ mod tests {
             &export_bundle(here.config(), "d7").expect("bundle"),
         );
 
-        assert_eq!(landed.project, None, "an id nothing here answers to is not a filing");
+        assert_eq!(
+            landed.project, None,
+            "an id nothing here answers to is not a filing"
+        );
     }
 
     #[test]
@@ -1995,21 +2123,33 @@ mod tests {
         let res = complete_move(here.config(), &ports, &[], "d8", "laptop-b", false);
         assert_eq!(res.status, 200, "{}", res.body);
 
-        let row = &serde_json::from_str::<DashboardsState>(&res.body).expect("state").dashboards[0];
+        let row = &serde_json::from_str::<DashboardsState>(&res.body)
+            .expect("state")
+            .dashboards[0];
         assert!(row.is_archived(), "the local one stops running");
         assert_eq!(row.moved_to.as_deref(), Some("laptop-b"));
         // Parked out of the supervisor's glob — which is what actually stops the two bun servers.
         assert!(dir.join(".adi").join(HIVE_ARCHIVED).exists());
         assert!(!dir.join(".adi").join(HIVE_LIVE).exists());
         // Nothing was deleted: Restore is still the way back.
-        assert!(dir.join("frontend").join("modules").join("mine.ts").exists());
+        assert!(
+            dir.join("frontend")
+                .join("modules")
+                .join("mine.ts")
+                .exists()
+        );
 
         // …and restoring drops the note, because this machine runs it again.
         let res = unarchive_dashboard(here.config(), &ports, &[], br#"{"id":"d8"}"#);
         assert_eq!(res.status, 200, "{}", res.body);
-        let row = &serde_json::from_str::<DashboardsState>(&res.body).expect("state").dashboards[0];
+        let row = &serde_json::from_str::<DashboardsState>(&res.body)
+            .expect("state")
+            .dashboards[0];
         assert!(!row.is_archived());
-        assert_eq!(row.moved_to, None, "a live dashboard does not live somewhere else");
+        assert_eq!(
+            row.moved_to, None,
+            "a live dashboard does not live somewhere else"
+        );
     }
 
     #[test]
@@ -2022,7 +2162,10 @@ mod tests {
 
         assert!(!dir.exists(), "the operator asked for the local copy to go");
         assert!(
-            serde_json::from_str::<DashboardsState>(&res.body).expect("state").dashboards.is_empty()
+            serde_json::from_str::<DashboardsState>(&res.body)
+                .expect("state")
+                .dashboards
+                .is_empty()
         );
         // A second attempt has nothing to stand down, and says so rather than reporting success.
         assert_eq!(

@@ -5,6 +5,7 @@
 use crate::arguments::{ClaudeEffort, ClaudePermissionMode, HarnessClaudeSdkArguments};
 use crate::backends::mcp::ToolScope;
 use crate::backends::{push_mcp_config, push_option, push_tool_scope};
+use crate::launch::expand_home;
 
 /// Which continuation flag a turn's command carries.
 ///
@@ -43,6 +44,7 @@ pub(crate) fn argv(
             push_option(&mut argv, "--resume", Some(session_id));
         }
     }
+    push_option(&mut argv, "--settings", settings(config).as_deref());
     push_option(&mut argv, "--model", config.model.as_deref());
     push_option(
         &mut argv,
@@ -74,6 +76,25 @@ pub(crate) fn argv(
     argv.push("--".to_string());
     argv.push(run_message(message));
     argv
+}
+
+/// The `--settings` value as the engine should receive it: a JSON string untouched, a path with its
+/// leading `~`/`$HOME` expanded.
+///
+/// The expansion is the whole reason this is a function. A settings path is written by hand, in the
+/// same TOML as `working_dir` and by someone who writes paths for a shell — but the run is spawned
+/// directly, so a literal `~/.claude/settings.glm.json` reaches the CLI as a filename that does not
+/// exist, and the agent runs on the default account while looking configured.
+fn settings(config: &HarnessClaudeSdkArguments) -> Option<String> {
+    let value = config
+        .settings
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())?;
+    if value.starts_with('{') {
+        return Some(value.to_string());
+    }
+    Some(expand_home(value)?.display().to_string())
 }
 
 /// Fold the agent's system prompts and its adi-mono command scope into a single
@@ -139,7 +160,9 @@ mod tests {
             argv(
                 &config,
                 "plan the migration",
-                &Continuation::First { session_id: "sid-1" },
+                &Continuation::First {
+                    session_id: "sid-1"
+                },
                 None,
                 &scope_tools(config.allowed_tools.as_deref()),
             ),
@@ -176,7 +199,9 @@ mod tests {
         let argv = argv(
             &HarnessClaudeSdkArguments::default(),
             "and now write a test",
-            &Continuation::Resume { session_id: "sid-1" },
+            &Continuation::Resume {
+                session_id: "sid-1",
+            },
             None,
             &scope_tools(None),
         );
@@ -200,6 +225,50 @@ mod tests {
         );
     }
 
+    /// Two agents, one engine, different accounts: the settings file is how a run is pointed at an
+    /// `ANTHROPIC_BASE_URL` of its own. A `~` in it has to be expanded here, because the run is
+    /// spawned without a shell that would have done it.
+    #[test]
+    fn a_settings_path_reaches_the_engine_with_its_home_expanded() {
+        let home = std::env::var("HOME").expect("a test host has a HOME");
+        let config = HarnessClaudeSdkArguments {
+            settings: Some("~/.claude/settings.glm.json".into()),
+            ..HarnessClaudeSdkArguments::default()
+        };
+        let argv = argv(
+            &config,
+            "",
+            &Continuation::First {
+                session_id: "sid-1",
+            },
+            None,
+            &scope_tools(None),
+        );
+        let at = argv.iter().position(|a| a == "--settings").expect("--settings");
+        assert_eq!(argv[at + 1], format!("{home}/.claude/settings.glm.json"));
+    }
+
+    /// The flag also takes settings inline, and JSON is not a path — expanding it would corrupt it.
+    #[test]
+    fn inline_settings_json_is_passed_through_untouched() {
+        let json = r#"{"env":{"ANTHROPIC_BASE_URL":"https://api.z.ai/api/anthropic"}}"#;
+        let config = HarnessClaudeSdkArguments {
+            settings: Some(json.into()),
+            ..HarnessClaudeSdkArguments::default()
+        };
+        let argv = argv(
+            &config,
+            "",
+            &Continuation::First {
+                session_id: "sid-1",
+            },
+            None,
+            &scope_tools(None),
+        );
+        let at = argv.iter().position(|a| a == "--settings").expect("--settings");
+        assert_eq!(argv[at + 1], json);
+    }
+
     /// The bare run is the one that matters most: an agent that configured nothing still carries an
     /// explicit empty `--tools`, because the flag's *absence* is what hands over every built-in the
     /// engine ships.
@@ -208,7 +277,9 @@ mod tests {
         let argv = argv(
             &HarnessClaudeSdkArguments::default(),
             "",
-            &Continuation::First { session_id: "sid-1" },
+            &Continuation::First {
+                session_id: "sid-1",
+            },
             None,
             &scope_tools(None),
         );

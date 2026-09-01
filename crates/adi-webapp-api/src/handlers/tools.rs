@@ -208,13 +208,13 @@ fn tool_dto(tool: Tool) -> ToolDto {
 }
 
 // Map a tool-store error to an HTTP status: bad id/runtime → 400, missing tool/linked file → 404,
-// a protected system tool → 409, launch/store failure → 500.
+// a taken id or a protected system tool → 409, launch/store failure → 500.
 impl From<&ToolStoreError> for Response {
     fn from(e: &ToolStoreError) -> Self {
         let status = match e {
             ToolStoreError::InvalidId(_) | ToolStoreError::InvalidRuntime(_) => 400,
             ToolStoreError::NotFound(_) | ToolStoreError::LinkedMissing(_) => 404,
-            ToolStoreError::SystemProtected(_) => 409,
+            ToolStoreError::SystemProtected(_) | ToolStoreError::Exists(_) => 409,
             ToolStoreError::Config(_) | ToolStoreError::Io(_) | ToolStoreError::Launch(_) => 500,
         };
         error(status, &e.to_string())
@@ -239,8 +239,7 @@ impl FromBody for NewTool {
 }
 
 impl FromBody for LinkTool {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"path\": \"…\" } with a non-empty path";
+    const EXPECTED: &'static str = "expected JSON body { \"path\": \"…\" } with a non-empty path";
 
     fn is_complete(&self) -> bool {
         !self.path.trim().is_empty()

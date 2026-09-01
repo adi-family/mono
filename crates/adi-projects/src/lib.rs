@@ -4,6 +4,12 @@
 //! state). A project's *runtime* config (services, proxy hosts, ports) lives separately in
 //! the project's own `.adi/hive.yaml`, owned by adi-hive — this crate only owns the manifest.
 //!
+//! A project's id is minted from its name ([`adi_config::mint`]) and *is* its directory name under
+//! `projects/`. Ids minted before that rule are UUIDs and keep working unchanged;
+//! [`rename`](Projects::rename) turns one into a name and records the old id in the registry's
+//! alias index, so a `.adi/hive.yaml`, an `$ADI_PROJECT`, or a manifest elsewhere in the store that
+//! still cites the UUID resolves to the same project it always did.
+//!
 //! ```
 //! # let tmp = std::env::temp_dir().join(format!("adi-projects-doctest-{}", std::process::id()));
 //! # let _ = std::fs::remove_dir_all(&tmp);
@@ -13,9 +19,9 @@
 //! // In real code: let store = Projects::open();
 //! let created = store.create("Demo", None, None)?;
 //! assert_eq!(created.manifest.name, "Demo");
+//! assert_eq!(created.id, "demo");
 //! assert!(!created.is_archived());
 //!
-//! // The id is a generated UUID — the project's directory name under `projects/`.
 //! store.archive(&created.id)?;
 //! assert!(store.get(&created.id)?.unwrap().is_archived());
 //! # std::fs::remove_dir_all(&tmp).ok();
@@ -25,10 +31,10 @@
 mod error;
 mod project;
 
-use adi_config::{clean, optional};
+use adi_config::{Aliases, clean, optional};
 use std::path::PathBuf;
 
-use adi_config::{Config, ConfigFile, now_unix};
+use adi_config::{Config, ConfigFile, Module, now_unix};
 
 pub use error::{Error, Result};
 pub use project::{Manifest, Project};
@@ -38,6 +44,8 @@ use project::validate_id;
 /// The store module projects live under, and the manifest file within each project dir.
 const PROJECTS_MODULE: &str = "projects";
 const MANIFEST_FILE: &str = "config.toml";
+/// The word a project's id falls back to when its name has nothing sluggable in it.
+const ID_FALLBACK: &str = "project";
 
 /// The projects registry: lists, reads, and mutates the per-project manifests under the
 /// `projects` module dir. Cheap to clone; all state is on disk.
@@ -87,8 +95,43 @@ impl Projects {
     /// [`Error::InvalidId`] for an unsafe id — the security boundary before the id is joined
     /// onto the store path.
     pub fn project_dir(&self, id: &str) -> Result<PathBuf> {
+        Ok(self.dir().join(self.resolve(id)?))
+    }
+
+    /// The `projects` module handle — the directory the project dirs and the alias index share.
+    fn module(&self) -> Module {
+        self.config.module(PROJECTS_MODULE)
+    }
+
+    /// The ids projects used to have, each pointing at the id it has now. See [`Aliases`].
+    ///
+    /// # Errors
+    /// [`Error::Config`] if the index exists but can't be read or parsed.
+    pub fn aliases(&self) -> Result<Aliases> {
+        Ok(Aliases::load(&self.module())?)
+    }
+
+    /// The id `id` actually names: itself when a project is registered under it, else what the
+    /// alias index says it was renamed to, else `id` unchanged.
+    ///
+    /// Every read and mutation path goes through here, which is what makes a UUID written into a
+    /// `.adi/hive.yaml`, a store document, or somebody's shell history keep working after the
+    /// project it names has been given one.
+    ///
+    /// # Errors
+    /// [`Error::InvalidId`] for an unsafe id, or [`Error::Config`] on an unreadable alias index.
+    pub fn resolve(&self, id: &str) -> Result<String> {
         validate_id(id)?;
-        Ok(self.dir().join(id))
+        if self.manifest_file(id).exists() {
+            return Ok(id.to_string());
+        }
+        Ok(self.aliases()?.target(id).unwrap_or(id).to_string())
+    }
+
+    /// Whether anything occupies `id`: a project's directory (registered or made by hand), or an
+    /// id some project was renamed away from and still answers to.
+    fn is_taken(&self, id: &str, aliases: &Aliases) -> bool {
+        self.dir().join(id).exists() || aliases.is_alias(id)
     }
 
     /// Where a project's runtime hive config lives: `projects/<id>/.adi/hive.yaml`. This crate
@@ -103,9 +146,7 @@ impl Projects {
 
     /// The manifest file handle for `id`, at `projects/<id>/config.toml` (touches no disk).
     fn manifest_file(&self, id: &str) -> ConfigFile<Manifest> {
-        self.config
-            .module(PROJECTS_MODULE)
-            .file(&format!("{id}/{MANIFEST_FILE}"))
+        self.module().file(&format!("{id}/{MANIFEST_FILE}"))
     }
 
     /// Every registered project, sorted by id. A project dir without a `config.toml` isn't
@@ -144,25 +185,27 @@ impl Projects {
         Ok(projects)
     }
 
-    /// The project with this id, or `None` if it isn't registered.
+    /// The project with this id, or `None` if it isn't registered. `id` may be an id the project
+    /// no longer has (see [`resolve`](Self::resolve)); the returned [`Project`] always carries the
+    /// current one.
     ///
     /// # Errors
     /// [`Error::InvalidId`] for an unsafe id, or [`Error::Config`] if the manifest is invalid TOML.
     pub fn get(&self, id: &str) -> Result<Option<Project>> {
-        validate_id(id)?;
-        let file = self.manifest_file(id);
+        let id = self.resolve(id)?;
+        let file = self.manifest_file(&id);
         if !file.exists() {
             return Ok(None);
         }
         Ok(Some(Project {
-            id: id.to_string(),
+            id,
             manifest: file.load()?,
         }))
     }
 
-    /// Register a new project under a freshly generated UUID id (its directory name), writing
-    /// its `config.toml`. Callers supply only the human-facing `name`; a blank name falls back
-    /// to the generated id.
+    /// Register a new project under an id minted from its name (its directory name), writing its
+    /// `config.toml`. Callers supply only the human-facing `name`; a blank name falls back to the
+    /// minted id.
     ///
     /// # Errors
     /// [`Error::NotFound`] for an unregistered parent, or [`Error::Config`] on a write failure.
@@ -172,7 +215,10 @@ impl Projects {
         description: Option<String>,
         parent: Option<String>,
     ) -> Result<Project> {
-        let id = uuid::Uuid::new_v4().to_string();
+        let aliases = self.aliases()?;
+        let id = adi_config::mint(name, ID_FALLBACK, |candidate| {
+            self.is_taken(candidate, &aliases)
+        });
         self.create_with_id(&id, Some(name.to_string()), description, parent)
     }
 
@@ -197,7 +243,9 @@ impl Projects {
     ) -> Result<Project> {
         validate_id(id)?;
         let file = self.manifest_file(id);
-        if file.exists() {
+        // An id another project was renamed away from is taken too: handing it to a new project
+        // would silently re-point every reference still naming the old one.
+        if file.exists() || self.aliases()?.is_alias(id) {
             return Err(Error::Exists(id.to_string()));
         }
         let parent = clean(parent);
@@ -238,7 +286,9 @@ impl Projects {
         let mut project = self.require(id)?;
         if project.manifest.archived_at.is_none() {
             project.manifest.archived_at = Some(now_unix());
-            self.manifest_file(id).save(&project.manifest)?;
+            // `project.id`, not `id`: the caller may have named it by an id it no longer has, and
+            // writing the manifest back under that one would create a second, half-made project.
+            self.manifest_file(&project.id).save(&project.manifest)?;
         }
         Ok(project)
     }
@@ -251,7 +301,7 @@ impl Projects {
         let mut project = self.require(id)?;
         if project.manifest.archived_at.is_some() {
             project.manifest.archived_at = None;
-            self.manifest_file(id).save(&project.manifest)?;
+            self.manifest_file(&project.id).save(&project.manifest)?;
         }
         Ok(project)
     }
@@ -261,19 +311,23 @@ impl Projects {
     /// removal. Sub-projects survive: they re-parent to the removed project's own parent
     /// (top-level when it had none), mirroring how the task tree deletes a node.
     ///
+    /// Every id the project answered to goes with it: an alias to a deleted project would hold
+    /// that id reserved against a future mint while pointing at nothing.
+    ///
     /// # Errors
     /// [`Error::InvalidId`] for an unsafe id, or [`Error::Io`] on a removal failure.
     pub fn remove(&self, id: &str) -> Result<bool> {
-        validate_id(id)?;
+        let id = self.resolve(id)?;
         // Capture the parent before the manifest is gone, to hand it down to the children.
-        let orphan_parent = self.get(id)?.and_then(|p| p.manifest.parent);
-        let dir = self.dir().join(id);
+        let orphan_parent = self.get(&id)?.and_then(|p| p.manifest.parent);
+        let dir = self.dir().join(&id);
         let removed = optional(std::fs::remove_dir_all(&dir))?.is_some();
         if removed {
-            for mut child in self.children(id)? {
+            for mut child in self.children(&id)? {
                 child.manifest.parent.clone_from(&orphan_parent);
                 self.manifest_file(&child.id).save(&child.manifest)?;
             }
+            Aliases::forget(&self.module(), &id)?;
         }
         Ok(removed)
     }
@@ -286,19 +340,26 @@ impl Projects {
     /// Renaming to the id it already has is a no-op, not an error: the caller asked for a state,
     /// and that state already holds.
     ///
+    /// The id it had is recorded in the alias index and keeps resolving — to this project's
+    /// directory, its manifest, and everything under it. That is what lets a project move from the
+    /// UUID it was created under to its name without breaking a `.adi/hive.yaml`, a store document
+    /// or an `$ADI_PROJECT` that names the old one. `from` may itself be such an id.
+    ///
     /// This is the *registry* half of a rename. A project id is also written down outside this
     /// store — a tool or an agent filed under it, its scoped secrets, its database, its knowledge
     /// bases — and none of that is this crate's to reach. Callers that own the whole store
-    /// (`adi_core::rename_project`) follow the rename into those stores after this returns.
+    /// (`adi_core::rename_project`) follow the rename into those stores after this returns, which
+    /// is what makes the new id the one those actually cost; the alias is for everything nobody
+    /// can reach.
     ///
     /// # Errors
     /// [`Error::InvalidId`] for an unsafe id on either side, [`Error::NotFound`] if `from` isn't
     /// registered, [`Error::Exists`] if anything already occupies `to`, or [`Error::Io`] /
     /// [`Error::Config`] if the move or a child rewrite fails.
     pub fn rename(&self, from: &str, to: &str) -> Result<Renamed> {
-        validate_id(from)?;
         validate_id(to)?;
         let project = self.require(from)?;
+        let from = project.id.clone();
         if from == to {
             return Ok(Renamed {
                 project,
@@ -309,13 +370,14 @@ impl Projects {
         // `projects/<to>` (a directory somebody made by hand) would otherwise swallow the moved
         // project as a child of itself on platforms where that rename succeeds.
         let target = self.dir().join(to);
-        if target.exists() {
+        if self.is_taken(to, &self.aliases()?) {
             return Err(Error::Exists(to.to_string()));
         }
-        std::fs::rename(self.dir().join(from), &target)?;
+        std::fs::rename(self.dir().join(&from), &target)?;
+        Aliases::record(&self.module(), &from, to)?;
 
         let mut subprojects = 0;
-        for mut child in self.children(from)? {
+        for mut child in self.children(&from)? {
             child.manifest.parent = Some(to.to_string());
             self.manifest_file(&child.id).save(&child.manifest)?;
             subprojects += 1;
@@ -382,20 +444,82 @@ mod tests {
     }
 
     #[test]
-    fn create_generates_a_unique_uuid_id() {
-        let store = scratch("uuid");
+    fn create_mints_a_slug_of_the_name() {
+        let store = scratch("mint");
         let a = store.create("My App", None, None).expect("create");
-        assert_eq!(a.id.len(), 36);
+        assert_eq!(a.id, "my-app");
         assert!(validate_id(&a.id).is_ok());
         assert_eq!(a.manifest.name, "My App");
         assert_eq!(store.get(&a.id).expect("get").expect("present"), a);
 
-        let b = store.create("My App", None, None).expect("second create");
-        assert_ne!(a.id, b.id);
+        // A second project of the same name takes the next number rather than the first one's dir.
+        let b = store.create("my app", None, None).expect("second create");
+        assert_eq!(b.id, "my-app-2");
         assert_eq!(store.list().expect("list").len(), 2);
 
+        // Nothing sluggable: the kind's own word, then the same numbering.
+        let cyrillic = store.create("Проект", None, None).expect("cyrillic");
+        assert_eq!(cyrillic.id, "project");
         let bare = store.create("   ", None, None).expect("blank name");
+        assert_eq!(bare.id, "project-2");
         assert_eq!(bare.manifest.name, bare.id);
+    }
+
+    /// The hard constraint: a renamed project still answers to the id it had, so a
+    /// `.adi/hive.yaml`, an `$ADI_PROJECT`, or a store document naming the UUID keeps resolving.
+    #[test]
+    fn a_renamed_project_still_answers_to_the_id_it_had() {
+        let store = scratch("alias");
+        let uuid = "3352a5eb-5166-4609-b164-3fe6bf1a091c";
+        store
+            .create_with_id(uuid, Some("Nakit Yok".into()), None, None)
+            .expect("create");
+        std::fs::write(
+            store.project_dir(uuid).expect("dir").join("NOTES.md"),
+            "inside",
+        )
+        .expect("write");
+
+        store.rename(uuid, "nakit-yok").expect("rename");
+        let by_old = store.get(uuid).expect("get old").expect("present");
+        assert_eq!(by_old.id, "nakit-yok", "the current id is what is reported");
+        assert_eq!(by_old.manifest.name, "Nakit Yok");
+        // The directory the old id points at is the moved one, files and all.
+        let notes = store.project_dir(uuid).expect("dir").join("NOTES.md");
+        assert_eq!(std::fs::read_to_string(notes).expect("read"), "inside");
+        assert!(
+            store
+                .hive_path(uuid)
+                .expect("hive path")
+                .ends_with("projects/nakit-yok/.adi/hive.yaml")
+        );
+        // `adi_config::Config::project_dir` is the same question asked by the crates that only
+        // need to point a run somewhere; it has to answer the old id too.
+        assert!(
+            store
+                .config()
+                .project_dir(uuid)
+                .expect("config project dir")
+                .ends_with("projects/nakit-yok")
+        );
+
+        // The id it gave up is not free to be handed to something else.
+        assert!(matches!(
+            store.create_with_id(uuid, None, None, None),
+            Err(Error::Exists(_))
+        ));
+        // And a rename can be corrected through it.
+        store.rename(uuid, "nakit").expect("re-rename by old id");
+        assert_eq!(store.get(uuid).expect("get").expect("present").id, "nakit");
+        assert_eq!(
+            store.get("nakit-yok").expect("get").expect("present").id,
+            "nakit"
+        );
+
+        // Deleting the project releases every id it answered to.
+        assert!(store.remove(uuid).expect("remove by old id"));
+        assert!(store.get(uuid).expect("get").is_none());
+        assert!(store.aliases().expect("aliases").all().is_empty());
     }
 
     #[test]
@@ -479,7 +603,11 @@ mod tests {
         assert_eq!(renamed.project.id, "new");
         assert_eq!(renamed.subprojects, 1);
 
-        assert!(store.get("old").expect("get old").is_none());
+        // The old id is an alias now, not an absence: it resolves to the project under its new id.
+        assert_eq!(
+            store.get("old").expect("get old").expect("present").id,
+            "new"
+        );
         let moved = store.get("new").expect("get new").expect("present");
         assert_eq!(moved.manifest.name, "Old");
         assert_eq!(moved.manifest.description.as_deref(), Some("keep me"));
@@ -508,11 +636,20 @@ mod tests {
         store.create_with_id("a", None, None, None).expect("a");
         store.create_with_id("b", None, None, None).expect("b");
         assert!(matches!(store.rename("a", "b"), Err(Error::Exists(_))));
-        assert!(matches!(store.rename("ghost", "c"), Err(Error::NotFound(_))));
-        assert!(matches!(store.rename("a", "../x"), Err(Error::InvalidId(_))));
+        assert!(matches!(
+            store.rename("ghost", "c"),
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            store.rename("a", "../x"),
+            Err(Error::InvalidId(_))
+        ));
         // A bare directory with no manifest still occupies the id.
         std::fs::create_dir_all(store.dir().join("squatter")).expect("mkdir");
-        assert!(matches!(store.rename("a", "squatter"), Err(Error::Exists(_))));
+        assert!(matches!(
+            store.rename("a", "squatter"),
+            Err(Error::Exists(_))
+        ));
         // Every refusal left both projects exactly where they were.
         assert!(store.get("a").expect("get a").is_some());
         assert!(store.get("b").expect("get b").is_some());

@@ -43,6 +43,11 @@ pub(crate) enum AgentsCommand {
         model: Option<String>,
         #[arg(long)]
         permission_mode: Option<String>,
+        /// `harness:claude-sdk` only: the engine settings JSON this agent runs under — a path or an
+        /// inline object. Its `env` block picks the account and models, so two agents on one machine
+        /// can run the same engine against different APIs.
+        #[arg(long)]
+        settings: Option<String>,
         #[arg(long)]
         temperature: Option<f64>,
         #[arg(long)]
@@ -390,6 +395,7 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             command_scope,
             model,
             permission_mode,
+            settings,
             temperature,
             max_turns,
             tags,
@@ -448,6 +454,9 @@ pub(crate) fn run_agents(adi: Adi, command: AgentsCommand) -> Result<(), String>
             }
             if let Some(value) = clean(permission_mode) {
                 arguments.insert("permission_mode".into(), value.into());
+            }
+            if let Some(value) = clean(settings) {
+                arguments.insert("settings".into(), value.into());
             }
             if let Some(value) = temperature {
                 arguments.insert("temperature".into(), value.into());

@@ -13,6 +13,12 @@
 //! `exec`s `adi-mono tools run <id> "$@"` — so an agent with that `.bin` on its `PATH` runs a
 //! tool by name. The shims are regenerated from the manifests on every mutation.
 //!
+//! A tool's id is minted from its name ([`adi_config::mint`]), so `confirm-sync` is both what it
+//! is called and where it lives. Ids minted before that rule are UUIDs and stay exactly as they
+//! are; [`rename`](Tools::rename) is how one becomes a name, and the UUID it had keeps resolving
+//! through the registry's alias index forever after — 75 agent definitions cite tool ids verbatim
+//! in their `bin_tools`, and none of them may stop working because a tool was given a better name.
+//!
 //! ```
 //! # let tmp = std::env::temp_dir().join(format!("adi-tools-doctest-{}", std::process::id()));
 //! # let _ = std::fs::remove_dir_all(&tmp);
@@ -37,10 +43,10 @@ mod run;
 mod system;
 mod tool;
 
-use adi_config::{clean, optional};
+use adi_config::{Aliases, clean, optional};
 use std::path::{Path, PathBuf};
 
-use adi_config::{Config, ConfigFile, now_unix};
+use adi_config::{Config, ConfigFile, Module, now_unix};
 
 pub use error::{Error, Result};
 pub use help::ToolHelp;
@@ -62,6 +68,8 @@ const BIN_DIR: &str = ".bin";
 /// The parent of the per-agent bin dirs (`tools/.agent-bin/<agent>`). Dot-prefixed so
 /// [`Tools::list`] skips it, and separate from [`BIN_DIR`] so regenerating one never wipes the other.
 const AGENT_BIN_DIR: &str = ".agent-bin";
+/// The word a tool's id falls back to when its name has nothing sluggable in it.
+const ID_FALLBACK: &str = "tool";
 
 /// The tools registry: lists, reads, edits, and runs the per-tool manifests + scripts under the
 /// `tools` module dir. Cheap to clone; all state is on disk.
@@ -116,15 +124,59 @@ impl Tools {
     /// [`Error::InvalidId`] for an unsafe id — the security boundary before the id is joined onto
     /// the store path.
     pub fn tool_dir(&self, id: &str) -> Result<PathBuf> {
-        validate_id(id)?;
-        Ok(self.dir().join(id))
+        Ok(self.dir().join(self.resolve(id)?))
     }
 
     /// The manifest file handle for `id`, at `tools/<id>/config.toml` (touches no disk).
     fn manifest_file(&self, id: &str) -> ConfigFile<Manifest> {
-        self.config
-            .module(TOOLS_MODULE)
-            .file(&format!("{id}/{MANIFEST_FILE}"))
+        self.module().file(&format!("{id}/{MANIFEST_FILE}"))
+    }
+
+    /// The `tools` module handle — the directory the manifests and the alias index share.
+    fn module(&self) -> Module {
+        self.config.module(TOOLS_MODULE)
+    }
+
+    /// The ids tools used to have, each pointing at the id it has now. See [`Aliases`].
+    ///
+    /// # Errors
+    /// [`Error::Config`] if the index exists but can't be read or parsed.
+    pub fn aliases(&self) -> Result<Aliases> {
+        Ok(Aliases::load(&self.module())?)
+    }
+
+    /// The id `id` actually names: itself when a tool is registered under it, else what the alias
+    /// index says the tool was renamed to, else `id` unchanged (so "no such tool" is reported
+    /// against the id the caller typed rather than something it was silently rewritten to).
+    ///
+    /// This is the one place a legacy UUID becomes a current id, and every read and mutation path
+    /// goes through it — which is what makes an old `bin_tools` entry, a stale shim, or a UUID out
+    /// of somebody's shell history keep working after a rename.
+    ///
+    /// # Errors
+    /// [`Error::InvalidId`] for an unsafe id, or [`Error::Config`] on an unreadable alias index.
+    pub fn resolve(&self, id: &str) -> Result<String> {
+        validate_id(id)?;
+        if self.manifest_file(id).exists() {
+            return Ok(id.to_string());
+        }
+        Ok(self.aliases()?.target(id).unwrap_or(id).to_string())
+    }
+
+    /// Whether anything occupies `id`: a tool's directory (registered or half-made by hand), or an
+    /// id some tool was renamed away from. Both count, because minting an id that still resolves
+    /// elsewhere would silently re-point every reference that names it.
+    fn is_taken(&self, id: &str, aliases: &Aliases) -> bool {
+        self.dir().join(id).exists() || aliases.is_alias(id)
+    }
+
+    /// Mint the id for a new tool called `name` — a slug of the name, uniquified against
+    /// everything already taken. See [`adi_config::mint`].
+    fn mint_id(&self, name: &str) -> Result<String> {
+        let aliases = self.aliases()?;
+        Ok(adi_config::mint(name, ID_FALLBACK, |candidate| {
+            self.is_taken(candidate, &aliases)
+        }))
     }
 
     /// Where a tool's script lives: the linked file for a linked tool, else the owned
@@ -141,10 +193,10 @@ impl Tools {
     fn script_path_of(&self, tool: &Tool) -> PathBuf {
         match &tool.manifest.linked_path {
             Some(path) => PathBuf::from(path),
-            None => self
-                .dir()
-                .join(&tool.id)
-                .join(format!("{SCRIPT_STEM}.{}", runtime_ext(&tool.manifest.runtime))),
+            None => self.dir().join(&tool.id).join(format!(
+                "{SCRIPT_STEM}.{}",
+                runtime_ext(&tool.manifest.runtime)
+            )),
         }
     }
 
@@ -184,25 +236,27 @@ impl Tools {
         Ok(tools)
     }
 
-    /// The tool with this id, or `None` if it isn't registered.
+    /// The tool with this id, or `None` if it isn't registered. `id` may be an id the tool no
+    /// longer has (see [`resolve`](Self::resolve)); the returned [`Tool`] always carries the
+    /// current one.
     ///
     /// # Errors
     /// [`Error::InvalidId`] for an unsafe id, or [`Error::Config`] if the manifest is invalid TOML.
     pub fn get(&self, id: &str) -> Result<Option<Tool>> {
-        validate_id(id)?;
-        let file = self.manifest_file(id);
+        let id = self.resolve(id)?;
+        let file = self.manifest_file(&id);
         if !file.exists() {
             return Ok(None);
         }
         Ok(Some(Tool {
-            id: id.to_string(),
+            id,
             manifest: file.load()?,
         }))
     }
 
-    /// Register a new **owned** tool under a generated UUID id: writes its `config.toml` and an
-    /// executable script (from `content`, or a runtime starter when omitted), then regenerates the
-    /// `.bin` shims. A blank `name` falls back to the generated id.
+    /// Register a new **owned** tool under an id minted from its name: writes its `config.toml`
+    /// and an executable script (from `content`, or a runtime starter when omitted), then
+    /// regenerates the `.bin` shims. A blank `name` falls back to the minted id.
     ///
     /// # Errors
     /// [`Error::InvalidRuntime`] for an unknown runtime, or [`Error::Config`]/[`Error::Io`] on a
@@ -216,8 +270,8 @@ impl Tools {
         content: Option<String>,
     ) -> Result<Tool> {
         let runtime = validate_runtime(runtime)?;
-        let id = uuid::Uuid::new_v4().to_string();
         let name = clean(Some(name.to_string()));
+        let id = self.mint_id(name.as_deref().unwrap_or_default())?;
         let manifest = Manifest {
             name: name.clone().unwrap_or_else(|| id.clone()),
             description: clean(description),
@@ -239,9 +293,10 @@ impl Tools {
         Ok(tool)
     }
 
-    /// Register a new **linked** tool that points at an existing file `path` on disk: writes only
-    /// a manifest (the file is never copied), then regenerates the `.bin` shims. `name` defaults
-    /// to the file's stem, `runtime` is inferred from the extension when blank.
+    /// Register a new **linked** tool that points at an existing file `path` on disk under an id
+    /// minted from its name: writes only a manifest (the file is never copied), then regenerates
+    /// the `.bin` shims. `name` defaults to the file's stem, `runtime` is inferred from the
+    /// extension when blank.
     ///
     /// # Errors
     /// [`Error::LinkedMissing`] when `path` doesn't exist, [`Error::InvalidRuntime`] for an
@@ -270,7 +325,7 @@ impl Tools {
                 .unwrap_or_else(|| "tool".to_string())
         });
 
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = self.mint_id(&name)?;
         let manifest = Manifest {
             name,
             description: clean(description),
@@ -321,7 +376,9 @@ impl Tools {
         let mut tool = self.require(id)?;
         if tool.manifest.archived_at.is_none() {
             tool.manifest.archived_at = Some(now_unix());
-            self.manifest_file(id).save(&tool.manifest)?;
+            // `tool.id`, not `id`: the caller may have named the tool by an id it no longer has,
+            // and writing the manifest back under that one would create a second, half-made tool.
+            self.manifest_file(&tool.id).save(&tool.manifest)?;
             self.sync_bin()?;
         }
         Ok(tool)
@@ -336,7 +393,7 @@ impl Tools {
         let mut tool = self.require(id)?;
         if tool.manifest.archived_at.is_some() {
             tool.manifest.archived_at = None;
-            self.manifest_file(id).save(&tool.manifest)?;
+            self.manifest_file(&tool.id).save(&tool.manifest)?;
             self.sync_bin()?;
         }
         Ok(tool)
@@ -347,20 +404,71 @@ impl Tools {
     /// the store's manifest dir is removed. A built-in **system** tool is protected: it cannot be
     /// hard-deleted (archive it to disable it instead). Returns `false` if the tool wasn't there.
     ///
+    /// Every id the tool answered to goes with it: an alias to a deleted tool would hold that id
+    /// reserved against a future mint for nobody's benefit, since the thing it pointed at is gone.
+    ///
     /// # Errors
     /// [`Error::InvalidId`] for an unsafe id, [`Error::SystemProtected`] for a system tool, or
     /// [`Error::Io`] on a removal failure.
     pub fn remove(&self, id: &str) -> Result<bool> {
-        validate_id(id)?;
-        if self.get(id)?.is_some_and(|t| t.is_system()) {
-            return Err(Error::SystemProtected(id.to_string()));
+        let id = self.resolve(id)?;
+        if self.get(&id)?.is_some_and(|t| t.is_system()) {
+            return Err(Error::SystemProtected(id));
         }
-        let dir = self.dir().join(id);
+        let dir = self.dir().join(&id);
         let removed = optional(std::fs::remove_dir_all(&dir))?.is_some();
         if removed {
+            Aliases::forget(&self.module(), &id)?;
             self.sync_bin()?;
         }
         Ok(removed)
+    }
+
+    /// Give a tool a new id, leaving the old one resolving.
+    ///
+    /// The id *is* the tool's directory, so this moves it whole — the manifest and the owned
+    /// script travel with it and nothing inside has to be rewritten — and then records the old id
+    /// in the alias index. That second half is the point: a tool id is written down in places this
+    /// crate cannot reach (an agent's `bin_tools`, a project's `.adi/hive.yaml`, a note, a shell
+    /// history), and after this returns every one of them still names this tool.
+    ///
+    /// `from` may itself be an id the tool no longer has, so a rename can be corrected without
+    /// first working out which id is current. Renaming to the id it already has is a no-op rather
+    /// than an error: the caller asked for a state, and that state already holds.
+    ///
+    /// This is the *registry* half. Callers that own the whole store (`adi_core::rename_tool`)
+    /// follow it into the agent definitions afterwards, so the new id is what those actually cost.
+    ///
+    /// A built-in **system** tool is protected, as it is from delete: its `sys-*` id is the handle
+    /// the platform re-seeds it by ([`seed_system`](Self::seed_system)) and names in code, so a
+    /// renamed one would simply be created again beside itself on the next start-up.
+    ///
+    /// # Errors
+    /// [`Error::InvalidId`] for an unsafe id on either side, [`Error::NotFound`] if `from` names
+    /// no tool, [`Error::SystemProtected`] for a system tool, [`Error::Exists`] if anything
+    /// already occupies `to`, or [`Error::Io`] / [`Error::Config`] if the move or the index write
+    /// fails.
+    pub fn rename(&self, from: &str, to: &str) -> Result<Tool> {
+        validate_id(to)?;
+        let tool = self.require(from)?;
+        if tool.id == to {
+            return Ok(tool);
+        }
+        if tool.is_system() {
+            return Err(Error::SystemProtected(tool.id));
+        }
+        // Refuse an occupied directory, not just a registered tool: an unregistered `tools/<to>`
+        // somebody made by hand would otherwise swallow the moved tool as a child of itself.
+        if self.is_taken(to, &self.aliases()?) {
+            return Err(Error::Exists(to.to_string()));
+        }
+        std::fs::rename(self.dir().join(&tool.id), self.dir().join(to))?;
+        Aliases::record(&self.module(), &tool.id, to)?;
+        self.sync_bin()?;
+        Ok(Tool {
+            id: to.to_string(),
+            manifest: tool.manifest,
+        })
     }
 
     /// Follow a project rename into this registry: every tool filed under `from` — archived ones
@@ -495,15 +603,26 @@ impl Tools {
     /// [`Error::Io`] if the agent's bin dir can't be rebuilt, or [`Error::Config`] on a bad manifest.
     pub fn sync_agent_bin(&self, agent_name: &str, enabled: &[String]) -> Result<PathBuf> {
         let dir = self.agent_bin_dir(agent_name);
-        let enabled: std::collections::HashSet<&str> =
-            enabled.iter().map(String::as_str).collect();
+        let enabled = self.enabled_set(enabled)?;
         let tools: Vec<Tool> = self
             .list()?
             .into_iter()
-            .filter(|t| !t.is_archived() && enabled.contains(t.id.as_str()))
+            .filter(|t| !t.is_archived() && enabled.contains(&t.id))
             .collect();
         self.write_shims(&dir, &tools)?;
         Ok(dir)
+    }
+
+    /// The current ids an `enabled` list denotes — each entry put through the alias index, so a
+    /// definition still naming a tool by the UUID it was created under selects the same tool it
+    /// always did. Nothing else in a launch would say otherwise: the agent would simply start
+    /// without a tool its own definition says it has.
+    fn enabled_set(&self, enabled: &[String]) -> Result<std::collections::HashSet<String>> {
+        let aliases = self.aliases()?;
+        Ok(enabled
+            .iter()
+            .map(|id| aliases.target(id).unwrap_or(id).to_string())
+            .collect())
     }
 
     /// What the tools in `enabled` say about themselves — one entry per tool an agent actually gets
@@ -520,15 +639,16 @@ impl Tools {
         let Ok(tools) = self.list() else {
             return Vec::new();
         };
-        let enabled: std::collections::HashSet<&str> =
-            enabled.iter().map(String::as_str).collect();
+        let Ok(enabled) = self.enabled_set(enabled) else {
+            return Vec::new();
+        };
         let deadline = std::time::Instant::now() + help::TOTAL_BUDGET;
         let tools_dir = self.dir();
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for tool in tools
             .iter()
-            .filter(|t| !t.is_archived() && enabled.contains(t.id.as_str()))
+            .filter(|t| !t.is_archived() && enabled.contains(&t.id))
         {
             let name = tool.bin_name();
             // The same first-wins rule the shims are written under: a colliding second tool has no
@@ -701,8 +821,171 @@ mod tests {
         assert!(body.contains("hello from Greet"), "body was {body:?}");
 
         // Edit it, then read it back.
-        store.write_script(&tool.id, "echo custom\n").expect("write");
-        assert_eq!(store.read_script(&tool.id).expect("reread"), "echo custom\n");
+        store
+            .write_script(&tool.id, "echo custom\n")
+            .expect("write");
+        assert_eq!(
+            store.read_script(&tool.id).expect("reread"),
+            "echo custom\n"
+        );
+    }
+
+    /// The id is the name, so nothing has to carry a UUID around to say which tool it means.
+    #[test]
+    fn a_new_tools_id_is_a_slug_of_its_name() {
+        let store = scratch("mint");
+        let tool = store
+            .create_file("Confirm Sync", None, "sh", None, None)
+            .expect("create");
+        assert_eq!(tool.id, "confirm-sync");
+        assert!(store.tool_dir(&tool.id).expect("dir").is_dir());
+
+        // A second tool of the same name takes the next number rather than the first one's dir.
+        let again = store
+            .create_file("confirm sync", None, "sh", None, None)
+            .expect("create again");
+        assert_eq!(again.id, "confirm-sync-2");
+
+        // Nothing sluggable in the name: the kind's own word, then the same numbering.
+        let cyrillic = store
+            .create_file("Инструмент", None, "sh", None, None)
+            .expect("create cyrillic");
+        assert_eq!(cyrillic.id, "tool");
+        let blank = store
+            .create_file("  ", None, "sh", None, None)
+            .expect("blank");
+        assert_eq!(blank.id, "tool-2");
+        assert_eq!(
+            blank.manifest.name, "tool-2",
+            "a blank name falls back to the id"
+        );
+
+        // A linked tool mints from the name it infers from the file, on the same rule.
+        let target = store.dir().join("external").join("Build Thing.ts");
+        std::fs::create_dir_all(target.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&target, "console.log(1)\n").expect("write");
+        let linked = store
+            .link(&target.to_string_lossy(), None, None, None, None)
+            .expect("link");
+        assert_eq!(linked.id, "build-thing");
+    }
+
+    /// The hard constraint of the whole change: after a rename the old id still names the tool.
+    /// Agent definitions, generated shims and the operator's own notes all cite ids verbatim.
+    #[test]
+    fn a_renamed_tool_still_answers_to_the_id_it_had() {
+        let store = scratch("rename");
+        let uuid = "ec5bd98c-35c1-4e9e-ba25-5c2dbd3d5a99";
+        let manifest = Manifest {
+            name: "confirm-sync".into(),
+            runtime: RUNTIME_SH.into(),
+            created_at: now_unix(),
+            ..Manifest::default()
+        };
+        store.manifest_file(uuid).save(&manifest).expect("seed");
+        store.write_script(uuid, "printf ran\n").expect("script");
+
+        let renamed = store.rename(uuid, "confirm-sync").expect("rename");
+        assert_eq!(renamed.id, "confirm-sync");
+
+        // Both ids resolve, to the same tool, with its script and its shim intact.
+        let by_old = store.get(uuid).expect("get old").expect("present");
+        let by_new = store
+            .get("confirm-sync")
+            .expect("get new")
+            .expect("present");
+        assert_eq!(by_old, by_new);
+        assert_eq!(
+            by_old.id, "confirm-sync",
+            "the current id is what is reported"
+        );
+        assert_eq!(store.read_script(uuid).expect("script"), "printf ran\n");
+        assert_eq!(store.run(uuid, &[], None).expect("run").output, "ran");
+        assert!(store.bin_dir().join("confirm-sync").exists());
+
+        // An agent definition that still names the UUID gets the same shim it always did.
+        let dir = store
+            .sync_agent_bin("adi-agent", &[uuid.to_string()])
+            .expect("agent bin");
+        assert!(
+            dir.join("confirm-sync").exists(),
+            "the old id lost the tool"
+        );
+        assert_eq!(store.help_for(&[uuid.to_string()]).len(), 1);
+
+        // And the id it gave up is not free to be minted onto something else.
+        let other = store
+            .create_file("confirm sync", None, "sh", None, None)
+            .expect("other");
+        assert_eq!(other.id, "confirm-sync-2");
+        assert_eq!(
+            store.get(uuid).expect("get old").expect("present").id,
+            "confirm-sync"
+        );
+    }
+
+    /// A rename is correctable and idempotent, and it never lands on something already there.
+    #[test]
+    fn rename_is_guarded_and_reachable_through_an_old_id() {
+        let store = scratch("rename-guard");
+        let a = store.create_file("A", None, "sh", None, None).expect("a");
+        store.create_file("B", None, "sh", None, None).expect("b");
+
+        assert!(matches!(store.rename(&a.id, "b"), Err(Error::Exists(_))));
+        assert!(matches!(
+            store.rename("ghost", "c"),
+            Err(Error::NotFound(_))
+        ));
+        assert!(matches!(
+            store.rename(&a.id, "../x"),
+            Err(Error::InvalidId(_))
+        ));
+        // Every refusal left both tools exactly where they were.
+        assert!(store.get("a").expect("get a").is_some());
+        assert!(store.get("b").expect("get b").is_some());
+
+        store.rename("a", "first").expect("rename");
+        // Correct it through the id it no longer has, then again through the one before that.
+        store.rename("a", "second").expect("re-rename by old id");
+        assert_eq!(store.get("a").expect("get").expect("present").id, "second");
+        assert_eq!(
+            store.get("first").expect("get").expect("present").id,
+            "second"
+        );
+        // Renaming to the id it already has is a no-op, not an error.
+        assert_eq!(store.rename("second", "second").expect("noop").id, "second");
+    }
+
+    /// A `sys-*` id is a compile-time handle (`SYS_KNOWLEDGE_ROOT`) and the key `seed_system`
+    /// re-creates by, so a renamed system tool would be recreated beside itself on next start-up.
+    #[test]
+    fn a_system_tool_cannot_be_renamed() {
+        let store = scratch("rename-sys");
+        store.seed_system().expect("seed");
+        assert!(matches!(
+            store.rename("sys-tasks", "adi-tasks"),
+            Err(Error::SystemProtected(_))
+        ));
+        assert!(store.get("sys-tasks").expect("get").is_some());
+    }
+
+    /// Deleting a tool releases the ids it answered to — an alias to nothing would keep an id
+    /// reserved against a future mint while pointing at a tool that no longer exists.
+    #[test]
+    fn removing_a_tool_forgets_its_old_ids() {
+        let store = scratch("rename-rm");
+        store
+            .create_file("Old Name", None, "sh", None, None)
+            .expect("create");
+        store.rename("old-name", "new-name").expect("rename");
+        assert!(store.remove("old-name").expect("remove by old id"));
+        assert!(store.get("new-name").expect("get").is_none());
+        assert!(store.aliases().expect("aliases").all().is_empty());
+        // Free again: a fresh tool may now take the id.
+        let fresh = store
+            .create_file("Old Name", None, "sh", None, None)
+            .expect("fresh");
+        assert_eq!(fresh.id, "old-name");
     }
 
     #[test]
@@ -744,9 +1027,19 @@ mod tests {
     fn owned_script_lands_at_the_runtime_extension() {
         let store = scratch("ext");
         let sh = store.create_file("s", None, "sh", None, None).expect("sh");
-        assert!(store.script_path(&sh.id).expect("path").ends_with("script.sh"));
+        assert!(
+            store
+                .script_path(&sh.id)
+                .expect("path")
+                .ends_with("script.sh")
+        );
         let ts = store.create_file("t", None, "ts", None, None).expect("ts");
-        assert!(store.script_path(&ts.id).expect("path").ends_with("script.ts"));
+        assert!(
+            store
+                .script_path(&ts.id)
+                .expect("path")
+                .ends_with("script.ts")
+        );
     }
 
     #[test]
@@ -773,7 +1066,10 @@ mod tests {
         assert_eq!(tool.manifest.name, "build");
         assert_eq!(tool.runtime(), "ts");
         // Reads through to the linked file.
-        assert_eq!(store.read_script(&tool.id).expect("read"), "console.log('x')\n");
+        assert_eq!(
+            store.read_script(&tool.id).expect("read"),
+            "console.log('x')\n"
+        );
 
         // Removing a linked tool never deletes the target file.
         assert!(store.remove(&tool.id).expect("remove"));
@@ -792,7 +1088,9 @@ mod tests {
     #[test]
     fn archive_toggles_state_and_bin_shim() {
         let store = scratch("archive");
-        let tool = store.create_file("deploy", None, "sh", None, None).expect("create");
+        let tool = store
+            .create_file("deploy", None, "sh", None, None)
+            .expect("create");
         let shim = store.bin_dir().join("deploy");
         assert!(shim.exists(), "active tool should have a .bin shim");
 
@@ -808,10 +1106,15 @@ mod tests {
     #[test]
     fn bin_shim_delegates_to_the_cli_run() {
         let store = scratch("shim");
-        let tool = store.create_file("My Tool", None, "sh", None, None).expect("create");
+        let tool = store
+            .create_file("My Tool", None, "sh", None, None)
+            .expect("create");
         let shim = store.bin_dir().join("my-tool");
         let body = std::fs::read_to_string(&shim).expect("shim");
-        assert!(body.contains(&format!("adi-mono tools run {}", tool.id)), "shim: {body}");
+        assert!(
+            body.contains(&format!("adi-mono tools run {}", tool.id)),
+            "shim: {body}"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
@@ -824,8 +1127,12 @@ mod tests {
     fn colliding_bin_names_keep_the_lower_id() {
         let store = scratch("collide");
         // Two tools whose names slug to the same shim name.
-        let a = store.create_file("Same Name", None, "sh", None, None).expect("a");
-        let b = store.create_file("same-name", None, "sh", None, None).expect("b");
+        let a = store
+            .create_file("Same Name", None, "sh", None, None)
+            .expect("a");
+        let b = store
+            .create_file("same-name", None, "sh", None, None)
+            .expect("b");
         let map = store.sync_bin().expect("sync");
         let winner = map.get("same-name").expect("a shim named same-name");
         let lower = std::cmp::min(a.id.clone(), b.id.clone());
@@ -835,8 +1142,14 @@ mod tests {
     #[test]
     fn seed_system_is_idempotent_and_flags_system_tools() {
         let store = scratch("seed");
-        assert!(store.seed_system().expect("seed"), "first seed creates tools");
-        assert!(!store.seed_system().expect("reseed"), "second seed is a no-op");
+        assert!(
+            store.seed_system().expect("seed"),
+            "first seed creates tools"
+        );
+        assert!(
+            !store.seed_system().expect("reseed"),
+            "second seed is a no-op"
+        );
         let tools = store.list().expect("list");
         assert!(!tools.is_empty());
         assert!(tools.iter().all(|t| t.is_system()), "all seeded are system");
@@ -844,7 +1157,12 @@ mod tests {
         let tasks = store.get("sys-tasks").expect("get").expect("present");
         assert!(tasks.is_system());
         assert_eq!(tasks.manifest.name, "adi-tasks");
-        assert!(store.read_script("sys-tasks").expect("script").contains("adi-mono tasks"));
+        assert!(
+            store
+                .read_script("sys-tasks")
+                .expect("script")
+                .contains("adi-mono tasks")
+        );
     }
 
     /// The knowledge base is only reachable by an agent if it has a `.bin` for it — a subcommand
@@ -879,7 +1197,10 @@ mod tests {
         let store = scratch("knowledge-root");
         store.seed_system().expect("seed");
 
-        let tool = store.get(SYS_KNOWLEDGE_ROOT).expect("get").expect("present");
+        let tool = store
+            .get(SYS_KNOWLEDGE_ROOT)
+            .expect("get")
+            .expect("present");
         assert!(tool.is_system());
         assert_eq!(tool.manifest.name, "adi-knowledge-root");
         assert!(
@@ -893,7 +1214,10 @@ mod tests {
         let dir = store
             .sync_agent_bin("reviewer", &[SYS_KNOWLEDGE_ROOT.to_string()])
             .expect("agent bin");
-        assert!(dir.join("adi-knowledge-root").exists(), "no shim to run it by");
+        assert!(
+            dir.join("adi-knowledge-root").exists(),
+            "no shim to run it by"
+        );
         assert!(
             !dir.join("adi-knowledge").exists(),
             "the plain tool arrived on its own"
@@ -916,15 +1240,22 @@ mod tests {
     fn agent_bin_holds_only_the_enabled_tools() {
         let store = scratch("agentbin");
         store.seed_system().expect("seed");
-        let mine = store.create_file("mine", None, "sh", None, None).expect("mine");
-        let other = store.create_file("other", None, "sh", None, None).expect("other");
+        let mine = store
+            .create_file("mine", None, "sh", None, None)
+            .expect("mine");
+        let other = store
+            .create_file("other", None, "sh", None, None)
+            .expect("other");
 
         // Enable one user tool + one system tool; the other user tool is left off.
         let enabled = vec![mine.id.clone(), "sys-tasks".to_string()];
         let dir = store.sync_agent_bin("solver", &enabled).expect("agent bin");
         assert!(dir.ends_with(".agent-bin/solver"), "got {}", dir.display());
         assert!(dir.join("mine").exists(), "enabled user tool present");
-        assert!(dir.join("adi-tasks").exists(), "enabled system tool present");
+        assert!(
+            dir.join("adi-tasks").exists(),
+            "enabled system tool present"
+        );
         assert!(!dir.join("other").exists(), "unselected tool absent");
 
         // An empty selection yields an empty bin (nothing force-fed).
@@ -936,13 +1267,13 @@ mod tests {
     #[test]
     fn run_executes_and_captures_output() {
         let store = scratch("run");
-        let tool = store.create_file("echoer", None, "sh", None, None).expect("create");
+        let tool = store
+            .create_file("echoer", None, "sh", None, None)
+            .expect("create");
         store
             .write_script(&tool.id, "printf 'ran:%s' \"$1\"\n")
             .expect("write");
-        let out = store
-            .run(&tool.id, &["ok".to_string()], None)
-            .expect("run");
+        let out = store.run(&tool.id, &["ok".to_string()], None).expect("run");
         assert!(out.ok());
         assert_eq!(out.output, "ran:ok");
     }
@@ -961,7 +1292,10 @@ mod tests {
         assert_eq!(described.len(), 1);
         assert_eq!(described[0].name, "greet");
         assert_eq!(described[0].description.as_deref(), Some("Say hello."));
-        let help = described[0].help.as_deref().expect("the starter's own help");
+        let help = described[0]
+            .help
+            .as_deref()
+            .expect("the starter's own help");
         assert!(help.starts_with("greet —"), "{help}");
         assert!(help.contains("Usage: greet"), "{help}");
 
@@ -978,7 +1312,9 @@ mod tests {
     #[test]
     fn help_covers_exactly_the_enabled_registered_tools() {
         let store = scratch("help-scope");
-        let tool = store.create_file("greet", None, "sh", None, None).expect("create");
+        let tool = store
+            .create_file("greet", None, "sh", None, None)
+            .expect("create");
         assert!(store.help_for(&[]).is_empty());
         assert!(store.help_for(&["ghost".to_string()]).is_empty());
 
@@ -993,7 +1329,10 @@ mod tests {
     fn mutating_an_unregistered_tool_is_not_found() {
         let store = scratch("missing");
         assert!(matches!(store.archive("ghost"), Err(Error::NotFound(_))));
-        assert!(matches!(store.read_script("ghost"), Err(Error::NotFound(_))));
+        assert!(matches!(
+            store.read_script("ghost"),
+            Err(Error::NotFound(_))
+        ));
         assert!(store.get("ghost").expect("get").is_none());
         assert!(!store.remove("ghost").expect("remove missing"));
     }
@@ -1009,7 +1348,9 @@ mod tests {
     #[test]
     fn list_skips_the_bin_dir_and_dirs_without_a_manifest() {
         let store = scratch("skip");
-        store.create_file("real", None, "sh", None, None).expect("create");
+        store
+            .create_file("real", None, "sh", None, None)
+            .expect("create");
         std::fs::create_dir_all(store.dir().join("bare")).expect("mkdir");
         let all = store.list().expect("list");
         assert_eq!(all.len(), 1, "only the real tool is listed");

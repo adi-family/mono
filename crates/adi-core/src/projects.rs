@@ -219,7 +219,12 @@ mod tests {
         assert_eq!(report.knowledge, 1);
         assert!(report.database);
 
-        assert!(projects.get("old").expect("get").is_none());
+        // The old id is not gone, it is an alias: everything reachable from here was re-pointed at
+        // the new one, and the id itself keeps resolving for everything that was not.
+        assert_eq!(
+            projects.get("old").expect("get").expect("present").id,
+            "new"
+        );
         assert_eq!(
             projects
                 .get("kid")
@@ -249,7 +254,10 @@ mod tests {
             Some("new")
         );
         assert_eq!(
-            secrets.reveal(Some("new"), "API_KEY").expect("reveal").as_deref(),
+            secrets
+                .reveal(Some("new"), "API_KEY")
+                .expect("reveal")
+                .as_deref(),
             Some("s3cr3t")
         );
         assert!(
@@ -258,7 +266,12 @@ mod tests {
                 .expect("get")
                 .is_some()
         );
-        assert!(db.tables(Some("new")).expect("tables").iter().any(|t| t.name == "t"));
+        assert!(
+            db.tables(Some("new"))
+                .expect("tables")
+                .iter()
+                .any(|t| t.name == "t")
+        );
     }
 
     /// The registry move is the gate. A refused rename must leave every follower untouched, or a
@@ -267,8 +280,12 @@ mod tests {
     fn a_refused_rename_moves_nothing() {
         let config = scratch("refused");
         let projects = Projects::with_config(config.clone());
-        projects.create_with_id("old", None, None, None).expect("old");
-        projects.create_with_id("taken", None, None, None).expect("taken");
+        projects
+            .create_with_id("old", None, None, None)
+            .expect("old");
+        projects
+            .create_with_id("taken", None, None, None)
+            .expect("taken");
         let tools = adi_tools::Tools::with_config(config.clone());
         let tool = tools
             .create_file("Deploy", None, "sh", Some("old".into()), None)
@@ -280,7 +297,13 @@ mod tests {
         ));
         assert!(projects.get("old").expect("get").is_some());
         assert_eq!(
-            tools.get(&tool.id).expect("get").expect("present").manifest.project.as_deref(),
+            tools
+                .get(&tool.id)
+                .expect("get")
+                .expect("present")
+                .manifest
+                .project
+                .as_deref(),
             Some("old")
         );
     }

@@ -14,6 +14,7 @@ mod proc;
 pub mod projects;
 pub mod service;
 pub mod status;
+pub mod tools;
 pub mod update;
 
 pub use app::App;
@@ -69,6 +70,8 @@ pub use adi_tasks::{EffectiveStatus, Error as TasksError, TaskPatch, TaskStatus,
 pub use adi_tools::{
     Error as ToolsError, Manifest as ToolManifest, RunOutput as ToolRunOutput, Tool, Tools,
 };
+
+pub use tools::{ToolRenamed, rename_tool};
 
 pub use adi_events::{
     ENVELOPE as EVENT_ENVELOPE, Error as EventsError, EventRecord, EventType, Events, SpooledEvent,

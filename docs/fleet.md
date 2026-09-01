@@ -323,7 +323,10 @@ as "just signalling" is the mistake that makes a flapping relay look like a myst
 Relays are configured per machine, as a **list**, in `mesh.toml`:
 
 ```toml
-relays = ["https://mad.mono-relay.withadi.dev"]
+relays = [
+  "https://mad.mono-relay.withadi.dev",   # GCE europe-southwest1 (Madrid)
+  "https://iad.mono-relay.withadi.dev",   # GCE us-east4 (N. Virginia)
+]
 ```
 
 Empty means **the adi relays** (`adi-mesh/src/relay.rs`, `DEFAULT_RELAYS`) as of 2026-08-24. It
@@ -331,9 +334,11 @@ used to mean n0's public relays, which is what every machine ran before the fiel
 reason it changed is not preference: n0's relay answers a websocket upgrade without echoing
 `sec-websocket-protocol`, which RFC 6455 §4.1 requires a client to fail on, so a browser gets
 `CloseEvent { code: 1006 }` and a machine left on the public default is unreachable from the
-browser client **entirely**. One entry, deliberately — iroh settles each machine on its own
-*nearest* relay, so a mixed map of ours and n0's would make browser reachability a coin flip
-decided by geography. Naming your own here still overrides the default —
+browser client **entirely**. Ours only, never mixed with n0's — iroh settles each machine on its own
+*nearest* relay, so a map holding both would make browser reachability a coin flip decided by
+geography. Two of *ours* is the opposite case, and is what the list is for: since 2026-08-27 the
+default carries both `mad` and `iad`, both echo `iroh-relay-v2`, and each machine takes the near
+one. Naming your own here still overrides the default —
 deliberately *not* `RelayMode::Disabled`, because off-LAN that reads as "unreachable" far more often
 than "direct only". A list rather than one URL because iroh probes every relay in the map and each
 machine settles on its own nearest as its home (`net_report`'s `preferred_relay`): a second region
@@ -356,6 +361,24 @@ Running one: `iroh-relay` with the `server` feature, `cert_mode = "LetsEncrypt"`
 a `contact` email or it exits at start-up), TCP 443 for the protocol, TCP 80 for ACME, and **UDP
 7842 for QUIC address discovery** — that last one is what lets a direct path form at all, so a relay
 behind anything that drops UDP is worse than no relay. Access defaults to `Everyone`.
+
+**Adding a region is one command**: `scripts/deploy-relay.sh <label> <zone>` — it reserves a static
+address, reuses the `adi-relay-ingress` firewall rule, and boots a Debian 12 `e2-micro` in project
+`mono-504617` that installs the binary, `/etc/iroh-relay/relay.toml` and a hardened unit, then
+verifies the three things that matter: HTTPS answers, the `101` echoes `sec-websocket-protocol:
+iroh-relay-v2`, and UDP 7842 is reachable. The label becomes the hostname's first label, so use the
+IATA code of the city the zone is in.
+
+Two things it cannot and will not do. **The DNS A record** must exist *before* the relay first
+starts, because LetsEncrypt's http-01 challenge is answered by the relay itself on :80 — and it must
+be an unproxied (grey-cloud) record, since the relay terminates its own TLS and needs raw UDP. And
+**it does not track the workspace's iroh version**: the relays are pinned to **1.0.1**, because
+1.0.3 aborts the whole process on an inbound control message —
+`noq-udp-1.1.0/src/cmsg/mod.rs:81: assertion failed: align_of::<T>() <= align_of::<C>()`, reachable
+from received UDP, i.e. from the QUIC-address-discovery half itself (measured on `adi-relay-iad`,
+2026-08-27; the assert is still in noq-udp 1.1.1). The relay need not match the client: nodes on
+iroh 1.0.3 have talked to 1.0.1 relays since August, because `iroh-relay-v2` is the surface that
+actually has to agree.
 
 ## 10. Moving a dashboard to a node
 

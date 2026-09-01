@@ -97,6 +97,16 @@ impl Adi {
         adi_tools::Tools::open()
     }
 
+    /// Rename a tool across the whole store — its registry entry, and every agent definition that
+    /// has it ticked on. See [`crate::tools::rename_tool`], which this is the standard-store
+    /// spelling of.
+    ///
+    /// # Errors
+    /// [`adi_tools::Error`] when the registry refuses the move.
+    pub fn rename_tool(self, from: &str, to: &str) -> adi_tools::Result<crate::tools::ToolRenamed> {
+        crate::tools::rename_tool(&adi_config::Config::open(), from, to)
+    }
+
     /// The secrets store backed by the standard store — `Adi::new().secrets().resolve(...)`.
     #[must_use]
     pub fn secrets(self) -> adi_secrets::Secrets {

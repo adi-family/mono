@@ -65,6 +65,17 @@ pub(crate) enum ToolsCommand {
         #[arg(long)]
         json: bool,
     },
+    /// Rename a tool's id — the name of its directory, and what every agent that can run it writes
+    /// down. The old id keeps resolving, so nothing that already names it breaks; agent
+    /// definitions are rewritten to the new one, which is where the saving is.
+    Rename {
+        /// The tool to rename — its current id, or any id it used to have.
+        id: String,
+        /// Its new id: letters, digits, '.', '-', or '_'.
+        new_id: String,
+        #[arg(long)]
+        json: bool,
+    },
     /// Print a tool's script to stdout.
     Cat { id: String },
     /// Print the resolved path of a tool's script (its owned file, or the linked target).
@@ -97,11 +108,7 @@ pub(crate) enum ToolsCommand {
 pub(crate) fn run_tools(adi: Adi, command: ToolsCommand) -> Result<(), String> {
     let store = adi.tools();
     match command {
-        ToolsCommand::List {
-            project,
-            all,
-            json,
-        } => {
+        ToolsCommand::List { project, all, json } => {
             let mut tools = store.list().map_err(|e| e.to_string())?;
             if !all {
                 tools.retain(|t| !t.is_archived());
@@ -117,7 +124,10 @@ pub(crate) fn run_tools(adi: Adi, command: ToolsCommand) -> Result<(), String> {
                 for tool in &tools {
                     print_tool(&tool);
                 }
-                println!("\nRun a tool with: {} tools run <id> [args…]", adi_core::BIN_NAME);
+                println!(
+                    "\nRun a tool with: {} tools run <id> [args…]",
+                    adi_core::BIN_NAME
+                );
                 println!("Or put {} on your PATH.", store.bin_dir().display());
             }
         }
@@ -175,6 +185,22 @@ pub(crate) fn run_tools(adi: Adi, command: ToolsCommand) -> Result<(), String> {
                 print_tool(&tool);
             }
         }
+        ToolsCommand::Rename { id, new_id, json } => {
+            let report = adi.rename_tool(&id, &new_id).map_err(|e| e.to_string())?;
+            if json {
+                print_json(&report);
+            } else {
+                println!("Renamed {} to {}.", report.from, report.tool.id);
+                print_tool(&report.tool);
+                if report.agents > 0 {
+                    println!("  followed: {} agent definitions", report.agents);
+                }
+                println!("  {} still resolves to it.", report.from);
+                for warning in &report.warnings {
+                    println!("  ! {warning}");
+                }
+            }
+        }
         ToolsCommand::Cat { id } => {
             let body = store.read_script(&id).map_err(|e| e.to_string())?;
             print!("{body}");
@@ -217,7 +243,11 @@ pub(crate) fn run_tools(adi: Adi, command: ToolsCommand) -> Result<(), String> {
             } else if written.is_empty() {
                 println!("No active tools — {} is empty.", store.bin_dir().display());
             } else {
-                println!("Regenerated {} shims in {}:", written.len(), store.bin_dir().display());
+                println!(
+                    "Regenerated {} shims in {}:",
+                    written.len(),
+                    store.bin_dir().display()
+                );
                 for (name, id) in &written {
                     println!("  {name} -> {id}");
                 }
@@ -231,7 +261,11 @@ pub(crate) fn run_tools(adi: Adi, command: ToolsCommand) -> Result<(), String> {
             } else {
                 println!("System tools already present.");
             }
-            println!("Global .bin now has {} shims in {}.", written.len(), store.bin_dir().display());
+            println!(
+                "Global .bin now has {} shims in {}.",
+                written.len(),
+                store.bin_dir().display()
+            );
         }
     }
     Ok(())
@@ -247,7 +281,11 @@ fn working_dir(adi: &Adi, store: &adi_core::Tools, id: &str) -> Option<PathBuf> 
 
 /// Print a tool as a human line plus its metadata, mirroring `print_project`.
 fn print_tool(tool: &Tool) {
-    let state = if tool.is_archived() { "archived" } else { "active" };
+    let state = if tool.is_archived() {
+        "archived"
+    } else {
+        "active"
+    };
     let source = if tool.is_system() {
         "system"
     } else if tool.is_linked() {

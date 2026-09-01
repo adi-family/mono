@@ -37,6 +37,7 @@ mod error;
 mod file;
 mod flavor;
 mod fsutil;
+mod ids;
 mod launch;
 mod layout;
 mod module;
@@ -46,6 +47,7 @@ use std::path::{Path, PathBuf};
 pub use error::{Error, Result};
 pub use file::{ConfigFile, Timestamped};
 pub use flavor::{DEFAULT_FLAVOR, FLAVOR_ENV, Flavor};
+pub use ids::{ALIASES_FILE, Aliases, MAX_ID, mint, slug, unique_id};
 pub use launch::{augmented_path, launch_env};
 pub use layout::{dir, dir_name, home};
 pub use module::Module;
@@ -181,13 +183,25 @@ impl Config {
     /// existence check is deliberate — a manifest may name a project that was since removed, and a
     /// caller resolving a launch directory needs a `None` it can fall back from, not a path that
     /// makes the spawn fail.
+    ///
+    /// An id the project no longer has still answers: a renamed project keeps its old id in the
+    /// registry's [`Aliases`] index, and this is the read path that a `.adi/hive.yaml`, an
+    /// `$ADI_PROJECT`, or a hand-typed UUID arrives through. The index is consulted only when the
+    /// id names no directory, so the common case is the same single `is_dir` it always was.
     #[must_use]
     pub fn project_dir(&self, project: &str) -> Option<PathBuf> {
         if !valid_name(project) {
             return None;
         }
-        let dir = self.module(PROJECTS_MODULE).dir().join(project);
-        dir.is_dir().then_some(dir)
+        let module = self.module(PROJECTS_MODULE);
+        let dir = module.dir().join(project);
+        if dir.is_dir() {
+            return Some(dir);
+        }
+        let current = module
+            .dir()
+            .join(Aliases::load(&module).ok()?.target(project)?);
+        current.is_dir().then_some(current)
     }
 
     /// The database environment a run is launched with: `ADI_DB` (this scope's file) and
@@ -203,7 +217,10 @@ impl Config {
             .unwrap_or_else(|| self.db_dir().join(DB_GLOBAL_FILE));
         vec![
             ("ADI_DB".to_string(), path.display().to_string()),
-            ("ADI_DB_DIR".to_string(), self.db_dir().display().to_string()),
+            (
+                "ADI_DB_DIR".to_string(),
+                self.db_dir().display().to_string(),
+            ),
         ]
     }
 }
