@@ -4,7 +4,7 @@
 
 > The adi platform CLI — a thin argv adapter over adi-core's command surface.
 
-5 structs · 22 enums across 17 files.
+5 structs · 23 enums across 18 files.
 
 ## Index
 
@@ -17,6 +17,7 @@
 - [`src/indexer.rs`](#srcindexerrs) — `IndexerCommand`
 - [`src/knowledge.rs`](#srcknowledgers) — `KnowledgeCommand`, `BaseCommand`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
+- [`src/marketplace.rs`](#srcmarketplacers) — `MarketplaceCommand`
 - [`src/mesh.rs`](#srcmeshrs) — `MeshCommand`
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectsCommand`, `WorkspaceCommand`, `HookCommand`, `WorkspaceRow`, `HookRow`
 - [`src/qr.rs`](#srcqrrs) — `Rendered`
@@ -858,6 +859,10 @@ enum Command {
         #[command(subcommand)]
         command: MeshCommand,
     },
+    Marketplace {
+        #[command(subcommand)]
+        command: MarketplaceCommand,
+    },
     Events {
         #[command(subcommand)]
         command: EventsCommand,
@@ -881,6 +886,43 @@ enum Command {
         agent: String,
         #[arg(long)]
         conv: String,
+    },
+}
+```
+
+---
+
+## `src/marketplace.rs`
+
+### enum `MarketplaceCommand`
+
+The verbs, as `adi-mono marketplace <verb>` spells them.
+
+```rust
+#[derive(Debug, Subcommand)]
+pub(crate) enum MarketplaceCommand {
+    Add {
+        #[arg(value_name = "NAME")]
+        name: String,
+        #[arg(value_name = "URL")]
+        url: String,
+    },
+    Remove {
+        #[arg(value_name = "NAME")]
+        name: String,
+    },
+    List,
+    Sync,
+    Apps,
+    Install {
+        #[arg(value_name = "MARKETPLACE/SLUG")]
+        spec: String,
+        #[arg(long)]
+        force: bool,
+    },
+    Start {
+        #[arg(value_name = "SLUG")]
+        spec: String,
     },
 }
 ```

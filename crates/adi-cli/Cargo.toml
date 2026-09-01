@@ -42,6 +42,11 @@ adi-knowledge = { workspace = true }
 # its design was measured against.
 adi-facts = { workspace = true }
 
+# The `marketplace` command group: sources, sync, install, start. This is what pulls the HTTPS
+# fetch (blocking reqwest + rustls) into `adi-mono` — the same trade `mesh` makes for iroh: an
+# app a reader installs from a manifest is reachable from a shell, wherever that shell is.
+adi-marketplace = { workspace = true }
+
 clap = { workspace = true }
 # `mesh invite` draws its token as a QR (see `src/qr.rs`). Encoder only — the decoder is the
 # browser client's problem, and this binary never reads an image.

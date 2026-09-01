@@ -69,6 +69,7 @@ dependencies = [
  "adi-facts",
  "adi-indexer",
  "adi-knowledge",
+ "adi-marketplace",
  "adi-mesh",
  "clap",
  "qrcode",

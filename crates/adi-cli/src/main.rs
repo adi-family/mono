@@ -11,6 +11,7 @@ mod format;
 mod goals;
 mod indexer;
 mod knowledge;
+mod marketplace;
 mod mesh;
 mod projects;
 mod qr;
@@ -33,6 +34,7 @@ use crate::format::{print_bun, print_report, print_service};
 use crate::goals::{GoalsCommand, run_goals};
 use crate::indexer::{IndexerCommand, run_indexer};
 use crate::knowledge::{KnowledgeCommand, run_knowledge};
+use crate::marketplace::{MarketplaceCommand, run_marketplace};
 use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::secrets::{SecretsCommand, run_secrets};
@@ -184,6 +186,12 @@ enum Command {
     Mesh {
         #[command(subcommand)]
         command: MeshCommand,
+    },
+    /// Apps marketplace commands: manifest sources you host anywhere, synced and installed
+    /// from this store. Installed is not started — `marketplace start` is the act that runs it.
+    Marketplace {
+        #[command(subcommand)]
+        command: MarketplaceCommand,
     },
     /// Event bus commands: publish platform events and peek at the spool.
     Events {
@@ -376,6 +384,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        // Like `mesh`: the marketplace's state is its own module under the store.
+        Command::Marketplace { command } => {
+            if let Err(e) = run_marketplace(command) {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        }
         Command::Events { command } => {
             if let Err(e) = run_events(adi, command) {
                 eprintln!("error: {e}");
@@ -509,5 +524,23 @@ mod tests {
             }
         ));
         assert!(Cli::try_parse_from(["adi-mono", "mesh"]).is_err());
+    }
+
+    #[test]
+    fn the_marketplace_group_is_reachable_from_the_top_level() {
+        // Its own argv surface is tested in `marketplace.rs`; this pins the wiring — that
+        // `adi-mono marketplace …` reaches it at all.
+        let cli = Cli::try_parse_from(["adi-mono", "marketplace", "install", "adi/crm", "--force"])
+            .expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Marketplace {
+                command: MarketplaceCommand::Install {
+                    ref spec,
+                    force: true
+                }
+            } if spec == "adi/crm"
+        ));
+        assert!(Cli::try_parse_from(["adi-mono", "marketplace"]).is_err());
     }
 }
