@@ -286,6 +286,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-marketplace"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "adi-dashboards",
+ "base64 0.22.1",
+ "reqwest",
+ "rustls",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
 name = "adi-mesh"
 version = "0.1.0"
 dependencies = [
