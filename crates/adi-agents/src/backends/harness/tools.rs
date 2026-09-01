@@ -18,9 +18,9 @@ use std::process::Command;
 
 use serde_json::{Value, json};
 
+use crate::awaits::{self, Awaits, Request};
 use crate::backends::jobs;
 use crate::backends::shell::Shell;
-use crate::awaits::{self, Awaits, Request};
 use crate::store::{AskRequest, Choice, MAX_QUESTIONS, SessionStore};
 
 /// A tool as the model sees it: a name, a sentence about when to reach for it, and the JSON Schema
@@ -186,8 +186,7 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "Await",
-        description:
-            "Ask to be woken later, then carry on and finish this turn. When one of `events` is \
+        description: "Ask to be woken later, then carry on and finish this turn. When one of `events` is \
              published — or the timer comes due — your `check` command decides whether it is really \
              the moment: exit 0 wakes you, anything else leaves the await waiting. Without a check, \
              the first event or deadline wakes you. **A check needs no events at all**: \
@@ -240,8 +239,7 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
     },
     ToolSpec {
         name: "Ask",
-        description:
-            "Put a decision to the person you are working for, then **end your turn**. You are not \
+        description: "Put a decision to the person you are working for, then **end your turn**. You are not \
              waiting here: the question is written down, this conversation is marked as blocked on \
              them, and their answer arrives as a new message with your whole transcript still in \
              front of you. Nothing is held open in the meantime.\n\nReach for this when the work \
@@ -310,7 +308,14 @@ pub(crate) const TOOLS: &[ToolSpec] = &[
 const MAX_OUTPUT: usize = 32_000;
 /// Directories never worth walking: build output and version-control internals, which are large,
 /// uninteresting, and would drown a `Glob` in noise.
-const SKIP_DIRS: &[&str] = &["target", "node_modules", ".git", "dist", ".build", "__pycache__"];
+const SKIP_DIRS: &[&str] = &[
+    "target",
+    "node_modules",
+    ".git",
+    "dist",
+    ".build",
+    "__pycache__",
+];
 /// How long a `Bash` command may run before it is killed, when the call names no timeout.
 const DEFAULT_TIMEOUT_MS: u64 = 120_000;
 
@@ -399,11 +404,7 @@ pub(crate) fn execute(
         "Ask" => ask(input, ctx),
         other => Err(format!(
             "no tool named {other} — the tools you have are: {}",
-            TOOLS
-                .iter()
-                .map(|t| t.name)
-                .collect::<Vec<_>>()
-                .join(", ")
+            TOOLS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
         )),
     }
 }
@@ -417,7 +418,8 @@ fn read(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
 
     // Saturating rather than casting: a model that asks for line 2^40 of a file gets the end of
     // it, not a number that wrapped into something else entirely.
-    let offset = usize::try_from(arg_u64(input, "offset").unwrap_or(1).max(1)).unwrap_or(usize::MAX);
+    let offset =
+        usize::try_from(arg_u64(input, "offset").unwrap_or(1).max(1)).unwrap_or(usize::MAX);
     let limit = usize::try_from(arg_u64(input, "limit").unwrap_or(u64::MAX)).unwrap_or(usize::MAX);
     let lines: Vec<&str> = text.lines().skip(offset - 1).take(limit).collect();
     if lines.is_empty() {
@@ -437,7 +439,8 @@ fn write(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("couldn't create {}: {e}", parent.display()))?;
     }
-    std::fs::write(&path, content).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+    std::fs::write(&path, content)
+        .map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
     Ok(format!(
         "wrote {} ({} bytes)",
         path.display(),
@@ -490,7 +493,11 @@ fn edit(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
 
 fn bash(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
     let command = arg_str(input, "command")?;
-    if input.get("background").and_then(Value::as_bool).unwrap_or(false) {
+    if input
+        .get("background")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         return background(command, ctx);
     }
     let (cwd, shell) = (ctx.cwd, &ctx.shell);
@@ -528,7 +535,10 @@ fn bash(input: &Value, ctx: &Ctx<'_>) -> std::result::Result<String, String> {
             .status
             .code()
             .map_or_else(|| "signal".to_string(), |c| c.to_string());
-        return Ok(with_note(&truncate(&format!("(exit {code})\n{text}")), moved));
+        return Ok(with_note(
+            &truncate(&format!("(exit {code})\n{text}")),
+            moved,
+        ));
     }
     let body = truncate(if text.trim().is_empty() {
         "(no output)"
@@ -607,10 +617,7 @@ fn glob(input: &Value, cwd: &Path) -> std::result::Result<String, String> {
         return Ok(format!("no files match {pattern} under {}", root.display()));
     }
     hits.sort_by(|a, b| b.0.cmp(&a.0));
-    let listed: Vec<String> = hits
-        .iter()
-        .map(|(_, p)| p.display().to_string())
-        .collect();
+    let listed: Vec<String> = hits.iter().map(|(_, p)| p.display().to_string()).collect();
     Ok(truncate(&listed.join("\n")))
 }
 
@@ -741,8 +748,8 @@ fn change_await(id: &str, input: &Value, ctx: &Ctx<'_>) -> std::result::Result<S
             .map(str::to_string),
         expires_in_seconds: arg_u64(input, "expires_in_seconds"),
     };
-    let changed = awaits::update(&ctx.awaits, ctx.agent, ctx.conv, id, &change)
-        .map_err(|e| e.to_string())?;
+    let changed =
+        awaits::update(&ctx.awaits, ctx.agent, ctx.conv, id, &change).map_err(|e| e.to_string())?;
     Ok(format!(
         "await {} now wakes you {}. Finish this turn.",
         changed.id,
@@ -902,9 +909,9 @@ fn string_map(
     let Some(value) = input.get(key) else {
         return Ok(std::collections::BTreeMap::new());
     };
-    let object = value
-        .as_object()
-        .ok_or_else(|| format!("`{key}` is an object of field names to the values they must have"))?;
+    let object = value.as_object().ok_or_else(|| {
+        format!("`{key}` is an object of field names to the values they must have")
+    })?;
     object
         .iter()
         .map(|(field, want)| match want {
@@ -1016,7 +1023,11 @@ fn glob_here(p: &[char], t: &[char]) -> bool {
             // `**` crosses `/`; a single `*` stops at one.
             let (rest, crosses) = if p.get(1) == Some(&'*') {
                 // Swallow the `/` that usually follows `**`, so `**/x` also matches a bare `x`.
-                let after = if p.get(2) == Some(&'/') { &p[3..] } else { &p[2..] };
+                let after = if p.get(2) == Some(&'/') {
+                    &p[3..]
+                } else {
+                    &p[2..]
+                };
                 (after, true)
             } else {
                 (&p[1..], false)
@@ -1288,7 +1299,8 @@ mod tests {
         let err = edit(&input, &dir).expect_err("ambiguous edit must fail");
         assert!(err.contains("appears 2 times"), "{err}");
 
-        let all = json!({"path": "f.txt", "old_string": "a", "new_string": "b", "replace_all": true});
+        let all =
+            json!({"path": "f.txt", "old_string": "a", "new_string": "b", "replace_all": true});
         edit(&all, &dir).expect("replace_all");
         assert_eq!(std::fs::read_to_string(&file).expect("read"), "b\nb\n");
     }
@@ -1308,7 +1320,8 @@ mod tests {
         std::fs::write(dir.join("f.txt"), "one\ntwo\nthree\n").expect("write");
         let all = read(&json!({"path": "f.txt"}), &dir).expect("read");
         assert_eq!(all, "one\ntwo\nthree");
-        let windowed = read(&json!({"path": "f.txt", "offset": 2, "limit": 1}), &dir).expect("read");
+        let windowed =
+            read(&json!({"path": "f.txt", "offset": 2, "limit": 1}), &dir).expect("read");
         assert_eq!(windowed, "two");
     }
 
@@ -1416,8 +1429,11 @@ mod tests {
     #[test]
     fn a_nonzero_exit_comes_back_as_a_result_not_an_error() {
         let dir = scratch("bash");
-        let out = bash(&json!({"command": "echo out; exit 3"}), &ctx_in(&dir, "bash"))
-            .expect("nonzero is a result");
+        let out = bash(
+            &json!({"command": "echo out; exit 3"}),
+            &ctx_in(&dir, "bash"),
+        )
+        .expect("nonzero is a result");
         assert!(out.contains("exit 3"), "{out}");
         assert!(out.contains("out"), "{out}");
     }
@@ -1425,8 +1441,11 @@ mod tests {
     #[test]
     fn a_command_that_never_finishes_is_killed_and_says_so() {
         let dir = scratch("bash-timeout");
-        let err = bash(&json!({"command": "sleep 5", "timeout_ms": 200}), &ctx_in(&dir, "bash"))
-            .expect_err("a hung command must fail");
+        let err = bash(
+            &json!({"command": "sleep 5", "timeout_ms": 200}),
+            &ctx_in(&dir, "bash"),
+        )
+        .expect_err("a hung command must fail");
         assert!(err.contains("still running"), "{err}");
     }
 
@@ -1465,7 +1484,10 @@ mod tests {
         let ctx = ctx_in(Path::new("."), "unknown-tool");
         let err = execute("Frobnicate", &json!({}), &ctx).expect_err("unknown tool");
         assert!(err.contains("Read"), "{err}");
-        assert!(err.contains("Await"), "the wake tool is advertised too: {err}");
+        assert!(
+            err.contains("Await"),
+            "the wake tool is advertised too: {err}"
+        );
         assert!(err.contains("Ask"), "and so is the question tool: {err}");
     }
 
@@ -1512,9 +1534,14 @@ mod tests {
             &ctx,
         )
         .expect("register");
-        assert!(registered.contains("run_id=r-42"), "the filter is in what it reads: {registered}");
+        assert!(
+            registered.contains("run_id=r-42"),
+            "the filter is in what it reads: {registered}"
+        );
 
-        let id = ctx.awaits.for_conversation("watcher", "conv-1")[0].id.clone();
+        let id = ctx.awaits.for_conversation("watcher", "conv-1")[0]
+            .id
+            .clone();
 
         let changed = await_wake(
             &json!({ "update": id, "note": "why I am waiting", "expires_in_seconds": 600 }),
@@ -1525,8 +1552,14 @@ mod tests {
         let pending = ctx.awaits.for_conversation("watcher", "conv-1");
         assert_eq!(pending.len(), 1, "changed in place, not registered again");
         assert_eq!(pending[0].note, "why I am waiting");
-        assert_eq!(pending[0].events, vec!["adi.agents.run.finished".to_string()]);
-        assert!(pending[0].expiry_wakes, "a deadline it named is one it hears about");
+        assert_eq!(
+            pending[0].events,
+            vec!["adi.agents.run.finished".to_string()]
+        );
+        assert!(
+            pending[0].expiry_wakes,
+            "a deadline it named is one it hears about"
+        );
 
         let dropped = await_wake(&json!({ "ignore": [&id] }), &ctx).expect("ignore");
         assert!(dropped.contains("dropped"), "{dropped}");
@@ -1542,14 +1575,22 @@ mod tests {
     fn await_answers_an_unknown_id_with_what_is_actually_pending() {
         let dir = scratch("await-unknown");
         let ctx = ctx_in(&dir, "await-unknown");
-        await_wake(&json!({ "note": "waiting", "events": ["adi.tasks.*"] }), &ctx).expect("register");
-        let id = ctx.awaits.for_conversation("watcher", "conv-1")[0].id.clone();
+        await_wake(
+            &json!({ "note": "waiting", "events": ["adi.tasks.*"] }),
+            &ctx,
+        )
+        .expect("register");
+        let id = ctx.awaits.for_conversation("watcher", "conv-1")[0]
+            .id
+            .clone();
 
-        let err = await_wake(&json!({ "update": "w-nope", "note": "x" }), &ctx).expect_err("unknown");
+        let err =
+            await_wake(&json!({ "update": "w-nope", "note": "x" }), &ctx).expect_err("unknown");
         assert!(err.contains(&id), "the real one is named: {err}");
         // `ignore` reports per id rather than failing the call, so a run dropping several is not
         // stopped by one that has already fired.
-        let mixed = await_wake(&json!({ "ignore": ["w-nope"] }), &ctx).expect("reported, not failed");
+        let mixed =
+            await_wake(&json!({ "ignore": ["w-nope"] }), &ctx).expect("reported, not failed");
         assert!(mixed.contains(&id), "{mixed}");
         assert!(mixed.contains("1 await(s) still pending"), "{mixed}");
 

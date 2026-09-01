@@ -120,8 +120,9 @@ pub fn Textarea(
     } else {
         "whitespace-pre overflow-auto"
     };
-    let own =
-        format!("{FRAME} {FIELD} block w-full resize-y align-top leading-relaxed [tab-size:2] {wrap}");
+    let own = format!(
+        "{FRAME} {FIELD} block w-full resize-y align-top leading-relaxed [tab-size:2] {wrap}"
+    );
     view! {
         <textarea
             class=merge(&own, class)

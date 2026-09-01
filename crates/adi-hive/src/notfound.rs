@@ -377,7 +377,10 @@ mod tests {
     fn the_mesh_page_escapes_the_host_it_was_handed() {
         // A `Host` header is whatever the client wrote — it must never reach the markup raw.
         let page = mesh_unavailable("<script>alert(1)</script>.n.adi", None);
-        assert!(!page.contains("<script>alert"), "the host must not be markup");
+        assert!(
+            !page.contains("<script>alert"),
+            "the host must not be markup"
+        );
         assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
         assert_eq!(escape("a&b\"c'<d>"), "a&amp;b&quot;c&#39;&lt;d&gt;");
     }

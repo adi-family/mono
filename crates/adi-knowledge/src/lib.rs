@@ -376,7 +376,9 @@ impl KnowledgeStore {
         // than this directory (a hosted vector store) would otherwise leak the whole base.
         match self.open_backend(&base) {
             Ok(backend) => backend.clear()?,
-            Err(e) => tracing::warn!(base = %id, error = %e, "deleting a base its provider cannot open"),
+            Err(e) => {
+                tracing::warn!(base = %id, error = %e, "deleting a base its provider cannot open")
+            }
         }
         self.bases.remove(id)?;
         Ok(true)
@@ -607,7 +609,11 @@ impl KnowledgeStore {
         // the query, which would otherwise cap the scan instead of the answer.
         let query = Query {
             tags: normalize_tags(&filter.tags),
-            limit: if filter.stale_only { None } else { filter.limit },
+            limit: if filter.stale_only {
+                None
+            } else {
+                filter.limit
+            },
         };
         let mut notes = backend.list(&query)?;
         if filter.stale_only {
@@ -651,7 +657,9 @@ impl KnowledgeStore {
         if vector.is_empty() {
             return Err(Error::Embed("the embedder returned no vector".into()));
         }
-        self.gather(bases, limit, |backend| backend.search_vectors(&vector, limit))
+        self.gather(bases, limit, |backend| {
+            backend.search_vectors(&vector, limit)
+        })
     }
 
     /// Search `bases` by word, best first — no embedder, no model, no network.
@@ -671,11 +679,7 @@ impl KnowledgeStore {
     /// # Errors
     /// A config or IO error while listing.
     pub fn visible_bases(&self) -> Result<Vec<BaseId>> {
-        Ok(self
-            .list_bases(None)?
-            .into_iter()
-            .map(|b| b.id)
-            .collect())
+        Ok(self.list_bases(None)?.into_iter().map(|b| b.id).collect())
     }
 
     // ------------------------------------------------------------ embedding
@@ -826,7 +830,6 @@ impl KnowledgeStore {
             "{stem}: a thousand notes already share this title"
         )))
     }
-
 }
 
 /// Resolve the knowledge bases an agent works with, from the fields on its definition.
@@ -857,7 +860,9 @@ pub fn resolve_agent_bases(
     for entry in configured {
         match entry.parse::<BaseId>() {
             Ok(id) if reader.access(&id).is_some() && !out.contains(&id) => out.push(id),
-            Ok(id) => tracing::debug!(%agent, base = %id, "knowledge base not readable by this agent"),
+            Ok(id) => {
+                tracing::debug!(%agent, base = %id, "knowledge base not readable by this agent")
+            }
             Err(e) => tracing::warn!(%agent, entry, error = %e, "unparseable knowledge base"),
         }
     }
@@ -865,7 +870,10 @@ pub fn resolve_agent_bases(
 }
 
 /// Embed every chunk of `note`, and describe what came back.
-fn embed_chunks(embedder: &dyn Embedder, note: &Knowledge) -> Result<(EmbeddingState, Vec<Vec<f32>>)> {
+fn embed_chunks(
+    embedder: &dyn Embedder,
+    note: &Knowledge,
+) -> Result<(EmbeddingState, Vec<Vec<f32>>)> {
     let chunks = note.chunks();
     if chunks.is_empty() {
         return Ok((EmbeddingState::default(), Vec::new()));
@@ -902,7 +910,11 @@ fn embed_chunks(embedder: &dyn Embedder, note: &Knowledge) -> Result<(EmbeddingS
 /// opening words — a note pasted in with no title still needs to be addressable.
 fn slug_or_body(title: &str, body: &str) -> Result<String> {
     slug(title).or_else(|_| {
-        let opening: String = body.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+        let opening: String = body
+            .split_whitespace()
+            .take(8)
+            .collect::<Vec<_>>()
+            .join(" ");
         slug(&opening)
     })
 }

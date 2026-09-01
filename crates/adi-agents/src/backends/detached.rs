@@ -285,7 +285,11 @@ mod tests {
     #[test]
     fn a_pid_is_recorded_and_dropped_when_the_child_exits() {
         let dir = scratch_dir("pidfile");
-        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "exit 0".to_string()];
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "exit 0".to_string(),
+        ];
         let child = spawn_child(
             &dir,
             "run-1",
@@ -305,7 +309,10 @@ mod tests {
             }
             std::thread::sleep(Duration::from_millis(10));
         }
-        assert!(!pid_file.exists(), "the reaper drops the pid of an exited child");
+        assert!(
+            !pid_file.exists(),
+            "the reaper drops the pid of an exited child"
+        );
         assert!(!pid_alive(child.pid), "the child is gone");
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -317,7 +324,11 @@ mod tests {
     #[test]
     fn a_spawn_records_which_process_got_the_pid() {
         let dir = scratch_dir("spawn-identity");
-        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "sleep 2".to_string()];
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "sleep 2".to_string(),
+        ];
         let child = spawn_child(
             &dir,
             "run-1",
@@ -349,7 +360,11 @@ mod tests {
         use std::sync::mpsc;
 
         let dir = scratch_dir("on-exit");
-        let argv = vec!["/bin/sh".to_string(), "-c".to_string(), "exit 0".to_string()];
+        let argv = vec![
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "exit 0".to_string(),
+        ];
         let (tx, rx) = mpsc::channel();
         let child = spawn_child(
             &dir,

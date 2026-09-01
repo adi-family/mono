@@ -126,7 +126,11 @@ impl Flavor {
     /// Resolve against an arbitrary lookup. The tests use this rather than mutating the
     /// process environment, which is shared by every test in the binary.
     fn resolve(lookup: &dyn Fn(&str) -> Option<String>) -> Self {
-        let get = |key: &str| lookup(key).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let get = |key: &str| {
+            lookup(key)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
 
         let id = get(FLAVOR_ENV).unwrap_or_else(|| DEFAULT_FLAVOR.to_string());
         let preset = Preset::for_id(&id);
@@ -246,8 +250,10 @@ impl Preset {
     fn derived(id: &str) -> Self {
         let slug = slugify(id);
         let hash = fnv1a(slug.as_bytes());
-        let port = DERIVED_PORT_BASE + u16::try_from(hash % u64::from(DERIVED_PORT_SPAN)).unwrap_or(0);
-        let octet = DERIVED_OCTET_BASE + u8::try_from(hash % u64::from(DERIVED_OCTET_SPAN)).unwrap_or(0);
+        let port =
+            DERIVED_PORT_BASE + u16::try_from(hash % u64::from(DERIVED_PORT_SPAN)).unwrap_or(0);
+        let octet =
+            DERIVED_OCTET_BASE + u8::try_from(hash % u64::from(DERIVED_OCTET_SPAN)).unwrap_or(0);
 
         Self {
             app_name: format!("ADI {}", titlecase(&slug)),
@@ -316,12 +322,7 @@ mod tests {
             .iter()
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
-        move |key| {
-            owned
-                .iter()
-                .find(|(k, _)| k == key)
-                .map(|(_, v)| v.clone())
-        }
+        move |key| owned.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
     }
 
     fn flavor(pairs: &[(&str, &str)]) -> Flavor {
@@ -355,8 +356,18 @@ mod tests {
         assert_ne!(release.frontdoor_addr, dev.frontdoor_addr);
         assert_ne!(release.supervisor_port, dev.supervisor_port);
 
-        for service in ["dns", "dns-landing", "control-panel", "dashboards", "updater"] {
-            assert_ne!(release.label(service), dev.label(service), "label {service}");
+        for service in [
+            "dns",
+            "dns-landing",
+            "control-panel",
+            "dashboards",
+            "updater",
+        ] {
+            assert_ne!(
+                release.label(service),
+                dev.label(service),
+                "label {service}"
+            );
         }
         // Whole-label inequality is not enough: one flavour's namespace must not *contain*
         // the other's. Compare the way the OS will, at component boundaries rather than in
@@ -396,10 +407,16 @@ mod tests {
     fn an_explicit_variable_beats_the_preset() {
         let f = flavor(&[(FLAVOR_ENV, "dev"), (DOMAIN_ENV, "adi-test")]);
         assert_eq!(f.domain, "adi-test");
-        assert_eq!(f.dir_name, ".adi-dev", "the rest of the preset still applies");
+        assert_eq!(
+            f.dir_name, ".adi-dev",
+            "the rest of the preset still applies"
+        );
 
         // ADI_DIR predates this type and still wins on its own.
-        assert_eq!(flavor(&[(DIR_ENV, ".adi-scratch")]).dir_name, ".adi-scratch");
+        assert_eq!(
+            flavor(&[(DIR_ENV, ".adi-scratch")]).dir_name,
+            ".adi-scratch"
+        );
     }
 
     #[test]
@@ -413,9 +430,19 @@ mod tests {
         // Clear of both presets, and of ADI DNS on 15353.
         assert!(![10_053, 10_063, 15_353].contains(&f.resolver_port));
         assert!(!(8_000..=9_999).contains(&f.resolver_port));
-        assert!(!(8_000..=9_999).contains(&f.supervisor_port), "a lease could take it");
-        assert!(![45_099, 45_199].contains(&f.supervisor_port), "clear of both presets");
-        assert_eq!(flavor(&[(FLAVOR_ENV, "staging")]), f, "derivation is stable");
+        assert!(
+            !(8_000..=9_999).contains(&f.supervisor_port),
+            "a lease could take it"
+        );
+        assert!(
+            ![45_099, 45_199].contains(&f.supervisor_port),
+            "clear of both presets"
+        );
+        assert_eq!(
+            flavor(&[(FLAVOR_ENV, "staging")]),
+            f,
+            "derivation is stable"
+        );
     }
 
     #[test]
@@ -424,7 +451,11 @@ mod tests {
         assert_eq!(f.domain, "adi-my-branch-v2");
         assert_eq!(f.dir_name, ".adi-my-branch-v2");
         assert!(!f.domain.ends_with('-'));
-        assert_eq!(flavor(&[(FLAVOR_ENV, "   ")]).id, DEFAULT_FLAVOR, "blank is not an id");
+        assert_eq!(
+            flavor(&[(FLAVOR_ENV, "   ")]).id,
+            DEFAULT_FLAVOR,
+            "blank is not an id"
+        );
     }
 
     #[test]
@@ -432,15 +463,27 @@ mod tests {
         // `for_id` reads the real environment for every field but the id, so a shell that
         // already pins one would make this compare two different things. Skip rather than
         // flake: the composition itself is covered by `an_explicit_variable_beats_the_preset`.
-        let ambient = [DOMAIN_ENV, DIR_ENV, APP_NAME_ENV, LABEL_PREFIX_ENV,
-                       RESOLVER_PORT_ENV, FRONTDOOR_ADDR_ENV, BUNDLE_ID_ENV, AUTO_UPDATE_ENV];
+        let ambient = [
+            DOMAIN_ENV,
+            DIR_ENV,
+            APP_NAME_ENV,
+            LABEL_PREFIX_ENV,
+            RESOLVER_PORT_ENV,
+            FRONTDOOR_ADDR_ENV,
+            BUNDLE_ID_ENV,
+            AUTO_UPDATE_ENV,
+        ];
         if ambient.iter().any(|k| std::env::var_os(k).is_some()) {
             return;
         }
         // The two ways of naming a flavour must not disagree: `--flavor dev` is exactly
         // `ADI_FLAVOR=dev`.
         assert_eq!(Flavor::for_id("dev"), flavor(&[(FLAVOR_ENV, "dev")]));
-        assert_eq!(Flavor::for_id("").id, DEFAULT_FLAVOR, "a blank flag is not an id");
+        assert_eq!(
+            Flavor::for_id("").id,
+            DEFAULT_FLAVOR,
+            "a blank flag is not an id"
+        );
     }
 
     /// A child re-resolving from what its parent exported must land on the same identity, or

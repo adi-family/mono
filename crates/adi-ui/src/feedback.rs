@@ -69,10 +69,7 @@ pub fn Flash(
             kind.card_classes()
         )
     } else {
-        format!(
-            "min-h-4 bg-bar px-3.5 pb-2.5 text-mini {}",
-            kind.classes()
-        )
+        format!("min-h-4 bg-bar px-3.5 pb-2.5 text-mini {}", kind.classes())
     };
     view! { <div class=merge(&own, class) role="status">{children()}</div> }
 }

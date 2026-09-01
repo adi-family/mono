@@ -121,7 +121,11 @@ fn loadavg() -> (f64, f64, f64) {
     let mut v = [0f64; 3];
     // SAFETY: `getloadavg` fills at most `nelem` doubles into the caller's array.
     let n = unsafe { getloadavg(v.as_mut_ptr(), 3) };
-    if n < 3 { (0.0, 0.0, 0.0) } else { (v[0], v[1], v[2]) }
+    if n < 3 {
+        (0.0, 0.0, 0.0)
+    } else {
+        (v[0], v[1], v[2])
+    }
 }
 
 unsafe extern "C" {
@@ -222,7 +226,9 @@ fn scan_log(
         };
         match v.get("type").and_then(serde_json::Value::as_str) {
             Some("assistant") => {
-                let blocks = v.pointer("/message/content").and_then(serde_json::Value::as_array);
+                let blocks = v
+                    .pointer("/message/content")
+                    .and_then(serde_json::Value::as_array);
                 for b in blocks.into_iter().flatten() {
                     if b.get("type").and_then(serde_json::Value::as_str) != Some("tool_use") {
                         continue;
@@ -230,7 +236,10 @@ fn scan_log(
                     if b.get("name").and_then(serde_json::Value::as_str) != Some("Bash") {
                         continue;
                     }
-                    let id = b.get("id").and_then(serde_json::Value::as_str).unwrap_or_default();
+                    let id = b
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default();
                     let asked = b
                         .pointer("/input/timeout")
                         .and_then(serde_json::Value::as_u64)
@@ -254,7 +263,9 @@ fn scan_log(
                 }
             }
             Some("tool_progress") => {
-                let Some(parent) = v.get("parent_tool_use_id").and_then(serde_json::Value::as_str)
+                let Some(parent) = v
+                    .get("parent_tool_use_id")
+                    .and_then(serde_json::Value::as_str)
                 else {
                     continue;
                 };
@@ -276,7 +287,9 @@ fn scan_log(
                 }
             }
             Some("user") => {
-                let blocks = v.pointer("/message/content").and_then(serde_json::Value::as_array);
+                let blocks = v
+                    .pointer("/message/content")
+                    .and_then(serde_json::Value::as_array);
                 for b in blocks.into_iter().flatten() {
                     if b.get("type").and_then(serde_json::Value::as_str) == Some("tool_result")
                         && let Some(id) = b.get("tool_use_id").and_then(serde_json::Value::as_str)
@@ -317,7 +330,14 @@ fn capture(w: &Watch, p: &Pending, elapsed_s: f64, deadline_s: f64, n: usize) {
         p.conv,
         elapsed_s / deadline_s
     );
-    println!("   {}", p.command.replace('\n', " ").chars().take(90).collect::<String>());
+    println!(
+        "   {}",
+        p.command
+            .replace('\n', " ")
+            .chars()
+            .take(90)
+            .collect::<String>()
+    );
 
     let (l1, l5, l15) = loadavg();
     let vm = vm_stat();
@@ -343,12 +363,20 @@ fn capture(w: &Watch, p: &Pending, elapsed_s: f64, deadline_s: f64, n: usize) {
 
     // The one artifact a vendor cannot get any other way: where the CLI's own event loop was
     // standing while its own timer was late. Only the conversation's `claude` pid is sampled.
-    if w.sample_pid && let Some(pid) = pid {
+    if w.sample_pid
+        && let Some(pid) = pid
+    {
         println!("   sampling claude pid {pid} for 5s…");
-        let out = sh_out("sample", &[&pid.to_string(), "5", "-mayDie", "-f", "/dev/stdout"]);
+        let out = sh_out(
+            "sample",
+            &[&pid.to_string(), "5", "-mayDie", "-f", "/dev/stdout"],
+        );
         let _ = std::fs::write(dir.join(format!("{stem}-sample.txt")), out);
     }
-    println!("   written to {}", dir.join(format!("{stem}.json")).display());
+    println!(
+        "   written to {}",
+        dir.join(format!("{stem}.json")).display()
+    );
 }
 
 /// The `claude` pid this conversation recorded, when it is still alive.
@@ -379,7 +407,11 @@ fn sh_out(program: &str, args: &[&str]) -> String {
 }
 
 fn append_line(path: &Path, line: &str) {
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
         let _ = writeln!(f, "{line}");
     }
 }

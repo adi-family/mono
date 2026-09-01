@@ -12,8 +12,8 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::parser::treesitter::TreeSitterParser;
     use crate::parser::Parser;
+    use crate::parser::treesitter::TreeSitterParser;
     use crate::types::{Language, ParsedFile, ParsedSymbol, SymbolKind};
 
     fn parse(source: &str, language: Language) -> ParsedFile {
@@ -82,7 +82,10 @@ mod tests {
 
         #[test]
         fn impl_methods_are_qualified_by_their_type() {
-            let parsed = parse("struct P;\nimpl P { fn origin() -> Self { P } }", Language::Rust);
+            let parsed = parse(
+                "struct P;\nimpl P { fn origin() -> Self { P } }",
+                Language::Rust,
+            );
 
             let method = find(&parsed.symbols, "P::origin").expect("P::origin");
             assert_eq!(method.kind, SymbolKind::Method);
@@ -130,8 +133,14 @@ mod tests {
             let parsed = parse("pub fn open() {}\nfn shut() {}", Language::Rust);
 
             use crate::types::Visibility;
-            assert_eq!(find(&parsed.symbols, "open").unwrap().visibility, Visibility::Unknown);
-            assert_eq!(find(&parsed.symbols, "shut").unwrap().visibility, Visibility::Unknown);
+            assert_eq!(
+                find(&parsed.symbols, "open").unwrap().visibility,
+                Visibility::Unknown
+            );
+            assert_eq!(
+                find(&parsed.symbols, "shut").unwrap().visibility,
+                Visibility::Unknown
+            );
         }
 
         #[test]
@@ -153,13 +162,23 @@ mod tests {
         #[test]
         fn location_points_at_the_declaration() {
             let parsed = parse("\n\nfn third_line() {}", Language::Rust);
-            assert_eq!(find(&parsed.symbols, "third_line").unwrap().location.start_line, 2);
+            assert_eq!(
+                find(&parsed.symbols, "third_line")
+                    .unwrap()
+                    .location
+                    .start_line,
+                2
+            );
         }
 
         #[test]
         fn empty_and_comment_only_sources_are_not_errors() {
             assert!(parse("", Language::Rust).symbols.is_empty());
-            assert!(parse("// nothing here\n", Language::Rust).symbols.is_empty());
+            assert!(
+                parse("// nothing here\n", Language::Rust)
+                    .symbols
+                    .is_empty()
+            );
         }
     }
 
@@ -253,10 +272,7 @@ mod tests {
 
         #[test]
         fn class_and_method() {
-            let parsed = parse(
-                "public class App { public void run() {} }",
-                Language::Java,
-            );
+            let parsed = parse("public class App { public void run() {} }", Language::Java);
             assert_eq!(
                 find(&parsed.symbols, "App").map(|s| s.kind),
                 Some(SymbolKind::Class)

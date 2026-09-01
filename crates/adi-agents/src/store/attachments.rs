@@ -98,8 +98,11 @@ pub struct Attachment {
 /// can disagree with the file it points at.
 #[must_use]
 pub fn path(dir: &Path, attachment: &Attachment) -> PathBuf {
-    dir.join(DIR)
-        .join(format!("{}.{}", attachment.id, extension(&attachment.media_type)))
+    dir.join(DIR).join(format!(
+        "{}.{}",
+        attachment.id,
+        extension(&attachment.media_type)
+    ))
 }
 
 /// The extension a media type's file is given. `bin` for anything unknown, which [`put`] refuses
@@ -227,7 +230,12 @@ pub(super) fn claim(conn: &Connection, agent: &str, session: &str, ids: &[String
 /// Remove every attachment claimed by one conversation, bytes and rows — what deleting it does.
 ///
 /// Returns how many were removed.
-pub(super) fn delete_for_session(conn: &Connection, dir: &Path, agent: &str, session: &str) -> usize {
+pub(super) fn delete_for_session(
+    conn: &Connection,
+    dir: &Path,
+    agent: &str,
+    session: &str,
+) -> usize {
     let rows = rows_where(
         conn,
         "SELECT id, media_type FROM attachments WHERE agent = ?1 AND session = ?2",
@@ -295,7 +303,8 @@ mod tests {
     fn store() -> (tempdir::Dir, rusqlite::Connection) {
         let dir = tempdir::Dir::new("attachments");
         let conn = Connection::open_in_memory().expect("memory db");
-        conn.execute_batch(super::super::db::SCHEMA).expect("schema");
+        conn.execute_batch(super::super::db::SCHEMA)
+            .expect("schema");
         (dir, conn)
     }
 

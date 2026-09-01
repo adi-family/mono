@@ -180,7 +180,10 @@ impl Staging {
     /// The pairs nobody has ruled on yet.
     #[must_use]
     pub fn open(&self) -> Vec<&Pending> {
-        self.pending.iter().filter(|p| p.verdict.is_none()).collect()
+        self.pending
+            .iter()
+            .filter(|p| p.verdict.is_none())
+            .collect()
     }
 }
 

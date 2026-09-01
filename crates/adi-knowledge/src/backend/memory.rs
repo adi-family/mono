@@ -11,9 +11,7 @@ use std::sync::{Arc, Mutex};
 use crate::error::{Error, Result};
 use crate::note::{EmbeddingState, Knowledge};
 
-use super::{
-    Backend, BaseContext, ChunkHit, MEMORY, Provider, Query, best_per_note, cosine,
-};
+use super::{Backend, BaseContext, ChunkHit, MEMORY, Provider, Query, best_per_note, cosine};
 
 /// Opens [`MemoryBackend`]s, and hands the same one back for the same base.
 ///
@@ -80,7 +78,10 @@ impl Backend for MemoryBackend {
         stored.base = None;
         // Same rule as the SQLite backend: an empty embedding state means the vectors are gone.
         let keep = if note.embedding.hash.is_some() {
-            notes.get(&note.id).map(|e| e.vectors.clone()).unwrap_or_default()
+            notes
+                .get(&note.id)
+                .map(|e| e.vectors.clone())
+                .unwrap_or_default()
         } else {
             Vec::new()
         };
@@ -105,7 +106,11 @@ impl Backend for MemoryBackend {
             .filter(|e| query.tags.iter().all(|t| e.note.tags.contains(t)))
             .map(|e| e.note.clone())
             .collect();
-        out.sort_by(|a, b| b.updated_at.cmp(&a.updated_at).then_with(|| a.id.cmp(&b.id)));
+        out.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
         if let Some(limit) = query.limit {
             out.truncate(limit);
         }
@@ -166,13 +171,8 @@ impl Backend for MemoryBackend {
         let hits = notes
             .values()
             .filter_map(|e| {
-                let hay = format!(
-                    "{} {} {}",
-                    e.note.title,
-                    e.note.body,
-                    e.note.tags.join(" ")
-                )
-                .to_ascii_lowercase();
+                let hay = format!("{} {} {}", e.note.title, e.note.body, e.note.tags.join(" "))
+                    .to_ascii_lowercase();
                 let matched = terms.iter().filter(|t| hay.contains(t.as_str())).count();
                 (matched > 0).then(|| ChunkHit {
                     id: e.note.id.clone(),
@@ -244,11 +244,22 @@ mod tests {
         backend
             .set_vectors(
                 "a",
-                &EmbeddingState { model: Some("m".into()), hash: Some("h".into()), chunks: 1, dimensions: 2 },
+                &EmbeddingState {
+                    model: Some("m".into()),
+                    hash: Some("h".into()),
+                    chunks: 1,
+                    dimensions: 2,
+                },
                 &[vec![1.0, 0.0]],
             )
             .expect("vectors");
-        assert_eq!(backend.search_vectors(&[1.0, 0.0], 5).expect("search").len(), 1);
+        assert_eq!(
+            backend
+                .search_vectors(&[1.0, 0.0], 5)
+                .expect("search")
+                .len(),
+            1
+        );
 
         // Carrying the embedding state forward keeps the vectors …
         let mut kept = note("a", "A", "first");
@@ -260,22 +271,41 @@ mod tests {
         };
         kept.source = Some("elsewhere".into());
         backend.put(&kept).expect("re-put with state");
-        assert_eq!(backend.search_vectors(&[1.0, 0.0], 5).expect("search").len(), 1);
+        assert_eq!(
+            backend
+                .search_vectors(&[1.0, 0.0], 5)
+                .expect("search")
+                .len(),
+            1
+        );
 
         // … and clearing it takes them away.
         backend.put(&note("a", "A", "second")).expect("re-put");
         assert!(
-            backend.search_vectors(&[1.0, 0.0], 5).expect("search").is_empty(),
+            backend
+                .search_vectors(&[1.0, 0.0], 5)
+                .expect("search")
+                .is_empty(),
             "a rewrite must take the old vectors with it"
         );
-        assert!(!backend.get("a").expect("get").expect("present").is_embedded());
+        assert!(
+            !backend
+                .get("a")
+                .expect("get")
+                .expect("present")
+                .is_embedded()
+        );
     }
 
     #[test]
     fn text_search_scores_by_how_much_of_the_query_a_note_carries() {
         let backend = MemoryBackend::default();
-        backend.put(&note("both", "restart panel", "")).expect("put");
-        backend.put(&note("one", "restart nothing", "")).expect("put");
+        backend
+            .put(&note("both", "restart panel", ""))
+            .expect("put");
+        backend
+            .put(&note("one", "restart nothing", ""))
+            .expect("put");
 
         let hits = backend.search_text("restart panel", 5).expect("search");
         assert_eq!(hits[0].id, "both");

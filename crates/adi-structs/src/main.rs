@@ -111,7 +111,11 @@ fn main() -> ExitCode {
     if check && !stale.is_empty() {
         eprintln!(
             "adi-structs: {} out of date:\n  {}\nrun `cargo run -p adi-structs` and commit the result.",
-            if stale.len() == 1 { "1 page is" } else { "pages are" },
+            if stale.len() == 1 {
+                "1 page is"
+            } else {
+                "pages are"
+            },
             stale.join("\n  ")
         );
         return ExitCode::FAILURE;
@@ -151,7 +155,11 @@ fn resolve(root: &Path, wanted: &[String]) -> Result<Vec<PathBuf>, String> {
     wanted
         .iter()
         .map(|name| {
-            let bare = name.trim_end_matches('/').rsplit('/').next().unwrap_or(name);
+            let bare = name
+                .trim_end_matches('/')
+                .rsplit('/')
+                .next()
+                .unwrap_or(name);
             all.iter()
                 .find(|dir| dir.file_name().is_some_and(|f| f == bare))
                 .cloned()

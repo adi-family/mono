@@ -33,8 +33,8 @@ pub(crate) mod tools;
 
 use std::path::Path;
 
-use crate::error::Result;
 use crate::StoredAgent;
+use crate::error::Result;
 
 /// Run one `adi` conversation turn: read the transcript, drive the provider and its tools, and
 /// return the answer text. Used by the `adi-mono harness-turn` child that an `adi` turn spawns — a

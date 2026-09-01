@@ -14,18 +14,18 @@
 //! fleet rather than anything typed is the point — "run this in the cloud" should be picking a
 //! name off a list, not learning a deployment.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{
     Dashboard, DashboardsState, NewDashboard, TransferDashboard, TransferMode,
 };
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{DashboardsForm, Flash, State, load};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, confirm, field_hint,
-    flash_view, menu_item, row_actions, segmented, sort_rows, updated_text,
+    Key, TableState, TextField, apply_mutation, confirm, field_hint, flash_view, menu_item,
+    row_actions, segmented, sort_rows, updated_text,
 };
 
 /// The columns shared by the live table and the archived disclosure — both render one dashboard
@@ -199,7 +199,12 @@ fn transfer_title(state: State, form: DashboardsForm) -> String {
     let name = state
         .dashboards
         .get()
-        .and_then(|d| d.dashboards.into_iter().find(|d| d.id == id).map(|d| d.name))
+        .and_then(|d| {
+            d.dashboards
+                .into_iter()
+                .find(|d| d.id == id)
+                .map(|d| d.name)
+        })
         .unwrap_or_else(|| short_id(&id));
     format!("Transfer \u{201c}{name}\u{201d}")
 }
@@ -295,7 +300,9 @@ fn submit_transfer(state: State, form: DashboardsForm) {
         return;
     }
     if node.is_empty() {
-        state.flash.set(Some(Flash::err("Pick a node to transfer to.".to_string())));
+        state
+            .flash
+            .set(Some(Flash::err("Pick a node to transfer to.".to_string())));
         return;
     }
     let password = form.transfer_password.get();
@@ -319,7 +326,11 @@ fn submit_transfer(state: State, form: DashboardsForm) {
     let body = TransferDashboard {
         id,
         node: node.clone(),
-        mode: if moving { TransferMode::Move } else { TransferMode::Copy },
+        mode: if moving {
+            TransferMode::Move
+        } else {
+            TransferMode::Copy
+        },
         delete_local,
         // The user pairing mints; the server fills it in when absent.
         username: None,
@@ -421,10 +432,11 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
         .collect();
     if rows.is_empty() {
         return view! { <EmptyRow state=table>{if archived {
-                "Nothing archived."
-            } else {
-                "No dashboards yet — create one under ~/.adi/mono/dashboards/."
-            }}</EmptyRow> }.into_any();
+            "Nothing archived."
+        } else {
+            "No dashboards yet — create one under ~/.adi/mono/dashboards/."
+        }}</EmptyRow> }
+        .into_any();
     }
     // A dead service sorts below every live one at the same port, so a descending Frontend sort
     // answers "what is actually up?" rather than interleaving the stopped ones.
@@ -441,7 +453,12 @@ fn rows_view(state: State, form: DashboardsForm, archived: bool) -> AnyView {
         &mut rows,
         table.sort.get(),
         |d, col| match col {
-            "Project" => Key::maybe(d.project.as_deref().and_then(|id| names.get(id)).map(String::as_str)),
+            "Project" => Key::maybe(
+                d.project
+                    .as_deref()
+                    .and_then(|id| names.get(id))
+                    .map(String::as_str),
+            ),
             "Frontend" => service_key(d.frontend_port, d.frontend_running),
             "Backend" => service_key(d.backend_port, d.backend_running),
             "Modules" => Key::count(d.modules.len()),
@@ -480,9 +497,8 @@ fn cell(col: &str, d: &Dashboard, state: State) -> AnyView {
             view! { <span>{service_cell(d.frontend_port, d.frontend_running, open_url(d))}</span> }
                 .into_any()
         }
-        "Backend" => {
-            view! { <span>{service_cell(d.backend_port, d.backend_running, None)}</span> }.into_any()
-        }
+        "Backend" => view! { <span>{service_cell(d.backend_port, d.backend_running, None)}</span> }
+            .into_any(),
         "Modules" => view! { <span class="font-mono">{summarize(&d.modules)}</span> }.into_any(),
         "Routes" => view! { <span class="font-mono">{summarize(&d.routes)}</span> }.into_any(),
         // "Dashboard", and anything the layout offers that this match doesn't name.
@@ -533,7 +549,8 @@ pub(crate) fn open_url(d: &Dashboard) -> Option<String> {
     if crate::origin::viewing_node().is_some() {
         return None;
     }
-    d.frontend_port.map(|port| format!("http://127.0.0.1:{port}"))
+    d.frontend_port
+        .map(|port| format!("http://127.0.0.1:{port}"))
 }
 
 /// The dashboard's hostname, with a blank one read as absent: a hand-edited hive file can carry a
@@ -656,11 +673,15 @@ fn row_action(state: State, form: DashboardsForm, id: &str, archived: bool) -> A
         let delete = menu_item(state, "Delete", true, move || {
             if !confirm(&format!(
                 "Permanently delete dashboard {del_short}? This removes all of its files \
-                 and cannot be undone.")) {
+                 and cannot be undone."
+            )) {
                 return;
             }
-            apply_dashboards(state, format!("Deleted {del_short}."),
-                fetch::delete_dashboard(del_id.clone()));
+            apply_dashboards(
+                state,
+                format!("Deleted {del_short}."),
+                fetch::delete_dashboard(del_id.clone()),
+            );
         });
         row_actions(state, key, restore, vec![transfer, delete])
     } else {

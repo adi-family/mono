@@ -328,7 +328,10 @@ fn print_trigger(store: &adi_core::Triggers, trigger: &Trigger) {
         println!("  events: {}", trigger.manifest.events.join(" · "));
     }
     if !trigger.manifest.trigger_on.is_empty() {
-        println!("  runs only for: {}", trigger.manifest.trigger_on.join(" · "));
+        println!(
+            "  runs only for: {}",
+            trigger.manifest.trigger_on.join(" · ")
+        );
     }
     if !trigger.manifest.extra.is_empty() {
         let extras: Vec<String> = trigger

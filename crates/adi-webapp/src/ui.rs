@@ -28,7 +28,9 @@ pub(crate) fn rows_or_placeholder<T>(
     empty: &str,
 ) -> Result<Vec<T>, AnyView> {
     let Some(rows) = loaded else {
-        return Err(view! { <adi_ui::EmptyRow state=table>"Loading…"</adi_ui::EmptyRow> }.into_any());
+        return Err(
+            view! { <adi_ui::EmptyRow state=table>"Loading…"</adi_ui::EmptyRow> }.into_any(),
+        );
     };
     if rows.is_empty() {
         let empty = empty.to_string();
@@ -191,7 +193,6 @@ pub(crate) fn fmt_uptime(s: u64) -> String {
         format!("{}h {}m", s / 3_600, (s % 3_600) / 60)
     }
 }
-
 
 /// The one-line status message shown under a form: reads the shared `flash` signal, colouring
 /// itself via `data-kind`.

@@ -53,17 +53,18 @@ fn extract_python_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymb
                     for i in 0..body.child_count() as u32 {
                         if let Some(child) = body.child(i)
                             && child.kind() == "function_definition"
-                                && let Some(method_name) = child.child_by_field_name("name") {
-                                    let method_name_text = node_text(method_name, source);
-                                    children.push(
-                                        ParsedSymbol::new(
-                                            method_name_text.clone(),
-                                            SymbolKind::Method,
-                                            node_location(child),
-                                        )
-                                        .with_visibility(detect_visibility(&method_name_text)),
-                                    );
-                                }
+                            && let Some(method_name) = child.child_by_field_name("name")
+                        {
+                            let method_name_text = node_text(method_name, source);
+                            children.push(
+                                ParsedSymbol::new(
+                                    method_name_text.clone(),
+                                    SymbolKind::Method,
+                                    node_location(child),
+                                )
+                                .with_visibility(detect_visibility(&method_name_text)),
+                            );
+                        }
                     }
                 }
                 symbols.push(
@@ -93,7 +94,8 @@ fn extract_function_signature(node: Node, source: &str, is_async: bool) -> Strin
         .map(|n| node_text(n, source))
         .unwrap_or_default();
     let params = node
-        .child_by_field_name("parameters").map_or_else(|| "()".to_string(), |n| node_text(n, source));
+        .child_by_field_name("parameters")
+        .map_or_else(|| "()".to_string(), |n| node_text(n, source));
     let ret = node
         .child_by_field_name("return_type")
         .map(|n| format!(" -> {}", node_text(n, source)))
@@ -129,13 +131,14 @@ fn collect_python_references(node: Node, source: &str, refs: &mut Vec<ParsedRefe
             if let Some(superclasses) = node.child_by_field_name("superclasses") {
                 for i in 0..superclasses.child_count() as u32 {
                     if let Some(child) = superclasses.child(i)
-                        && (child.kind() == "identifier" || child.kind() == "attribute") {
-                            refs.push(ParsedReference::new(
-                                node_text(child, source),
-                                ReferenceKind::Inheritance,
-                                node_location(child),
-                            ));
-                        }
+                        && (child.kind() == "identifier" || child.kind() == "attribute")
+                    {
+                        refs.push(ParsedReference::new(
+                            node_text(child, source),
+                            ReferenceKind::Inheritance,
+                            node_location(child),
+                        ));
+                    }
                 }
             }
         }

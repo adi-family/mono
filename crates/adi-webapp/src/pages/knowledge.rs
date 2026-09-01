@@ -220,7 +220,11 @@ fn results_panel(kb: KnowledgeConsole) -> AnyView {
             "{} result(s) for “{}” — {} across {} base(s)",
             results.hits.len(),
             results.query,
-            if results.semantic { "by meaning" } else { "by words" },
+            if results.semantic {
+                "by meaning"
+            } else {
+                "by words"
+            },
             results.bases.len(),
         );
         Some(view! {

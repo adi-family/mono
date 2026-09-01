@@ -391,7 +391,9 @@ fn swap_binaries(
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new(); // (parked copy, where it came from)
     let mut had_previous = false;
     for src in read_files(staged)? {
-        let Some(name) = src.file_name() else { continue };
+        let Some(name) = src.file_name() else {
+            continue;
+        };
         let dest = target.join(name);
         if dest.exists() {
             let parked = backup.join(name);
@@ -444,9 +446,8 @@ fn make_executable(path: &Path) -> Result<(), Error> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).map_err(|e| {
-            Error::Install(format!("could not chmod {}: {e}", path.display()))
-        })?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+            .map_err(|e| Error::Install(format!("could not chmod {}: {e}", path.display())))?;
     }
     #[cfg(not(unix))]
     let _ = path;
@@ -596,9 +597,18 @@ mod tests {
             .expect("swap")
             .expect("a previous install was there, so there is a backup");
 
-        assert_eq!(fs::read_to_string(target.join(mono_file())).unwrap(), "new-mono");
-        assert_eq!(fs::read_to_string(backup.join(mono_file())).unwrap(), "old-mono");
-        assert_eq!(fs::read_to_string(target.join("VERSION")).unwrap(), "0.2.0\n");
+        assert_eq!(
+            fs::read_to_string(target.join(mono_file())).unwrap(),
+            "new-mono"
+        );
+        assert_eq!(
+            fs::read_to_string(backup.join(mono_file())).unwrap(),
+            "old-mono"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("VERSION")).unwrap(),
+            "0.2.0\n"
+        );
         assert_eq!(Payload::Archive.installed_version(&target), "0.2.0");
 
         let _ = fs::remove_dir_all(&root);
@@ -610,9 +620,18 @@ mod tests {
         let staged = root.join("staged");
         write(&staged.join(mono_file()), "mono");
         let backup = Payload::Archive
-            .swap(&staged, &root.join("bin"), &root.join("backups"), "0.1.0", "0.2.0")
+            .swap(
+                &staged,
+                &root.join("bin"),
+                &root.join("backups"),
+                "0.1.0",
+                "0.2.0",
+            )
             .expect("swap");
-        assert!(backup.is_none(), "nothing was replaced, so nothing to roll back to");
+        assert!(
+            backup.is_none(),
+            "nothing was replaced, so nothing to roll back to"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -631,14 +650,20 @@ mod tests {
             .expect("backup");
         Payload::Archive.restore(&backup, &target).expect("restore");
 
-        assert_eq!(fs::read_to_string(target.join(mono_file())).unwrap(), "old-mono");
+        assert_eq!(
+            fs::read_to_string(target.join(mono_file())).unwrap(),
+            "old-mono"
+        );
         let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
     fn an_archive_install_falls_back_to_the_built_version_without_a_version_file() {
         let dir = scratch("noversion");
-        assert_eq!(Payload::Archive.installed_version(&dir), crate::BUILT_VERSION);
+        assert_eq!(
+            Payload::Archive.installed_version(&dir),
+            crate::BUILT_VERSION
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -658,7 +683,10 @@ mod tests {
         // contains. Everything here is real — a real gzip, a real unpack, a real exec.
         let root = scratch("stage-tarball");
         let pkg = root.join("src/adi-linux-x64");
-        write(&pkg.join("bin").join(mono_file()), "#!/bin/sh\necho 'adi-mono 0.2.0'\n");
+        write(
+            &pkg.join("bin").join(mono_file()),
+            "#!/bin/sh\necho 'adi-mono 0.2.0'\n",
+        );
         make_executable(&pkg.join("bin").join(mono_file())).unwrap();
         write(&pkg.join("README.md"), "node package");
 
@@ -671,7 +699,11 @@ mod tests {
             root.join("src").as_os_str(),
             std::ffi::OsStr::new("adi-linux-x64"),
         ]);
-        assert!(tar.ok(), "could not build the fixture tarball: {}", tar.text);
+        assert!(
+            tar.ok(),
+            "could not build the fixture tarball: {}",
+            tar.text
+        );
 
         let staging = root.join("staging");
         fs::create_dir_all(&staging).unwrap();
@@ -704,7 +736,9 @@ mod tests {
     #[test]
     fn preflight_rejects_a_payload_with_no_cli() {
         let dir = scratch("preflight-missing");
-        let err = Payload::Archive.preflight(&dir, "0.2.0").expect_err("no binary");
+        let err = Payload::Archive
+            .preflight(&dir, "0.2.0")
+            .expect_err("no binary");
         assert!(matches!(err, Error::Preflight(_)));
         let _ = fs::remove_dir_all(&dir);
     }
@@ -721,7 +755,9 @@ mod tests {
         // Can't set env for the child through `shell::capture`, so bake the number in instead.
         write(&fake, "#!/bin/sh\necho 'adi-mono 0.2.0'\n");
         make_executable(&fake).unwrap();
-        Payload::Archive.preflight(&dir, "0.2.0").expect("version matches the manifest");
+        Payload::Archive
+            .preflight(&dir, "0.2.0")
+            .expect("version matches the manifest");
 
         let err = Payload::Archive
             .preflight(&dir, "0.3.0")

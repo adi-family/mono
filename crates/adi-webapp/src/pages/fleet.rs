@@ -30,16 +30,16 @@
 //!
 //! [`FleetForm::clear_invite`]: crate::state::FleetForm::clear_invite
 
+use adi_ui::{Row as TableRow, Table};
 use adi_webapp_api::types::{FleetNode, FleetState, GRANT_PLACEHOLDER, MESH_CLIENT_URL};
 use leptos::prelude::*;
-use adi_ui::{Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, FleetForm, State};
 use crate::ui::{
-    apply_mutation, confirm, copy_row, fmt_date, Key, menu_item, prompt, row_actions,
-    rows_or_placeholder, sort_rows, TextField, updated_text,
+    Key, TextField, apply_mutation, confirm, copy_row, fmt_date, menu_item, prompt, row_actions,
+    rows_or_placeholder, sort_rows, updated_text,
 };
 
 /// The nodes table. `Node` carries the two names an operator reads (petname, then what the node
@@ -199,11 +199,14 @@ fn change_row(state: State, node: &FleetNode) -> AnyView {
 /// per node with its grants and the actions that change them.
 fn node_rows(state: State) -> AnyView {
     let table = state.tables.fleet;
-    let mut nodes =
-        match rows_or_placeholder(table, state.fleet.get().map(|v| v.nodes), "No nodes paired yet — press “Show pairing QR” below.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut nodes = match rows_or_placeholder(
+        table,
+        state.fleet.get().map(|v| v.nodes),
+        "No nodes paired yet — press “Show pairing QR” below.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(
         &mut nodes,
         table.sort.get(),
@@ -222,7 +225,8 @@ fn node_rows(state: State) -> AnyView {
         .into_iter()
         .map(|n| {
             let action = row_action(state, &n);
-            view! { <TableRow state=table cell=move |col| cell(col, &n, state) actions=action/> }.into_any()
+            view! { <TableRow state=table cell=move |col| cell(col, &n, state) actions=action/> }
+                .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

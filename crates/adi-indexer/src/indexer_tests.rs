@@ -11,8 +11,8 @@ mod tests {
     use crate::indexer::index_project;
     use crate::parser::{Parser, TreeSitterParser};
     use crate::search::VectorIndex;
-    use crate::storage::sqlite::SqliteStorage;
     use crate::storage::Storage;
+    use crate::storage::sqlite::SqliteStorage;
     use crate::types::{IndexProgress, Symbol};
     use std::collections::HashMap;
     use std::path::Path;
@@ -202,7 +202,11 @@ mod tests {
             "symbols_fts still answers for the symbol"
         );
         assert!(
-            fixture.storage.search_files_fts("gone", 10).unwrap().is_empty(),
+            fixture
+                .storage
+                .search_files_fts("gone", 10)
+                .unwrap()
+                .is_empty(),
             "files_fts still answers for the file"
         );
         assert!(

@@ -2,7 +2,7 @@
 
 use tree_sitter::{Node, Tree};
 
-use super::common::{declaration, node_location, node_text, WithDocCommentOpt};
+use super::common::{WithDocCommentOpt, declaration, node_location, node_text};
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
 
@@ -194,13 +194,15 @@ fn collect_ruby_references(node: Node, source: &str, refs: &mut Vec<ParsedRefere
             let name = node_text(node, source);
             let parent = node.parent();
             if let Some(p) = parent
-                && p.kind() != "class" && p.kind() != "module" {
-                    refs.push(ParsedReference::new(
-                        name,
-                        ReferenceKind::TypeReference,
-                        node_location(node),
-                    ));
-                }
+                && p.kind() != "class"
+                && p.kind() != "module"
+            {
+                refs.push(ParsedReference::new(
+                    name,
+                    ReferenceKind::TypeReference,
+                    node_location(node),
+                ));
+            }
         }
         "scope_resolution" => {
             let name = node_text(node, source);
@@ -254,4 +256,3 @@ fn is_common_method(name: &str) -> bool {
             | "attr_accessor"
     )
 }
-

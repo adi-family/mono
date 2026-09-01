@@ -145,7 +145,10 @@ mod tests {
             "fn f(x: u8) -> u8"
         );
         // A bodiless declaration: the second token carries it, and the terminator goes too.
-        assert_eq!(cut_before_body("fn f(&self) -> u8;", &["{", ";"]), "fn f(&self) -> u8");
+        assert_eq!(
+            cut_before_body("fn f(&self) -> u8;", &["{", ";"]),
+            "fn f(&self) -> u8"
+        );
     }
 
     #[test]

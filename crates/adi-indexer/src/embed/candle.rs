@@ -7,10 +7,10 @@
 //! Custom `JinaBert` implementation with QK-norm support, which candle-transformers lacks.
 //! The jina-embeddings-v2-base-code model requires QK-norm for correct attention scores.
 
-use super::error::{EmbedError, Result};
 use super::Embedder;
-use candle_core::{DType, Device, IndexOp, Module, Tensor, D};
-use candle_nn::{layer_norm, linear, linear_no_bias, LayerNorm, Linear, VarBuilder};
+use super::error::{EmbedError, Result};
+use candle_core::{D, DType, Device, IndexOp, Module, Tensor};
+use candle_nn::{LayerNorm, Linear, VarBuilder, layer_norm, linear, linear_no_bias};
 use candle_transformers::models::jina_bert::Config;
 use std::sync::Mutex;
 use tokenizers::Tokenizer;
@@ -489,7 +489,11 @@ mod tests {
 
         let pair = embedder.embed(&[long, short]).expect("embed");
         let trio = embedder
-            .embed(&[long, short, "fn china_market_entry_plan() -> Plan { Plan::skip(Country::CN) }"])
+            .embed(&[
+                long,
+                short,
+                "fn china_market_entry_plan() -> Plan { Plan::skip(Country::CN) }",
+            ])
             .expect("embed");
         let alone = embedder.embed(&[long]).expect("embed");
 

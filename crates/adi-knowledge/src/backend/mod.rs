@@ -306,9 +306,21 @@ mod tests {
     #[test]
     fn a_note_is_counted_once_at_its_best_chunk() {
         let hits = vec![
-            ChunkHit { id: "a".into(), chunk: 0, score: 0.4 },
-            ChunkHit { id: "a".into(), chunk: 7, score: 0.9 },
-            ChunkHit { id: "b".into(), chunk: 0, score: 0.6 },
+            ChunkHit {
+                id: "a".into(),
+                chunk: 0,
+                score: 0.4,
+            },
+            ChunkHit {
+                id: "a".into(),
+                chunk: 7,
+                score: 0.9,
+            },
+            ChunkHit {
+                id: "b".into(),
+                chunk: 0,
+                score: 0.6,
+            },
         ];
         let best = best_per_note(hits, 10);
         assert_eq!(best.len(), 2);
@@ -318,7 +330,10 @@ mod tests {
 
     #[test]
     fn an_fts_query_cannot_be_a_syntax_error() {
-        assert_eq!(fts_query("restart the panel"), "\"restart\" OR \"the\" OR \"panel\"");
+        assert_eq!(
+            fts_query("restart the panel"),
+            "\"restart\" OR \"the\" OR \"panel\""
+        );
         // Operators and quotes are searched for, not obeyed.
         assert_eq!(fts_query("NEAR( \"x"), "\"NEAR(\" OR \"x\"");
         assert_eq!(fts_query(""), "");

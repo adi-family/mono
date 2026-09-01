@@ -4,7 +4,7 @@
 
 > adi-family peer mesh over iroh: expose a machine's allow-listed local ports to authorized peers, and forward a local port to a peer's allowed port — peer-to-peer (QUIC + relay-assisted NAT traversal), no public IP required.
 
-25 structs · 8 enums across 8 files.
+26 structs · 8 enums across 8 files.
 
 ## Index
 
@@ -12,7 +12,7 @@
 - [`src/config.rs`](#srcconfigrs) — `MeshConfig`, `HostConfig`, `Forward`
 - [`src/daemon.rs`](#srcdaemonrs) — `Daemon`
 - [`src/fleet.rs`](#srcfleetrs) — `Scope`, `Grant`, `Target`, `NodeRecord`, `NameProblem`, `Pairing`, `NicknameChange`, `FleetRegistry`
-- [`src/gateway.rs`](#srcgatewayrs) — `Snapshot`, `Routes`, `Peer`, `Gateway`, `Admitted`, `IrohDialer`, `Pool`, `Slot`, `SlotState`
+- [`src/gateway.rs`](#srcgatewayrs) — `Snapshot`, `Routes`, `Peer`, `Gateway`, `Admitted`, `Verified`, `IrohDialer`, `Pool`, `Slot`, `SlotState`
 - [`src/join.rs`](#srcjoinrs) — `Invite`, `PendingInvite`, `ClaimError`, `InviteBook`, `JoinRequest`, `Accepted`, `JoinReply`, `Joined`
 - [`src/main.rs`](#srcmainrs) — `Cli`, `Command`
 - [`src/node.rs`](#srcnoders) — `NodeConfig`
@@ -285,6 +285,18 @@ struct Admitted {
 }
 ```
 
+### struct `Verified`
+
+Which of the two headers carried credentials that verify against the peer's stored one.
+
+```rust
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Verified {
+    mesh: bool,
+    authorization: bool,
+}
+```
+
 ### struct `IrohDialer`
 
 The production dialer: an iroh connection on the gateway ALPN.
@@ -413,6 +425,8 @@ pub struct Accepted {
     pub username: String,
     pub password: String,
     pub grants: Vec<Grant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nickname: Option<String>,
 }
 ```
 

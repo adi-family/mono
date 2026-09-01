@@ -173,9 +173,8 @@ fn lobe(index: usize, variant: MarkVariant, accent: bool) -> String {
         ),
     };
 
-    let mut group = format!(
-        r#"<g class="adi-mark__lobe adi-mark__lobe--{name}"{group_opacity}{mask}>"#
-    );
+    let mut group =
+        format!(r#"<g class="adi-mark__lobe adi-mark__lobe--{name}"{group_opacity}{mask}>"#);
     let _ = write!(group, r#"<path {fill} d="{path}"/>"#);
     let _ = write!(group, r#"<path fill="url(#adi-mark-gloss)" d="{path}"/>"#);
     group.push_str("</g>");
@@ -275,4 +274,3 @@ mod tests {
         assert!(!markup(MarkVariant::Solid, true).contains("mask"));
     }
 }
-

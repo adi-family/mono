@@ -6,11 +6,16 @@
 
 mod runner;
 
-pub use runner::{run, SqlMigration};
+pub use runner::{SqlMigration, run};
 
 /// Every migration, in order. The runner refuses a set whose versions are not 1..=n.
 pub fn migrations() -> Vec<SqlMigration> {
-    vec![migration_v1(), migration_v2(), migration_v3(), migration_v4()]
+    vec![
+        migration_v1(),
+        migration_v2(),
+        migration_v3(),
+        migration_v4(),
+    ]
 }
 
 /// V1: Initial schema - files, symbols, `symbol_refs`, status, FTS

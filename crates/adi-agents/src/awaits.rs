@@ -497,7 +497,11 @@ pub fn register(store: &Awaits, agent: &str, conv: &str, req: &Request) -> Resul
         check,
         cwd: req.cwd.clone(),
         expires_at: Some(
-            now.saturating_add(req.expires_in_seconds.unwrap_or(DEFAULT_LIFETIME_SECS).max(1)),
+            now.saturating_add(
+                req.expires_in_seconds
+                    .unwrap_or(DEFAULT_LIFETIME_SECS)
+                    .max(1),
+            ),
         ),
         expiry_wakes: req.expires_in_seconds.is_some(),
         created_at: now,
@@ -636,13 +640,7 @@ pub struct Change {
 /// [`Error::Arguments`] when no such await is pending here, when the change leaves it with nothing
 /// to wake on, or when it names a pattern the bus could never match; [`Error::Config`] if the
 /// rewritten record can't be stored.
-pub fn update(
-    store: &Awaits,
-    agent: &str,
-    conv: &str,
-    id: &str,
-    change: &Change,
-) -> Result<Await> {
+pub fn update(store: &Awaits, agent: &str, conv: &str, id: &str, change: &Change) -> Result<Await> {
     let mut record = mine(store, agent, conv, id)?;
     let now = now_unix();
     if let Some(note) = &change.note {
@@ -730,9 +728,9 @@ fn mine(store: &Awaits, agent: &str, conv: &str, id: &str) -> Result<Await> {
 fn check_pattern(pattern: &str) -> Result<()> {
     let segments: Vec<&str> = pattern.split('.').collect();
     let well_formed = !pattern.is_empty()
-        && segments.iter().all(|seg| {
-            *seg == "*" || *seg == "**" || adi_events::validate_name(seg).is_ok()
-        });
+        && segments
+            .iter()
+            .all(|seg| *seg == "*" || *seg == "**" || adi_events::validate_name(seg).is_ok());
     if !well_formed {
         return Err(Error::Arguments(format!(
             "{pattern:?} is not an event pattern — every dotted segment is either a name or a whole \
@@ -1001,10 +999,22 @@ mod tests {
         let saved = register(&store, "watcher", "conv-1", &req).expect("register");
 
         let name = "adi.agents.run.finished";
-        assert!(saved.wants(name, r#"{"agent":"solver","run_id":"r-42","is_error":false}"#));
-        assert!(!saved.wants(name, r#"{"agent":"solver","run_id":"r-43","is_error":false}"#));
-        assert!(!saved.wants(name, r#"{"agent":"solver"}"#), "a missing field is not a match");
-        assert!(!saved.wants("adi.tasks.created", r#"{"run_id":"r-42"}"#), "the name still gates");
+        assert!(saved.wants(
+            name,
+            r#"{"agent":"solver","run_id":"r-42","is_error":false}"#
+        ));
+        assert!(!saved.wants(
+            name,
+            r#"{"agent":"solver","run_id":"r-43","is_error":false}"#
+        ));
+        assert!(
+            !saved.wants(name, r#"{"agent":"solver"}"#),
+            "a missing field is not a match"
+        );
+        assert!(
+            !saved.wants("adi.tasks.created", r#"{"run_id":"r-42"}"#),
+            "the name still gates"
+        );
         assert!(
             saved.describe().contains("run_id=r-42"),
             "the filter belongs in what the run is told: {}",
@@ -1075,10 +1085,20 @@ mod tests {
         let note = follow_up(&store, &who, &req);
 
         let pending = store.for_conversation("watcher", "conv-1");
-        assert_eq!(pending.len(), 1, "the wake is registered before the caller reads about it");
+        assert_eq!(
+            pending.len(),
+            1,
+            "the wake is registered before the caller reads about it"
+        );
         assert!(note.contains(&pending[0].id), "{note}");
-        assert!(note.contains("awaits ignore"), "the way out has to be in it: {note}");
-        assert!(note.contains("awaits update"), "so does the way to change it: {note}");
+        assert!(
+            note.contains("awaits ignore"),
+            "the way out has to be in it: {note}"
+        );
+        assert!(
+            note.contains("awaits update"),
+            "so does the way to change it: {note}"
+        );
         assert!(
             !pending[0].cwd.trim().is_empty(),
             "a check added later has to run somewhere"
@@ -1097,12 +1117,16 @@ mod tests {
             conv: "conv-1".into(),
         };
         for i in 0..MAX_PER_CONVERSATION {
-            register(&store, "watcher", "conv-1", &request(&format!("wake {i}"))).expect("register");
+            register(&store, "watcher", "conv-1", &request(&format!("wake {i}")))
+                .expect("register");
         }
         let note = follow_up(&store, &who, &request("one too many"));
         assert!(note.starts_with("Nothing will wake you"), "{note}");
         assert!(note.contains("running either way"), "{note}");
-        assert_eq!(store.for_conversation("watcher", "conv-1").len(), MAX_PER_CONVERSATION);
+        assert_eq!(
+            store.for_conversation("watcher", "conv-1").len(),
+            MAX_PER_CONVERSATION
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }
@@ -1119,7 +1143,11 @@ mod tests {
         assert!(err.to_string().contains("no await"), "{err}");
         let err = ignore(&store, "stranger", "conv-1", &saved.id).expect_err("another agent");
         assert!(err.to_string().contains("no await"), "{err}");
-        assert_eq!(store.for_conversation("watcher", "conv-1").len(), 1, "still pending");
+        assert_eq!(
+            store.for_conversation("watcher", "conv-1").len(),
+            1,
+            "still pending"
+        );
 
         let gone = ignore(&store, "watcher", "conv-1", &saved.id).expect("its own");
         assert_eq!(gone.id, saved.id);
@@ -1155,11 +1183,20 @@ mod tests {
         )
         .expect("update");
 
-        assert_eq!(changed.id, saved.id, "the id the caller was handed still names it");
+        assert_eq!(
+            changed.id, saved.id,
+            "the id the caller was handed still names it"
+        );
         assert_eq!(changed.note, "the reason, not the mechanics");
-        assert_eq!(changed.events, saved.events, "what was not named was left alone");
+        assert_eq!(
+            changed.events, saved.events,
+            "what was not named was left alone"
+        );
         assert_eq!(changed.every, Some(30));
-        assert!(changed.at.is_some(), "a poll with no deadline behind it is never looked at");
+        assert!(
+            changed.at.is_some(),
+            "a poll with no deadline behind it is never looked at"
+        );
         assert_eq!(changed.check.as_deref(), Some("test -f done"));
         assert_eq!(store.for_conversation("watcher", "conv-1"), vec![changed]);
 
@@ -1199,7 +1236,8 @@ mod tests {
     #[test]
     fn a_registered_await_round_trips_and_is_claimed_exactly_once() {
         let store = scratch("roundtrip");
-        let saved = register(&store, "watcher", "conv-1", &request("check the deploy")).expect("register");
+        let saved =
+            register(&store, "watcher", "conv-1", &request("check the deploy")).expect("register");
         assert!(saved.id.starts_with("w-"));
 
         let listed = store.for_conversation("watcher", "conv-1");
@@ -1235,11 +1273,15 @@ mod tests {
     fn a_conversation_cannot_hoard_awaits() {
         let store = scratch("cap");
         for i in 0..MAX_PER_CONVERSATION {
-            register(&store, "watcher", "conv-1", &request(&format!("note {i}"))).expect("register");
+            register(&store, "watcher", "conv-1", &request(&format!("note {i}")))
+                .expect("register");
         }
         let err = register(&store, "watcher", "conv-1", &request("one too many"))
             .expect_err("the cap must bite");
-        assert!(matches!(&err, Error::Arguments(m) if m.contains("limit")), "{err}");
+        assert!(
+            matches!(&err, Error::Arguments(m) if m.contains("limit")),
+            "{err}"
+        );
         register(&store, "watcher", "conv-2", &request("elsewhere")).expect("other conversation");
 
         let _ = std::fs::remove_dir_all(store.dir());
@@ -1249,7 +1291,12 @@ mod tests {
     /// everything — including the events a run's own wake goes on to cause.
     #[test]
     fn a_pattern_that_cannot_match_or_matches_everything_is_refused() {
-        for good in ["adi.tasks.created", "adi.tasks.*", "adi.**", "*.tasks.created"] {
+        for good in [
+            "adi.tasks.created",
+            "adi.tasks.*",
+            "adi.**",
+            "*.tasks.created",
+        ] {
             assert!(check_pattern(good).is_ok(), "{good} should be a pattern");
         }
         for bad in ["", "adi.*ed.created", "adi tasks.*", "adi/tasks"] {
@@ -1299,10 +1346,17 @@ mod tests {
         };
         let saved = register(&store, "watcher", "conv-1", &req).expect("register");
         let now = now_unix();
-        assert!(saved.at.is_some_and(|at| at > now), "the first look is in the future");
+        assert!(
+            saved.at.is_some_and(|at| at > now),
+            "the first look is in the future"
+        );
         assert!(saved.at.is_some_and(|at| at <= now + 61));
         assert_eq!(saved.every, Some(60));
-        assert!(saved.describe().contains("then every 60s"), "{}", saved.describe());
+        assert!(
+            saved.describe().contains("then every 60s"),
+            "{}",
+            saved.describe()
+        );
 
         let guarded = register(
             &store,
@@ -1360,7 +1414,11 @@ mod tests {
             CHECK_TIMEOUT_MS,
         );
         assert!(outcome.passed);
-        assert!(outcome.output.contains("the-build-is-green"), "{}", outcome.output);
+        assert!(
+            outcome.output.contains("the-build-is-green"),
+            "{}",
+            outcome.output
+        );
 
         assert!(!run_check(&a, "exit 1", Cause::Timer, CHECK_TIMEOUT_MS).passed);
 
@@ -1420,7 +1478,11 @@ mod tests {
         };
         let outcome = run_check(&a, "sleep 30", Cause::Timer, 200);
         assert!(!outcome.passed, "a killed check must never wake a run");
-        assert!(outcome.output.contains("still running"), "{}", outcome.output);
+        assert!(
+            outcome.output.contains("still running"),
+            "{}",
+            outcome.output
+        );
     }
 
     #[test]
@@ -1448,11 +1510,17 @@ mod tests {
             },
             Some("build green"),
         );
-        assert!(text.contains("adi.tasks.created fired and your check passed"), "{text}");
+        assert!(
+            text.contains("adi.tasks.created fired and your check passed"),
+            "{text}"
+        );
         assert!(text.contains("check whether the deploy landed"), "{text}");
         assert!(text.contains(r#"{"id":"t1"}"#), "{text}");
         assert!(text.contains("build green"), "{text}");
-        assert!(text.contains("spent"), "the run must know it has to re-register: {text}");
+        assert!(
+            text.contains("spent"),
+            "the run must know it has to re-register: {text}"
+        );
 
         let expired = wake_message(&a, Cause::Expired, None);
         assert!(expired.contains("expired"), "{expired}");
@@ -1491,8 +1559,15 @@ mod tests {
 
         assert!(saved.events.is_empty(), "no events, and none needed");
         assert!(saved.at.is_some(), "its timer is what makes it a candidate");
-        assert_eq!(saved.every, Some(30), "and it looks again while the check says no");
-        assert!(!saved.wants_event("adi.tasks.created"), "it subscribes to nothing");
+        assert_eq!(
+            saved.every,
+            Some(30),
+            "and it looks again while the check says no"
+        );
+        assert!(
+            !saved.wants_event("adi.tasks.created"),
+            "it subscribes to nothing"
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

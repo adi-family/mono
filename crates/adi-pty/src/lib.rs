@@ -49,12 +49,22 @@ static SESSIONS: LazyLock<Mutex<BTreeMap<String, Session>>> =
 /// Launch `argv` under a fresh pty as session `name`, in `cwd`, with `env` overlaid on the
 /// inherited environment. Caller must ensure no live session of that name exists (check
 /// [`is_running`]); a dead session of that name is replaced.
-pub fn launch(name: &str, argv: &[String], cwd: &Path, env: &[(String, String)]) -> Result<(), Error> {
+pub fn launch(
+    name: &str,
+    argv: &[String],
+    cwd: &Path,
+    env: &[(String, String)],
+) -> Result<(), Error> {
     let (program, args) = argv
         .split_first()
         .ok_or_else(|| Error::Launch("empty command".to_string()))?;
     let pair = native_pty_system()
-        .openpty(PtySize { rows: ROWS, cols: COLS, pixel_width: 0, pixel_height: 0 })
+        .openpty(PtySize {
+            rows: ROWS,
+            cols: COLS,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
         .map_err(|e| Error::Launch(format!("open pty: {e}")))?;
     let mut cmd = CommandBuilder::new(program);
     cmd.args(args);
@@ -101,21 +111,35 @@ pub fn launch(name: &str, argv: &[String], cwd: &Path, env: &[(String, String)])
     }
     SESSIONS.lock().unwrap().insert(
         name.to_string(),
-        Session { _master: pair.master, writer, killer, parser, alive },
+        Session {
+            _master: pair.master,
+            writer,
+            killer,
+            parser,
+            alive,
+        },
     );
     Ok(())
 }
 
 #[must_use]
 pub fn is_running(name: &str) -> bool {
-    SESSIONS.lock().unwrap().get(name).is_some_and(|s| s.alive.load(Ordering::Relaxed))
+    SESSIONS
+        .lock()
+        .unwrap()
+        .get(name)
+        .is_some_and(|s| s.alive.load(Ordering::Relaxed))
 }
 
 #[must_use]
 pub fn running(prefix: &str) -> BTreeSet<String> {
-    SESSIONS.lock().unwrap().iter()
+    SESSIONS
+        .lock()
+        .unwrap()
+        .iter()
         .filter(|(n, s)| n.starts_with(prefix) && s.alive.load(Ordering::Relaxed))
-        .map(|(n, _)| n.clone()).collect()
+        .map(|(n, _)| n.clone())
+        .collect()
 }
 
 #[must_use]
@@ -127,9 +151,15 @@ pub fn capture(name: &str) -> Option<String> {
 }
 
 pub fn send_keys(name: &str, text: &str, key: &str) -> Result<(), Error> {
-    let key_bytes = if key.is_empty() { Vec::new() } else { key_to_bytes(key)? };
+    let key_bytes = if key.is_empty() {
+        Vec::new()
+    } else {
+        key_to_bytes(key)?
+    };
     let mut reg = SESSIONS.lock().unwrap();
-    let Some(session) = reg.get_mut(name) else { return Ok(()); };
+    let Some(session) = reg.get_mut(name) else {
+        return Ok(());
+    };
     if !text.is_empty() {
         let _ = session.writer.write_all(text.as_bytes());
     }
@@ -207,7 +237,10 @@ mod tests {
         assert_eq!(key_to_bytes("Up").unwrap(), b"\x1b[A");
         assert_eq!(key_to_bytes("C-c").unwrap(), vec![0x03]);
         assert_eq!(key_to_bytes("a").unwrap(), b"a");
-        assert!(matches!(key_to_bytes("Enter Escape"), Err(Error::InvalidKey(_))));
+        assert!(matches!(
+            key_to_bytes("Enter Escape"),
+            Err(Error::InvalidKey(_))
+        ));
     }
     #[test]
     fn absent_session_is_inert() {

@@ -212,7 +212,8 @@ fn index(path: Option<&Path>, json: bool) -> Result<(), String> {
 
 fn search(query: &str, limit: usize, path: Option<&Path>, json: bool) -> Result<(), String> {
     let indexer = open(path)?;
-    let results = block_on(indexer.search(query, limit)).map_err(|e| format!("search failed: {e}"))?;
+    let results =
+        block_on(indexer.search(query, limit)).map_err(|e| format!("search failed: {e}"))?;
 
     if json {
         print_json(&results);
@@ -270,8 +271,8 @@ fn symbols(query: &str, limit: usize, path: Option<&Path>, json: bool) -> Result
 
 fn files(query: &str, limit: usize, path: Option<&Path>, json: bool) -> Result<(), String> {
     let indexer = open(path)?;
-    let files =
-        block_on(indexer.search_files(query, limit)).map_err(|e| format!("file search failed: {e}"))?;
+    let files = block_on(indexer.search_files(query, limit))
+        .map_err(|e| format!("file search failed: {e}"))?;
 
     if json {
         print_json(&files);
@@ -466,7 +467,9 @@ fn resolve_symbol(indexer: &Indexer, name: &str) -> Result<Symbol, String> {
 
 fn status(path: Option<&Path>, json: bool) -> Result<(), String> {
     let indexer = open(path)?;
-    let status = indexer.status().map_err(|e| format!("status failed: {e}"))?;
+    let status = indexer
+        .status()
+        .map_err(|e| format!("status failed: {e}"))?;
 
     if json {
         print_json(&status);
@@ -483,7 +486,9 @@ fn status(path: Option<&Path>, json: bool) -> Result<(), String> {
 
 fn tree(path: Option<&Path>, json: bool) -> Result<(), String> {
     let indexer = open(path)?;
-    let tree = indexer.get_tree().map_err(|e| format!("tree failed: {e}"))?;
+    let tree = indexer
+        .get_tree()
+        .map_err(|e| format!("tree failed: {e}"))?;
 
     if json {
         print_json(&tree);
@@ -525,12 +530,7 @@ fn block_on<T>(future: impl Future<Output = T>) -> T {
 }
 
 fn print_node(node: &SymbolNode, depth: usize) {
-    println!(
-        "{}{} {}",
-        "  ".repeat(depth),
-        node.kind.as_str(),
-        node.name
-    );
+    println!("{}{} {}", "  ".repeat(depth), node.kind.as_str(), node.name);
     for child in &node.children {
         print_node(child, depth + 1);
     }

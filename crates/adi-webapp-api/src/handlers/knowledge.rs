@@ -322,7 +322,11 @@ fn base_dto(store: &KnowledgeStore, base: &adi_knowledge::Base) -> KnowledgeBase
 fn note_dto(note: &Knowledge) -> KnowledgeNoteDto {
     KnowledgeNoteDto {
         id: note.id.clone(),
-        base: note.base.as_ref().map(ToString::to_string).unwrap_or_default(),
+        base: note
+            .base
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
         title: note.title.clone(),
         body: note.body.clone(),
         tags: note.tags.clone(),
@@ -490,7 +494,10 @@ mod tests {
     #[test]
     fn a_note_is_added_embedded_and_listed() {
         let store = scratch("notes");
-        must(create_knowledge_base(&store, &body(&serde_json::json!({ "base": "global/n" }))));
+        must(create_knowledge_base(
+            &store,
+            &body(&serde_json::json!({ "base": "global/n" })),
+        ));
 
         let resp = add_knowledge_note(
             &store,
@@ -515,7 +522,10 @@ mod tests {
     #[test]
     fn search_ranks_and_says_what_it_covered() {
         let store = scratch("search");
-        must(create_knowledge_base(&store, &body(&serde_json::json!({ "base": "global/n" }))));
+        must(create_knowledge_base(
+            &store,
+            &body(&serde_json::json!({ "base": "global/n" })),
+        ));
         for title in ["Restart the control panel", "Sourdough hydration"] {
             must(add_knowledge_note(
                 &store,
@@ -527,7 +537,10 @@ mod tests {
             &body(&serde_json::json!({ "query": "restart the panel" })),
         ));
         assert_eq!(v["semantic"], true);
-        assert_eq!(v["bases"][0], "global/n", "an empty request covers everything");
+        assert_eq!(
+            v["bases"][0], "global/n",
+            "an empty request covers everything"
+        );
         assert_eq!(v["hits"][0]["id"], "restart-the-control-panel");
         assert!(v["hits"][0]["score"].as_f64().expect("score") > 0.0);
 
@@ -543,7 +556,10 @@ mod tests {
     #[test]
     fn an_edit_that_names_no_new_text_keeps_the_note_embedded() {
         let store = scratch("edit");
-        must(create_knowledge_base(&store, &body(&serde_json::json!({ "base": "global/n" }))));
+        must(create_knowledge_base(
+            &store,
+            &body(&serde_json::json!({ "base": "global/n" })),
+        ));
         must(add_knowledge_note(
             &store,
             &body(&serde_json::json!({ "base": "global/n", "title": "A", "body": "one" })),
@@ -560,7 +576,10 @@ mod tests {
     #[test]
     fn removing_a_note_answers_with_the_bases_fresh_list() {
         let store = scratch("remove");
-        must(create_knowledge_base(&store, &body(&serde_json::json!({ "base": "global/n" }))));
+        must(create_knowledge_base(
+            &store,
+            &body(&serde_json::json!({ "base": "global/n" })),
+        ));
         must(add_knowledge_note(
             &store,
             &body(&serde_json::json!({ "base": "global/n", "title": "A" })),
@@ -585,7 +604,10 @@ mod tests {
             knowledge_notes(&store, &body(&serde_json::json!({ "base": "global/nope" }))).status,
             404
         );
-        must(create_knowledge_base(&store, &body(&serde_json::json!({ "base": "global/n" }))));
+        must(create_knowledge_base(
+            &store,
+            &body(&serde_json::json!({ "base": "global/n" })),
+        ));
         assert_eq!(
             create_knowledge_base(&store, &body(&serde_json::json!({ "base": "global/n" }))).status,
             409
@@ -617,7 +639,10 @@ mod tests {
     #[test]
     fn deleting_a_base_takes_it_out_of_the_state() {
         let store = scratch("delbase");
-        must(create_knowledge_base(&store, &body(&serde_json::json!({ "base": "global/n" }))));
+        must(create_knowledge_base(
+            &store,
+            &body(&serde_json::json!({ "base": "global/n" })),
+        ));
         let v = json(&remove_knowledge_base(
             &store,
             &body(&serde_json::json!({ "base": "global/n" })),

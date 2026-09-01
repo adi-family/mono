@@ -13,16 +13,17 @@
 use std::collections::BTreeMap;
 
 use adi_ui::Lang;
+use adi_ui::{Row as TableRow, Table};
 use adi_webapp_api::types::{SaveTrigger, TriggerDto, TriggerPreset, TriggersState};
 use leptos::prelude::*;
-use adi_ui::{Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, TriggersForm, TriggersLogView};
 use crate::ui::{
-    apply_mutation, field_hint, flash_view, fmt_date, fmt_uptime, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, TextField, updated_text,
+    Key, TextField, apply_mutation, field_hint, flash_view, fmt_date, fmt_uptime, menu_item,
+    row_actions, rows_or_placeholder, sort_rows, updated_text,
 };
 
 /// The Triggers page's columns; the trailing blank one holds Fire / Log / Enable.
@@ -512,11 +513,14 @@ fn current_extras(state: State, form: TriggersForm) -> BTreeMap<String, String> 
 /// Render the triggers table body: a loading/empty placeholder, or one row per trigger.
 fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyView {
     let table = state.tables.triggers;
-    let mut triggers =
-        match rows_or_placeholder(table, state.triggers.get().map(|v| v.triggers), "No triggers yet — define one below.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut triggers = match rows_or_placeholder(
+        table,
+        state.triggers.get().map(|v| v.triggers),
+        "No triggers yet — define one below.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(&mut triggers, table.sort.get(), trigger_key, |t| {
         Key::text(&t.name)
     });
@@ -525,14 +529,25 @@ fn trigger_rows(state: State, form: TriggersForm, log: TriggersLogView) -> AnyVi
         .map(|t| {
             let del_name = t.name.clone();
             let t_edit = t.clone();
-            let edit = menu_item(state, "Edit", false, move || load_trigger_into_form(form, &t_edit));
-            let delete = menu_item(state, "Delete", true, move || {
-                apply_triggers(state, None, format!("Deleted {del_name}."),
-                    fetch::delete_trigger(del_name.clone()));
+            let edit = menu_item(state, "Edit", false, move || {
+                load_trigger_into_form(form, &t_edit)
             });
-            let actions = row_actions(state, format!("trigger:{}", t.name),
-                trigger_actions(state, log, &t), vec![trigger_toggle_item(state, &t), edit, delete]);
-            view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }.into_any()
+            let delete = menu_item(state, "Delete", true, move || {
+                apply_triggers(
+                    state,
+                    None,
+                    format!("Deleted {del_name}."),
+                    fetch::delete_trigger(del_name.clone()),
+                );
+            });
+            let actions = row_actions(
+                state,
+                format!("trigger:{}", t.name),
+                trigger_actions(state, log, &t),
+                vec![trigger_toggle_item(state, &t), edit, delete],
+            );
+            view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }
+                .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

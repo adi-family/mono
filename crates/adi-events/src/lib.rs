@@ -248,10 +248,7 @@ impl Events {
 
     /// The record files currently in the spool (full paths, unsorted). A missing dir is empty.
     fn spool_files(&self) -> Result<Vec<PathBuf>> {
-        Ok(self
-            .config
-            .module(MODULE)
-            .raw_paths_with_ext(RECORD_EXT)?)
+        Ok(self.config.module(MODULE).raw_paths_with_ext(RECORD_EXT)?)
     }
 
     /// Delete the oldest records until at most [`MAX_SPOOL`] remain. Best-effort: this guards a
@@ -400,10 +397,7 @@ mod tests {
             bus.emit("bad name", "x"),
             Err(Error::InvalidName(_))
         ));
-        assert!(matches!(
-            bus.emit("a/b", "x"),
-            Err(Error::InvalidName(_))
-        ));
+        assert!(matches!(bus.emit("a/b", "x"), Err(Error::InvalidName(_))));
         assert!(bus.drain().expect("still empty").is_empty());
     }
 

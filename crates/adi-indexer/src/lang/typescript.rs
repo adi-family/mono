@@ -41,13 +41,14 @@ fn extract_ts_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
                     for i in 0..body.child_count() as u32 {
                         if let Some(child) = body.child(i)
                             && child.kind() == "method_definition"
-                                && let Some(method_name) = child.child_by_field_name("name") {
-                                    children.push(ParsedSymbol::new(
-                                        node_text(method_name, source),
-                                        SymbolKind::Method,
-                                        node_location(child),
-                                    ));
-                                }
+                            && let Some(method_name) = child.child_by_field_name("name")
+                        {
+                            children.push(ParsedSymbol::new(
+                                node_text(method_name, source),
+                                SymbolKind::Method,
+                                node_location(child),
+                            ));
+                        }
                     }
                 }
                 symbols.push(

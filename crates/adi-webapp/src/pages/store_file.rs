@@ -10,7 +10,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::state::{Flash, State};
-use crate::ui::{flash_view};
+use crate::ui::flash_view;
 
 /// The editor page: a header with the path and Save, then the buffer. Shows a placeholder when
 /// no file is selected, and the failure in place when one couldn't be read.

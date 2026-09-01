@@ -87,8 +87,10 @@ impl DetachedRunner {
             Backend::ProcessClaude => {
                 let mut config = decode::<ProcessClaudeArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
-                config.append_system_prompt =
-                    with_tool_help(spec, with_knowledge(spec, with_workspace(spec, config.append_system_prompt)));
+                config.append_system_prompt = with_tool_help(
+                    spec,
+                    with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                );
                 let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(process::claude::argv(
                     &config,
@@ -108,8 +110,10 @@ impl DetachedRunner {
             Backend::HarnessClaudeSdk => {
                 let mut config = decode::<HarnessClaudeSdkArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
-                config.append_system_prompt =
-                    with_tool_help(spec, with_knowledge(spec, with_workspace(spec, config.append_system_prompt)));
+                config.append_system_prompt = with_tool_help(
+                    spec,
+                    with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                );
                 let cont = if session.has_started() {
                     Continuation::Resume { session_id }
                 } else {
@@ -774,7 +778,12 @@ mod tests {
         }
     }
 
-    fn argv_of(backend: Backend, spec: &RunSpec, session: &dyn Session, message: &str) -> Vec<String> {
+    fn argv_of(
+        backend: Backend,
+        spec: &RunSpec,
+        session: &dyn Session,
+        message: &str,
+    ) -> Vec<String> {
         DetachedRunner::new(backend)
             .argv(spec, session, message, "sid-1")
             .expect("argv")
@@ -817,8 +826,16 @@ mod tests {
     #[test]
     fn a_claude_session_is_established_once_and_resumed_after() {
         let spec = spec(json!({}));
-        let first = argv_of(Backend::HarnessClaudeSdk, &spec, &FakeSession::new("first"), "go");
-        assert!(first.windows(2).any(|w| w == ["--session-id", "sid-1"]), "{first:?}");
+        let first = argv_of(
+            Backend::HarnessClaudeSdk,
+            &spec,
+            &FakeSession::new("first"),
+            "go",
+        );
+        assert!(
+            first.windows(2).any(|w| w == ["--session-id", "sid-1"]),
+            "{first:?}"
+        );
         assert!(!first.iter().any(|arg| arg == "--resume"));
 
         let again = argv_of(
@@ -827,7 +844,10 @@ mod tests {
             &FakeSession::new("again").started(),
             "and now a test",
         );
-        assert!(again.windows(2).any(|w| w == ["--resume", "sid-1"]), "{again:?}");
+        assert!(
+            again.windows(2).any(|w| w == ["--resume", "sid-1"]),
+            "{again:?}"
+        );
         assert!(!again.iter().any(|arg| arg == "--session-id"));
     }
 
@@ -893,7 +913,9 @@ mod tests {
             .position(|arg| arg == "--append-system-prompt")
             .expect("claude takes a system prompt");
         let prompt = &claude[at + 1];
-        let note = prompt.find("# Where you are").expect("the location is stated");
+        let note = prompt
+            .find("# Where you are")
+            .expect("the location is stated");
         let tools = prompt.find("# Your tools").expect("the tools are listed");
         assert!(note < tools, "{prompt}");
         assert!(prompt.starts_with("You are a planner."), "{prompt}");
@@ -909,7 +931,6 @@ mod tests {
             "codex must not be handed the location block: {codex:?}"
         );
     }
-
 
     /// Both Claude engines are pointed at this run's own MCP server, scoped to the conversation it
     /// belongs to and to the directory the run is about. Codex is not: it reads none of these flags.
@@ -951,7 +972,10 @@ mod tests {
                 .iter()
                 .position(|arg| arg == "--")
                 .unwrap_or_else(|| panic!("{backend:?} ends option parsing: {argv:?}"));
-            assert!(at < terminator, "the mcp config must precede `--`: {argv:?}");
+            assert!(
+                at < terminator,
+                "the mcp config must precede `--`: {argv:?}"
+            );
         }
 
         let codex = argv_of(
@@ -1084,7 +1108,12 @@ mod tests {
         assert!(prompt.contains("## adi-db"), "{prompt}");
 
         let claude = DetachedRunner::new(Backend::HarnessClaudeSdk);
-        assert!(claude.run_env(&spec).iter().all(|(key, _)| key != SYSTEM_PROMPT_ENV));
+        assert!(
+            claude
+                .run_env(&spec)
+                .iter()
+                .all(|(key, _)| key != SYSTEM_PROMPT_ENV)
+        );
     }
 
     /// A Claude turn's `stream-json` log becomes the timeline, the answer, and the telemetry — and
@@ -1107,7 +1136,10 @@ mod tests {
 
         let runner = DetachedRunner::new(Backend::HarnessClaudeSdk);
         let batch = runner.events(&session, None).expect("events");
-        assert!(matches!(batch.events[0], RunEvent::Step(Step::Thinking { .. })));
+        assert!(matches!(
+            batch.events[0],
+            RunEvent::Step(Step::Thinking { .. })
+        ));
         assert!(matches!(
             &batch.events[1],
             RunEvent::Step(Step::Tool { name, status, output, .. })
@@ -1119,9 +1151,14 @@ mod tests {
         assert_eq!(batch.events.len(), 5, "{:?}", batch.events);
         assert!(matches!(
             batch.events[4],
-            RunEvent::Finished { ok: true, error: None }
+            RunEvent::Finished {
+                ok: true,
+                error: None
+            }
         ));
-        let next = runner.events(&session, Some(&batch.cursor)).expect("events");
+        let next = runner
+            .events(&session, Some(&batch.cursor))
+            .expect("events");
         assert!(next.events.is_empty(), "{:?}", next.events);
         assert_eq!(next.cursor, batch.cursor);
     }
@@ -1132,8 +1169,8 @@ mod tests {
     fn the_adi_loops_events_are_read_incrementally_from_the_cursor() {
         // A live pid: this process. The turn reads as still running, so a partial trailing line is
         // left for the next poll rather than parsed in half.
-        let session = FakeSession::new("adi-events")
-            .with_state(json!({ "pid": std::process::id() }));
+        let session =
+            FakeSession::new("adi-events").with_state(json!({ "pid": std::process::id() }));
         session.write_log(&format!(
             "{}\n{}",
             json!({"kind": "tool", "id": "c1", "name": "Grep", "input": "{}", "status": "running"}),
@@ -1149,7 +1186,10 @@ mod tests {
                 if name == "Grep" && *status == ToolStatus::Running
         ));
         assert!(
-            !first.events.iter().any(|e| matches!(e, RunEvent::Finished { .. })),
+            !first
+                .events
+                .iter()
+                .any(|e| matches!(e, RunEvent::Finished { .. })),
             "a running turn has not finished",
         );
 
@@ -1172,7 +1212,10 @@ mod tests {
         let session = FakeSession::new("truncated").with_state(json!({ "pid": dead_pid() }));
         session.write_log("short\n");
         let batch = DetachedRunner::new(Backend::ProcessCodex)
-            .events(&session, Some(&json!({ "offset": 9_000, "finished": true })))
+            .events(
+                &session,
+                Some(&json!({ "offset": 9_000, "finished": true })),
+            )
             .expect("events");
         assert!(
             matches!(&batch.events[0], RunEvent::Answer { text } if text == "short"),
@@ -1197,13 +1240,19 @@ mod tests {
                 {"type": "tool_use", "id": format!("t{i}"), "name": "Bash", "input": {"command": "cat big"}}
             ]}}).to_string());
             log.push('\n');
-            log.push_str(&json!({"type": "user", "message": {"content": [
-                {"type": "tool_result", "tool_use_id": format!("t{i}"), "content": filler}
-            ]}}).to_string());
+            log.push_str(
+                &json!({"type": "user", "message": {"content": [
+                    {"type": "tool_result", "tool_use_id": format!("t{i}"), "content": filler}
+                ]}})
+                .to_string(),
+            );
             log.push('\n');
         }
-        log.push_str(&json!({"type": "result", "result": "all done",
-            "terminal_reason": "completed", "num_turns": 80}).to_string());
+        log.push_str(
+            &json!({"type": "result", "result": "all done",
+            "terminal_reason": "completed", "num_turns": 80})
+            .to_string(),
+        );
         log.push('\n');
         assert!(
             log.len() as u64 > MAX_PARSE_BYTES,
@@ -1216,7 +1265,10 @@ mod tests {
             .events(&session, None)
             .expect("events");
         assert!(
-            batch.events.iter().any(|e| matches!(e, RunEvent::Answer { text } if text == "all done")),
+            batch
+                .events
+                .iter()
+                .any(|e| matches!(e, RunEvent::Answer { text } if text == "all done")),
             "the answer is at the end of the log and must survive the read",
         );
         assert!(
@@ -1231,7 +1283,10 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, RunEvent::Step(Step::Tool { .. })))
             .count();
-        assert_eq!(tools, 40, "and every step in between, not just the first chunk's");
+        assert_eq!(
+            tools, 40,
+            "and every step in between, not just the first chunk's"
+        );
     }
 
     /// An incremental read cuts its chunk at the last newline in it, so a line longer than the
@@ -1242,7 +1297,8 @@ mod tests {
     fn a_line_longer_than_a_chunk_does_not_stall_the_cursor() {
         // A live pid: the writer reads as still going, which is the only case that cuts on a
         // newline at all.
-        let session = FakeSession::new("giant-line").with_state(json!({ "pid": std::process::id() }));
+        let session =
+            FakeSession::new("giant-line").with_state(json!({ "pid": std::process::id() }));
         let giant = json!({"type": "user", "message": {"content": [
             {"type": "tool_result", "tool_use_id": "t1", "content": "z".repeat(MAX_PARSE_BYTES as usize)}
         ]}});
@@ -1255,12 +1311,24 @@ mod tests {
         let first = runner
             .events(&session, Some(&json!({ "offset": 0 })))
             .expect("events");
-        let moved = first.cursor.get("offset").and_then(Value::as_u64).unwrap_or(0);
-        assert!(moved > 0, "the cursor must clear the oversized line, not sit on it");
-
-        let second = runner.events(&session, Some(&first.cursor)).expect("events");
+        let moved = first
+            .cursor
+            .get("offset")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
         assert!(
-            second.events.iter().any(|e| matches!(e, RunEvent::Answer { text } if text == "after")),
+            moved > 0,
+            "the cursor must clear the oversized line, not sit on it"
+        );
+
+        let second = runner
+            .events(&session, Some(&first.cursor))
+            .expect("events");
+        assert!(
+            second
+                .events
+                .iter()
+                .any(|e| matches!(e, RunEvent::Answer { text } if text == "after")),
             "and what follows it must still be read: {:?}",
             second.events,
         );
@@ -1296,7 +1364,10 @@ mod tests {
     fn stopping_something_that_was_never_started_is_not_a_stop() {
         let runner = DetachedRunner::new(Backend::ProcessClaude);
         let session = FakeSession::new("nothing");
-        assert_eq!(runner.stop(&session, Duration::ZERO).expect("stop"), Stopped::default());
+        assert_eq!(
+            runner.stop(&session, Duration::ZERO).expect("stop"),
+            Stopped::default()
+        );
         assert!(!runner.is_alive(&session));
     }
 
@@ -1314,7 +1385,10 @@ mod tests {
             .expect("stop");
         assert_eq!(
             stopped,
-            Stopped { was_running: true, forced: true },
+            Stopped {
+                was_running: true,
+                forced: true
+            },
             "a deaf child has to be killed",
         );
         assert!(!runner.is_alive(&deaf));
@@ -1322,16 +1396,31 @@ mod tests {
         let polite = FakeSession::new("polite");
         spawn_probe(&polite, "sleep 30");
         let stopped = runner.stop(&polite, Duration::from_secs(5)).expect("stop");
-        assert_eq!(stopped, Stopped { was_running: true, forced: false });
+        assert_eq!(
+            stopped,
+            Stopped {
+                was_running: true,
+                forced: false
+            }
+        );
         assert!(!runner.is_alive(&polite));
 
         let now = FakeSession::new("now");
         spawn_probe(&now, "trap '' TERM; sleep 30");
         let stopped = runner.stop(&now, Duration::ZERO).expect("stop");
-        assert_eq!(stopped, Stopped { was_running: true, forced: true });
+        assert_eq!(
+            stopped,
+            Stopped {
+                was_running: true,
+                forced: true
+            }
+        );
         assert!(!runner.is_alive(&now));
 
-        assert_eq!(runner.stop(&now, Duration::ZERO).expect("stop"), Stopped::default());
+        assert_eq!(
+            runner.stop(&now, Duration::ZERO).expect("stop"),
+            Stopped::default()
+        );
     }
 
     /// The bug this whole pairing exists for. A pid is a slot the kernel reissues, so a run that
@@ -1347,8 +1436,8 @@ mod tests {
         let started = adi_osext::process_start_millis(pid).expect("this platform can say");
         let runner = DetachedRunner::new(Backend::HarnessAdi);
 
-        let ours = FakeSession::new("reuse-ours")
-            .with_state(json!({ "pid": pid, "started": started }));
+        let ours =
+            FakeSession::new("reuse-ours").with_state(json!({ "pid": pid, "started": started }));
         assert!(runner.is_alive(&ours), "our own child, correctly named");
 
         // The same pid, recorded when a different process held it. Alive, and not ours.
@@ -1372,7 +1461,10 @@ mod tests {
         // A log this process could plausibly be writing: it was touched after we started.
         let live = FakeSession::new("legacy-live").with_state(json!({ "pid": pid }));
         live.write_log("still going");
-        assert!(runner.is_alive(&live), "a pid whose log is still being written");
+        assert!(
+            runner.is_alive(&live),
+            "a pid whose log is still being written"
+        );
 
         // The same pid against a log that went quiet days before this process existed — which is
         // what both of the stuck runs looked like.
@@ -1402,7 +1494,9 @@ mod tests {
     fn a_run_that_cannot_be_confirmed_is_never_signalled() {
         let bystander = FakeSession::new("no-signal");
         spawn_probe(&bystander, "sleep 30");
-        let pid = State::read(&bystander).pid.expect("the probe recorded a pid");
+        let pid = State::read(&bystander)
+            .pid
+            .expect("the probe recorded a pid");
 
         // Rewrite the slot as a record from another incarnation of that pid — alive, wrong process.
         let started = State::read(&bystander).started.expect("a start time");
@@ -1437,7 +1531,13 @@ mod tests {
         }));
         let writer = session.state_writer().expect("an owned slot");
 
-        forget_child(writer.as_ref(), Spawned { pid: 4321, started: Some(111) });
+        forget_child(
+            writer.as_ref(),
+            Spawned {
+                pid: 4321,
+                started: Some(111),
+            },
+        );
 
         let state = State::read(&session);
         assert_eq!(state.pid, None, "the child is struck from the record");
@@ -1463,14 +1563,26 @@ mod tests {
         let writer = session.state_writer().expect("an owned slot");
 
         // Turn N's reaper, arriving after turn N+1 wrote its own child into the slot.
-        forget_child(writer.as_ref(), Spawned { pid: 4321, started: Some(111) });
+        forget_child(
+            writer.as_ref(),
+            Spawned {
+                pid: 4321,
+                started: Some(111),
+            },
+        );
 
         let state = State::read(&session);
         assert_eq!(state.pid, Some(999), "the turn in flight is left alone");
         assert_eq!(state.started, Some(222));
 
         // A pid that matches but an incarnation that does not is still somebody else's ending.
-        forget_child(writer.as_ref(), Spawned { pid: 999, started: Some(111) });
+        forget_child(
+            writer.as_ref(),
+            Spawned {
+                pid: 999,
+                started: Some(111),
+            },
+        );
         assert_eq!(State::read(&session).pid, Some(999));
     }
 

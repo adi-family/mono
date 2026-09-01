@@ -1,17 +1,14 @@
 //! The Tasks panel of the project detail page.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{NewTask, TasksState};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::pages::tasks::{is_finished, task_cell, task_key};
 use crate::routing::{ProjectSection, Route};
 use crate::state::{Flash, State};
-use crate::ui::{
-    Key, Sort, TextField, apply_mutation, sort_rows,
-    task_tree_rows,
-};
+use crate::ui::{Key, Sort, TextField, apply_mutation, sort_rows, task_tree_rows};
 
 /// The panel's columns. No Project column — every row is this project's (or a sub-project's,
 /// which the Task cell marks inline), so it would say the same thing all the way down.
@@ -181,23 +178,24 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
                 }
             };
             view! { <TableRow state=table cell=move |col| {
-                    // Every column but Task renders exactly as it does on the global page; only
-                    // this one differs, by carrying the owning sub-project's marker.
-                    if col != "Task" {
-                        return task_cell(col, &t, depth);
-                    }
-                    let indent = format!("padding-left:{}px", depth * 20);
-                    let details = t.details.clone().unwrap_or_default();
-                    let marker = owner.clone().map(|(oid, oname)| {
-                        super::sub_marker(state, route, oid, oname, ProjectSection::Tasks)
-                    });
-                    view! {
-                        <span title=details>
-                            <span style=indent>{t.title.clone()}</span>{marker}
-                        </span>
-                    }
-                    .into_any()
-                } actions=action/> }.into_any()
+                // Every column but Task renders exactly as it does on the global page; only
+                // this one differs, by carrying the owning sub-project's marker.
+                if col != "Task" {
+                    return task_cell(col, &t, depth);
+                }
+                let indent = format!("padding-left:{}px", depth * 20);
+                let details = t.details.clone().unwrap_or_default();
+                let marker = owner.clone().map(|(oid, oname)| {
+                    super::sub_marker(state, route, oid, oname, ProjectSection::Tasks)
+                });
+                view! {
+                    <span title=details>
+                        <span style=indent>{t.title.clone()}</span>{marker}
+                    </span>
+                }
+                .into_any()
+            } actions=action/> }
+            .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -207,15 +205,19 @@ fn project_task_rows(state: State, route: RwSignal<Route>) -> AnyView {
 /// subtask can be nested under any node at any level. Sub-project tasks are deliberately excluded
 /// — a task added here files under this project, so it should only nest under this project's own.
 fn project_task_options(state: State) -> AnyView {
-    project_task_tree(state, &super::ProjectScope::open(state, false), Sort::new("Task"))
-        .into_iter()
-        .map(|(depth, t)| {
-            // Non-breaking spaces so the depth indent survives inside <option> text.
-            let indent = "\u{00a0}\u{00a0}".repeat(depth);
-            let value = t.id.clone();
-            let label = format!("{indent}{} · {}", t.id, t.title);
-            view! { <option value=value>{label}</option> }
-        })
-        .collect::<Vec<_>>()
-        .into_any()
+    project_task_tree(
+        state,
+        &super::ProjectScope::open(state, false),
+        Sort::new("Task"),
+    )
+    .into_iter()
+    .map(|(depth, t)| {
+        // Non-breaking spaces so the depth indent survives inside <option> text.
+        let indent = "\u{00a0}\u{00a0}".repeat(depth);
+        let value = t.id.clone();
+        let label = format!("{indent}{} · {}", t.id, t.title);
+        view! { <option value=value>{label}</option> }
+    })
+    .collect::<Vec<_>>()
+    .into_any()
 }

@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: BUSL-1.1
 // See LICENSE file for details
 
-use super::base::AnalyzerBase;
 use super::LanguageAnalyzer;
+use super::base::AnalyzerBase;
 use crate::types::{
     Language, ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility,
 };
@@ -77,31 +77,32 @@ impl GenericAnalyzer {
         };
 
         if let Some(sk) = symbol_kind
-            && let Some(name_node) = self.base.find_child_by_field(node, "name") {
-                let name = self.base.node_text(name_node, source);
-                let doc_comment = self.base.extract_doc_comment(node, source);
+            && let Some(name_node) = self.base.find_child_by_field(node, "name")
+        {
+            let name = self.base.node_text(name_node, source);
+            let doc_comment = self.base.extract_doc_comment(node, source);
 
-                let mut children = Vec::new();
-                if matches!(
-                    sk,
-                    SymbolKind::Class | SymbolKind::Struct | SymbolKind::Interface
-                )
-                    && let Some(body) = self.base.find_child_by_field(node, "body") {
-                        self.extract_generic_symbols(body, source, &mut children);
-                    }
-
-                symbols.push(ParsedSymbol {
-                    name,
-                    kind: sk,
-                    location: self.base.node_location(node),
-                    signature: None,
-                    doc_comment,
-                    visibility: Visibility::Unknown,
-                    children,
-                    structure: None,
-                });
-                return;
+            let mut children = Vec::new();
+            if matches!(
+                sk,
+                SymbolKind::Class | SymbolKind::Struct | SymbolKind::Interface
+            ) && let Some(body) = self.base.find_child_by_field(node, "body")
+            {
+                self.extract_generic_symbols(body, source, &mut children);
             }
+
+            symbols.push(ParsedSymbol {
+                name,
+                kind: sk,
+                location: self.base.node_location(node),
+                signature: None,
+                doc_comment,
+                visibility: Visibility::Unknown,
+                children,
+                structure: None,
+            });
+            return;
+        }
 
         for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i) {
@@ -132,17 +133,17 @@ impl GenericAnalyzer {
                         .child_by_field_name("function")
                         .or_else(|| node.child_by_field_name("name"))
                         .or_else(|| node.child(0))
-                    {
-                        let name = self.base.node_text(func, source);
-                        if !name.is_empty() {
-                            refs.push(ParsedReference {
-                                name,
-                                kind: ReferenceKind::Call,
-                                location: self.base.node_location(func),
-                                containing_symbol_index: None,
-                            });
-                        }
+                {
+                    let name = self.base.node_text(func, source);
+                    if !name.is_empty() {
+                        refs.push(ParsedReference {
+                            name,
+                            kind: ReferenceKind::Call,
+                            location: self.base.node_location(func),
+                            containing_symbol_index: None,
+                        });
                     }
+                }
             }
         }
 
@@ -187,15 +188,16 @@ impl GenericAnalyzer {
                 if let Some(args) = node.child_by_field_name("superclasses") {
                     for i in 0..args.child_count() as u32 {
                         if let Some(arg) = args.child(i)
-                            && (arg.kind() == "identifier" || arg.kind() == "attribute") {
-                                let name = self.base.node_text(arg, source);
-                                refs.push(ParsedReference {
-                                    name,
-                                    kind: ReferenceKind::Inheritance,
-                                    location: self.base.node_location(arg),
-                                    containing_symbol_index: None,
-                                });
-                            }
+                            && (arg.kind() == "identifier" || arg.kind() == "attribute")
+                        {
+                            let name = self.base.node_text(arg, source);
+                            refs.push(ParsedReference {
+                                name,
+                                kind: ReferenceKind::Inheritance,
+                                location: self.base.node_location(arg),
+                                containing_symbol_index: None,
+                            });
+                        }
                     }
                 }
             }
@@ -222,23 +224,24 @@ impl GenericAnalyzer {
             "import_statement" => {
                 for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i)
-                        && (child.kind() == "dotted_name" || child.kind() == "aliased_import") {
-                            let name = if child.kind() == "aliased_import" {
-                                if let Some(name_node) = child.child_by_field_name("name") {
-                                    self.base.node_text(name_node, source)
-                                } else {
-                                    continue;
-                                }
+                        && (child.kind() == "dotted_name" || child.kind() == "aliased_import")
+                    {
+                        let name = if child.kind() == "aliased_import" {
+                            if let Some(name_node) = child.child_by_field_name("name") {
+                                self.base.node_text(name_node, source)
                             } else {
-                                self.base.node_text(child, source)
-                            };
-                            refs.push(ParsedReference {
-                                name,
-                                kind: ReferenceKind::Import,
-                                location: self.base.node_location(child),
-                                containing_symbol_index: None,
-                            });
-                        }
+                                continue;
+                            }
+                        } else {
+                            self.base.node_text(child, source)
+                        };
+                        refs.push(ParsedReference {
+                            name,
+                            kind: ReferenceKind::Import,
+                            location: self.base.node_location(child),
+                            containing_symbol_index: None,
+                        });
+                    }
                 }
             }
             "import_from_statement" => {
@@ -252,30 +255,30 @@ impl GenericAnalyzer {
                         && (child.kind() == "dotted_name"
                             || child.kind() == "aliased_import"
                             || child.kind() == "identifier")
-                        {
-                            let import_name = if child.kind() == "aliased_import" {
-                                if let Some(name_node) = child.child_by_field_name("name") {
-                                    self.base.node_text(name_node, source)
-                                } else {
-                                    continue;
-                                }
+                    {
+                        let import_name = if child.kind() == "aliased_import" {
+                            if let Some(name_node) = child.child_by_field_name("name") {
+                                self.base.node_text(name_node, source)
                             } else {
-                                self.base.node_text(child, source)
-                            };
+                                continue;
+                            }
+                        } else {
+                            self.base.node_text(child, source)
+                        };
 
-                            let full_name = if module.is_empty() {
-                                import_name
-                            } else {
-                                format!("{module}.{import_name}")
-                            };
+                        let full_name = if module.is_empty() {
+                            import_name
+                        } else {
+                            format!("{module}.{import_name}")
+                        };
 
-                            refs.push(ParsedReference {
-                                name: full_name,
-                                kind: ReferenceKind::Import,
-                                location: self.base.node_location(child),
-                                containing_symbol_index: None,
-                            });
-                        }
+                        refs.push(ParsedReference {
+                            name: full_name,
+                            kind: ReferenceKind::Import,
+                            location: self.base.node_location(child),
+                            containing_symbol_index: None,
+                        });
+                    }
                 }
             }
             _ => {}
@@ -374,22 +377,23 @@ impl GenericAnalyzer {
                 if let Some(heritage) = node.child_by_field_name("heritage") {
                     for i in 0..heritage.child_count() as u32 {
                         if let Some(clause) = heritage.child(i)
-                            && clause.kind() == "extends_clause" {
-                                for j in 0..clause.child_count() as u32 {
-                                    if let Some(base) = clause.child(j)
-                                        && (base.kind() == "identifier"
-                                            || base.kind() == "member_expression")
-                                        {
-                                            let name = self.base.node_text(base, source);
-                                            refs.push(ParsedReference {
-                                                name,
-                                                kind: ReferenceKind::Inheritance,
-                                                location: self.base.node_location(base),
-                                                containing_symbol_index: None,
-                                            });
-                                        }
+                            && clause.kind() == "extends_clause"
+                        {
+                            for j in 0..clause.child_count() as u32 {
+                                if let Some(base) = clause.child(j)
+                                    && (base.kind() == "identifier"
+                                        || base.kind() == "member_expression")
+                                {
+                                    let name = self.base.node_text(base, source);
+                                    refs.push(ParsedReference {
+                                        name,
+                                        kind: ReferenceKind::Inheritance,
+                                        location: self.base.node_location(base),
+                                        containing_symbol_index: None,
+                                    });
                                 }
                             }
+                        }
                     }
                 }
             }
@@ -457,15 +461,16 @@ impl GenericAnalyzer {
                             for j in 0..child.child_count() as u32 {
                                 if let Some(spec) = child.child(j)
                                     && spec.kind() == "import_specifier"
-                                        && let Some(name_node) = spec.child_by_field_name("name") {
-                                            let name = self.base.node_text(name_node, source);
-                                            refs.push(ParsedReference {
-                                                name: format!("{module_path}:{name}"),
-                                                kind: ReferenceKind::Import,
-                                                location: self.base.node_location(name_node),
-                                                containing_symbol_index: None,
-                                            });
-                                        }
+                                    && let Some(name_node) = spec.child_by_field_name("name")
+                                {
+                                    let name = self.base.node_text(name_node, source);
+                                    refs.push(ParsedReference {
+                                        name: format!("{module_path}:{name}"),
+                                        kind: ReferenceKind::Import,
+                                        location: self.base.node_location(name_node),
+                                        containing_symbol_index: None,
+                                    });
+                                }
                             }
                         }
                         _ => {}
@@ -603,9 +608,10 @@ impl GenericAnalyzer {
     fn extract_go_imports(&self, node: Node, source: &str, refs: &mut Vec<ParsedReference>) {
         for i in 0..node.child_count() as u32 {
             if let Some(child) = node.child(i)
-                && (child.kind() == "import_spec" || child.kind() == "import_spec_list") {
-                    self.extract_go_import_spec(child, source, refs);
-                }
+                && (child.kind() == "import_spec" || child.kind() == "import_spec_list")
+            {
+                self.extract_go_import_spec(child, source, refs);
+            }
         }
     }
 
@@ -713,15 +719,16 @@ impl GenericAnalyzer {
             "import_declaration" => {
                 for i in 0..node.child_count() as u32 {
                     if let Some(child) = node.child(i)
-                        && child.kind() == "scoped_identifier" {
-                            let name = self.base.node_text(child, source);
-                            refs.push(ParsedReference {
-                                name,
-                                kind: ReferenceKind::Import,
-                                location: self.base.node_location(child),
-                                containing_symbol_index: None,
-                            });
-                        }
+                        && child.kind() == "scoped_identifier"
+                    {
+                        let name = self.base.node_text(child, source);
+                        refs.push(ParsedReference {
+                            name,
+                            kind: ReferenceKind::Import,
+                            location: self.base.node_location(child),
+                            containing_symbol_index: None,
+                        });
+                    }
                 }
             }
             "field_access" => {
@@ -748,15 +755,16 @@ impl GenericAnalyzer {
                 if let Some(interfaces) = node.child_by_field_name("interfaces") {
                     for i in 0..interfaces.child_count() as u32 {
                         if let Some(iface) = interfaces.child(i)
-                            && iface.kind() == "type_identifier" {
-                                let name = self.base.node_text(iface, source);
-                                refs.push(ParsedReference {
-                                    name,
-                                    kind: ReferenceKind::Inheritance,
-                                    location: self.base.node_location(iface),
-                                    containing_symbol_index: None,
-                                });
-                            }
+                            && iface.kind() == "type_identifier"
+                        {
+                            let name = self.base.node_text(iface, source);
+                            refs.push(ParsedReference {
+                                name,
+                                kind: ReferenceKind::Inheritance,
+                                location: self.base.node_location(iface),
+                                containing_symbol_index: None,
+                            });
+                        }
                     }
                 }
             }
@@ -859,15 +867,15 @@ impl GenericAnalyzer {
                     if let Some(child) = node.child(i)
                         && (child.kind() == "type_identifier"
                             || child.kind() == "qualified_identifier")
-                        {
-                            let name = self.base.node_text(child, source);
-                            refs.push(ParsedReference {
-                                name,
-                                kind: ReferenceKind::Inheritance,
-                                location: self.base.node_location(child),
-                                containing_symbol_index: None,
-                            });
-                        }
+                    {
+                        let name = self.base.node_text(child, source);
+                        refs.push(ParsedReference {
+                            name,
+                            kind: ReferenceKind::Inheritance,
+                            location: self.base.node_location(child),
+                            containing_symbol_index: None,
+                        });
+                    }
                 }
             }
             _ => {}

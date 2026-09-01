@@ -396,8 +396,8 @@ mod tests {
 
     #[test]
     fn indexed_search_on_populated_sqlite() {
-        use crate::storage::sqlite::SqliteStorage;
         use crate::storage::Storage;
+        use crate::storage::sqlite::SqliteStorage;
 
         let dir = tempdir().unwrap();
         let db_path = dir.path().join("index.sqlite");

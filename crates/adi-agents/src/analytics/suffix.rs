@@ -267,14 +267,8 @@ fn sort_cyclic_shifts(s: &[u32]) -> Vec<u32> {
         cn[p[0] as usize] = 0;
         classes = 1;
         for i in 1..n {
-            let cur = (
-                c[p[i] as usize],
-                c[(p[i] as usize + shift) % n],
-            );
-            let prev = (
-                c[p[i - 1] as usize],
-                c[(p[i - 1] as usize + shift) % n],
-            );
+            let cur = (c[p[i] as usize], c[(p[i] as usize + shift) % n]);
+            let prev = (c[p[i - 1] as usize], c[(p[i - 1] as usize + shift) % n]);
             if cur != prev {
                 classes += 1;
             }
@@ -364,7 +358,11 @@ mod tests {
         assert!(!repeats.is_empty(), "expected a repeat");
         let top = &repeats[0];
         assert_eq!(top.count, 3, "three occurrences");
-        assert_eq!(top.len, "the quick fox.".len(), "the whole phrase, not a fragment");
+        assert_eq!(
+            top.len,
+            "the quick fox.".len(),
+            "the whole phrase, not a fragment"
+        );
         assert_eq!(top.wasted(), top.len * 2);
     }
 

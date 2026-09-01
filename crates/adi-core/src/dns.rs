@@ -1085,9 +1085,7 @@ fn report_frontdoor_blocked() {
         "{}",
         linux_plan::manual(&linux_plan::capability_steps(&hive_binary_path()))
     );
-    eprintln!(
-        "adi: a node you reach over the mesh does not need this — see apps/linux/README.md."
-    );
+    eprintln!("adi: a node you reach over the mesh does not need this — see apps/linux/README.md.");
 }
 
 // MARK: paired nodes on the front door (docs/fleet.md F2)
@@ -1330,7 +1328,10 @@ impl Dns {
              && dscacheutil -flushcache\
              && killall -HUP mDNSResponder"
         );
-        report_admin("installing the .adi route + front door", &proc::run_admin(&shell));
+        report_admin(
+            "installing the .adi route + front door",
+            &proc::run_admin(&shell),
+        );
     }
 
     /// Grant just the DNS route: `/etc/resolver/<domain>`, so names in this zone resolve here.
@@ -1359,7 +1360,10 @@ impl Dns {
              && dscacheutil -flushcache\
              && killall -HUP mDNSResponder"
         );
-        report_admin("routing this zone to the local resolver", &proc::run_admin(&shell));
+        report_admin(
+            "routing this zone to the local resolver",
+            &proc::run_admin(&shell),
+        );
     }
 
     /// Grant just the front door: the root `LaunchDaemon` that answers `:80`/`:443`.
@@ -1428,10 +1432,7 @@ impl Dns {
         let drop_in = resolver_file();
         run_privileged(
             &format!("routing .{} to the local resolver", domain()),
-            &linux_plan::route_install_steps(
-                &stage.to_string_lossy(),
-                &drop_in.to_string_lossy(),
-            ),
+            &linux_plan::route_install_steps(&stage.to_string_lossy(), &drop_in.to_string_lossy()),
         );
 
         let granted = run_privileged(
@@ -1544,7 +1545,10 @@ impl Dns {
              ; dscacheutil -flushcache\
              ; killall -HUP mDNSResponder"
         );
-        report_admin("removing the .adi route + front door", &proc::run_admin(&shell));
+        report_admin(
+            "removing the .adi route + front door",
+            &proc::run_admin(&shell),
+        );
     }
 
     /// Tear down all three pieces, best-effort and each reported: the front-door unit (no
@@ -1723,10 +1727,22 @@ mod tests {
     fn config_describes_this_flavour() {
         let flavour = Flavor::current();
         let cfg = render_config();
-        assert!(cfg.contains(&format!("domain = \"{}\"", flavour.domain)), "{cfg}");
-        assert!(cfg.contains(&format!("preferred_port = {}", port())), "{cfg}");
-        assert!(cfg.contains(&format!("suffix = \"{}\"", flavour.domain)), "{cfg}");
-        assert!(cfg.contains(&format!("address = \"{}\"", flavour.frontdoor_addr)), "{cfg}");
+        assert!(
+            cfg.contains(&format!("domain = \"{}\"", flavour.domain)),
+            "{cfg}"
+        );
+        assert!(
+            cfg.contains(&format!("preferred_port = {}", port())),
+            "{cfg}"
+        );
+        assert!(
+            cfg.contains(&format!("suffix = \"{}\"", flavour.domain)),
+            "{cfg}"
+        );
+        assert!(
+            cfg.contains(&format!("address = \"{}\"", flavour.frontdoor_addr)),
+            "{cfg}"
+        );
         assert!(cfg.contains("status_file = \""));
     }
 
@@ -2118,7 +2134,10 @@ mod tests {
         // `resolver_addr` rather than of a literal, so the two cannot drift apart per platform.
         let addr = resolver_addr();
         let cfg = render_config();
-        assert!(cfg.contains(&format!("bind_addr = \"{}\"", addr.ip())), "{cfg}");
+        assert!(
+            cfg.contains(&format!("bind_addr = \"{}\"", addr.ip())),
+            "{cfg}"
+        );
         assert!(
             cfg.contains(&format!("preferred_port = {}", addr.port())),
             "{cfg}"
@@ -2273,7 +2292,9 @@ mod tests {
             "/opt/adi-hive = cap_net_bind_service+ep\n"
         ));
         assert!(!linux_plan::capability_granted(""));
-        assert!(!linux_plan::capability_granted("/opt/adi-hive cap_net_raw=ep\n"));
+        assert!(!linux_plan::capability_granted(
+            "/opt/adi-hive cap_net_raw=ep\n"
+        ));
     }
 
     /// Mesh-only is a node's *normal* state, so the status line describes it rather than
@@ -2343,8 +2364,14 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_root_owned_program_is_accepted() {
-        assert_eq!(first_unsafe_component(std::path::Path::new("/bin/sh")), None);
-        assert_eq!(root_program_objection(std::path::Path::new("/bin/sh")), None);
+        assert_eq!(
+            first_unsafe_component(std::path::Path::new("/bin/sh")),
+            None
+        );
+        assert_eq!(
+            root_program_objection(std::path::Path::new("/bin/sh")),
+            None
+        );
     }
 
     /// A path that does not exist yet is judged by the directories above it — which is the case
@@ -2357,9 +2384,12 @@ mod tests {
             None
         );
         let home = std::env::var("HOME").expect("a home directory");
-        let (component, _) =
-            first_unsafe_component(&PathBuf::from(home).join("adi-hive-not-here"))
-                .expect("a user's home is not root-owned");
-        assert!(component.exists(), "{} must be a real component", component.display());
+        let (component, _) = first_unsafe_component(&PathBuf::from(home).join("adi-hive-not-here"))
+            .expect("a user's home is not root-owned");
+        assert!(
+            component.exists(),
+            "{} must be a real component",
+            component.display()
+        );
     }
 }

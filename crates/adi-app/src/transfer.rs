@@ -89,7 +89,9 @@ pub(crate) async fn transfer_dashboard(
             Err(e) => {
                 return handlers::error(
                     502,
-                    &format!("{node} accepted the dashboard but answered something unreadable: {e}"),
+                    &format!(
+                        "{node} accepted the dashboard but answered something unreadable: {e}"
+                    ),
                 );
             }
         },

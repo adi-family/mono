@@ -111,7 +111,11 @@ impl Param {
             ParamKind::List => "string[]",
             ParamKind::Flag => "boolean",
         };
-        format!("{}{}  {kind}", self.name, if self.required { " *" } else { "" })
+        format!(
+            "{}{}  {kind}",
+            self.name,
+            if self.required { " *" } else { "" }
+        )
     }
 }
 
@@ -183,7 +187,11 @@ pub fn ToolForm(
 
             // A flag says what it is next to the box, so repeating the hint above it would
             // print the same sentence twice.
-            let hint = if p.kind == ParamKind::Flag { String::new() } else { p.hint.clone() };
+            let hint = if p.kind == ParamKind::Flag {
+                String::new()
+            } else {
+                p.hint.clone()
+            };
             view! {
                 <div class=span>
                     <Field label=p.label() hint=hint>

@@ -3,8 +3,8 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, signature_before, tree_walking_analyzer,
-    WithDocCommentOpt,
+    WithDocCommentOpt, declaration, node_location, node_text, signature_before,
+    tree_walking_analyzer,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -138,13 +138,14 @@ fn parse_java_declarators(
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == "variable_declarator"
-                && let Some(name) = child.child_by_field_name("name") {
-                    symbols.push(
-                        ParsedSymbol::new(node_text(name, source), kind, node_location(child))
-                            .with_visibility(visibility)
-                            .with_doc_comment_opt(doc_comment.clone()),
-                    );
-                }
+            && let Some(name) = child.child_by_field_name("name")
+        {
+            symbols.push(
+                ParsedSymbol::new(node_text(name, source), kind, node_location(child))
+                    .with_visibility(visibility)
+                    .with_doc_comment_opt(doc_comment.clone()),
+            );
+        }
     }
 }
 
@@ -193,25 +194,27 @@ fn collect_java_references(node: Node, source: &str, refs: &mut Vec<ParsedRefere
         "import_declaration" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
-                    && child.kind() == "scoped_identifier" {
-                        refs.push(ParsedReference::new(
-                            node_text(child, source),
-                            ReferenceKind::Import,
-                            node_location(child),
-                        ));
-                    }
+                    && child.kind() == "scoped_identifier"
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(child, source),
+                        ReferenceKind::Import,
+                        node_location(child),
+                    ));
+                }
             }
         }
         "superclass" | "super_interfaces" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
-                    && (child.kind() == "type_identifier" || child.kind() == "generic_type") {
-                        refs.push(ParsedReference::new(
-                            node_text(child, source),
-                            ReferenceKind::Inheritance,
-                            node_location(child),
-                        ));
-                    }
+                    && (child.kind() == "type_identifier" || child.kind() == "generic_type")
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(child, source),
+                        ReferenceKind::Inheritance,
+                        node_location(child),
+                    ));
+                }
             }
         }
         _ => {}
@@ -267,4 +270,3 @@ fn is_common_method(name: &str) -> bool {
             | "format"
     )
 }
-

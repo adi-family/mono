@@ -47,7 +47,9 @@
 use leptos::{ev, html, prelude::*, wasm_bindgen::JsCast, web_sys};
 
 use crate::facts::{Provenance, Sentence, Stamp};
-use crate::{Badge, BadgeTone, Button, ButtonSize, ButtonVariant, Empty, Fact, Kbd, Textarea, merge};
+use crate::{
+    Badge, BadgeTone, Button, ButtonSize, ButtonVariant, Empty, Fact, Kbd, Textarea, merge,
+};
 
 /// What the classifier thought the pair was.
 ///
@@ -177,8 +179,12 @@ impl Verdict {
     /// Every verdict, in the order the card draws them. `coexist` leads because it is the one
     /// that keeps both sentences, not because it is a default — the card gives none of the
     /// four the primary weight.
-    pub const ALL: [Verdict; 4] =
-        [Verdict::Coexist, Verdict::Merge, Verdict::Supersede, Verdict::Drop];
+    pub const ALL: [Verdict; 4] = [
+        Verdict::Coexist,
+        Verdict::Merge,
+        Verdict::Supersede,
+        Verdict::Drop,
+    ];
 }
 
 /// One half of a pair.
@@ -194,7 +200,10 @@ impl PairSide {
     /// A fact already in the base.
     #[must_use]
     pub fn base(fact: Fact) -> Self {
-        Self { fact, staged: false }
+        Self {
+            fact,
+            staged: false,
+        }
     }
 
     /// A fact staged in the open transaction.
@@ -222,7 +231,10 @@ pub struct Decided {
 impl Decided {
     #[must_use]
     pub fn new(verdict: Verdict, by: impl Into<String>) -> Self {
-        Self { verdict, by: by.into() }
+        Self {
+            verdict,
+            by: by.into(),
+        }
     }
 }
 
@@ -316,7 +328,10 @@ pub struct Truncated {
 impl Truncated {
     #[must_use]
     pub fn new(not_examined: usize, below: f32) -> Self {
-        Self { not_examined, below }
+        Self {
+            not_examined,
+            below,
+        }
     }
 }
 
@@ -396,7 +411,12 @@ pub fn PairCard(
     let rule = {
         let id = id.clone();
         move |verdict: Verdict, keep: Option<String>, fact: Option<String>| {
-            on_rule.run(Ruling { pair: id.clone(), verdict, keep, fact });
+            on_rule.run(Ruling {
+                pair: id.clone(),
+                verdict,
+                keep,
+                fact,
+            });
             mode.set(Mode::Idle);
             // Walk on before the caller's re-render lands. A queue you have to re-aim after
             // every decision is a queue worked with the mouse.
@@ -719,7 +739,11 @@ fn step(root: NodeRef<html::Div>, delta: i32) {
     let Some(el) = root.get_untracked() else {
         return;
     };
-    let next = if delta > 0 { el.next_element_sibling() } else { el.previous_element_sibling() };
+    let next = if delta > 0 {
+        el.next_element_sibling()
+    } else {
+        el.previous_element_sibling()
+    };
     let Some(next) = next.filter(|n| n.has_attribute("data-pair")) else {
         return;
     };

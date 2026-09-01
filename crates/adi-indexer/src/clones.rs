@@ -69,7 +69,10 @@ impl CloneGroup {
 pub fn exact(rows: Vec<StructureRow>) -> Vec<CloneGroup> {
     let mut by_hash: HashMap<String, Vec<StructureRow>> = HashMap::new();
     for row in rows {
-        by_hash.entry(row.structure.hash.clone()).or_default().push(row);
+        by_hash
+            .entry(row.structure.hash.clone())
+            .or_default()
+            .push(row);
     }
 
     let mut groups: Vec<CloneGroup> = by_hash
@@ -241,7 +244,10 @@ mod tests {
     fn near_leaves_exact_duplicates_to_exact() {
         // Identical hashes are 0 bits apart, so a distance filter alone would report them —
         // and drown the drifted pairs this is for.
-        let groups = near(vec![row(1, "aaaa", 0b101, 60), row(2, "aaaa", 0b101, 60)], 4);
+        let groups = near(
+            vec![row(1, "aaaa", 0b101, 60), row(2, "aaaa", 0b101, 60)],
+            4,
+        );
         assert!(groups.is_empty(), "got {groups:?}");
     }
 

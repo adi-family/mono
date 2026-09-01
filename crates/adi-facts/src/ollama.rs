@@ -108,7 +108,10 @@ mod tests {
     fn a_blank_variable_is_not_a_host() {
         // An exported-but-empty `ADI_FACTS_OLLAMA` must fall through to the default rather than
         // producing `/api/embeddings` with no host in front of it.
-        assert_eq!(env_or("ADI_FACTS_NOT_SET_ANYWHERE", DEFAULT_HOST), DEFAULT_HOST);
+        assert_eq!(
+            env_or("ADI_FACTS_NOT_SET_ANYWHERE", DEFAULT_HOST),
+            DEFAULT_HOST
+        );
         assert_eq!(Ollama::at("http://box:11434/").host(), "http://box:11434/");
     }
 }

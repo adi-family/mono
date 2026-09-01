@@ -184,8 +184,11 @@ pub trait Runner: Send + Sync {
     /// # Errors
     /// Returns read or transport errors. An unparseable log is not an error — it yields whatever
     /// text could be recovered.
-    fn events(&self, session: &dyn Session, cursor: Option<&serde_json::Value>)
-    -> Result<EventBatch>;
+    fn events(
+        &self,
+        session: &dyn Session,
+        cursor: Option<&serde_json::Value>,
+    ) -> Result<EventBatch>;
 
     /// The terminal extension, for runners that drive a live screen. Everyone else inherits `None`.
     ///

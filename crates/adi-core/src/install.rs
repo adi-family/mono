@@ -124,8 +124,18 @@ mod tests {
 
     #[test]
     fn a_normal_install_is_durable() {
-        assert!(classify(Path::new("/Applications/ADI.app/Contents/Resources/adi-mono")).is_durable());
-        assert!(classify(Path::new("/Users/x/Applications/ADI.app/Contents/Resources/adi-mono")).is_durable());
+        assert!(
+            classify(Path::new(
+                "/Applications/ADI.app/Contents/Resources/adi-mono"
+            ))
+            .is_durable()
+        );
+        assert!(
+            classify(Path::new(
+                "/Users/x/Applications/ADI.app/Contents/Resources/adi-mono"
+            ))
+            .is_durable()
+        );
     }
 
     /// A checkout is a perfectly good place to run from — this guard is about paths that
@@ -137,8 +147,15 @@ mod tests {
 
     #[test]
     fn a_mounted_disk_image_is_not() {
-        let loc = classify(Path::new("/Volumes/ADI/ADI.app/Contents/Resources/adi-mono"));
-        assert_eq!(loc, Location::Volume(PathBuf::from("/Volumes/ADI/ADI.app/Contents/Resources/adi-mono")));
+        let loc = classify(Path::new(
+            "/Volumes/ADI/ADI.app/Contents/Resources/adi-mono",
+        ));
+        assert_eq!(
+            loc,
+            Location::Volume(PathBuf::from(
+                "/Volumes/ADI/ADI.app/Contents/Resources/adi-mono"
+            ))
+        );
         assert!(!loc.is_durable());
         assert!(loc.explain().unwrap().contains("ejected"));
     }

@@ -3,17 +3,15 @@
 //! This view is meant to be the one place every hive service is visible, whichever adi-hive
 //! instance actually supervises it.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{Dashboard, HiveService, Project};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href, push_state};
 use crate::state::{Flash, State};
-use crate::ui::{
-    Sort, cpu_cell, dash, fmt_bytes, fmt_cpu, fmt_ports, memory_cell,
-    };
+use crate::ui::{Sort, cpu_cell, dash, fmt_bytes, fmt_cpu, fmt_ports, memory_cell};
 
 /// Every column the Hive table can show, in its declared order — the set the settings menu
 /// offers, and the order a user who has never rearranged it sees. Sort keys and cell builders
@@ -238,9 +236,12 @@ fn cell(col: &str, s: &HiveService, src: &Source, state: State, route: RwSignal<
         "Service" => view! { <span class="font-mono">{s.name.clone()}</span> }.into_any(),
         "Host" => host_cell(s.host.as_deref()),
         "Ports" => {
-            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }.into_any()
+            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }
+                .into_any()
         }
-        "Command" => view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any(),
+        "Command" => {
+            view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any()
+        }
         "Restart" => view! { <span class="text-meta">{dash(s.restart.clone())}</span> }.into_any(),
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),

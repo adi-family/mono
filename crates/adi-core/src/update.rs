@@ -97,7 +97,11 @@ impl Update {
         // Snapshot before anything moves: only services that were *already* up are expected
         // back afterwards. Without this, a stack the user had deliberately stopped would read
         // as a failed update and roll back a release that is perfectly fine.
-        let expected = if restart { running_services() } else { Vec::new() };
+        let expected = if restart {
+            running_services()
+        } else {
+            Vec::new()
+        };
 
         let installed = engine.install(&check.manifest)?;
         if !restart {

@@ -313,8 +313,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&home);
     }
 
-
-
     /// A broken env file is skipped rather than taking the shell down with it — a sourced syntax
     /// error would otherwise end every command in the conversation, not just the one that wrote it.
     #[test]

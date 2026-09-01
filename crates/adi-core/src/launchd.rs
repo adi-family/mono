@@ -413,8 +413,15 @@ mod unit {
             );
         }
         path_dirs.extend(
-            ["/usr/local/bin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/sbin", "/sbin"]
-                .map(str::to_owned),
+            [
+                "/usr/local/bin",
+                "/usr/bin",
+                "/bin",
+                "/usr/local/sbin",
+                "/usr/sbin",
+                "/sbin",
+            ]
+            .map(str::to_owned),
         );
         // The derived directory is often one of the standard ones (a package installed into
         // /usr/local/bin, say); keep first occurrence so the package's own dir still wins.
@@ -427,10 +434,7 @@ mod unit {
         let env_lines = env
             .iter()
             .map(|(k, v)| quote(&format!("{k}={v}")))
-            .chain(
-                (!caller_sets_path)
-                    .then(|| quote(&format!("PATH={}", path_dirs.join(":")))),
-            )
+            .chain((!caller_sets_path).then(|| quote(&format!("PATH={}", path_dirs.join(":")))))
             .fold(String::new(), |mut lines, pair| {
                 let _ = writeln!(lines, "Environment={pair}");
                 lines
@@ -707,7 +711,10 @@ mod windows {
         env: &[(String, String)],
         interval_secs: u32,
     ) {
-        install(label, &task_xml(label, program, log, env, Some(interval_secs)));
+        install(
+            label,
+            &task_xml(label, program, log, env, Some(interval_secs)),
+        );
     }
 
     fn install(label: &str, xml: &str) {
@@ -921,7 +928,10 @@ mod windows {
         fn service_task_has_logon_trigger_and_restart() {
             let xml = task_xml(
                 "family.adi.app.dns",
-                &["C:\\adi\\adi-dns.exe".to_string(), "C:\\cfg.toml".to_string()],
+                &[
+                    "C:\\adi\\adi-dns.exe".to_string(),
+                    "C:\\cfg.toml".to_string(),
+                ],
                 "C:\\log.txt",
                 &[("RUST_LOG".to_string(), "info".to_string())],
                 None,
@@ -1023,7 +1033,10 @@ mod tests {
 
     #[test]
     fn xml_escapes_markup() {
-        assert_eq!(plist::xml_escape("a & b < c > d"), "a &amp; b &lt; c &gt; d");
+        assert_eq!(
+            plist::xml_escape("a & b < c > d"),
+            "a &amp; b &lt; c &gt; d"
+        );
     }
 
     // MARK: systemd units (Linux)
@@ -1059,9 +1072,7 @@ mod tests {
         assert!(u.contains("[Unit]") && u.contains("[Service]") && u.contains("[Install]"));
         assert!(u.contains("Description=ADI service family.adi.app.dns"));
         assert!(
-            u.contains(
-                "ExecStart=\"/opt/adi/adi-dns\" \"/home/n/.adi/mono/dns/adi-dns.toml\"\n"
-            ),
+            u.contains("ExecStart=\"/opt/adi/adi-dns\" \"/home/n/.adi/mono/dns/adi-dns.toml\"\n"),
             "got: {u}"
         );
         assert!(u.contains("Environment=\"RUST_LOG=info\"\n"));
@@ -1097,7 +1108,10 @@ mod tests {
     fn service_unit_path_covers_the_package_dir_and_bun() {
         let u = unit::service_unit(
             "family.adi.app.dashboards",
-            &argv(&["/home/adi/.local/adi/bin/adi-hive", "/home/adi/.adi/mono/x.yaml"]),
+            &argv(&[
+                "/home/adi/.local/adi/bin/adi-hive",
+                "/home/adi/.adi/mono/x.yaml",
+            ]),
             "/tmp/log",
             &[],
         );
@@ -1160,7 +1174,10 @@ mod tests {
         let t = unit::timer_unit("family.adi.app.updater", 21600);
         assert_well_formed(&t);
         assert!(t.contains("[Timer]"));
-        assert!(t.contains("Unit=family.adi.app.updater.service\n"), "got: {t}");
+        assert!(
+            t.contains("Unit=family.adi.app.updater.service\n"),
+            "got: {t}"
+        );
         // First run after the timer starts, then every interval — systemd has no StartInterval.
         assert!(t.contains("OnActiveSec=21600\n"), "got: {t}");
         assert!(t.contains("OnUnitActiveSec=21600\n"), "got: {t}");
@@ -1198,7 +1215,10 @@ mod tests {
             let name = unit::service_name(label);
             assert!(!name.contains('/'), "{label:?} → {name:?}");
             assert!(!name.contains('\\'), "{label:?} → {name:?}");
-            assert!(!name.contains(std::path::MAIN_SEPARATOR), "{label:?} → {name:?}");
+            assert!(
+                !name.contains(std::path::MAIN_SEPARATOR),
+                "{label:?} → {name:?}"
+            );
             assert!(!name.starts_with('.'), "{label:?} → {name:?}");
             assert!(name.ends_with(".service"), "{label:?} → {name:?}");
             assert!(name.is_ascii(), "{label:?} → {name:?}");
@@ -1285,6 +1305,9 @@ mod tests {
     #[test]
     fn a_percent_in_free_text_is_not_a_specifier() {
         let u = unit::service_unit("100%done", &argv(&["/bin/x"]), "/tmp/log", &[]);
-        assert!(u.contains("Description=ADI service 100%%done\n"), "got: {u}");
+        assert!(
+            u.contains("Description=ADI service 100%%done\n"),
+            "got: {u}"
+        );
     }
 }

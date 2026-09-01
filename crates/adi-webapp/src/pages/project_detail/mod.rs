@@ -2,9 +2,9 @@
 //! the project's `.adi/hive.yaml`, and an in-place file browser/editor scoped to the project's own
 //! directory (via the isolated `adi-fs` jail).
 
+use adi_ui::Table;
 use adi_webapp_api::types::{ProjectDetail, ProjectRenamed, ProjectsState};
 use leptos::prelude::*;
-use adi_ui::{Table};
 use wasm_bindgen_futures::spawn_local;
 
 use super::agents::{all_chats_view, live_view as agent_live_view};
@@ -20,8 +20,7 @@ use crate::routing::{
 };
 use crate::state::{
     AgentsForm, AgentsWatch, Flash, HookEditor, HookLogView, KnowledgeConsole, SecretsForm, State,
-    TermWatch,
-    ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
+    TermWatch, ToolEditor, ToolRunView, ToolsForm, TriggersLogView,
 };
 use crate::ui::{flash_view, fmt_date, prompt};
 

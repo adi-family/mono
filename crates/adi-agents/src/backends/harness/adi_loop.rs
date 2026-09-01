@@ -53,8 +53,8 @@ use crate::backends::adi_events::{self, Sink};
 use crate::error::{Error, Result};
 use crate::progress::TurnMetrics;
 
-use crate::store::{Attachment, Turn};
 use super::tools;
+use crate::store::{Attachment, Turn};
 
 /// Anthropic requires an explicit output cap, so default one when the agent sets none.
 const DEFAULT_MAX_TOKENS: u64 = 4096;
@@ -95,7 +95,10 @@ pub(crate) fn adi_mono_program() -> String {
         .ok()
         .and_then(|exe| exe.parent().map(|dir| dir.join("adi-mono")))
         .filter(|candidate| candidate.is_file())
-        .map_or_else(|| "adi-mono".to_string(), |p| p.to_string_lossy().into_owned())
+        .map_or_else(
+            || "adi-mono".to_string(),
+            |p| p.to_string_lossy().into_owned(),
+        )
 }
 
 /// The command a conversation turn spawns for an `adi` agent: re-enter this binary's hidden
@@ -422,17 +425,18 @@ impl<'a> Wire<'a> {
             Self::Gemini { .. } => plain
                 .iter()
                 .map(|said| {
-                    let role = if said.role == "assistant" { "model" } else { "user" };
+                    let role = if said.role == "assistant" {
+                        "model"
+                    } else {
+                        "user"
+                    };
                     json!({ "role": role, "parts": self.parts(&said.text, said, images) })
                 })
                 .collect(),
             // Everyone else takes `{role, content}` with the system prompt as the first message —
             // except Anthropic, which has a `system` field; passing it as a message is accepted on
             // current models, but the dedicated field is what the API documents, so it goes there.
-            Self::Anthropic { .. } => plain
-                .iter()
-                .map(|said| self.said(said, images))
-                .collect(),
+            Self::Anthropic { .. } => plain.iter().map(|said| self.said(said, images)).collect(),
             Self::OpenAi { args, .. } | Self::Ollama { args, .. } => {
                 let mut messages: Vec<Value> =
                     plain.iter().map(|said| self.said(said, images)).collect();
@@ -651,9 +655,9 @@ impl<'a> Wire<'a> {
                     .collect();
                 messages.push(json!({ "role": "user", "content": blocks }));
             }
-            Self::OpenAi { .. } => messages.extend(results.iter().map(|r| {
-                json!({ "role": "tool", "tool_call_id": r.call_id, "content": r.output })
-            })),
+            Self::OpenAi { .. } => messages.extend(results.iter().map(
+                |r| json!({ "role": "tool", "tool_call_id": r.call_id, "content": r.output }),
+            )),
             // Ollama identifies a result by the tool's name rather than a call id.
             Self::Ollama { .. } => messages.extend(
                 results
@@ -1340,7 +1344,9 @@ fn usage(resp: &Value, path: &[&str]) -> Option<u64> {
 /// to rely on; the install happens on the way to the first request instead. `install_default`
 /// errors only if a provider is already set, which is exactly the outcome wanted.
 fn ensure_provider() {
-    rustls::crypto::ring::default_provider().install_default().ok();
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .ok();
 }
 
 /// POST `body` as JSON with the given extra headers, returning the decoded JSON response. A non-2xx
@@ -1368,8 +1374,7 @@ fn post_json(url: &str, headers: &[(&str, &str)], body: &Value) -> Result<Value>
             text.trim()
         )));
     }
-    serde_json::from_str(&text)
-        .map_err(|e| Error::Process(format!("invalid JSON from {url}: {e}")))
+    serde_json::from_str(&text).map_err(|e| Error::Process(format!("invalid JSON from {url}: {e}")))
 }
 
 fn provider_shape_error(provider: &str, resp: &Value) -> Error {
@@ -1615,7 +1620,11 @@ mod tests {
             "https://api.z.ai/api/paas/v4/chat/completions"
         );
         assert_eq!(
-            versioned_url("https://api.z.ai/api/paas/v4", "api/paas/v4", "chat/completions"),
+            versioned_url(
+                "https://api.z.ai/api/paas/v4",
+                "api/paas/v4",
+                "chat/completions"
+            ),
             "https://api.z.ai/api/paas/v4/chat/completions"
         );
         assert_eq!(
@@ -1671,7 +1680,14 @@ mod tests {
         let mut args = args_for(HarnessProvider::Monshoot);
         args.system_prompt = Some("be terse".into());
         let wire = Wire::of(&args, "kimi-k3").expect("wire");
-        let seeded = wire.seed(&[turn("user", "hi"), turn("assistant", "  "), turn("user", "again")], &images);
+        let seeded = wire.seed(
+            &[
+                turn("user", "hi"),
+                turn("assistant", "  "),
+                turn("user", "again"),
+            ],
+            &images,
+        );
         // Two, not three: the empty answer goes, and the questions it stood between are then
         // neighbours of the same role, which replay as one message rather than as the pair
         // Anthropic and Gemini reject.
@@ -1764,7 +1780,10 @@ mod tests {
             .expect("wire")
             .interject(&mut messages, "stop now");
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[1], json!({ "role": "user", "content": "stop now" }));
+        assert_eq!(
+            messages[1],
+            json!({ "role": "user", "content": "stop now" })
+        );
     }
 
     /// The round-1 shape, which the wrap-up round never met: the trailing user message is the
@@ -1798,7 +1817,10 @@ mod tests {
         ];
         wire.interject(&mut messages, "actually, skip the tests");
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[1]["content"][1]["text"], "actually, skip the tests");
+        assert_eq!(
+            messages[1]["content"][1]["text"],
+            "actually, skip the tests"
+        );
     }
 
     /// Four providers, four spellings of "here is a picture". This is the check that each one is
@@ -1871,9 +1893,7 @@ mod tests {
             ..turn("user", "  ")
         };
         let args = args_for(HarnessProvider::Anthropic);
-        let seeded = Wire::of(&args, "m")
-            .expect("wire")
-            .seed(&[asked], &images);
+        let seeded = Wire::of(&args, "m").expect("wire").seed(&[asked], &images);
         assert_eq!(seeded.len(), 1, "the wordless turn survived: {seeded:?}");
         // And the empty text is left out rather than sent as an empty part.
         assert_eq!(seeded[0]["content"].as_array().map(Vec::len), Some(1));
@@ -1899,9 +1919,7 @@ mod tests {
             ..turn("user", "still worth answering")
         };
         let args = args_for(HarnessProvider::Anthropic);
-        let seeded = Wire::of(&args, "m")
-            .expect("wire")
-            .seed(&[asked], &images);
+        let seeded = Wire::of(&args, "m").expect("wire").seed(&[asked], &images);
         assert_eq!(seeded.len(), 1);
         assert_eq!(seeded[0]["content"], "still worth answering");
 
@@ -1920,16 +1938,23 @@ mod tests {
             turn("user", "and handle CRLF"),
             turn("assistant", "done"),
         ];
-        let seeded = Wire::of(&anthropic, "m").expect("wire").seed(&history, &images);
+        let seeded = Wire::of(&anthropic, "m")
+            .expect("wire")
+            .seed(&history, &images);
         assert_eq!(seeded.len(), 2, "the two questions merged: {seeded:?}");
         assert_eq!(seeded[0]["role"], "user");
         assert_eq!(seeded[0]["content"], "fix the parser\n\nand handle CRLF");
         assert_eq!(seeded[1]["role"], "assistant");
 
         let gemini = args_for(HarnessProvider::Gemini);
-        let seeded = Wire::of(&gemini, "m").expect("wire").seed(&history, &images);
+        let seeded = Wire::of(&gemini, "m")
+            .expect("wire")
+            .seed(&history, &images);
         assert_eq!(seeded.len(), 2, "the two questions merged: {seeded:?}");
-        assert_eq!(seeded[0]["parts"][0]["text"], "fix the parser\n\nand handle CRLF");
+        assert_eq!(
+            seeded[0]["parts"][0]["text"],
+            "fix the parser\n\nand handle CRLF"
+        );
         assert_eq!(seeded[1]["role"], "model");
     }
 
@@ -1939,7 +1964,10 @@ mod tests {
             parse_arguments(Some(&json!("{\"path\":\"a.rs\"}")))["path"],
             "a.rs"
         );
-        assert_eq!(parse_arguments(Some(&json!({"path": "a.rs"})))["path"], "a.rs");
+        assert_eq!(
+            parse_arguments(Some(&json!({"path": "a.rs"})))["path"],
+            "a.rs"
+        );
         assert_eq!(parse_arguments(Some(&json!("{not json"))), json!({}));
         assert_eq!(parse_arguments(None), json!({}));
     }
@@ -1950,10 +1978,19 @@ mod tests {
         // The program may be an absolute path beside the running executable or the bare name,
         // depending on what is installed next to the test binary — both name the same tool.
         let program = std::path::Path::new(&argv[0]);
-        assert_eq!(program.file_name().and_then(|n| n.to_str()), Some("adi-mono"));
+        assert_eq!(
+            program.file_name().and_then(|n| n.to_str()),
+            Some("adi-mono")
+        );
         assert_eq!(
             &argv[1..],
-            ["harness-turn", "--agent", "planner", "--conv", "0000000000001-0000"]
+            [
+                "harness-turn",
+                "--agent",
+                "planner",
+                "--conv",
+                "0000000000001-0000"
+            ]
         );
     }
 

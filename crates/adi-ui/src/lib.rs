@@ -33,11 +33,11 @@
 // Leptos components are PascalCase functions by convention, which is not a Rust function name.
 #![allow(non_snake_case)]
 
+mod app;
 mod ask;
 mod attach;
 mod badge;
 mod button;
-mod app;
 mod chat;
 mod code;
 mod composer;
@@ -50,8 +50,8 @@ mod form;
 pub mod highlight;
 mod input;
 mod kbd;
-mod markdown;
 mod mark;
+mod markdown;
 mod modal;
 mod pair;
 mod panel;
@@ -68,17 +68,15 @@ mod tree;
 mod tx;
 mod voice;
 
+pub use app::{AppItem, AppState};
 pub use ask::{Ask, AskOption, AskQuestion};
 pub use attach::{AttachState, Attached, Attaching, files_of};
 pub use badge::{Badge, BadgeTone};
 pub use button::{Button, ButtonSize, ButtonVariant};
-pub use app::{AppItem, AppState};
 pub use chat::{Chat, Entry, Image, Queued, Role, ToolCall, ToolState, Turn, by_position};
 pub use code::{CodeEditor, CodeFrame, CodeHeight, CodeLog};
 pub use composer::Composer;
-pub use facts::{
-    Change, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Stale, StaleList,
-};
+pub use facts::{Change, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Stale, StaleList};
 pub use faq::{Faq, Qna};
 pub use feedback::{Empty, Flash, FlashKind};
 pub use field::Field;

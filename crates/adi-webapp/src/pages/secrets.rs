@@ -14,9 +14,9 @@
 //! The table and create form are shared with a project's Secrets panel, so their view helpers are
 //! `pub(crate)`.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{OAuthInfoDto, SecretDto, SecretsState, SetOAuthSecret, SetSecret};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen::JsValue;
 use wasm_bindgen_futures::spawn_local;
 
@@ -24,8 +24,8 @@ use crate::fetch;
 use crate::routing::Route;
 use crate::state::{Flash, SecretsForm, State};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, confirm, flash_view,
-    menu_item, row_actions, sort_rows, updated_text,
+    Key, TableState, TextField, apply_mutation, confirm, flash_view, menu_item, row_actions,
+    sort_rows, updated_text,
 };
 
 /// The OAuth router that runs the provider flow and returns the token in the redirect fragment.
@@ -166,13 +166,22 @@ fn oauth_authorize_row(state: State, form: SecretsForm, project: Option<String>)
 fn provider_accesses(provider: &str) -> &'static [(&'static str, &'static str)] {
     match provider {
         "google" => &[
-            ("https://www.googleapis.com/auth/gmail.readonly", "Gmail — read (messages, threads, labels)"),
-            ("https://www.googleapis.com/auth/gmail.send", "Gmail — send email"),
+            (
+                "https://www.googleapis.com/auth/gmail.readonly",
+                "Gmail — read (messages, threads, labels)",
+            ),
+            (
+                "https://www.googleapis.com/auth/gmail.send",
+                "Gmail — send email",
+            ),
             (
                 "https://www.googleapis.com/auth/gmail.modify",
                 "Gmail — read, send & manage (labels, drafts, archive; no permanent delete)",
             ),
-            ("https://mail.google.com/", "Gmail — full access (incl. permanent delete)"),
+            (
+                "https://mail.google.com/",
+                "Gmail — full access (incl. permanent delete)",
+            ),
             ("email", "Account email address"),
         ],
         _ => &[],
@@ -227,18 +236,30 @@ fn access_checkbox(form: SecretsForm, scope: &'static str, label: &'static str) 
 fn submit_text(state: State, form: SecretsForm, scoped: Option<String>) {
     let name = form.name.get().trim().to_string();
     if name.is_empty() {
-        state.flash.set(Some(Flash::err("A secret name is required.".to_string())));
+        state
+            .flash
+            .set(Some(Flash::err("A secret name is required.".to_string())));
         return;
     }
     let value = form.value.get();
     let description = form.description.get().trim().to_string();
     let description = (!description.is_empty()).then_some(description);
     let project = resolve_scope(form, scoped.as_ref());
-    let body = SetSecret { project, name: name.clone(), value, description };
+    let body = SetSecret {
+        project,
+        name: name.clone(),
+        value,
+        description,
+    };
     reset_form(form);
     form.busy.set(true);
-    apply_mutation(state, Some(form.busy), format!("Set secret \u{201c}{name}\u{201d}."),
-        |s: State, sec: SecretsState| s.secrets.set(Some(sec)), fetch::set_secret(body));
+    apply_mutation(
+        state,
+        Some(form.busy),
+        format!("Set secret \u{201c}{name}\u{201d}."),
+        |s: State, sec: SecretsState| s.secrets.set(Some(sec)),
+        fetch::set_secret(body),
+    );
 }
 
 /// Begin the OAuth flow for the secret named in the create form: park the intent, then leave for
@@ -246,7 +267,9 @@ fn submit_text(state: State, form: SecretsForm, scoped: Option<String>) {
 fn start_oauth(state: State, form: SecretsForm, scoped: Option<String>) {
     let name = form.name.get().trim().to_string();
     if name.is_empty() {
-        state.flash.set(Some(Flash::err("A secret name is required.".to_string())));
+        state
+            .flash
+            .set(Some(Flash::err("A secret name is required.".to_string())));
         return;
     }
     let provider = current_provider(form);
@@ -257,7 +280,9 @@ fn start_oauth(state: State, form: SecretsForm, scoped: Option<String>) {
     } else {
         let selected = form.scopes.get();
         if selected.is_empty() {
-            state.flash.set(Some(Flash::err("Select at least one access.".to_string())));
+            state
+                .flash
+                .set(Some(Flash::err("Select at least one access.".to_string())));
             return;
         }
         Some(selected.join(" "))
@@ -288,7 +313,11 @@ fn resolve_scope(form: SecretsForm, scoped: Option<&String>) -> Option<String> {
 /// The provider currently selected, defaulting to `google`.
 fn current_provider(form: SecretsForm) -> String {
     let p = form.provider.get();
-    if p.is_empty() { "google".to_string() } else { p }
+    if p.is_empty() {
+        "google".to_string()
+    } else {
+        p
+    }
 }
 
 /// Render a secrets table body: the loading/empty placeholder, or one row per matching secret, in
@@ -310,7 +339,8 @@ pub(crate) fn rows_view(
         .filter(|s| s.project.as_deref() == want.as_deref())
         .collect();
     if rows.is_empty() {
-        return view! { <EmptyRow state=table>"No secrets yet — set one below."</EmptyRow> }.into_any();
+        return view! { <EmptyRow state=table>"No secrets yet — set one below."</EmptyRow> }
+            .into_any();
     }
     sort_rows(
         &mut rows,
@@ -328,7 +358,8 @@ pub(crate) fn rows_view(
     rows.into_iter()
         .map(|s| {
             let action = secret_actions(state, form, &s);
-            view! { <TableRow state=table cell=move |col| cell(col, &s, form) actions=action/> }.into_any()
+            view! { <TableRow state=table cell=move |col| cell(col, &s, form) actions=action/> }
+                .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -400,7 +431,12 @@ pub(crate) fn secret_actions(state: State, form: SecretsForm, s: &SecretDto) -> 
             {move || if form.revealed.get().contains_key(&label_key) { "Hide" } else { "Reveal" }}
         </button>
     };
-    row_actions(state, format!("secret:{key}"), reveal, secret_menu_items(state, s))
+    row_actions(
+        state,
+        format!("secret:{key}"),
+        reveal,
+        secret_menu_items(state, s),
+    )
 }
 
 /// The kebab menu items for a secret row: the OAuth actions (Refresh when a refresh token is held,
@@ -411,8 +447,11 @@ fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
         if info.has_refresh {
             let (refresh_name, refresh_project) = (s.name.clone(), s.project.clone());
             items.push(menu_item(state, "Refresh", false, move || {
-                apply_secrets(state, format!("Refreshed \u{201c}{refresh_name}\u{201d}."),
-                    fetch::refresh_secret(refresh_project.clone(), refresh_name.clone()));
+                apply_secrets(
+                    state,
+                    format!("Refreshed \u{201c}{refresh_name}\u{201d}."),
+                    fetch::refresh_secret(refresh_project.clone(), refresh_name.clone()),
+                );
             }));
         }
         // Re-authorize asking for the same access the secret already holds.
@@ -429,11 +468,16 @@ fn secret_menu_items(state: State, s: &SecretDto) -> Vec<AnyView> {
     }
     let (del_project, del_name, del_display) = (s.project.clone(), s.name.clone(), s.name.clone());
     items.push(menu_item(state, "Remove", true, move || {
-        if !confirm(&format!("Delete secret {del_display}? This is irreversible.")) {
+        if !confirm(&format!(
+            "Delete secret {del_display}? This is irreversible."
+        )) {
             return;
         }
-        apply_secrets(state, "Deleted secret.".to_string(),
-            fetch::remove_secret(del_project.clone(), del_name.clone()));
+        apply_secrets(
+            state,
+            "Deleted secret.".to_string(),
+            fetch::remove_secret(del_project.clone(), del_name.clone()),
+        );
     }));
     items
 }
@@ -517,7 +561,10 @@ fn oauth_initiate(pending: &PendingOAuth, requested_scope: Option<&str>) {
     // the token fragment — landing on the bare root would silently drop it.
     let redirect: String =
         js_sys::encode_uri_component(&format!("{origin}{}", Route::Secrets.path())).into();
-    let mut url = format!("{OAUTH_ROUTER}/login/{}?redirect={redirect}", pending.provider);
+    let mut url = format!(
+        "{OAUTH_ROUTER}/login/{}?redirect={redirect}",
+        pending.provider
+    );
     if let Some(scope) = requested_scope.filter(|s| !s.trim().is_empty()) {
         let enc: String = js_sys::encode_uri_component(scope).into();
         url.push_str("&scope=");
@@ -555,7 +602,9 @@ fn handle_oauth_return(state: State) {
 
     if let Some(err) = params.get("error") {
         let desc = params.get("error_description").unwrap_or(err);
-        state.flash.set(Some(Flash::err(format!("OAuth failed: {desc}"))));
+        state
+            .flash
+            .set(Some(Flash::err(format!("OAuth failed: {desc}"))));
         return;
     }
 
@@ -578,7 +627,9 @@ fn handle_oauth_return(state: State) {
         match fetch::set_oauth_secret(body).await {
             Ok(sec) => {
                 state.secrets.set(Some(sec));
-                state.flash.set(Some(Flash::ok(format!("Stored OAuth secret \u{201c}{name}\u{201d}."))));
+                state.flash.set(Some(Flash::ok(format!(
+                    "Stored OAuth secret \u{201c}{name}\u{201d}."
+                ))));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }

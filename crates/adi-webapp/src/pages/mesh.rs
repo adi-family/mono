@@ -1,15 +1,13 @@
 //! The Mesh page: this machine's id/ticket to share, the ports it exposes to peers, the peers
 //! authorized to reach them, and the local→peer forwards.
 
+use adi_ui::{Row as TableRow, Table};
 use adi_webapp_api::types::{MeshForward, MeshForwardRef, MeshState};
 use leptos::prelude::*;
-use adi_ui::{Row as TableRow, Table};
 
 use crate::fetch;
 use crate::state::{MeshForm, State};
-use crate::ui::{
-    apply_mutation, copy_row, Key, rows_or_placeholder, sort_rows, TextField,
-};
+use crate::ui::{Key, TextField, apply_mutation, copy_row, rows_or_placeholder, sort_rows};
 
 /// The exposed-ports table: one port per row, with a Remove control. A single named column, so
 /// it sorts but has no settings gear — there is nothing to hide or reorder.
@@ -177,11 +175,14 @@ fn mesh_state_data(mesh: RwSignal<Option<MeshState>>) -> &'static str {
 /// button to stop exposing it.
 fn mesh_allow_rows(state: State) -> AnyView {
     let table = state.tables.mesh_allow;
-    let mut ports =
-        match rows_or_placeholder(table, state.mesh.get().map(|v| v.allow), "No ports exposed — add one below to let peers reach it.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut ports = match rows_or_placeholder(
+        table,
+        state.mesh.get().map(|v| v.allow),
+        "No ports exposed — add one below to let peers reach it.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(
         &mut ports,
         table.sort.get(),
@@ -217,11 +218,14 @@ fn mesh_allow_rows(state: State) -> AnyView {
 /// Rows for the authorized-peers table: a note when the list is empty, else one row per id.
 fn mesh_peer_rows(state: State) -> AnyView {
     let table = state.tables.mesh_peers;
-    let mut peers =
-        match rows_or_placeholder(table, state.mesh.get().map(|v| v.authorized_peers), "No peer may use the exposed ports. Add a key to allow one.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut peers = match rows_or_placeholder(
+        table,
+        state.mesh.get().map(|v| v.authorized_peers),
+        "No peer may use the exposed ports. Add a key to allow one.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     // By the full token, not its shortened rendering — two ids that abbreviate alike still order.
     sort_rows(
         &mut peers,
@@ -261,11 +265,14 @@ fn mesh_peer_rows(state: State) -> AnyView {
 /// Rows for the forwards table: a placeholder, or one row per forward with a remove button.
 fn mesh_forward_rows(state: State) -> AnyView {
     let table = state.tables.mesh_forwards;
-    let mut forwards =
-        match rows_or_placeholder(table, state.mesh.get().map(|v| v.forwards), "No forwards — add one below to reach a peer's port locally.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut forwards = match rows_or_placeholder(
+        table,
+        state.mesh.get().map(|v| v.forwards),
+        "No forwards — add one below to reach a peer's port locally.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(
         &mut forwards,
         table.sort.get(),
@@ -341,4 +348,3 @@ fn short_id(s: &str) -> String {
         s.to_string()
     }
 }
-

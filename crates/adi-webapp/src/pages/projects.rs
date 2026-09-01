@@ -3,16 +3,16 @@
 
 use std::collections::HashMap;
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{NewProject, Project, ProjectsState, TasksState};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, ProjectsForm, State};
 use crate::ui::{
-    Key, TextField, apply_mutation, confirm, flash_view, fmt_date,
-    menu_item, row_actions, sort_rows, updated_text,
+    Key, TextField, apply_mutation, confirm, flash_view, fmt_date, menu_item, row_actions,
+    sort_rows, updated_text,
 };
 
 /// The live projects table's columns; the trailing blank one holds the row's Archive control.
@@ -193,10 +193,11 @@ fn project_rows(state: State, route: RwSignal<Route>, archived: bool) -> AnyView
     let rows = project_tree_rows(mine);
     if rows.is_empty() {
         return view! { <EmptyRow state=table>{if archived {
-                "Nothing archived."
-            } else {
-                "No projects yet \u{2014} register one below."
-            }}</EmptyRow> }.into_any();
+            "Nothing archived."
+        } else {
+            "No projects yet \u{2014} register one below."
+        }}</EmptyRow> }
+        .into_any();
     }
 
     rows.into_iter()

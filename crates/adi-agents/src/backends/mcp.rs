@@ -404,7 +404,10 @@ mod tests {
         let scope = scope_tools(None);
 
         assert_eq!(scope.builtins, "", "empty is the CLI's spelling of 'none'");
-        assert_eq!(scope.allowed, "mcp__adi", "ours is the one grant nobody asks for");
+        assert_eq!(
+            scope.allowed, "mcp__adi",
+            "ours is the one grant nobody asks for"
+        );
     }
 
     /// The grant: an agent's own list is what switches a built-in on, and it does both jobs at once
@@ -415,10 +418,22 @@ mod tests {
         let available: Vec<&str> = scope.builtins.split(',').collect();
 
         assert_eq!(available, ["Read", "Edit", "Workflow"], "named, so present");
-        assert!(scope.allowed.split(',').any(|t| t == "Read"), "{}", scope.allowed);
-        assert!(scope.allowed.split(',').any(|t| t == "mcp__adi"), "{}", scope.allowed);
+        assert!(
+            scope.allowed.split(',').any(|t| t == "Read"),
+            "{}",
+            scope.allowed
+        );
+        assert!(
+            scope.allowed.split(',').any(|t| t == "mcp__adi"),
+            "{}",
+            scope.allowed
+        );
         for off in ["CronCreate", "Skill", "WebFetch", "Task", "ToolSearch"] {
-            assert!(!available.contains(&off), "{off} was not asked for: {}", scope.builtins);
+            assert!(
+                !available.contains(&off),
+                "{off} was not asked for: {}",
+                scope.builtins
+            );
         }
 
         let scope = scope_tools(Some("Read Edit Write Bash Glob"));
@@ -458,7 +473,14 @@ mod tests {
         let scope = scope_tools(Some("Read,,mcp__adi, "));
 
         assert_eq!(scope.builtins, "Read", "an MCP name is not a built-in");
-        assert_eq!(scope.allowed.split(',').filter(|t| *t == "mcp__adi").count(), 1);
+        assert_eq!(
+            scope
+                .allowed
+                .split(',')
+                .filter(|t| *t == "mcp__adi")
+                .count(),
+            1
+        );
     }
 
     /// The handshake agrees with the client rather than insisting on a version of its own, and says

@@ -3,7 +3,7 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, tree_walking_analyzer, WithDocCommentOpt,
+    WithDocCommentOpt, declaration, node_location, node_text, tree_walking_analyzer,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -90,11 +90,7 @@ fn extract_lua_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
     }
 }
 
-fn parse_lua_function(
-    node: Node,
-    source: &str,
-    visibility: Visibility,
-) -> Option<ParsedSymbol> {
+fn parse_lua_function(node: Node, source: &str, visibility: Visibility) -> Option<ParsedSymbol> {
     declaration(
         node,
         source,
@@ -111,38 +107,36 @@ fn parse_lua_variables(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
 
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && (child.kind() == "variable_list" || child.kind() == "identifier") {
-                let visibility = if is_local {
-                    Visibility::Private
-                } else {
-                    Visibility::Public
-                };
+            && (child.kind() == "variable_list" || child.kind() == "identifier")
+        {
+            let visibility = if is_local {
+                Visibility::Private
+            } else {
+                Visibility::Public
+            };
 
-                if child.kind() == "identifier" {
-                    let name_text = node_text(child, source);
-                    symbols.push(
-                        ParsedSymbol::new(name_text, SymbolKind::Variable, node_location(child))
-                            .with_visibility(visibility)
-                            .with_doc_comment_opt(doc_comment.clone()),
-                    );
-                } else {
-                    for j in 0..child.child_count() as u32 {
-                        if let Some(var) = child.child(j)
-                            && var.kind() == "identifier" {
-                                let name_text = node_text(var, source);
-                                symbols.push(
-                                    ParsedSymbol::new(
-                                        name_text,
-                                        SymbolKind::Variable,
-                                        node_location(var),
-                                    )
-                                    .with_visibility(visibility)
-                                    .with_doc_comment_opt(doc_comment.clone()),
-                                );
-                            }
+            if child.kind() == "identifier" {
+                let name_text = node_text(child, source);
+                symbols.push(
+                    ParsedSymbol::new(name_text, SymbolKind::Variable, node_location(child))
+                        .with_visibility(visibility)
+                        .with_doc_comment_opt(doc_comment.clone()),
+                );
+            } else {
+                for j in 0..child.child_count() as u32 {
+                    if let Some(var) = child.child(j)
+                        && var.kind() == "identifier"
+                    {
+                        let name_text = node_text(var, source);
+                        symbols.push(
+                            ParsedSymbol::new(name_text, SymbolKind::Variable, node_location(var))
+                                .with_visibility(visibility)
+                                .with_doc_comment_opt(doc_comment.clone()),
+                        );
                     }
                 }
             }
+        }
     }
 }
 
@@ -151,15 +145,17 @@ fn parse_lua_assignment(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol
     let mut is_function = false;
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && child.kind() == "expression_list" {
-                for j in 0..child.child_count() as u32 {
-                    if let Some(expr) = child.child(j)
-                        && expr.kind() == "function_definition" {
-                            is_function = true;
-                            break;
-                        }
+            && child.kind() == "expression_list"
+        {
+            for j in 0..child.child_count() as u32 {
+                if let Some(expr) = child.child(j)
+                    && expr.kind() == "function_definition"
+                {
+                    is_function = true;
+                    break;
                 }
             }
+        }
     }
 
     if !is_function {
@@ -171,19 +167,20 @@ fn parse_lua_assignment(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol
 
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && child.kind() == "variable_list" {
-                for j in 0..child.child_count() as u32 {
-                    if let Some(var) = child.child(j) {
-                        let name_text = node_text(var, source);
-                        symbols.push(
-                            ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
-                                .with_signature(signature.clone())
-                                .with_visibility(Visibility::Public)
-                                .with_doc_comment_opt(doc_comment.clone()),
-                        );
-                    }
+            && child.kind() == "variable_list"
+        {
+            for j in 0..child.child_count() as u32 {
+                if let Some(var) = child.child(j) {
+                    let name_text = node_text(var, source);
+                    symbols.push(
+                        ParsedSymbol::new(name_text, SymbolKind::Function, node_location(node))
+                            .with_signature(signature.clone())
+                            .with_visibility(Visibility::Public)
+                            .with_doc_comment_opt(doc_comment.clone()),
+                    );
                 }
             }
+        }
     }
 }
 
@@ -318,4 +315,3 @@ fn is_keyword(name: &str) -> bool {
             | "self"
     )
 }
-

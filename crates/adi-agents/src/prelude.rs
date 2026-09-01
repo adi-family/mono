@@ -398,7 +398,9 @@ mod tests {
         assert!(block.contains("Already run for you"));
         assert!(block.contains("`Bash` tool calls"));
         assert!(block.contains("do not run the command again"));
-        assert!(block.contains("<pre-run command=\"adi-mono tasks show BUGBOUNTY-465\" status=\"ok\">"));
+        assert!(
+            block.contains("<pre-run command=\"adi-mono tasks show BUGBOUNTY-465\" status=\"ok\">")
+        );
         assert!(block.contains("Title: probe the auth flow"));
     }
 

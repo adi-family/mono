@@ -17,8 +17,8 @@
 //! is what the [provider trait](super::Provider) is for.
 
 use std::path::Path;
-use std::sync::Mutex;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
@@ -228,9 +228,8 @@ impl Backend for SqliteBackend {
         }
         tx.execute("delete from vectors where note_id = ?1", params![id])?;
         {
-            let mut insert = tx.prepare(
-                "insert into vectors (note_id, chunk, vector) values (?1, ?2, ?3)",
-            )?;
+            let mut insert =
+                tx.prepare("insert into vectors (note_id, chunk, vector) values (?1, ?2, ?3)")?;
             for (ix, vector) in vectors.iter().enumerate() {
                 insert.execute(params![id, ix as i64, encode_vector(vector)])?;
             }
@@ -299,9 +298,7 @@ impl Backend for SqliteBackend {
 
     fn clear(&self) -> Result<()> {
         let conn = self.conn()?;
-        conn.execute_batch(
-            "delete from vectors; delete from notes_fts; delete from notes;",
-        )?;
+        conn.execute_batch("delete from vectors; delete from notes_fts; delete from notes;")?;
         Ok(())
     }
 }
@@ -380,7 +377,12 @@ mod tests {
     #[test]
     fn a_note_survives_the_round_trip_whole() {
         let (_dir, backend) = backend();
-        let mut n = note("restart", "Restarting the panel", "kickstart -k", &["ops", "adi"]);
+        let mut n = note(
+            "restart",
+            "Restarting the panel",
+            "kickstart -k",
+            &["ops", "adi"],
+        );
         n.source = Some("docs/deploy.md".into());
         backend.put(&n).expect("put");
 
@@ -395,10 +397,15 @@ mod tests {
         let (_dir, backend) = backend();
         backend.put(&note("a", "A", "", &["ops"])).expect("put");
         backend.put(&note("b", "B", "", &["devops"])).expect("put");
-        backend.put(&note("c", "C", "", &["ops", "net"])).expect("put");
+        backend
+            .put(&note("c", "C", "", &["ops", "net"]))
+            .expect("put");
 
         let ops = backend
-            .list(&Query { tags: vec!["ops".into()], limit: None })
+            .list(&Query {
+                tags: vec!["ops".into()],
+                limit: None,
+            })
             .expect("list");
         let ids: Vec<&str> = ops.iter().map(|n| n.id.as_str()).collect();
         assert_eq!(ids.len(), 2, "devops must not match ops: {ids:?}");
@@ -406,7 +413,10 @@ mod tests {
 
         // Several tags are an AND.
         let both = backend
-            .list(&Query { tags: vec!["ops".into(), "net".into()], limit: None })
+            .list(&Query {
+                tags: vec!["ops".into(), "net".into()],
+                limit: None,
+            })
             .expect("list");
         assert_eq!(both.len(), 1);
         assert_eq!(both[0].id, "c");
@@ -425,7 +435,16 @@ mod tests {
             all.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
             vec!["new", "mid", "old"]
         );
-        assert_eq!(backend.list(&Query { tags: vec![], limit: Some(2) }).expect("list").len(), 2);
+        assert_eq!(
+            backend
+                .list(&Query {
+                    tags: vec![],
+                    limit: Some(2)
+                })
+                .expect("list")
+                .len(),
+            2
+        );
     }
 
     /// The contract that keeps a stale vector from ever being searched: rewriting a note takes
@@ -441,15 +460,26 @@ mod tests {
             chunks: 1,
             dimensions: 3,
         };
-        backend.set_vectors("a", &state, &[vec![1.0, 0.0, 0.0]]).expect("vectors");
-        assert_eq!(backend.search_vectors(&[1.0, 0.0, 0.0], 5).expect("search").len(), 1);
+        backend
+            .set_vectors("a", &state, &[vec![1.0, 0.0, 0.0]])
+            .expect("vectors");
+        assert_eq!(
+            backend
+                .search_vectors(&[1.0, 0.0, 0.0], 5)
+                .expect("search")
+                .len(),
+            1
+        );
 
         n.body = "second text".into();
         n.content_hash = content_hash(&n.embed_text());
         backend.put(&n).expect("re-put");
 
         assert!(
-            backend.search_vectors(&[1.0, 0.0, 0.0], 5).expect("search").is_empty(),
+            backend
+                .search_vectors(&[1.0, 0.0, 0.0], 5)
+                .expect("search")
+                .is_empty(),
             "the old vector outlived the text it described"
         );
         let read = backend.get("a").expect("get").expect("present");
@@ -469,13 +499,21 @@ mod tests {
             chunks: 1,
             dimensions: 2,
         };
-        backend.set_vectors("a", &state, &[vec![1.0, 0.0]]).expect("vectors");
+        backend
+            .set_vectors("a", &state, &[vec![1.0, 0.0]])
+            .expect("vectors");
 
         n.embedding = state;
         n.source = Some("docs/new.md".into());
         backend.put(&n).expect("re-put");
 
-        assert_eq!(backend.search_vectors(&[1.0, 0.0], 5).expect("search").len(), 1);
+        assert_eq!(
+            backend
+                .search_vectors(&[1.0, 0.0], 5)
+                .expect("search")
+                .len(),
+            1
+        );
         let read = backend.get("a").expect("get").expect("present");
         assert_eq!(read.source.as_deref(), Some("docs/new.md"));
         assert!(!read.is_stale("jina"), "the text never moved");
@@ -521,26 +559,49 @@ mod tests {
     fn full_text_search_finds_words_in_title_body_and_tags() {
         let (_dir, backend) = backend();
         backend
-            .put(&note("a", "Restarting the panel", "launchctl kickstart", &["ops"]))
+            .put(&note(
+                "a",
+                "Restarting the panel",
+                "launchctl kickstart",
+                &["ops"],
+            ))
             .expect("put");
-        backend.put(&note("b", "Unrelated", "nothing here", &[])).expect("put");
+        backend
+            .put(&note("b", "Unrelated", "nothing here", &[]))
+            .expect("put");
 
         for query in ["kickstart", "restarting", "ops"] {
             let hits = backend.search_text(query, 5).expect("search");
-            assert_eq!(hits.first().map(|h| h.id.as_str()), Some("a"), "query {query:?}");
+            assert_eq!(
+                hits.first().map(|h| h.id.as_str()),
+                Some("a"),
+                "query {query:?}"
+            );
         }
         // A query made only of noise is answered with nothing, not an FTS syntax error.
-        assert!(backend.search_text("\" NEAR( AND", 5).expect("search").is_empty());
+        assert!(
+            backend
+                .search_text("\" NEAR( AND", 5)
+                .expect("search")
+                .is_empty()
+        );
     }
 
     #[test]
     fn deleting_takes_the_vectors_and_the_text_index_with_it() {
         let (_dir, backend) = backend();
-        backend.put(&note("a", "Findable", "body", &[])).expect("put");
+        backend
+            .put(&note("a", "Findable", "body", &[]))
+            .expect("put");
         backend
             .set_vectors(
                 "a",
-                &EmbeddingState { model: Some("m".into()), hash: Some("h".into()), chunks: 1, dimensions: 2 },
+                &EmbeddingState {
+                    model: Some("m".into()),
+                    hash: Some("h".into()),
+                    chunks: 1,
+                    dimensions: 2,
+                },
                 &[vec![1.0, 0.0]],
             )
             .expect("vectors");
@@ -548,8 +609,18 @@ mod tests {
         assert!(backend.delete("a").expect("delete"));
         assert!(!backend.delete("a").expect("second delete"));
         assert_eq!(backend.count().expect("count"), 0);
-        assert!(backend.search_vectors(&[1.0, 0.0], 5).expect("search").is_empty());
-        assert!(backend.search_text("findable", 5).expect("search").is_empty());
+        assert!(
+            backend
+                .search_vectors(&[1.0, 0.0], 5)
+                .expect("search")
+                .is_empty()
+        );
+        assert!(
+            backend
+                .search_text("findable", 5)
+                .expect("search")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -559,14 +630,24 @@ mod tests {
         backend
             .set_vectors(
                 "a",
-                &EmbeddingState { model: Some("m".into()), hash: Some("h".into()), chunks: 1, dimensions: 2 },
+                &EmbeddingState {
+                    model: Some("m".into()),
+                    hash: Some("h".into()),
+                    chunks: 1,
+                    dimensions: 2,
+                },
                 &[vec![1.0, 0.0]],
             )
             .expect("vectors");
         backend.clear().expect("clear");
         assert_eq!(backend.count().expect("count"), 0);
         assert!(backend.search_text("a", 5).expect("search").is_empty());
-        assert!(backend.search_vectors(&[1.0, 0.0], 5).expect("search").is_empty());
+        assert!(
+            backend
+                .search_vectors(&[1.0, 0.0], 5)
+                .expect("search")
+                .is_empty()
+        );
     }
 
     #[test]
@@ -579,6 +660,9 @@ mod tests {
         }
         let reopened = SqliteBackend::open(&path).expect("reopen");
         assert_eq!(reopened.count().expect("count"), 1);
-        assert_eq!(reopened.get("a").expect("get").expect("present").tags, vec!["ops"]);
+        assert_eq!(
+            reopened.get("a").expect("get").expect("present").tags,
+            vec!["ops"]
+        );
     }
 }

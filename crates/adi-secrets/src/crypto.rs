@@ -51,7 +51,11 @@ pub(crate) fn load_or_create_key(secrets_dir: &Path) -> Result<[u8; KEY_LEN]> {
 
 /// Encrypt `plaintext` for the secret at `aad` (its `"<scope>/<name>"`), returning
 /// `(nonce, ciphertext)` both base64.
-pub(crate) fn encrypt(key: &[u8; KEY_LEN], aad: &str, plaintext: &[u8]) -> Result<(String, String)> {
+pub(crate) fn encrypt(
+    key: &[u8; KEY_LEN],
+    aad: &str,
+    plaintext: &[u8],
+) -> Result<(String, String)> {
     let cipher = XChaCha20Poly1305::new(Key::from_slice(key));
     let nonce = XChaCha20Poly1305::generate_nonce(&mut OsRng);
     let ciphertext = cipher
@@ -68,7 +72,12 @@ pub(crate) fn encrypt(key: &[u8; KEY_LEN], aad: &str, plaintext: &[u8]) -> Resul
 
 /// Decrypt, verifying the authentication tag and the `aad` binding. Wrong key, a tampered
 /// value, or a value moved out of its file all surface as [`Error::Decrypt`].
-pub(crate) fn decrypt(key: &[u8; KEY_LEN], aad: &str, nonce_b64: &str, ct_b64: &str) -> Result<Vec<u8>> {
+pub(crate) fn decrypt(
+    key: &[u8; KEY_LEN],
+    aad: &str,
+    nonce_b64: &str,
+    ct_b64: &str,
+) -> Result<Vec<u8>> {
     let nonce_bytes = B64.decode(nonce_b64).map_err(|_| Error::Decrypt)?;
     if nonce_bytes.len() != NONCE_LEN {
         return Err(Error::Decrypt);
@@ -170,7 +179,10 @@ mod tests {
     #[test]
     fn a_bad_key_file_is_rejected_not_rotated() {
         assert!(matches!(decode_key("not-base64!!"), Err(Error::Crypto(_))));
-        assert!(matches!(decode_key(&B64.encode([0u8; 16])), Err(Error::Crypto(_))));
+        assert!(matches!(
+            decode_key(&B64.encode([0u8; 16])),
+            Err(Error::Crypto(_))
+        ));
         assert!(decode_key(&B64.encode([7u8; 32])).is_ok());
     }
 }

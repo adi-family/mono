@@ -105,10 +105,10 @@ pub use adi_knowledge::{Access, BaseId, Reader, Scope};
 pub use embed::OllamaEmbedder;
 pub use error::{Error, Result};
 pub use judge::{Judge, JudgeError, Judgement, NoJudge, OllamaJudge, Relation, Side};
-pub use ollama::Ollama;
 pub use model::{
-    Committed, Event, Fact, Neighbour, Pending, Reference, Stale, Staging, Truncation, Verdict,
+    Committed, Event, Fact, Neighbour, Pending, Reference, Staging, Stale, Truncation, Verdict,
 };
+pub use ollama::Ollama;
 
 /// A batch's authorship, provenance, and kind — see [`Incoming`].
 pub use self::Incoming as IncomingBatch;
@@ -417,7 +417,8 @@ impl FactStore {
             .judge
             .extract(text)
             .map_err(|e| Error::Judge(e.to_string()))?;
-        let note_id = note_id.map_or_else(|| format!("note_{:x}", db::now_ms()), ToString::to_string);
+        let note_id =
+            note_id.map_or_else(|| format!("note_{:x}", db::now_ms()), ToString::to_string);
         self.stage(base, incoming, Some((note_id.as_str(), text)), facts)
     }
 
@@ -533,17 +534,22 @@ impl FactStore {
         let cos = adi_knowledge::backend::cosine;
         // A pair is identified by the staged fact and whatever sits on the other side, so the two
         // directions can propose the same pair and it is still one row.
-        let mut chosen: std::collections::BTreeSet<(usize, Other)> = std::collections::BTreeSet::new();
+        let mut chosen: std::collections::BTreeSet<(usize, Other)> =
+            std::collections::BTreeSet::new();
 
         // Direction one: what each staged fact holds closest.
         for i in 0..facts.len() {
-            let mut ranked: Vec<(f32, Other)> = Vec::with_capacity(base_vectors.len() + facts.len());
+            let mut ranked: Vec<(f32, Other)> =
+                Vec::with_capacity(base_vectors.len() + facts.len());
             for (b, (_, vector)) in base_vectors.iter().enumerate() {
                 ranked.push((cos(&staged_vectors[i], vector), Other::Base(b)));
             }
             for j in 0..facts.len() {
                 if j != i {
-                    ranked.push((cos(&staged_vectors[i], &staged_vectors[j]), Other::Staged(j)));
+                    ranked.push((
+                        cos(&staged_vectors[i], &staged_vectors[j]),
+                        Other::Staged(j),
+                    ));
                 }
             }
             for (_, other) in take_top(ranked, k) {
@@ -557,7 +563,8 @@ impl FactStore {
         // ~9k dot products) and is the first thing to cache — a per-node K-th similarity,
         // invalidated exactly like a vector — if a base ever reaches tens of thousands.
         for (b, (_, bvec)) in base_vectors.iter().enumerate() {
-            let mut ranked: Vec<(f32, Other)> = Vec::with_capacity(base_vectors.len() + facts.len());
+            let mut ranked: Vec<(f32, Other)> =
+                Vec::with_capacity(base_vectors.len() + facts.len());
             for (c, (_, cvec)) in base_vectors.iter().enumerate() {
                 if c != b {
                     // A base-to-base pair was ruled on when the later of the two was inserted;
@@ -659,12 +666,10 @@ impl FactStore {
         self.reader.require_write(base)?;
         let db = self.read_db(base)?;
         require_open(&db, tx)?;
-        let row = db
-            .pair(tx, pair)?
-            .ok_or_else(|| Error::NoSuchPair {
-                tx: tx.to_string(),
-                pair,
-            })?;
+        let row = db.pair(tx, pair)?.ok_or_else(|| Error::NoSuchPair {
+            tx: tx.to_string(),
+            pair,
+        })?;
         let (mine, theirs) = (row.mine(), row.theirs());
 
         let fact = fact.map(str::trim).filter(|f| !f.is_empty());

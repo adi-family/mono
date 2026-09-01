@@ -12,7 +12,10 @@ mod tests;
 
 use crate::error::Result;
 use crate::structure::Structure;
-use crate::types::{File, FileId, FileInfo, Location, ReferenceKind, Symbol, SymbolId, SymbolKind, Reference, SymbolUsage, Tree, Status};
+use crate::types::{
+    File, FileId, FileInfo, Location, Reference, ReferenceKind, Status, Symbol, SymbolId,
+    SymbolKind, SymbolUsage, Tree,
+};
 use std::path::{Path, PathBuf};
 
 /// A reference as the parser saw it: a symbol, a name it mentions, and where.

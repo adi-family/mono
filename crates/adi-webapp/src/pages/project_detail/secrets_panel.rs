@@ -2,8 +2,8 @@
 //! shared list at `/api/secrets`), with the same Reveal / Remove actions as the global Secrets
 //! page, plus a create form pre-scoped to the open project.
 
+use adi_ui::Table;
 use leptos::prelude::*;
-use adi_ui::{Table};
 
 use crate::pages::secrets::{rows_view, secret_create_form};
 use crate::state::{SecretsForm, State};

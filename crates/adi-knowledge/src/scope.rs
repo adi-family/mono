@@ -286,8 +286,9 @@ impl Reader {
         }
         match &base.scope {
             Scope::Global => Some(Access::Write),
-            Scope::Project { project } => (self.project.as_deref() == Some(project.as_str()))
-                .then_some(Access::Write),
+            Scope::Project { project } => {
+                (self.project.as_deref() == Some(project.as_str())).then_some(Access::Write)
+            }
             Scope::Agent { agent } => match self.agent.as_deref() {
                 Some(me) if me == agent => Some(Access::Write),
                 // Every other agent may consult it. This is the point of the level.
@@ -363,11 +364,11 @@ mod tests {
 
     #[test]
     fn a_bare_scope_is_that_scopes_default_base() {
-        assert_eq!("global".parse::<BaseId>().unwrap(), BaseId::global_default());
         assert_eq!(
-            "project:acme".parse::<BaseId>().unwrap().name,
-            DEFAULT_BASE
+            "global".parse::<BaseId>().unwrap(),
+            BaseId::global_default()
         );
+        assert_eq!("project:acme".parse::<BaseId>().unwrap().name, DEFAULT_BASE);
     }
 
     #[test]
@@ -438,7 +439,11 @@ mod tests {
             Some(Access::Read)
         );
         assert!(Reader::agent("reviewer", None).require_read(&base).is_ok());
-        assert!(Reader::agent("reviewer", None).require_write(&base).is_err());
+        assert!(
+            Reader::agent("reviewer", None)
+                .require_write(&base)
+                .is_err()
+        );
         // Nobody in particular is not "some agent" — an unattributed caller gets nothing.
         assert_eq!(Reader::project("acme").access(&base), None);
     }

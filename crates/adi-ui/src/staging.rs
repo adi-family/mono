@@ -44,7 +44,10 @@ impl Block {
     /// A call block.
     #[must_use]
     pub fn call(name: impl Into<String>, params: Vec<(String, String)>) -> Self {
-        Self::Call { name: name.into(), params }
+        Self::Call {
+            name: name.into(),
+            params,
+        }
     }
 
     /// Whether this block is a call — which is the whole question the stop reason turns on.

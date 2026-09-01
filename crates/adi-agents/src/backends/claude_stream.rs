@@ -147,10 +147,7 @@ fn absorb_assistant(event: &Value, steps: &mut Vec<Step>, tool_index: &mut HashM
                     .and_then(Value::as_str)
                     .unwrap_or("tool")
                     .to_string();
-                let input = block
-                    .get("input")
-                    .map(compact_json)
-                    .unwrap_or_default();
+                let input = block.get("input").map(compact_json).unwrap_or_default();
                 steps.push(Step::Tool {
                     name,
                     input,
@@ -178,7 +175,10 @@ fn absorb_tool_results(event: &Value, steps: &mut [Step], tool_index: &HashMap<S
         let Some(&idx) = tool_index.get(id) else {
             continue;
         };
-        let is_error = block.get("is_error").and_then(Value::as_bool).unwrap_or(false);
+        let is_error = block
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let result = tool_result_text(block.get("content"));
         if let Some(Step::Tool { status, output, .. }) = steps.get_mut(idx) {
             *status = if is_error {
@@ -233,8 +233,12 @@ fn parse_metrics(event: &Value) -> TurnMetrics {
         })
         .unwrap_or_default();
     TurnMetrics {
-        input_tokens: usage.and_then(|u| u.get("input_tokens")).and_then(Value::as_u64),
-        output_tokens: usage.and_then(|u| u.get("output_tokens")).and_then(Value::as_u64),
+        input_tokens: usage
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(Value::as_u64),
+        output_tokens: usage
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(Value::as_u64),
         // Dollars as reported, kept as whole micro-dollars: [`TurnMetrics`] is `Eq`, and a float
         // there would make every poll-change comparison a float comparison. Rounding at the sixth
         // decimal loses nothing that was ever billed.
@@ -245,7 +249,10 @@ fn parse_metrics(event: &Value) -> TurnMetrics {
         duration_ms: event.get("duration_ms").and_then(Value::as_u64),
         num_turns: event.get("num_turns").and_then(Value::as_u64),
         permission_denials: denials,
-        is_error: event.get("is_error").and_then(Value::as_bool).unwrap_or(false),
+        is_error: event
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         // The engine's own word for how it ended. `subtype` is the older spelling of the same
         // thing and stands in for builds that don't send `terminal_reason`.
         terminal_reason: event
@@ -290,7 +297,12 @@ mod tests {
         let c = parse(TOOL_TURN.as_bytes());
         assert_eq!(c.text, "It printed hi.");
         assert_eq!(c.steps.len(), 2);
-        assert_eq!(c.steps[0], Step::Thinking { text: "I should run echo.".into() });
+        assert_eq!(
+            c.steps[0],
+            Step::Thinking {
+                text: "I should run echo.".into()
+            }
+        );
         assert_eq!(
             c.steps[1],
             Step::Tool {
@@ -314,7 +326,13 @@ mod tests {
         let c = parse(partial.join("\n").as_bytes());
         assert!(c.metrics.is_none());
         assert_eq!(c.steps.len(), 2);
-        assert!(matches!(c.steps[1], Step::Tool { status: ToolStatus::Running, .. }));
+        assert!(matches!(
+            c.steps[1],
+            Step::Tool {
+                status: ToolStatus::Running,
+                ..
+            }
+        ));
     }
 
     // A turn that talks *between* tool calls: says something, runs a tool, says something else, runs
@@ -346,14 +364,18 @@ mod tests {
         assert_eq!(
             c.steps,
             vec![
-                Step::Message { text: "Let me look at the config.".into() },
+                Step::Message {
+                    text: "Let me look at the config.".into()
+                },
                 Step::Tool {
                     name: "Read".into(),
                     input: r#"{"path":"a.toml"}"#.into(),
                     status: ToolStatus::Ok,
                     output: "port = 80".into(),
                 },
-                Step::Message { text: "Port 80 is taken. Trying another.".into() },
+                Step::Message {
+                    text: "Port 80 is taken. Trying another.".into()
+                },
                 Step::Tool {
                     name: "Bash".into(),
                     input: r#"{"command":"lsof -i:81"}"#.into(),
@@ -372,8 +394,17 @@ mod tests {
         let partial: Vec<&str> = CHATTY_TURN.lines().take(4).collect();
         let c = parse(partial.join("\n").as_bytes());
         assert_eq!(c.text, "Port 80 is taken. Trying another.");
-        assert_eq!(c.steps.len(), 2, "the first message and the tool it introduced");
-        assert_eq!(c.steps[0], Step::Message { text: "Let me look at the config.".into() });
+        assert_eq!(
+            c.steps.len(),
+            2,
+            "the first message and the tool it introduced"
+        );
+        assert_eq!(
+            c.steps[0],
+            Step::Message {
+                text: "Let me look at the config.".into()
+            }
+        );
     }
 
     /// One message split by the engine across several `text` blocks (no tool call between them) is
@@ -404,7 +435,12 @@ mod tests {
         let c = parse(log.as_bytes());
         assert_eq!(c.text, "Done.");
         assert_eq!(c.steps.len(), 2);
-        assert_eq!(c.steps[0], Step::Message { text: "Running it now.".into() });
+        assert_eq!(
+            c.steps[0],
+            Step::Message {
+                text: "Running it now.".into()
+            }
+        );
     }
 
     #[test]

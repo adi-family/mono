@@ -49,7 +49,11 @@ pub struct ToolDecl {
 impl ToolDecl {
     #[must_use]
     pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
-        Self { name: name.into(), description: description.into(), params: Vec::new() }
+        Self {
+            name: name.into(),
+            description: description.into(),
+            params: Vec::new(),
+        }
     }
 
     /// The tool's parameters, in declaration order.
@@ -150,7 +154,11 @@ pub fn Simulator(
     let current = Signal::derive(move || {
         let tools = tools.get();
         let picked = picked.get();
-        tools.iter().find(|t| t.name == picked).or_else(|| tools.first()).cloned()
+        tools
+            .iter()
+            .find(|t| t.name == picked)
+            .or_else(|| tools.first())
+            .cloned()
     });
     // Name the fallback out loud, once the tools have arrived. Without this the `<select>` sits
     // on a value no option has and renders blank, while the form under it is already the first

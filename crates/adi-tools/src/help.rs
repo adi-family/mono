@@ -237,7 +237,10 @@ mod tests {
 
     /// A shell command printing `text` for exactly the argument list `want`, failing otherwise —
     /// stands in for a tool that implements one of the two help conventions and not the other.
-    fn answering(want: &'static [&'static str], text: &'static str) -> impl FnMut(&[&str]) -> Option<Command> {
+    fn answering(
+        want: &'static [&'static str],
+        text: &'static str,
+    ) -> impl FnMut(&[&str]) -> Option<Command> {
         move |args: &[&str]| {
             let mut cmd = Command::new("sh");
             if args == want {
@@ -257,7 +260,11 @@ mod tests {
         // Both conventions answer; the model-facing one is the one that reaches the prompt.
         let both = |args: &[&str]| {
             let mut cmd = Command::new("sh");
-            let text = if args == ["llm", "help"] { "for the model" } else { "for a human" };
+            let text = if args == ["llm", "help"] {
+                "for the model"
+            } else {
+                "for a human"
+            };
             cmd.args(["-c", &format!("printf '%s' '{text}'")]);
             Some(cmd)
         };
@@ -271,7 +278,13 @@ mod tests {
         let dir = scratch("falls-back");
         let script = dir.join("script.sh");
         std::fs::write(&script, "echo hi\n").expect("write");
-        let got = text(&dir, &tool(), &script, answering(&["help"], "usage: greet"), far_future());
+        let got = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["help"], "usage: greet"),
+            far_future(),
+        );
         assert_eq!(got.as_deref(), Some("usage: greet"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -299,7 +312,13 @@ mod tests {
         let dir = scratch("silent");
         let script = dir.join("script.sh");
         std::fs::write(&script, "echo hi\n").expect("write");
-        let got = text(&dir, &tool(), &script, answering(&["nope"], "x"), far_future());
+        let got = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["nope"], "x"),
+            far_future(),
+        );
         assert_eq!(got, None);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -309,11 +328,23 @@ mod tests {
         let dir = scratch("cached");
         let script = dir.join("script.sh");
         std::fs::write(&script, "echo hi\n").expect("write");
-        let first = text(&dir, &tool(), &script, answering(&["help"], "usage: greet"), far_future());
+        let first = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["help"], "usage: greet"),
+            far_future(),
+        );
         assert_eq!(first.as_deref(), Some("usage: greet"));
 
         // The tool now answers something else. The cache is what the prompt gets, so nothing ran.
-        let got = text(&dir, &tool(), &script, answering(&["help"], "different"), far_future());
+        let got = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["help"], "different"),
+            far_future(),
+        );
         assert_eq!(got.as_deref(), Some("usage: greet"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -323,11 +354,23 @@ mod tests {
         let dir = scratch("invalidates");
         let script = dir.join("script.sh");
         std::fs::write(&script, "echo hi\n").expect("write");
-        let _ = text(&dir, &tool(), &script, answering(&["help"], "old help"), far_future());
+        let _ = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["help"], "old help"),
+            far_future(),
+        );
 
         // A different size is a different key, so the stale entry is not reused.
         std::fs::write(&script, "echo hi there, at length\n").expect("rewrite");
-        let got = text(&dir, &tool(), &script, answering(&["help"], "new help"), far_future());
+        let got = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["help"], "new help"),
+            far_future(),
+        );
         assert_eq!(got.as_deref(), Some("new help"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -343,7 +386,13 @@ mod tests {
             None
         );
         // Capture it, then ask again past the deadline: the cached answer needs no spawn.
-        let _ = text(&dir, &tool(), &script, answering(&["help"], "usage"), far_future());
+        let _ = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["help"], "usage"),
+            far_future(),
+        );
         assert_eq!(
             text(&dir, &tool(), &script, answering(&["help"], "usage"), past).as_deref(),
             Some("usage")
@@ -365,14 +414,23 @@ mod tests {
         };
         let budget = Duration::from_millis(700);
         let started = Instant::now();
-        assert_eq!(text(&dir, &tool(), &script, hang, Instant::now() + budget), None);
+        assert_eq!(
+            text(&dir, &tool(), &script, hang, Instant::now() + budget),
+            None
+        );
         assert!(
             started.elapsed() < budget * 3,
             "waited on the tool: {:?}",
             started.elapsed()
         );
         // Nothing was concluded, so a later launch still finds the tool's real help.
-        let got = text(&dir, &tool(), &script, answering(&["help"], "usage"), far_future());
+        let got = text(
+            &dir,
+            &tool(),
+            &script,
+            answering(&["help"], "usage"),
+            far_future(),
+        );
         assert_eq!(got.as_deref(), Some("usage"));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -381,7 +439,11 @@ mod tests {
     fn an_overlong_help_is_cut_on_a_line_boundary() {
         let long = "a line of help\n".repeat(500);
         let capped = cap(&long).expect("some");
-        assert!(capped.chars().count() <= MAX_HELP_CHARS + 32, "{}", capped.len());
+        assert!(
+            capped.chars().count() <= MAX_HELP_CHARS + 32,
+            "{}",
+            capped.len()
+        );
         assert!(capped.ends_with("… (help truncated)"));
         assert!(cap("   ").is_none());
     }

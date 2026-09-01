@@ -60,9 +60,10 @@ impl EntryPointDetector {
 
     fn is_test_function(&self, symbol: &Symbol) -> bool {
         if let Some(doc) = &symbol.doc_comment
-            && (doc.contains("#[test]") || doc.contains("@Test")) {
-                return true;
-            }
+            && (doc.contains("#[test]") || doc.contains("@Test"))
+        {
+            return true;
+        }
 
         if symbol.name.starts_with("test_") || symbol.name.starts_with("Test") {
             return true;

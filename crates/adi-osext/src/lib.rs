@@ -50,8 +50,7 @@ pub fn pid_alive(pid: u32) -> bool {
             kill(pid, 0)
         };
         // `EPERM` is the kernel saying "it exists, but it isn't yours" — alive either way.
-        sent == 0
-            || std::io::Error::last_os_error().kind() == std::io::ErrorKind::PermissionDenied
+        sent == 0 || std::io::Error::last_os_error().kind() == std::io::ErrorKind::PermissionDenied
     }
     #[cfg(windows)]
     {

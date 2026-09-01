@@ -3,8 +3,8 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, signature_before, tree_walking_analyzer,
-    WithDocCommentOpt,
+    WithDocCommentOpt, declaration, node_location, node_text, signature_before,
+    tree_walking_analyzer,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -133,23 +133,25 @@ fn parse_csharp_fields(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
 
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && child.kind() == "variable_declaration" {
-                for j in 0..child.child_count() as u32 {
-                    if let Some(declarator) = child.child(j)
-                        && declarator.kind() == "variable_declarator"
-                            && let Some(name) = declarator.child_by_field_name("name") {
-                                symbols.push(
-                                    ParsedSymbol::new(
-                                        node_text(name, source),
-                                        SymbolKind::Field,
-                                        node_location(declarator),
-                                    )
-                                    .with_visibility(visibility)
-                                    .with_doc_comment_opt(doc_comment.clone()),
-                                );
-                            }
+            && child.kind() == "variable_declaration"
+        {
+            for j in 0..child.child_count() as u32 {
+                if let Some(declarator) = child.child(j)
+                    && declarator.kind() == "variable_declarator"
+                    && let Some(name) = declarator.child_by_field_name("name")
+                {
+                    symbols.push(
+                        ParsedSymbol::new(
+                            node_text(name, source),
+                            SymbolKind::Field,
+                            node_location(declarator),
+                        )
+                        .with_visibility(visibility)
+                        .with_doc_comment_opt(doc_comment.clone()),
+                    );
                 }
             }
+        }
     }
 }
 
@@ -179,16 +181,17 @@ fn collect_csharp_references(node: Node, source: &str, refs: &mut Vec<ParsedRefe
         "identifier" | "generic_name" => {
             let parent = node.parent();
             if let Some(p) = parent
-                && (p.kind() == "type" || p.kind() == "base_list") {
-                    let name = node_text(node, source);
-                    if !is_primitive_type(&name) {
-                        refs.push(ParsedReference::new(
-                            name,
-                            ReferenceKind::TypeReference,
-                            node_location(node),
-                        ));
-                    }
+                && (p.kind() == "type" || p.kind() == "base_list")
+            {
+                let name = node_text(node, source);
+                if !is_primitive_type(&name) {
+                    refs.push(ParsedReference::new(
+                        name,
+                        ReferenceKind::TypeReference,
+                        node_location(node),
+                    ));
                 }
+            }
         }
         "member_access_expression" => {
             if let Some(name) = node.child_by_field_name("name") {
@@ -211,13 +214,14 @@ fn collect_csharp_references(node: Node, source: &str, refs: &mut Vec<ParsedRefe
         "base_list" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
-                    && (child.kind() == "identifier" || child.kind() == "generic_name") {
-                        refs.push(ParsedReference::new(
-                            node_text(child, source),
-                            ReferenceKind::Inheritance,
-                            node_location(child),
-                        ));
-                    }
+                    && (child.kind() == "identifier" || child.kind() == "generic_name")
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(child, source),
+                        ReferenceKind::Inheritance,
+                        node_location(child),
+                    ));
+                }
             }
         }
         _ => {}
@@ -289,4 +293,3 @@ fn is_common_method(name: &str) -> bool {
         "ToString" | "Equals" | "GetHashCode" | "GetType" | "WriteLine" | "Write" | "ReadLine"
     )
 }
-

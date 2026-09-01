@@ -38,7 +38,10 @@ enum Block {
     /// Level 1-6, already stripped of its hashes.
     Heading(usize, String),
     Code(Lang, String),
-    List { ordered: bool, items: Vec<String> },
+    List {
+        ordered: bool,
+        items: Vec<String>,
+    },
     Quote(String),
     Rule,
     /// A header row, the body under it, and one alignment per column.
@@ -613,9 +616,11 @@ mod tests {
     #[test]
     fn a_wrapped_item_stays_one_item() {
         assert_eq!(
-            shapes("- **Lead in.** and the rest
+            shapes(
+                "- **Lead in.** and the rest
   of the sentence
-- second"),
+- second"
+            ),
             ["ul:**Lead in.** and the rest of the sentence,second"],
         );
     }
@@ -624,26 +629,40 @@ mod tests {
     /// heading, fence, quote or table that follows it.
     #[test]
     fn continuation_ends_at_the_next_block() {
-        assert_eq!(shapes("- one
-  more
-# H"), ["ul:one more", "h1:H"]);
         assert_eq!(
-            shapes("- one
+            shapes(
+                "- one
+  more
+# H"
+            ),
+            ["ul:one more", "h1:H"]
+        );
+        assert_eq!(
+            shapes(
+                "- one
   more
 ```rs
 x
-```"),
+```"
+            ),
             ["ul:one more", "code:x"],
         );
-        assert_eq!(shapes("- one
-  more
-> q"), ["ul:one more", "quote:q"]);
         assert_eq!(
-            shapes("- one
+            shapes(
+                "- one
+  more
+> q"
+            ),
+            ["ul:one more", "quote:q"]
+        );
+        assert_eq!(
+            shapes(
+                "- one
   more
 | a |
 | - |
-| 1 |"),
+| 1 |"
+            ),
             ["ul:one more", "table:[ a ] 1 "],
         );
     }
@@ -652,10 +671,20 @@ x
     /// — continuation must not have quietly merged either case into the item above.
     #[test]
     fn a_blank_line_and_the_other_marker_both_still_end_the_list() {
-        assert_eq!(shapes("- one
+        assert_eq!(
+            shapes(
+                "- one
 
-after"), ["ul:one", "p:after"]);
-        assert_eq!(shapes("- one
-1. two"), ["ul:one", "ol:two"]);
+after"
+            ),
+            ["ul:one", "p:after"]
+        );
+        assert_eq!(
+            shapes(
+                "- one
+1. two"
+            ),
+            ["ul:one", "ol:two"]
+        );
     }
 }

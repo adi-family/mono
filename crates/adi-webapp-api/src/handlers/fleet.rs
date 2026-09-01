@@ -258,12 +258,15 @@ pub fn fleet_dismiss_nickname(store: &Config, body: &[u8]) -> Response {
     };
     fleet_edit(store, move |registry| {
         require_paired(registry, &petname)?;
-        registry.dismiss_nickname(&petname).map(|_| ()).ok_or_else(|| {
-            error(
-                409,
-                &format!("node {petname:?} has not declared a new nickname"),
-            )
-        })
+        registry
+            .dismiss_nickname(&petname)
+            .map(|_| ())
+            .ok_or_else(|| {
+                error(
+                    409,
+                    &format!("node {petname:?} has not declared a new nickname"),
+                )
+            })
     })
 }
 
@@ -433,7 +436,13 @@ mod tests {
     #[test]
     fn fleet_reports_every_node_with_all_three_of_its_names() {
         let store = temp_store();
-        pair(&store, "laptop-b", "laptop-b", &["http:*", "ctl:read"], true);
+        pair(
+            &store,
+            "laptop-b",
+            "laptop-b",
+            &["http:*", "ctl:read"],
+            true,
+        );
         pair(&store, "desk", "workstation", &[], false);
 
         let v = ok_body(&fleet(&store));
@@ -504,7 +513,10 @@ mod tests {
             );
         }
         for field in ["salt", "digest", "auth"] {
-            assert!(!body.contains(field), "the response names {field:?}: {body}");
+            assert!(
+                !body.contains(field),
+                "the response names {field:?}: {body}"
+            );
         }
     }
 
@@ -514,10 +526,7 @@ mod tests {
         pair(&store, "main", "main", &["http:nosh"], false);
         pair(&store, "desk", "desk", &[], false);
 
-        let v = ok_body(&fleet_rename(
-            &store,
-            br#"{"petname":"main","to":"work"}"#,
-        ));
+        let v = ok_body(&fleet_rename(&store, br#"{"petname":"main","to":"work"}"#));
         let node = v["nodes"]
             .as_array()
             .unwrap()
@@ -570,7 +579,10 @@ mod tests {
             .map(|n| n["petname"].as_str().unwrap())
             .collect();
         assert_eq!(names, ["desk"]);
-        assert_eq!(ok_body(&fleet(&store))["nodes"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            ok_body(&fleet(&store))["nodes"].as_array().unwrap().len(),
+            1
+        );
 
         // Unpairing what is already gone is a 404, not a silent success.
         assert_eq!(
@@ -678,10 +690,7 @@ mod tests {
         assert_eq!(v["nodes"][0]["nickname"], "laptop-b");
         assert_eq!(v["nodes"][0]["pending_nickname"], "desk");
 
-        let v = ok_body(&fleet_accept_nickname(
-            &store,
-            br#"{"petname":"laptop-b"}"#,
-        ));
+        let v = ok_body(&fleet_accept_nickname(&store, br#"{"petname":"laptop-b"}"#));
         let node = &v["nodes"][0];
         assert_eq!(node["petname"], "desk", "the petname moved to the new name");
         assert_eq!(node["nickname"], "desk");
@@ -789,7 +798,10 @@ mod tests {
 
         // The QR is the token, not a description of it.
         assert!(invite.svg.starts_with("<svg "), "{}", &invite.svg[..40]);
-        assert!(!invite.svg.contains(&invite.token), "an SVG is not a text field");
+        assert!(
+            !invite.svg.contains(&invite.token),
+            "an SVG is not a text field"
+        );
 
         // A second call is a second invite: minting is never idempotent, or two nodes would race
         // for one nonce and the second would be told it was replayed.
@@ -802,7 +814,11 @@ mod tests {
         let store = temp_store();
         let response = mint(&store, None, 1_700_000_000).expect_err("nothing to dial");
         assert_eq!(response.status, 409, "{}", response.body);
-        assert!(response.body.contains("mesh is not running"), "{}", response.body);
+        assert!(
+            response.body.contains("mesh is not running"),
+            "{}",
+            response.body
+        );
         // And nothing was written: a refusal must not leave a nonce behind.
         let book = adi_mesh::join::InviteBook::load_from(&store).expect("the book");
         assert!(book.invites.is_empty());
@@ -819,7 +835,10 @@ mod tests {
 
         assert_eq!(node.app_host(), "app.laptop-b.n.adi");
         let short = node.key_short();
-        assert!(short.starts_with("llllllll") && short.ends_with("tail"), "{short}");
+        assert!(
+            short.starts_with("llllllll") && short.ends_with("tail"),
+            "{short}"
+        );
         assert!(short.len() < node.key.len());
 
         // A key short enough to read whole is left alone.

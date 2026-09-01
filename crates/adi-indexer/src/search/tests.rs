@@ -5,8 +5,8 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::search::usearch::UsearchIndex;
     use crate::search::VectorIndex;
+    use crate::search::usearch::UsearchIndex;
     use tempfile::tempdir;
 
     fn create_test_index() -> (UsearchIndex, tempfile::TempDir) {

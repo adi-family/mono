@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 // See LICENSE file for details
 
-use crate::types::{SymbolId, Symbol};
+use crate::types::{Symbol, SymbolId};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

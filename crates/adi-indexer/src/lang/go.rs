@@ -22,11 +22,7 @@ tree_walking_analyzer!(
 );
 
 fn detect_visibility(name: &str) -> Visibility {
-    if name
-        .chars()
-        .next()
-        .is_some_and(char::is_uppercase)
-    {
+    if name.chars().next().is_some_and(char::is_uppercase) {
         Visibility::Public
     } else {
         Visibility::Private
@@ -69,72 +65,72 @@ fn extract_go_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>)
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && child.kind() == "type_spec"
-                        && let Some(name) = child.child_by_field_name("name") {
-                            let name_text = node_text(name, source);
-                            let type_node = child.child_by_field_name("type");
-                            let kind = match type_node.map(|t| t.kind()) {
-                                Some("struct_type") => SymbolKind::Struct,
-                                Some("interface_type") => SymbolKind::Interface,
-                                _ => SymbolKind::Type,
-                            };
-                            let mut children = Vec::new();
-                            if let Some(type_def) = type_node {
-                                if type_def.kind() == "struct_type" {
-                                    if let Some(fields) = type_def.child_by_field_name("fields") {
-                                        for j in 0..fields.child_count() as u32 {
-                                            if let Some(field) = fields.child(j)
-                                                && field.kind() == "field_declaration"
-                                                    && let Some(field_name) =
-                                                        field.child_by_field_name("name")
-                                                    {
-                                                        children.push(ParsedSymbol::new(
-                                                            node_text(field_name, source),
-                                                            SymbolKind::Field,
-                                                            node_location(field),
-                                                        ));
-                                                    }
-                                        }
-                                    }
-                                } else if type_def.kind() == "interface_type" {
-                                    for j in 0..type_def.child_count() as u32 {
-                                        if let Some(member) = type_def.child(j)
-                                            && member.kind() == "method_spec"
-                                                && let Some(method_name) =
-                                                    member.child_by_field_name("name")
-                                                {
-                                                    children.push(ParsedSymbol::new(
-                                                        node_text(method_name, source),
-                                                        SymbolKind::Method,
-                                                        node_location(member),
-                                                    ));
-                                                }
+                    && let Some(name) = child.child_by_field_name("name")
+                {
+                    let name_text = node_text(name, source);
+                    let type_node = child.child_by_field_name("type");
+                    let kind = match type_node.map(|t| t.kind()) {
+                        Some("struct_type") => SymbolKind::Struct,
+                        Some("interface_type") => SymbolKind::Interface,
+                        _ => SymbolKind::Type,
+                    };
+                    let mut children = Vec::new();
+                    if let Some(type_def) = type_node {
+                        if type_def.kind() == "struct_type" {
+                            if let Some(fields) = type_def.child_by_field_name("fields") {
+                                for j in 0..fields.child_count() as u32 {
+                                    if let Some(field) = fields.child(j)
+                                        && field.kind() == "field_declaration"
+                                        && let Some(field_name) = field.child_by_field_name("name")
+                                    {
+                                        children.push(ParsedSymbol::new(
+                                            node_text(field_name, source),
+                                            SymbolKind::Field,
+                                            node_location(field),
+                                        ));
                                     }
                                 }
                             }
-                            symbols.push(
-                                ParsedSymbol::new(name_text.clone(), kind, node_location(child))
-                                    .with_visibility(detect_visibility(&name_text))
-                                    .with_children(children),
-                            );
+                        } else if type_def.kind() == "interface_type" {
+                            for j in 0..type_def.child_count() as u32 {
+                                if let Some(member) = type_def.child(j)
+                                    && member.kind() == "method_spec"
+                                    && let Some(method_name) = member.child_by_field_name("name")
+                                {
+                                    children.push(ParsedSymbol::new(
+                                        node_text(method_name, source),
+                                        SymbolKind::Method,
+                                        node_location(member),
+                                    ));
+                                }
+                            }
                         }
+                    }
+                    symbols.push(
+                        ParsedSymbol::new(name_text.clone(), kind, node_location(child))
+                            .with_visibility(detect_visibility(&name_text))
+                            .with_children(children),
+                    );
+                }
             }
         }
         "const_declaration" | "var_declaration" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && (child.kind() == "const_spec" || child.kind() == "var_spec")
-                        && let Some(name) = child.child_by_field_name("name") {
-                            let name_text = node_text(name, source);
-                            let kind = if node.kind() == "const_declaration" {
-                                SymbolKind::Constant
-                            } else {
-                                SymbolKind::Variable
-                            };
-                            symbols.push(
-                                ParsedSymbol::new(name_text.clone(), kind, node_location(child))
-                                    .with_visibility(detect_visibility(&name_text)),
-                            );
-                        }
+                    && let Some(name) = child.child_by_field_name("name")
+                {
+                    let name_text = node_text(name, source);
+                    let kind = if node.kind() == "const_declaration" {
+                        SymbolKind::Constant
+                    } else {
+                        SymbolKind::Variable
+                    };
+                    symbols.push(
+                        ParsedSymbol::new(name_text.clone(), kind, node_location(child))
+                            .with_visibility(detect_visibility(&name_text)),
+                    );
+                }
             }
         }
         _ => {
@@ -153,7 +149,8 @@ fn extract_function_signature(node: Node, source: &str) -> String {
         .map(|n| node_text(n, source))
         .unwrap_or_default();
     let params = node
-        .child_by_field_name("parameters").map_or_else(|| "()".to_string(), |n| node_text(n, source));
+        .child_by_field_name("parameters")
+        .map_or_else(|| "()".to_string(), |n| node_text(n, source));
     let result = node
         .child_by_field_name("result")
         .map(|n| format!(" {}", node_text(n, source)))

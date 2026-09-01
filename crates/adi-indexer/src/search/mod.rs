@@ -7,10 +7,10 @@ pub mod usearch;
 #[cfg(test)]
 mod tests;
 
+use crate::embed::Embedder;
 use crate::error::Result;
 use crate::storage::Storage;
-use crate::types::{SearchResult, SymbolId, Symbol, File};
-use crate::embed::Embedder;
+use crate::types::{File, SearchResult, Symbol, SymbolId};
 use std::sync::Arc;
 
 pub trait VectorIndex: std::fmt::Debug + Send + Sync {

@@ -188,7 +188,10 @@ mod tests {
             .expect("set state");
         std::fs::write(view.log_path(), "first turn").expect("the runner opens the log");
 
-        assert!(view.has_started(), "the view re-reads rather than remembers");
+        assert!(
+            view.has_started(),
+            "the view re-reads rather than remembers"
+        );
         assert_eq!(
             view.state(),
             Some(serde_json::json!({ "pid": 4711 })),

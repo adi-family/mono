@@ -48,7 +48,10 @@ pub(crate) fn command(
     }
 
     let (program, mut argv) = match normalize_runtime(&tool.manifest.runtime) {
-        RUNTIME_TS => ("bun", vec!["run".to_string(), script_path.display().to_string()]),
+        RUNTIME_TS => (
+            "bun",
+            vec!["run".to_string(), script_path.display().to_string()],
+        ),
         // `sh` and anything a newer build might have written: run it as a shell script.
         _ => ("sh", vec![script_path.display().to_string()]),
     };
@@ -146,7 +149,8 @@ mod tests {
         let script = dir.join("script.sh");
         std::fs::write(&script, "printf '%s:%s' \"$ADI_TOOL_NAME\" \"$1\"\n").expect("write");
         let tool = owned(RUNTIME_SH);
-        let out = run_capture(&tool, &script, &["hi".to_string()], &dir, &config("sh")).expect("run");
+        let out =
+            run_capture(&tool, &script, &["hi".to_string()], &dir, &config("sh")).expect("run");
         assert!(out.ok(), "expected clean exit, got {out:?}");
         assert_eq!(out.output, "greet:hi");
         let _ = std::fs::remove_dir_all(&dir);
@@ -190,7 +194,11 @@ mod tests {
         let mut tool = owned(RUNTIME_SH);
         let store = config("db");
         let global = run_capture(&tool, &script, &[], &dir, &store).expect("global run");
-        assert!(global.output.ends_with("db/global.db"), "got {:?}", global.output);
+        assert!(
+            global.output.ends_with("db/global.db"),
+            "got {:?}",
+            global.output
+        );
 
         // A tool filed under a project gets that project's database instead.
         tool.manifest.project = Some("acme".to_string());

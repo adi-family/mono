@@ -195,8 +195,12 @@ mod tests {
 
         #[test]
         fn a_renamed_copy_fingerprints_identically() {
-            let original = only("fn collect(items: &[u32]) -> u32 { let mut total = 0; for i in items { total += i; } total }");
-            let renamed = only("fn tally(values: &[u64]) -> u64 { let mut sum = 0; for v in values { sum += v; } sum }");
+            let original = only(
+                "fn collect(items: &[u32]) -> u32 { let mut total = 0; for i in items { total += i; } total }",
+            );
+            let renamed = only(
+                "fn tally(values: &[u64]) -> u64 { let mut sum = 0; for v in values { sum += v; } sum }",
+            );
 
             let (a, b) = (
                 original.structure.expect("fingerprinted"),
@@ -208,8 +212,10 @@ mod tests {
 
         #[test]
         fn different_code_fingerprints_differently() {
-            let loop_fn = only("fn a(xs: &[u32]) -> u32 { let mut t = 0; for x in xs { t += x; } t }");
-            let match_fn = only("fn b(x: Option<u32>) -> u32 { match x { Some(v) => v, None => 0 } }");
+            let loop_fn =
+                only("fn a(xs: &[u32]) -> u32 { let mut t = 0; for x in xs { t += x; } t }");
+            let match_fn =
+                only("fn b(x: Option<u32>) -> u32 { match x { Some(v) => v, None => 0 } }");
 
             assert_ne!(
                 loop_fn.structure.expect("fingerprinted").hash,
@@ -332,7 +338,10 @@ mod tests {
         use crate::types::Language;
 
         let parsed = TreeSitterParser::new()
-            .parse("class C:\n    def m(self):\n        return 1\n", Language::Python)
+            .parse(
+                "class C:\n    def m(self):\n        return 1\n",
+                Language::Python,
+            )
             .expect("python source parses");
 
         let class = parsed.symbols.first().expect("the class was indexed");

@@ -1,8 +1,8 @@
 //! The Files panel of the project detail page.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::FileEntry;
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
@@ -165,7 +165,8 @@ fn file_rows(state: State) -> AnyView {
 
     // The way out stays pinned at the top whatever the sort says — it is navigation, not an entry.
     if let Some(parent) = listing.parent.clone() {
-        rows.push(view! { <TableRow state=table cell=move |col| match col {
+        rows.push(
+            view! { <TableRow state=table cell=move |col| match col {
                 "Name" => {
                     let parent = parent.clone();
                     view! {
@@ -182,11 +183,14 @@ fn file_rows(state: State) -> AnyView {
                     .into_any()
                 }
                 _ => view! { <span class="text-meta">"—"</span> }.into_any(),
-            }/> }.into_any());
+            }/> }
+            .into_any(),
+        );
     }
 
     if listing.entries.is_empty() && listing.parent.is_none() {
-        return view! { <EmptyRow state=table>"This project directory is empty."</EmptyRow> }.into_any();
+        return view! { <EmptyRow state=table>"This project directory is empty."</EmptyRow> }
+            .into_any();
     }
 
     let mut entries = listing.entries;
@@ -218,7 +222,9 @@ fn file_cell(col: &str, entry: &FileEntry, path: &str, is_open: bool, state: Sta
     match col {
         // A directory has no meaningful size, so it shows a dash rather than a misleading zero.
         "Size" if entry.is_dir => view! { <span class="text-meta">"—"</span> }.into_any(),
-        "Size" => view! { <span class="font-mono text-meta">{fmt_size(entry.size)}</span> }.into_any(),
+        "Size" => {
+            view! { <span class="font-mono text-meta">{fmt_size(entry.size)}</span> }.into_any()
+        }
         "Modified" => {
             let modified = entry.modified.map_or_else(|| "—".to_string(), fmt_date);
             view! { <span class="font-mono text-meta">{modified}</span> }.into_any()

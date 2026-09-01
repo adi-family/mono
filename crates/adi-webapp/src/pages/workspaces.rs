@@ -4,18 +4,18 @@
 //! Edit action opens them in a dedicated hook editor panel rendered right above this one.
 
 use adi_ui::Lang;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{
     NewProjectHook, NewWorkspace, ProjectHookDto, WorkspaceDto, WorkspacesState,
 };
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, HookEditor, HookLogView, State, TermWatch};
 use crate::ui::{
-    confirm, fmt_date, Key, menu_item, row_actions, rows_or_placeholder, sort_rows, TextField,
+    Key, TextField, confirm, fmt_date, menu_item, row_actions, rows_or_placeholder, sort_rows,
 };
 
 /// The workspaces table's columns; the trailing blank one holds ⌨ Terminal and Unregister.
@@ -266,11 +266,14 @@ fn workspace_cell(col: &str, w: &WorkspaceDto) -> AnyView {
 /// Rows for the hooks table: each hook file with Run / Log / Edit actions.
 fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
     let table = state.tables.hooks;
-    let mut hooks =
-        match rows_or_placeholder(table, current_snapshot(state).map(|v| v.hooks), "No hooks yet — add one below.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut hooks = match rows_or_placeholder(
+        table,
+        current_snapshot(state).map(|v| v.hooks),
+        "No hooks yet — add one below.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(
         &mut hooks,
         table.sort.get(),
@@ -292,25 +295,31 @@ fn hook_rows(state: State, log: HookLogView, editor: HookEditor) -> AnyView {
             let lifecycle = h.name == "init" || h.name == "workspace";
             // ▶ Run inline for a runnable hook (a lifecycle hook shows why it can't be run by
             // hand instead); Log + Edit live in the kebab.
-            let inline = if lifecycle {
-                view! {
+            let inline =
+                if lifecycle {
+                    view! {
                     <span class="adi-muted" style="font-size:var(--text-sm)"
                         title="lifecycle hooks run when a workspace is created — use Add workspace">
                         "via Add workspace"
                     </span>
                 }.into_any()
-            } else {
-                view! {
+                } else {
+                    view! {
                     <button class="adi-btn adi-btn--link" title="run the hook now, detached"
                         on:click=move |_| run_hook(state, log, run_name.clone())>"▶ Run"</button>
                 }.into_any()
-            };
+                };
             let items = vec![
-                menu_item(state, "Log", false, move || open_hook_log(state, log, log_name.clone())),
-                menu_item(state, "Edit", false, move || open_hook_editor(state, editor, edit_name.clone())),
+                menu_item(state, "Log", false, move || {
+                    open_hook_log(state, log, log_name.clone())
+                }),
+                menu_item(state, "Edit", false, move || {
+                    open_hook_editor(state, editor, edit_name.clone())
+                }),
             ];
             let actions = row_actions(state, format!("hook:{}", h.name), inline, items);
-            view! { <TableRow state=table cell=move |col| hook_cell(col, &h) actions=actions/> }.into_any()
+            view! { <TableRow state=table cell=move |col| hook_cell(col, &h) actions=actions/> }
+                .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

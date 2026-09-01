@@ -27,7 +27,6 @@
 //! that is the whole point of the layering: adding an engine must not mean teaching the store a
 //! wire format.
 
-
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -220,9 +219,9 @@ pub(super) fn insert(tx: &Connection, agent: &str, id: &str, mut turn: Turn) -> 
 /// true are still on disk, and a conversation from last week does not get a second chance to be
 /// recorded correctly. Closing on read is what heals them.
 pub(super) fn load(conn: &Connection, agent: &str, id: &str) -> Vec<Turn> {
-    let Ok(mut stmt) = conn.prepare_cached(
-        "SELECT json FROM turns WHERE agent = ?1 AND session = ?2 ORDER BY seq",
-    ) else {
+    let Ok(mut stmt) = conn
+        .prepare_cached("SELECT json FROM turns WHERE agent = ?1 AND session = ?2 ORDER BY seq")
+    else {
         return Vec::new();
     };
     stmt.query_map([agent, id], |row| row.get::<_, String>(0))
@@ -290,9 +289,9 @@ pub(super) fn view(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Backend;
     use crate::progress::ToolStatus;
     use crate::store::SessionStore;
-    use crate::Backend;
 
     fn scratch(tag: &str) -> SessionStore {
         let dir = std::env::temp_dir().join(format!(

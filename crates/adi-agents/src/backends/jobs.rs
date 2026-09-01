@@ -113,12 +113,7 @@ pub(crate) fn start(
         let _ = child.wait();
     });
 
-    Ok(Job {
-        id,
-        log,
-        exit,
-        pid,
-    })
+    Ok(Job { id, log, exit, pid })
 }
 
 /// The shell condition an await runs to decide whether this job is done, and what to tell the
@@ -160,7 +155,10 @@ fn new_id() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or_default();
-    format!("job-{millis}-{:03}", SEQ.fetch_add(1, Ordering::Relaxed) % 1000)
+    format!(
+        "job-{millis}-{:03}",
+        SEQ.fetch_add(1, Ordering::Relaxed) % 1000
+    )
 }
 
 #[cfg(test)]
@@ -229,7 +227,10 @@ mod tests {
         assert!(!fired, "a job in flight is not a finished one");
         assert!(!job.exit.exists());
 
-        let _ = Command::new("kill").arg("-9").arg(job.pid.to_string()).status();
+        let _ = Command::new("kill")
+            .arg("-9")
+            .arg(job.pid.to_string())
+            .status();
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -278,10 +279,7 @@ mod tests {
         std::fs::create_dir_all(&elsewhere).expect("elsewhere");
         let out = Command::new("sh")
             .arg("-c")
-            .arg(shell.script(&format!(
-                "cd {} && export MARK=carried",
-                quote(&elsewhere)
-            )))
+            .arg(shell.script(&format!("cd {} && export MARK=carried", quote(&elsewhere))))
             .current_dir(&home)
             .output()
             .expect("seed");
@@ -291,15 +289,25 @@ mod tests {
         settle(&job);
         let said = std::fs::read_to_string(&job.log).expect("log");
         assert!(
-            said.contains(&std::fs::canonicalize(&elsewhere).expect("real").display().to_string()),
+            said.contains(
+                &std::fs::canonicalize(&elsewhere)
+                    .expect("real")
+                    .display()
+                    .to_string()
+            ),
             "the job starts where the conversation stands: {said}"
         );
-        assert!(said.contains("MARK=carried"), "and with what it exported: {said}");
+        assert!(
+            said.contains("MARK=carried"),
+            "and with what it exported: {said}"
+        );
 
         // …and the conversation is exactly where it was: a job that recorded its own `cd` would
         // land it after later commands had already made theirs.
         assert_eq!(
-            shell.ended_in().map(|d| std::fs::canonicalize(&d).unwrap_or(d)),
+            shell
+                .ended_in()
+                .map(|d| std::fs::canonicalize(&d).unwrap_or(d)),
             Some(std::fs::canonicalize(&elsewhere).expect("real")),
         );
 

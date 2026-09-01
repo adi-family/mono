@@ -222,7 +222,9 @@ impl Opts {
                     o.interval = it.next().and_then(|v| v.parse().ok()).unwrap_or(o.interval);
                 }
                 "--factor" => o.factor = it.next().and_then(|v| v.parse().ok()).unwrap_or(o.factor),
-                "--minutes" => o.minutes = it.next().and_then(|v| v.parse().ok()).unwrap_or(o.minutes),
+                "--minutes" => {
+                    o.minutes = it.next().and_then(|v| v.parse().ok()).unwrap_or(o.minutes)
+                }
                 "--no-sample" => o.no_sample = true,
                 "--root" => o.root = it.next().map(PathBuf::from),
                 "--replay" => o.replay = true,
@@ -267,7 +269,11 @@ fn cmd_spawn(o: &Opts) {
     let started = Instant::now();
     let mut launched = Vec::new();
     for i in 0..o.runs {
-        let p = if o.bigout { prompt_for(BIGOUT) } else { prompt() };
+        let p = if o.bigout {
+            prompt_for(BIGOUT)
+        } else {
+            prompt()
+        };
         match agents.force_run_in(&o.agent, &p, o.dir.as_deref()) {
             Ok(launch) => {
                 let id = run_id_of(&launch);
@@ -426,8 +432,13 @@ fn cmd_probe(o: &Opts) {
 fn cmd_mem(o: &Opts) {
     const STEP_GB: usize = 4;
     let cap_gb = if o.repeat > 5 { o.repeat } else { 48 };
-    println!("mem: stepping {STEP_GB} GB at a time up to {cap_gb} GB, stopping at first non-normal pressure");
-    println!("  {:>7} {:>9} {:>10} {:>10} {:>10}", "held_GB", "pressure", "median_ms", "p90_ms", "max_ms");
+    println!(
+        "mem: stepping {STEP_GB} GB at a time up to {cap_gb} GB, stopping at first non-normal pressure"
+    );
+    println!(
+        "  {:>7} {:>9} {:>10} {:>10} {:>10}",
+        "held_GB", "pressure", "median_ms", "p90_ms", "max_ms"
+    );
 
     let mut held: Vec<Vec<u8>> = Vec::new();
     let base = spawn_stats(40);
@@ -663,7 +674,10 @@ fn cmd_parse(o: &Opts) {
         let steps = count_steps(&dest);
         let el = t.elapsed();
         times.push(el.as_secs_f64());
-        println!("  round {i}: {:.1}ms  ({steps} steps)", el.as_secs_f64() * 1e3);
+        println!(
+            "  round {i}: {:.1}ms  ({steps} steps)",
+            el.as_secs_f64() * 1e3
+        );
     }
     if !times.is_empty() {
         let mean = times.iter().sum::<f64>() / times.len() as f64;
@@ -689,10 +703,20 @@ fn report_runs(agents: &Agents, agent: &StoredAgent, ids: &[String]) {
         if let Some(r) = &result {
             println!(
                 "  wall={:.1}s api={:.1}s turns={} err={}",
-                r.get("duration_ms").and_then(serde_json::Value::as_f64).unwrap_or(0.0) / 1e3,
-                r.get("duration_api_ms").and_then(serde_json::Value::as_f64).unwrap_or(0.0) / 1e3,
-                r.get("num_turns").and_then(serde_json::Value::as_i64).unwrap_or(0),
-                r.get("is_error").and_then(serde_json::Value::as_bool).unwrap_or(false),
+                r.get("duration_ms")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0)
+                    / 1e3,
+                r.get("duration_api_ms")
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(0.0)
+                    / 1e3,
+                r.get("num_turns")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0),
+                r.get("is_error")
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false),
             );
         }
         for c in &calls {
@@ -719,7 +743,10 @@ fn report_runs(agents: &Agents, agent: &StoredAgent, ids: &[String]) {
     let steady: Vec<f64> = all.iter().copied().filter(|&s| s < 1.0).collect();
     if !steady.is_empty() {
         let mean = steady.iter().sum::<f64>() / steady.len() as f64;
-        println!("steady-state floor (calls under 1s): n={} mean={mean:.3}s", steady.len());
+        println!(
+            "steady-state floor (calls under 1s): n={} mean={mean:.3}s",
+            steady.len()
+        );
     }
 }
 
@@ -739,8 +766,13 @@ fn tool_calls(log: &Path) -> Vec<Call> {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        let ts = v.get("timestamp").and_then(serde_json::Value::as_str).and_then(parse_ts);
-        let content = v.pointer("/message/content").and_then(serde_json::Value::as_array);
+        let ts = v
+            .get("timestamp")
+            .and_then(serde_json::Value::as_str)
+            .and_then(parse_ts);
+        let content = v
+            .pointer("/message/content")
+            .and_then(serde_json::Value::as_array);
         match v.get("type").and_then(serde_json::Value::as_str) {
             Some("assistant") => {
                 let (Some(ts), Some(blocks)) = (ts, content) else {
@@ -748,7 +780,10 @@ fn tool_calls(log: &Path) -> Vec<Call> {
                 };
                 for b in blocks {
                     if b.get("type").and_then(serde_json::Value::as_str) == Some("tool_use") {
-                        let id = b.get("id").and_then(serde_json::Value::as_str).unwrap_or_default();
+                        let id = b
+                            .get("id")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or_default();
                         let cmd = b
                             .pointer("/input/command")
                             .and_then(serde_json::Value::as_str)
@@ -768,7 +803,10 @@ fn tool_calls(log: &Path) -> Vec<Call> {
                             .and_then(serde_json::Value::as_str)
                             .unwrap_or_default();
                         if let Some((start, cmd)) = pending.remove(id) {
-                            out.push(Call { secs: ts - start, cmd });
+                            out.push(Call {
+                                secs: ts - start,
+                                cmd,
+                            });
                         }
                     }
                 }
@@ -796,7 +834,10 @@ fn count_steps(log: &Path) -> usize {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if let Some(blocks) = v.pointer("/message/content").and_then(serde_json::Value::as_array) {
+        if let Some(blocks) = v
+            .pointer("/message/content")
+            .and_then(serde_json::Value::as_array)
+        {
             steps += blocks.len();
         }
     }
@@ -841,7 +882,9 @@ fn resolve(agents: &Agents, name: &str) -> Option<StoredAgent> {
         }
         Ok(None) => {
             eprintln!("no agent `{name}` — create one with:");
-            eprintln!("  adi-mono agents save {name} --backend harness:claude-sdk --model haiku --command-scope Bash");
+            eprintln!(
+                "  adi-mono agents save {name} --backend harness:claude-sdk --model haiku --command-scope Bash"
+            );
             None
         }
         Err(e) => {

@@ -352,7 +352,8 @@ mod tests {
                 },
             )
             .expect("save");
-        let Launch::Process { run_id, .. } = agents.simulate(name, "get started").expect("simulate")
+        let Launch::Process { run_id, .. } =
+            agents.simulate(name, "get started").expect("simulate")
         else {
             panic!("a simulated run is not a pane");
         };
@@ -380,8 +381,8 @@ mod tests {
     fn a_quiet_conversation_with_an_open_goal_is_asked_about_it() {
         let agents = scratch("asked");
         let conv = quiet_conversation(&agents, "worker");
-        let goal = create(&agents, "worker", &conv, "the suite is green", SetBy::Human)
-            .expect("create");
+        let goal =
+            create(&agents, "worker", &conv, "the suite is green", SetBy::Human).expect("create");
 
         let nudged = tick(&agents);
 
@@ -445,7 +446,9 @@ mod tests {
 
         let queued = quiet_conversation(&agents, "queued");
         create(&agents, "queued", &queued, "finish", SetBy::Human).expect("create");
-        store.enqueue("queued", &queued, "one more thing", &[]).expect("enqueue");
+        store
+            .enqueue("queued", &queued, "one more thing", &[])
+            .expect("enqueue");
 
         let asking = quiet_conversation(&agents, "asking");
         create(&agents, "asking", &asking, "finish", SetBy::Human).expect("create");
@@ -566,7 +569,10 @@ mod tests {
 
         assert!(text.contains("2 open goals"), "{text}");
         assert!(text.contains("g-1") && text.contains("g-2"), "{text}");
-        assert!(text.contains("tests green") && text.contains("docs updated"), "{text}");
+        assert!(
+            text.contains("tests green") && text.contains("docs updated"),
+            "{text}"
+        );
         assert!(
             text.contains("goals met <id>"),
             "with several there is no one id to substitute, and the list is right above: {text}"

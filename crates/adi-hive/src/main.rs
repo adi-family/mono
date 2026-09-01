@@ -472,4 +472,3 @@ fn ensure_loopback_alias(ip: IpAddr) {
         let _ = ip; // 127.0.0.0/8 is already loopback on Linux/Windows
     }
 }
-

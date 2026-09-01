@@ -241,12 +241,7 @@ pub struct Request {
 /// [`Error::Arguments`] for a request that is empty, oversized, malformed, or arrives while another
 /// ask is still pending — every one of them phrased for the model that will read it as a failed
 /// tool result. Database errors otherwise.
-pub(super) fn register(
-    conn: &Connection,
-    agent: &str,
-    conv: &str,
-    req: &Request,
-) -> Result<Ask> {
+pub(super) fn register(conn: &Connection, agent: &str, conv: &str, req: &Request) -> Result<Ask> {
     if req.questions.is_empty() {
         return Err(Error::Arguments(
             "an ask needs at least one question — say what you want decided".to_string(),
@@ -780,12 +775,17 @@ mod tests {
                 "chat",
                 &conv,
                 &Request {
-                    questions: (0..=MAX_QUESTIONS).map(|n| one(&format!("q{n}?"))).collect(),
+                    questions: (0..=MAX_QUESTIONS)
+                        .map(|n| one(&format!("q{n}?")))
+                        .collect(),
                     ..Request::default()
                 },
             )
             .expect_err("refused");
-        assert!(err.to_string().contains(&MAX_QUESTIONS.to_string()), "{err}");
+        assert!(
+            err.to_string().contains(&MAX_QUESTIONS.to_string()),
+            "{err}"
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

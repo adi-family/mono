@@ -1,8 +1,8 @@
 //! The Agents panel of the project detail page.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{AgentsState, SaveAgent};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::pages::agents::{
@@ -10,9 +10,7 @@ use crate::pages::agents::{
 };
 use crate::routing::{ProjectSection, Route};
 use crate::state::{AgentsForm, AgentsWatch, Flash, State};
-use crate::ui::{
-    Key, TextField, apply_mutation, menu_item, row_actions, sort_rows,
-};
+use crate::ui::{Key, TextField, apply_mutation, menu_item, row_actions, sort_rows};
 
 /// The panel's columns. No Project column — every row is this project's (or a sub-project's,
 /// which the Name cell marks inline) — and a Status one the global page doesn't carry, since

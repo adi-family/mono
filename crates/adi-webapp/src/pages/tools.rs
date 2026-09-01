@@ -9,17 +9,17 @@
 //! same way there), so their view + action helpers are `pub(crate)`.
 
 use adi_ui::Lang;
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{LinkTool, NewTool, ToolDto, ToolsState};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
 use crate::routing::scroll_top;
 use crate::state::{Flash, State, ToolEditor, ToolRunView, ToolsForm};
 use crate::ui::{
-    Key, TableState, TextField, apply_mutation, confirm, flash_view, menu_item, row_actions, segmented,
-    sort_rows, updated_text,
+    Key, TableState, TextField, apply_mutation, confirm, flash_view, menu_item, row_actions,
+    segmented, sort_rows, updated_text,
 };
 
 /// The columns of the global tools table.
@@ -214,14 +214,19 @@ pub(crate) fn rows_view(
         .tools
         .into_iter()
         .filter(|t| t.is_archived() == archived)
-        .filter(|t| project.as_deref().is_none_or(|p| t.project.as_deref() == Some(p)))
+        .filter(|t| {
+            project
+                .as_deref()
+                .is_none_or(|p| t.project.as_deref() == Some(p))
+        })
         .collect();
     if rows.is_empty() {
         return view! { <EmptyRow state=table>{if archived {
-                "Nothing archived."
-            } else {
-                "No tools yet — create or link one below."
-            }}</EmptyRow> }.into_any();
+            "Nothing archived."
+        } else {
+            "No tools yet — create or link one below."
+        }}</EmptyRow> }
+        .into_any();
     }
     sort_rows(
         &mut rows,
@@ -237,7 +242,8 @@ pub(crate) fn rows_view(
     rows.into_iter()
         .map(|t| {
             let action = tool_actions(state, editor, run, &t);
-            view! { <TableRow state=table cell=move |col| cell(col, &t) actions=action/> }.into_any()
+            view! { <TableRow state=table cell=move |col| cell(col, &t) actions=action/> }
+                .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()
@@ -313,10 +319,15 @@ pub(crate) fn tool_actions(
             items.push(menu_item(state, "Delete", true, move || {
                 if !confirm(&format!(
                     "Permanently delete tool {del_short}? This removes its manifest (and, for \
-                     an owned tool, its script). A linked file is left alone.")) {
+                     an owned tool, its script). A linked file is left alone."
+                )) {
                     return;
                 }
-                apply_tools(state, "Deleted tool.".to_string(), fetch::remove_tool(del_id.clone()));
+                apply_tools(
+                    state,
+                    "Deleted tool.".to_string(),
+                    fetch::remove_tool(del_id.clone()),
+                );
             }));
         }
         row_actions(state, key, restore, items)
@@ -334,10 +345,20 @@ pub(crate) fn tool_actions(
         };
         let items = vec![
             menu_item(state, "Edit", false, move || {
-                open_tool_editor(state, editor, edit_id.clone(), edit_name.clone(), edit_runtime.clone());
+                open_tool_editor(
+                    state,
+                    editor,
+                    edit_id.clone(),
+                    edit_name.clone(),
+                    edit_runtime.clone(),
+                );
             }),
             menu_item(state, "Archive", false, move || {
-                apply_tools(state, "Archived tool.".to_string(), fetch::archive_tool(arch_id.clone()));
+                apply_tools(
+                    state,
+                    "Archived tool.".to_string(),
+                    fetch::archive_tool(arch_id.clone()),
+                );
             }),
         ];
         row_actions(state, key, run_btn, items)
@@ -508,7 +529,9 @@ fn save_tool_script(state: State, editor: ToolEditor, id: String) {
         match fetch::write_tool_script(id, content).await {
             Ok(s) => {
                 editor.original.set(s.content);
-                state.flash.set(Some(Flash::ok(format!("Saved {}.", s.path))));
+                state
+                    .flash
+                    .set(Some(Flash::ok(format!("Saved {}.", s.path))));
             }
             Err(e) => state.flash.set(Some(Flash::err(e))),
         }
@@ -546,7 +569,8 @@ pub(crate) fn run_tool_now(
                 } else {
                     Flash::err(format!(
                         "Tool exited {}.",
-                        res.exit_code.map_or_else(|| "with no code".to_string(), |c| c.to_string())
+                        res.exit_code
+                            .map_or_else(|| "with no code".to_string(), |c| c.to_string())
                     ))
                 }));
             }

@@ -22,7 +22,10 @@ pub(crate) fn page(krate: &CrateTypes) -> String {
 
     let (structs, enums, aliases) = counts(krate);
     if structs + enums + aliases == 0 {
-        let _ = writeln!(out, "This crate declares no structs, enums or type aliases.");
+        let _ = writeln!(
+            out,
+            "This crate declares no structs, enums or type aliases."
+        );
         return out;
     }
     let _ = writeln!(
@@ -40,7 +43,12 @@ pub(crate) fn page(krate: &CrateTypes) -> String {
             .map(|d| format!("`{}`", d.qualified_name()))
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = writeln!(out, "- [`{}`](#{}) — {names}", file.path, anchor(&file.path));
+        let _ = writeln!(
+            out,
+            "- [`{}`](#{}) — {names}",
+            file.path,
+            anchor(&file.path)
+        );
     }
 
     for file in &krate.files {

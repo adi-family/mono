@@ -15,9 +15,7 @@ use adi_ui::{Row as TableRow, Table};
 
 use crate::fetch;
 use crate::state::{DbConsole, Flash, State, load};
-use crate::ui::{
-    Key, placeholder_row, rows_or_placeholder, sort_rows, updated_text,
-};
+use crate::ui::{Key, placeholder_row, rows_or_placeholder, sort_rows, updated_text};
 
 /// The databases table: one row per scope in the store. No action column — a row's control is the
 /// Scope cell itself, which opens that database.
@@ -136,11 +134,14 @@ pub(crate) fn database_view(state: State, console: DbConsole) -> AnyView {
 /// The databases table: one row per scope, the open one marked. Clicking a row opens that scope.
 fn scope_rows(state: State, console: DbConsole) -> AnyView {
     let table = state.tables.db_scopes;
-    let mut databases =
-        match rows_or_placeholder(table, state.db.get().map(|v| v.databases), "No databases yet — the first write creates one. Try a `create table` below.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut databases = match rows_or_placeholder(
+        table,
+        state.db.get().map(|v| v.databases),
+        "No databases yet — the first write creates one. Try a `create table` below.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     // By the byte count, not the `1.4 MB` the cell renders — otherwise `900 B` sorts after `2 GB`.
     sort_rows(
         &mut databases,
@@ -174,7 +175,8 @@ fn scope_cell(col: &str, d: &DbInfoDto, console: DbConsole) -> AnyView {
     match col {
         "Tables" => view! { <span class="font-mono">{d.tables.to_string()}</span> }.into_any(),
         "Size" => {
-            view! { <span class="font-mono text-meta">{adi_config::human_bytes(d.bytes)}</span> }.into_any()
+            view! { <span class="font-mono text-meta">{adi_config::human_bytes(d.bytes)}</span> }
+                .into_any()
         }
         "Path" => view! { <span class="font-mono text-meta">{d.path.clone()}</span> }.into_any(),
         // "Scope", and anything the layout offers that this match doesn't name.
@@ -203,11 +205,14 @@ fn scope_cell(col: &str, d: &DbInfoDto, console: DbConsole) -> AnyView {
 /// The open scope's tables: shape, live row count, and a preview button per table.
 fn table_rows(state: State, console: DbConsole) -> AnyView {
     let table = state.tables.db_tables;
-    let mut tables =
-        match rows_or_placeholder(table, console.tables.get().map(|v| v.tables), "This database has no tables yet.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut tables = match rows_or_placeholder(
+        table,
+        console.tables.get().map(|v| v.tables),
+        "This database has no tables yet.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(
         &mut tables,
         table.sort.get(),
@@ -413,4 +418,3 @@ fn flash_or_nothing(flash: RwSignal<Option<Flash>>) -> AnyView {
     }
     .into_any()
 }
-

@@ -189,9 +189,9 @@ fn ready_panel(
 fn submit_setup(state: State, form: MetaForm) {
     let backend = form.backend.get_untracked().trim().to_string();
     if backend.is_empty() {
-        state
-            .flash
-            .set(Some(Flash::err("Pick a backend for the agent.".to_string())));
+        state.flash.set(Some(Flash::err(
+            "Pick a backend for the agent.".to_string(),
+        )));
         return;
     }
     let prompt = form.prompt.get_untracked();

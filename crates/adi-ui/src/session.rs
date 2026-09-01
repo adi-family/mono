@@ -57,9 +57,7 @@ impl SessionState {
     #[must_use]
     pub fn row_classes(self, selected: bool) -> &'static str {
         match (self, selected) {
-            (Self::Done | Self::Error | Self::Working, false) => {
-                "border-transparent hover:bg-card"
-            }
+            (Self::Done | Self::Error | Self::Working, false) => "border-transparent hover:bg-card",
             (Self::Done | Self::Error | Self::Working, true) => "border-edge bg-selected",
             (Self::Awaiting, false) => "border-transparent hover:bg-await-bg",
             (Self::Awaiting, true) => "border-await-edge bg-selected",
@@ -182,4 +180,3 @@ pub fn SessionItem(
         </RailCard>
     }
 }
-

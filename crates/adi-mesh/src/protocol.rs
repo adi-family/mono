@@ -201,9 +201,7 @@ pub fn is_dns_label(label: &str) -> bool {
     }
     let alnum = |b: u8| b.is_ascii_lowercase() || b.is_ascii_digit();
     // First and last must be alphanumeric; hyphens are legal only in between.
-    alnum(bytes[0])
-        && alnum(bytes[bytes.len() - 1])
-        && bytes.iter().all(|&b| alnum(b) || b == b'-')
+    alnum(bytes[0]) && alnum(bytes[bytes.len() - 1]) && bytes.iter().all(|&b| alnum(b) || b == b'-')
 }
 
 /// Is this a **service name** — one or more [DNS labels](is_dns_label) joined by dots, at most
@@ -263,7 +261,9 @@ pub async fn read_http_request<R: AsyncRead + Unpin>(r: &mut R) -> std::io::Resu
     }
     let len = usize::from(head[1]);
     if len == 0 {
-        return Err(invalid_data("mesh http request names an empty service".into()));
+        return Err(invalid_data(
+            "mesh http request names an empty service".into(),
+        ));
     }
     // Refuse before allocating or reading: an over-long length is a broken peer, and the
     // stream is closed either way, so there is nothing to resynchronise with.
@@ -446,17 +446,24 @@ mod tests {
     async fn http_request_round_trips_a_multi_label_service() {
         // `app.nosh.adi` on the node is `app.nosh` on the wire — a service name, not a label.
         let mut buf = Vec::new();
-        write_http_request(&mut buf, "app.nosh").await.expect("write");
+        write_http_request(&mut buf, "app.nosh")
+            .await
+            .expect("write");
         assert_eq!(buf, b"\x01\x08app.nosh".to_vec());
 
         let mut cursor = std::io::Cursor::new(buf);
-        assert_eq!(read_http_request(&mut cursor).await.expect("read"), "app.nosh");
+        assert_eq!(
+            read_http_request(&mut cursor).await.expect("read"),
+            "app.nosh"
+        );
     }
 
     #[tokio::test]
     async fn http_request_rejects_a_future_version() {
         let mut frame = http_frame(HTTP_VERSION + 1, 4, b"nosh");
-        let err = read_http_request(&mut frame).await.expect_err("bad version");
+        let err = read_http_request(&mut frame)
+            .await
+            .expect_err("bad version");
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
@@ -505,11 +512,21 @@ mod tests {
         // `no.sh` is absent on purpose: a dot now separates labels rather than disqualifying
         // the name. What is still refused is a *label* that breaks the rule, wherever it sits.
         for bad in [
-            "-nosh", "nosh-", "no sh", "No.sh", "NOSH", "no_sh", ".nosh", "nosh.", "app..nosh",
+            "-nosh",
+            "nosh-",
+            "no sh",
+            "No.sh",
+            "NOSH",
+            "no_sh",
+            ".nosh",
+            "nosh.",
+            "app..nosh",
         ] {
             let len = u8::try_from(bad.len()).expect("fits");
             let mut frame = http_frame(HTTP_VERSION, len, bad.as_bytes());
-            let err = read_http_request(&mut frame).await.expect_err("not a label");
+            let err = read_http_request(&mut frame)
+                .await
+                .expect_err("not a label");
             assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{bad:?}");
 
             let mut buf = Vec::new();
@@ -600,7 +617,15 @@ mod tests {
         for good in ["a", "nosh", "app.nosh", "ivr-analytics.nosh", "a.b.c.d"] {
             assert!(is_service_name(good), "{good:?} is a valid service name");
         }
-        for bad in ["", ".", "app.", ".nosh", "app..nosh", "App.nosh", "app.no sh"] {
+        for bad in [
+            "",
+            ".",
+            "app.",
+            ".nosh",
+            "app..nosh",
+            "App.nosh",
+            "app.no sh",
+        ] {
             assert!(!is_service_name(bad), "{bad:?} is not a valid service name");
         }
         assert!(!is_service_name(&"a".repeat(MAX_SERVICE_LEN + 1)));
@@ -627,17 +652,17 @@ mod tests {
     fn non_fleet_hosts_are_none() {
         for host in [
             "",
-            "n.adi",              // the suffix alone names no node
-            "foo.n.adi",          // a node with no service
-            "nosh.laptop-b.adi",  // the local namespace, not the fleet one
+            "n.adi",             // the suffix alone names no node
+            "foo.n.adi",         // a node with no service
+            "nosh.laptop-b.adi", // the local namespace, not the fleet one
             "nosh.laptop-b.n.test",
             "nosh.adi",
             "app.adi",
             "example.com",
             "127.0.0.1:8000",
             "[::1]:8000",
-            ".laptop-b.n.adi",    // empty service label
-            "nosh..n.adi",        // empty node label
+            ".laptop-b.n.adi",          // empty service label
+            "nosh..n.adi",              // empty node label
             "app..nosh.laptop-b.n.adi", // an empty label inside the service name
             "-nosh.laptop-b.n.adi",
             "nosh.laptop-.n.adi",

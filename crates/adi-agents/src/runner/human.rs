@@ -39,9 +39,7 @@ use crate::backends::adi_events;
 use crate::error::Result;
 use crate::progress::MAX_PARSE_BYTES;
 
-use super::{
-    EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, Stopped,
-};
+use super::{EventBatch, EventKinds, RunEvent, RunSpec, Runner, RunnerKind, Session, Stopped};
 
 /// The name this runner is recorded under, and the one a session record is resolved back through.
 pub const KIND: &str = "human";
@@ -156,7 +154,10 @@ impl Runner for HumanRunner {
         if was_running {
             Self::set_open(session, false)?;
         }
-        Ok(Stopped { was_running, forced: false })
+        Ok(Stopped {
+            was_running,
+            forced: false,
+        })
     }
 
     fn emits(&self) -> EventKinds {
@@ -189,7 +190,10 @@ impl Runner for HumanRunner {
         if let Some(metrics) = content.metrics {
             events.push(RunEvent::Metrics(metrics));
         }
-        Ok(EventBatch { events, cursor: json!(next) })
+        Ok(EventBatch {
+            events,
+            cursor: json!(next),
+        })
     }
 }
 
@@ -213,8 +217,8 @@ fn read_after(path: &Path, offset: u64) -> (Vec<u8>, u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::SessionStore;
     use crate::Backend;
+    use crate::store::SessionStore;
 
     /// A store of this test's own, on the same pattern the store's tests use: named for the thread
     /// so two cases never share a database, and wiped first so a previous run's ghost is not read.
@@ -260,7 +264,10 @@ mod tests {
             .send(&spec(&dir), &session, "go")
             .expect("taking the seat needs no process");
         assert!(runner.is_alive(&session));
-        assert!(session.has_started(), "the log exists, so a later send resumes");
+        assert!(
+            session.has_started(),
+            "the log exists, so a later send resumes"
+        );
 
         let stopped = runner.stop(&session, Duration::from_secs(1)).expect("stop");
         assert!(stopped.was_running);
@@ -295,8 +302,14 @@ mod tests {
         adi_events::answer(&mut log, "one file");
 
         let batch = runner.events(&session, None).expect("events");
-        assert!(matches!(batch.events[0], RunEvent::Step(crate::progress::Step::Message { .. })));
-        assert!(matches!(batch.events[1], RunEvent::Step(crate::progress::Step::Tool { .. })));
+        assert!(matches!(
+            batch.events[0],
+            RunEvent::Step(crate::progress::Step::Message { .. })
+        ));
+        assert!(matches!(
+            batch.events[1],
+            RunEvent::Step(crate::progress::Step::Tool { .. })
+        ));
         assert!(
             matches!(&batch.events[2], RunEvent::Answer { text } if text == "one file"),
             "the answer closes the turn: {:?}",

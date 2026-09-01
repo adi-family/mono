@@ -1044,7 +1044,10 @@ grants = ["ftp:*"]
         // string form, the credential in its own sub-table.
         let rendered = toml::to_string_pretty(&registry).expect("render");
         for expected in ["[nodes.laptop-b]", "\"http:nosh\"", "[nodes.laptop-b.auth]"] {
-            assert!(rendered.contains(expected), "missing {expected}:\n{rendered}");
+            assert!(
+                rendered.contains(expected),
+                "missing {expected}:\n{rendered}"
+            );
         }
         assert!(
             !rendered.contains("pending_nickname"),
@@ -1211,10 +1214,7 @@ grants = ["ftp:*"]
         );
 
         // Declaring the acknowledged name again clears the notification.
-        assert_eq!(
-            registry.pair(&key, "laptop-b").petname(),
-            Some("laptop-b")
-        );
+        assert_eq!(registry.pair(&key, "laptop-b").petname(), Some("laptop-b"));
         assert!(registry.pending_nicknames().is_empty());
     }
 
@@ -1257,7 +1257,10 @@ grants = ["ftp:*"]
         pair_ok(&mut registry, &key, "laptop-b");
         let _ = registry.pair(&key, "desk");
 
-        assert_eq!(registry.accept_nickname("laptop-b").expect("accept"), "desk");
+        assert_eq!(
+            registry.accept_nickname("laptop-b").expect("accept"),
+            "desk"
+        );
         assert_eq!(registry.petname_of(&key), Some("desk"));
         assert_eq!(registry.get("desk").expect("record").nickname, "desk");
         assert!(registry.pending_nicknames().is_empty());
@@ -1379,7 +1382,10 @@ grants = ["ftp:*"]
     fn http_wildcard_and_exact_service_grants() {
         let mut exact = NodeRecord::default();
         assert!(exact.grant(Grant::Http(Scope::One("nosh".into()))));
-        assert!(!exact.grant(Grant::Http(Scope::One("nosh".into()))), "dedup");
+        assert!(
+            !exact.grant(Grant::Http(Scope::One("nosh".into()))),
+            "dedup"
+        );
         assert!(exact.allows(Target::Http("nosh")));
         assert!(!exact.allows(Target::Http("app")));
         assert!(!exact.allows(Target::Ctl("nosh")), "families do not cross");
@@ -1474,7 +1480,10 @@ grants = ["ftp:*"]
         assert!(!record.verify_password("igor", ""), "empty password");
         assert!(!record.verify_password("root", "hunter2"), "wrong username");
 
-        assert!(!record.auth.digest.contains("hunter2"), "no plaintext at rest");
+        assert!(
+            !record.auth.digest.contains("hunter2"),
+            "no plaintext at rest"
+        );
         assert!(record.auth.is_set());
     }
 
@@ -1498,7 +1507,10 @@ grants = ["ftp:*"]
         let a = Credential::from_password("igor", "hunter2");
         let b = Credential::from_password("igor", "hunter2");
         assert_ne!(a.salt, b.salt, "salts are per credential");
-        assert_ne!(a.digest, b.digest, "so identical passwords store differently");
+        assert_ne!(
+            a.digest, b.digest,
+            "so identical passwords store differently"
+        );
         assert!(a.verify("igor", "hunter2") && b.verify("igor", "hunter2"));
     }
 }

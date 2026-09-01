@@ -5,17 +5,17 @@
 mod agents;
 mod db;
 mod dns;
+mod events;
+mod facts;
 mod format;
 mod goals;
 mod indexer;
-mod facts;
 mod knowledge;
 mod mesh;
 mod projects;
 mod qr;
 mod reader;
 mod secrets;
-mod events;
 mod tasks;
 mod tools;
 mod triggers;
@@ -27,15 +27,15 @@ use clap::{Parser, Subcommand};
 use crate::agents::{AgentsCommand, run_agents};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
+use crate::events::{EventsCommand, run_events};
+use crate::facts::{FactsCommand, run_facts};
 use crate::format::{print_bun, print_report, print_service};
 use crate::goals::{GoalsCommand, run_goals};
 use crate::indexer::{IndexerCommand, run_indexer};
-use crate::facts::{FactsCommand, run_facts};
 use crate::knowledge::{KnowledgeCommand, run_knowledge};
 use crate::mesh::{MeshCommand, run_mesh};
 use crate::projects::{ProjectsCommand, run_projects};
 use crate::secrets::{SecretsCommand, run_secrets};
-use crate::events::{EventsCommand, run_events};
 use crate::tasks::{TasksCommand, run_tasks};
 use crate::tools::{ToolsCommand, run_tools};
 use crate::triggers::{TriggersCommand, run_triggers};
@@ -260,7 +260,10 @@ fn main() {
     // has to happen while nothing has asked yet.
     if let Some(id) = cli.flavor.as_deref() {
         if let Err(active) = adi_config::Flavor::pin(adi_config::Flavor::for_id(id)) {
-            eprintln!("error: --flavor came too late; already running as '{}'", active.id);
+            eprintln!(
+                "error: --flavor came too late; already running as '{}'",
+                active.id
+            );
             std::process::exit(1);
         }
     }

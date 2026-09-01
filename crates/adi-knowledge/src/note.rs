@@ -366,7 +366,13 @@ fn break_at(chars: &[char], floor: usize, hard_end: usize) -> Option<usize> {
         .enumerate()
         .rev()
         .find(|(i, c)| **c == '\n' && *i > 0 && window[i - 1] == '\n')
-        .or_else(|| window.iter().enumerate().rev().find(|(_, c)| c.is_whitespace()))
+        .or_else(|| {
+            window
+                .iter()
+                .enumerate()
+                .rev()
+                .find(|(_, c)| c.is_whitespace())
+        })
         .map(|(i, _)| floor + i + 1)
 }
 
@@ -418,7 +424,10 @@ mod tests {
         assert_ne!(before.content_hash, after.content_hash);
 
         // ... and so does editing only the title, or only the tags.
-        assert_ne!(before.content_hash, note("Other title", "body").content_hash);
+        assert_ne!(
+            before.content_hash,
+            note("Other title", "body").content_hash
+        );
         let mut retagged = before.clone();
         retagged.tags = vec!["net".into()];
         let rehashed = content_hash(&retagged.embed_text());

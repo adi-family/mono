@@ -38,12 +38,12 @@
 //! # Ok::<(), adi_triggers::Error>(())
 //! ```
 
+#[cfg(feature = "supervisor")]
+mod dispatch;
 mod error;
 mod fire;
 pub mod presets;
 mod run;
-#[cfg(feature = "supervisor")]
-mod dispatch;
 #[cfg(feature = "supervisor")]
 mod supervisor;
 mod trigger;
@@ -52,12 +52,12 @@ use std::path::PathBuf;
 
 use adi_config::{Config, ConfigFile, now_unix};
 
+#[cfg(feature = "supervisor")]
+pub use dispatch::{EventDispatcher, EventObserver};
 pub use error::{Error, Result};
 pub use fire::Firing;
 pub use presets::{Preset, PresetField};
 pub use run::{RunState, Status};
-#[cfg(feature = "supervisor")]
-pub use dispatch::{EventDispatcher, EventObserver};
 #[cfg(feature = "supervisor")]
 pub use supervisor::Supervisor;
 pub use trigger::{

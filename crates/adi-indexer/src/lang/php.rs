@@ -3,8 +3,8 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, signature_before, tree_walking_analyzer,
-    WithDocCommentOpt,
+    WithDocCommentOpt, declaration, node_location, node_text, signature_before,
+    tree_walking_analyzer,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -53,15 +53,16 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
 fn extract_visibility(node: Node, source: &str) -> Visibility {
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && child.kind() == "visibility_modifier" {
-                let text = node_text(child, source);
-                match text.as_str() {
-                    "public" => return Visibility::Public,
-                    "private" => return Visibility::Private,
-                    "protected" => return Visibility::Protected,
-                    _ => {}
-                }
+            && child.kind() == "visibility_modifier"
+        {
+            let text = node_text(child, source);
+            match text.as_str() {
+                "public" => return Visibility::Public,
+                "private" => return Visibility::Private,
+                "protected" => return Visibility::Protected,
+                _ => {}
             }
+        }
     }
     Visibility::Public
 }
@@ -79,12 +80,9 @@ fn extract_php_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
         "trait_declaration" => parse_php_declaration(node, source, SymbolKind::Trait),
         "enum_declaration" => parse_php_declaration(node, source, SymbolKind::Enum),
         // A top-level function is always public; only a method carries a visibility keyword.
-        "function_definition" => parse_php_callable(
-            node,
-            source,
-            SymbolKind::Function,
-            Visibility::Public,
-        ),
+        "function_definition" => {
+            parse_php_callable(node, source, SymbolKind::Function, Visibility::Public)
+        }
         "method_declaration" => parse_php_callable(
             node,
             source,
@@ -92,7 +90,13 @@ fn extract_php_symbols(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>
             extract_visibility(node, source),
         ),
         "property_declaration" => {
-            parse_php_elements(node, source, symbols, "property_element", SymbolKind::Property);
+            parse_php_elements(
+                node,
+                source,
+                symbols,
+                "property_element",
+                SymbolKind::Property,
+            );
             None
         }
         "const_declaration" => {
@@ -159,14 +163,15 @@ fn parse_php_elements(
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
             && child.kind() == element
-                && let Some(name) = child.child_by_field_name("name") {
-                    let name_text = node_text(name, source);
-                    symbols.push(
-                        ParsedSymbol::new(name_text, kind, node_location(child))
-                            .with_visibility(visibility)
-                            .with_doc_comment_opt(doc_comment.clone()),
-                    );
-                }
+            && let Some(name) = child.child_by_field_name("name")
+        {
+            let name_text = node_text(name, source);
+            symbols.push(
+                ParsedSymbol::new(name_text, kind, node_location(child))
+                    .with_visibility(visibility)
+                    .with_doc_comment_opt(doc_comment.clone()),
+            );
+        }
     }
 }
 
@@ -205,13 +210,14 @@ fn collect_php_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
         "object_creation_expression" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
-                    && (child.kind() == "name" || child.kind() == "qualified_name") {
-                        refs.push(ParsedReference::new(
-                            node_text(child, source),
-                            ReferenceKind::Call,
-                            node_location(child),
-                        ));
-                    }
+                    && (child.kind() == "name" || child.kind() == "qualified_name")
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(child, source),
+                        ReferenceKind::Call,
+                        node_location(child),
+                    ));
+                }
             }
         }
         "named_type" => {
@@ -237,25 +243,27 @@ fn collect_php_references(node: Node, source: &str, refs: &mut Vec<ParsedReferen
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
                     && child.kind() == "namespace_use_clause"
-                        && let Some(name) = child.child_by_field_name("name") {
-                            refs.push(ParsedReference::new(
-                                node_text(name, source),
-                                ReferenceKind::Import,
-                                node_location(name),
-                            ));
-                        }
+                    && let Some(name) = child.child_by_field_name("name")
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(name, source),
+                        ReferenceKind::Import,
+                        node_location(name),
+                    ));
+                }
             }
         }
         "base_clause" | "class_interface_clause" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
-                    && (child.kind() == "name" || child.kind() == "qualified_name") {
-                        refs.push(ParsedReference::new(
-                            node_text(child, source),
-                            ReferenceKind::Inheritance,
-                            node_location(child),
-                        ));
-                    }
+                    && (child.kind() == "name" || child.kind() == "qualified_name")
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(child, source),
+                        ReferenceKind::Inheritance,
+                        node_location(child),
+                    ));
+                }
             }
         }
         _ => {}
@@ -311,4 +319,3 @@ fn is_builtin_function(name: &str) -> bool {
             | "require_once"
     )
 }
-

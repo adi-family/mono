@@ -615,7 +615,8 @@ fn shape_of(text: &str) -> Shape {
 /// sentence with a slash in it.
 fn is_path(word: &str) -> bool {
     let w = word.trim_end_matches([':', ')', ']', '.']);
-    let rooted = w.starts_with('/') || w.starts_with("./") || w.starts_with("../") || w.starts_with("~/");
+    let rooted =
+        w.starts_with('/') || w.starts_with("./") || w.starts_with("../") || w.starts_with("~/");
     (rooted || w.contains('/')) && w.matches('/').count() >= 2 && !w.contains("//")
 }
 
@@ -624,7 +625,11 @@ fn is_path(word: &str) -> bool {
 /// not.
 fn is_opaque_literal(word: &str) -> bool {
     let w = word.trim_matches(|c: char| !c.is_ascii_alphanumeric());
-    if w.len() < 16 || !w.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_') {
+    if w.len() < 16
+        || !w
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
         return false;
     }
     let digits = w.chars().filter(char::is_ascii_digit).count();
@@ -686,7 +691,10 @@ mod tests {
     fn a_conversation_without_repetition_reports_none() {
         let turns = vec![
             user_turn("Explain how the scheduler decides which node runs a job."),
-            assistant_with(Vec::new(), "It ranks candidates by free capacity, then by locality."),
+            assistant_with(
+                Vec::new(),
+                "It ranks candidates by free capacity, then by locality.",
+            ),
         ];
         let report = analyze(&turns, Options::default());
         assert!(report.repeats.is_empty(), "got {:?}", report.repeats);
@@ -713,15 +721,27 @@ mod tests {
         let turns = vec![
             user_turn("read the file"),
             assistant_with(
-                vec![tool("Read", "src/main.rs", &"a line of file content\n".repeat(40))],
+                vec![tool(
+                    "Read",
+                    "src/main.rs",
+                    &"a line of file content\n".repeat(40),
+                )],
                 "here it is",
             ),
         ];
         let report = analyze(&turns, Options::default());
         let top = report.by_source.first().expect("a source");
-        assert_eq!(top.0, Source::ToolOutput, "the output dominates: {:?}", report.by_source);
+        assert_eq!(
+            top.0,
+            Source::ToolOutput,
+            "the output dominates: {:?}",
+            report.by_source
+        );
         assert!(report.by_source.iter().any(|(s, _)| *s == Source::User));
-        assert_eq!(report.total, report.by_source.iter().map(|(_, n)| n).sum::<usize>());
+        assert_eq!(
+            report.total,
+            report.by_source.iter().map(|(_, n)| n).sum::<usize>()
+        );
     }
 
     /// The case exact repeats cannot see: the same file read three times with an edit in between.
@@ -794,7 +814,10 @@ mod tests {
     #[test]
     fn shapes_are_classified() {
         assert_eq!(shape_of("/usr/local/share/thing/file.rs"), Shape::Path);
-        assert_eq!(shape_of("--manifest-path /repo/crates/api/Cargo.toml --release"), Shape::Path);
+        assert_eq!(
+            shape_of("--manifest-path /repo/crates/api/Cargo.toml --release"),
+            Shape::Path
+        );
         assert_eq!(shape_of("https://example.com/a/b"), Shape::Url);
         assert_eq!(shape_of("a\nb"), Shape::Block);
         assert_eq!(shape_of("run the tests again"), Shape::Phrase);

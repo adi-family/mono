@@ -410,8 +410,7 @@ impl FromBody for ProjectHookRef {
 }
 
 impl FromBody for NewProjectHook {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"template\"?: \"init|workspace|blank\" }";
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\", \"name\": \"…\", \"template\"?: \"init|workspace|blank\" }";
 
     fn is_complete(&self) -> bool {
         !self.id.trim().is_empty() && !self.name.trim().is_empty()

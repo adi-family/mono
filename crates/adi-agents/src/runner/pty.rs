@@ -54,8 +54,10 @@ impl PtyRunner {
             Backend::PtyClaude => {
                 let mut config = decode::<PtyClaudeArguments>(&spec.arguments)?;
                 config.system_prompt = own_prompt(spec, config.system_prompt);
-                config.append_system_prompt =
-                    with_tool_help(spec, with_knowledge(spec, with_workspace(spec, config.append_system_prompt)));
+                config.append_system_prompt = with_tool_help(
+                    spec,
+                    with_knowledge(spec, with_workspace(spec, config.append_system_prompt)),
+                );
                 let tools = crate::backends::mcp::scope_tools(config.allowed_tools.as_deref());
                 Ok(pty::claude::argv(
                     &config,
@@ -117,7 +119,12 @@ impl Runner for PtyRunner {
         env.push(("PATH".to_string(), spec.path.clone()));
         adi_pty::launch(&name, &argv, &spec.cwd, &env).map_err(|e| Error::Launch(e.to_string()))?;
 
-        session.set_state(State { session: Some(name) }.into_value())
+        session.set_state(
+            State {
+                session: Some(name),
+            }
+            .into_value(),
+        )
     }
 
     fn is_alive(&self, session: &dyn Session) -> bool {
@@ -322,8 +329,12 @@ mod tests {
     /// A pty session name unique to this test run, so concurrently running tests (the registry is
     /// process-global) never collide.
     fn unique(tag: &str) -> String {
-        format!("{tag}-{}-{:?}", std::process::id(), std::thread::current().id())
-            .replace(['(', ')', '#'], "-")
+        format!(
+            "{tag}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        )
+        .replace(['(', ')', '#'], "-")
     }
 
     /// The capability question a caller is supposed to ask, and the two answers that make
@@ -334,7 +345,10 @@ mod tests {
         assert_eq!(runner.kind().as_str(), "pty");
         assert!(runner.as_terminal().is_some());
 
-        assert!(!runner.emits().any(), "a tty has nothing structured to read");
+        assert!(
+            !runner.emits().any(),
+            "a tty has nothing structured to read"
+        );
         let session = FakeSession::new("solver");
         let batch = runner.events(&session, None).expect("events");
         assert!(batch.events.is_empty());
@@ -454,7 +468,10 @@ mod tests {
             Stopped::default()
         );
         assert!(matches!(
-            runner.as_terminal().expect("a terminal").send_keys(&session, "hi", "Enter"),
+            runner
+                .as_terminal()
+                .expect("a terminal")
+                .send_keys(&session, "hi", "Enter"),
             Err(Error::NotRunning(_))
         ));
     }
@@ -471,13 +488,8 @@ mod tests {
         session
             .set_state(json!({ "session": name }))
             .expect("state");
-        adi_pty::launch(
-            &name,
-            &["/bin/cat".to_string()],
-            &std::env::temp_dir(),
-            &[],
-        )
-        .expect("launch a pane");
+        adi_pty::launch(&name, &["/bin/cat".to_string()], &std::env::temp_dir(), &[])
+            .expect("launch a pane");
         assert!(runner.is_alive(&session));
 
         let terminal = runner.as_terminal().expect("a pty is a terminal");
@@ -494,9 +506,7 @@ mod tests {
         }
         assert!(screen.contains("hello pane"), "{screen:?}");
 
-        let stopped = runner
-            .stop(&session, Duration::from_secs(5))
-            .expect("stop");
+        let stopped = runner.stop(&session, Duration::from_secs(5)).expect("stop");
         assert_eq!(
             stopped,
             Stopped {

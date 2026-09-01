@@ -3,8 +3,8 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, signature_before, tree_walking_analyzer,
-    WithDocCommentOpt,
+    WithDocCommentOpt, declaration, node_location, node_text, signature_before,
+    tree_walking_analyzer,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -64,21 +64,22 @@ fn extract_doc_comment(node: Node, source: &str) -> Option<String> {
 fn extract_visibility(node: Node, source: &str) -> Visibility {
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && child.kind() == "modifiers" {
-                for j in 0..child.child_count() as u32 {
-                    if let Some(modifier) = child.child(j) {
-                        let text = node_text(modifier, source);
-                        match text.as_str() {
-                            "public" => return Visibility::Public,
-                            "private" => return Visibility::Private,
-                            "fileprivate" => return Visibility::Private,
-                            "internal" => return Visibility::Internal,
-                            "open" => return Visibility::Public,
-                            _ => {}
-                        }
+            && child.kind() == "modifiers"
+        {
+            for j in 0..child.child_count() as u32 {
+                if let Some(modifier) = child.child(j) {
+                    let text = node_text(modifier, source);
+                    match text.as_str() {
+                        "public" => return Visibility::Public,
+                        "private" => return Visibility::Private,
+                        "fileprivate" => return Visibility::Private,
+                        "internal" => return Visibility::Internal,
+                        "open" => return Visibility::Public,
+                        _ => {}
                     }
                 }
             }
+        }
     }
     Visibility::Internal
 }
@@ -140,17 +141,18 @@ fn parse_swift_callable(node: Node, source: &str, kind: SymbolKind) -> Option<Pa
 fn parse_swift_property(node: Node, source: &str) -> Option<ParsedSymbol> {
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && child.kind() == "pattern" {
-                let name_text = node_text(child, source);
-                let doc_comment = extract_doc_comment(node, source);
-                let visibility = extract_visibility(node, source);
+            && child.kind() == "pattern"
+        {
+            let name_text = node_text(child, source);
+            let doc_comment = extract_doc_comment(node, source);
+            let visibility = extract_visibility(node, source);
 
-                return Some(
-                    ParsedSymbol::new(name_text, SymbolKind::Property, node_location(node))
-                        .with_visibility(visibility)
-                        .with_doc_comment_opt(doc_comment),
-                );
-            }
+            return Some(
+                ParsedSymbol::new(name_text, SymbolKind::Property, node_location(node))
+                    .with_visibility(visibility)
+                    .with_doc_comment_opt(doc_comment),
+            );
+        }
     }
     None
 }
@@ -180,14 +182,15 @@ fn parse_swift_deinit(node: Node) -> ParsedSymbol {
 fn parse_swift_extension(node: Node, source: &str) -> Option<ParsedSymbol> {
     for i in 0..node.child_count() as u32 {
         if let Some(child) = node.child(i)
-            && (child.kind() == "user_type" || child.kind() == "type_identifier") {
-                let name_text = format!("extension {}", node_text(child, source));
-                return Some(ParsedSymbol::new(
-                    name_text,
-                    SymbolKind::Class,
-                    node_location(node),
-                ));
-            }
+            && (child.kind() == "user_type" || child.kind() == "type_identifier")
+        {
+            let name_text = format!("extension {}", node_text(child, source));
+            return Some(ParsedSymbol::new(
+                name_text,
+                SymbolKind::Class,
+                node_location(node),
+            ));
+        }
     }
     None
 }
@@ -228,25 +231,27 @@ fn collect_swift_references(node: Node, source: &str, refs: &mut Vec<ParsedRefer
         "import_declaration" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
-                    && child.kind() == "identifier" {
-                        refs.push(ParsedReference::new(
-                            node_text(child, source),
-                            ReferenceKind::Import,
-                            node_location(child),
-                        ));
-                    }
+                    && child.kind() == "identifier"
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(child, source),
+                        ReferenceKind::Import,
+                        node_location(child),
+                    ));
+                }
             }
         }
         "inheritance_specifier" => {
             for i in 0..node.child_count() as u32 {
                 if let Some(child) = node.child(i)
-                    && (child.kind() == "user_type" || child.kind() == "type_identifier") {
-                        refs.push(ParsedReference::new(
-                            node_text(child, source),
-                            ReferenceKind::Inheritance,
-                            node_location(child),
-                        ));
-                    }
+                    && (child.kind() == "user_type" || child.kind() == "type_identifier")
+                {
+                    refs.push(ParsedReference::new(
+                        node_text(child, source),
+                        ReferenceKind::Inheritance,
+                        node_location(child),
+                    ));
+                }
             }
         }
         _ => {}
@@ -316,4 +321,3 @@ fn is_common_function(name: &str) -> bool {
             | "assertionFailure"
     )
 }
-

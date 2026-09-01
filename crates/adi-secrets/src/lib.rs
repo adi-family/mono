@@ -302,7 +302,12 @@ impl Secrets {
         }
         let manifest: Manifest = file.load()?;
         let key = crypto::load_or_create_key(&self.dir())?;
-        let plaintext = crypto::decrypt(&key, &aad(project, name), &manifest.nonce, &manifest.ciphertext)?;
+        let plaintext = crypto::decrypt(
+            &key,
+            &aad(project, name),
+            &manifest.nonce,
+            &manifest.ciphertext,
+        )?;
         Ok(Some(decode_value(plaintext)?))
     }
 
@@ -419,7 +424,12 @@ impl Secrets {
     /// Load and decrypt one secret's value with an already-loaded key.
     fn decrypt_named(&self, key: &[u8; 32], project: Option<&str>, name: &str) -> Result<String> {
         let manifest = self.manifest_file(project, name)?.load()?;
-        let plaintext = crypto::decrypt(key, &aad(project, name), &manifest.nonce, &manifest.ciphertext)?;
+        let plaintext = crypto::decrypt(
+            key,
+            &aad(project, name),
+            &manifest.nonce,
+            &manifest.ciphertext,
+        )?;
         decode_value(plaintext)
     }
 
@@ -599,10 +609,15 @@ mod tests {
     #[test]
     fn no_plaintext_value_is_written_to_disk() {
         let store = scratch("nodisk");
-        store.set(None, "TOKEN", "super-secret-value", None).expect("set");
+        store
+            .set(None, "TOKEN", "super-secret-value", None)
+            .expect("set");
         let path = store.dir().join("global/TOKEN.toml");
         let raw = std::fs::read_to_string(&path).expect("read");
-        assert!(!raw.contains("super-secret-value"), "value leaked into {path:?}");
+        assert!(
+            !raw.contains("super-secret-value"),
+            "value leaked into {path:?}"
+        );
         assert!(raw.contains("ciphertext"));
     }
 
@@ -613,35 +628,60 @@ mod tests {
         let second = store.set(None, "K", "v2", None).expect("overwrite");
         assert_eq!(first.created_at, second.created_at);
         assert!(second.updated_at >= first.updated_at);
-        assert_eq!(store.reveal(None, "K").expect("reveal").as_deref(), Some("v2"));
+        assert_eq!(
+            store.reveal(None, "K").expect("reveal").as_deref(),
+            Some("v2")
+        );
     }
 
     #[test]
     fn project_scope_is_separate_from_global_and_overrides_on_resolve() {
         let store = scratch("scope");
-        store.set(None, "SHARED", "global-value", None).expect("global");
+        store
+            .set(None, "SHARED", "global-value", None)
+            .expect("global");
         store.set(None, "ONLY_GLOBAL", "g", None).expect("global2");
-        store.set(Some("proj"), "SHARED", "project-value", None).expect("project");
-        store.set(Some("proj"), "ONLY_PROJECT", "p", None).expect("project2");
+        store
+            .set(Some("proj"), "SHARED", "project-value", None)
+            .expect("project");
+        store
+            .set(Some("proj"), "ONLY_PROJECT", "p", None)
+            .expect("project2");
 
         // list is scope-specific.
         assert_eq!(
-            store.list(None).expect("g").iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+            store
+                .list(None)
+                .expect("g")
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>(),
             vec!["ONLY_GLOBAL", "SHARED"]
         );
         assert_eq!(
-            store.list(Some("proj")).expect("p").iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+            store
+                .list(Some("proj"))
+                .expect("p")
+                .iter()
+                .map(|s| s.name.clone())
+                .collect::<Vec<_>>(),
             vec!["ONLY_PROJECT", "SHARED"]
         );
 
         // resolve(None) = global only.
         let global = store.resolve(None).expect("resolve global");
-        assert_eq!(global.get("SHARED").map(String::as_str), Some("global-value"));
+        assert_eq!(
+            global.get("SHARED").map(String::as_str),
+            Some("global-value")
+        );
         assert!(!global.contains_key("ONLY_PROJECT"));
 
         // resolve(project) = global overlaid by project; project wins on SHARED.
         let merged = store.resolve(Some("proj")).expect("resolve merged");
-        assert_eq!(merged.get("SHARED").map(String::as_str), Some("project-value"));
+        assert_eq!(
+            merged.get("SHARED").map(String::as_str),
+            Some("project-value")
+        );
         assert_eq!(merged.get("ONLY_GLOBAL").map(String::as_str), Some("g"));
         assert_eq!(merged.get("ONLY_PROJECT").map(String::as_str), Some("p"));
     }
@@ -698,7 +738,10 @@ mod tests {
         assert!(store.remove(Some("proj"), "K").expect("remove project"));
         assert!(store.get(Some("proj"), "K").expect("get").is_none());
         // The global one is untouched.
-        assert_eq!(store.reveal(None, "K").expect("reveal").as_deref(), Some("g"));
+        assert_eq!(
+            store.reveal(None, "K").expect("reveal").as_deref(),
+            Some("g")
+        );
         assert!(!store.remove(Some("proj"), "K").expect("remove missing"));
     }
 
@@ -733,20 +776,32 @@ mod tests {
         // The values decrypt at the new address — which they only can if they were re-encrypted
         // under it, since the AAD binds a ciphertext to its scope.
         assert_eq!(
-            store.reveal(Some("new"), "API_KEY").expect("reveal").as_deref(),
+            store
+                .reveal(Some("new"), "API_KEY")
+                .expect("reveal")
+                .as_deref(),
             Some("s3cr3t")
         );
         assert_eq!(
-            store.reveal(Some("new"), "GOOGLE_TOKEN").expect("reveal").as_deref(),
+            store
+                .reveal(Some("new"), "GOOGLE_TOKEN")
+                .expect("reveal")
+                .as_deref(),
             Some("ya29.access")
         );
         assert_eq!(
-            store.reveal_refresh(Some("new"), "GOOGLE_TOKEN").expect("refresh").as_deref(),
+            store
+                .reveal_refresh(Some("new"), "GOOGLE_TOKEN")
+                .expect("refresh")
+                .as_deref(),
             Some("1//refresh")
         );
 
         // Metadata travelled unchanged — a rename is not a re-set.
-        let moved = store.get(Some("new"), "API_KEY").expect("get").expect("present");
+        let moved = store
+            .get(Some("new"), "API_KEY")
+            .expect("get")
+            .expect("present");
         assert_eq!(moved.description.as_deref(), Some("the key"));
         assert_eq!(moved.created_at, created);
         let oauth = store
@@ -763,16 +818,25 @@ mod tests {
         assert!(store.list(Some("old")).expect("list old").is_empty());
         assert!(!store.dir().join("projects/old").exists());
         assert_eq!(
-            store.reveal(Some("other"), "API_KEY").expect("reveal").as_deref(),
+            store
+                .reveal(Some("other"), "API_KEY")
+                .expect("reveal")
+                .as_deref(),
             Some("not mine")
         );
-        assert_eq!(store.reveal(None, "API_KEY").expect("reveal").as_deref(), Some("global"));
+        assert_eq!(
+            store.reveal(None, "API_KEY").expect("reveal").as_deref(),
+            Some("global")
+        );
 
         // Nothing to move the second time, and renaming onto itself is a no-op.
         assert_eq!(store.rename_project("old", "new").expect("again"), 0);
         assert_eq!(store.rename_project("new", "new").expect("self"), 0);
         assert_eq!(
-            store.reveal(Some("new"), "API_KEY").expect("reveal").as_deref(),
+            store
+                .reveal(Some("new"), "API_KEY")
+                .expect("reveal")
+                .as_deref(),
             Some("s3cr3t")
         );
     }
@@ -787,7 +851,9 @@ mod tests {
             expires_at: Some(1_800_000_000),
             scope: Some("email profile".to_string()),
         };
-        let meta = store.set_oauth(None, "GOOGLE_TOKEN", &token, Some("login")).expect("set_oauth");
+        let meta = store
+            .set_oauth(None, "GOOGLE_TOKEN", &token, Some("login"))
+            .expect("set_oauth");
 
         // The view exposes provenance but never a token.
         let info = meta.oauth.expect("oauth info");
@@ -796,16 +862,33 @@ mod tests {
         assert!(info.has_refresh);
 
         // The access token is the secret's value — reveal + resolve return it, injecting like text.
-        assert_eq!(store.reveal(None, "GOOGLE_TOKEN").expect("reveal").as_deref(), Some("ya29.access"));
         assert_eq!(
-            store.resolve(None).expect("resolve").get("GOOGLE_TOKEN").map(String::as_str),
+            store
+                .reveal(None, "GOOGLE_TOKEN")
+                .expect("reveal")
+                .as_deref(),
+            Some("ya29.access")
+        );
+        assert_eq!(
+            store
+                .resolve(None)
+                .expect("resolve")
+                .get("GOOGLE_TOKEN")
+                .map(String::as_str),
             Some("ya29.access")
         );
         // The refresh token round-trips through its server-side path.
-        assert_eq!(store.reveal_refresh(None, "GOOGLE_TOKEN").expect("refresh").as_deref(), Some("1//refresh"));
+        assert_eq!(
+            store
+                .reveal_refresh(None, "GOOGLE_TOKEN")
+                .expect("refresh")
+                .as_deref(),
+            Some("1//refresh")
+        );
 
         // Neither token appears in plaintext on disk.
-        let raw = std::fs::read_to_string(store.dir().join("global/GOOGLE_TOKEN.toml")).expect("read");
+        let raw =
+            std::fs::read_to_string(store.dir().join("global/GOOGLE_TOKEN.toml")).expect("read");
         assert!(!raw.contains("ya29.access") && !raw.contains("1//refresh"));
         assert!(raw.contains("provider = \"google\""));
     }
@@ -820,7 +903,9 @@ mod tests {
             expires_at: None,
             scope: None,
         };
-        let meta = store.set_oauth(None, "GH", &token, None).expect("set_oauth");
+        let meta = store
+            .set_oauth(None, "GH", &token, None)
+            .expect("set_oauth");
         assert!(!meta.oauth.expect("info").has_refresh);
         assert_eq!(store.reveal_refresh(None, "GH").expect("refresh"), None);
     }
@@ -836,7 +921,14 @@ mod tests {
             scope: None,
         };
         store.set_oauth(None, "K", &token, None).expect("oauth");
-        assert!(store.get(None, "K").expect("get").expect("present").oauth.is_some());
+        assert!(
+            store
+                .get(None, "K")
+                .expect("get")
+                .expect("present")
+                .oauth
+                .is_some()
+        );
         // Overwriting with a plain text value drops the OAuth metadata + refresh token.
         store.set(None, "K", "plain", None).expect("set");
         let after = store.get(None, "K").expect("get").expect("present");
@@ -847,13 +939,22 @@ mod tests {
     #[test]
     fn invalid_names_never_touch_disk() {
         let store = scratch("invalid");
-        assert!(matches!(store.get(None, "../escape"), Err(Error::InvalidName(_))));
+        assert!(matches!(
+            store.get(None, "../escape"),
+            Err(Error::InvalidName(_))
+        ));
         assert!(matches!(
             store.set(Some("a/b"), "K", "v", None),
             Err(Error::InvalidName(_))
         ));
-        assert!(matches!(store.reveal(None, ".."), Err(Error::InvalidName(_))));
-        assert!(matches!(store.list(Some("../x")), Err(Error::InvalidName(_))));
+        assert!(matches!(
+            store.reveal(None, ".."),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(matches!(
+            store.list(Some("../x")),
+            Err(Error::InvalidName(_))
+        ));
     }
 
     #[test]
@@ -866,6 +967,9 @@ mod tests {
         store.ensure_scope_dir(Some("proj")).expect("scope dir");
         let to = store.dir().join("projects/proj/K.toml");
         std::fs::copy(&from, &to).expect("copy");
-        assert!(matches!(store.reveal(Some("proj"), "K"), Err(Error::Decrypt)));
+        assert!(matches!(
+            store.reveal(Some("proj"), "K"),
+            Err(Error::Decrypt)
+        ));
     }
 }

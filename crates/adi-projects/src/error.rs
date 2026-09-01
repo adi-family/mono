@@ -26,11 +26,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(e) => write!(f, "project store error: {e}"),
-            Self::InvalidId(id) => write!(
-                f,
-                "invalid project id {id:?}: {}",
-                adi_config::NAME_RULE
-            ),
+            Self::InvalidId(id) => {
+                write!(f, "invalid project id {id:?}: {}", adi_config::NAME_RULE)
+            }
             Self::NotFound(id) => write!(f, "no such project: {id}"),
             Self::Exists(id) => write!(f, "project already exists: {id}"),
             Self::Io(e) => write!(f, "project store I/O error: {e}"),

@@ -546,7 +546,13 @@ fn take_raw_string(chars: &[char], i: usize) -> Option<(String, usize)> {
     }
     j += 1;
     while j < chars.len() {
-        if chars[j] == '"' && chars[j + 1..].iter().take(hashes).filter(|&&c| c == '#').count() == hashes
+        if chars[j] == '"'
+            && chars[j + 1..]
+                .iter()
+                .take(hashes)
+                .filter(|&&c| c == '#')
+                .count()
+                == hashes
         {
             j += 1 + hashes;
             return Some((chars[i..j].iter().collect(), j));

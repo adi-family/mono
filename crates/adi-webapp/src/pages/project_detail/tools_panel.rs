@@ -2,8 +2,8 @@
 //! shared list at `/api/tools`), with the same Run / Edit / Archive actions as the global Tools
 //! page, plus a create/link form pre-scoped to the open project.
 
+use adi_ui::Table;
 use leptos::prelude::*;
-use adi_ui::{Table};
 
 use crate::pages::tools::{rows_view, tool_create_form};
 use crate::state::{State, ToolEditor, ToolRunView, ToolsForm};

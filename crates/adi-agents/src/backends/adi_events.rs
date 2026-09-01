@@ -107,7 +107,9 @@ pub(crate) fn parse(log: &[u8]) -> TurnContent {
         match event.get("kind").and_then(Value::as_str) {
             Some("message") => {
                 if let Some(t) = event.get("text").and_then(Value::as_str) {
-                    steps.push(Step::Message { text: t.to_string() });
+                    steps.push(Step::Message {
+                        text: t.to_string(),
+                    });
                 }
             }
             Some("tool") => fold_tool(&event, &mut steps, &mut tool_index),
@@ -205,7 +207,12 @@ mod tests {
         ]);
         let content = parse(&log);
         assert_eq!(content.text, "done");
-        assert_eq!(content.steps.len(), 1, "one call is one row: {:?}", content.steps);
+        assert_eq!(
+            content.steps.len(),
+            1,
+            "one call is one row: {:?}",
+            content.steps
+        );
         let Step::Tool { status, output, .. } = &content.steps[0] else {
             panic!("expected a tool step, got {:?}", content.steps[0]);
         };
@@ -252,6 +259,9 @@ mod tests {
 
         let mut empty = Vec::new();
         metrics(&mut empty, &TurnMetrics::default());
-        assert!(parse(&empty).metrics.is_none(), "empty metrics are not shown");
+        assert!(
+            parse(&empty).metrics.is_none(),
+            "empty metrics are not shown"
+        );
     }
 }

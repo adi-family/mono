@@ -97,11 +97,11 @@ pub use config::Config;
 pub use embed::Embedder;
 pub use error::{Error, Result};
 pub use graph::{
-    calculate_metrics, detect_cycles, find_call_path, get_entry_points, get_leaf_nodes,
-    get_transitive_callees, get_transitive_callers, get_usage_stats, SymbolMetrics,
+    SymbolMetrics, calculate_metrics, detect_cycles, find_call_path, get_entry_points,
+    get_leaf_nodes, get_transitive_callees, get_transitive_callers, get_usage_stats,
 };
 pub use storage::sqlite::SqliteStorage;
-pub use structure::{hamming, Structure};
+pub use structure::{Structure, hamming};
 pub use types::*;
 pub use watcher::Watcher;
 

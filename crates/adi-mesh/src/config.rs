@@ -253,7 +253,11 @@ allow = [3000]
                 "https://fra.mono-relay.withadi.dev".to_string(),
             ],
         );
-        assert_eq!(cfg.host.allow, vec![3000], "the rest of the file is untouched");
+        assert_eq!(
+            cfg.host.allow,
+            vec![3000],
+            "the rest of the file is untouched"
+        );
 
         // A machine that saves its config must not lose its relays — this file is edited by hand
         // *and* rewritten by every `mesh allow`/`grant` mutation.

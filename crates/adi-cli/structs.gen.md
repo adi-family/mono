@@ -57,6 +57,8 @@ pub(crate) enum AgentsCommand {
         #[arg(long)]
         permission_mode: Option<String>,
         #[arg(long)]
+        settings: Option<String>,
+        #[arg(long)]
         temperature: Option<f64>,
         #[arg(long)]
         max_turns: Option<u32>,
@@ -1294,6 +1296,12 @@ pub(crate) enum ToolsCommand {
     },
     Show {
         id: String,
+        #[arg(long)]
+        json: bool,
+    },
+    Rename {
+        id: String,
+        new_id: String,
         #[arg(long)]
         json: bool,
     },

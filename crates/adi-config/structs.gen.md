@@ -4,13 +4,14 @@
 
 > The adi configurator: per-module settings directories with typed TOML config files and raw file storage under the ~/.adi/mono namespace. Pure library.
 
-5 structs · 1 enum · 1 type alias across 5 files.
+6 structs · 1 enum · 1 type alias across 6 files.
 
 ## Index
 
 - [`src/error.rs`](#srcerrorrs) — `Result`, `Error`
 - [`src/file.rs`](#srcfilers) — `ConfigFile`
 - [`src/flavor.rs`](#srcflavorrs) — `Flavor`, `Preset`
+- [`src/ids.rs`](#srcidsrs) — `Aliases`
 - [`src/lib.rs`](#srclibrs) — `Config`
 - [`src/module.rs`](#srcmodulers) — `Module`
 
@@ -100,6 +101,22 @@ struct Preset {
     frontdoor_addr: Ipv4Addr,
     supervisor_port: u16,
     auto_update: bool,
+}
+```
+
+---
+
+## `src/ids.rs`
+
+### struct `Aliases`
+
+One registry's alias index: the ids an entry used to have, each pointing at the id it has now.
+
+```rust
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Aliases {
+    #[serde(default)]
+    aliases: BTreeMap<String, String>,
 }
 ```
 

@@ -45,7 +45,9 @@ pub fn set_oauth_secret(store: &Secrets, body: &[u8]) -> Response {
     let req = require!(body, SetOAuthSecret);
     let project = clean(req.project);
     // The provider gives seconds-to-expiry; stamp the absolute time the store keeps.
-    let expires_at = req.expires_in.map(|secs| adi_config::now_unix().saturating_add(secs));
+    let expires_at = req
+        .expires_in
+        .map(|secs| adi_config::now_unix().saturating_add(secs));
     let token = OAuthToken {
         provider: req.provider.trim().to_string(),
         access_token: req.access_token,
@@ -53,7 +55,12 @@ pub fn set_oauth_secret(store: &Secrets, body: &[u8]) -> Response {
         expires_at,
         scope: clean(req.scope),
     };
-    match store.set_oauth(project.as_deref(), req.name.trim(), &token, req.description.as_deref()) {
+    match store.set_oauth(
+        project.as_deref(),
+        req.name.trim(),
+        &token,
+        req.description.as_deref(),
+    ) {
         Ok(_) => secrets(store),
         Err(e) => Response::from(&e),
     }

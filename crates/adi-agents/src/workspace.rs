@@ -374,7 +374,10 @@ mod tests {
         for engine in ["harness:adi", "harness:claude-sdk", "process:claude"] {
             let kept = block_for(engine);
             assert!(kept.contains("belongs to this conversation"), "{kept}");
-            assert!(kept.contains("export FE="), "how to name a path once: {kept}");
+            assert!(
+                kept.contains("export FE="),
+                "how to name a path once: {kept}"
+            );
         }
 
         let bare = block_for("pty:codex");

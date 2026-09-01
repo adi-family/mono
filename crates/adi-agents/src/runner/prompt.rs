@@ -31,7 +31,10 @@ use super::RunSpec;
 /// tools — which is different from an empty string and is why the type says so.
 #[must_use]
 pub fn compose(spec: &RunSpec, stored: Option<String>) -> Option<String> {
-    with_tool_help(spec, with_knowledge(spec, with_workspace(spec, own_prompt(spec, stored))))
+    with_tool_help(
+        spec,
+        with_knowledge(spec, with_workspace(spec, own_prompt(spec, stored))),
+    )
 }
 
 /// One stretch of a composed prompt, and what it is.
@@ -86,11 +89,17 @@ pub fn sections(prompt: &str) -> Vec<Section<'_>> {
     let mut out = Vec::with_capacity(cuts.len() + 1);
     let head = cuts.first().map_or(prompt.len(), |(_, at)| *at);
     if head > 0 {
-        out.push(Section { label: "instructions", text: &prompt[..head] });
+        out.push(Section {
+            label: "instructions",
+            text: &prompt[..head],
+        });
     }
     for (i, (label, at)) in cuts.iter().enumerate() {
         let end = cuts.get(i + 1).map_or(prompt.len(), |(_, next)| *next);
-        out.push(Section { label, text: &prompt[*at..end] });
+        out.push(Section {
+            label,
+            text: &prompt[*at..end],
+        });
     }
     out
 }
@@ -145,7 +154,10 @@ pub(super) fn with_knowledge(spec: &RunSpec, existing: Option<String>) -> Option
 /// A conversation past its first turn carries the section it opened with
 /// ([`RunSpec::tool_help`]) and that is used verbatim; only a fresh run renders one.
 pub(super) fn with_tool_help(spec: &RunSpec, existing: Option<String>) -> Option<String> {
-    let block = spec.tool_help.clone().or_else(|| tool_help::block(&spec.tools));
+    let block = spec
+        .tool_help
+        .clone()
+        .or_else(|| tool_help::block(&spec.tools));
     behind(existing, block.as_deref())
 }
 
@@ -255,7 +267,12 @@ mod tests {
         let cut = sections(&prompt);
         assert_eq!(
             cut.iter().map(|s| s.label).collect::<Vec<_>>(),
-            ["instructions", "where you are", "what you know", "your tools"],
+            [
+                "instructions",
+                "where you are",
+                "what you know",
+                "your tools"
+            ],
         );
         assert_eq!(cut.iter().map(|s| s.text).collect::<String>(), prompt);
         assert!(cut[0].text.starts_with("You review code."));
@@ -275,7 +292,10 @@ mod tests {
         spec.tool_help = Some("# Your tools\n\nBash".into());
         let with_tools = compose(&spec, None).expect("a prompt");
         assert_eq!(
-            sections(&with_tools).iter().map(|s| s.label).collect::<Vec<_>>(),
+            sections(&with_tools)
+                .iter()
+                .map(|s| s.label)
+                .collect::<Vec<_>>(),
             ["instructions", "your tools"],
         );
     }

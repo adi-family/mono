@@ -3,8 +3,8 @@
 use tree_sitter::{Node, Tree};
 
 use super::common::{
-    declaration, node_location, node_text, signature_before, tree_walking_analyzer,
-    WithDocCommentOpt,
+    WithDocCommentOpt, declaration, node_location, node_text, signature_before,
+    tree_walking_analyzer,
 };
 use crate::parser::treesitter::analyzers::LanguageAnalyzer;
 use crate::types::{ParsedReference, ParsedSymbol, ReferenceKind, SymbolKind, Visibility};
@@ -124,16 +124,17 @@ fn parse_rust_struct(node: Node, source: &str) -> Option<ParsedSymbol> {
         for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
                 && child.kind() == "field_declaration"
-                    && let Some(field_name) = child.child_by_field_name("name") {
-                        children.push(
-                            ParsedSymbol::new(
-                                node_text(field_name, source),
-                                SymbolKind::Field,
-                                node_location(child),
-                            )
-                            .with_doc_comment_opt(extract_doc_comment(child, source)),
-                        );
-                    }
+                && let Some(field_name) = child.child_by_field_name("name")
+            {
+                children.push(
+                    ParsedSymbol::new(
+                        node_text(field_name, source),
+                        SymbolKind::Field,
+                        node_location(child),
+                    )
+                    .with_doc_comment_opt(extract_doc_comment(child, source)),
+                );
+            }
         }
     }
 
@@ -146,17 +147,18 @@ fn parse_rust_trait(node: Node, source: &str) -> Option<ParsedSymbol> {
         for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
                 && (child.kind() == "function_signature_item" || child.kind() == "function_item")
-                    && let Some(method_name) = child.child_by_field_name("name") {
-                        children.push(
-                            ParsedSymbol::new(
-                                node_text(method_name, source),
-                                SymbolKind::Method,
-                                node_location(child),
-                            )
-                            .with_signature(extract_function_signature(child, source))
-                            .with_doc_comment_opt(extract_doc_comment(child, source)),
-                        );
-                    }
+                && let Some(method_name) = child.child_by_field_name("name")
+            {
+                children.push(
+                    ParsedSymbol::new(
+                        node_text(method_name, source),
+                        SymbolKind::Method,
+                        node_location(child),
+                    )
+                    .with_signature(extract_function_signature(child, source))
+                    .with_doc_comment_opt(extract_doc_comment(child, source)),
+                );
+            }
         }
     }
 
@@ -184,17 +186,18 @@ fn parse_rust_impl(node: Node, source: &str, symbols: &mut Vec<ParsedSymbol>) {
         for i in 0..body.child_count() as u32 {
             if let Some(child) = body.child(i)
                 && child.kind() == "function_item"
-                    && let Some(method_name) = child.child_by_field_name("name") {
-                        symbols.push(
-                            ParsedSymbol::new(
-                                format!("{}::{}", type_name, node_text(method_name, source)),
-                                SymbolKind::Method,
-                                node_location(child),
-                            )
-                            .with_signature(extract_function_signature(child, source))
-                            .with_doc_comment_opt(extract_doc_comment(child, source)),
-                        );
-                    }
+                && let Some(method_name) = child.child_by_field_name("name")
+            {
+                symbols.push(
+                    ParsedSymbol::new(
+                        format!("{}::{}", type_name, node_text(method_name, source)),
+                        SymbolKind::Method,
+                        node_location(child),
+                    )
+                    .with_signature(extract_function_signature(child, source))
+                    .with_doc_comment_opt(extract_doc_comment(child, source)),
+                );
+            }
         }
     }
 }

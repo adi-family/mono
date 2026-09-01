@@ -218,7 +218,10 @@ mod tests {
             serde_yaml_ng::from_str(&supervisor_config()).expect("the shipped config parses");
 
         let imports = hive["imports"].as_sequence().expect("imports");
-        let imports: Vec<&str> = imports.iter().filter_map(serde_yaml_ng::Value::as_str).collect();
+        let imports: Vec<&str> = imports
+            .iter()
+            .filter_map(serde_yaml_ng::Value::as_str)
+            .collect();
         assert!(
             imports.iter().any(|i| i.contains("ADI_DASHBOARDS_DIR")),
             "dashboards must be imported or nothing runs them: {imports:?}"
@@ -237,7 +240,12 @@ mod tests {
         assert_eq!(binds.len(), 1, "one throwaway address, not a front door");
         let bind = binds[0].as_str().expect("bind is a string");
         assert_eq!(bind, super::bind(), "the config and the probe must agree");
-        let port: u16 = bind.rsplit(':').next().expect("port").parse().expect("numeric");
+        let port: u16 = bind
+            .rsplit(':')
+            .next()
+            .expect("port")
+            .parse()
+            .expect("numeric");
         assert!(
             !(8000..=9999).contains(&port),
             "must sit outside the ports manager's allocation range, or a lease could take it"

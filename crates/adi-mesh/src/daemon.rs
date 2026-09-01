@@ -52,9 +52,7 @@ impl Daemon {
     ///
     /// # Errors
     /// As [`start`](Self::start).
-    pub async fn start_with(
-        credentials: Option<Arc<dyn NodeCredentials>>,
-    ) -> anyhow::Result<Self> {
+    pub async fn start_with(credentials: Option<Arc<dyn NodeCredentials>>) -> anyhow::Result<Self> {
         let cfg = MeshConfig::load()?;
         let secret = identity::load_or_create()?;
         let mut builder = Endpoint::builder(presets::N0)
@@ -114,7 +112,9 @@ impl Daemon {
                     rx.clone(),
                 )));
             }
-            Err(e) => warn!(%addr, error = %e, "mesh gateway could not bind; no node is reachable from here"),
+            Err(e) => {
+                warn!(%addr, error = %e, "mesh gateway could not bind; no node is reachable from here")
+            }
         }
 
         // Independently of the listener: the *node* side reads the same snapshots, so a machine

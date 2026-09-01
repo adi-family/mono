@@ -4,7 +4,7 @@
 
 > Core shared library for the adi-family workspace.
 
-16 structs · 5 enums across 11 files.
+17 structs · 5 enums across 12 files.
 
 ## Index
 
@@ -18,6 +18,7 @@
 - [`src/projects.rs`](#srcprojectsrs) — `ProjectRenamed`
 - [`src/service.rs`](#srcservicers) — `Action`, `ServiceReport`
 - [`src/status.rs`](#srcstatusrs) — `DaemonStatus`
+- [`src/tools.rs`](#srctoolsrs) — `ToolRenamed`
 - [`src/update.rs`](#srcupdaters) — `RunOutcome`, `Update`, `Updater`
 
 ---
@@ -292,6 +293,24 @@ pub struct DaemonStatus {
     pub route_installed: bool,
     pub started_at_unix: u64,
     pub version: String,
+}
+```
+
+---
+
+## `src/tools.rs`
+
+### struct `ToolRenamed`
+
+What a `rename_tool` did — the receipt the CLI prints.
+
+```rust
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ToolRenamed {
+    pub tool: Tool,
+    pub from: String,
+    pub agents: usize,
+    pub warnings: Vec<String>,
 }
 ```
 

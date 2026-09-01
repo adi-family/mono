@@ -39,9 +39,7 @@ pub fn runner_of(record: &SessionRecord) -> Option<Box<dyn Runner>> {
 #[must_use]
 pub fn runner_for(backend: &Backend) -> Option<Box<dyn Runner>> {
     match backend {
-        Backend::PtyClaude | Backend::PtyCodex => {
-            Some(Box::new(PtyRunner::new(backend.clone())))
-        }
+        Backend::PtyClaude | Backend::PtyCodex => Some(Box::new(PtyRunner::new(backend.clone()))),
         Backend::ProcessClaude
         | Backend::ProcessCodex
         | Backend::HarnessClaudeSdk

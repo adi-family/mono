@@ -5,8 +5,8 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::storage::sqlite::SqliteStorage;
     use crate::storage::Storage;
+    use crate::storage::sqlite::SqliteStorage;
     use crate::structure::Structure;
     use crate::types::*;
     use std::path::PathBuf;
@@ -511,7 +511,11 @@ mod tests {
             .unwrap();
 
         let caller = storage
-            .insert_symbol(&create_test_symbol(caller_file, "caller", SymbolKind::Function))
+            .insert_symbol(&create_test_symbol(
+                caller_file,
+                "caller",
+                SymbolKind::Function,
+            ))
             .unwrap();
         let mut callee_symbol = create_test_symbol(callee_file, "callee", SymbolKind::Function);
         callee_symbol.file_path = PathBuf::from("src/util.rs");

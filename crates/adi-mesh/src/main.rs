@@ -210,4 +210,3 @@ fn default_forward_name(peer_id: &str, port: u16) -> String {
     let prefix: String = peer_id.chars().take(8).collect();
     format!("{prefix}:{port}")
 }
-

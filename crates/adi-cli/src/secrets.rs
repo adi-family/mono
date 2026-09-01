@@ -111,7 +111,11 @@ pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), Strin
             if json {
                 print_json(&secret);
             } else {
-                println!("Set secret {} in {}.", secret.name, scope_label(scope.as_deref()));
+                println!(
+                    "Set secret {} in {}.",
+                    secret.name,
+                    scope_label(scope.as_deref())
+                );
             }
         }
         SecretsCommand::Get {
@@ -166,8 +170,14 @@ pub(crate) fn run_secrets(adi: Adi, command: SecretsCommand) -> Result<(), Strin
             project,
         } => {
             let scope = resolve_scope(global, project)?;
-            if store.remove(scope.as_deref(), &name).map_err(|e| e.to_string())? {
-                println!("Deleted secret {name} from {}.", scope_label(scope.as_deref()));
+            if store
+                .remove(scope.as_deref(), &name)
+                .map_err(|e| e.to_string())?
+            {
+                println!(
+                    "Deleted secret {name} from {}.",
+                    scope_label(scope.as_deref())
+                );
             } else {
                 println!("No such secret: {name}.");
             }
@@ -190,7 +200,11 @@ fn read_stdin_value() -> Result<String, String> {
 
 /// Print a secret's metadata as a human line plus its description — never the value.
 fn print_secret(secret: &Secret) {
-    println!("{} [{}]", secret.name, scope_label(secret.project.as_deref()));
+    println!(
+        "{} [{}]",
+        secret.name,
+        scope_label(secret.project.as_deref())
+    );
     if let Some(description) = &secret.description {
         println!("  {description}");
     }

@@ -69,15 +69,18 @@ mod tests {
 
         // A stated flag beats the environment — that is what makes `--as-agent` useful for
         // inspecting another agent's view from inside a run.
-        let stated = identity(Some("reviewer".into()), None, Some("solver".into()), None)
-            .expect("stated");
+        let stated =
+            identity(Some("reviewer".into()), None, Some("solver".into()), None).expect("stated");
         assert_eq!(stated.agent.as_deref(), Some("reviewer"));
 
         // A person's shell has neither, and stays the owner of the store.
         assert_eq!(identity(None, None, None, None), None);
         // …and an empty variable is not an identity, which is how an exported-but-blank
         // `ADI_PROJECT` avoids hiding every project base from a run that has no project.
-        assert_eq!(identity(None, None, Some(String::new()), Some("  ".into())), None);
+        assert_eq!(
+            identity(None, None, Some(String::new()), Some("  ".into())),
+            None
+        );
     }
 
     #[test]

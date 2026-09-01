@@ -27,9 +27,9 @@ use std::rc::Rc;
 
 use adi_webapp_api::types::VoiceEngineDto;
 use leptos::html;
+use leptos::prelude::LocalStorage;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
-use leptos::prelude::LocalStorage;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -386,9 +386,10 @@ fn start_browser(value: RwSignal<String>, state: RwSignal<MicState>) -> Result<S
                 let Ok(alternative) = js_sys::Reflect::get_u32(&result, 0) else {
                     continue;
                 };
-                let Some(text) = js_sys::Reflect::get(&alternative, &JsValue::from_str("transcript"))
-                    .ok()
-                    .and_then(|v| v.as_string())
+                let Some(text) =
+                    js_sys::Reflect::get(&alternative, &JsValue::from_str("transcript"))
+                        .ok()
+                        .and_then(|v| v.as_string())
                 else {
                     continue;
                 };
@@ -498,10 +499,12 @@ fn start_recording(
 
         let options = MediaRecorderOptions::new();
         options.set_mime_type(mime);
-        let Ok(recorder) = MediaRecorder::new_with_media_stream_and_media_recorder_options(
-            &stream, &options,
-        ) else {
-            state.set(MicState::Blocked("the recorder would not start".to_string()));
+        let Ok(recorder) =
+            MediaRecorder::new_with_media_stream_and_media_recorder_options(&stream, &options)
+        else {
+            state.set(MicState::Blocked(
+                "the recorder would not start".to_string(),
+            ));
             return;
         };
 
@@ -559,7 +562,9 @@ fn start_recording(
         on_stop.forget();
 
         if recorder.start().is_err() {
-            state.set(MicState::Blocked("the recorder would not start".to_string()));
+            state.set(MicState::Blocked(
+                "the recorder would not start".to_string(),
+            ));
             return;
         }
         *handoff.borrow_mut() = Some(recorder);

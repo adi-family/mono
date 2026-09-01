@@ -32,7 +32,10 @@ impl Flag {
     /// A flag on a passage, with nothing said about it yet.
     #[must_use]
     pub fn new(quote: impl Into<String>) -> Self {
-        Self { quote: quote.into(), note: RwSignal::new(String::new()) }
+        Self {
+            quote: quote.into(),
+            note: RwSignal::new(String::new()),
+        }
     }
 }
 
@@ -67,7 +70,11 @@ fn selected_in(host: &web_sys::Element) -> Option<Offer> {
     }
     let at = range.get_bounding_client_rect();
     let frame = host.get_bounding_client_rect();
-    Some(Offer { x: at.left() - frame.left(), y: at.bottom() - frame.top(), quote })
+    Some(Offer {
+        x: at.left() - frame.left(),
+        y: at.bottom() - frame.top(),
+        quote,
+    })
 }
 
 /// Wraps something readable and offers to flag whatever is selected in it.

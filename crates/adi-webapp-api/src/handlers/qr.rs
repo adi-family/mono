@@ -184,7 +184,10 @@ mod tests {
     fn the_svg_is_inlinable_and_opaque() {
         let rendered = svg(&sample_token()).expect("an invite fits in a QR code");
         assert!(rendered.starts_with("<svg "), "{}", &rendered[..40]);
-        assert!(!rendered.contains("<?xml"), "an XML prolog is an HTML parse error");
+        assert!(
+            !rendered.contains("<?xml"),
+            "an XML prolog is an HTML parse error"
+        );
         // The `<svg>` tag itself carries no pixel size — only a viewBox — so the stylesheet is
         // what decides how big the code is on the screen it landed on. (The background rect's own
         // width/height are in module units and are a different thing.)

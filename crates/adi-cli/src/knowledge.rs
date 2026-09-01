@@ -228,7 +228,9 @@ pub(crate) fn run_knowledge(
                 let rows: Vec<_> = providers
                     .all()
                     .iter()
-                    .map(|p| serde_json::json!({ "name": p.name(), "description": p.description() }))
+                    .map(
+                        |p| serde_json::json!({ "name": p.name(), "description": p.description() }),
+                    )
                     .collect();
                 print_json(&rows);
             } else {
@@ -384,7 +386,10 @@ pub(crate) fn run_knowledge(
             let ids = if bases.is_empty() {
                 store.visible_bases().map_err(err)?
             } else {
-                bases.iter().map(|b| parse_base(b)).collect::<Result<_, _>>()?
+                bases
+                    .iter()
+                    .map(|b| parse_base(b))
+                    .collect::<Result<_, _>>()?
             };
             let hits = if text {
                 store.search_text(&ids, &query, limit)
@@ -599,10 +604,7 @@ fn print_hit(hit: &Hit) {
         .map_or_else(String::new, ToString::to_string);
     println!(
         "{:.3}  {:<28} {:<34} {}",
-        hit.score,
-        base,
-        hit.knowledge.id,
-        hit.knowledge.title
+        hit.score, base, hit.knowledge.id, hit.knowledge.title
     );
 }
 
@@ -642,10 +644,24 @@ mod tests {
 
     #[test]
     fn adding_a_note_takes_its_tags_either_way_round() {
-        let KnowledgeCommand::Add { base, title, tags, create, .. } = parse(&[
-            "add", "global/runbooks", "-t", "Restarting", "--tag", "ops,adi", "--tag", "deploy",
+        let KnowledgeCommand::Add {
+            base,
+            title,
+            tags,
+            create,
+            ..
+        } = parse(&[
+            "add",
+            "global/runbooks",
+            "-t",
+            "Restarting",
+            "--tag",
+            "ops,adi",
+            "--tag",
+            "deploy",
             "--create",
-        ]) else {
+        ])
+        else {
             panic!("expected add");
         };
         assert_eq!(base, "global/runbooks");
@@ -658,25 +674,45 @@ mod tests {
     #[test]
     fn a_base_is_created_through_the_base_group() {
         let KnowledgeCommand::Base { command } = parse(&[
-            "base", "new", "project:acme/notes", "--provider", "memory", "--set", "room=12",
+            "base",
+            "new",
+            "project:acme/notes",
+            "--provider",
+            "memory",
+            "--set",
+            "room=12",
         ]) else {
             panic!("expected base");
         };
-        let BaseCommand::New { base, provider, settings, .. } = command else {
+        let BaseCommand::New {
+            base,
+            provider,
+            settings,
+            ..
+        } = command
+        else {
             panic!("expected base new");
         };
         assert_eq!(base, "project:acme/notes");
         assert_eq!(provider.as_deref(), Some("memory"));
         assert_eq!(
-            parse_settings(settings).expect("settings").get("room").map(String::as_str),
+            parse_settings(settings)
+                .expect("settings")
+                .get("room")
+                .map(String::as_str),
             Some("12")
         );
     }
 
     #[test]
     fn search_defaults_to_meaning_over_every_readable_base() {
-        let KnowledgeCommand::Search { query, bases, limit, text, .. } =
-            parse(&["search", "how do I deploy"])
+        let KnowledgeCommand::Search {
+            query,
+            bases,
+            limit,
+            text,
+            ..
+        } = parse(&["search", "how do I deploy"])
         else {
             panic!("expected search");
         };
@@ -694,8 +730,9 @@ mod tests {
         };
         assert!(tags.is_empty() && !no_tag, "omitted means unchanged");
 
-        let KnowledgeCommand::Edit { no_tag, no_source, .. } =
-            parse(&["edit", "global/n", "note", "--no-tag", "--no-source"])
+        let KnowledgeCommand::Edit {
+            no_tag, no_source, ..
+        } = parse(&["edit", "global/n", "note", "--no-tag", "--no-source"])
         else {
             panic!("expected edit");
         };
@@ -705,7 +742,10 @@ mod tests {
     #[test]
     fn a_base_id_is_parsed_before_anything_touches_the_store() {
         assert!(parse_base("agent:solver/memory").is_ok());
-        assert!(parse_base("global").is_ok(), "a bare scope is its default base");
+        assert!(
+            parse_base("global").is_ok(),
+            "a bare scope is its default base"
+        );
         assert!(parse_base("team:acme/notes").is_err());
     }
 

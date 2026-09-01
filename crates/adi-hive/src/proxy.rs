@@ -238,7 +238,8 @@ pub async fn serve_tls(
                 tokio::spawn(async move {
                     // Bound the handshake too: an idle client that opens a socket and says nothing
                     // would otherwise hold the task open indefinitely.
-                    let accepted = tokio::time::timeout(READ_TIMEOUT, acceptor.accept(stream)).await;
+                    let accepted =
+                        tokio::time::timeout(READ_TIMEOUT, acceptor.accept(stream)).await;
                     let tls = match accepted {
                         Ok(Ok(tls)) => tls,
                         Ok(Err(e)) => {
@@ -757,11 +758,20 @@ mod tests {
             None,
         );
         assert_eq!(r.route("nosh.adi", "/"), service("127.0.0.1:8010"));
-        assert_eq!(r.route("nosh.adi", "/assets/app.js"), service("127.0.0.1:8010"));
+        assert_eq!(
+            r.route("nosh.adi", "/assets/app.js"),
+            service("127.0.0.1:8010")
+        );
         assert_eq!(r.route("nosh.adi", "/api"), service("127.0.0.1:8011"));
-        assert_eq!(r.route("nosh.adi", "/api/v1/things"), service("127.0.0.1:8011"));
+        assert_eq!(
+            r.route("nosh.adi", "/api/v1/things"),
+            service("127.0.0.1:8011")
+        );
         assert_eq!(r.route("nosh.adi", "/api/v2"), service("127.0.0.1:8012"));
-        assert_eq!(r.route("nosh.adi", "/api/v2/things?x=1"), service("127.0.0.1:8012"));
+        assert_eq!(
+            r.route("nosh.adi", "/api/v2/things?x=1"),
+            service("127.0.0.1:8012")
+        );
     }
 
     #[test]
@@ -801,7 +811,10 @@ mod tests {
             Decision::Mesh(gateway)
         );
         assert_eq!(r.route("app.laptop-b.n.adi", "/"), Decision::Mesh(gateway));
-        assert_eq!(r.route("NOSH.Tower.N.ADI:443", "/"), Decision::Mesh(gateway));
+        assert_eq!(
+            r.route("NOSH.Tower.N.ADI:443", "/"),
+            Decision::Mesh(gateway)
+        );
         // Local names are untouched by the gateway rule.
         assert_eq!(r.route("app.adi", "/"), service("127.0.0.1:8010"));
     }
@@ -961,7 +974,10 @@ mod tests {
         );
         assert!(dashboard.host_is_carved("nosh.adi"));
         assert!(dashboard.host_is_carved("NOSH.adi:8080"), "same key rules");
-        assert!(!dashboard.host_is_carved("other.adi"), "not a host we route");
+        assert!(
+            !dashboard.host_is_carved("other.adi"),
+            "not a host we route"
+        );
         // The pre-prefix shape: one service, whole host, splice it whole.
         assert!(!router().host_is_carved("app.test"));
     }
@@ -987,7 +1003,9 @@ mod tests {
         );
         // Field-name case and padding are the client's business, not a reason to miss the header.
         assert_eq!(
-            force_connection_close(b"GET / HTTP/1.1\r\nHost: n.adi\r\nCONNECTION :  keep-alive\r\n\r\n"),
+            force_connection_close(
+                b"GET / HTTP/1.1\r\nHost: n.adi\r\nCONNECTION :  keep-alive\r\n\r\n"
+            ),
             b"GET / HTTP/1.1\r\nHost: n.adi\r\nConnection: close\r\n\r\n".to_vec(),
         );
     }
@@ -1014,7 +1032,11 @@ mod tests {
 
     /// Spin up a fake upstream that answers with `response`, proxy one request to it, and hand back
     /// the bytes each side saw: `(what the upstream read, what the client read)`.
-    async fn proxied(router: Router, request: &[u8], response: &'static [u8]) -> (Vec<u8>, Vec<u8>) {
+    async fn proxied(
+        router: Router,
+        request: &[u8],
+        response: &'static [u8],
+    ) -> (Vec<u8>, Vec<u8>) {
         let upstream = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = upstream.local_addr().unwrap();
         let received = tokio::spawn(async move {
@@ -1117,14 +1139,18 @@ mod tests {
             received.len() - head_end(&received).unwrap_or(0),
             body.len(),
         );
-        assert!(answered.starts_with(b"HTTP/1.1 200 OK"), "no response reached the client");
+        assert!(
+            answered.starts_with(b"HTTP/1.1 200 OK"),
+            "no response reached the client"
+        );
     }
 
     /// The other side of the same rule: a host one service owns keeps its keep-alive, because every
     /// request on that connection was going to the same place regardless.
     #[tokio::test]
     async fn a_host_owned_end_to_end_still_gets_its_connection_spliced_whole() {
-        const REQUEST: &[u8] = b"GET / HTTP/1.1\r\nHost: app.test\r\nConnection: keep-alive\r\n\r\n";
+        const REQUEST: &[u8] =
+            b"GET / HTTP/1.1\r\nHost: app.test\r\nConnection: keep-alive\r\n\r\n";
         let (received, _) = proxied(router(), REQUEST, OK).await;
         assert_eq!(received, REQUEST.to_vec());
     }
@@ -1196,7 +1222,11 @@ mod tests {
         const SWITCHING: &[u8] = b"HTTP/1.1 101 Switching Protocols\r\n\
                                    Upgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
         let (received, answered) = proxied(carved_host(), REQUEST, SWITCHING).await;
-        assert_eq!(received, REQUEST.to_vec(), "the handshake goes up untouched");
+        assert_eq!(
+            received,
+            REQUEST.to_vec(),
+            "the handshake goes up untouched"
+        );
         assert_eq!(
             answered,
             SWITCHING.to_vec(),

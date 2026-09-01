@@ -86,9 +86,10 @@ impl AnalyzerBase {
         }
         for i in 0..ancestor.child_count() as u32 {
             if let Some(child) = ancestor.child(i)
-                && Self::is_node_or_descendant_helper(child, target) {
-                    return true;
-                }
+                && Self::is_node_or_descendant_helper(child, target)
+            {
+                return true;
+            }
         }
         false
     }

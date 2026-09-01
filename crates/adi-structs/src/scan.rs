@@ -272,7 +272,13 @@ fn struct_decl(it: &syn::ItemStruct, module: &str, src: &Src) -> Option<Decl> {
     // A tuple struct's `where` clause sits *after* the parens, so pick it up separately.
     let trailing_where = match (&it.fields, &it.generics.where_clause) {
         (syn::Fields::Unnamed(f), Some(w)) => {
-            format!(" {}", src.between(f.paren_token.span.close().byte_range().end, w.span().byte_range().end))
+            format!(
+                " {}",
+                src.between(
+                    f.paren_token.span.close().byte_range().end,
+                    w.span().byte_range().end
+                )
+            )
         }
         _ => String::new(),
     };
@@ -352,7 +358,11 @@ fn alias_decl(it: &syn::ItemType, module: &str, src: &Src) -> Option<Decl> {
 fn field(f: &syn::Field, src: &Src) -> Field {
     Field {
         vis: vis(&f.vis, src),
-        name: f.ident.as_ref().map(ToString::to_string).unwrap_or_default(),
+        name: f
+            .ident
+            .as_ref()
+            .map(ToString::to_string)
+            .unwrap_or_default(),
         ty: src.slice(f.ty.span()),
         attrs: attrs(&f.attrs, src),
     }

@@ -282,7 +282,10 @@ pub fn AttachButton(attach: Attaching) -> impl IntoView {
 
 /// What the composer says when the conversation cannot take images at all.
 #[component]
-pub fn AttachRefusal(#[prop(into)] reason: Signal<String>, #[prop(optional)] class: String) -> impl IntoView {
+pub fn AttachRefusal(
+    #[prop(into)] reason: Signal<String>,
+    #[prop(optional)] class: String,
+) -> impl IntoView {
     view! {
         <div class=merge("px-1 text-mini text-meta", class)>{move || reason.get()}</div>
     }

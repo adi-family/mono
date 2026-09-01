@@ -245,7 +245,10 @@ pub(crate) fn launcher(
     // puts something else on that key reports *that*, and the menu must not depend on the
     // keyboard. Toggles rather than opens, so the same press that opened it closes it.
     let keys = window_event_listener(ev::keydown, move |ev| {
-        if ev.code() != "KeyK" || !(ev.meta_key() || ev.ctrl_key()) || ev.alt_key() || ev.shift_key()
+        if ev.code() != "KeyK"
+            || !(ev.meta_key() || ev.ctrl_key())
+            || ev.alt_key()
+            || ev.shift_key()
         {
             return;
         }

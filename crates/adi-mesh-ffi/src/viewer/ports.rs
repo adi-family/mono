@@ -39,7 +39,9 @@ pub async fn bind_stable(node: &str, service: &str) -> anyhow::Result<TcpListene
                 return Ok(listener);
             }
             // Taken, or otherwise unusable this run. Fall through to a fresh one.
-            Err(e) => warn!(%node, %service, port, error = %e, "recorded port unavailable; taking a new one"),
+            Err(e) => {
+                warn!(%node, %service, port, error = %e, "recorded port unavailable; taking a new one")
+            }
         }
     }
 

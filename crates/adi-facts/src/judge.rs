@@ -610,7 +610,10 @@ mod tests {
     #[test]
     fn a_verdict_nobody_recognises_is_unclassified_and_not_independent() {
         assert_eq!("controversy".parse::<Relation>(), Ok(Relation::Controversy));
-        assert_eq!("CONTRADICTION".parse::<Relation>(), Ok(Relation::Unclassified));
+        assert_eq!(
+            "CONTRADICTION".parse::<Relation>(),
+            Ok(Relation::Unclassified)
+        );
         // The distinction is load-bearing: `independent` drops the pair from the queue.
         assert!(!Relation::Independent.is_actionable());
         assert!(Relation::Unclassified.is_actionable());

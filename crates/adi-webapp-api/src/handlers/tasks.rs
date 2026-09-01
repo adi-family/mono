@@ -119,8 +119,7 @@ impl FromBody for NewTask {
 }
 
 impl FromBody for TaskRef {
-    const EXPECTED: &'static str =
-        "expected JSON body { \"id\": \"…\" } with a non-empty task id";
+    const EXPECTED: &'static str = "expected JSON body { \"id\": \"…\" } with a non-empty task id";
 
     fn is_complete(&self) -> bool {
         !self.id.trim().is_empty()

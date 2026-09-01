@@ -107,10 +107,11 @@ impl Watcher {
                 if should_process_event(&event) {
                     for path in event.paths {
                         if should_index_path(&path, &project_path, &config)
-                            && let Ok(relative) = path.strip_prefix(&project_path) {
-                                debug!("File changed: {}", relative.display());
-                                pending_paths.push(relative.to_path_buf());
-                            }
+                            && let Ok(relative) = path.strip_prefix(&project_path)
+                        {
+                            debug!("File changed: {}", relative.display());
+                            pending_paths.push(relative.to_path_buf());
+                        }
                     }
                     last_event_time = std::time::Instant::now();
                 }

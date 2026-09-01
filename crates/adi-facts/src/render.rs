@@ -16,7 +16,7 @@
 
 use std::fmt::Write as _;
 
-use crate::model::{Committed, Neighbour, Reference, Stale, Staging};
+use crate::model::{Committed, Neighbour, Reference, Staging, Stale};
 
 /// A staged transaction: what is waiting, and what has to be decided first.
 #[must_use]
@@ -146,12 +146,7 @@ pub fn list(rows: &[crate::model::Fact]) -> String {
         return "nothing in this base yet".to_string();
     }
     rows.iter()
-        .map(|f| {
-            format!(
-                "{:<18} v{:<3} {:<9} {}",
-                f.id, f.version, f.kind, f.fact
-            )
-        })
+        .map(|f| format!("{:<18} v{:<3} {:<9} {}", f.id, f.version, f.kind, f.fact))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -204,7 +199,11 @@ pub fn reference(r: &Reference, full: bool) -> String {
     out.push('\n');
     out.push_str(heading);
     for e in &r.since {
-        let _ = write!(out, "\n  v{:<3} {:<11} by {}", e.version, e.event, e.confirmer);
+        let _ = write!(
+            out,
+            "\n  v{:<3} {:<11} by {}",
+            e.version, e.event, e.confirmer
+        );
         if !e.was.is_empty() {
             let _ = write!(out, "\n        was: {}", e.was);
         }
@@ -272,7 +271,10 @@ mod tests {
     fn a_decided_pair_shows_its_verdict_and_who_made_it() {
         let text = staging(&staging_of(vec![pending(0, Some("coexist"))]));
         assert!(text.contains("-> coexist by igor"), "{text}");
-        assert!(!text.contains("facts tx resolve"), "nothing left to decide: {text}");
+        assert!(
+            !text.contains("facts tx resolve"),
+            "nothing left to decide: {text}"
+        );
         assert!(text.contains("facts tx commit tx_7f3a91"), "{text}");
     }
 
@@ -285,7 +287,10 @@ mod tests {
             below: 0.612,
         });
         let text = staging(&s);
-        assert!(text.contains("capped: 12 more pair(s) below 0.612"), "{text}");
+        assert!(
+            text.contains("capped: 12 more pair(s) below 0.612"),
+            "{text}"
+        );
     }
 
     /// An unreachable classifier used to empty the queue: every chunk defaulted to
@@ -303,7 +308,10 @@ mod tests {
     fn nothing_close_is_said_plainly_and_offers_the_commit() {
         let text = staging(&staging_of(vec![]));
         assert!(text.contains("nothing to decide"), "{text}");
-        assert!(!text.contains("close"), "the pairs were read, not skipped: {text}");
+        assert!(
+            !text.contains("close"),
+            "the pairs were read, not skipped: {text}"
+        );
         assert!(text.contains("facts tx commit"), "{text}");
     }
 
@@ -342,9 +350,18 @@ mod tests {
             ),
             false,
         );
-        assert!(text.contains("STALE REFERENCE — written against v1, the fact is now v2."), "{text}");
-        assert!(text.contains("was: The company was incorporated in Delaware."), "{text}");
-        assert!(text.contains("now: The company was reincorporated in Nevada."), "{text}");
+        assert!(
+            text.contains("STALE REFERENCE — written against v1, the fact is now v2."),
+            "{text}"
+        );
+        assert!(
+            text.contains("was: The company was incorporated in Delaware."),
+            "{text}"
+        );
+        assert!(
+            text.contains("now: The company was reincorporated in Nevada."),
+            "{text}"
+        );
     }
 
     /// A fact that swallowed another inside its own batch has two log entries and one version:
@@ -376,8 +393,14 @@ mod tests {
             ),
             true,
         );
-        assert!(text.contains("absorbed"), "the loser is still on the record: {text}");
-        assert!(!text.contains("no longer mean what its author meant"), "{text}");
+        assert!(
+            text.contains("absorbed"),
+            "the loser is still on the record: {text}"
+        );
+        assert!(
+            !text.contains("no longer mean what its author meant"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -416,6 +439,9 @@ mod tests {
             ),
             false,
         );
-        assert!(text.contains("this id still resolves, but what it says has changed"), "{text}");
+        assert!(
+            text.contains("this id still resolves, but what it says has changed"),
+            "{text}"
+        );
     }
 }

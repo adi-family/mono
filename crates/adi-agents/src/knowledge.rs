@@ -87,7 +87,11 @@ pub(crate) fn resolve(config: &Config, agent: &StoredAgent) -> RunKnowledge {
         None => None,
     };
 
-    let project = manifest.project.as_deref().map(str::trim).filter(|p| !p.is_empty());
+    let project = manifest
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
     let bases = match resolve_agent_bases(
         &agent.name,
         project,
@@ -116,7 +120,11 @@ pub(crate) fn rescope_base(entry: &str, from: &str, to: &str) -> Option<String> 
     if !matches!(&id.scope, Scope::Project { project } if project == from) {
         return None;
     }
-    Some(BaseId::new(Scope::project(to).ok()?, id.name).ok()?.to_string())
+    Some(
+        BaseId::new(Scope::project(to).ok()?, id.name)
+            .ok()?
+            .to_string(),
+    )
 }
 
 /// The prompt section telling the run what it knows and how to reach it.
@@ -304,7 +312,7 @@ mod tests {
                 &[
                     "global/runbooks",
                     "project:acme/notes",
-                    "project:other/notes",  // another project's — dropped
+                    "project:other/notes",   // another project's — dropped
                     "agent:reviewer/memory", // another agent's — kept, read-only
                     "nonsense::",            // unparseable — dropped
                 ],

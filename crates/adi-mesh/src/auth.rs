@@ -228,9 +228,9 @@ pub fn is_authorized(head: &[u8], credentials: &[Credential]) -> bool {
     .into_iter()
     .flatten()
     .fold(Choice::from(0u8), |seen, (user, password)| {
-        credentials.iter().fold(seen, |seen, c| {
-            seen | c.verify_choice(&user, &password)
-        })
+        credentials
+            .iter()
+            .fold(seen, |seen, c| seen | c.verify_choice(&user, &password))
     })
     .into()
 }
@@ -376,7 +376,10 @@ mod tests {
             &mesh_basic("igor", "the-old-one"),
             &basic("igor", "also-wrong"),
         ]);
-        assert!(!is_authorized(&neither, &creds), "two wrong ones are still wrong");
+        assert!(
+            !is_authorized(&neither, &creds),
+            "two wrong ones are still wrong"
+        );
     }
 
     /// The mesh credential is the node's business and no one else's: it never reaches the service.
@@ -390,9 +393,15 @@ mod tests {
         let out = strip_header(&head, MESH_AUTH_HEADER_LOWER);
         let text = String::from_utf8(out).expect("still text");
         assert!(!text.contains("X-Adi-Authorization"), "gone: {text}");
-        assert!(text.contains("Authorization: Bearer app.jwt.token"), "kept: {text}");
+        assert!(
+            text.contains("Authorization: Bearer app.jwt.token"),
+            "kept: {text}"
+        );
         assert!(text.contains("Accept: */*"), "kept: {text}");
-        assert!(text.starts_with("GET /ws HTTP/1.1\r\n"), "request line intact: {text}");
+        assert!(
+            text.starts_with("GET /ws HTTP/1.1\r\n"),
+            "request line intact: {text}"
+        );
         assert!(text.ends_with("\r\n\r\n"), "head still terminated: {text}");
     }
 
@@ -407,7 +416,10 @@ mod tests {
     }
 
     fn basic(user: &str, password: &str) -> String {
-        format!("Authorization: Basic {}", B64.encode(format!("{user}:{password}")))
+        format!(
+            "Authorization: Basic {}",
+            B64.encode(format!("{user}:{password}"))
+        )
     }
 
     /// [`basic`], but in the mesh's own header.
@@ -459,14 +471,14 @@ mod tests {
         let token = B64.encode("igor:hunter2");
         let no_colon = B64.encode("no-colon-here");
         let cases: Vec<Vec<u8>> = vec![
-            head(&[]),                                        // absent
-            head(&["Authorization: Basic !!!not-base64!!!"]),  // bad base64
-            head(&[format!("Authorization: Bearer {token}").as_str()]), // wrong scheme
-            head(&[format!("Authorization: {token}").as_str()]), // no scheme
-            head(&["Authorization: Basic"]),                  // no token
+            head(&[]),                                                    // absent
+            head(&["Authorization: Basic !!!not-base64!!!"]),             // bad base64
+            head(&[format!("Authorization: Bearer {token}").as_str()]),   // wrong scheme
+            head(&[format!("Authorization: {token}").as_str()]),          // no scheme
+            head(&["Authorization: Basic"]),                              // no token
             head(&[format!("Authorization: Basic {no_colon}").as_str()]), // no user:pass split
-            head(&[format!("Authorization : Basic {token}").as_str()]), // padded header name
-            head(&[format!("X-Authorization: Basic {token}").as_str()]), // a different header
+            head(&[format!("Authorization : Basic {token}").as_str()]),   // padded header name
+            head(&[format!("X-Authorization: Basic {token}").as_str()]),  // a different header
         ];
         for bytes in cases {
             let shown = String::from_utf8_lossy(&bytes).replace("\r\n", " | ");
@@ -502,7 +514,10 @@ mod tests {
         assert!(!cred.verify("igor", ""), "empty password");
         assert!(!cred.verify("igor", "hunter2 "), "trailing space matters");
         assert!(!cred.verify("mallory", "hunter2"), "wrong username");
-        assert!(!cred.verify("Igor", "hunter2"), "usernames are case-sensitive");
+        assert!(
+            !cred.verify("Igor", "hunter2"),
+            "usernames are case-sensitive"
+        );
         assert!(!cred.verify("", ""), "neither half");
     }
 
@@ -511,7 +526,10 @@ mod tests {
         let a = Credential::from_password("igor", "hunter2");
         let b = Credential::from_password("igor", "hunter2");
         assert_ne!(a.salt, b.salt, "salts are random per credential");
-        assert_ne!(a.digest, b.digest, "so the same password stores differently");
+        assert_ne!(
+            a.digest, b.digest,
+            "so the same password stores differently"
+        );
         assert!(a.verify("igor", "hunter2") && b.verify("igor", "hunter2"));
         assert_eq!(B64.decode(&a.salt).expect("base64").len(), SALT_LEN);
         assert_eq!(B64.decode(&a.digest).expect("base64").len(), DIGEST_LEN);
@@ -535,7 +553,10 @@ mod tests {
         let text = toml::to_string(&cred).expect("serialize");
         let back: Credential = toml::from_str(&text).expect("deserialize");
         assert!(back.verify("igor", "hunter2"));
-        assert_eq!((back.user, back.salt, back.digest), (cred.user, cred.salt, cred.digest));
+        assert_eq!(
+            (back.user, back.salt, back.digest),
+            (cred.user, cred.salt, cred.digest)
+        );
     }
 
     // --- the gate ------------------------------------------------------------------------
@@ -632,7 +653,11 @@ mod tests {
             4,
             "two quoted values, nothing loose"
         );
-        assert_eq!(head_part.lines().count(), 5, "no extra header line: {head_part}");
+        assert_eq!(
+            head_part.lines().count(),
+            5,
+            "no extra header line: {head_part}"
+        );
         assert!(
             !head_part.lines().any(|l| l.starts_with("X-Injected")),
             "{head_part}"

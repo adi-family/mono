@@ -102,11 +102,7 @@ pub(super) fn enqueue(
 /// # Errors
 /// Returns the database error, with the queue left as it was — the caller must not start a turn
 /// whose removal was not recorded, or the same thing is asked twice.
-pub(super) fn dequeue(
-    conn: &Connection,
-    agent: &str,
-    id: &str,
-) -> Result<Option<QueuedMessage>> {
+pub(super) fn dequeue(conn: &Connection, agent: &str, id: &str) -> Result<Option<QueuedMessage>> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("take from the queue of", e))?;
@@ -218,7 +214,6 @@ fn decode(json: Option<&str>) -> Vec<Attachment> {
     json.and_then(|raw| serde_json::from_str(raw).ok())
         .unwrap_or_default()
 }
-
 
 /// Drop the message at `index` (0-based, in the order they will be asked), for something you have
 /// thought better of. Returns whether there was one there to drop — an index past the end is a

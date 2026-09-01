@@ -587,7 +587,11 @@ mod tests {
         assert!(!sibling(&store.path(Some("old")).expect("old path"), "-wal").exists());
 
         // A project with no database of its own is a no-op, not a failure.
-        assert!(!store.rename_project("never-used", "elsewhere").expect("no db"));
+        assert!(
+            !store
+                .rename_project("never-used", "elsewhere")
+                .expect("no db")
+        );
         // And a rename onto an occupied id refuses rather than clobbering it.
         store
             .exec(Some("other"), "create table t (body text)", &[])

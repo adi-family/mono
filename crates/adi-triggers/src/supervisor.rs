@@ -208,8 +208,12 @@ impl Supervisor {
             let supervisor = Arc::clone(&self);
             match tokio::task::spawn_blocking(move || supervisor.wanted()).await {
                 Ok(Ok(wanted)) => self.reconcile(wanted, &mut running),
-                Ok(Err(e)) => warn!(error = %e, "couldn't read triggers; leaving the running set alone"),
-                Err(e) => warn!(error = %e, "reading triggers failed; leaving the running set alone"),
+                Ok(Err(e)) => {
+                    warn!(error = %e, "couldn't read triggers; leaving the running set alone")
+                }
+                Err(e) => {
+                    warn!(error = %e, "reading triggers failed; leaving the running set alone")
+                }
             }
 
             tokio::select! {
@@ -237,7 +241,11 @@ impl Supervisor {
     ///
     /// `wanted` is read by the caller ([`Self::reconcile_loop`]) rather than here, so the disk
     /// read can happen off the async runtime while this stays pure bookkeeping.
-    fn reconcile(&self, mut wanted: BTreeMap<String, Spec>, running: &mut BTreeMap<String, Running>) {
+    fn reconcile(
+        &self,
+        mut wanted: BTreeMap<String, Spec>,
+        running: &mut BTreeMap<String, Running>,
+    ) {
         // Drop anything no longer wanted, or wanted differently. A changed one is restarted by
         // being stopped here and re-started below, since it stays in `wanted`.
         let stale: Vec<String> = running
@@ -444,9 +452,7 @@ fn running_command(pid: u32) -> Option<String> {
 
 #[cfg(not(unix))]
 fn running_command(pid: u32) -> Option<String> {
-    let script = format!(
-        "(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"
-    );
+    let script = format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine");
     let out = std::process::Command::new("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()

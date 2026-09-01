@@ -11,14 +11,12 @@
 //! deliberately the caller's half of the [`adi_ui::ToolForm`] bargain — the component owns the
 //! fields, whoever sends the call owns its JSON.
 
+use adi_ui::{Block, Flag, Param, ParamKind, Simulator, Stop, Token, ToolDecl};
 use adi_webapp_api::types::{
     AgentSimBlock, AgentSimField, AgentSimFieldKind, AgentSimState, AgentSimTool, AgentToken,
 };
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
-use adi_ui::{
-    Block, Flag, Param, ParamKind, Simulator, Stop, Token, ToolDecl,
-};
 
 use crate::fetch;
 use crate::state::{Flash, Simulate, State};
@@ -84,8 +82,7 @@ fn land(sim: Simulate, next: AgentSimState) {
 
 /// One declared tool as the component's own, with a signal-backed field per parameter.
 fn tool_decl(tool: &AgentSimTool) -> ToolDecl {
-    ToolDecl::new(&tool.name, &tool.description)
-        .params(tool.fields.iter().map(param).collect())
+    ToolDecl::new(&tool.name, &tool.description).params(tool.fields.iter().map(param).collect())
 }
 
 fn param(field: &AgentSimField) -> Param {

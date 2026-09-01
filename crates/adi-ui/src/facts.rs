@@ -212,7 +212,14 @@ pub fn FactRow(
     #[prop(optional)]
     children: Option<Children>,
 ) -> impl IntoView {
-    let Fact { id, text, author, creator, version, kind } = fact;
+    let Fact {
+        id,
+        text,
+        author,
+        creator,
+        version,
+        kind,
+    } = fact;
     // One reactive `class`, because an element may only be given the attribute once: the
     // selected/idle fill and the call site's own utilities are merged in the same closure.
     let fill = move || {
@@ -252,7 +259,14 @@ pub fn FactCard(
     #[prop(optional)]
     children: Option<Children>,
 ) -> impl IntoView {
-    let Fact { id, text, author, creator, version, kind } = fact;
+    let Fact {
+        id,
+        text,
+        author,
+        creator,
+        version,
+        kind,
+    } = fact;
     view! {
         <div class=merge("island bg-card", class)>
             <div class="flex items-center gap-2 border-b border-divider px-3 py-1.5">
@@ -310,7 +324,13 @@ pub struct Moved {
 impl Moved {
     #[must_use]
     pub fn new(source: impl Into<String>, was: impl Into<String>, now: impl Into<String>) -> Self {
-        Self { source: source.into(), was: was.into(), now: now.into(), built_at: 1, version: 2 }
+        Self {
+            source: source.into(),
+            was: was.into(),
+            now: now.into(),
+            built_at: 1,
+            version: 2,
+        }
     }
 
     /// The two versions: what it was built against, and where the source is now.
@@ -438,7 +458,13 @@ impl Change {
     /// The step that created the fact.
     #[must_use]
     pub fn created(by: impl Into<String>, text: impl Into<String>) -> Self {
-        Self { version: 1, verdict: None, by: by.into(), was: String::new(), now: text.into() }
+        Self {
+            version: 1,
+            verdict: None,
+            by: by.into(),
+            was: String::new(),
+            now: text.into(),
+        }
     }
 
     /// A step that rewrote it.
@@ -552,7 +578,13 @@ pub fn FactHistory(
 /// One step of a fact's log.
 #[component]
 fn Step(change: Change) -> impl IntoView {
-    let Change { version, verdict, by, was, now } = change;
+    let Change {
+        version,
+        verdict,
+        by,
+        was,
+        now,
+    } = change;
     view! {
         <div class="rounded-sm border border-edge bg-panel-alt p-2.5">
             <div class="mb-1.5 flex flex-wrap items-center gap-2">

@@ -154,7 +154,16 @@ mod tests {
     fn invalid_names_are_rejected() {
         // Not env-var identifiers: traversal, separators, dashes/dots, and a leading digit.
         for name in [
-            "", ".", "..", "a/b", "a\\b", "with space", "sneaky/../x", "database-url", "a.b", "2fa",
+            "",
+            ".",
+            "..",
+            "a/b",
+            "a\\b",
+            "with space",
+            "sneaky/../x",
+            "database-url",
+            "a.b",
+            "2fa",
         ] {
             assert!(
                 matches!(validate_name(name), Err(Error::InvalidName(_))),
@@ -167,8 +176,14 @@ mod tests {
     fn project_ids_allow_uuid_dashes_but_never_traversal() {
         assert!(validate_project("3f2504e0-4f89-41d3-9a0c-0305e82c3301").is_ok());
         assert!(validate_project("proj42").is_ok());
-        assert!(matches!(validate_project("../x"), Err(Error::InvalidName(_))));
-        assert!(matches!(validate_project("a/b"), Err(Error::InvalidName(_))));
+        assert!(matches!(
+            validate_project("../x"),
+            Err(Error::InvalidName(_))
+        ));
+        assert!(matches!(
+            validate_project("a/b"),
+            Err(Error::InvalidName(_))
+        ));
     }
 
     #[test]

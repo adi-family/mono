@@ -42,12 +42,7 @@ pub fn process_alive(pid: i32) -> bool {
     }
     #[cfg(not(unix))]
     {
-        let out = proc::run(&[
-            "tasklist",
-            "/NH",
-            "/FI",
-            &format!("PID eq {pid}"),
-        ]);
+        let out = proc::run(&["tasklist", "/NH", "/FI", &format!("PID eq {pid}")]);
         out.ok() && out.text.contains(&pid.to_string())
     }
 }

@@ -217,7 +217,10 @@ fn busy_row(state: State, b: Busy) -> AnyView {
     // sitting there doing nothing.
     let untasked = task.trim().is_empty();
     let (hover, shown) = match untasked {
-        true => (String::new(), "no task — an interactive session".to_string()),
+        true => (
+            String::new(),
+            "no task — an interactive session".to_string(),
+        ),
         false => (task.clone(), task),
     };
     let started_title = match started_at {
@@ -581,7 +584,13 @@ fn activity_view(state: State, spend: RwSignal<bool>) -> AnyView {
     let showing_spend = spend.get();
     // Every bar is a percentage of the tallest one, so the two series each get the full height
     // rather than the money series being invisible next to a run count.
-    let value = move |d: &Day| if showing_spend { d.cost_micro } else { d.runs as u64 };
+    let value = move |d: &Day| {
+        if showing_spend {
+            d.cost_micro
+        } else {
+            d.runs as u64
+        }
+    };
     let peak = days.iter().map(value).max().unwrap_or(0);
     let total: u64 = days.iter().map(value).sum();
 
@@ -598,11 +607,7 @@ fn activity_view(state: State, spend: RwSignal<bool>) -> AnyView {
                 (peak, n) => format!("{}%", (n * 100 / peak).max(6)),
             };
             let is_today = day == today;
-            let hover = format!(
-                "{date} — {} run(s) · {}",
-                d.runs,
-                fmt_money(d.cost_micro)
-            );
+            let hover = format!("{date} — {} run(s) · {}", d.runs, fmt_money(d.cost_micro));
             view! {
                 <div class="adi-spark__col" title=hover>
                     <span class="adi-spark__bar" class:adi-spark__bar--today=is_today
@@ -680,11 +685,11 @@ fn agent_rows(state: State) -> AnyView {
     }
     // Ties on the sorted column fall back to the name, so two agents with the same run count keep
     // a stable order between polls instead of swapping places under the reader.
-    sort_rows(&mut rows, table.sort.get(), agent_key, |s| Key::text(&s.name));
+    sort_rows(&mut rows, table.sort.get(), agent_key, |s| {
+        Key::text(&s.name)
+    });
     rows.into_iter()
-        .map(|s| {
-            view! { <TableRow state=table cell=move |col| agent_cell(col, &s)/> }.into_any()
-        })
+        .map(|s| view! { <TableRow state=table cell=move |col| agent_cell(col, &s)/> }.into_any())
         .collect::<Vec<_>>()
         .into_any()
 }

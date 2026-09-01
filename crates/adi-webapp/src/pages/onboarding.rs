@@ -58,7 +58,10 @@ const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
         note: "Uses your existing Claude login — no API key needed. Same credentials either way:",
         options: &[
             ("pty:claude", "Claude Code in a live terminal session"),
-            ("harness:claude-sdk", "the Claude SDK, headless, on the same login"),
+            (
+                "harness:claude-sdk",
+                "the Claude SDK, headless, on the same login",
+            ),
         ],
     },
     RuntimeGuide {
@@ -69,7 +72,10 @@ const RUNTIME_GUIDE: [RuntimeGuide; 4] = [
     RuntimeGuide {
         question: "I have an Anthropic API key",
         note: "Talks to the Claude API directly with your key — no CLI login required.",
-        options: &[("harness:adi", "the ADI agent loop, on the Anthropic provider")],
+        options: &[(
+            "harness:adi",
+            "the ADI agent loop, on the Anthropic provider",
+        )],
     },
     RuntimeGuide {
         question: "I have another provider's API key (OpenAI, Gemini, Kimi, GLM, …)",
@@ -542,7 +548,8 @@ fn onb_help_modal(form: OnboardingForm, backends: Vec<AgentBackendOption>) -> An
 fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
     let backend = form.agent.backend.get_untracked().trim().to_string();
     if backend.is_empty() {
-        form.error.set(Some("Pick how the agent should run.".to_string()));
+        form.error
+            .set(Some("Pick how the agent should run.".to_string()));
         return;
     }
     let presets = m.form.presets.clone();
@@ -603,7 +610,13 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
         // The wizard offers no pre-run box, and a brand-new agent has nothing to keep: `None` is
         // both "leave it alone" and "there was nothing there".
         prelude: None,
-        secrets: Some(attached_secrets(state, form, &presets, secret.as_ref(), &key)),
+        secrets: Some(attached_secrets(
+            state,
+            form,
+            &presets,
+            secret.as_ref(),
+            &key,
+        )),
         // No form offers the knowledge bases or the memory toggle yet, so none of them
         // states one: `None` leaves whatever the agent already has. Set them with
         // `adi-mono agents save --knowledge … --memory` until the editor grows the
@@ -621,14 +634,12 @@ fn submit_onb_agent(state: State, form: OnboardingForm, m: &MetaState) {
 
     form.agent.busy.set(true);
     form.error.set(None);
-    let store_key = secret
-        .filter(|_| !key.is_empty())
-        .map(|sec| SetSecret {
-            project: None,
-            name: sec.env,
-            value: key,
-            description: Some("Set up on the adi onboarding page.".to_string()),
-        });
+    let store_key = secret.filter(|_| !key.is_empty()).map(|sec| SetSecret {
+        project: None,
+        name: sec.env,
+        value: key,
+        description: Some("Set up on the adi onboarding page.".to_string()),
+    });
     spawn_local(async move {
         let mut failed = None;
         if let Some(set) = store_key {

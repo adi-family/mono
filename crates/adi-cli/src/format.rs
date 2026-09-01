@@ -11,7 +11,10 @@ use adi_core::{EffectiveStatus, Report, ServiceReport, TaskStatus, contains_json
 ///
 /// # Errors
 /// The message to print when `--global` and `--project` are both given.
-pub(crate) fn resolve_scope(global: bool, project: Option<String>) -> Result<Option<String>, String> {
+pub(crate) fn resolve_scope(
+    global: bool,
+    project: Option<String>,
+) -> Result<Option<String>, String> {
     match (global, project) {
         (true, Some(_)) => Err("pass either --global or --project <id>, not both".to_string()),
         (_, Some(id)) => Ok(Some(id)),

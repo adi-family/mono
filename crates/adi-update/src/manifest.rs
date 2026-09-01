@@ -122,7 +122,10 @@ mod tests {
         if std::env::consts::OS == "macos" {
             assert_eq!(key, "macos");
         } else {
-            assert_eq!(key, format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
+            assert_eq!(
+                key,
+                format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+            );
         }
     }
 
@@ -147,8 +150,9 @@ mod tests {
 
     #[test]
     fn a_legacy_manifest_still_updates_macos_only() {
-        let m = Manifest::from_json(br#"{ "version": "0.2.0", "dmg": { "url": "u", "sha256": "s" } }"#)
-            .expect("parse");
+        let m =
+            Manifest::from_json(br#"{ "version": "0.2.0", "dmg": { "url": "u", "sha256": "s" } }"#)
+                .expect("parse");
         assert_eq!(m.artifact_for("macos").expect("macos").url, "u");
         // …and publishes nothing for a node, which must not mistake the DMG for its package.
         assert!(m.artifact_for("linux-x86_64").is_none());

@@ -299,7 +299,11 @@ pub(crate) fn run_facts(
             }
             for base in &bases {
                 let count = store.count(base).map_err(err)?;
-                println!("{:<34} {:<8} {count} fact(s)", base.to_string(), base.scope.level());
+                println!(
+                    "{:<34} {:<8} {count} fact(s)",
+                    base.to_string(),
+                    base.scope.level()
+                );
             }
         }
         FactsCommand::Add {
@@ -354,7 +358,10 @@ pub(crate) fn run_facts(
             println!("{node} refreshed");
         }
         FactsCommand::Near { id: node, top } => {
-            println!("{}", render::near(&store.near(&id, &node, top).map_err(err)?));
+            println!(
+                "{}",
+                render::near(&store.near(&id, &node, top).map_err(err)?)
+            );
         }
         FactsCommand::Get { id: node, full } => {
             let reference = store.get(&id, &node).map_err(err)?;
@@ -414,7 +421,10 @@ fn run_tx(store: &FactStore, id: &BaseId, command: TxCommand) -> Result<(), Stri
             }
         }
         TxCommand::Commit { tx } => {
-            println!("{}", render::committed(&store.commit(id, &tx).map_err(err)?));
+            println!(
+                "{}",
+                render::committed(&store.commit(id, &tx).map_err(err)?)
+            );
         }
         TxCommand::Abort { tx } => {
             store.abort(id, &tx).map_err(err)?;
@@ -482,12 +492,12 @@ mod tests {
         // The six things an agent cannot work the tool without. A rewrite that drops one of these
         // is the regression this test exists to catch.
         for needle in [
-            "One fact per line",          // what to send
+            "One fact per line", // what to send
             "NOTHING IS IN THE BASE UNTIL commit",
             "coexist",
             "supersede --keep",
             "NEVER GUESS A VERDICT",
-            "--from",                     // provenance, and what makes staleness work
+            "--from", // provenance, and what makes staleness work
             "--author",
             "--creator",
         ] {
@@ -529,7 +539,10 @@ mod tests {
         else {
             panic!("expected add");
         };
-        assert_eq!((author.as_str(), creator.as_str()), ("igor", "agent:chat@1"));
+        assert_eq!(
+            (author.as_str(), creator.as_str()),
+            ("igor", "agent:chat@1")
+        );
         assert!(!text, "one fact per line unless --text says otherwise");
         assert_eq!(note_id, None);
     }
@@ -537,14 +550,22 @@ mod tests {
     #[test]
     fn a_verdict_outside_the_four_is_refused_before_anything_opens_the_base() {
         assert!(
-            Harness::try_parse_from([
-                "facts", "tx", "resolve", "tx_1", "0", "--verdict", "review",
-            ])
+            Harness::try_parse_from(
+                ["facts", "tx", "resolve", "tx_1", "0", "--verdict", "review",]
+            )
             .is_err(),
             "`review` is not a verdict this tool records"
         );
         let FactsCommand::Tx { command } = parse(&[
-            "tx", "resolve", "tx_1", "3", "--verdict", "supersede", "--keep", "#0", "--confirmer",
+            "tx",
+            "resolve",
+            "tx_1",
+            "3",
+            "--verdict",
+            "supersede",
+            "--keep",
+            "#0",
+            "--confirmer",
             "agent:verifier@3",
         ]) else {
             panic!("expected tx");
@@ -560,7 +581,10 @@ mod tests {
             panic!("expected resolve");
         };
         assert_eq!(pair, 3);
-        assert_eq!(verdict.parse::<Verdict>().expect("verdict"), Verdict::Supersede);
+        assert_eq!(
+            verdict.parse::<Verdict>().expect("verdict"),
+            Verdict::Supersede
+        );
         assert_eq!(keep.as_deref(), Some("#0"));
         assert_eq!(confirmer, "agent:verifier@3");
     }
@@ -580,7 +604,10 @@ mod tests {
         let FactsCommand::Add { from, kind, .. } = parse(&["add"]) else {
             panic!("expected add");
         };
-        assert!(from.is_empty(), "a batch derived from nothing is the common case");
+        assert!(
+            from.is_empty(),
+            "a batch derived from nothing is the common case"
+        );
         assert_eq!(kind, KIND_FACT);
 
         // A kind nobody defined is refused before the base is opened.
@@ -604,9 +631,17 @@ mod tests {
             "agent:solver/default"
         );
         // A bare scope is that scope's default base, exactly as in `knowledge`.
-        assert_eq!(parse_base(Some("global".into())).expect("parses").to_string(), "global/default");
+        assert_eq!(
+            parse_base(Some("global".into()))
+                .expect("parses")
+                .to_string(),
+            "global/default"
+        );
         assert!(parse_base(Some("team:acme/notes".into())).is_err());
         // A blank flag is not a base id — it falls through to the default rather than failing.
-        assert_eq!(parse_base(Some("  ".into())).expect("parses").to_string(), DEFAULT_BASE);
+        assert_eq!(
+            parse_base(Some("  ".into())).expect("parses").to_string(),
+            DEFAULT_BASE
+        );
     }
 }

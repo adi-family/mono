@@ -435,6 +435,8 @@ pub struct HarnessClaudeSdkArguments {
     pub tools: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settings: Option<String>,
 }
 ```
 

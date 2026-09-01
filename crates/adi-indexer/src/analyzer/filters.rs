@@ -4,7 +4,7 @@
 
 use crate::error::Result;
 use crate::storage::Storage;
-use crate::types::{SymbolId, Symbol, SymbolKind};
+use crate::types::{Symbol, SymbolId, SymbolKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -101,9 +101,10 @@ impl<'a> DeadCodeFilter<'a> {
 
     fn is_test_symbol(&self, symbol: &Symbol) -> bool {
         if let Some(doc) = &symbol.doc_comment
-            && (doc.contains("#[test]") || doc.contains("@Test")) {
-                return true;
-            }
+            && (doc.contains("#[test]") || doc.contains("@Test"))
+        {
+            return true;
+        }
 
         symbol.name.starts_with("test_") || symbol.name.starts_with("Test")
     }

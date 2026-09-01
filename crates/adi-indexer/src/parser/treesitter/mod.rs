@@ -11,7 +11,7 @@ use crate::lang;
 use crate::parser::Parser;
 use crate::structure;
 use crate::types::{Language, ParsedFile, ParsedSymbol};
-use analyzers::{generic::GenericAnalyzer, LanguageAnalyzer};
+use analyzers::{LanguageAnalyzer, generic::GenericAnalyzer};
 
 /// Tree-sitter parser over the grammars this build links in (see [`crate::lang`]).
 ///
@@ -81,12 +81,9 @@ impl Parser for TreeSitterParser {
 /// Fingerprint every symbol in the tree the analyzer just produced, children included.
 fn attach_structure(symbols: &mut [ParsedSymbol], root: tree_sitter::Node) {
     for symbol in symbols {
-        symbol.structure = structure::node_for_range(
-            root,
-            symbol.location.start_byte,
-            symbol.location.end_byte,
-        )
-        .map(structure::fingerprint);
+        symbol.structure =
+            structure::node_for_range(root, symbol.location.start_byte, symbol.location.end_byte)
+                .map(structure::fingerprint);
 
         attach_structure(&mut symbol.children, root);
     }
@@ -110,7 +107,10 @@ mod tests {
         assert!(parser.supports(Language::Rust));
 
         let parsed = parser
-            .parse("pub fn main() { helper(); }\nfn helper() {}", Language::Rust)
+            .parse(
+                "pub fn main() { helper(); }\nfn helper() {}",
+                Language::Rust,
+            )
             .expect("rust source parses");
 
         let names: Vec<_> = parsed.symbols.iter().map(|s| s.name.as_str()).collect();

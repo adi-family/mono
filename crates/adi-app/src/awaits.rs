@@ -248,7 +248,11 @@ mod tests {
         // almost at once — and the whole point is that nothing happens.
         observer(&finished("r-43"));
         std::thread::sleep(Duration::from_millis(500));
-        assert_eq!(store.list().len(), 1, "a stranger's ending is not this run's");
+        assert_eq!(
+            store.list().len(),
+            1,
+            "a stranger's ending is not this run's"
+        );
 
         observer(&finished("r-42"));
         let deadline = Instant::now() + Duration::from_secs(10);

@@ -2,15 +2,15 @@
 //! a create form, and a collapsed block of finished tasks; deeper mutations stay in the
 //! `adi-mono tasks ...` CLI surface.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{NewTask, TaskRow, TasksState};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
 use crate::state::{Flash, State, TasksForm};
 use crate::ui::{
-    Key, TextField, apply_mutation, confirm, effective_label_title,
-    flash_view, sort_rows, task_tree_rows, updated_text,
+    Key, TextField, apply_mutation, confirm, effective_label_title, flash_view, sort_rows,
+    task_tree_rows, updated_text,
 };
 
 /// The columns of both task tables — the open tree and the collapsed Done block, which are the
@@ -208,10 +208,11 @@ fn task_rows(state: State, finished: bool) -> AnyView {
         .collect();
     if rows.is_empty() {
         return view! { <EmptyRow state=table>{if finished {
-                "Nothing finished yet."
-            } else {
-                "No open tasks — add one below, or use the adi-mono tasks add CLI command."
-            }}</EmptyRow> }.into_any();
+            "Nothing finished yet."
+        } else {
+            "No open tasks — add one below, or use the adi-mono tasks add CLI command."
+        }}</EmptyRow> }
+        .into_any();
     }
     sort_rows(&mut rows, table.sort.get(), task_key, |t| {
         Key::text(&t.title)

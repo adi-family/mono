@@ -268,7 +268,9 @@ fn call(engine: &Engine, key: &str, content_type: &str, audio: &[u8]) -> Result<
             let part = reqwest::blocking::multipart::Part::bytes(audio.to_vec())
                 .file_name(format!("clip.{}", extension(content_type)))
                 .mime_str(content_type)
-                .map_err(|e| format!("the recording's content type {content_type:?} is not usable: {e}"))?;
+                .map_err(|e| {
+                    format!("the recording's content type {content_type:?} is not usable: {e}")
+                })?;
             req.multipart(
                 reqwest::blocking::multipart::Form::new()
                     .part("file", part)
@@ -436,16 +438,27 @@ mod tests {
         let deepgram = serde_json::json!({
             "results": { "channels": [ { "alternatives": [ { "transcript": "hello there" } ] } ] }
         });
-        let path: &[&str] = &["results", "channels", "0", "alternatives", "0", "transcript"];
+        let path: &[&str] = &[
+            "results",
+            "channels",
+            "0",
+            "alternatives",
+            "0",
+            "transcript",
+        ];
         assert_eq!(dig(&deepgram, path).unwrap(), "hello there");
     }
 
     #[test]
     fn a_provider_error_keeps_the_providers_own_words() {
-        let body = r#"{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}"#;
+        let body =
+            r#"{"error":{"message":"Incorrect API key provided","type":"invalid_request_error"}}"#;
         assert_eq!(provider_message(body), "Incorrect API key provided");
         // ElevenLabs nests it one level deeper, under `detail`.
-        assert_eq!(provider_message(r#"{"detail":{"message":"quota"}}"#), "quota");
+        assert_eq!(
+            provider_message(r#"{"detail":{"message":"quota"}}"#),
+            "quota"
+        );
         // And anything unparseable still says something rather than nothing.
         assert_eq!(provider_message("  upstream is down  "), "upstream is down");
     }

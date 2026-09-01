@@ -10,7 +10,7 @@ use crate::state::{Flash, Form, State, load};
 use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::ui::{
-    dash, flash_view, Key, rows_or_placeholder, segmented, sort_rows, TextField, updated_text,
+    Key, TextField, dash, flash_view, rows_or_placeholder, segmented, sort_rows, updated_text,
 };
 
 /// The port registry's columns; the trailing blank one holds the row's Release control.
@@ -116,11 +116,14 @@ pub(crate) fn ports_manager_view(
 /// refresh.
 fn rows_view(state: State) -> AnyView {
     let table = state.tables.leases;
-    let mut leases =
-        match rows_or_placeholder(table, state.ports.get().map(|v| v.leases), "No ports reserved yet — reserve one below.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut leases = match rows_or_placeholder(
+        table,
+        state.ports.get().map(|v| v.leases),
+        "No ports reserved yet — reserve one below.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     // By the port number itself, not its rendering — the lease list reads as an allocation map.
     sort_rows(
         &mut leases,

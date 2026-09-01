@@ -29,9 +29,10 @@ fn transitive(
 
     while let Some((current_id, depth)) = queue.pop_front() {
         if let Some(max) = max_depth
-            && depth >= max {
-                continue;
-            }
+            && depth >= max
+        {
+            continue;
+        }
 
         for next in step(storage, current_id)? {
             if !visited.contains(&next.id.0) {
@@ -141,9 +142,10 @@ pub fn find_call_path(
 
     while let Some((current_id, path)) = queue.pop_front() {
         if let Some(max) = max_depth
-            && path.len() > max {
-                continue;
-            }
+            && path.len() > max
+        {
+            continue;
+        }
 
         if current_id == to_id {
             return Ok(Some(path));

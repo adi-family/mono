@@ -99,7 +99,10 @@ impl Db {
             "select id, fact, author, creator, version, updated_at, kind from facts_v
              order by updated_at desc, id limit ?1",
         )?;
-        let rows = stmt.query_map(params![i64::try_from(limit).unwrap_or(i64::MAX)], row_to_fact)?;
+        let rows = stmt.query_map(
+            params![i64::try_from(limit).unwrap_or(i64::MAX)],
+            row_to_fact,
+        )?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -237,7 +240,14 @@ impl Db {
         tx.execute(
             "insert into transactions (id, state, author, creator, note_id, kind, created_at)
              values (?1, 'needs_review', ?2, ?3, ?4, ?5, ?6)",
-            params![tx_id, author_id, creator_id, note.map(|(id, _)| id), kind, now],
+            params![
+                tx_id,
+                author_id,
+                creator_id,
+                note.map(|(id, _)| id),
+                kind,
+                now
+            ],
         )?;
         for (seq, fact) in facts.iter().enumerate() {
             tx.execute(
@@ -570,8 +580,9 @@ impl Db {
         };
 
         let rows: Vec<(i64, String)> = {
-            let mut stmt =
-                tx.prepare("select seq, fact from staged where tx = ?1 and dropped = 0 order by seq")?;
+            let mut stmt = tx.prepare(
+                "select seq, fact from staged where tx = ?1 and dropped = 0 order by seq",
+            )?;
             let rows = stmt.query_map(params![tx_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
             rows.collect::<rusqlite::Result<Vec<_>>>()?
         };
@@ -601,7 +612,9 @@ impl Db {
             )?;
             for (winner, lost, verdict, confirmer) in &absorbed {
                 if *winner == seq {
-                    log(&tx, &id, 1, "absorbed", lost, &fact, verdict, *confirmer, tx_id)?;
+                    log(
+                        &tx, &id, 1, "absorbed", lost, &fact, verdict, *confirmer, tx_id,
+                    )?;
                 }
             }
             ids_by_seq.push((seq, id.clone()));
@@ -638,8 +651,8 @@ impl Db {
                 if &src == dst {
                     continue;
                 }
-                let version = node_version(&tx, &src)?
-                    .ok_or_else(|| Error::NoSuchFact(src.clone()))?;
+                let version =
+                    node_version(&tx, &src)?.ok_or_else(|| Error::NoSuchFact(src.clone()))?;
                 tx.execute(
                     "insert or replace into edges (src, dst, src_version, created_at)
                      values (?1, ?2, ?3, ?4)",
@@ -732,7 +745,11 @@ pub(crate) fn rank(
 ///
 /// Truncation is always reported. A silent cap reads as "nothing else to see", which is the one
 /// lie this interface must never tell.
-pub(crate) fn cap<T>(mut candidates: Vec<T>, max: usize, strength: impl Fn(&T) -> f32) -> (Vec<T>, Option<Truncation>) {
+pub(crate) fn cap<T>(
+    mut candidates: Vec<T>,
+    max: usize,
+    strength: impl Fn(&T) -> f32,
+) -> (Vec<T>, Option<Truncation>) {
     if candidates.len() <= max {
         return (candidates, None);
     }
@@ -841,7 +858,10 @@ fn bump(tx: &Transaction<'_>, id: &str) -> Result<()> {
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments, reason = "one row of an append-only log, written in one place")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one row of an append-only log, written in one place"
+)]
 fn log(
     tx: &Transaction<'_>,
     id: &str,
@@ -856,7 +876,17 @@ fn log(
     tx.execute(
         "insert into history (id, at, version, event, was, now, other, confirmer, tx)
          values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-        params![id, now_ms(), version, event, was, now, other, confirmer, tx_id],
+        params![
+            id,
+            now_ms(),
+            version,
+            event,
+            was,
+            now,
+            other,
+            confirmer,
+            tx_id
+        ],
     )?;
     Ok(())
 }

@@ -1,15 +1,13 @@
 //! The Sub-projects panel of the project detail page.
 
+use adi_ui::{Row as TableRow, Table};
 use adi_webapp_api::types::{NewProject, Project};
 use leptos::prelude::*;
-use adi_ui::{Row as TableRow, Table};
 
 use crate::fetch;
 use crate::routing::{Route, open_project, project_href};
 use crate::state::{Flash, State};
-use crate::ui::{
-    fmt_date, Key, rows_or_placeholder, sort_rows, TextField,
-};
+use crate::ui::{Key, TextField, fmt_date, rows_or_placeholder, sort_rows};
 
 /// The panel's columns. No action column — archive and restore live on the Projects page; a row
 /// here is a way in, not a thing to manage.
@@ -81,11 +79,14 @@ pub(crate) fn subprojects_panel(
 /// Loading/empty placeholders otherwise.
 fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
     let table = state.tables.subprojects;
-    let mut subprojects =
-        match rows_or_placeholder(table, state.project_detail.get().map(|v| v.subprojects), "No sub-projects yet — add one below.") {
-            Ok(rows) => rows,
-            Err(placeholder) => return placeholder,
-        };
+    let mut subprojects = match rows_or_placeholder(
+        table,
+        state.project_detail.get().map(|v| v.subprojects),
+        "No sub-projects yet — add one below.",
+    ) {
+        Ok(rows) => rows,
+        Err(placeholder) => return placeholder,
+    };
     sort_rows(
         &mut subprojects,
         table.sort.get(),
@@ -99,7 +100,10 @@ fn subproject_rows(state: State, route: RwSignal<Route>) -> AnyView {
     );
     subprojects
         .into_iter()
-        .map(|p| view! { <TableRow state=table cell=move |col| subproject_cell(col, &p, state, route)/> }.into_any())
+        .map(|p| {
+            view! { <TableRow state=table cell=move |col| subproject_cell(col, &p, state, route)/> }
+                .into_any()
+        })
         .collect::<Vec<_>>()
         .into_any()
 }

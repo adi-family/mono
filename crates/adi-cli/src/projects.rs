@@ -169,7 +169,9 @@ pub(crate) fn run_projects(adi: Adi, command: ProjectsCommand) -> Result<(), Str
             }
         }
         ProjectsCommand::Rename { id, new_id, json } => {
-            let report = adi.rename_project(&id, &new_id).map_err(|e| e.to_string())?;
+            let report = adi
+                .rename_project(&id, &new_id)
+                .map_err(|e| e.to_string())?;
             if json {
                 print_json(&report);
             } else {

@@ -128,7 +128,9 @@ fn commit(facts: FactsConsole) {
             data.tx = None;
         }
     });
-    facts.note.set(format!("Committed \u{2014} {staged} facts landed."));
+    facts
+        .note
+        .set(format!("Committed \u{2014} {staged} facts landed."));
 }
 
 /// Throw the transaction away.
@@ -138,7 +140,9 @@ fn abort(facts: FactsConsole) {
             data.tx = None;
         }
     });
-    facts.note.set("Transaction aborted. Nothing landed.".to_string());
+    facts
+        .note
+        .set("Transaction aborted. Nothing landed.".to_string());
 }
 
 /// A derived node was regenerated: re-stamp its edges at its sources' current versions.
@@ -148,7 +152,9 @@ fn refresh(facts: FactsConsole, id: &str) {
             data.stale.retain(|s| s.node.id != id);
         }
     });
-    facts.note.set(format!("{id} re-stamped at its sources' current versions."));
+    facts
+        .note
+        .set(format!("{id} re-stamped at its sources' current versions."));
 }
 
 // ==========================================================================================
@@ -234,9 +240,7 @@ fn decide_panel(facts: FactsConsole) -> AnyView {
 
 /// What is out of date, and what changed under it.
 fn stale_panel(facts: FactsConsole) -> AnyView {
-    let items = Signal::derive(move || {
-        facts.data.get().map(|d| d.stale).unwrap_or_default()
-    });
+    let items = Signal::derive(move || facts.data.get().map(|d| d.stale).unwrap_or_default());
     view! {
         <section class="adi-panel">
             <div class="adi-panel__head">
@@ -373,18 +377,33 @@ fn fixture() -> FactsData {
         .at(2);
     let ukraine = Fact::new("f104", "Within the CIS, the company supports Ukraine.")
         .by("igor", "agent:chat@1");
-    let china_market = Fact::new("f044", "China is one of the operator's main target markets.")
-        .by("igor", "agent:extractor@1");
-    let china_unsure = Fact::new("f038", "The company is not sure it can enter the China market.")
-        .by("igor", "agent:extractor@1");
-    let licence = Fact::new("f052", "The enterprise licence would include user management.")
-        .by("igor", "agent:extractor@1");
-    let no_users = Fact::new("f061", "The company decided not to add user management to Mesh.")
-        .by("igor", "agent:extractor@1");
-    let plan = Fact::new("a012", "Market entry plan: skip China for now, open the EU first.")
-        .by("igor", "agent:planner@2")
-        .at(3)
-        .kind(NodeKind::Artifact);
+    let china_market = Fact::new(
+        "f044",
+        "China is one of the operator's main target markets.",
+    )
+    .by("igor", "agent:extractor@1");
+    let china_unsure = Fact::new(
+        "f038",
+        "The company is not sure it can enter the China market.",
+    )
+    .by("igor", "agent:extractor@1");
+    let licence = Fact::new(
+        "f052",
+        "The enterprise licence would include user management.",
+    )
+    .by("igor", "agent:extractor@1");
+    let no_users = Fact::new(
+        "f061",
+        "The company decided not to add user management to Mesh.",
+    )
+    .by("igor", "agent:extractor@1");
+    let plan = Fact::new(
+        "a012",
+        "Market entry plan: skip China for now, open the EU first.",
+    )
+    .by("igor", "agent:planner@2")
+    .at(3)
+    .kind(NodeKind::Artifact);
     let composed = Fact::new(
         "c003",
         "The company supports every country outside the CIS, and Ukraine inside it.",
@@ -459,12 +478,14 @@ fn fixture() -> FactsData {
         }),
         stale: vec![Stale::new(
             plan.clone(),
-            vec![Moved::new(
-                "f038",
-                "The company is not sure it can enter the China market.",
-                "The company can support China after all.",
-            )
-            .versions(1, 2)],
+            vec![
+                Moved::new(
+                    "f038",
+                    "The company is not sure it can enter the China market.",
+                    "The company can support China after all.",
+                )
+                .versions(1, 2),
+            ],
         )],
         facts: vec![
             cis.clone(),

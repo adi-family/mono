@@ -348,8 +348,14 @@ mod tests {
     fn an_event_fire_exposes_the_event_name() {
         let dir = scratch_dir("eventname");
         let t = trigger("on-task", "printf '%s|%s' \"$ADI_EVENT\" \"$ADI_PAYLOAD\"");
-        let firing = fire(&dir, &t, Some(b"{\"id\":\"t1\"}"), Some("adi.tasks.created"), &[])
-            .expect("fire");
+        let firing = fire(
+            &dir,
+            &t,
+            Some(b"{\"id\":\"t1\"}"),
+            Some("adi.tasks.created"),
+            &[],
+        )
+        .expect("fire");
         assert_eq!(
             wait_for_log(&firing.log, |s| s.contains('|')),
             "adi.tasks.created|{\"id\":\"t1\"}"

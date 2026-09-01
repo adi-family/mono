@@ -524,7 +524,12 @@ impl Docker {
             .collect();
         create.push(shell_quote(&name));
 
-        if let Some(pull) = self.pull.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        if let Some(pull) = self
+            .pull
+            .as_deref()
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
             create.push("--pull".to_string());
             create.push(shell_quote(pull));
         }
@@ -1311,7 +1316,11 @@ services:
             "only the local host is routable"
         );
         assert_eq!(r.skipped.len(), 2);
-        assert!(r.skipped.iter().all(|s| s.contains("reserved")), "{:?}", r.skipped);
+        assert!(
+            r.skipped.iter().all(|s| s.contains("reserved")),
+            "{:?}",
+            r.skipped
+        );
     }
 
     #[test]
@@ -1324,7 +1333,10 @@ services:
         assert!(!is_mesh_host("n.adi.example.com"));
         assert!(!is_mesh_host("notn.adi"));
 
-        assert_eq!(mesh_node("nosh.laptop-b.n.adi").as_deref(), Some("laptop-b"));
+        assert_eq!(
+            mesh_node("nosh.laptop-b.n.adi").as_deref(),
+            Some("laptop-b")
+        );
         assert_eq!(mesh_node("laptop-b.n.adi").as_deref(), Some("laptop-b"));
         assert_eq!(mesh_node("a.b.laptop-b.n.adi").as_deref(), Some("laptop-b"));
         assert_eq!(mesh_node("n.adi"), None, "the zone apex names no node");
@@ -1344,7 +1356,10 @@ proxy:
         .unwrap();
         let r = hive.resolve();
         assert_eq!(r.mesh_gateway, "127.0.0.1:8099".parse().ok());
-        assert_eq!(r.mesh_nodes, vec!["laptop-b".to_string(), "tower".to_string()]);
+        assert_eq!(
+            r.mesh_nodes,
+            vec!["laptop-b".to_string(), "tower".to_string()]
+        );
 
         // Absent by default — a hive that says nothing about the mesh has none.
         let bare = Hive::default().resolve();
@@ -1630,7 +1645,9 @@ services:
             std::thread::current().id()
         ));
         let service = |host: &str| {
-            format!("services:\n  app:\n    proxy: {{ host: {host} }}\n    rollout: {{ recreate: {{ ports: {{ http: 9124 }} }} }}\n")
+            format!(
+                "services:\n  app:\n    proxy: {{ host: {host} }}\n    rollout: {{ recreate: {{ ports: {{ http: 9124 }} }} }}\n"
+            )
         };
         for pruned in ["target", "node_modules", ".git", "dist"] {
             let dir = base.join(pruned).join("buried/.adi");
@@ -1692,7 +1709,9 @@ services:
             "exactly the two projects at the fixed depth: {found:?}"
         );
         assert!(
-            found.iter().all(|p| !p.starts_with(base.join("proj-a/backend"))),
+            found
+                .iter()
+                .all(|p| !p.starts_with(base.join("proj-a/backend"))),
             "a `*` segment must not descend into a project's own tree: {found:?}"
         );
         // A level that exists but holds no such file contributes nothing rather than erroring.
@@ -1804,7 +1823,12 @@ services:
         )
         .expect("parse child");
         let mut sup = Hive::default();
-        sup.merge_import(child, "proj", false, Some(Path::new("/home/u/.adi/mono/projects/proj")));
+        sup.merge_import(
+            child,
+            "proj",
+            false,
+            Some(Path::new("/home/u/.adi/mono/projects/proj")),
+        );
 
         // The supervisor's own base_dir is elsewhere; the imported service must ignore it.
         let runners = sup.runners(Path::new("/home/u/.adi/mono/dashboards"));
@@ -2000,7 +2024,10 @@ services:
             "got: {run}"
         );
         assert!(run.ends_with("; exec docker wait adi-web"), "got: {run}");
-        assert!(!run.contains("--rm"), "no --rm (persistent container): {run}");
+        assert!(
+            !run.contains("--rm"),
+            "no --rm (persistent container): {run}"
+        );
         assert!(run.contains("--pull always"), "got: {run}");
         // Leased host port 8080 → container 80, on loopback.
         assert!(run.contains("-p 127.0.0.1:8080:80"), "got: {run}");
@@ -2009,7 +2036,10 @@ services:
         assert!(run.contains("-e PORT_HTTP=80"), "got: {run}");
         // The block's env overrides the service's static env of the same name.
         assert!(run.contains("-e LOG_LEVEL=debug"), "got: {run}");
-        assert!(!run.contains("LOG_LEVEL=info"), "override should win: {run}");
+        assert!(
+            !run.contains("LOG_LEVEL=info"),
+            "override should win: {run}"
+        );
         assert!(run.contains("-e EXTRA=1"), "got: {run}");
         // Relative bind-mount host path resolved against base_dir; a named volume left alone.
         assert!(
@@ -2058,7 +2088,9 @@ services:
 
         let runners = hive.runners(Path::new("/x"));
         assert!(
-            runners[0].run.contains(&format!("-p 127.0.0.1:{host}:3000")),
+            runners[0]
+                .run
+                .contains(&format!("-p 127.0.0.1:{host}:3000")),
             "got: {}",
             runners[0].run
         );
@@ -2093,10 +2125,7 @@ services:
     #[test]
     fn resolve_volume_only_rewrites_relative_paths() {
         let base = Path::new("/base");
-        assert_eq!(
-            resolve_volume(base, "./data:/data"),
-            "/base/data:/data"
-        );
+        assert_eq!(resolve_volume(base, "./data:/data"), "/base/data:/data");
         assert_eq!(resolve_volume(base, "sub/x:/x:ro"), "/base/sub/x:/x:ro");
         assert_eq!(resolve_volume(base, "/abs:/data"), "/abs:/data");
         assert_eq!(resolve_volume(base, "named:/data"), "named:/data");

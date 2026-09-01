@@ -298,11 +298,7 @@ impl TableState {
     /// history reads newest-first, so it declares `When` descending rather than inheriting a rule
     /// that would silently reverse it.
     #[must_use]
-    pub fn sorted(
-        key: &'static str,
-        headers: &'static [&'static str],
-        default_sort: Sort,
-    ) -> Self {
+    pub fn sorted(key: &'static str, headers: &'static [&'static str], default_sort: Sort) -> Self {
         let sort = read(key, "sort")
             .and_then(|raw| {
                 let (name, dir) = raw.split_once('|')?;
@@ -949,7 +945,9 @@ mod tests {
     #[test]
     fn a_column_orders_by_its_value_not_its_formatted_cell() {
         let mut rows = rows();
-        sort_rows(&mut rows, Sort::new("Memory"), key, |r| SortKey::text(r.name));
+        sort_rows(&mut rows, Sort::new("Memory"), key, |r| {
+            SortKey::text(r.name)
+        });
         assert_eq!(names(&rows), ["web", "app", "api"]);
 
         sort_rows(&mut rows, desc("Memory"), key, |r| SortKey::text(r.name));
@@ -972,7 +970,9 @@ mod tests {
         assert_eq!(names(&ascending), ["web", "api", "app"]);
 
         let mut descending = rows();
-        sort_rows(&mut descending, desc("Status"), key, |r| SortKey::text(r.name));
+        sort_rows(&mut descending, desc("Status"), key, |r| {
+            SortKey::text(r.name)
+        });
         assert_eq!(
             names(&descending),
             ["api", "app", "web"],
@@ -985,7 +985,9 @@ mod tests {
     #[test]
     fn an_unkeyed_column_falls_through_to_the_comparators_default() {
         let mut rows = rows();
-        sort_rows(&mut rows, Sort::new("Nonsense"), key, |r| SortKey::text(r.name));
+        sort_rows(&mut rows, Sort::new("Nonsense"), key, |r| {
+            SortKey::text(r.name)
+        });
         assert_eq!(names(&rows), ["api", "app", "web"], "by name, the default");
     }
 
@@ -999,7 +1001,10 @@ mod tests {
 
         assert!(SortKey::Bool(false) < SortKey::Bool(true));
         assert!(SortKey::num(0) < SortKey::count(1));
-        assert!(SortKey::maybe(None) < SortKey::text("a"), "absent sorts as empty");
+        assert!(
+            SortKey::maybe(None) < SortKey::text("a"),
+            "absent sorts as empty"
+        );
         assert_eq!(
             SortKey::text("a").cmp(&SortKey::Int(1)),
             std::cmp::Ordering::Equal,

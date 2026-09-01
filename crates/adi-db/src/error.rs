@@ -27,11 +27,9 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(e) => write!(f, "db store error: {e}"),
-            Self::InvalidProject(id) => write!(
-                f,
-                "invalid project id {id:?}: {}",
-                adi_config::NAME_RULE
-            ),
+            Self::InvalidProject(id) => {
+                write!(f, "invalid project id {id:?}: {}", adi_config::NAME_RULE)
+            }
             Self::NotFound(path) => write!(f, "no database at {path}"),
             Self::Sqlite(e) => write!(f, "sqlite error: {e}"),
             Self::Io(e) => write!(f, "db store I/O error: {e}"),

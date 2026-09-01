@@ -288,7 +288,10 @@ mod tests {
         assert_eq!(service_name(Some("nosh.adi")).as_deref(), Some("nosh"));
         assert_eq!(service_name(Some("NOSH.adi.")).as_deref(), Some("nosh"));
         // Kept whole: `app.nosh.adi` is its own service, not `app`'s and not `nosh`'s.
-        assert_eq!(service_name(Some("app.nosh.adi")).as_deref(), Some("app.nosh"));
+        assert_eq!(
+            service_name(Some("app.nosh.adi")).as_deref(),
+            Some("app.nosh")
+        );
         assert_eq!(service_name(None), None);
         assert_eq!(service_name(Some("  ")), None);
         // Outside the node's own zone there is no name the mesh could route.
@@ -312,7 +315,10 @@ mod tests {
     fn the_credential_defaults_to_the_user_pairing_mints() {
         // `adi:hunter2`
         assert_eq!(basic_auth(None, "hunter2"), "Basic YWRpOmh1bnRlcjI=");
-        assert_eq!(basic_auth(Some("  "), "hunter2"), basic_auth(None, "hunter2"));
+        assert_eq!(
+            basic_auth(Some("  "), "hunter2"),
+            basic_auth(None, "hunter2")
+        );
         assert_ne!(
             basic_auth(Some("root"), "hunter2"),
             basic_auth(None, "hunter2")
@@ -425,7 +431,10 @@ mod tests {
             "the loopback address must not reach the wire as a name: {head}"
         );
         // `adi:hunter2`, and a content length so the node reads the whole bundle.
-        assert!(head.contains("authorization: basic ywrpomh1bnrlcji="), "{head}");
+        assert!(
+            head.contains("authorization: basic ywrpomh1bnrlcji="),
+            "{head}"
+        );
         assert!(head.contains("content-length: 2"), "{head}");
         assert_eq!(body, "{\"ok\":1}");
     }

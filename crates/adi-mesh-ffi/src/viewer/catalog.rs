@@ -240,8 +240,11 @@ async fn request(
     path: &str,
     body: Option<&[u8]>,
 ) -> anyhow::Result<Vec<u8>> {
-    let raw = match timeout(STEP_TIMEOUT, exchange(shared, key, credential, method, path, body))
-        .await
+    let raw = match timeout(
+        STEP_TIMEOUT,
+        exchange(shared, key, credential, method, path, body),
+    )
+    .await
     {
         Ok(Ok(raw)) => raw,
         Ok(Err(e)) => {
@@ -263,9 +266,7 @@ async fn request(
         401 => anyhow::bail!(
             "this node did not accept the password stored for it — pair again to rotate it"
         ),
-        404 => anyhow::bail!(
-            "this node's control panel has no {path} — it is older than this app"
-        ),
+        404 => anyhow::bail!("this node's control panel has no {path} — it is older than this app"),
         status => anyhow::bail!(
             "this node's control panel answered {status}: {}",
             snippet(&reply.body)
@@ -294,7 +295,8 @@ async fn exchange(
         refused => anyhow::bail!("{}", refused.reason()),
     }
 
-    send.write_all(&head(method, path, credential, body)).await?;
+    send.write_all(&head(method, path, credential, body))
+        .await?;
     if let Some(body) = body {
         send.write_all(body).await?;
     }
@@ -406,9 +408,9 @@ fn assemble(dashboards: Vec<RawDashboard>, grants: &[Grant]) -> Vec<DashboardInf
         .filter(|dashboard| dashboard.archived_at.is_none())
         .map(|dashboard| {
             let service = dashboard.host.as_deref().and_then(service_label);
-            let allowed = service.as_deref().is_some_and(|label| {
-                grants.iter().any(|grant| grant.allows(Target::Http(label)))
-            });
+            let allowed = service
+                .as_deref()
+                .is_some_and(|label| grants.iter().any(|grant| grant.allows(Target::Http(label))));
             DashboardInfo {
                 name: dashboard.name.unwrap_or_else(|| dashboard.id.clone()),
                 id: dashboard.id,
@@ -437,7 +439,9 @@ mod tests {
     use super::*;
 
     fn grants(raw: &[&str]) -> Vec<Grant> {
-        raw.iter().map(|g| g.parse().expect("a valid grant")).collect()
+        raw.iter()
+            .map(|g| g.parse().expect("a valid grant"))
+            .collect()
     }
 
     fn dashboard(id: &str, host: Option<&str>) -> RawDashboard {
@@ -474,8 +478,8 @@ mod tests {
 
     #[test]
     fn a_body_less_head_declares_no_length() {
-        let head = String::from_utf8(head("GET", "/api/dashboards", ("adi", "x"), None))
-            .expect("utf-8");
+        let head =
+            String::from_utf8(head("GET", "/api/dashboards", ("adi", "x"), None)).expect("utf-8");
         assert!(!head.contains("Content-Length"), "{head}");
         assert!(head.contains("Connection: close\r\n"), "{head}");
     }
@@ -549,7 +553,10 @@ mod tests {
     #[test]
     fn a_wildcard_grant_opens_every_dashboard() {
         let rows = assemble(
-            vec![dashboard("nosh", Some("nosh.adi")), dashboard("books", Some("books.adi"))],
+            vec![
+                dashboard("nosh", Some("nosh.adi")),
+                dashboard("books", Some("books.adi")),
+            ],
             &grants(&["http:*"]),
         );
         assert!(rows.iter().all(|row| row.allowed), "http:* covers the lot");
@@ -561,8 +568,15 @@ mod tests {
             archived_at: Some(1),
             ..dashboard("old", Some("old.adi"))
         };
-        let rows = assemble(vec![archived, dashboard("nosh", Some("nosh.adi"))], &grants(&["http:*"]));
-        assert_eq!(rows.len(), 1, "archiving stops the services; the row would only fail");
+        let rows = assemble(
+            vec![archived, dashboard("nosh", Some("nosh.adi"))],
+            &grants(&["http:*"]),
+        );
+        assert_eq!(
+            rows.len(),
+            1,
+            "archiving stops the services; the row would only fail"
+        );
         assert_eq!(rows[0].id, "nosh");
     }
 
@@ -589,8 +603,14 @@ mod tests {
         assert_eq!(grants.len(), 2, "every grant it holds, whatever kind");
         assert!(grants.iter().any(|g| g.allows(Target::Http("app"))));
 
-        assert!(find_me(fleet, "cccc").is_none(), "an unpaired key is not there");
-        assert!(find_me(b"not json", "bbbb").is_none(), "and neither is a bad page");
+        assert!(
+            find_me(fleet, "cccc").is_none(),
+            "an unpaired key is not there"
+        );
+        assert!(
+            find_me(b"not json", "bbbb").is_none(),
+            "and neither is a bad page"
+        );
     }
 
     #[test]
@@ -599,7 +619,11 @@ mod tests {
             "grants":["http:app","quantum:entangle"],"nickname":"p","paired_at":1,
             "has_password":true}]}"#;
         let (_, grants) = find_me(fleet, "bbbb").expect("listed");
-        assert_eq!(grants.len(), 1, "the rule we do not know is skipped, not fatal");
+        assert_eq!(
+            grants.len(),
+            1,
+            "the rule we do not know is skipped, not fatal"
+        );
         assert!(grants[0].allows(Target::Http("app")));
     }
 
@@ -611,7 +635,10 @@ mod tests {
                 .expect("an older payload still deserializes");
         let rows = assemble(listing.dashboards, &grants(&["http:*"]));
         assert_eq!(rows[0].id, "nosh");
-        assert_eq!(rows[0].service, None, "no host declared is no service to open");
+        assert_eq!(
+            rows[0].service, None,
+            "no host declared is no service to open"
+        );
         assert!(!rows[0].running);
     }
 
@@ -637,7 +664,11 @@ mod tests {
 
         let rows = assemble(listing.dashboards, &grants(&["http:app"]));
         assert_eq!(rows[0].name, "Bugbounty");
-        assert_eq!(rows[0].service.as_deref(), Some("bugbounty"), "host → label");
+        assert_eq!(
+            rows[0].service.as_deref(),
+            Some("bugbounty"),
+            "host → label"
+        );
         assert!(rows[0].running, "frontend_running is what the row reports");
         assert!(
             !rows[0].allowed,

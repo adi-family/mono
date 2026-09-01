@@ -1,18 +1,13 @@
 //! The Triggers panel of the project detail page.
 
+use adi_ui::{EmptyRow, Row as TableRow, Table};
 use adi_webapp_api::types::{SaveTrigger, TriggersState};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow, Table};
 
 use crate::fetch;
-use crate::pages::triggers::{
-    trigger_actions, trigger_cell, trigger_key, trigger_toggle_item,
-};
+use crate::pages::triggers::{trigger_actions, trigger_cell, trigger_key, trigger_toggle_item};
 use crate::state::{Flash, State, TriggersLogView};
-use crate::ui::{
-    Key, TextField, apply_mutation, row_actions,
-    sort_rows,
-};
+use crate::ui::{Key, TextField, apply_mutation, row_actions, sort_rows};
 
 /// The project detail page's quick trigger create form (name, kind, code; the project is fixed
 /// to the open project). Full editing — presets, runtimes, settings, enable/disable — lives on
@@ -144,7 +139,8 @@ fn project_trigger_rows(state: State, log: TriggersLogView) -> AnyView {
                 trigger_actions(state, log, &t),
                 vec![trigger_toggle_item(state, &t)],
             );
-            view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }.into_any()
+            view! { <TableRow state=table cell=move |col| trigger_cell(col, &t) actions=actions/> }
+                .into_any()
         })
         .collect::<Vec<_>>()
         .into_any()

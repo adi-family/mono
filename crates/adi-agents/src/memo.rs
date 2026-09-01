@@ -29,7 +29,6 @@ use crate::progress::TurnContent;
 /// at once, and small enough that the whole cache is a rounding error beside one parsed log.
 const CAPACITY: usize = 64;
 
-
 /// A file's identity: two cheap `stat` fields that together change whenever its bytes do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Stamp {
@@ -136,8 +135,6 @@ fn evict<T>(entries: &mut HashMap<PathBuf, Entry<T>>, capacity: usize) {
 /// one: two parsers keyed on the same path would each serve the other's answer.
 static EVENTS: LazyLock<Memo<TurnContent>> = LazyLock::new(|| Memo::new(CAPACITY));
 
-
-
 /// A turn's events, folded into content by the caller — memoized on the log they were read from.
 ///
 /// The bargain the module docs describe, for the runner-driven path: a runner turns bytes into
@@ -207,7 +204,10 @@ mod tests {
         let missing = std::env::temp_dir().join("adi-memo-nothing-here");
         let _ = std::fs::remove_file(&missing);
 
-        assert_eq!(*memo.get_or_insert_as(missing.clone(), &missing, String::new), "");
+        assert_eq!(
+            *memo.get_or_insert_as(missing.clone(), &missing, String::new),
+            ""
+        );
         assert!(memo.lock().is_empty(), "nothing was remembered");
     }
 

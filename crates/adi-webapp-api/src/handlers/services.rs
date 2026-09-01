@@ -344,7 +344,10 @@ pub fn start_service(store: &Projects, body: &[u8]) -> Response {
     let Some(script) = runner.script.as_ref() else {
         return error(
             400,
-            &format!("service `{}` has no script or docker runner to start", req.service),
+            &format!(
+                "service `{}` has no script or docker runner to start",
+                req.service
+            ),
         );
     };
 
@@ -636,7 +639,12 @@ fn valid_service_name(name: &str) -> bool {
 /// adi-hive's own `container_name`, so a container started here and one the hive supervisor runs
 /// resolve to the same name.
 fn docker_container_name(service: &str, docker: &HiveDocker) -> String {
-    if let Some(name) = docker.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+    if let Some(name) = docker
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
         return name.to_string();
     }
     let mut out = String::from("adi-");

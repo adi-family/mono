@@ -118,7 +118,12 @@ pub fn AppItem(
     // and a row that reveals its own control does not need the screen's permission.
     let revealed = RwSignal::new(false);
     let dot = state.dot_classes();
-    let mark = title.chars().next().unwrap_or('·').to_uppercase().to_string();
+    let mark = title
+        .chars()
+        .next()
+        .unwrap_or('·')
+        .to_uppercase()
+        .to_string();
     let machine = if machine.is_empty() {
         String::from("this machine")
     } else {

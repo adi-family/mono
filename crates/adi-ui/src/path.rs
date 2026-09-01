@@ -739,7 +739,10 @@ fn complete_leaf(value: RwSignal<String>, entries: Signal<Vec<DirEntry>>) -> boo
 }
 
 /// The one-click places, across the top of the sheet. Nothing when the caller named none.
-fn roots_strip(roots: Signal<Vec<PathRoot>>, go: impl Fn(&str) + Copy + Send + Sync + 'static) -> impl IntoView {
+fn roots_strip(
+    roots: Signal<Vec<PathRoot>>,
+    go: impl Fn(&str) + Copy + Send + Sync + 'static,
+) -> impl IntoView {
     move || {
         let places = roots.get();
         (!places.is_empty()).then(|| {
@@ -843,7 +846,10 @@ fn crumbs_strip(
 /// The bottom of the sheet: what you are about to hand over, spelled out, and the button
 /// that hands it over. The path is written out because the field above it may be scrolled,
 /// truncated, or still holding the half-name you typed before clicking.
-fn choose_strip(value: RwSignal<String>, confirm: impl Fn() + Copy + Send + Sync + 'static) -> impl IntoView {
+fn choose_strip(
+    value: RwSignal<String>,
+    confirm: impl Fn() + Copy + Send + Sync + 'static,
+) -> impl IntoView {
     view! {
         <div class="flex items-center gap-2 border-t border-divider bg-panel px-2 py-1.5">
             <span class="min-w-0 flex-1 truncate font-mono text-mini text-meta">
@@ -1042,7 +1048,10 @@ mod tests {
     #[test]
     fn tab_completes_as_far_as_the_names_agree() {
         let names = |v: &[&str]| v.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        assert_eq!(common_prefix(&names(&["adi-ui", "adi-app", "adi-agents"])), "adi-");
+        assert_eq!(
+            common_prefix(&names(&["adi-ui", "adi-app", "adi-agents"])),
+            "adi-"
+        );
         assert_eq!(common_prefix(&names(&["adi-ui"])), "adi-ui");
         // Nothing shared, nothing typed for you — including across a case difference.
         assert_eq!(common_prefix(&names(&["Documents", "downloads"])), "");

@@ -239,7 +239,10 @@ mod tests {
         assert_eq!(v["services"][0]["run"], "docker: nginx:1.27");
 
         let text = std::fs::read_to_string(store.hive_path("demo").unwrap()).unwrap();
-        assert!(text.contains("docker:"), "a docker runner is written: {text}");
+        assert!(
+            text.contains("docker:"),
+            "a docker runner is written: {text}"
+        );
         assert!(text.contains("image: nginx:1.27"), "got: {text}");
         assert!(text.contains("http: 80"), "container port mapping: {text}");
         assert!(text.contains("pull: missing"), "got: {text}");
@@ -305,11 +308,23 @@ mod tests {
         let v: Value = serde_json::from_str(&body).unwrap();
         let d = &v["dashboards"][0];
         assert_eq!(d["id"], id);
-        assert!(d["archived_at"].as_u64().is_some(), "archived_at set: {body}");
-        assert!(!dir.join(".adi/hive.yaml").exists(), "live hive file is parked");
-        assert!(dir.join(".adi/hive.yaml.archived").is_file(), "parked file present");
+        assert!(
+            d["archived_at"].as_u64().is_some(),
+            "archived_at set: {body}"
+        );
+        assert!(
+            !dir.join(".adi/hive.yaml").exists(),
+            "live hive file is parked"
+        );
+        assert!(
+            dir.join(".adi/hive.yaml.archived").is_file(),
+            "parked file present"
+        );
         let toml = std::fs::read_to_string(dir.join("config.toml")).unwrap();
-        assert!(toml.contains("archived_at ="), "manifest records archive: {toml}");
+        assert!(
+            toml.contains("archived_at ="),
+            "manifest records archive: {toml}"
+        );
 
         // Restore: the hive file returns to the glob and archived_at clears.
         let Response { status, body } = unarchive_dashboard(&cfg, &ports, &[], ref_body.as_bytes());
@@ -320,7 +335,10 @@ mod tests {
             "archived_at cleared: {body}"
         );
         assert!(dir.join(".adi/hive.yaml").is_file(), "hive file restored");
-        assert!(!dir.join(".adi/hive.yaml.archived").exists(), "parked file removed");
+        assert!(
+            !dir.join(".adi/hive.yaml.archived").exists(),
+            "parked file removed"
+        );
 
         // Bad ids: an unknown or path-escaping id is a 404; a blank or unparseable body is a 400.
         assert_eq!(
@@ -335,7 +353,10 @@ mod tests {
             archive_dashboard(&cfg, &ports, &[], br#"{"id":""}"#).status,
             400
         );
-        assert_eq!(archive_dashboard(&cfg, &ports, &[], b"not json").status, 400);
+        assert_eq!(
+            archive_dashboard(&cfg, &ports, &[], b"not json").status,
+            400
+        );
     }
 
     #[test]
@@ -421,7 +442,10 @@ mod tests {
             "parent is gone: {body}"
         );
         let child = list.iter().find(|t| t["title"] == "child").unwrap();
-        assert!(child["parent"].is_null(), "child reparented to root: {body}");
+        assert!(
+            child["parent"].is_null(),
+            "child reparented to root: {body}"
+        );
 
         assert_eq!(delete_task(&store, br#"{"id":"ghost"}"#).status, 404);
         assert_eq!(delete_task(&store, br#"{"id":""}"#).status, 400);
@@ -638,7 +662,12 @@ mod tests {
         let Response { status, body } = run_agent(&store, br#"{"name":"looper"}"#);
         assert_eq!(status, 400);
         let v: Value = serde_json::from_str(&body).unwrap();
-        assert!(v["error"].as_str().unwrap().contains("needs an initial task"));
+        assert!(
+            v["error"]
+                .as_str()
+                .unwrap()
+                .contains("needs an initial task")
+        );
     }
 
     /// `harness:adi` implements every provider it can name, so the one thing left to refuse is an
@@ -774,7 +803,10 @@ mod tests {
 
         let Response { status, .. } =
             run_agent(&store, br#"{"name":"looper","message":"go","force":true}"#);
-        assert_eq!(status, 400, "force gets past the cap, to the backend's verdict");
+        assert_eq!(
+            status, 400,
+            "force gets past the cap, to the backend's verdict"
+        );
     }
 
     /// A project's own cap: set through the same endpoint, reported per project, and enforced on
@@ -788,8 +820,10 @@ mod tests {
         );
         let _ = save_agent(&store, br#"{"name":"loose","backend":"harness:adi"}"#);
 
-        let Response { status, body } =
-            set_run_limit(&store, br#"{"max_concurrent_runs":1,"project":"bugbounty"}"#);
+        let Response { status, body } = set_run_limit(
+            &store,
+            br#"{"max_concurrent_runs":1,"project":"bugbounty"}"#,
+        );
         assert_eq!(status, 200);
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["max_concurrent_runs"], 3, "the global cap is untouched");
@@ -828,8 +862,10 @@ mod tests {
         assert_eq!(flags, [("loose", false), ("solver", true)]);
 
         // Clearing it (a 0) leaves the project bound only by the global cap.
-        let Response { body, .. } =
-            set_run_limit(&store, br#"{"max_concurrent_runs":0,"project":"bugbounty"}"#);
+        let Response { body, .. } = set_run_limit(
+            &store,
+            br#"{"max_concurrent_runs":0,"project":"bugbounty"}"#,
+        );
         let v: Value = serde_json::from_str(&body).unwrap();
         assert_eq!(
             v["project_run_limits"].as_array().unwrap()[0]["max_concurrent_runs"],
@@ -940,7 +976,11 @@ mod tests {
             br#"{"name":"target-agent","backend":"harness:claude-sdk","prelude":[]}"#,
         );
         let v: Value = serde_json::from_str(&body).unwrap();
-        assert!(v["agents"][0]["prelude"].as_array().is_none_or(Vec::is_empty));
+        assert!(
+            v["agents"][0]["prelude"]
+                .as_array()
+                .is_none_or(Vec::is_empty)
+        );
     }
 
     /// The launch request's own pre-run list, which is a different thing from the agent's standing

@@ -112,7 +112,8 @@ pub(crate) fn run_goals(adi: Adi, command: GoalsCommand) -> Result<(), String> {
             // reads differently afterward from one it was handed. The environment is what tells
             // them apart: nothing else here can.
             let set_by = if from_env { SetBy::Agent } else { SetBy::Human };
-            let goal = goals::create(&store, &agent, &conv, &text, set_by).map_err(|e| e.to_string())?;
+            let goal =
+                goals::create(&store, &agent, &conv, &text, set_by).map_err(|e| e.to_string())?;
             if json {
                 print_json(&goal);
             } else {
@@ -173,11 +174,7 @@ pub(crate) fn run_goals(adi: Adi, command: GoalsCommand) -> Result<(), String> {
                 }
             }
         }
-        GoalsCommand::Met {
-            id,
-            evidence,
-            json,
-        } => {
+        GoalsCommand::Met { id, evidence, json } => {
             let closed = goals::met(&store, &id, evidence.as_deref().unwrap_or_default())
                 .map_err(|e| e.to_string())?;
             report_closed(&id, &closed, "met", json)?;
@@ -204,7 +201,9 @@ fn address(
         .or_else(|| std::env::var(AGENT_ENV).ok())
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| {
-            format!("no agent: pass --agent, or run this from inside a turn where {AGENT_ENV} is set")
+            format!(
+                "no agent: pass --agent, or run this from inside a turn where {AGENT_ENV} is set"
+            )
         })?;
     let conv = session
         .or_else(|| std::env::var(CONV_ENV).ok())

@@ -123,15 +123,31 @@ fn renaming_a_project_moves_its_bases_and_the_notes_in_them() {
 #[test]
 fn renaming_a_project_onto_an_occupied_base_moves_nothing() {
     let (_dir, store) = store();
-    store.ensure_base(&base("project:old/runbook")).expect("old");
-    store.ensure_base(&base("project:old/scratch")).expect("old scratch");
-    store.ensure_base(&base("project:new/runbook")).expect("new");
+    store
+        .ensure_base(&base("project:old/runbook"))
+        .expect("old");
+    store
+        .ensure_base(&base("project:old/scratch"))
+        .expect("old scratch");
+    store
+        .ensure_base(&base("project:new/runbook"))
+        .expect("new");
 
     let err = store.rename_project("old", "new").unwrap_err();
     assert!(matches!(err, Error::BaseExists(_)), "{err:?}");
     // The refusal is checked before the first move, so the whole of `old` is still there.
-    assert!(store.get_base(&base("project:old/runbook")).expect("get").is_some());
-    assert!(store.get_base(&base("project:old/scratch")).expect("get").is_some());
+    assert!(
+        store
+            .get_base(&base("project:old/runbook"))
+            .expect("get")
+            .is_some()
+    );
+    assert!(
+        store
+            .get_base(&base("project:old/scratch"))
+            .expect("get")
+            .is_some()
+    );
 }
 
 #[test]
@@ -142,7 +158,9 @@ fn creating_a_base_twice_is_refused_but_ensuring_it_twice_is_not() {
         .create_base(&id, None, Some("shared"), BTreeMap::new())
         .expect("create");
     assert!(matches!(
-        store.create_base(&id, None, None, BTreeMap::new()).unwrap_err(),
+        store
+            .create_base(&id, None, None, BTreeMap::new())
+            .unwrap_err(),
         Error::BaseExists(_)
     ));
     assert_eq!(
@@ -169,7 +187,11 @@ fn a_base_naming_a_provider_nobody_registered_is_never_written() {
 #[test]
 fn bases_list_across_all_three_levels_and_survive_a_reopen() {
     let (dir, store) = store();
-    for id in ["global/notes", "project:acme/runbook", "agent:solver/memory"] {
+    for id in [
+        "global/notes",
+        "project:acme/runbook",
+        "agent:solver/memory",
+    ] {
         store.ensure_base(&base(id)).expect("ensure");
     }
     let listed: Vec<String> = store
@@ -180,7 +202,11 @@ fn bases_list_across_all_three_levels_and_survive_a_reopen() {
         .collect();
     assert_eq!(
         listed,
-        vec!["global/notes", "project:acme/runbook", "agent:solver/memory"],
+        vec![
+            "global/notes",
+            "project:acme/runbook",
+            "agent:solver/memory"
+        ],
         "sorted by scope then name"
     );
 
@@ -210,7 +236,12 @@ fn deleting_a_base_takes_its_notes_with_it() {
 
     // Recreating it gives an empty base, not the old contents.
     store.ensure_base(&id).expect("re-ensure");
-    assert!(store.list(&id, &Filter::default()).expect("list").is_empty());
+    assert!(
+        store
+            .list(&id, &Filter::default())
+            .expect("list")
+            .is_empty()
+    );
 }
 
 // ------------------------------------------------------------------- notes
@@ -239,7 +270,10 @@ fn a_note_of_any_length_round_trips_and_is_embedded_on_the_way_in() {
         saved.knowledge.embedding
     );
 
-    let read = store.get(&id, "restarting-the-panel").expect("get").expect("present");
+    let read = store
+        .get(&id, "restarting-the-panel")
+        .expect("get")
+        .expect("present");
     assert_eq!(read.body, long.trim_end());
     assert!(!read.is_stale("hash-bow-256"));
 }
@@ -250,8 +284,12 @@ fn two_notes_with_the_same_title_are_two_notes() {
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
 
-    let first = store.add(&id, NewKnowledge::new("Deploy", "one")).expect("add");
-    let second = store.add(&id, NewKnowledge::new("Deploy", "two")).expect("add");
+    let first = store
+        .add(&id, NewKnowledge::new("Deploy", "one"))
+        .expect("add");
+    let second = store
+        .add(&id, NewKnowledge::new("Deploy", "two"))
+        .expect("add");
     assert_eq!(first.knowledge.id, "deploy");
     assert_eq!(second.knowledge.id, "deploy-2");
     assert_eq!(store.list(&id, &Filter::default()).expect("list").len(), 2);
@@ -297,7 +335,9 @@ fn a_note_with_nothing_in_it_is_refused() {
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
     assert!(matches!(
-        store.add(&id, NewKnowledge::new("   ", "  \n ")).unwrap_err(),
+        store
+            .add(&id, NewKnowledge::new("   ", "  \n "))
+            .unwrap_err(),
         Error::Empty
     ));
 }
@@ -308,7 +348,10 @@ fn a_note_with_only_a_body_still_gets_an_id() {
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
     let saved = store
-        .add(&id, NewKnowledge::new("", "the front door hot-reloads its routes"))
+        .add(
+            &id,
+            NewKnowledge::new("", "the front door hot-reloads its routes"),
+        )
         .expect("add");
     assert_eq!(saved.knowledge.id, "the-front-door-hot-reloads-its-routes");
 }
@@ -318,13 +361,28 @@ fn listing_filters_by_tag_and_respects_its_limit() {
     let (_dir, store) = store();
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
-    store.add(&id, NewKnowledge::new("A", "x").tagged(["ops"])).expect("add");
-    store.add(&id, NewKnowledge::new("B", "x").tagged(["net"])).expect("add");
-    store.add(&id, NewKnowledge::new("C", "x").tagged(["ops", "net"])).expect("add");
+    store
+        .add(&id, NewKnowledge::new("A", "x").tagged(["ops"]))
+        .expect("add");
+    store
+        .add(&id, NewKnowledge::new("B", "x").tagged(["net"]))
+        .expect("add");
+    store
+        .add(&id, NewKnowledge::new("C", "x").tagged(["ops", "net"]))
+        .expect("add");
 
-    assert_eq!(store.list(&id, &Filter::tagged(["OPS"])).expect("list").len(), 2);
     assert_eq!(
-        store.list(&id, &Filter::tagged(["ops", "net"])).expect("list").len(),
+        store
+            .list(&id, &Filter::tagged(["OPS"]))
+            .expect("list")
+            .len(),
+        2
+    );
+    assert_eq!(
+        store
+            .list(&id, &Filter::tagged(["ops", "net"]))
+            .expect("list")
+            .len(),
         1
     );
     assert_eq!(store.list(&id, &Filter::limit(2)).expect("list").len(), 2);
@@ -335,13 +393,31 @@ fn removing_a_note_takes_it_out_of_search_too() {
     let (_dir, store) = store();
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
-    store.add(&id, NewKnowledge::new("Findable", "unique-token")).expect("add");
-    assert_eq!(store.search(&[id.clone()], "unique-token", 5).expect("search").len(), 1);
+    store
+        .add(&id, NewKnowledge::new("Findable", "unique-token"))
+        .expect("add");
+    assert_eq!(
+        store
+            .search(&[id.clone()], "unique-token", 5)
+            .expect("search")
+            .len(),
+        1
+    );
 
     assert!(store.remove(&id, "findable").expect("remove"));
     assert!(!store.remove(&id, "findable").expect("second remove"));
-    assert!(store.search(&[id.clone()], "unique-token", 5).expect("search").is_empty());
-    assert!(store.search_text(&[id], "unique-token", 5).expect("search").is_empty());
+    assert!(
+        store
+            .search(&[id.clone()], "unique-token", 5)
+            .expect("search")
+            .is_empty()
+    );
+    assert!(
+        store
+            .search_text(&[id], "unique-token", 5)
+            .expect("search")
+            .is_empty()
+    );
 }
 
 // -------------------------------------------------------- the re-embedding contract
@@ -352,7 +428,9 @@ fn editing_a_note_re_embeds_it() {
     let (_dir, store) = store();
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
-    store.add(&id, NewKnowledge::new("Note", "alpha alpha alpha")).expect("add");
+    store
+        .add(&id, NewKnowledge::new("Note", "alpha alpha alpha"))
+        .expect("add");
 
     // Before the edit, the old text is what matches.
     let before = store.search(&[id.clone()], "alpha", 5).expect("search");
@@ -386,11 +464,13 @@ fn editing_a_note_re_embeds_it() {
 fn an_edit_that_changes_no_text_does_not_re_embed() {
     let (dir, _) = store();
     let counter = Arc::new(CountingEmbedder::default());
-    let store = KnowledgeStore::with_config(Config::with_root(dir.path()))
-        .with_embedder(counter.clone());
+    let store =
+        KnowledgeStore::with_config(Config::with_root(dir.path())).with_embedder(counter.clone());
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
-    store.add(&id, NewKnowledge::new("Note", "body")).expect("add");
+    store
+        .add(&id, NewKnowledge::new("Note", "body"))
+        .expect("add");
     let after_add = counter.texts();
     assert!(after_add > 0);
 
@@ -405,7 +485,10 @@ fn an_edit_that_changes_no_text_does_not_re_embed() {
         )
         .expect("update");
     assert_eq!(saved.knowledge.source.as_deref(), Some("docs/deploy.md"));
-    assert!(saved.embedded, "the vectors were still accurate and must be kept");
+    assert!(
+        saved.embedded,
+        "the vectors were still accurate and must be kept"
+    );
     assert_eq!(counter.texts(), after_add, "re-embedded for no reason");
 }
 
@@ -414,7 +497,9 @@ fn an_edit_that_changes_nothing_at_all_does_not_even_touch_the_timestamp() {
     let (_dir, store) = store();
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
-    let first = store.add(&id, NewKnowledge::new("Note", "body")).expect("add");
+    let first = store
+        .add(&id, NewKnowledge::new("Note", "body"))
+        .expect("add");
 
     let again = store
         .update(&id, "note", KnowledgePatch::default())
@@ -431,22 +516,36 @@ fn a_note_that_could_not_be_embedded_is_still_stored_and_says_so() {
     let id = base("global/notes");
     broken.ensure_base(&id).expect("ensure");
 
-    let saved = broken.add(&id, NewKnowledge::new("Note", "body")).expect("add");
+    let saved = broken
+        .add(&id, NewKnowledge::new("Note", "body"))
+        .expect("add");
     assert!(!saved.embedded);
     assert!(
-        saved.embed_error.as_deref().is_some_and(|e| e.contains("no model")),
+        saved
+            .embed_error
+            .as_deref()
+            .is_some_and(|e| e.contains("no model")),
         "the reason must travel with the result: {:?}",
         saved.embed_error
     );
     // It is there, and full-text finds it even though meaning cannot.
     assert_eq!(broken.list(&id, &Filter::default()).expect("list").len(), 1);
-    assert_eq!(broken.search_text(&[id.clone()], "body", 5).expect("search").len(), 1);
+    assert_eq!(
+        broken
+            .search_text(&[id.clone()], "body", 5)
+            .expect("search")
+            .len(),
+        1
+    );
 
     // The same store with a working embedder sweeps it up.
     let fixed = KnowledgeStore::with_config(Config::with_root(dir.path()))
         .with_embedder(Arc::new(HashEmbedder));
     let report = fixed.reembed(&id, false).expect("reembed");
-    assert_eq!((report.scanned, report.embedded, report.unchanged), (1, 1, 0));
+    assert_eq!(
+        (report.scanned, report.embedded, report.unchanged),
+        (1, 1, 0)
+    );
     assert!(report.failed.is_empty());
     assert_eq!(fixed.search(&[id], "body", 5).expect("search").len(), 1);
 }
@@ -455,8 +554,8 @@ fn a_note_that_could_not_be_embedded_is_still_stored_and_says_so() {
 fn re_embedding_an_up_to_date_base_embeds_nothing() {
     let (dir, _) = store();
     let counter = Arc::new(CountingEmbedder::default());
-    let store = KnowledgeStore::with_config(Config::with_root(dir.path()))
-        .with_embedder(counter.clone());
+    let store =
+        KnowledgeStore::with_config(Config::with_root(dir.path())).with_embedder(counter.clone());
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
     store.add(&id, NewKnowledge::new("A", "one")).expect("add");
@@ -464,7 +563,10 @@ fn re_embedding_an_up_to_date_base_embeds_nothing() {
     let after_adds = counter.texts();
 
     let report = store.reembed(&id, false).expect("reembed");
-    assert_eq!((report.scanned, report.embedded, report.unchanged), (2, 0, 2));
+    assert_eq!(
+        (report.scanned, report.embedded, report.unchanged),
+        (2, 0, 2)
+    );
     assert_eq!(counter.texts(), after_adds);
 
     // `--force` is the override, and it does the work.
@@ -489,7 +591,16 @@ fn changing_the_model_makes_the_whole_base_stale() {
     let status = swapped.base_status(&id).expect("status");
     assert_eq!((status.notes, status.embedded, status.stale), (1, 0, 1));
     assert_eq!(
-        swapped.list(&id, &Filter { stale_only: true, ..Filter::default() }).expect("list").len(),
+        swapped
+            .list(
+                &id,
+                &Filter {
+                    stale_only: true,
+                    ..Filter::default()
+                }
+            )
+            .expect("list")
+            .len(),
         1
     );
 
@@ -504,13 +615,25 @@ fn search_ranks_the_closer_note_first_and_honours_its_limit() {
     let (_dir, store) = store();
     let id = base("global/notes");
     store.ensure_base(&id).expect("ensure");
-    store.add(&id, NewKnowledge::new("Restart the control panel", "")).expect("add");
-    store.add(&id, NewKnowledge::new("Sourdough hydration", "")).expect("add");
+    store
+        .add(&id, NewKnowledge::new("Restart the control panel", ""))
+        .expect("add");
+    store
+        .add(&id, NewKnowledge::new("Sourdough hydration", ""))
+        .expect("add");
 
-    let hits = store.search(&[id.clone()], "restart the panel", 5).expect("search");
+    let hits = store
+        .search(&[id.clone()], "restart the panel", 5)
+        .expect("search");
     assert_eq!(hits[0].knowledge.id, "restart-the-control-panel");
     assert!(hits[0].score > 0.0);
-    assert_eq!(store.search(&[id], "restart the panel", 1).expect("search").len(), 1);
+    assert_eq!(
+        store
+            .search(&[id], "restart the panel", 1)
+            .expect("search")
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -521,18 +644,27 @@ fn one_search_spans_several_bases_and_says_which_one_each_hit_came_from() {
     for id in [&shared, &mine] {
         store.ensure_base(id).expect("ensure");
     }
-    store.add(&shared, NewKnowledge::new("Deploying the panel", "")).expect("add");
-    store.add(&mine, NewKnowledge::new("Deploying the panel my way", "")).expect("add");
+    store
+        .add(&shared, NewKnowledge::new("Deploying the panel", ""))
+        .expect("add");
+    store
+        .add(&mine, NewKnowledge::new("Deploying the panel my way", ""))
+        .expect("add");
 
     let hits = store
         .search(&[shared.clone(), mine.clone()], "deploying the panel", 10)
         .expect("search");
     assert_eq!(hits.len(), 2);
-    let bases: Vec<&BaseId> = hits.iter().filter_map(|h| h.knowledge.base.as_ref()).collect();
+    let bases: Vec<&BaseId> = hits
+        .iter()
+        .filter_map(|h| h.knowledge.base.as_ref())
+        .collect();
     assert!(bases.contains(&&shared) && bases.contains(&&mine));
 
     // Naming the same base twice does not double the results.
-    let twice = store.search(&[shared.clone(), shared], "deploying the panel", 10).expect("search");
+    let twice = store
+        .search(&[shared.clone(), shared], "deploying the panel", 10)
+        .expect("search");
     assert_eq!(twice.len(), 1);
 }
 
@@ -543,9 +675,17 @@ fn text_search_works_with_no_embedder_at_all() {
         .with_embedder(Arc::new(BrokenEmbedder));
     let id = base("global/notes");
     broken.ensure_base(&id).expect("ensure");
-    broken.add(&id, NewKnowledge::new("Kickstart the agent", "launchctl")).expect("add");
+    broken
+        .add(&id, NewKnowledge::new("Kickstart the agent", "launchctl"))
+        .expect("add");
 
-    assert_eq!(broken.search_text(&[id.clone()], "kickstart", 5).expect("search").len(), 1);
+    assert_eq!(
+        broken
+            .search_text(&[id.clone()], "kickstart", 5)
+            .expect("search")
+            .len(),
+        1
+    );
     // …and the meaning search says plainly that it cannot run.
     let err = broken.search(&[id], "kickstart", 5).unwrap_err();
     assert!(matches!(err, Error::Embed(_)), "{err:?}");
@@ -593,24 +733,48 @@ fn an_agent_can_read_another_agents_knowledge_and_cannot_change_it() {
     store
         .clone()
         .as_agent("reviewer", None)
-        .add(&reviewers, NewKnowledge::new("What I learned", "the deploy needs a restart"))
+        .add(
+            &reviewers,
+            NewKnowledge::new("What I learned", "the deploy needs a restart"),
+        )
         .expect("add");
 
     let solver = store.clone().as_agent("solver", None);
 
     // Reading and searching: yes.
-    let hits = solver.search(&[reviewers.clone()], "the deploy needs a restart", 5).expect("search");
+    let hits = solver
+        .search(&[reviewers.clone()], "the deploy needs a restart", 5)
+        .expect("search");
     assert_eq!(hits.len(), 1);
-    assert!(solver.get(&reviewers, "what-i-learned").expect("get").is_some());
-    assert_eq!(solver.list(&reviewers, &Filter::default()).expect("list").len(), 1);
+    assert!(
+        solver
+            .get(&reviewers, "what-i-learned")
+            .expect("get")
+            .is_some()
+    );
+    assert_eq!(
+        solver
+            .list(&reviewers, &Filter::default())
+            .expect("list")
+            .len(),
+        1
+    );
 
     // Writing to it: no, in every direction.
     for err in [
-        solver.add(&reviewers, NewKnowledge::new("Mine", "x")).unwrap_err(),
-        solver.update(&reviewers, "what-i-learned", KnowledgePatch {
-            body: Some("something else".into()),
-            ..KnowledgePatch::default()
-        }).unwrap_err(),
+        solver
+            .add(&reviewers, NewKnowledge::new("Mine", "x"))
+            .unwrap_err(),
+        solver
+            .update(
+                &reviewers,
+                "what-i-learned",
+                KnowledgePatch {
+                    body: Some("something else".into()),
+                    ..KnowledgePatch::default()
+                },
+            )
+            .unwrap_err(),
         solver.remove(&reviewers, "what-i-learned").unwrap_err(),
         solver.reembed(&reviewers, true).unwrap_err(),
         solver.delete_base(&reviewers).unwrap_err(),
@@ -619,7 +783,11 @@ fn an_agent_can_read_another_agents_knowledge_and_cannot_change_it() {
     }
     // …and the note is untouched.
     assert_eq!(
-        store.get(&reviewers, "what-i-learned").expect("get").expect("present").body,
+        store
+            .get(&reviewers, "what-i-learned")
+            .expect("get")
+            .expect("present")
+            .body,
         "the deploy needs a restart"
     );
 }
@@ -629,7 +797,9 @@ fn a_project_base_is_closed_to_everyone_outside_that_project() {
     let (_dir, store) = store();
     let acme = base("project:acme/runbook");
     store.ensure_base(&acme).expect("ensure");
-    store.add(&acme, NewKnowledge::new("Secret", "internal")).expect("add");
+    store
+        .add(&acme, NewKnowledge::new("Secret", "internal"))
+        .expect("add");
 
     let outsider = store.clone().as_agent("solver", Some("other"));
     assert!(matches!(
@@ -645,7 +815,11 @@ fn a_project_base_is_closed_to_everyone_outside_that_project() {
     // An agent working in the project has it in full.
     let insider = store.clone().as_agent("solver", Some("acme"));
     assert!(insider.get(&acme, "secret").expect("get").is_some());
-    assert!(insider.add(&acme, NewKnowledge::new("Another", "x")).is_ok());
+    assert!(
+        insider
+            .add(&acme, NewKnowledge::new("Another", "x"))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -660,7 +834,11 @@ fn everybody_writes_the_global_base() {
     ] {
         let label = reader.label();
         assert!(
-            store.clone().as_reader(reader).add(&id, NewKnowledge::new(label.as_str(), "x")).is_ok(),
+            store
+                .clone()
+                .as_reader(reader)
+                .add(&id, NewKnowledge::new(label.as_str(), "x"))
+                .is_ok(),
             "{label} could not write the global base"
         );
     }
@@ -674,7 +852,11 @@ fn an_agents_memory_base_is_made_on_demand() {
     let memory = solver.ensure_memory("solver").expect("ensure memory");
     assert!(memory.is_memory());
     assert_eq!(memory.id.to_string(), "agent:solver/memory");
-    assert!(solver.add(&memory.id, NewKnowledge::new("Learned", "x")).is_ok());
+    assert!(
+        solver
+            .add(&memory.id, NewKnowledge::new("Learned", "x"))
+            .is_ok()
+    );
 }
 
 #[test]
@@ -707,7 +889,8 @@ fn an_agents_configured_bases_resolve_to_the_ones_it_may_actually_read() {
     );
 
     // With memory off, the agent's own base is not implied.
-    let without = resolve_agent_bases("solver", None, &["global/notes".into()], false).expect("resolve");
+    let without =
+        resolve_agent_bases("solver", None, &["global/notes".into()], false).expect("resolve");
     assert_eq!(without.len(), 1);
     assert_eq!(without[0].to_string(), "global/notes");
 }
@@ -721,11 +904,27 @@ fn a_base_can_be_held_by_a_different_provider() {
     store
         .create_base(&id, Some(MEMORY), Some("ephemeral"), BTreeMap::new())
         .expect("create");
-    assert_eq!(store.get_base(&id).expect("get").expect("base").manifest.provider, MEMORY);
+    assert_eq!(
+        store
+            .get_base(&id)
+            .expect("get")
+            .expect("base")
+            .manifest
+            .provider,
+        MEMORY
+    );
 
-    let saved = store.add(&id, NewKnowledge::new("Held in a map", "body")).expect("add");
+    let saved = store
+        .add(&id, NewKnowledge::new("Held in a map", "body"))
+        .expect("add");
     assert!(saved.embedded);
-    assert_eq!(store.search(&[id.clone()], "held in a map", 5).expect("search").len(), 1);
+    assert_eq!(
+        store
+            .search(&[id.clone()], "held in a map", 5)
+            .expect("search")
+            .len(),
+        1
+    );
 
     // Nothing landed in the SQLite file the default provider would have made.
     assert!(!store.base_dir(&id).join("knowledge.db").exists());
@@ -768,16 +967,32 @@ fn a_provider_registered_from_outside_serves_a_base_like_any_other() {
         .with_embedder(Arc::new(HashEmbedder));
     let id = base("global/elsewhere");
     store
-        .create_base(&id, Some("recording"), None, BTreeMap::from([("room".into(), "12".into())]))
+        .create_base(
+            &id,
+            Some("recording"),
+            None,
+            BTreeMap::from([("room".into(), "12".into())]),
+        )
         .expect("create");
 
-    store.add(&id, NewKnowledge::new("Stored elsewhere", "body")).expect("add");
-    assert_eq!(store.search(&[id.clone()], "stored elsewhere", 5).expect("search").len(), 1);
+    store
+        .add(&id, NewKnowledge::new("Stored elsewhere", "body"))
+        .expect("add");
+    assert_eq!(
+        store
+            .search(&[id.clone()], "stored elsewhere", 5)
+            .expect("search")
+            .len(),
+        1
+    );
     assert!(recording.opened.load(Ordering::Relaxed) > 0);
 
     // Provider settings survive the manifest round trip and reach the provider.
     let manifest = store.get_base(&id).expect("get").expect("base").manifest;
-    assert_eq!(manifest.settings.get("room").map(String::as_str), Some("12"));
+    assert_eq!(
+        manifest.settings.get("room").map(String::as_str),
+        Some("12")
+    );
 }
 
 #[test]

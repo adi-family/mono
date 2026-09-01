@@ -68,7 +68,12 @@ fn section(tool: &ToolHelp) -> String {
     {
         let _ = write!(out, " — {description}");
     }
-    if let Some(help) = tool.help.as_deref().map(str::trim).filter(|h| !h.is_empty()) {
+    if let Some(help) = tool
+        .help
+        .as_deref()
+        .map(str::trim)
+        .filter(|h| !h.is_empty())
+    {
         let _ = write!(out, "\n\n```\n{help}\n```");
     }
     out
@@ -89,7 +94,11 @@ mod tests {
     #[test]
     fn a_block_names_each_tool_and_carries_its_help() {
         let block = block(&[
-            help("adi-tasks", Some("Work the task tree."), Some("Usage: adi-tasks <CMD>")),
+            help(
+                "adi-tasks",
+                Some("Work the task tree."),
+                Some("Usage: adi-tasks <CMD>"),
+            ),
             help("adi-db", None, Some("Usage: adi-db query <SQL>")),
         ])
         .expect("a block");
@@ -119,8 +128,11 @@ mod tests {
             .map(|i| help(&format!("tool-{i}"), None, Some(&long)))
             .collect();
         let block = block(&tools).expect("a block");
-        assert!(block.len() < MAX_BLOCK_CHARS + 2_500, "{} chars", block.len());
+        assert!(
+            block.len() < MAX_BLOCK_CHARS + 2_500,
+            "{} chars",
+            block.len()
+        );
         assert!(block.contains("more tools on your PATH"), "{block}");
     }
-
 }

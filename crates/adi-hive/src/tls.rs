@@ -414,8 +414,8 @@ fn reissue_reason(
 }
 
 fn read_chain(path: &Path) -> anyhow::Result<Vec<CertificateDer<'static>>> {
-    let pem = std::fs::read(path)
-        .with_context(|| format!("reading certificate {}", path.display()))?;
+    let pem =
+        std::fs::read(path).with_context(|| format!("reading certificate {}", path.display()))?;
     let chain = CertificateDer::pem_slice_iter(&pem)
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| format!("parsing certificate {}", path.display()))?;
@@ -448,8 +448,7 @@ fn read_key(path: &Path) -> anyhow::Result<String> {
 }
 
 fn write_public(path: &Path, contents: &str) -> anyhow::Result<()> {
-    std::fs::write(path, contents)
-        .with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(path, contents).with_context(|| format!("writing {}", path.display()))?;
     set_mode(path, 0o644);
     Ok(())
 }
@@ -485,7 +484,10 @@ pub fn trust_hint(ca_path: &Path) -> String {
             ca_path.display()
         )
     } else {
-        format!("trust {} in your browser/system trust store", ca_path.display())
+        format!(
+            "trust {} in your browser/system trust store",
+            ca_path.display()
+        )
     }
 }
 
@@ -495,7 +497,10 @@ mod tests {
 
     #[test]
     fn san_list_adds_base_hosts_and_dedupes() {
-        let sans = san_list(&["app.adi".into(), "APP.adi".into(), "api.adi".into()], None);
+        let sans = san_list(
+            &["app.adi".into(), "APP.adi".into(), "api.adi".into()],
+            None,
+        );
         assert_eq!(
             sans,
             vec!["127.0.0.1", "127.0.0.53", "api.adi", "app.adi", "localhost"]
@@ -524,7 +529,10 @@ mod tests {
 
         // …and one label short again for a deep service name, which is why a dotted entry is
         // allowed: it moves the same single wildcard one level further down.
-        assert!(!matches_wildcard("*.laptop-b.n.adi", "app.nosh.laptop-b.n.adi"));
+        assert!(!matches_wildcard(
+            "*.laptop-b.n.adi",
+            "app.nosh.laptop-b.n.adi"
+        ));
         let deep = mesh_sans(&["nosh.laptop-b".into()]);
         assert_eq!(deep, vec!["*.n.adi", "*.nosh.laptop-b.n.adi"]);
         assert!(matches_wildcard(
@@ -591,7 +599,10 @@ mod tests {
         let hosts = vec!["app.adi".to_string()];
 
         let first = prepare(&dir, &hosts, None).expect("first prepare");
-        assert!(first.ca_is_new, "the CA should be generated on a cold start");
+        assert!(
+            first.ca_is_new,
+            "the CA should be generated on a cold start"
+        );
         let ca_pem = std::fs::read_to_string(dir.join("ca.pem")).unwrap();
         let leaf_pem = std::fs::read_to_string(dir.join("cert.pem")).unwrap();
 
@@ -816,7 +827,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         prepare(&dir, &["app.adi".to_string()], None).expect("prepare");
         for name in ["ca-key.pem", "key.pem"] {
-            let mode = std::fs::metadata(dir.join(name)).unwrap().permissions().mode();
+            let mode = std::fs::metadata(dir.join(name))
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o777, 0o600, "{name} should be 0600, was {mode:o}");
         }
         let _ = std::fs::remove_dir_all(&dir);

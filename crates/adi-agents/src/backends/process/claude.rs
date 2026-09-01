@@ -27,7 +27,10 @@ pub(crate) fn argv(
     // Default to a streamed event log so a run's progress (tool calls, thinking, metrics) is
     // captured and can be shown as a feed; an explicit format is respected. `stream-json` needs
     // `--verbose` in print mode.
-    match config.output_format.unwrap_or(ClaudeOutputFormat::StreamJson) {
+    match config
+        .output_format
+        .unwrap_or(ClaudeOutputFormat::StreamJson)
+    {
         ClaudeOutputFormat::StreamJson => {
             argv.extend([
                 "--output-format".to_string(),
@@ -141,7 +144,14 @@ mod tests {
         let window = argv.windows(3).find(|w| w[0] == "--output-format");
         assert_eq!(
             window,
-            Some(["--output-format".to_string(), "stream-json".to_string(), "--verbose".to_string()].as_slice())
+            Some(
+                [
+                    "--output-format".to_string(),
+                    "stream-json".to_string(),
+                    "--verbose".to_string()
+                ]
+                .as_slice()
+            )
         );
     }
 }

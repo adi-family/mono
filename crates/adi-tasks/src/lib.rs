@@ -498,7 +498,14 @@ mod tests {
             .expect("create");
         assert_eq!(root.task.id, "DEMO-1");
         let child = store
-            .create("child".into(), None, None, None, Some("DEMO-1".into()), None)
+            .create(
+                "child".into(),
+                None,
+                None,
+                None,
+                Some("DEMO-1".into()),
+                None,
+            )
             .expect("create");
         assert_eq!(child.task.id, "DEMO-2");
         assert_eq!(child.task.project.as_deref(), Some("demo"));
@@ -522,7 +529,14 @@ mod tests {
         assert_eq!(root.task.cwd.as_deref(), Some("~/repos/thing"));
 
         let child = store
-            .create("step one".into(), None, None, None, Some(root.task.id.clone()), None)
+            .create(
+                "step one".into(),
+                None,
+                None,
+                None,
+                Some(root.task.id.clone()),
+                None,
+            )
             .expect("create");
         assert_eq!(child.task.cwd.as_deref(), Some("~/repos/thing"));
 

@@ -20,15 +20,13 @@ use std::time::Duration;
 
 use adi_ui::{
     AppItem, AppState, Ask, AskOption, AskQuestion, AttachState, Attached, Attaching, Badge,
-    BadgeTone, Chat, Button, ButtonSize,
-    ButtonVariant, CodeEditor, CodeFrame,
-    CodeHeight, CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flash, FlashKind,
-    Form, Hint, Input, InputWidth, Kbd, Lang, Mark, MarkVariant, Markdown, Modal, Panel,
-    PathPicker, PathRoot, Qna,
-    Block, Flag, FlagList, FlagMark, Param, ParamKind, PromptText, Queued, Rail, RailCard,
-    RailGroup, Role, Select, SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table,
-    TableState, Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar,
-    Tree, TreeNode, TreeState, Turn, TurnBlocks, dir_of, sort_rows,
+    BadgeTone, Block, Button, ButtonSize, ButtonVariant, Chat, CodeEditor, CodeFrame, CodeHeight,
+    CodeLog, Composer, Crumb, Crumbs, DirEntry, Empty, Faq, Field, Flag, FlagList, FlagMark, Flash,
+    FlashKind, Form, Hint, Input, InputWidth, Kbd, Lang, Mark, MarkVariant, Markdown, Modal, Panel,
+    Param, ParamKind, PathPicker, PathRoot, PromptText, Qna, Queued, Rail, RailCard, RailGroup,
+    Role, Select, SessionItem, SessionState, Simulator, SortKey, Stop, StopLine, Table, TableState,
+    Textarea, Token, TokenStream, ToolCall, ToolDecl, ToolForm, ToolState, TopBar, Tree, TreeNode,
+    TreeState, Turn, TurnBlocks, dir_of, sort_rows,
 };
 use adi_ui::{
     Change, Decided, Fact, FactCard, FactHistory, FactRow, Moved, NodeKind, Pair, PairCard,
@@ -119,14 +117,45 @@ fn Swatches(label: &'static str, items: Vec<(&'static str, &'static str)>) -> im
 /// own seams) and tokens with newlines in them, including one that is *only* a break.
 fn prompt_tokens() -> Vec<Token> {
     let content = [
-        (27, "You"), (3477, " review"), (2082, " code"), (304, " in"), (420, " this"),
-        (12827, " repository"), (13, "."), (4557, " Read"), (1603, " before"), (499, " you"),
-        (11913, " judge"), (26, ";"), (1475, " every"), (9455, " finding"), (5144, " names"),
-        (264, " a"), (1052, " file"), (627, ".\n"),
-        (2, "#"), (11208, " Where"), (499, " you"), (527, " are"), (271, "\n\n"),
-        (2028, "This"), (1629, " run"), (8638, " starts"), (304, " in"), (38401, " `/"),
-        (7220, "Users"), (14, "/"), (76, "m"), (39847, "gor"), (359, "un"), (14588, "uch"),
-        (14, "/"), (16607, "adi"), (24815, "-family"), (63, "`"), (13, "."),
+        (27, "You"),
+        (3477, " review"),
+        (2082, " code"),
+        (304, " in"),
+        (420, " this"),
+        (12827, " repository"),
+        (13, "."),
+        (4557, " Read"),
+        (1603, " before"),
+        (499, " you"),
+        (11913, " judge"),
+        (26, ";"),
+        (1475, " every"),
+        (9455, " finding"),
+        (5144, " names"),
+        (264, " a"),
+        (1052, " file"),
+        (627, ".\n"),
+        (2, "#"),
+        (11208, " Where"),
+        (499, " you"),
+        (527, " are"),
+        (271, "\n\n"),
+        (2028, "This"),
+        (1629, " run"),
+        (8638, " starts"),
+        (304, " in"),
+        (38401, " `/"),
+        (7220, "Users"),
+        (14, "/"),
+        (76, "m"),
+        (39847, "gor"),
+        (359, "un"),
+        (14588, "uch"),
+        (14, "/"),
+        (16607, "adi"),
+        (24815, "-family"),
+        (63, "`"),
+        (13, "."),
     ];
     let mut out = vec![
         Token::special(100_264, "<|im_start|>"),
@@ -139,8 +168,14 @@ fn prompt_tokens() -> Vec<Token> {
     out.push(Token::new(882, "user"));
     out.push(Token::special(100_266, "<|im_sep|>"));
     for (id, text) in [
-        (19461, "Review"), (279, " the"), (23055, " runner"), (2098, " ref"), (5739, "actor"),
-        (389, " on"), (1925, " main"), (13, "."),
+        (19461, "Review"),
+        (279, " the"),
+        (23055, " runner"),
+        (2098, " ref"),
+        (5739, "actor"),
+        (389, " on"),
+        (1925, " main"),
+        (13, "."),
     ] {
         out.push(Token::new(id, text));
     }
@@ -202,19 +237,21 @@ fn ToolFormDemo() -> impl IntoView {
 /// Bash and Read as their schemas declare them, which is what the simulator is handed.
 fn agent_tools() -> Vec<ToolDecl> {
     vec![
-        ToolDecl::new("Bash", "Run a command in the agent's own shell, in its own cwd.").params(
-            vec![
-                Param::new("command", ParamKind::Text)
-                    .required()
-                    .hint("The command line to run.")
-                    .placeholder("git log --oneline -3"),
-                Param::new("timeout_ms", ParamKind::Number)
-                    .hint("Give up after this long. Defaults to 120000.")
-                    .placeholder("120000"),
-                Param::new("background", ParamKind::Flag)
-                    .hint("Start it and return a job id instead of waiting for it."),
-            ],
-        ),
+        ToolDecl::new(
+            "Bash",
+            "Run a command in the agent's own shell, in its own cwd.",
+        )
+        .params(vec![
+            Param::new("command", ParamKind::Text)
+                .required()
+                .hint("The command line to run.")
+                .placeholder("git log --oneline -3"),
+            Param::new("timeout_ms", ParamKind::Number)
+                .hint("Give up after this long. Defaults to 120000.")
+                .placeholder("120000"),
+            Param::new("background", ParamKind::Flag)
+                .hint("Start it and return a job id instead of waiting for it."),
+        ]),
         ToolDecl::new("Read", "Read a file from the local filesystem.").params(vec![
             Param::new("path", ParamKind::Line)
                 .required()
@@ -318,11 +355,20 @@ fn StagingDemo() -> impl IntoView {
         Block::call(
             "Bash",
             vec![
-                ("command".into(), "rg -n 'fn own_prompt' crates/adi-agents/src".into()),
+                (
+                    "command".into(),
+                    "rg -n 'fn own_prompt' crates/adi-agents/src".into(),
+                ),
                 ("timeout_ms".into(), "30000".into()),
             ],
         ),
-        Block::call("Read", vec![("path".into(), "crates/adi-agents/src/runner/prompt.rs".into())]),
+        Block::call(
+            "Read",
+            vec![(
+                "path".into(),
+                "crates/adi-agents/src/runner/prompt.rs".into(),
+            )],
+        ),
     ]);
     view! {
         <TurnBlocks
@@ -589,7 +635,6 @@ impl TreeNode<'static> {
         }
     }
 }
-
 
 /// A machine, for [`PathPicker`] to browse. Every path the fake `read_dir` below knows
 /// about: a trailing slash makes it a directory, and the directories in between are implied
@@ -907,7 +952,10 @@ fn favicon(letter: char, fill: &str) -> String {
     );
     format!(
         "data:image/svg+xml,{}",
-        svg.replace('#', "%23").replace('<', "%3C").replace('>', "%3E").replace('"', "%22")
+        svg.replace('#', "%23")
+            .replace('<', "%3C")
+            .replace('>', "%3E")
+            .replace('"', "%22")
     )
 }
 
@@ -927,22 +975,54 @@ fn AppsDemo() -> impl IntoView {
         (
             "nakityok",
             vec![
-                ("NakitYok Status", 'N', "#1f7a5c", "zomro-de1", AppState::Live),
-                ("IVR Call Funnel", 'I', "#2f5fa8", "zomro-de1", AppState::Live),
-                ("IIKO Sync Errors", 'K', "#8a6414", "teremec", AppState::Live),
+                (
+                    "NakitYok Status",
+                    'N',
+                    "#1f7a5c",
+                    "zomro-de1",
+                    AppState::Live,
+                ),
+                (
+                    "IVR Call Funnel",
+                    'I',
+                    "#2f5fa8",
+                    "zomro-de1",
+                    AppState::Live,
+                ),
+                (
+                    "IIKO Sync Errors",
+                    'K',
+                    "#8a6414",
+                    "teremec",
+                    AppState::Live,
+                ),
             ],
         ),
         (
             "bugbounty",
             vec![
-                ("Bugbounty Targets", 'B', "#6b3fa0", "teremec", AppState::Live),
-                ("Payout Queue", 'P', "#a03f3f", "8626e4721660", AppState::Offline),
+                (
+                    "Bugbounty Targets",
+                    'B',
+                    "#6b3fa0",
+                    "teremec",
+                    AppState::Live,
+                ),
+                (
+                    "Payout Queue",
+                    'P',
+                    "#a03f3f",
+                    "8626e4721660",
+                    AppState::Offline,
+                ),
             ],
         ),
         (
             "infrastructure",
-            vec![// Empty machine: it runs right here, and the row says so itself.
-                ("Fleet Load", 'F', "#3f6b6b", "", AppState::ViewOnly)],
+            vec![
+                // Empty machine: it runs right here, and the row says so itself.
+                ("Fleet Load", 'F', "#3f6b6b", "", AppState::ViewOnly),
+            ],
         ),
     ];
 
@@ -1095,8 +1175,8 @@ The first two                    are the same bug. I will read the pairing path 
         files,
         on_files: Callback::new(move |picked: Vec<web_sys::File>| {
             for (n, file) in picked.into_iter().enumerate() {
-                let url = web_sys::Url::create_object_url_with_blob(file.as_ref())
-                    .unwrap_or_default();
+                let url =
+                    web_sys::Url::create_object_url_with_blob(file.as_ref()).unwrap_or_default();
                 files.update(|list| {
                     list.push(Attached {
                         key: format!("demo-{}-{n}", list.len()),
@@ -1360,12 +1440,48 @@ const PORT_HEADERS: &[&str] = &["Port", "Service", "PID", "Uptime", "State", ""]
 const PORTS: &[Reservation] = &[
     // The uptimes are chosen to make the sort key visible: as text, `9h 5m` sorts *after*
     // `53h 11m` — as a number it does not. A demo where both orders agree proves nothing.
-    Reservation { port: 80, service: "adi-hive", pid: 4417, uptime: 191_460, state: "up" },
-    Reservation { port: 8000, service: "adi-app", pid: 88_231, uptime: 8_040, state: "up" },
-    Reservation { port: 9081, service: "adi-ui-playground", pid: 91_002, uptime: 92, state: "up" },
-    Reservation { port: 15353, service: "adi.hive · dns", pid: 512, uptime: 356_460, state: "up" },
-    Reservation { port: 45353, service: "adi-dns · scratch", pid: 0, uptime: 0, state: "down" },
-    Reservation { port: 5432, service: "postgres", pid: 3301, uptime: 32_700, state: "idle" },
+    Reservation {
+        port: 80,
+        service: "adi-hive",
+        pid: 4417,
+        uptime: 191_460,
+        state: "up",
+    },
+    Reservation {
+        port: 8000,
+        service: "adi-app",
+        pid: 88_231,
+        uptime: 8_040,
+        state: "up",
+    },
+    Reservation {
+        port: 9081,
+        service: "adi-ui-playground",
+        pid: 91_002,
+        uptime: 92,
+        state: "up",
+    },
+    Reservation {
+        port: 15353,
+        service: "adi.hive · dns",
+        pid: 512,
+        uptime: 356_460,
+        state: "up",
+    },
+    Reservation {
+        port: 45353,
+        service: "adi-dns · scratch",
+        pid: 0,
+        uptime: 0,
+        state: "down",
+    },
+    Reservation {
+        port: 5432,
+        service: "postgres",
+        pid: 3301,
+        uptime: 32_700,
+        state: "idle",
+    },
 ];
 
 /// An uptime as `Ns` / `Nm Ss` / `Nh Mm` — the rendered cell, which is exactly what must not
@@ -2313,8 +2429,11 @@ fn ukraine() -> Fact {
 }
 
 fn china_market() -> Fact {
-    Fact::new("f044", "China is one of the operator's main target markets.")
-        .by("igor", "agent:extractor@1")
+    Fact::new(
+        "f044",
+        "China is one of the operator's main target markets.",
+    )
+    .by("igor", "agent:extractor@1")
 }
 
 fn china_great() -> Fact {
@@ -2322,8 +2441,11 @@ fn china_great() -> Fact {
 }
 
 fn china_unsure() -> Fact {
-    Fact::new("f038", "The company is not sure it can enter the China market.")
-        .by("igor", "agent:extractor@1")
+    Fact::new(
+        "f038",
+        "The company is not sure it can enter the China market.",
+    )
+    .by("igor", "agent:extractor@1")
 }
 
 fn china_can() -> Fact {
@@ -2331,10 +2453,13 @@ fn china_can() -> Fact {
 }
 
 fn plan() -> Fact {
-    Fact::new("a012", "Market entry plan: skip China for now, open the EU first.")
-        .by("igor", "agent:planner@2")
-        .at(3)
-        .kind(NodeKind::Artifact)
+    Fact::new(
+        "a012",
+        "Market entry plan: skip China for now, open the EU first.",
+    )
+    .by("igor", "agent:planner@2")
+    .at(3)
+    .kind(NodeKind::Artifact)
 }
 
 /// The pending list of an open transaction: one of each relation, and the two cases that need
@@ -2371,10 +2496,13 @@ fn demo_pairs() -> Vec<Pair> {
             "p4",
             0.664,
             Relation::Duplicate,
-            PairSide::staged(Fact::new("n#12", "The company was incorporated in Delaware.")
-                .by("igor", "agent:chat@1")),
-            PairSide::staged(Fact::new("n#13", "The company is a Delaware C-corp.")
-                .by("igor", "agent:chat@1")),
+            PairSide::staged(
+                Fact::new("n#12", "The company was incorporated in Delaware.")
+                    .by("igor", "agent:chat@1"),
+            ),
+            PairSide::staged(
+                Fact::new("n#13", "The company is a Delaware C-corp.").by("igor", "agent:chat@1"),
+            ),
         )
         .reason("the same incorporation, said twice"),
     ]

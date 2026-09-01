@@ -4,13 +4,16 @@
 
 use crate::cache::{CachedFileData, GlobalCache};
 use crate::config::Config;
+use crate::embed::Embedder;
 use crate::error::Result;
 use crate::parser::Parser;
 use crate::search::VectorIndex;
 use crate::storage::{PendingRef, Storage};
-use crate::types::{SymbolId, ParsedReference, IndexProgress, Location, Status, Reference, Language, File, FileId, ParsedSymbol, Symbol, SymbolKind};
+use crate::types::{
+    File, FileId, IndexProgress, Language, Location, ParsedReference, ParsedSymbol, Reference,
+    Status, Symbol, SymbolId, SymbolKind,
+};
 use ignore::WalkBuilder;
-use crate::embed::Embedder;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -78,7 +81,6 @@ pub async fn index_project(
 
     // Phase 1: Index all symbols
     storage.begin_transaction()?;
-
 
     for file_path in &walk.files {
         match process_file(
@@ -258,9 +260,10 @@ fn find_target_symbol<'a>(
 
     let short_name = name.rsplit("::").next().unwrap_or(name);
     if short_name != name
-        && let Some(ids) = symbol_map.get(short_name) {
-            return ids;
-        }
+        && let Some(ids) = symbol_map.get(short_name)
+    {
+        return ids;
+    }
 
     &[]
 }
@@ -341,7 +344,9 @@ fn prune_departed_files(
     index: &Arc<dyn VectorIndex>,
 ) -> Result<usize> {
     if walk.blind {
-        warn!("Not pruning: the walk failed somewhere it could not name, so what it did not reach is no evidence that anything left the tree");
+        warn!(
+            "Not pruning: the walk failed somewhere it could not name, so what it did not reach is no evidence that anything left the tree"
+        );
         return Ok(0);
     }
 
@@ -461,10 +466,11 @@ fn collect_files(project_path: &Path, config: &Config) -> Result<Walk> {
 
                 // Check file size
                 if let Ok(metadata) = path.metadata()
-                    && metadata.len() > config.parser.max_file_size {
-                        debug!("Skipping large file: {}", path.display());
-                        continue;
-                    }
+                    && metadata.len() > config.parser.max_file_size
+                {
+                    debug!("Skipping large file: {}", path.display());
+                    continue;
+                }
 
                 // Check language support
                 if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
@@ -534,14 +540,15 @@ async fn process_file(
     // reprocessed when the pipeline itself moved on — see `PIPELINE_VERSION`.
     if !rebuild
         && let Ok(Some(existing_hash)) = storage.get_file_hash(relative_path)
-        && existing_hash == hash {
-            debug!("File unchanged, skipping: {}", relative_path.display());
-            return Ok(FileProcessResult {
-                file_id: None,
-                symbols_count: 0,
-                references: Vec::new(),
-            });
-        }
+        && existing_hash == hash
+    {
+        debug!("File unchanged, skipping: {}", relative_path.display());
+        return Ok(FileProcessResult {
+            file_id: None,
+            symbols_count: 0,
+            references: Vec::new(),
+        });
+    }
 
     // Detect language
     let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -787,8 +794,7 @@ fn compute_embeddings(
     for (_, text) in texts_to_embed {
         // What this text would cost if it joined: every member padded to the new widest.
         let padded_area = widest.max(text.len()) * (batch.len() + 1);
-        if !batch.is_empty() && (batch.len() >= MAX_BATCH || padded_area > MAX_BATCH_PADDED_CHARS)
-        {
+        if !batch.is_empty() && (batch.len() >= MAX_BATCH || padded_area > MAX_BATCH_PADDED_CHARS) {
             embeddings.extend(embed_batch(embedder, &batch));
             batch.clear();
             widest = 0;
@@ -1027,7 +1033,10 @@ mod tests {
 
         let signature = text.find("fn restart_onto").expect("signature present");
         let body = text.find("do_the_thing").expect("body present");
-        assert!(signature < body, "body came before the signature in {text:?}");
+        assert!(
+            signature < body,
+            "body came before the signature in {text:?}"
+        );
         assert!(text.starts_with("function restart_onto"));
     }
 

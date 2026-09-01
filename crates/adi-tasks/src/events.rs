@@ -17,9 +17,8 @@ pub fn event_types() -> Vec<EventType> {
     // One schema shared by every task-view event; `to_value` of the reflected schema keeps the
     // catalog free of any hand-written JSON.
     let view_schema = serde_json::to_value(schemars::schema_for!(TaskView)).unwrap_or(Value::Null);
-    let view = |name, summary| {
-        EventType::of(name, summary, view_schema.clone(), &TaskView::example())
-    };
+    let view =
+        |name, summary| EventType::of(name, summary, view_schema.clone(), &TaskView::example());
     vec![
         view("adi.tasks.created", "A task was created."),
         view(
@@ -28,7 +27,10 @@ pub fn event_types() -> Vec<EventType> {
         ),
         view("adi.tasks.completed", "A task was marked done."),
         view("adi.tasks.archived", "A task was archived."),
-        view("adi.tasks.reopened", "A done or archived task was reopened."),
+        view(
+            "adi.tasks.reopened",
+            "A done or archived task was reopened.",
+        ),
         EventType::of(
             "adi.tasks.deleted",
             "A task was permanently deleted (only its id survives).",

@@ -4,10 +4,13 @@
 
 use crate::error::{Error, Result};
 use crate::migrations::migrations;
-use crate::storage::{PendingRef, StructureRow, Storage};
+use crate::storage::{PendingRef, Storage, StructureRow};
 use crate::structure::Structure;
-use crate::types::{File, FileId, Language, Symbol, SymbolId, SymbolKind, Location, Visibility, FileInfo, Reference, ReferenceKind, SymbolUsage, Tree, SymbolNode, FileNode, Status};
-use rusqlite::{params, Connection, OptionalExtension};
+use crate::types::{
+    File, FileId, FileInfo, FileNode, Language, Location, Reference, ReferenceKind, Status, Symbol,
+    SymbolId, SymbolKind, SymbolNode, SymbolUsage, Tree, Visibility,
+};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
@@ -475,7 +478,10 @@ impl Storage for SqliteStorage {
 
         rows(
             &conn,
-            &format!("SELECT {}, f.path FROM symbols s JOIN files f ON s.file_id = f.id", symbol_columns_as("s")),
+            &format!(
+                "SELECT {}, f.path FROM symbols s JOIN files f ON s.file_id = f.id",
+                symbol_columns_as("s")
+            ),
             params![],
             |row| self.row_to_joined_symbol(row),
         )

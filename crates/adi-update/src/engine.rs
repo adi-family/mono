@@ -29,7 +29,10 @@ use crate::version::Version;
 /// is the second of two locks on the same door.
 #[must_use]
 pub fn default_app_path() -> String {
-    format!("/Applications/{}.app", adi_config::Flavor::current().app_name)
+    format!(
+        "/Applications/{}.app",
+        adi_config::Flavor::current().app_name
+    )
 }
 
 /// The Apple Developer Team ID every genuine ADI release is signed with; a downloaded
@@ -564,7 +567,10 @@ mod tests {
         fs::write(&big, vec![b'a'; 200_000]).unwrap();
         let hash = sha256(&big).expect("sha");
         assert_eq!(hash.len(), 64);
-        assert!(hash.chars().all(|c| c.is_ascii_hexdigit() && !c.is_uppercase()));
+        assert!(
+            hash.chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_uppercase())
+        );
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -593,7 +599,7 @@ mod tests {
         ] {
             let name = download_name(hostile);
             assert!(
-                !name.contains('/') && name != ".." ,
+                !name.contains('/') && name != "..",
                 "{hostile} produced {name}"
             );
         }

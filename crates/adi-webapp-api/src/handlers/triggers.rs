@@ -3,9 +3,9 @@ use std::collections::BTreeMap;
 use adi_triggers::Error as TriggerStoreError;
 use adi_triggers::RunState;
 use adi_triggers::Supervisor;
-use adi_triggers::clean_trigger_on;
 use adi_triggers::TriggerManifest;
 use adi_triggers::Triggers;
+use adi_triggers::clean_trigger_on;
 
 use crate::types::{
     EmitAck, EmitEvent, EventTypeDto, HookAck, SaveTrigger, TriggerDto, TriggerFireResult,

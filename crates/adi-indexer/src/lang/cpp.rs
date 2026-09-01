@@ -162,16 +162,17 @@ fn extract_cpp_symbols(node: Node, source: &str, symbols: &mut Vec<InternalSymbo
     match node.kind() {
         "function_definition" => {
             if let Some(declarator) = node.child_by_field_name("declarator")
-                && let Some(name) = extract_function_name(declarator, source) {
-                    let sig = extract_signature(node, source);
-                    symbols.push(InternalSymbol {
-                        name,
-                        kind: InternalSymbolKind::Function,
-                        location: node_location(node),
-                        signature: Some(sig),
-                        children: vec![],
-                    });
-                }
+                && let Some(name) = extract_function_name(declarator, source)
+            {
+                let sig = extract_signature(node, source);
+                symbols.push(InternalSymbol {
+                    name,
+                    kind: InternalSymbolKind::Function,
+                    location: node_location(node),
+                    signature: Some(sig),
+                    children: vec![],
+                });
+            }
         }
         "class_specifier" => {
             if let Some(name) = node.child_by_field_name("name") {
@@ -246,28 +247,30 @@ fn collect_class_members(body: Node, source: &str, children: &mut Vec<InternalSy
             match child.kind() {
                 "function_definition" | "declaration" => {
                     if let Some(declarator) = child.child_by_field_name("declarator")
-                        && let Some(name) = extract_function_name(declarator, source) {
-                            children.push(InternalSymbol {
-                                name,
-                                kind: InternalSymbolKind::Method,
-                                location: node_location(child),
-                                signature: None,
-                                children: vec![],
-                            });
-                        }
+                        && let Some(name) = extract_function_name(declarator, source)
+                    {
+                        children.push(InternalSymbol {
+                            name,
+                            kind: InternalSymbolKind::Method,
+                            location: node_location(child),
+                            signature: None,
+                            children: vec![],
+                        });
+                    }
                 }
                 "field_declaration" => {
                     for j in 0..child.child_count() as u32 {
                         if let Some(field) = child.child(j)
-                            && field.kind() == "field_identifier" {
-                                children.push(InternalSymbol {
-                                    name: node_text(field, source),
-                                    kind: InternalSymbolKind::Field,
-                                    location: node_location(field),
-                                    signature: None,
-                                    children: vec![],
-                                });
-                            }
+                            && field.kind() == "field_identifier"
+                        {
+                            children.push(InternalSymbol {
+                                name: node_text(field, source),
+                                kind: InternalSymbolKind::Field,
+                                location: node_location(field),
+                                signature: None,
+                                children: vec![],
+                            });
+                        }
                     }
                 }
                 _ => {}
@@ -358,13 +361,14 @@ fn collect_cpp_references(node: Node, source: &str, refs: &mut Vec<InternalRefer
                 for i in 0..base.child_count() as u32 {
                     if let Some(child) = base.child(i)
                         && child.kind() == "base_class_clause"
-                            && let Some(type_node) = child.child_by_field_name("type") {
-                                refs.push(InternalReference {
-                                    name: node_text(type_node, source),
-                                    kind: InternalReferenceKind::Inheritance,
-                                    location: node_location(type_node),
-                                });
-                            }
+                        && let Some(type_node) = child.child_by_field_name("type")
+                    {
+                        refs.push(InternalReference {
+                            name: node_text(type_node, source),
+                            kind: InternalReferenceKind::Inheritance,
+                            location: node_location(type_node),
+                        });
+                    }
                 }
             }
         }

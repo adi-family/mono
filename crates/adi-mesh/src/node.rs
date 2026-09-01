@@ -247,7 +247,10 @@ mod tests {
 
     #[test]
     fn the_env_override_is_coerced_not_refused() {
-        assert_eq!(override_from(Some("Build Box")).as_deref(), Some("build-box"));
+        assert_eq!(
+            override_from(Some("Build Box")).as_deref(),
+            Some("build-box")
+        );
         assert_eq!(override_from(Some(" node-7 ")).as_deref(), Some("node-7"));
         // An unset or blank variable is not an override at all — the file wins.
         assert_eq!(override_from(None), None);
@@ -297,8 +300,9 @@ mod tests {
         assert!(valid_name(&filled.nickname), "{:?}", filled.nickname);
 
         // Written back, not just filled in memory: the next process must see the same name.
-        let raw = std::fs::read_to_string(store.module(crate::config::MODULE).dir().join(NODE_FILE))
-            .expect("read node.toml");
+        let raw =
+            std::fs::read_to_string(store.module(crate::config::MODULE).dir().join(NODE_FILE))
+                .expect("read node.toml");
         assert!(
             raw.contains(&format!("nickname = \"{}\"", filled.nickname)),
             "{raw}"
@@ -315,9 +319,14 @@ mod tests {
         assert!(config.nickname.is_empty(), "a refused name changes nothing");
 
         for bad in ["", "-a", "a-", "a.b", &"x".repeat(64)] {
-            assert!(config.set_nickname(bad).is_err(), "{bad:?} should be refused");
+            assert!(
+                config.set_nickname(bad).is_err(),
+                "{bad:?} should be refused"
+            );
         }
-        config.set_nickname("  desk  ").expect("trimmed and accepted");
+        config
+            .set_nickname("  desk  ")
+            .expect("trimmed and accepted");
         assert_eq!(config.nickname, "desk");
     }
 

@@ -37,6 +37,7 @@ pub enum Error {
     Config(adi_config::Error),
     InvalidId(String),
     NotFound(String),
+    Exists(String),
     InvalidRuntime(String),
     LinkedMissing(String),
     SystemProtected(String),

@@ -1,8 +1,8 @@
 //! The Services panel of the project detail page.
 
+use adi_ui::{EmptyRow, Row as TableRow};
 use adi_webapp_api::types::{NewService, NewServiceDocker, ProjectDetail, ProjectService};
 use leptos::prelude::*;
-use adi_ui::{EmptyRow, Row as TableRow};
 use wasm_bindgen_futures::spawn_local;
 
 use crate::fetch;
@@ -112,9 +112,12 @@ fn cell(col: &str, s: &ProjectService) -> AnyView {
     match col {
         "Host" => view! { <span class="font-mono">{dash(s.host.clone())}</span> }.into_any(),
         "Ports" => {
-            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }.into_any()
+            view! { <span class="font-mono font-medium text-accent">{fmt_ports(&s.ports)}</span> }
+                .into_any()
         }
-        "Command" => view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any(),
+        "Command" => {
+            view! { <span class="font-mono text-meta">{dash(s.run.clone())}</span> }.into_any()
+        }
         "Restart" => view! { <span class="text-meta">{dash(s.restart.clone())}</span> }.into_any(),
         "CPU" => cpu_cell(s.usage.as_ref()),
         "Memory" => memory_cell(s.usage.as_ref()),

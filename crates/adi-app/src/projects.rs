@@ -90,15 +90,24 @@ mod tests {
         assert!(got.warnings.is_empty(), "{:?}", got.warnings);
         // The list is read after the move, so a client that trusts it sees the new id and not the
         // old one — the page navigates on this.
-        let ids: Vec<&str> = got.projects.projects.iter().map(|p| p.id.as_str()).collect();
+        let ids: Vec<&str> = got
+            .projects
+            .projects
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
         assert_eq!(ids, ["new"]);
     }
 
     #[test]
     fn a_body_that_names_nothing_is_a_400_and_a_taken_id_is_a_409() {
         let projects = scratch("refused");
-        projects.create_with_id("old", None, None, None).expect("old");
-        projects.create_with_id("taken", None, None, None).expect("taken");
+        projects
+            .create_with_id("old", None, None, None)
+            .expect("old");
+        projects
+            .create_with_id("taken", None, None, None)
+            .expect("taken");
 
         for body in [
             &b"not json"[..],

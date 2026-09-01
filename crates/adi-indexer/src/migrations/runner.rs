@@ -44,10 +44,8 @@ pub fn run(conn: &Connection, migrations: &[SqlMigration]) -> Result<usize> {
         .unwrap_or(None)
         .unwrap_or(0);
 
-    let mut pending: Vec<&SqlMigration> = migrations
-        .iter()
-        .filter(|m| m.version > current)
-        .collect();
+    let mut pending: Vec<&SqlMigration> =
+        migrations.iter().filter(|m| m.version > current).collect();
     pending.sort_by_key(|m| m.version);
 
     for migration in &pending {

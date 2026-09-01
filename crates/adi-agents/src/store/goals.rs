@@ -272,12 +272,7 @@ pub enum Closed {
 ///
 /// # Errors
 /// Returns database errors only.
-pub(super) fn close(
-    conn: &Connection,
-    id: &str,
-    state: GoalState,
-    note: &str,
-) -> Result<Closed> {
+pub(super) fn close(conn: &Connection, id: &str, state: GoalState, note: &str) -> Result<Closed> {
     let tx = conn
         .unchecked_transaction()
         .map_err(|e| sql_err("close a goal in", e))?;
@@ -535,11 +530,16 @@ mod tests {
             .create_goal("chat", &conv, "third", SetBy::Agent)
             .expect("create");
 
-        store.mark_goals_nudged("chat", &conv, 1_700).expect("nudge");
+        store
+            .mark_goals_nudged("chat", &conv, 1_700)
+            .expect("nudge");
 
         let open = store.open_goals("chat", &conv);
         assert_eq!(open.len(), 2);
-        assert!(open.iter().all(|g| g.last_nudge_at == 1_700 && g.nudges == 1));
+        assert!(
+            open.iter()
+                .all(|g| g.last_nudge_at == 1_700 && g.nudges == 1)
+        );
         assert_eq!(
             store
                 .goal(&second.id)
@@ -549,7 +549,10 @@ mod tests {
             0,
             "a closed goal is not nudged and does not count one"
         );
-        assert_eq!(store.goal(&third.id).expect("read").expect("there").nudges, 1);
+        assert_eq!(
+            store.goal(&third.id).expect("read").expect("there").nudges,
+            1
+        );
 
         let _ = std::fs::remove_dir_all(store.dir());
     }

@@ -44,13 +44,21 @@ impl Token {
     /// A content token — the common case.
     #[must_use]
     pub fn new(id: u32, text: impl Into<String>) -> Self {
-        Self { id, text: text.into(), special: false }
+        Self {
+            id,
+            text: text.into(),
+            special: false,
+        }
     }
 
     /// A template control token.
     #[must_use]
     pub fn special(id: u32, text: impl Into<String>) -> Self {
-        Self { id, text: text.into(), special: true }
+        Self {
+            id,
+            text: text.into(),
+            special: true,
+        }
     }
 }
 
@@ -80,9 +88,7 @@ fn body(text: &str) -> Vec<AnyView> {
     for (i, piece) in text.split('\n').enumerate() {
         if i > 0 {
             // The arrow, then the real break. Both, in that order, is the whole trick.
-            out.push(
-                view! { <span class="text-fainter select-none">"⏎"</span>"\n" }.into_any(),
-            );
+            out.push(view! { <span class="text-fainter select-none">"⏎"</span>"\n" }.into_any());
         }
         if !piece.is_empty() {
             out.push(piece.to_string().into_any());

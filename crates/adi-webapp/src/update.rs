@@ -78,9 +78,7 @@ pub(crate) fn watch() -> UpdateWatch {
         if let Ok(u) = fetch::update_state().await {
             let stale = u.stale;
             watch.state.set(Some(u));
-            if stale
-                && let Ok(fresh) = fetch::check_update().await
-            {
+            if stale && let Ok(fresh) = fetch::check_update().await {
                 watch.state.set(Some(fresh));
             }
         }
@@ -168,12 +166,9 @@ pub(crate) fn action(watch: UpdateWatch) -> Action {
     let Some(u) = watch.state.get() else {
         // Before the first answer we do not know the version, so the row offers the one thing
         // that is true regardless: ask.
-        return Action::new(
-            "Check for updates",
-            "",
-            icons::Icon::Box,
-            move || watch.check(),
-        );
+        return Action::new("Check for updates", "", icons::Icon::Box, move || {
+            watch.check()
+        });
     };
     if u.installing {
         return Action::new(
@@ -334,7 +329,10 @@ fn tooltip(u: &UpdateState) -> String {
     if u.running != u.installed {
         // Worth saying out loud rather than hiding: the panel you are looking at was built
         // from a checkout, so the number beside it is the bundle's, not this binary's.
-        lines.push(format!("This panel is running {} from a checkout", u.running));
+        lines.push(format!(
+            "This panel is running {} from a checkout",
+            u.running
+        ));
     }
     match (&u.latest, u.has_artifact) {
         (Some(latest), Some(false)) => lines.push(format!(

@@ -118,7 +118,10 @@ mod tests {
         assert_eq!(node_of("app.zomro-de1.n.adi").as_deref(), Some("zomro-de1"));
         assert_eq!(node_of("APP.Laptop-B.N.ADI").as_deref(), Some("laptop-b"));
         assert_eq!(node_of("app.laptop-b.n.adi.").as_deref(), Some("laptop-b"));
-        assert_eq!(node_of("app.laptop-b.n.adi:8443").as_deref(), Some("laptop-b"));
+        assert_eq!(
+            node_of("app.laptop-b.n.adi:8443").as_deref(),
+            Some("laptop-b")
+        );
         // The node is the label before the zone, however deep the service name is.
         assert_eq!(
             node_of("app.nosh.zomro-de1.n.adi").as_deref(),
@@ -129,11 +132,11 @@ mod tests {
     #[test]
     fn every_other_location_is_local() {
         for host in [
-            "app.adi",            // the ordinary local panel
-            "localhost:8000",     // …and the port behind it
+            "app.adi",        // the ordinary local panel
+            "localhost:8000", // …and the port behind it
             "127.0.0.1:8000",
-            "n.adi",              // the suffix alone names no node
-            "app.n.adi",          // a node with no service
+            "n.adi",                          // the suffix alone names no node
+            "app.n.adi",                      // a node with no service
             "app.laptop-b.n.adi.example.com", // a lookalike that is not in the zone
         ] {
             assert_eq!(node_of(host), None, "{host} is not a fleet host");
@@ -192,7 +195,10 @@ mod tests {
         );
         // The node listing builds these against *this* machine's registry, so read through a node
         // they name a third machine — one hop more than the gateway routes.
-        assert_eq!(mapped_url_via("http://nosh.other.n.adi/", Some("laptop-b")), None);
+        assert_eq!(
+            mapped_url_via("http://nosh.other.n.adi/", Some("laptop-b")),
+            None
+        );
         assert_eq!(mapped_url_via("nosh.adi", None), None);
     }
 }
