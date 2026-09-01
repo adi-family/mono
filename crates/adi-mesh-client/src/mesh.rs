@@ -34,12 +34,17 @@ pub const STEP_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The relay this client calls home when nothing else is said.
 ///
-/// Pinned here rather than read from iroh's preset, and it is `adi_mesh::relay::DEFAULT_RELAYS`
+/// Pinned here rather than read from iroh's preset, and it is one of `adi_mesh::relay::DEFAULT_RELAYS`
 /// said again on purpose: that constant lives in a crate this one cannot depend on (it reaches
 /// `adi_config` and the local store) and the value is load-bearing in a way a default is not — a
 /// browser that lands on n0's public relay cannot dial *anything*, because that relay answers the
 /// websocket upgrade without echoing `sec-websocket-protocol` and RFC 6455 §4.1 makes the browser
 /// fail the connection (measured 2026-08-24, `spikes/mesh-browser`).
+///
+/// **One, where the node list is two.** Nothing ever dials a browser, so this is the tab's own home
+/// relay and not how anyone reaches it: a node is reached through *its* relay, carried in that
+/// node's record. So a second region belongs in `DEFAULT_RELAYS`, where nodes read it, and choosing
+/// between them here would only trade one tab-side latency for another.
 pub const HOME_RELAY: &str = "https://mad.mono-relay.withadi.dev";
 
 /// A dial that failed, with enough detail for the reader to know whose fault it is.

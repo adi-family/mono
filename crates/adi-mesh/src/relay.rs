@@ -48,7 +48,12 @@ pub fn relay_mode(relays: &[String]) -> Option<RelayMode> {
                 "mesh: no configured relay URL parsed; falling back to the adi relays"
             );
         }
-        let fallback = relay_urls(&DEFAULT_RELAYS.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        let fallback = relay_urls(
+            &DEFAULT_RELAYS
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+        );
         return Some(RelayMode::Custom(RelayMap::from_iter(fallback)));
     }
     Some(RelayMode::Custom(RelayMap::from_iter(urls)))
@@ -62,12 +67,21 @@ pub fn relay_mode(relays: &[String]) -> Option<RelayMode> {
 /// node left on the public default is unreachable from the browser client **entirely**, not slowly
 /// (measured 2026-08-24). Ours echoes `iroh-relay-v2`.
 ///
-/// **One entry, deliberately.** iroh settles each machine on its own *nearest* relay in the map, so
-/// a mixed map of ours and n0's would make browser reachability a coin flip decided by geography —
-/// the "everything works, just not where you think" failure this module's header warns about. A
-/// second region is one more line here once it exists; `fra.mono-relay.withadi.dev` was in this
-/// crate's test fixtures and has never resolved, so it is not in this list.
-pub const DEFAULT_RELAYS: &[&str] = &["https://mad.mono-relay.withadi.dev"];
+/// **Ours only — never mixed with n0's.** iroh settles each machine on its own *nearest* relay in
+/// the map, so a map holding both would make browser reachability a coin flip decided by geography:
+/// the "everything works, just not where you think" failure this module's header warns about. Two
+/// of *ours* is the opposite case, and is what the list is for — both echo `iroh-relay-v2`, so
+/// whichever a machine picks works, and it picks the near one.
+///
+/// - `mad` — GCE `europe-southwest1` (Madrid), live since 2026-08-05
+/// - `iad` — GCE `us-east4` (N. Virginia), live since 2026-08-27
+///
+/// Add a region with `scripts/deploy-relay.sh`, and only once its name resolves:
+/// `fra.mono-relay.withadi.dev` sat in this crate's test fixtures for weeks without ever existing.
+pub const DEFAULT_RELAYS: &[&str] = &[
+    "https://mad.mono-relay.withadi.dev",
+    "https://iad.mono-relay.withadi.dev",
+];
 
 /// The schemes a relay can actually be reached over. A relay is an HTTPS endpoint that upgrades to
 /// a websocket; `http` is here only because a `--dev` relay on a trusted LAN skips TLS.
@@ -145,11 +159,8 @@ mod tests {
 
     #[test]
     fn one_bad_url_does_not_cost_the_good_ones() {
-        let mode = relay_mode(&urls(&[
-            "not a url",
-            "https://mad.mono-relay.withadi.dev",
-        ]))
-        .expect("the usable one survives");
+        let mode = relay_mode(&urls(&["not a url", "https://mad.mono-relay.withadi.dev"]))
+            .expect("the usable one survives");
         assert_eq!(mode.relay_map().len(), 1);
     }
 
@@ -167,7 +178,10 @@ mod tests {
         // `RelayUrl` wraps a generic `Url`, so this parses cleanly as scheme `also` — the exact
         // shape a typo takes, and it would otherwise sit in the map as a relay that simply never
         // answers a latency probe.
-        assert!("also::not::one".parse::<RelayUrl>().is_ok(), "premise: it parses");
+        assert!(
+            "also::not::one".parse::<RelayUrl>().is_ok(),
+            "premise: it parses"
+        );
         assert!(relay_urls(&urls(&["also::not::one"])).is_empty());
         assert!(relay_urls(&urls(&["ftp://relay.example.org"])).is_empty());
 
