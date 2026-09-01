@@ -38,8 +38,8 @@ use adi_mesh::fleet::{FleetRegistry, Grant, Target};
 use adi_secrets::Secrets;
 use adi_webapp_api::handlers::{self, Response};
 use adi_webapp_api::types::{
-    Dashboard, DashboardsState, FleetDashboards, FleetGrantRef, FleetState, FleetRef, NodeDashboard,
-    NodeDashboards, NodeServiceRef, UnlockNode,
+    Dashboard, DashboardsState, FleetDashboards, FleetGrantRef, FleetNodeAccess, FleetNodes,
+    FleetRef, FleetState, NodeDashboard, NodeDashboards, NodeServiceRef, UnlockNode,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -111,6 +111,31 @@ pub(crate) async fn fleet_dashboards(secrets: &Secrets) -> Response {
     }
 }
 
+/// `GET /api/fleet/nodes` — which paired nodes this machine holds a password for.
+///
+/// Deliberately *not* [`fleet_dashboards`] with less in it: this one asks nobody anything. It reads
+/// the local registry and the local credential store, which is all a menu of nodes needs to know,
+/// and it costs nothing to repeat — where the listing above is one authenticated mesh round trip
+/// per node and belongs to a rail somebody opened.
+pub(crate) fn nodes(secrets: &Secrets) -> Response {
+    let registry = match FleetRegistry::load() {
+        Ok(registry) => registry,
+        Err(e) => return handlers::error(500, &format!("reading the fleet registry: {e}")),
+    };
+    let held = credentials(secrets);
+    // `FleetRegistry::nodes` is a `BTreeMap`, so this is petname order — the same order
+    // `/api/fleet` prints and a menu should offer.
+    let nodes = registry
+        .nodes
+        .into_keys()
+        .map(|node| FleetNodeAccess {
+            locked: !held.contains_key(&node),
+            node,
+        })
+        .collect();
+    handlers::ok_json(&FleetNodes { nodes })
+}
+
 /// `POST /api/fleet/dashboards/unlock` — store a node's password here, so its dashboards can be
 /// listed without asking again.
 ///
@@ -131,7 +156,10 @@ pub(crate) async fn unlock(secrets: &Secrets, body: &[u8]) -> Response {
     }
 
     let credential = Credential {
-        user: req.username.map(|u| u.trim().to_string()).filter(|u| !u.is_empty()),
+        user: req
+            .username
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty()),
         password: req.password,
     };
     // The cheapest authenticated call the panel has, and the very one the rail will make.
@@ -183,7 +211,10 @@ pub(crate) async fn allow(secrets: &Secrets, body: &[u8]) -> Response {
         Ok(req) => req,
         Err(e) => return handlers::error(400, &format!("invalid request body: {e}")),
     };
-    let (petname, service) = (req.node.trim().to_string(), req.service.trim().to_lowercase());
+    let (petname, service) = (
+        req.node.trim().to_string(),
+        req.service.trim().to_lowercase(),
+    );
     if petname.is_empty() || service.is_empty() {
         return handlers::error(400, "a grant needs both a node and a service");
     }
@@ -199,6 +230,97 @@ pub(crate) async fn allow(secrets: &Secrets, body: &[u8]) -> Response {
 
     match grant_self(&petname, &credential.auth(), &service).await {
         Ok(_) => fleet_dashboards(secrets).await,
+        Err(e) => handlers::error(e.status, &e.message),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// Driving a node: this panel's own API, pointed at another machine (`docs/fleet.md` §13)
+// ---------------------------------------------------------------------------------------
+
+/// The prefix that addresses a paired node's control-panel API through this one:
+/// `/api/node/<petname>` followed by the very path that node would answer.
+///
+/// Under `/api` on purpose — it inherits `origin::check`, the shared-read collapsing, and the
+/// browser's same-origin rules, none of which a second prefix would have.
+pub(crate) const NODE_PREFIX: &str = "/api/node/";
+
+/// Split `/api/node/<node>/api/…` into the node and the path it names *on that node*, or `None`
+/// when the path is not addressed to a node at all.
+///
+/// The remainder is handed back whole, query and all, because the node's own router reads it: a
+/// page of a listing (`?limit=100`) is a different read over there exactly as it is here.
+///
+/// **Only `/api` is reachable.** Anything else on a node's panel is its web app — HTML, wasm, its
+/// own assets — which this cannot carry (a [`Response`] is a status and a JSON string) and should
+/// not: the point of §13 is that the UI is *this* machine's and only the data is the node's. A
+/// browser that wants the node's own page has `app.<node>.n.adi` and always did.
+pub(crate) fn split_node_path(path: &str) -> Option<(&str, &str)> {
+    let after = path.strip_prefix(NODE_PREFIX)?;
+    let cut = after.find('/')?;
+    let (node, rest) = after.split_at(cut);
+    let route = rest.split('?').next().unwrap_or(rest);
+    // `/api/ws` is refused by name: it is not a request but a socket upgrade, and the mesh call
+    // this forwards through speaks one request and one response. A path that is itself addressed to
+    // a node is refused for the reason §4 refuses an `n.adi` name inside an `n.adi` page: one hop
+    // is what this machine can reason about, and a chain would put a third machine's data on screen
+    // under the second one's name.
+    let reachable =
+        route.starts_with("/api/") && route != "/api/ws" && !route.starts_with(NODE_PREFIX);
+    (!node.is_empty() && reachable).then_some((node, rest))
+}
+
+/// `GET|POST /api/node/<node>/api/…` — the same request, answered by a paired node.
+///
+/// This is the whole of §13. The control panel already knows how to *drive* an adi machine; what it
+/// could not do was drive one that is not this one, and the missing piece was never the screens —
+/// it was an address for the data behind them. So the screens stay put and the API moves: a page
+/// that prefixes its reads and its writes with `/api/node/<node>` is looking at that node, with no
+/// second copy of anything.
+///
+/// **It grants no authority this machine did not already have.** Holding a node's password means
+/// this panel can list, grant and transfer against it (§11); a forwarded `POST /api/agents/run` is
+/// the same authority spent through a different screen. Both halves of §5 are still enforced *on
+/// the node* — the mesh grant that let the connection through, and the Basic-auth gate behind it —
+/// and both are the node's to withdraw. **Lock** on the Fleet page is the undo, as before: without
+/// a stored credential this answers `401` and asks for one rather than reaching anything.
+pub(crate) async fn proxy(
+    secrets: &Secrets,
+    method: &str,
+    node: &str,
+    path: &str,
+    body: &[u8],
+) -> Response {
+    if let Err(response) = node::require_paired(node) {
+        return response;
+    }
+    let Some(credential) = credentials(secrets).remove(node) else {
+        // A lock, phrased as one. The client shows the password field it already has for the
+        // dashboards rail rather than reporting the node as broken.
+        return handlers::error(
+            401,
+            &format!("{node} is locked here — give this machine its password first"),
+        );
+    };
+    let auth = credential.auth();
+
+    // A read gets the rail's shorter bound and a write the deliberate-click one, for the reason
+    // [`LIST_TIMEOUT`] gives: a read is repeated on a timer and must not stack up behind a sleeping
+    // machine, while a write is a person waiting on something they asked for.
+    let answered = match method {
+        "GET" => node::get(node, path, &auth, LIST_TIMEOUT).await,
+        "POST" => node::post(node, path, &auth, body.to_vec(), CONTROL_TIMEOUT).await,
+        other => {
+            return handlers::error(
+                405,
+                &format!("{other} is not forwarded to a node — only GET and POST are"),
+            );
+        }
+    };
+    match answered {
+        // Verbatim: the node's panel answers JSON on `/api`, and the page reading it is the same
+        // page that reads ours. Re-wrapping it would be a second shape to keep in step.
+        Ok(body) => Response { status: 200, body },
         Err(e) => handlers::error(e.status, &e.message),
     }
 }
@@ -372,8 +494,7 @@ fn find_me(fleet: &str, us: &str) -> Option<(String, Vec<Grant>)> {
 /// hosts nothing and answers nothing (`adi-mesh-ffi/src/viewer.rs`) — so it can only ever sit
 /// locked, and it sits at the bottom rather than above the machines that do serve something.
 async fn listing(secrets: &Secrets) -> Result<FleetDashboards, String> {
-    let registry =
-        FleetRegistry::load().map_err(|e| format!("reading the fleet registry: {e}"))?;
+    let registry = FleetRegistry::load().map_err(|e| format!("reading the fleet registry: {e}"))?;
     let held = credentials(secrets);
 
     let mut asking = tokio::task::JoinSet::new();
@@ -450,7 +571,9 @@ pub(crate) struct HeldCredentials;
 
 impl adi_mesh::gateway::NodeCredentials for HeldCredentials {
     fn authorization(&self, node: &str) -> Option<String> {
-        credentials(&Secrets::open()).get(node).map(Credential::auth)
+        credentials(&Secrets::open())
+            .get(node)
+            .map(Credential::auth)
     }
 }
 
@@ -464,8 +587,8 @@ fn save(secrets: &Secrets, held: &Credentials) -> Result<(), String> {
             .map(|_| ())
             .map_err(|e| format!("dropping the stored node credentials: {e}"));
     }
-    let raw = serde_json::to_string(held)
-        .map_err(|e| format!("encoding the node credentials: {e}"))?;
+    let raw =
+        serde_json::to_string(held).map_err(|e| format!("encoding the node credentials: {e}"))?;
     secrets
         .set(
             Some(CREDENTIAL_SCOPE),
@@ -593,7 +716,10 @@ mod tests {
         assert_eq!(grants.len(), 2, "every grant it holds, whatever kind");
         assert!(grants.iter().any(|g| g.allows(Target::Http("app"))));
 
-        assert!(find_me(fleet, "cccc").is_none(), "an unpaired key is not there");
+        assert!(
+            find_me(fleet, "cccc").is_none(),
+            "an unpaired key is not there"
+        );
         assert!(find_me("not json", "bbbb").is_none(), "nor is a bad page");
     }
 
@@ -603,7 +729,11 @@ mod tests {
             "grants":["http:app","quantum:entangle"],"nickname":"s","paired_at":1,
             "has_password":true}]}"#;
         let (_, grants) = find_me(fleet, "bbbb").expect("listed");
-        assert_eq!(grants.len(), 1, "the rule we do not know is skipped, not fatal");
+        assert_eq!(
+            grants.len(),
+            1,
+            "the rule we do not know is skipped, not fatal"
+        );
         assert!(grants[0].allows(Target::Http("app")));
     }
 
@@ -612,7 +742,10 @@ mod tests {
     #[test]
     fn credentials_round_trip_and_the_last_one_out_removes_the_secret() {
         let secrets = store();
-        assert!(credentials(&secrets).is_empty(), "nothing is held to begin with");
+        assert!(
+            credentials(&secrets).is_empty(),
+            "nothing is held to begin with"
+        );
 
         let mut held = Credentials::new();
         held.insert(
@@ -651,6 +784,56 @@ mod tests {
                 .is_none(),
             "an empty store leaves no row claiming this machine keeps passwords"
         );
+    }
+
+    #[test]
+    fn a_node_path_names_the_node_and_the_path_it_answers() {
+        assert_eq!(
+            split_node_path("/api/node/zomro-de1/api/agents"),
+            Some(("zomro-de1", "/api/agents"))
+        );
+        // The query rides along — a page of a listing is its own read over there too.
+        assert_eq!(
+            split_node_path("/api/node/laptop-b/api/agents/runs/all?limit=100"),
+            Some(("laptop-b", "/api/agents/runs/all?limit=100"))
+        );
+    }
+
+    #[test]
+    fn nothing_but_a_nodes_api_is_reachable_through_it() {
+        for path in [
+            "/api/agents",                   // not addressed to a node at all
+            "/api/node/",                    // no node
+            "/api/node/laptop-b",            // no path
+            "/api/node//api/agents",         // an empty node label
+            "/api/node/laptop-b/index.html", // the node's web app, which this cannot carry
+            "/api/node/laptop-b/api/ws",     // a socket upgrade, not a request
+            "/api/node/laptop-b/apiagents",  // a prefix that is not the segment
+            // A node's node: one hop more than this machine can reason about.
+            "/api/node/laptop-b/api/node/studio/api/agents",
+        ] {
+            assert_eq!(split_node_path(path), None, "{path} must not be forwarded");
+        }
+    }
+
+    /// The menu's list is the registry joined to what is stored here — and it never says a node is
+    /// unlocked on the strength of the *node* having a password, which is a different fact.
+    #[test]
+    fn the_node_list_says_which_ones_this_machine_can_ask() {
+        let secrets = store();
+        let mut held = Credentials::new();
+        held.insert(
+            "laptop-b".to_string(),
+            Credential {
+                user: None,
+                password: "hunter2".to_string(),
+            },
+        );
+        save(&secrets, &held).expect("saved");
+
+        let held = credentials(&secrets);
+        assert!(!held.contains_key("studio"), "never asked, never stored");
+        assert!(held.contains_key("laptop-b"));
     }
 
     /// The passwords must not be reachable through the path that fills a run's environment.

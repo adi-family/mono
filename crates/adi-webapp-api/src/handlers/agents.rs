@@ -1735,6 +1735,16 @@ fn agent_form_spec() -> AgentFormSpec {
         "where the agent starts (default: its project's directory, else the store root)",
     ));
 
+    // How one machine runs the same engine against two accounts: a settings file carries its own
+    // `env`, so this agent's turns can go to a different API than the CLI's own login uses.
+    fields.push(txt_field(
+        "settings",
+        "Settings file",
+        &["harness:claude-sdk"],
+        "~/.claude/settings.glm.json",
+        "engine settings JSON (path or inline) — its `env` block chooses the account and models",
+    ));
+
     fields.push(chk_field(
         "skip_git_repo_check",
         "Skip git-repo check",

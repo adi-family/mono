@@ -22,6 +22,24 @@ answerable (a harness engine); a one-shot `process:*` run is the same record wit
 A pty agent has **no session record at all** — its live pane is the whole of it, and it is
 synthesized as a row only in the client.
 
+## The pipeline is not always about this machine
+
+Since `docs/fleet.md` §13 the rail can be pointed at a **paired node**, and then every step below
+happens on that node instead: its `sessions.db`, its `Agents`, its `runs_response`. Only the last
+two rows of the diagram are local — the client's signals and the rail it draws.
+
+What moves is the *address*, in one place: `fetch::routed` prefixes every `/api/agents…` path with
+`/api/node/<node>`, and `adi-app`'s `viewer::proxy` forwards it on the credential this machine holds
+for that node. So nothing in this document's pipeline is duplicated or conditional; a session is
+read, listed, replied to and stopped by exactly the code below, one machine further away. The two
+consequences worth carrying into any refactor here:
+
+- **A `run_id` is only unique on the machine that minted it.** Switching nodes therefore clears the
+  watch and the rail rather than re-filtering them (`state::view_sessions_on`) — a run id left in
+  place would be asked of a machine that never heard of it.
+- **A node's read is polled at three seconds, not one** (`adi-app`'s `live::watchable`), because
+  each tick is a mesh round trip.
+
 ## The pipeline, end to end
 
 ```

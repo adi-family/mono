@@ -76,6 +76,14 @@ const STALE: Duration = Duration::from_secs(60);
 /// the full path, so two pages watching different pages of it get an answer each.
 fn watchable(method: &str, path: &str) -> Option<Duration> {
     let path = path.split('?').next().unwrap_or(path);
+    // The same read, on a paired node (`docs/fleet.md` §13). Watchable exactly when the read it
+    // names is — it *is* that read, forwarded — but never faster than [`SLOW`], because every tick
+    // is an authenticated mesh round trip and a third of a second of it is relay latency before any
+    // payload. A transcript on another machine updating every three seconds instead of every one is
+    // the cost of it being on another machine.
+    if let Some((_, inner)) = crate::viewer::split_node_path(path) {
+        return watchable(method, inner).map(|every| every.max(SLOW));
+    }
     match method {
         "GET" => match path {
             "/api/health" => Some(IDLE),
@@ -84,6 +92,7 @@ fn watchable(method: &str, path: &str) -> Option<Duration> {
             | "/api/dashboards"
             | "/api/db"
             | "/api/fleet"
+            | "/api/fleet/nodes"
             | "/api/hive"
             | "/api/mesh"
             | "/api/meta"
@@ -288,7 +297,10 @@ impl Hub {
         }
         drop(inner);
         for id in stalled {
-            debug!(conn = id, "dropping a websocket client that stopped reading");
+            debug!(
+                conn = id,
+                "dropping a websocket client that stopped reading"
+            );
             self.detach(id);
         }
     }
@@ -304,7 +316,8 @@ async fn compute(app: &Arc<App>, key: String, watch: Watch) {
         rest: Vec::new(),
     };
     let response = crate::answer(app, req).await;
-    app.live.publish(&key, message(&key, response.status, &response.body));
+    app.live
+        .publish(&key, message(&key, response.status, &response.body));
 }
 
 /// Render what goes over the wire: the topic it answers, its status, and the response body
@@ -420,7 +433,11 @@ async fn take_subscription<W: tokio::io::AsyncWrite + Unpin>(
             Some(Watch {
                 method: sub.get("method")?.as_str()?.to_string(),
                 path: sub.get("path")?.as_str()?.to_string(),
-                body: sub.get("body").and_then(Value::as_str).unwrap_or("").to_string(),
+                body: sub
+                    .get("body")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
             })
         })
         .collect();
@@ -453,7 +470,10 @@ mod tests {
         assert_eq!(watchable("GET", "/api/fleet"), Some(SLOW));
         // A query parameter is part of the read, not a different one: the rail's page of the
         // session index is watchable exactly as the whole index is.
-        assert_eq!(watchable("GET", "/api/agents/runs/all?limit=100"), Some(SLOW));
+        assert_eq!(
+            watchable("GET", "/api/agents/runs/all?limit=100"),
+            Some(SLOW)
+        );
         // Mutations are not on the list, whatever they look like.
         assert_eq!(watchable("POST", "/api/fleet/unpair"), None);
         assert_eq!(watchable("POST", "/api/projects/remove"), None);
@@ -461,6 +481,35 @@ mod tests {
         assert_eq!(watchable("DELETE", "/api/health"), None);
         // …and a query cannot smuggle one on: the route is what is matched, still.
         assert_eq!(watchable("POST", "/api/agents/run?limit=1"), None);
+    }
+
+    /// A node's read is watchable exactly when the same read here is — and no faster than [`SLOW`],
+    /// because each tick crosses the mesh. The allowlist is the boundary of this module, so a
+    /// forwarded path must not be a way past it.
+    #[test]
+    fn a_nodes_read_is_watchable_but_never_at_the_local_rate() {
+        assert_eq!(
+            watchable("GET", "/api/node/laptop-b/api/agents"),
+            Some(SLOW)
+        );
+        assert_eq!(
+            watchable("GET", "/api/node/laptop-b/api/agents/runs/all?limit=100"),
+            Some(SLOW)
+        );
+        // FAST locally; a transcript on another machine is asked for at SLOW.
+        assert_eq!(
+            watchable("POST", "/api/node/laptop-b/api/agents/run/peek"),
+            Some(SLOW)
+        );
+        // …and everything the local table refuses, this refuses through a node too.
+        assert_eq!(watchable("POST", "/api/node/laptop-b/api/agents/run"), None);
+        assert_eq!(watchable("GET", "/api/node/laptop-b/api/ws"), None);
+        assert_eq!(watchable("GET", "/api/node/laptop-b/index.html"), None);
+        // No chain of them: a node's node is one hop more than the gateway routes.
+        assert_eq!(
+            watchable("GET", "/api/node/laptop-b/api/node/studio/api/agents"),
+            None
+        );
     }
 
     /// Two pages of the same read are two topics: the path they are keyed by carries the query, so

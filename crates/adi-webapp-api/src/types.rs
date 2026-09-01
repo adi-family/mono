@@ -3087,6 +3087,30 @@ pub struct UnlockNode {
     pub password: String,
 }
 
+// MARK: driving a node through this panel (`docs/fleet.md` §13)
+
+/// `GET /api/fleet/nodes` — which paired nodes this machine can *ask* things of.
+///
+/// The cheap half of [`FleetDashboards`], and the reason it exists separately: that one is a fan-out
+/// of one authenticated mesh call per node, which is right for a rail a person opened and wrong for
+/// a control that only has to know what to put in a menu. This reads the local registry and the
+/// local credential store and leaves the machine not at all, so it is watchable at the same rate as
+/// any other list.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetNodes {
+    pub nodes: Vec<FleetNodeAccess>,
+}
+
+/// One paired node, and whether this machine holds the password to drive it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FleetNodeAccess {
+    /// The node's petname, as this machine files it.
+    pub node: String,
+    /// No credential is stored here, so nothing on this machine can ask that node anything. The
+    /// fix is `POST /api/fleet/dashboards/unlock`, not anything on the node.
+    pub locked: bool,
+}
+
 /// `POST /api/fleet/dashboards/allow` — ask a node to let this machine reach one of its services.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NodeServiceRef {

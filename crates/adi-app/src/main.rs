@@ -27,9 +27,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use adi_agents::Agents;
-use adi_knowledge::KnowledgeStore;
 use adi_db::Db;
 use adi_events::Events;
+use adi_knowledge::KnowledgeStore;
 use adi_mesh::Daemon;
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
@@ -162,8 +162,9 @@ impl Reads {
 
     /// A previous panic while holding this lock says nothing about the map, so a poisoned lock is
     /// taken anyway rather than failing every later request.
-    fn inflight(&self) -> std::sync::MutexGuard<'_, HashMap<String, broadcast::Sender<Arc<Response>>>>
-    {
+    fn inflight(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<String, broadcast::Sender<Arc<Response>>>> {
         self.inflight
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -181,7 +182,9 @@ async fn blocking<F>(work: F) -> Response
 where
     F: FnOnce() -> Response + Send + 'static,
 {
-    tokio::task::spawn_blocking(work).await.unwrap_or_else(|e| handlers::error(500, &format!("the request handler failed: {e}")))
+    tokio::task::spawn_blocking(work)
+        .await
+        .unwrap_or_else(|e| handlers::error(500, &format!("the request handler failed: {e}")))
 }
 
 /// The webapp's Trunk build output, embedded so the binary is self-contained. Empty until
@@ -241,7 +244,10 @@ async fn main() -> anyhow::Result<()> {
     let tools = Tools::open();
     // Ensure the built-in system tools (the adi-ecosystem CLIs) exist, then rebuild the global
     // `.bin`. Best-effort — a store that can't be seeded shouldn't stop the app from starting.
-    if let Err(e) = tools.seed_system().and_then(|_| tools.sync_bin().map(|_| ())) {
+    if let Err(e) = tools
+        .seed_system()
+        .and_then(|_| tools.sync_bin().map(|_| ()))
+    {
         warn!(error = %e, "seeding system tools failed");
     }
     // Create the global database (so it exists in WAL mode before anything races to make it) and
@@ -423,6 +429,13 @@ async fn answer(app: &Arc<App>, req: http::Request) -> Arc<Response> {
 /// daemon behind its async mutex. `None` means "not one of these" — a synchronous route, which
 /// [`App::answer`] takes off the runtime entirely.
 async fn async_route(app: &App, req: &http::Request) -> Option<Response> {
+    // Addressed to one of the paired nodes: forwarded to that node's own control panel and handed
+    // back verbatim, so this panel's pages can be pointed at another machine without a second copy
+    // of any of them (`docs/fleet.md` §13, [`viewer::proxy`]). Matched on `req.path` and not
+    // `route_path`, because the query belongs to the node's router, not to ours.
+    if let Some((node, path)) = viewer::split_node_path(&req.path) {
+        return Some(viewer::proxy(&app.secrets, &req.method, node, path, &req.body).await);
+    }
     let response = match (req.method.as_str(), req.route_path()) {
         // Server-side: decrypt the refresh token, exchange it at the router, re-store. Async
         // because it makes an outbound call, so it can't be a plain sync handler.
@@ -482,6 +495,7 @@ const SHARED_GETS: &[&str] = &[
     "/api/dashboards",
     "/api/db",
     "/api/fleet",
+    "/api/fleet/nodes",
     "/api/hive",
     "/api/knowledge",
     "/api/meta",
@@ -620,9 +634,7 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         // meaning. These run here, on the blocking pool, and not as `async_route` arms — a search
         // may load the embedding model, which is seconds of CPU the async workers must not spend.
         ("GET", "/api/knowledge") => handlers::knowledge(knowledge_store),
-        ("POST", "/api/knowledge/search") => {
-            handlers::search_knowledge(knowledge_store, &req.body)
-        }
+        ("POST", "/api/knowledge/search") => handlers::search_knowledge(knowledge_store, &req.body),
         ("POST", "/api/knowledge/notes") => handlers::knowledge_notes(knowledge_store, &req.body),
         ("POST", "/api/knowledge/note/get") => handlers::knowledge_note(knowledge_store, &req.body),
         ("POST", "/api/knowledge/note/add") => {
@@ -648,13 +660,19 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         // already holds open rather than reaching for `~/.adi/mono` a second time — which is also
         // what lets the handlers be tested against a temp root.
         ("GET", "/api/fleet") => handlers::fleet(projects.config()),
+        // Which of those nodes this machine can *ask* things of — the registry joined to the
+        // credentials kept here, and nothing over the wire, so it is cheap enough for a menu to
+        // watch (`docs/fleet.md` §13). `/api/fleet/dashboards` is the expensive one beside it.
+        ("GET", "/api/fleet/nodes") => viewer::nodes(secrets),
         // Minting is a POST with no body: it takes nothing and it is not a read — every call
         // writes a fresh nonce into the invite book.
         ("POST", "/api/fleet/invite") => handlers::fleet_invite(projects.config()),
         ("POST", "/api/fleet/rename") => handlers::fleet_rename(projects.config(), &req.body),
         ("POST", "/api/fleet/unpair") => handlers::fleet_unpair(projects.config(), &req.body),
         ("POST", "/api/fleet/grants/add") => handlers::fleet_grant(projects.config(), &req.body),
-        ("POST", "/api/fleet/grants/remove") => handlers::fleet_revoke(projects.config(), &req.body),
+        ("POST", "/api/fleet/grants/remove") => {
+            handlers::fleet_revoke(projects.config(), &req.body)
+        }
         ("POST", "/api/fleet/nickname/accept") => {
             handlers::fleet_accept_nickname(projects.config(), &req.body)
         }
@@ -697,7 +715,8 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
         ("GET", "/api/voice") => handlers::voice(secrets),
         ("POST", "/api/voice/transcribe") => handlers::transcribe(
             secrets,
-            req.query_param("engine").unwrap_or(handlers::BROWSER_ENGINE),
+            req.query_param("engine")
+                .unwrap_or(handlers::BROWSER_ENGINE),
             // Chrome records WebM/Opus and Safari MP4; the fallback only matters for a caller
             // that sent no type at all, and webm is the likelier guess.
             req.header("content-type").unwrap_or("audio/webm"),
@@ -880,7 +899,10 @@ fn now_secs() -> u64 {
 /// never crosses to the browser. Returns the fresh secrets list on success.
 async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
     let Ok(req) = serde_json::from_slice::<adi_webapp_api::types::SecretRef>(body) else {
-        return handlers::error(400, "expected JSON body { \"name\": \"…\", \"project\"?: \"…\" }");
+        return handlers::error(
+            400,
+            "expected JSON body { \"name\": \"…\", \"project\"?: \"…\" }",
+        );
     };
     let name = req.name.trim();
     if name.is_empty() {
@@ -902,7 +924,10 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
         return handlers::error(400, "not an OAuth secret — nothing to refresh");
     };
     if !oauth.has_refresh {
-        return handlers::error(409, "no refresh token stored — re-authorize to get a new one");
+        return handlers::error(
+            409,
+            "no refresh token stored — re-authorize to get a new one",
+        );
     }
     let refresh_token = match secrets.reveal_refresh(project, name) {
         Ok(Some(rt)) => rt,
@@ -938,7 +963,10 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
             .unwrap_or("refresh failed");
         return handlers::error(502, &format!("OAuth refresh failed: {msg}"));
     }
-    let Some(access_token) = payload.get("access_token").and_then(serde_json::Value::as_str) else {
+    let Some(access_token) = payload
+        .get("access_token")
+        .and_then(serde_json::Value::as_str)
+    else {
         return handlers::error(502, "the OAuth router returned no access_token");
     };
 
@@ -975,11 +1003,7 @@ async fn refresh_secret(secrets: &Secrets, body: &[u8]) -> Response {
 /// Cached hard: an attachment is immutable and its id is minted from random bytes, so the page that
 /// draws a chat every second must not re-fetch every screenshot in it. The id changing *is* the
 /// invalidation.
-async fn serve_attachment(
-    stream: &mut TcpStream,
-    agents: &Agents,
-    id: &str,
-) -> anyhow::Result<()> {
+async fn serve_attachment(stream: &mut TcpStream, agents: &Agents, id: &str) -> anyhow::Result<()> {
     let Some((media_type, bytes)) = handlers::attachment_bytes(agents, id) else {
         return http::write_json(stream, 404, r#"{"ok":false,"error":"no such attachment"}"#).await;
     };
@@ -1128,13 +1152,19 @@ mod tests {
     fn the_key_separates_subjects_and_bounds_itself() {
         let one = shared_read_key(&request("POST", "/api/agents/runs", r#"{"name":"a"}"#));
         let other = shared_read_key(&request("POST", "/api/agents/runs", r#"{"name":"b"}"#));
-        assert!(one.is_some() && one != other, "different agents, different keys");
+        assert!(
+            one.is_some() && one != other,
+            "different agents, different keys"
+        );
 
         // A query is part of the subject, not decoration on the route: `?limit=100` and
         // `?limit=200` are two different pages of the session index, and sharing them would hand
         // one page's asker the other's answer.
         let page = shared_read_key(&request("GET", "/api/agents/runs/all?limit=100", ""));
-        assert!(page.is_some(), "the route is still the one on the allowlist");
+        assert!(
+            page.is_some(),
+            "the route is still the one on the allowlist"
+        );
         assert_ne!(
             page,
             shared_read_key(&request("GET", "/api/agents/runs/all?limit=200", "")),
