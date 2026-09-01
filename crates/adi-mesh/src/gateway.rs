@@ -21,7 +21,9 @@
 //! what the service reads are the same bytes. Headers are *added* — the password this machine
 //! already holds for the node ([`prefill_auth`]) — which is a different act: nothing that was in
 //! the head changes, and the client's own `Authorization` is left alone. The password travels in
-//! [`auth::MESH_AUTH_HEADER`], and the node strips it again before the service sees it.
+//! [`auth::MESH_AUTH_HEADER`], and the node strips it again before the service sees it — along
+//! with `Authorization`, but only in the case where *that* header is what verified as the mesh
+//! credential, so a fronted app's own `Bearer` token still arrives untouched ([`authenticated`]).
 //!
 //! **Authorization comes before resolution.** [`admit`] asks "may this peer have `nosh`?" before
 //! it asks "do we serve `nosh`?", so an unpaired peer learns nothing about which services exist
@@ -56,9 +58,7 @@ use std::time::Duration;
 
 use adi_hive::config::Hive;
 use adi_hive::notfound::escape;
-use adi_hive::proxy::{
-    Decision, Router as HiveRouter, force_connection_close, is_upgrade_request,
-};
+use adi_hive::proxy::{Decision, Router as HiveRouter, force_connection_close, is_upgrade_request};
 use anyhow::Context as _;
 use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, EndpointId};
@@ -95,6 +95,12 @@ pub use adi_config::MESH_GATEWAY_PORT as DEFAULT_PORT;
 /// rather than a `mesh.toml` field because the address is really the front door's business —
 /// `proxy.mesh_gateway` is where an operator states it — and this end only has to agree.
 pub const ADDR_ENV: &str = "ADI_MESH_GATEWAY_ADDR";
+
+/// Opt-in for the calling side's *compatibility* write: this machine's stored mesh credential
+/// into `Authorization` as well as [`auth::MESH_AUTH_HEADER`]. Off unless set to `1`/`true`,
+/// because the credential in that header is what a node older than the split reads — and also
+/// what such a node hands straight to the app it fronts. See [`prefill_auth`].
+pub const PREFILL_AUTHORIZATION_ENV: &str = "ADI_MESH_PREFILL_AUTHORIZATION";
 
 /// Caps per-connection memory against a client that never sends the blank line.
 const MAX_HEAD: usize = 16 * 1024;
@@ -267,7 +273,10 @@ impl Routes {
         // reads back the supervisor's existing lease rather than inventing a second port.
         let allocated = hive.allocate_missing_ports(&adi_ports_manager::Ports::new());
         if !allocated.is_empty() {
-            debug!(?allocated, "gateway: filled in leased ports for the route table");
+            debug!(
+                ?allocated,
+                "gateway: filled in leased ports for the route table"
+            );
         }
         Ok(Self::from_hive(&hive))
     }
@@ -285,7 +294,10 @@ impl Routes {
     /// over the mesh.
     #[must_use]
     pub fn resolve(&self, service: &str, target: &str) -> Option<SocketAddr> {
-        match self.router.route(&format!("{service}.{LOCAL_ZONE}"), target) {
+        match self
+            .router
+            .route(&format!("{service}.{LOCAL_ZONE}"), target)
+        {
             Decision::Service(addr) => Some(addr),
             _ => None,
         }
@@ -432,10 +444,13 @@ impl Gateway {
 
 impl NodeSide for Gateway {
     fn peer(&self, key: &EndpointId) -> Option<Peer> {
-        self.registry.get().by_key(key).map(|(petname, record)| Peer {
-            petname: petname.to_string(),
-            record: record.clone(),
-        })
+        self.registry
+            .get()
+            .by_key(key)
+            .map(|(petname, record)| Peer {
+                petname: petname.to_string(),
+                record: record.clone(),
+            })
     }
 
     fn resolve(&self, service: &str, target: &str) -> Option<SocketAddr> {
@@ -568,7 +583,8 @@ where
     protocol::write_http_status(send, HttpStatus::Ok).await?;
 
     let head = read_head(recv).await?;
-    if !authenticated(&head, &peer_record) {
+    let verified = authenticated(&head, &peer_record);
+    if !verified.any() {
         debug!(peer = %peer_record.petname, %service, "gateway: 401 — no usable credentials");
         // A `401` is an ordinary HTTP response on an `Ok` stream (`docs/fleet.md` §7): the
         // transport worked, the human did not authenticate.
@@ -612,9 +628,20 @@ where
     };
 
     // The credential has done its job at the gate. The service behind this node has no business
-    // seeing this machine's password, and dropping the header here is also what leaves the
-    // request's own `Authorization` — a fronted app's `Bearer` token — arriving untouched.
+    // seeing this machine's password — in *either* header it can arrive in.
+    //
+    // `Authorization` is stripped only when it was the header that verified, because that is the
+    // one case where its contents are known to be a mesh credential rather than the fronted app's
+    // own. A `Bearer` token never verifies, so it never takes this branch and always reaches the
+    // service; a password typed at the browser's prompt does verify, and is this machine's mesh
+    // password however it got here. The branch is on the *result* of the gate, after it, so it
+    // costs the constant-time property of [`authenticated`] nothing.
     let head = auth::strip_header(&head, auth::MESH_AUTH_HEADER_LOWER);
+    let head = if verified.authorization {
+        auth::strip_header(&head, AUTHORIZATION_LOWER)
+    } else {
+        head
+    };
 
     upstream.write_all(&head).await?;
     Ok(Some(Admitted {
@@ -659,29 +686,58 @@ fn admit<N: NodeSide + ?Sized>(
     Ok((peer, addr))
 }
 
+/// `Authorization`, lowercased, for [`auth::strip_header`] — which matches by the same rules
+/// [`auth::parse_basic_credentials`] reads by, so a header it would have read is one it removes.
+const AUTHORIZATION_LOWER: &[u8] = b"authorization";
+
+/// Which of the two headers carried credentials that verify against the peer's stored one.
+///
+/// Two answers rather than one because the strip that follows needs the discriminator: a
+/// credential that verified is this machine's mesh password wherever it arrived, and must not
+/// reach the service — while an `Authorization` that did *not* verify belongs to the fronted app
+/// and must arrive untouched.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct Verified {
+    /// [`auth::MESH_AUTH_HEADER`] verified.
+    mesh: bool,
+    /// `Authorization` verified — so it holds a mesh credential, not an app's own token.
+    authorization: bool,
+}
+
+impl Verified {
+    /// Whether anything verified at all, which is what the gate turns on.
+    fn any(self) -> bool {
+        self.mesh | self.authorization
+    }
+}
+
 /// Does this request head carry credentials that verify against the peer's stored one?
 ///
 /// Nothing about the request is inspected but the credentials — not the method, not the path, not
 /// `Upgrade` — so a WebSocket handshake is gated by *not* adding an exception (`docs/fleet.md`
 /// §5). Default-deny: a peer with no password configured authenticates nobody.
-fn authenticated(head: &[u8], peer: &Peer) -> bool {
+fn authenticated(head: &[u8], peer: &Peer) -> Verified {
+    let verify = |candidate: Option<(String, String)>| {
+        candidate.is_some_and(|(user, password)| peer.record.verify_password(&user, &password))
+    };
     // Both headers are tried, not the first one that parses. [`auth::MESH_AUTH_HEADER`] carries
     // the caller machine's stored password and `Authorization` whatever a person typed at the
     // browser's prompt — and it is precisely when the stored one has gone *stale* that the typed
     // one is the only way in. Falling through only on a missing header would leave a stale store
     // re-prompting forever, since the front door keeps attaching it.
     //
-    // Folded rather than short-circuited, for the reason `verify_password` is: a caller must not
-    // learn from the timing which of the two it was that matched.
-    [
-        auth::parse_basic_credentials_in(head, auth::MESH_AUTH_HEADER_LOWER),
-        auth::parse_basic_credentials(head),
-    ]
-    .into_iter()
-    .flatten()
-    .fold(false, |seen, (user, password)| {
-        peer.record.verify_password(&user, &password) | seen
-    })
+    // Both are evaluated, and neither decides whether the other runs, for the reason
+    // `verify_password` is constant-time: a caller must not learn from the timing which of the two
+    // it was that matched. Two statements rather than a `||`, which would short-circuit.
+    let mesh = verify(auth::parse_basic_credentials_in(
+        head,
+        auth::MESH_AUTH_HEADER_LOWER,
+    ));
+    let authorization = verify(auth::parse_basic_credentials(head));
+    Verified {
+        mesh,
+        authorization,
+    }
 }
 
 /// The plain `502` a node sends when a path-routed upstream turns out to be dead *after* the
@@ -706,7 +762,11 @@ pub async fn bind(addr: SocketAddr) -> std::io::Result<TcpListener> {
 }
 
 /// Accept loop for the calling side: a task per connection until shutdown.
-pub async fn serve(listener: TcpListener, gateway: Arc<Gateway>, mut shutdown: watch::Receiver<bool>) {
+pub async fn serve(
+    listener: TcpListener,
+    gateway: Arc<Gateway>,
+    mut shutdown: watch::Receiver<bool>,
+) {
     loop {
         tokio::select! {
             _ = shutdown.changed() => {
@@ -1066,11 +1126,15 @@ fn header_value(head: &[u8], name: &str) -> Option<String> {
 /// `401 WWW-Authenticate: Basic` from the node, and the browser popped a password prompt on an
 /// ordinary `fetch`. Two owners, one header. Now the mesh has its own.
 ///
-/// **The client's `Authorization` is never overwritten.** It is still *read* by the node as a
-/// fallback, so a stale stored password heals the way it always did — the node answers `401`, the
-/// browser prompts, and what a person typed rides every request afterwards. `Authorization` is
-/// filled from the store only when the client sent none, which is what keeps a node from before
-/// the split authenticating this machine at all.
+/// **The client's `Authorization` is never overwritten, and by default nothing is written into it
+/// at all.** It is still *read* by the node as a fallback, so a stale stored password heals the way
+/// it always did — the node answers `401`, the browser prompts, and what a person typed rides every
+/// request afterwards. Filling it from the store as well is the compatibility path for a node from
+/// before the split, which reads that header and nothing else; it is now behind
+/// [`PREFILL_AUTHORIZATION_ENV`] and off by default, because a node that old also does not strip
+/// it, so it hands this machine's plaintext mesh password to the app it fronts. Set the variable if
+/// a node in your fleet is too old to update; a current node needs nothing, and challenging is what
+/// an un-updated one did before this existed.
 ///
 /// **Only the first head of a connection is ours to edit** — the rest is a byte splice. That is
 /// enough, because the node side reads one head per stream too: it authenticates the request it
@@ -1095,14 +1159,30 @@ fn prefill_auth(
     };
     debug!(%node, "gateway: attaching this machine's stored credential");
     let head = with_header(&head, auth::MESH_AUTH_HEADER, &value);
-    // And in `Authorization` too, but only when the client sent none — a node from before the
-    // split reads that header and nothing else, so this is what keeps a mixed fleet working. The
-    // *client's* header is never overwritten: it may be the browser's answer to a challenge, and
-    // on a fronted app it is far more often a token that is none of the mesh's business.
-    if header_value(&head, "authorization").is_some() {
+    // And in `Authorization` too — but only on request, and only when the client sent none. The
+    // *client's* header is never overwritten either way: it may be the browser's answer to a
+    // challenge, and on a fronted app it is far more often a token that is none of the mesh's
+    // business.
+    if !prefill_authorization_enabled() || header_value(&head, "authorization").is_some() {
         return head;
     }
     with_header(&head, "Authorization", &value)
+}
+
+/// Whether the compatibility write into `Authorization` is switched on
+/// ([`PREFILL_AUTHORIZATION_ENV`]).
+fn prefill_authorization_enabled() -> bool {
+    truthy(std::env::var(PREFILL_AUTHORIZATION_ENV).ok().as_deref())
+}
+
+/// The pure half of [`prefill_authorization_enabled`], so what counts as "on" is testable without
+/// writing to the process environment — which no test can do without racing every other one.
+fn truthy(raw: Option<&str>) -> bool {
+    raw.map(str::trim).is_some_and(|raw| {
+        ["1", "true", "yes", "on"]
+            .iter()
+            .any(|on| raw.eq_ignore_ascii_case(on))
+    })
 }
 
 /// The head with one header inserted directly below the request line.
@@ -1133,7 +1213,11 @@ fn with_header(head: &[u8], name: &str, value: &str) -> Vec<u8> {
 /// among a host's path-prefixed routes.
 fn request_target(head: &[u8]) -> Option<String> {
     let text = String::from_utf8_lossy(head);
-    let mut parts = text.split("\r\n").next()?.split(' ').filter(|p| !p.is_empty());
+    let mut parts = text
+        .split("\r\n")
+        .next()?
+        .split(' ')
+        .filter(|p| !p.is_empty());
     let _method = parts.next()?;
     let target = parts.next()?;
     // No version means a truncated request line, not a target worth routing on.
@@ -1263,10 +1347,9 @@ fn page(host: &str, reason: &str, message: &str, rows: &[(&str, &str)]) -> Strin
     let host = escape(host);
     let reason = escape(reason);
     let message = escape(message);
-    let rows = rows
-        .iter()
-        .filter(|(_, value)| !value.is_empty())
-        .fold(String::new(), |mut html, (label, value)| {
+    let rows = rows.iter().filter(|(_, value)| !value.is_empty()).fold(
+        String::new(),
+        |mut html, (label, value)| {
             use std::fmt::Write as _;
             let _ = write!(
                 html,
@@ -1275,7 +1358,8 @@ fn page(host: &str, reason: &str, message: &str, rows: &[(&str, &str)]) -> Strin
                 escape(value)
             );
             html
-        });
+        },
+    );
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -1459,6 +1543,12 @@ mod tests {
         format!("Authorization: Basic {token}\r\n")
     }
 
+    /// [`basic`], in the header the mesh's own credential rides.
+    fn mesh_basic(user: &str, password: &str) -> String {
+        let token = base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"));
+        format!("{}: Basic {token}\r\n", auth::MESH_AUTH_HEADER)
+    }
+
     fn get_head(host: &str, target: &str, extra: &str) -> String {
         format!("GET {target} HTTP/1.1\r\nHost: {host}\r\n{extra}\r\n")
     }
@@ -1537,7 +1627,10 @@ mod tests {
             admit(&node, &key, "nosh").expect_err("no grant covers `nosh`"),
             HttpStatus::NotAuthorized
         );
-        assert!(admit(&node, &key, "app").is_err(), "`app` is not routed here");
+        assert!(
+            admit(&node, &key, "app").is_err(),
+            "`app` is not routed here"
+        );
     }
 
     #[test]
@@ -1634,14 +1727,20 @@ mod tests {
             table.resolve("nosh", "/"),
             Some(SocketAddr::from((Ipv4Addr::LOCALHOST, 8010)))
         );
-        assert_eq!(table.resolve("app", "/"), None, "`app.adi` is not routed here");
+        assert_eq!(
+            table.resolve("app", "/"),
+            None,
+            "`app.adi` is not routed here"
+        );
     }
 
     #[test]
     fn a_grant_names_a_multi_label_service_in_full() {
         let key = some_key();
-        let node = StubNode::new(routes(&[("app-nosh", "app.nosh.adi", None, 8020)]))
-            .with_peer(key, peer_named("laptop-a", &["http:app.nosh"], "igor", "pw"));
+        let node = StubNode::new(routes(&[("app-nosh", "app.nosh.adi", None, 8020)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:app.nosh"], "igor", "pw"),
+        );
         let (_, addr) = admit(&node, &key, "app.nosh").expect("granted and routed");
         assert_eq!(addr, SocketAddr::from((Ipv4Addr::LOCALHOST, 8020)));
     }
@@ -1652,8 +1751,10 @@ mod tests {
     async fn an_authorized_request_reaches_the_service_with_its_head_verbatim() {
         let key = some_key();
         let (listener, port) = idle_upstream().await;
-        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
-            .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
 
         let head = get_head("nosh.laptop-b.n.adi", "/dash", &basic("igor", "hunter2"));
         let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
@@ -1661,12 +1762,17 @@ mod tests {
         assert_eq!(reply, vec![HttpStatus::Ok as u8]);
         assert!(upstream.is_some(), "the local service was handed over");
 
+        // Everything except the credential, which verified and so is stripped at the gate rather
+        // than handed on (`a_mesh_password_in_authorization_never_reaches_the_service`). Sizing
+        // the read to the *original* head would block here for ever: the upstream stays open, so
+        // the bytes that were removed never arrive and never EOF either.
+        let expected = head.replace(&basic("igor", "hunter2"), "");
         let (mut served, _) = listener.accept().await.expect("the service was connected");
-        let mut got = vec![0u8; head.len()];
+        let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
         assert_eq!(
             String::from_utf8_lossy(&got),
-            head,
+            expected,
             "the head is forwarded byte for byte — `Host` and target untouched"
         );
     }
@@ -1681,11 +1787,17 @@ mod tests {
             ("nosh", "nosh.adi", None, 1),
             ("app-nosh", "app.nosh.adi", None, port),
         ]))
-        .with_peer(key, peer_named("laptop-a", &["http:app.nosh"], "igor", "hunter2"));
+        .with_peer(
+            key,
+            peer_named("laptop-a", &["http:app.nosh"], "igor", "hunter2"),
+        );
 
         let host = "app.nosh.laptop-b.n.adi";
         let (service, petname) = protocol::parse_fleet_host(host).expect("a fleet host");
-        assert_eq!((service.as_str(), petname.as_str()), ("app.nosh", "laptop-b"));
+        assert_eq!(
+            (service.as_str(), petname.as_str()),
+            ("app.nosh", "laptop-b")
+        );
 
         let head = get_head(host, "/", &basic("igor", "hunter2"));
         let (reply, upstream) = negotiate_over(&node, key, &service, &head).await;
@@ -1693,18 +1805,23 @@ mod tests {
         assert_eq!(reply, vec![HttpStatus::Ok as u8]);
         assert!(upstream.is_some(), "the local service was handed over");
 
+        // Minus the credential, for the reason given in
+        // `an_authorized_request_reaches_the_service_with_its_head_verbatim`.
+        let expected = head.replace(&basic("igor", "hunter2"), "");
         let (mut served, _) = listener.accept().await.expect("the service was connected");
-        let mut got = vec![0u8; head.len()];
+        let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
-        assert_eq!(String::from_utf8_lossy(&got), head);
+        assert_eq!(String::from_utf8_lossy(&got), expected);
     }
 
     #[tokio::test]
     async fn a_request_without_credentials_gets_a_401_on_an_ok_stream() {
         let key = some_key();
         let (listener, port) = idle_upstream().await;
-        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
-            .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
 
         let head = get_head("nosh.laptop-b.n.adi", "/", "");
         let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
@@ -1732,8 +1849,10 @@ mod tests {
     async fn a_wrong_password_is_challenged_too() {
         let key = some_key();
         let (_listener, port) = idle_upstream().await;
-        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
-            .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
 
         let head = get_head("nosh.laptop-b.n.adi", "/", &basic("igor", "wrong"));
         let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
@@ -1747,8 +1866,10 @@ mod tests {
         // making an exception for it (docs/fleet.md §5).
         let key = some_key();
         let (_listener, port) = idle_upstream().await;
-        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
-            .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
 
         let head = get_head(
             "nosh.laptop-b.n.adi",
@@ -1778,8 +1899,10 @@ mod tests {
     async fn a_service_whose_port_is_dead_is_upstream_unavailable() {
         let key = some_key();
         let port = dead_port().await;
-        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)]))
-            .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+        let node = StubNode::new(routes(&[("nosh", "nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
 
         let head = get_head("nosh.laptop-b.n.adi", "/", &basic("igor", "hunter2"));
         let (reply, upstream) = negotiate_over(&node, key, "nosh", &head).await;
@@ -1810,9 +1933,18 @@ mod tests {
             ("frontend", "nosh.adi", None, frontend_port),
             ("backend", "nosh.adi", Some("/api"), backend_port),
         ]))
-        .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+        .with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
 
-        let head = get_head("nosh.laptop-b.n.adi", "/api/tasks", &basic("igor", "hunter2"));
+        // `Accept` rides along as the header that is neither the credential nor about connection
+        // reuse, so this still pins that an ordinary header crosses the gate untouched.
+        let head = get_head(
+            "nosh.laptop-b.n.adi",
+            "/api/tasks",
+            &format!("{}Accept: application/json\r\n", basic("igor", "hunter2")),
+        );
         let (reply, admitted) = negotiate_over(&node, key, "nosh", &head).await;
         assert_eq!(reply, vec![HttpStatus::Ok as u8]);
         let admitted = admitted.expect("the backend was handed over");
@@ -1829,8 +1961,14 @@ mod tests {
             "the request line and `Host` stay untouched: {got}"
         );
         assert!(
-            got.contains("Authorization: Basic aWdvcjpodW50ZXIy\r\n"),
-            "and so does every header that is not about connection reuse: {got}"
+            got.contains("Accept: application/json\r\n"),
+            "and so does every header that is neither the credential nor about connection \
+             reuse: {got}"
+        );
+        assert!(
+            !got.contains("Authorization:"),
+            "the credential verified, so it is this machine's mesh password and the gate keeps \
+             it rather than handing it to the service: {got}"
         );
         assert!(
             got.contains("Connection: close\r\n"),
@@ -1853,14 +1991,24 @@ mod tests {
         let node = StubNode::new(routes(&[("app", "app.adi", None, port)]))
             .with_peer(key, peer_named("phone", &["http:app"], "adi", "hunter2"));
 
-        let head = get_head("app.laptop-b.n.adi", "/api/dashboards", &basic("adi", "hunter2"));
+        let head = get_head(
+            "app.laptop-b.n.adi",
+            "/api/dashboards",
+            &basic("adi", "hunter2"),
+        );
         let (_, admitted) = negotiate_over(&node, key, "app", &head).await;
         assert!(!admitted.expect("handed over").single_request);
 
+        // Everything the caller sent except the credential. It verified, which is what makes it
+        // this machine's mesh password rather than the app's own header, so the gate strips it —
+        // see `a_mesh_password_in_authorization_never_reaches_the_service`. "Verbatim" is about
+        // the rewrite this test exists for: no `Connection: close` is inserted and no other header
+        // is touched or reordered. It never meant that the gate hands its credentials on.
+        let expected = head.replace(&basic("adi", "hunter2"), "");
         let (mut served, _) = listener.accept().await.expect("connected");
-        let mut got = vec![0u8; head.len()];
+        let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
-        assert_eq!(String::from_utf8_lossy(&got), head, "byte for byte");
+        assert_eq!(String::from_utf8_lossy(&got), expected, "byte for byte");
     }
 
     #[tokio::test]
@@ -1875,7 +2023,10 @@ mod tests {
             ("frontend", "nosh.adi", None, frontend_port),
             ("backend", "nosh.adi", Some("/api"), backend_port),
         ]))
-        .with_peer(key, peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"));
+        .with_peer(
+            key,
+            peer_named("laptop-a", &["http:nosh"], "igor", "hunter2"),
+        );
 
         let head = get_head(
             "nosh.laptop-b.n.adi",
@@ -1891,14 +2042,148 @@ mod tests {
             "an upgrade keeps its connection"
         );
 
+        // The credential is stripped at the gate like any other verified one; what this test is
+        // about is that `Connection: Upgrade` survives instead of being rewritten to `close`.
+        let expected = head.replace(&basic("igor", "hunter2"), "");
         let (mut served, _) = frontend.accept().await.expect("connected");
-        let mut got = vec![0u8; head.len()];
+        let mut got = vec![0u8; expected.len()];
         served.read_exact(&mut got).await.expect("the head arrived");
         assert_eq!(
             String::from_utf8_lossy(&got),
-            head,
-            "an upgrade head is forwarded verbatim, `Connection: Upgrade` included"
+            expected,
+            "an upgrade head is forwarded unrewritten, `Connection: Upgrade` included"
         );
+    }
+
+    /// The password reaches the gate in whichever header it was sent in, and the service behind
+    /// the node has no business seeing it in either. This is the case that used to leak: a browser
+    /// answering the node's own `401` sends `Authorization` on every request afterwards, and the
+    /// node stripped only [`auth::MESH_AUTH_HEADER`].
+    #[tokio::test]
+    async fn a_mesh_password_in_authorization_never_reaches_the_service() {
+        let key = some_key();
+        let (listener, port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[("app", "app.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:app"], "igor", "hunter2"),
+        );
+
+        // Both headers carrying it, which is what a pre-split node's compatibility path produced.
+        let head = get_head(
+            "app.laptop-b.n.adi",
+            "/api/health",
+            &format!(
+                "{}{}",
+                mesh_basic("igor", "hunter2"),
+                basic("igor", "hunter2")
+            ),
+        );
+        let (reply, admitted) = negotiate_over(&node, key, "app", &head).await;
+        assert_eq!(reply, vec![HttpStatus::Ok as u8], "it authenticates");
+        assert!(admitted.is_some(), "and is handed over");
+
+        let (mut served, _) = listener.accept().await.expect("connected");
+        let got = read_head(&mut served).await.expect("the head arrived");
+        let got = String::from_utf8_lossy(&got).into_owned();
+        assert!(
+            !got.to_ascii_lowercase().contains("authorization:"),
+            "neither header reaches the service: {got}"
+        );
+        assert!(
+            got.starts_with("GET /api/health HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\n"),
+            "and nothing else about the head changed: {got}"
+        );
+    }
+
+    /// The other half of the same decision: an `Authorization` that does not verify is not the
+    /// mesh's, so it is not the mesh's to remove. A fronted app authenticating its own callers is
+    /// the reason [`auth::MESH_AUTH_HEADER`] exists at all.
+    #[tokio::test]
+    async fn an_apps_own_bearer_token_reaches_the_service_untouched() {
+        let key = some_key();
+        let (listener, port) = idle_upstream().await;
+        let node = StubNode::new(routes(&[("app-nosh", "app.nosh.adi", None, port)])).with_peer(
+            key,
+            peer_named("laptop-a", &["http:app.nosh"], "igor", "hunter2"),
+        );
+
+        let head = get_head(
+            "app.nosh.laptop-b.n.adi",
+            "/_v2/companies",
+            &format!(
+                "{}Authorization: Bearer app.jwt.token\r\n",
+                mesh_basic("igor", "hunter2")
+            ),
+        );
+        let (reply, admitted) = negotiate_over(&node, key, "app.nosh", &head).await;
+        assert_eq!(reply, vec![HttpStatus::Ok as u8]);
+        assert!(admitted.is_some());
+
+        let (mut served, _) = listener.accept().await.expect("connected");
+        let got = read_head(&mut served).await.expect("the head arrived");
+        let got = String::from_utf8_lossy(&got).into_owned();
+        assert!(
+            got.contains("Authorization: Bearer app.jwt.token\r\n"),
+            "the app's own token is left for the app: {got}"
+        );
+        assert!(
+            !got.contains("X-Adi-Authorization"),
+            "and the mesh credential still goes no further than the gate: {got}"
+        );
+    }
+
+    #[test]
+    fn the_gate_says_which_header_it_was_that_verified() {
+        // The discriminator the strip above turns on, asked of the gate directly: a `Bearer` token
+        // verifies as nothing, whichever header holds the password.
+        let peer = peer_named("laptop-a", &["http:app"], "igor", "hunter2");
+        let head = |extra: &str| get_head("app.laptop-b.n.adi", "/", extra).into_bytes();
+
+        assert_eq!(
+            authenticated(&head(&mesh_basic("igor", "hunter2")), &peer),
+            Verified {
+                mesh: true,
+                authorization: false
+            }
+        );
+        assert_eq!(
+            authenticated(&head(&basic("igor", "hunter2")), &peer),
+            Verified {
+                mesh: false,
+                authorization: true
+            }
+        );
+        assert_eq!(
+            authenticated(
+                &head(&format!(
+                    "{}Authorization: Bearer app.jwt.token\r\n",
+                    mesh_basic("igor", "hunter2")
+                )),
+                &peer
+            ),
+            Verified {
+                mesh: true,
+                authorization: false
+            },
+            "a token that verifies as nothing is nobody's credential to take away"
+        );
+        // A stale stored password healed by one typed at the prompt — both headers present, and
+        // only the typed one verifies.
+        assert_eq!(
+            authenticated(
+                &head(&format!(
+                    "{}{}",
+                    mesh_basic("igor", "the-old-one"),
+                    basic("igor", "hunter2")
+                )),
+                &peer
+            ),
+            Verified {
+                mesh: false,
+                authorization: true
+            }
+        );
+        assert!(!authenticated(&head(""), &peer).any(), "default-deny");
     }
 
     // -- C5: the pool ---------------------------------------------------------------------
@@ -2009,7 +2294,11 @@ mod tests {
 
         tokio::time::sleep(Duration::from_millis(160)).await;
         assert!(pool.get(peer).await.is_err());
-        assert_eq!(pool.dialer.count(), 2, "once the backoff expires, it retries");
+        assert_eq!(
+            pool.dialer.count(),
+            2,
+            "once the backoff expires, it retries"
+        );
     }
 
     #[test]
@@ -2080,19 +2369,33 @@ mod tests {
         let text = String::from_utf8(out).expect("still text");
         assert_eq!(
             text,
-            "GET /x HTTP/1.1\r\nAuthorization: Basic held\r\n\
-             X-Adi-Authorization: Basic held\r\nHost: app.laptop-b.n.adi\r\n\
-             Accept: */*\r\n\r\nbody",
-            "both headers added below the request line — the mesh's own, and `Authorization` for \
-             a node from before the split; Host, target and body byte for byte"
+            "GET /x HTTP/1.1\r\nX-Adi-Authorization: Basic held\r\n\
+             Host: app.laptop-b.n.adi\r\nAccept: */*\r\n\r\nbody",
+            "the mesh's own header added below the request line, and nothing else: Host, target \
+             and body byte for byte, and `Authorization` left for whoever the node fronts"
         );
+    }
+
+    #[test]
+    fn the_compatibility_write_into_authorization_is_off_unless_asked_for() {
+        // It exists for a node from before the header split, which reads `Authorization` and
+        // nothing else — and does not strip it either, so it hands this machine's plaintext mesh
+        // password to the app it fronts. Off by default; such a node challenges instead, which is
+        // what it did before the credential was ever attached.
+        for on in ["1", "true", "YES", " on "] {
+            assert!(truthy(Some(on)), "{on:?}");
+        }
+        for off in [None, Some(""), Some("0"), Some("false"), Some("  ")] {
+            assert!(!truthy(off), "{off:?}");
+        }
     }
 
     #[test]
     fn a_client_that_authenticated_itself_is_never_overwritten() {
         // The self-healing case: a stale stored password draws a 401, the browser asks a person,
         // and what the person typed must survive this function or the prompt returns forever.
-        let head = b"GET / HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\nAuthorization: Basic typed\r\n\r\n";
+        let head =
+            b"GET / HTTP/1.1\r\nHost: app.laptop-b.n.adi\r\nAuthorization: Basic typed\r\n\r\n";
         let out = prefill_auth(Some(&held()), "laptop-b", head.to_vec());
         let text = String::from_utf8(out).expect("still text");
         assert!(
@@ -2308,7 +2611,11 @@ mod tests {
         );
 
         let allocated = hive.allocate_missing_ports(&ports);
-        assert_eq!(allocated.len(), 1, "the manager hands it a port: {allocated:?}");
+        assert_eq!(
+            allocated.len(),
+            1,
+            "the manager hands it a port: {allocated:?}"
+        );
 
         let routes = Routes::from_hive(&hive);
         assert!(
