@@ -502,6 +502,7 @@ dependencies = [
  "adi-fs",
  "adi-hooks",
  "adi-knowledge",
+ "adi-marketplace",
  "adi-mesh",
  "adi-osext",
  "adi-ports-manager",

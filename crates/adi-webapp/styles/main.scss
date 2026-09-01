@@ -1631,6 +1631,31 @@
   font-size: var(--text-sm);
 }
 
+// ---- marketplace page: one app per row, its about on the left and its one action right -
+.adi-market__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+
+  &:last-child {
+    border-bottom: none;
+  }
+}
+
+.adi-market__about {
+  min-width: 0;
+}
+
+.adi-market__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  flex: none;
+}
+
 // ---- task effective-status badge ---------------------------------------------------
 .adi-tstatus {
   display: inline-flex;

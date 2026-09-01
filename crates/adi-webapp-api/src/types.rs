@@ -2953,6 +2953,81 @@ pub struct DashboardTransferred {
     pub dashboards: DashboardsState,
 }
 
+// MARK: the apps marketplace (docs/marketplace.md)
+
+/// `GET /api/marketplace` — the configured sources and the cached entries, read from the store
+/// with no network: a listing answers offline, and says per source when it was last synced and
+/// whether what it shows is a stale copy standing in for a failed fetch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceState {
+    pub sources: Vec<MarketplaceSource>,
+    pub apps: Vec<MarketplaceApp>,
+}
+
+/// One configured marketplace as the panel sees it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceSource {
+    /// The local name the source was added under (`adi-mono marketplace add`).
+    pub name: String,
+    /// Where its manifest is fetched from.
+    pub url: String,
+    /// Unix seconds of the last successful sync, or `None` if it never succeeded.
+    #[serde(default)]
+    pub synced_at: Option<u64>,
+    /// Why the sync after the one above failed, when it did — the sentence that says the listing
+    /// is stale rather than fresh.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+/// One cached entry: the listing text the manifest published, and where the app stands on this
+/// machine. No counts ride on this DTO or anywhere on the page — under the standing decision an
+/// install does not count toward anything, and a number is not the story the page should tell.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceApp {
+    /// The source's local name — the first half of `<marketplace>/<slug>`.
+    pub marketplace: String,
+    /// The entry's slug — the second half, and the directory an install lands as.
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// As published. Shown, never enforced.
+    #[serde(default)]
+    pub version: Option<String>,
+    /// Whether a dashboard directory by this slug is on this machine already.
+    pub installed: bool,
+    /// Whether something is running it — the hive file is in the supervisor's glob.
+    pub started: bool,
+    /// The hostname a started app answers on, when it declares one.
+    #[serde(default)]
+    pub host: Option<String>,
+}
+
+/// `POST /api/marketplace/install` — which entry, and whether a collision may be replaced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallMarketplaceApp {
+    pub marketplace: String,
+    pub slug: String,
+    #[serde(default)]
+    pub force: bool,
+}
+
+/// `POST /api/marketplace/start` — the installed app to start. The dashboard store is the whole
+/// address by then, so the slug alone names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StartMarketplaceApp {
+    pub slug: String,
+}
+
+/// What a marketplace mutation answers with: the fresh state, and the one line that says what
+/// happened — the line the CLI prints, so both doors say the same thing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketplaceDone {
+    pub state: MarketplaceState,
+    pub message: String,
+}
+
 // MARK: viewing a fleet's dashboards (`docs/fleet.md` §11)
 
 /// `GET /api/fleet/dashboards` — what every paired node is running, asked node by node.

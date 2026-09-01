@@ -10,10 +10,10 @@ use adi_webapp_api::types::{
     AgentsState, AllAgentRuns, DashboardsState, DbExecResult, DbQueryResult, DbState,
     DbTablesState, DirListing, FileEntry, FleetDashboards, FleetNodes, FleetState, Health,
     HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults,
-    KnowledgeState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
-    ProjectHookRef, ProjectsState, RunRef, SecretsState, TasksState, ToolsState, TriggerLog,
-    TriggerRef, TriggersState, UsedPorts, WorkspaceTerm, WorkspaceTermRef, WorkspacesRef,
-    WorkspacesState,
+    KnowledgeState, MarketplaceState, MeshState, MetaState, PortsState, ProjectDetail,
+    ProjectHookLog, ProjectHookRef, ProjectsState, RunRef, SecretsState, TasksState, ToolsState,
+    TriggerLog, TriggerRef, TriggersState, UsedPorts, WorkspaceTerm, WorkspaceTermRef,
+    WorkspacesRef, WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -83,6 +83,10 @@ pub(crate) struct State {
     pub(crate) hive: RwSignal<Option<HiveState>>,
     /// The dashboards listing (`/dashboards`).
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
+    /// The apps marketplace (`/marketplace`): configured sources and the cached entries. Read
+    /// from the store on the server, so it loads offline; the one call that leaves the machine
+    /// is the page's Sync button, never this signal's refresh.
+    pub(crate) marketplace: RwSignal<Option<MarketplaceState>>,
     /// What the *fleet* is running (`/api/fleet/dashboards`) — one entry per paired node, asked of
     /// that node's own control panel over the mesh. Not part of the poll: every read of it leaves
     /// the machine, so it is fetched on load and when [`fleet_dashboards_busy`] says the rail asked
@@ -327,6 +331,7 @@ impl State {
             triggers: RwSignal::new(None),
             hive: RwSignal::new(None),
             dashboards: RwSignal::new(None),
+            marketplace: RwSignal::new(None),
             fleet_dashboards: RwSignal::new(None),
             fleet_dashboards_busy: RwSignal::new(false),
             fleet_unlock: FleetUnlock::new(),
@@ -619,6 +624,23 @@ pub(crate) struct DashboardsForm {
     /// Set while the upload is in flight; a transfer crosses a relay and carries files, so it is
     /// the one action on this page that is visibly slow.
     pub(crate) transfer_busy: RwSignal<bool>,
+}
+
+/// The Marketplace page's action state. The page has no create form — sources are added from the
+/// CLI (`adi-mono marketplace add`), and the page says so when there are none — so all it holds
+/// is which single action is in flight, keyed `"sync"` or `"<marketplace>/<slug>"`, so exactly
+/// the button a person pressed disables while it runs.
+#[derive(Clone, Copy)]
+pub(crate) struct MarketplaceForm {
+    pub(crate) busy: RwSignal<Option<String>>,
+}
+
+impl MarketplaceForm {
+    pub(crate) fn new() -> Self {
+        Self {
+            busy: RwSignal::new(None),
+        }
+    }
 }
 
 /// The Tools page's create/link form. `linking` flips the form between creating a new owned
@@ -2020,6 +2042,11 @@ pub(crate) async fn load(s: State) {
         && let Ok(d) = fetch::dashboards().await
     {
         set_if_changed(s.dashboards, d);
+    }
+    if path == Route::Marketplace.path()
+        && let Ok(m) = fetch::marketplace().await
+    {
+        set_if_changed(s.marketplace, m);
     }
     if path == Route::PortsManager.path()
         && let Ok(u) = fetch::used().await

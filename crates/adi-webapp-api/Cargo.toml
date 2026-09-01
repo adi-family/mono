@@ -48,6 +48,9 @@ server = [
     "dep:serde_yaml_ng",
     "dep:toml",
     "dep:uuid",
+    # The marketplace handlers: sync fetches over HTTPS, install lands a bundle in the dashboard
+    # store. Native-only with the rest of this feature — the wasm page reads the DTOs only.
+    "dep:adi-marketplace",
     # Dictation (`handlers::voice`) posts the recorded clip to a speech-to-text provider, so the
     # API key stays on this side and never reaches the page.
     "dep:reqwest",
@@ -81,6 +84,7 @@ adi-hooks = { workspace = true, optional = true }
 adi-triggers = { workspace = true, optional = true }
 adi-update = { workspace = true, optional = true }
 adi-fs = { workspace = true, optional = true }
+adi-marketplace = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 # `blocking` because every /api handler is a sync function run on tokio's blocking pool (see
 # adi-app's `blocking`), and `multipart` because that is how three of the four speech providers

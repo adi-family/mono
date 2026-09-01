@@ -7,21 +7,22 @@ use adi_webapp_api::types::{
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
     DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent, FilesRef, FleetDashboards,
     FleetGrantRef, FleetNodes, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing,
-    FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait, KnowledgeBaseRef,
-    KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed, KnowledgeResults,
-    KnowledgeSaved, KnowledgeSearch, KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool,
-    MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
-    NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
-    NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
-    ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
-    RenameProject, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent, RunRef,
-    RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
-    SetOAuthSecret, SetRunLimit, SetSecret, SimulateAgent, SimulateTurn, StarRun, StartResult,
-    StartService, StopResult, TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState,
-    Transcript, TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState,
-    UnlockNode, UnqueueFromRun, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult,
-    WorkspaceRef, WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef,
-    WorkspacesState, WriteFile, WriteToolScript,
+    FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait, InstallMarketplaceApp,
+    KnowledgeBaseRef, KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed,
+    KnowledgeResults, KnowledgeSaved, KnowledgeSearch, KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef,
+    LinkTool, MarketplaceDone, MarketplaceState, MeshForwardRef, MeshListenRef, MeshPeerRef,
+    MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase, NewKnowledgeNote,
+    NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace, NodeServiceRef,
+    PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectHookRunResult, ProjectRef,
+    ProjectRenamed, ProjectsState, ReleaseResponse, RenameProject, ReplyToRun, ReserveResponse,
+    RevealedSecret, ReviewRun, RunAgent, RunRef, RunTool, SaveAgent, SaveTrigger, SecretRef,
+    SecretsState, SetDashboardProject, SetGoal, SetOAuthSecret, SetRunLimit, SetSecret,
+    SimulateAgent, SimulateTurn, StarRun, StartMarketplaceApp, StartResult, StartService,
+    StopResult, TaskRef, TasksState, ToolRef, ToolRunResult, ToolScript, ToolsState, Transcript,
+    TransferDashboard, TriggerFireResult, TriggerLog, TriggerRef, TriggersState, UnlockNode,
+    UnqueueFromRun, UpdateState, UsedPorts, VoiceState, WorkspaceCreateResult, WorkspaceRef,
+    WorkspaceTerm, WorkspaceTermKeys, WorkspaceTermRef, WorkspacesRef, WorkspacesState, WriteFile,
+    WriteToolScript,
 };
 use gloo_net::http::{Request, Response};
 use serde::Serialize;
@@ -738,6 +739,41 @@ pub async fn trigger_log(name: String) -> Result<TriggerLog, String> {
 
 pub async fn dashboards() -> Result<DashboardsState, String> {
     get("/api/dashboards").await
+}
+
+// The apps marketplace (docs/marketplace.md). The listing reads the store; sync is the only
+// call that leaves the machine, which is why it is a button and not a poll.
+
+/// Sources and cached entries, with where each app stands on this machine.
+pub async fn marketplace() -> Result<MarketplaceState, String> {
+    get("/api/marketplace").await
+}
+
+/// Fetch every source's manifest. One line per source comes back in the message.
+pub async fn sync_marketplace() -> Result<MarketplaceDone, String> {
+    post("/api/marketplace/sync", &()).await
+}
+
+/// Install an app: land its files, started nothing.
+pub async fn install_marketplace_app(
+    marketplace: String,
+    slug: String,
+    force: bool,
+) -> Result<MarketplaceDone, String> {
+    post(
+        "/api/marketplace/install",
+        &InstallMarketplaceApp {
+            marketplace,
+            slug,
+            force,
+        },
+    )
+    .await
+}
+
+/// Start an installed app — the act that runs it.
+pub async fn start_marketplace_app(slug: String) -> Result<MarketplaceDone, String> {
+    post("/api/marketplace/start", &StartMarketplaceApp { slug }).await
 }
 
 /// Scaffold a new dashboard; the supervisor starts it within a few seconds.

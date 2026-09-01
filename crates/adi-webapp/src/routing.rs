@@ -44,6 +44,9 @@ pub(crate) enum Route {
     Triggers,
     /// Agent-authored dashboards (`/dashboards`).
     Dashboards,
+    /// The apps marketplace (`/marketplace`) — apps from manifests this machine trusts, listed
+    /// from the cache and installed inert.
+    Marketplace,
     Hive,
     PortsManager,
     Mesh,
@@ -61,7 +64,7 @@ impl Route {
     /// to it. [`Route::ProjectDetail`], [`Route::AgentDetail`] and [`Route::StoreFile`] are
     /// deliberately absent: each needs a subject the menu has no way to supply, so a row for one
     /// would open an error rather than a page.
-    pub(crate) const NAV: [Route; 16] = [
+    pub(crate) const NAV: [Route; 17] = [
         Route::Meta,
         Route::Analytics,
         Route::Projects,
@@ -74,6 +77,7 @@ impl Route {
         Route::Database,
         Route::Triggers,
         Route::Dashboards,
+        Route::Marketplace,
         Route::Hive,
         Route::PortsManager,
         Route::Mesh,
@@ -105,6 +109,7 @@ impl Route {
             "/database" => Route::Database,
             "/triggers" => Route::Triggers,
             "/dashboards" => Route::Dashboards,
+            "/marketplace" => Route::Marketplace,
             "/settings/hive" => Route::Hive,
             "/settings/ports-manager" => Route::PortsManager,
             "/settings/mesh" => Route::Mesh,
@@ -132,6 +137,7 @@ impl Route {
             Route::Database => "/extended/database",
             Route::Triggers => "/extended/triggers",
             Route::Dashboards => "/extended/dashboards",
+            Route::Marketplace => "/extended/marketplace",
             Route::Hive => "/extended/settings/hive",
             Route::PortsManager => "/extended/settings/ports-manager",
             Route::Mesh => "/extended/settings/mesh",
@@ -158,6 +164,7 @@ impl Route {
             Route::Database => "Database",
             Route::Triggers => "Triggers",
             Route::Dashboards => "Dashboards",
+            Route::Marketplace => "Marketplace",
             Route::Hive => "Hive",
             Route::PortsManager => "Ports Manager",
             Route::Mesh => "Mesh",
@@ -186,6 +193,7 @@ impl Route {
             Route::Database => "Browse the store's tables, run SQL",
             Route::Triggers => "What runs when something happens",
             Route::Dashboards => "Create, archive, transfer",
+            Route::Marketplace => "Install an app someone else published",
             Route::Hive => "Services, and the .adi names in front of them",
             Route::PortsManager => "Reserved ports and what holds them",
             Route::Mesh => "Peers, allowed ports and forwards",

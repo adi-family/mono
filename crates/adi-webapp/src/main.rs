@@ -51,9 +51,10 @@ use pages::{
     FactsConsole, OnboardingForm, adopt_run_settings, agent_detail_view, agents_view,
     analytics_view, chat_home_view, dashboards_view, database_view, facts_view, fleet_view,
     hive_view, knowledge_view, live_view, load_agent_into_form, load_dir, load_store_file,
-    mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term, poll_trigger_log, poll_watch,
-    ports_manager_view, project_detail_view, projects_view, reset_chat_home, secrets_view,
-    seed_onboarding, start_onb_reconfigure, store_file_view, tasks_view, tools_view, triggers_view,
+    marketplace_view, mesh_view, meta_view, onboarding_view, poll_hook_log, poll_term,
+    poll_trigger_log, poll_watch, ports_manager_view, project_detail_view, projects_view,
+    reset_chat_home, secrets_view, seed_onboarding, start_onb_reconfigure, store_file_view,
+    tasks_view, tools_view, triggers_view,
 };
 use routing::{
     ProjectSection, Route, current_path, open_project_section, project_id_from_path,
@@ -61,9 +62,9 @@ use routing::{
 };
 use state::{
     AgentsForm, AgentsWatch, DashboardsForm, DbConsole, FilesState, Flash, FleetForm, Form,
-    HookLogView, KnowledgeConsole, MeshForm, MetaForm, ProjectsForm, ROOT_AGENT, SecretsForm,
-    SessionFilter, Simulate, State, Status, TasksForm, TermWatch, ToolEditor, ToolRunView,
-    ToolsForm, TriggersForm, TriggersLogView, load, refresh_fleet_dashboards,
+    HookLogView, KnowledgeConsole, MarketplaceForm, MeshForm, MetaForm, ProjectsForm, ROOT_AGENT,
+    SecretsForm, SessionFilter, Simulate, State, Status, TasksForm, TermWatch, ToolEditor,
+    ToolRunView, ToolsForm, TriggersForm, TriggersLogView, load, refresh_fleet_dashboards,
 };
 use ui::{apply_saved_theme, fmt_uptime, toggle_theme};
 
@@ -613,6 +614,7 @@ fn App() -> impl IntoView {
     let triggers = RwSignal::new(None::<TriggersState>);
     let hive = RwSignal::new(None::<HiveState>);
     let dashboards = RwSignal::new(None::<DashboardsState>);
+    let marketplace = RwSignal::new(None::<adi_webapp_api::types::MarketplaceState>);
     let workspaces = RwSignal::new(None::<WorkspacesState>);
     // The id of the project whose detail page is open ("" when not on one). Drives detail
     // loads so navigating from one project to another (route stays ProjectDetail) still refreshes.
@@ -652,6 +654,7 @@ fn App() -> impl IntoView {
         triggers,
         hive,
         dashboards,
+        marketplace,
         // The workbench shell has no dashboards rail, so nothing here ever asks the fleet what it
         // runs — the signals exist because `State` is one shape, not because this page fills them.
         fleet_dashboards: RwSignal::new(None),
@@ -690,6 +693,7 @@ fn App() -> impl IntoView {
     // on screen at once and must not fight over the selection.
     let explorer = TreeState::new();
 
+    let marketplace_form = MarketplaceForm::new();
     let dashboards_form = DashboardsForm {
         name: RwSignal::new(String::new()),
         description: RwSignal::new(String::new()),
@@ -1157,6 +1161,7 @@ fn App() -> impl IntoView {
                         Route::Database => database_view(state, db_console),
                         Route::Triggers => triggers_view(state, triggers_form, triggers_log),
                         Route::Dashboards => dashboards_view(state, dashboards_form),
+                        Route::Marketplace => marketplace_view(state, marketplace_form),
                         Route::Hive => hive_view(state, route),
                         Route::PortsManager => ports_manager_view(state, form, managed_only),
                         Route::Mesh => mesh_view(state, mesh_form),
@@ -1254,6 +1259,7 @@ const GLOBAL_SCOPES: [(&str, &[Route]); 2] = [
             Route::Database,
             Route::Triggers,
             Route::Dashboards,
+            Route::Marketplace,
         ],
     ),
     (

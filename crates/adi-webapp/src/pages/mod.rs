@@ -9,6 +9,7 @@ mod facts;
 pub(crate) mod fleet;
 mod hive;
 mod knowledge;
+mod marketplace;
 mod mesh;
 mod meta;
 mod onboarding;
@@ -67,6 +68,7 @@ pub(crate) use facts::{FactsConsole, facts_view};
 pub(crate) use fleet::fleet_view;
 pub(crate) use hive::hive_view;
 pub(crate) use knowledge::knowledge_view;
+pub(crate) use marketplace::marketplace_view;
 pub(crate) use mesh::mesh_view;
 pub(crate) use meta::{meta_bin_tools, meta_view};
 pub(crate) use onboarding::{

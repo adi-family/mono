@@ -4,7 +4,7 @@
 
 > The adi control-panel UI: a Leptos (Rust→wasm) single-page app, built by Trunk and embedded into adi-app.
 
-61 structs · 9 enums · 1 type alias across 23 files.
+62 structs · 9 enums · 1 type alias across 23 files.
 
 ## Index
 
@@ -28,7 +28,7 @@
 - [`src/pages/secrets.rs`](#srcpagessecretsrs) — `PendingOAuth`
 - [`src/pages/workspaces.rs`](#srcpagesworkspacesrs) — `WorkspaceForm`, `NewHookForm`
 - [`src/routing.rs`](#srcroutingrs) — `Route`, `ProjectSection`
-- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
+- [`src/state.rs`](#srcstaters) — `State`, `Tables`, `SessionFilter`, `ChatDrawer`, `StoreBrowser`, `RowMenu`, `SessionMenu`, `StoreMenu`, `StoreDraft`, `FilesState`, `ProjectsForm`, `TasksForm`, `DashboardsForm`, `MarketplaceForm`, `ToolsForm`, `SecretsForm`, `KnowledgeConsole`, `DbConsole`, `ToolEditor`, `ToolRunView`, `AgentsForm`, `MetaForm`, `TriggersForm`, `TriggersLogView`, `HookLogView`, `TermWatch`, `HookEditor`, `AgentsWatch`, `Form`, `MeshForm`, `FleetForm`, `FleetUnlock`, `Status`, `Simulate`, `Flash`
 - [`src/update.rs`](#srcupdaters) — `UpdateWatch`
 - [`src/voice.rs`](#srcvoicers) — `Session`
 
@@ -638,6 +638,7 @@ pub(crate) enum Route {
     Database,
     Triggers,
     Dashboards,
+    Marketplace,
     Hive,
     PortsManager,
     Mesh,
@@ -700,6 +701,7 @@ pub(crate) struct State {
     pub(crate) triggers: RwSignal<Option<TriggersState>>,
     pub(crate) hive: RwSignal<Option<HiveState>>,
     pub(crate) dashboards: RwSignal<Option<DashboardsState>>,
+    pub(crate) marketplace: RwSignal<Option<MarketplaceState>>,
     pub(crate) fleet_dashboards: RwSignal<Option<FleetDashboards>>,
     pub(crate) fleet_dashboards_busy: RwSignal<bool>,
     pub(crate) fleet_unlock: FleetUnlock,
@@ -937,6 +939,17 @@ pub(crate) struct DashboardsForm {
     pub(crate) transfer_delete: RwSignal<bool>,
     pub(crate) transfer_password: RwSignal<String>,
     pub(crate) transfer_busy: RwSignal<bool>,
+}
+```
+
+### struct `MarketplaceForm`
+
+The Marketplace page's action state. The page has no create form — sources are added from the CLI (`adi-mono marketplace add`), and the page says so when there are none — so all it holds is which single action is in flight, keyed `"sync"` or `"<marketplace>/<slug>"`, so exactly the button a person pressed disables while it runs.
+
+```rust
+#[derive(Clone, Copy)]
+pub(crate) struct MarketplaceForm {
+    pub(crate) busy: RwSignal<Option<String>>,
 }
 ```
 

@@ -844,6 +844,17 @@ fn dispatch(app: &App, req: &http::Request) -> Response {
             let live = scan::listening_ports();
             handlers::import_dashboard(projects, ports, &live, &req.body)
         }
+        // The apps marketplace: the listing reads the store (offline), sync is the only one of
+        // the four that fetches, and install/start are the two deliberate acts. See
+        // docs/marketplace.md.
+        ("GET", "/api/marketplace") => handlers::marketplace(projects.config()),
+        ("POST", "/api/marketplace/sync") => handlers::sync_marketplace(projects.config()),
+        ("POST", "/api/marketplace/install") => {
+            handlers::install_marketplace_app(projects.config(), &req.body)
+        }
+        ("POST", "/api/marketplace/start") => {
+            handlers::start_marketplace_app(projects.config(), &req.body)
+        }
         // Starting or stopping a service changes what is listening, and the page asks that next —
         // so drop the port-scan memo rather than answering it from a scan taken before the change.
         ("POST", "/api/hive/start") => {
