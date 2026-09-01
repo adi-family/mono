@@ -3,6 +3,7 @@
 
 use std::collections::BTreeMap;
 
+use adi_core::bun::Outcome as BunOutcome;
 use adi_core::{EffectiveStatus, Report, ServiceReport, TaskStatus, contains_json_null};
 
 /// Resolve the two scope flags into `Option<project-id>` (`None` = global). `--global` is accepted
@@ -42,6 +43,25 @@ pub(crate) fn print_report(report: &Report, json: bool) {
     for svc in &report.services {
         print_human(svc);
     }
+}
+
+/// Report what the bun step did, and answer whether bun is on the machine — which the caller
+/// makes the exit code, so `adi-mono bun && …` means what it looks like it means.
+///
+/// A failure goes to stderr rather than stdout for the same reason: `--json` on stdout stays
+/// parseable, and the sentence explaining a missing bun is not a result.
+pub(crate) fn print_bun(outcome: &BunOutcome, json: bool) -> bool {
+    if json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(outcome).unwrap_or_else(|_| "{}".to_string())
+        );
+    } else if outcome.is_available() {
+        println!("{}", outcome.summary());
+    } else {
+        eprintln!("{}", outcome.summary());
+    }
+    outcome.is_available()
 }
 
 pub(crate) fn print_service(svc: &ServiceReport, json: bool) {

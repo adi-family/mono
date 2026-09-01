@@ -4,11 +4,12 @@
 
 > Core shared library for the adi-family workspace.
 
-14 structs · 4 enums across 10 files.
+16 structs · 5 enums across 11 files.
 
 ## Index
 
 - [`src/app.rs`](#srcapprs) — `App`
+- [`src/bun.rs`](#srcbunrs) — `Artifact`, `Outcome`, `Staging`
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
 - [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `Unsafe`, `MeshNodeChange`, `Dns`
@@ -30,6 +31,54 @@ The adi control-panel service (`adi.app.*`). Zero-sized; all state is in launchd
 ```rust
 #[derive(Debug, Default, Clone, Copy)]
 pub struct App;
+```
+
+---
+
+## `src/bun.rs`
+
+### struct `Artifact`
+
+One of bun's published macOS builds: the release-asset stem, and the SHA-256 of the `.zip` it is published in (from that release's `SHASUMS256.txt`).
+
+```rust
+struct Artifact {
+    variant: &'static str,
+    sha256: &'static str,
+}
+```
+
+### enum `Outcome`
+
+What `ensure` did. Serializable so the CLI can print it as JSON without a second shape.
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "outcome", rename_all = "snake_case")]
+pub enum Outcome {
+    Present {
+        path: PathBuf,
+        version: String,
+    },
+    Installed {
+        path: PathBuf,
+        version: String,
+    },
+    Unmanaged,
+    Failed {
+        why: String,
+    },
+}
+```
+
+### struct `Staging`
+
+A scratch directory that removes itself, so a failed or panicking install leaves no ~23 MB archive behind in the temp dir.
+
+```rust
+struct Staging {
+    dir: PathBuf,
+}
 ```
 
 ---

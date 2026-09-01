@@ -27,7 +27,7 @@ use clap::{Parser, Subcommand};
 use crate::agents::{AgentsCommand, run_agents};
 use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
-use crate::format::{print_report, print_service};
+use crate::format::{print_bun, print_report, print_service};
 use crate::goals::{GoalsCommand, run_goals};
 use crate::indexer::{IndexerCommand, run_indexer};
 use crate::facts::{FactsCommand, run_facts};
@@ -81,6 +81,16 @@ enum Command {
     /// Show live status across all services.
     Status {
         /// Emit machine-readable JSON (what the GUI polls).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Make sure `bun` — the runtime every dashboard is served by — is installed.
+    ///
+    /// `up` and `enable` already do this; the verb exists so it can be asked for on its own,
+    /// and so a machine whose dashboards do not start can be told why in one line. An existing
+    /// bun is reported and left exactly as it is.
+    Bun {
+        /// Emit machine-readable JSON.
         #[arg(long)]
         json: bool,
     },
@@ -261,6 +271,11 @@ fn main() {
         Command::Enable => adi.enable(),
         Command::Disable => adi.disable(),
         Command::Status { json } => print_report(&adi.report(), json),
+        Command::Bun { json } => {
+            if !print_bun(&adi_core::bun::ensure(), json) {
+                std::process::exit(1);
+            }
+        }
         Command::Dns { command } => match command {
             DnsCommand::Enable => adi.dns().enable(),
             DnsCommand::Disable => adi.dns().disable(),

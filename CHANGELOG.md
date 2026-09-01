@@ -20,6 +20,33 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.1.0 — 2026-09-01
+
+### Added
+
+- **A Mac installs `bun` for itself.** A dashboard is a pair of bun servers, and macOS only ever
+  *assumed* bun was there: a Mac that had never installed it by hand still scaffolded a dashboard,
+  still listed it, still gave it a hostname — and then served a dead host, with nothing on screen
+  saying why. Starting the stack now fetches the pinned build into `~/.bun/bin`, checked against
+  its published SHA-256 before it is ever made executable, exactly as the Linux node installer has
+  done since 1.0.0. A bun you already have is reported and left exactly as it is — we do not
+  upgrade one out from under your other projects — and a Mac with no route to GitHub still comes
+  up, because only dashboards need it. `adi-mono bun` asks for the step on its own and says in one
+  line what happened.
+- **A phone pairs by being shown a code.** Scanning is the primary pairing action on iPhone and
+  iPad now: an invite is over nine hundred characters, so a QR code is how it gets onto a phone,
+  and the text field is the fallback for a camera that is refused, absent, or pointed at nothing.
+  A machine paired this way is filed under its own name instead of a key-derived
+  `viewer-25f6795fa6`.
+
+### Fixed
+
+- **Opening a dashboard your phone holds no grant for no longer answers "The node refused this
+  service."** Tapping one asks the machine to share it and then opened the page immediately — but
+  a node's gateway serves from a snapshot it re-reads every few seconds, so the request was judged
+  against a registry that had never heard of the grant. The phone waits that window out now. It
+  read as a flake rather than a bug, because iPhone usually won the race and iPad usually lost it.
+
 ## 1.0.1 — 2026-08-27
 
 ### Added

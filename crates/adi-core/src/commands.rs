@@ -6,6 +6,7 @@ use serde::Serialize;
 use adi_config::Flavor;
 
 use crate::app::App;
+use crate::bun;
 use crate::dashboards::Dashboards;
 use crate::dns::Dns;
 use crate::install;
@@ -172,6 +173,9 @@ impl Adi {
         if !install::allow_install() {
             return;
         }
+        // Before the services, because one of them is the dashboards supervisor and `bun` is what
+        // it exists to run. Never fatal and never checked: see [`crate::bun`].
+        let _ = bun::ensure();
         for svc in self.services() {
             svc.enable();
         }
@@ -187,6 +191,9 @@ impl Adi {
         if !install::allow_install() {
             return;
         }
+        // Costs one `stat` on a machine that has bun, which is what makes it safe on a path the
+        // app runs at every launch; only a machine without it reaches the network at all.
+        let _ = bun::ensure();
         for svc in self.services() {
             svc.ensure_enabled();
         }

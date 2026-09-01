@@ -436,7 +436,14 @@ fn download_name(url: &str) -> String {
 ///
 /// Streamed in chunks: the artifact is tens of megabytes and there is no reason to hold it in
 /// memory a second time when it is already on disk.
-fn sha256(path: &Path) -> Result<String, Error> {
+///
+/// Public because it is not only the updater's problem: `adi-core`'s bun installer verifies its
+/// download the same way, and the paragraphs above are the whole reason there is one of these
+/// rather than a `shasum` call per caller.
+///
+/// # Errors
+/// [`Error::Download`] when `path` cannot be read.
+pub fn sha256(path: &Path) -> Result<String, Error> {
     use std::io::Read;
 
     use sha2::{Digest, Sha256};

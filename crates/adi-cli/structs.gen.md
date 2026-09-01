@@ -786,6 +786,10 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    Bun {
+        #[arg(long)]
+        json: bool,
+    },
     Dns {
         #[command(subcommand)]
         command: DnsCommand,

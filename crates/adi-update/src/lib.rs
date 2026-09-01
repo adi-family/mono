@@ -29,7 +29,7 @@ mod shell;
 mod state;
 mod version;
 
-pub use engine::{Check, DEFAULT_TEAM_ID, Engine, Error, Installed, default_app_path};
+pub use engine::{Check, DEFAULT_TEAM_ID, Engine, Error, Installed, default_app_path, sha256};
 pub use manifest::{Artifact, Manifest, host_platform};
 pub use settings::{DEFAULT_MANIFEST_URL, Settings};
 pub use state::State;

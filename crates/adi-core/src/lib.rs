@@ -3,6 +3,7 @@
 //! launchd/config/route logic. The `adi-mono` CLI is a thin argv adapter over this API.
 
 pub mod app;
+pub mod bun;
 mod commands;
 pub mod dashboards;
 pub mod dns;
