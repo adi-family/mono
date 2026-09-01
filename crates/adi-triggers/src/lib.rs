@@ -345,13 +345,16 @@ impl Triggers {
 
     /// Publish a supervised trigger's run state for other processes to read. Best-effort: a
     /// status file that can't be written costs a status readout, never the running process.
+    #[cfg(feature = "supervisor")]
     pub(crate) fn publish_run_state(&self, name: &str, state: &RunState) {
+
         if validate_name(name).is_ok() {
             let _ = self.run_file(name).save(state);
         }
     }
 
     /// Withdraw a trigger's published run state — it is no longer running.
+    #[cfg(feature = "supervisor")]
     pub(crate) fn clear_run_state(&self, name: &str) {
         if validate_name(name).is_ok() {
             let _ = self

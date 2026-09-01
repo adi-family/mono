@@ -130,7 +130,18 @@ fn sync(market: &Marketplace) -> Result<(), String> {
 fn list_apps(market: &Marketplace) {
     let apps = adi_marketplace::install::cached_apps(market.config());
     if apps.is_empty() {
-        println!("nothing cached yet — add a marketplace and run `adi-mono marketplace sync`");
+        // A cached marketplace with zero apps is not "nothing cached" — an empty list is a
+        // valid marketplace (the starter repo), and telling somebody to add and sync when
+        // they just did is a wrong answer. Name the sources that are standing instead.
+        let cached = adi_marketplace::source_states(market.config())
+            .iter()
+            .filter(|state| state.synced_at.is_some())
+            .count();
+        if cached == 0 {
+            println!("nothing cached yet — add a marketplace and run `adi-mono marketplace sync`");
+        } else {
+            println!("{cached} marketplace(s) cached, no apps between them yet");
+        }
         return;
     }
     let mut current = String::new();

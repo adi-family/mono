@@ -65,7 +65,7 @@ built on it.
 ```toml
 [[marketplaces]]
 name = "adi"
-url = "https://raw.githubusercontent.com/adi-family/apps/main/marketplace.json"
+url = "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json"
 ```
 
 - The array **ships empty**. Adding URLs is the operator's act (`adi-mono marketplace add`).

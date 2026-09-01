@@ -122,7 +122,7 @@ mod tests {
         Config::with_root(root)
     }
 
-    const URL: &str = "https://raw.githubusercontent.com/adi-family/apps/main/marketplace.json";
+    const URL: &str = "https://raw.githubusercontent.com/adi-family/marketplace/main/apps/marketplace.json";
 
     #[test]
     fn the_store_starts_empty_and_writes_the_documented_shape() {
