@@ -16,42 +16,24 @@
 //! the mesh (where `127.0.0.1` would be the *viewer's* machine), and behind a real domain later.
 //! Dashboards written before that rule are brought up to it by [`migrate`] on the next read.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use adi_config::Config;
+use adi_dashboards::{
+    BundleError, CollectError, DashboardBundle, HIVE_ARCHIVED, HIVE_LIVE, MAX_BUNDLE_FILES,
+    Manifest, dashboard_host, declared_host, decode_bundle, hive_yaml, is_one_origin, parse_hive,
+    preferred_host, read_manifest, valid_id, write_import, write_manifest,
+};
 use adi_ports_manager::Ports;
 use adi_projects::Projects;
-use base64::Engine as _;
-use serde::Deserialize;
 
 use crate::types::{
-    BundleFile, Dashboard, DashboardBundle, DashboardRef, DashboardsState, NewDashboard,
-    SetDashboardProject, UsedPort,
+    Dashboard, DashboardRef, DashboardsState, NewDashboard, SetDashboardProject, UsedPort,
 };
 
 use super::response::{FromBody, Response, error, ok_json};
 use super::services::is_listening;
-
-/// The metadata file each dashboard directory carries.
-#[derive(Deserialize, Default)]
-struct Manifest {
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    description: Option<String>,
-    /// The project this dashboard is filed under (its id), or `None` when unfiled.
-    #[serde(default)]
-    project: Option<String>,
-    /// When the dashboard was archived (Unix seconds), or `None` while it is live.
-    #[serde(default)]
-    archived_at: Option<u64>,
-    /// The node this dashboard was moved to, when it was ([`complete_move`]). Written beside
-    /// `archived_at` rather than instead of it: the local remains are archived like any other
-    /// archived dashboard, and this only says *why*.
-    #[serde(default)]
-    moved_to: Option<String>,
-}
 
 /// The scaffold a new dashboard starts from — the two fixed entry points plus one worked
 /// example of each extension point, embedded so the binary can create a dashboard anywhere.
@@ -315,252 +297,8 @@ fn scaffold(
     Ok(())
 }
 
-/// The dashboard's hive file, as the supervisor's `$ADI_DASHBOARDS_DIR/**/hive.yaml` glob names
-/// it. Archiving parks it aside under [`HIVE_ARCHIVED`] (which the glob no longer matches), so
-/// the supervisor drops both bun services within a few seconds; restoring moves it back.
-const HIVE_LIVE: &str = "hive.yaml";
-/// The parked name an archived dashboard's hive file takes — deliberately not `hive.yaml`, so the
-/// supervisor's glob skips it.
-const HIVE_ARCHIVED: &str = "hive.yaml.archived";
-
-/// Read a dashboard directory's `config.toml` manifest, degrading a missing or malformed file to
-/// the default (all fields absent) rather than failing.
-fn read_manifest(dir: &Path) -> Manifest {
-    std::fs::read_to_string(dir.join("config.toml"))
-        .ok()
-        .and_then(|raw| toml::from_str::<Manifest>(&raw).ok())
-        .unwrap_or_default()
-}
-
-/// Write a dashboard's `config.toml`, emitting only the fields that are present so a rewrite never
-/// invents a blank `name`/`description` the manifest didn't already carry.
-fn write_manifest(dir: &Path, manifest: &Manifest) -> std::io::Result<()> {
-    let mut out = String::new();
-    if let Some(name) = &manifest.name {
-        out.push_str(&format!("name = {}\n", toml_string(name)));
-    }
-    if let Some(description) = &manifest.description {
-        out.push_str(&format!("description = {}\n", toml_string(description)));
-    }
-    if let Some(project) = &manifest.project {
-        out.push_str(&format!("project = {}\n", toml_string(project)));
-    }
-    if let Some(ts) = manifest.archived_at {
-        out.push_str(&format!("archived_at = {ts}\n"));
-    }
-    if let Some(node) = &manifest.moved_to {
-        out.push_str(&format!("moved_to = {}\n", toml_string(node)));
-    }
-    std::fs::write(dir.join("config.toml"), out)
-}
-
-/// The dashboard's hive services: **one host, two services**. `{{HOST}}` is the hostname both
-/// share and `{{DIR}}` the dashboard directory; nothing else is generated, and in particular no
-/// port ever is — adi-hive leases those.
-///
-/// Kept as a template rather than a `format!` chain so the emitted YAML reads here exactly as it
-/// lands on disk, comments and all.
-const HIVE_TEMPLATE: &str = r#"# Dashboard hive services — run by the per-user supervisor (~/.adi/mono/dashboards/hive.yaml).
-#
-# One dashboard is one origin. Both services declare the same `proxy.host`: the frontend owns
-# `/`, the backend claims `/api`. The page therefore only ever uses relative URLs and never
-# learns its own address, which is what lets this dashboard work unchanged at `{{HOST}}`, at
-# `<label>.<node>.n.adi` over the mesh, and behind a real domain later — for every viewer, with
-# no substitution. Do not give the backend a host of its own: an absolute backend URL in the page
-# would point at whatever machine the *browser* is on.
-#
-# The front door imports dashboards (stripping their runners, since it only routes) and picks
-# both entries up; the per-user supervisor is what actually runs them.
-#
-# No port is declared: adi-hive leases a stable one per service from the ports manager (keyed
-# `<dashboard-id>/frontend` and `<dashboard-id>/backend`) and injects it as $PORT. The leases are
-# idempotent, so the front door resolves the same port the supervisor runs on.
-
-version: "1"
-
-services:
-  frontend:
-    restart: always
-    proxy:
-      host: {{HOST}}
-    runner:
-      type: script
-      script:
-        run: bun run frontend/index.ts
-        working_dir: {{DIR}}
-
-  backend:
-    restart: always
-    proxy:
-      host: {{HOST}}
-      path: /api
-    runner:
-      type: script
-      script:
-        run: bun run backend/index.ts
-        working_dir: {{DIR}}
-"#;
-
-/// Render [`HIVE_TEMPLATE`] for one dashboard directory and hostname.
-fn hive_yaml(dir: &Path, host: &str) -> String {
-    HIVE_TEMPLATE
-        .replace("{{HOST}}", host)
-        .replace("{{DIR}}", &dir.display().to_string())
-}
-
-/// The zone every local service answers under, so a label becomes `<label>.adi`.
-const HOST_ZONE: &str = "adi";
-
-/// The path prefix the backend claims on the dashboard's host. The page's whole API base.
-const API_PATH: &str = "/api";
-
-/// The longest a single DNS label may be.
-const MAX_LABEL: usize = 63;
-
-/// Labels a dashboard may never take, because something else already answers there:
-/// `n` is the reserved mesh zone (`docs/fleet.md` §1, and adi-hive refuses to route `n.adi`),
-/// `app` is the control panel, and the rest would shadow infrastructure or read as one.
-const RESERVED_LABELS: &[&str] = &["adi", "api", "app", "dns", "hive", "localhost", "n", "www"];
-
-/// The label used when neither the name nor the id yields a usable one — a host must always exist.
-const FALLBACK_LABEL: &str = "dashboard";
-
 /// The word a dashboard's id falls back to when its name has nothing sluggable in it.
 const ID_FALLBACK: &str = "dashboard";
-
-/// The hostname both of a dashboard's services share: `<label>.adi`.
-///
-/// Deterministic, and derived from what a human already typed: a slug of the dashboard's name,
-/// falling back to its id when the name has nothing DNS-usable in it (all-unicode, punctuation
-/// only), is reserved, or is already claimed by another dashboard — and then to a numbered
-/// [`FALLBACK_LABEL`]. A collision costs you a pretty hostname, never a working one.
-///
-/// The id fallback is checked against the claimed labels like the name is. It did not have to be
-/// while ids were UUIDs — no dashboard could declare `ec5bd98c-….adi` as its host — but an id is a
-/// slug of the name now, so it can collide with exactly what the name collided with.
-fn dashboard_host(dir: &Path, name: &str) -> String {
-    let id = dir
-        .file_name()
-        .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    format!("{}.{HOST_ZONE}", host_label(dir, &id, name))
-}
-
-/// The label part of [`dashboard_host`]. Split out so the fallback chain is testable on its own.
-fn host_label(dir: &Path, id: &str, name: &str) -> String {
-    let taken = claimed_labels(dir);
-    let free = |label: &String| !is_reserved(label) && !taken.contains(label);
-
-    slugify(name)
-        .filter(free)
-        .or_else(|| slugify(id).filter(free))
-        .unwrap_or_else(|| adi_config::unique_id(FALLBACK_LABEL, |label| !free(&label.to_string())))
-}
-
-/// Whether `label` is one of the names a dashboard must not take. Compared case-insensitively
-/// even though [`slugify`] already lowercases, so a hand-edited hive file is judged the same way.
-fn is_reserved(label: &str) -> bool {
-    RESERVED_LABELS.contains(&label.to_ascii_lowercase().as_str())
-}
-
-/// Reduce free text to a single DNS label: ASCII-lowercased, every other character a separator,
-/// runs of separators collapsed, trimmed, capped at [`MAX_LABEL`]. `None` when nothing usable is
-/// left — a name written entirely in a non-Latin script is the common case, and inventing a
-/// transliteration for it would be a worse hostname than the id.
-fn slugify(text: &str) -> Option<String> {
-    let mut out = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-        } else if !out.ends_with('-') {
-            out.push('-');
-        }
-    }
-    out.truncate(MAX_LABEL);
-    let label = out.trim_matches('-').to_string();
-    (!label.is_empty()).then_some(label)
-}
-
-/// Every host label already claimed by a dashboard *other* than the one in `dir`.
-///
-/// Read from the siblings' hive files rather than re-derived from their names, so a host that was
-/// hand-picked (or derived under an older rule) still counts as taken — two dashboards answering
-/// on one hostname is a routing coin-flip, and the point of the check is that it never happens.
-fn claimed_labels(dir: &Path) -> BTreeSet<String> {
-    let Some(root) = dir.parent() else {
-        return BTreeSet::new();
-    };
-    let Ok(entries) = std::fs::read_dir(root) else {
-        return BTreeSet::new();
-    };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.is_dir() && p != dir)
-        .filter_map(|p| declared_host(&p))
-        .map(|host| label_of(&host))
-        .collect()
-}
-
-/// The first label of a hostname, lowercased — `nosh.adi` → `nosh`.
-fn label_of(host: &str) -> String {
-    host.trim()
-        .trim_end_matches('.')
-        .split('.')
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase()
-}
-
-/// The proxy-relevant subset of a dashboard's hive file — enough to tell whether it already
-/// declares one origin, and which host it declares. Unknown fields (runners, restart policy) are
-/// ignored: this parse decides *whether* to rewrite, never what to keep.
-#[derive(Deserialize)]
-struct HiveFile {
-    #[serde(default)]
-    services: BTreeMap<String, HiveService>,
-}
-
-#[derive(Deserialize)]
-struct HiveService {
-    #[serde(default)]
-    proxy: Option<HiveProxy>,
-}
-
-#[derive(Deserialize)]
-struct HiveProxy {
-    host: String,
-    #[serde(default)]
-    path: Option<String>,
-}
-
-/// The dashboard's declared hostname, preferring the frontend's (it owns the host's root) and
-/// falling back to the backend's. `None` when there is no hive file, it does not parse, or no
-/// service declares a `proxy.host` — all three meaning "nothing has been claimed yet".
-fn declared_host(dir: &Path) -> Option<String> {
-    let parsed = parse_hive(dir)?.1;
-    let host = |svc: &str| {
-        parsed
-            .services
-            .get(svc)
-            .and_then(|s| s.proxy.as_ref())
-            .map(|p| p.host.trim().to_string())
-            .filter(|h| !h.is_empty())
-    };
-    host("frontend").or_else(|| host("backend"))
-}
-
-/// Read and parse whichever of the two hive file names is on disk, returning that path with it.
-/// The live name wins; an archived dashboard keeps its parked file, and migrating that one too is
-/// what stops a restore from bringing back the old shape.
-fn parse_hive(dir: &Path) -> Option<(PathBuf, HiveFile)> {
-    let path = [HIVE_LIVE, HIVE_ARCHIVED]
-        .iter()
-        .map(|f| dir.join(".adi").join(f))
-        .find(|p| p.is_file())?;
-    let raw = std::fs::read_to_string(&path).ok()?;
-    let parsed = serde_yaml_ng::from_str::<HiveFile>(&raw).ok()?;
-    Some((path, parsed))
-}
 
 // MARK: migration — replacing generated files with the current templates
 
@@ -649,81 +387,16 @@ fn migrate_hive(dir: &Path, name: &str) {
     let _ = std::fs::write(path, hive_yaml(dir, &host));
 }
 
-/// Whether a parsed hive file already declares one origin: both services on the same host, the
-/// frontend as that host's fallback route, the backend claiming [`API_PATH`]. Paths are compared
-/// after the same normalisation adi-hive applies, so `/api/` and `api` count as current.
-fn is_one_origin(parsed: &HiveFile) -> bool {
-    let proxy = |svc: &str| parsed.services.get(svc).and_then(|s| s.proxy.as_ref());
-    let (Some(frontend), Some(backend)) = (proxy("frontend"), proxy("backend")) else {
-        return false;
-    };
-    let same_host = !frontend.host.trim().is_empty()
-        && frontend
-            .host
-            .trim()
-            .eq_ignore_ascii_case(backend.host.trim());
-    same_host
-        && path_claim(frontend.path.as_deref()).is_none()
-        && path_claim(backend.path.as_deref()).as_deref() == Some(API_PATH)
-}
-
-/// Normalise a `proxy.path` the way adi-hive's router does: `None` (the host's fallback) or a
-/// `/`-rooted prefix with no trailing slash. `/` is the fallback, so it normalises to `None`.
-fn path_claim(raw: Option<&str>) -> Option<String> {
-    let trimmed = raw?.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return None;
-    }
-    Some(if trimmed.starts_with('/') {
-        trimmed.to_string()
-    } else {
-        format!("/{trimmed}")
-    })
-}
-
 // MARK: moving a dashboard to another machine
-
-/// The most a bundle may carry, in raw bytes. Generous for what a dashboard is — a handful of
-/// `.ts` files and whatever assets go with them — and small enough that the whole thing fits in
-/// one JSON body on both ends after base64 has added its third.
-///
-/// A cap rather than a stream because the alternative is worse: a transfer that half-arrives
-/// leaves a dashboard on the node with some of its modules, which looks like it worked.
-const MAX_BUNDLE_BYTES: u64 = 4 * 1024 * 1024;
-
-/// The most files a bundle may carry. A dashboard someone pointed at a data directory is the
-/// case this exists for — it fails with a sentence rather than a five-minute walk.
-const MAX_BUNDLE_FILES: usize = 2000;
-
-/// Directory names never packed, wherever they appear in the tree.
-///
-/// `.adi` because the hive file inside it is rebuilt on the far side (its `working_dir` is an
-/// absolute local path, and its host may be taken over there); the other two because they are
-/// caches of things already in the bundle, and shipping them is how a 20 KB dashboard becomes a
-/// 200 MB one.
-const NEVER_BUNDLED_DIRS: &[&str] = &[".adi", "node_modules", ".git"];
-
-/// Files never packed from the dashboard's root: the manifest travels as the bundle's own fields,
-/// so shipping it too would be two sources of truth for one name.
-const NEVER_BUNDLED_ROOT_FILES: &[&str] = &["config.toml"];
-
-/// What lives through an import that overwrites an existing dashboard.
-///
-/// `.adi` holds the hive file the receiving machine wrote for *its* paths — rewritten right
-/// after, but never through a window in which the supervisor could read a missing one. Anything
-/// installed under `node_modules` is a cache the bundle deliberately did not carry, and deleting
-/// it would make every re-transfer an install.
-const KEPT_ON_IMPORT: &[&str] = &[".adi", "node_modules"];
 
 /// Pack a dashboard's authored files into a [`DashboardBundle`] ready to POST at another machine.
 ///
-/// Everything a person or an agent wrote travels; everything a machine generated does not (see
-/// [`NEVER_BUNDLED_DIRS`]). Symlinks are skipped rather than followed — a link pointing out of the
-/// dashboard would otherwise quietly put whatever it names on the wire.
+/// Everything a person or an agent wrote travels; everything a machine generated does not. The
+/// packing rules themselves are [`adi_dashboards`]'s — this is only the HTTP-shaped error mapping.
 ///
 /// # Errors
-/// The [`Response`] to answer with: 404 for an unknown id, 413 when the directory is past
-/// [`MAX_BUNDLE_BYTES`] / [`MAX_BUNDLE_FILES`], 500 on a read failure.
+/// The [`Response`] to answer with: 404 for an unknown id, 413 when the directory is past the
+/// bundle caps, 500 on a read failure.
 pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response> {
     let Some(dir) = dashboard_dir(cfg, id) else {
         return Err(error(404, &format!("no such dashboard: {id}")));
@@ -733,7 +406,13 @@ pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response
 
     let mut files = Vec::new();
     let mut total = 0_u64;
-    collect_files(&dir, &mut PathBuf::new(), &mut files, &mut total)?;
+    if let Err(e) = adi_dashboards::collect_files(&dir, &mut PathBuf::new(), &mut files, &mut total)
+    {
+        return Err(match e {
+            CollectError::TooLarge { .. } => error(413, &e.to_string()),
+            CollectError::Io(e) => error(500, &format!("reading {}: {e}", dir.display())),
+        });
+    }
 
     Ok(DashboardBundle {
         id: id.to_string(),
@@ -743,101 +422,6 @@ pub fn export_bundle(cfg: &Config, id: &str) -> Result<DashboardBundle, Response
         host: declared_host(&dir),
         files,
     })
-}
-
-/// Walk one directory of a dashboard, appending its files to `files`. `rel` is the path so far,
-/// relative to the dashboard root, which is what the bundle records.
-///
-/// Recursive rather than iterative because the depth is a dashboard's own source tree; the two
-/// caps are what bound the work, not the shape of the walk.
-fn collect_files(
-    dir: &Path,
-    rel: &mut PathBuf,
-    files: &mut Vec<BundleFile>,
-    total: &mut u64,
-) -> Result<(), Response> {
-    let here = dir.join(&*rel);
-    let entries = match std::fs::read_dir(&here) {
-        Ok(entries) => entries,
-        Err(e) => return Err(error(500, &format!("reading {}: {e}", here.display()))),
-    };
-    // Sorted, so a bundle of an unchanged dashboard is byte-identical between runs and a diff of
-    // two transfers is about the dashboard rather than about directory order.
-    let mut names: Vec<String> = entries
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .collect();
-    names.sort();
-
-    for name in names {
-        if NEVER_BUNDLED_DIRS.contains(&name.as_str())
-            || (rel.as_os_str().is_empty() && NEVER_BUNDLED_ROOT_FILES.contains(&name.as_str()))
-        {
-            continue;
-        }
-        let path = here.join(&name);
-        // Not `metadata`: that follows the link, and a link out of the dashboard would then be
-        // read and shipped as though it lived here.
-        let Ok(meta) = std::fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if meta.file_type().is_symlink() {
-            continue;
-        }
-        rel.push(&name);
-        let walked = if meta.is_dir() {
-            collect_files(dir, rel, files, total)
-        } else {
-            pack_file(&path, rel, meta.len(), files, total)
-        };
-        rel.pop();
-        walked?;
-    }
-    Ok(())
-}
-
-/// Add one file to the bundle, refusing once either cap is past.
-fn pack_file(
-    path: &Path,
-    rel: &Path,
-    size: u64,
-    files: &mut Vec<BundleFile>,
-    total: &mut u64,
-) -> Result<(), Response> {
-    *total += size;
-    if *total > MAX_BUNDLE_BYTES || files.len() >= MAX_BUNDLE_FILES {
-        return Err(error(
-            413,
-            &format!(
-                "this dashboard is too large to transfer ({} files, {} bytes so far; the limits \
-                 are {MAX_BUNDLE_FILES} files and {MAX_BUNDLE_BYTES} bytes) — move the bulk of it \
-                 out of the dashboard directory, or copy it across by hand",
-                files.len() + 1,
-                *total,
-            ),
-        ));
-    }
-    let bytes = match std::fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(e) => return Err(error(500, &format!("reading {}: {e}", path.display()))),
-    };
-    files.push(BundleFile {
-        path: slash_path(rel),
-        contents: base64::engine::general_purpose::STANDARD.encode(bytes),
-    });
-    Ok(())
-}
-
-/// A relative path as the bundle spells it: `/`-separated on every platform, so a dashboard
-/// packed on Windows unpacks on Linux and the reverse.
-fn slash_path(rel: &Path) -> String {
-    rel.components()
-        .filter_map(|c| match c {
-            std::path::Component::Normal(segment) => Some(segment.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
 }
 
 /// `POST /api/dashboards/import` — receive a dashboard packed by another machine and make it
@@ -885,7 +469,7 @@ pub fn import_dashboard(
     // halfway would leave a live dashboard holding a mix of two versions.
     let decoded = match decode_bundle(&dir, &bundle.files) {
         Ok(decoded) => decoded,
-        Err(response) => return response,
+        Err(e) => return bundle_refusal(&e),
     };
 
     if let Err(e) = write_import(&dir, &decoded) {
@@ -930,124 +514,14 @@ pub fn import_dashboard(
     ok_json(&read_dashboard(&dir, ports, live))
 }
 
-/// A bundle's files, decoded and resolved to absolute paths under the dashboard directory.
-type DecodedFiles = Vec<(PathBuf, Vec<u8>)>;
-
-/// Decode every file's bytes and resolve its path, refusing the whole bundle on the first thing
-/// that does not belong.
-///
-/// The path check is [`adi_fs::Jail`]'s, not one written here: it is the same lexical rule the
-/// store browser is confined by, and a second implementation is a second chance to get `..` wrong.
-/// On top of it, the generated directories are refused outright — a bundle claiming to carry
-/// `.adi/hive.yaml` is a bundle trying to choose this machine's routing.
-fn decode_bundle(dir: &Path, files: &[BundleFile]) -> Result<DecodedFiles, Response> {
-    let jail = adi_fs::Jail::new(dir);
-    let mut decoded = Vec::with_capacity(files.len());
-    let mut total = 0_u64;
-    for file in files {
-        let path = file.path.trim();
-        if path.is_empty() {
-            return Err(error(400, "the bundle carries a file with no path"));
-        }
-        if path
-            .split(['/', '\\'])
-            .any(|segment| NEVER_BUNDLED_DIRS.contains(&segment))
-        {
-            return Err(error(
-                400,
-                &format!("a bundle may not carry {path:?} — that directory is generated here"),
-            ));
-        }
-        let resolved = jail
-            .resolve(path)
-            .map_err(|e| error(400, &format!("refusing {path:?}: {e}")))?;
-        if resolved == dir {
-            return Err(error(400, &format!("{path:?} names the dashboard itself")));
-        }
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(file.contents.as_bytes())
-            .map_err(|e| error(400, &format!("{path:?} is not valid base64: {e}")))?;
-        total += bytes.len() as u64;
-        if total > MAX_BUNDLE_BYTES {
-            return Err(error(413, "the bundle is too large"));
-        }
-        decoded.push((resolved, bytes));
-    }
-    Ok(decoded)
-}
-
-/// Mirror `decoded` into the dashboard directory: drop what an earlier version left behind, then
-/// write what this one carries.
-fn write_import(dir: &Path, decoded: &DecodedFiles) -> std::io::Result<()> {
-    clear_imported(dir)?;
-    std::fs::create_dir_all(dir.join(".adi"))?;
-    for (path, bytes) in decoded {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        std::fs::write(path, bytes)?;
-    }
-    Ok(())
-}
-
-/// Empty a dashboard directory of everything an import replaces, keeping [`KEPT_ON_IMPORT`]. A
-/// directory that does not exist yet is simply nothing to clear.
-fn clear_imported(dir: &Path) -> std::io::Result<()> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
+/// Map a bundle refusal onto the HTTP answer a rejected import earns. Every property of the
+/// bundle itself is a 400 except the size caps, which are a 413 — the caller can shrink and retry.
+fn bundle_refusal(e: &BundleError) -> Response {
+    let status = match e {
+        BundleError::TooLarge | BundleError::TooManyFiles => 413,
+        _ => 400,
     };
-    for entry in entries.flatten() {
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        if KEPT_ON_IMPORT.contains(&name.as_str()) {
-            continue;
-        }
-        let path = entry.path();
-        // `symlink_metadata`, so a symlinked directory is unlinked rather than walked into.
-        let meta = std::fs::symlink_metadata(&path)?;
-        if meta.is_dir() {
-            std::fs::remove_dir_all(&path)?;
-        } else {
-            std::fs::remove_file(&path)?;
-        }
-    }
-    Ok(())
-}
-
-/// An id from a bundle, accepted only as one ordinary path segment — it becomes a directory name
-/// under the dashboards root, and the far side chose it.
-fn valid_id(raw: &str) -> Option<String> {
-    let id = raw.trim();
-    let usable = !id.is_empty()
-        && id.len() <= 128
-        && id != "."
-        && id != ".."
-        && id
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
-    usable.then(|| id.to_string())
-}
-
-/// The hostname an imported dashboard takes: the one it answered on where it came from, when that
-/// label is free here, and a freshly derived one when it is not.
-///
-/// Keeping the label is what makes a transfer feel like a move rather than a copy — the same
-/// dashboard is `nosh.adi` locally and `nosh.<node>.n.adi` through the mesh. But it is only ever a
-/// preference: a label another dashboard on this machine already claims would make routing a
-/// coin-flip, and a reserved one would shadow infrastructure.
-fn preferred_host(dir: &Path, name: &str, offered: Option<&str>) -> String {
-    let taken = claimed_labels(dir);
-    let offered = offered
-        .map(label_of)
-        .filter(|label| slugify(label).as_deref() == Some(label.as_str()))
-        .filter(|label| !is_reserved(label) && !taken.contains(label));
-    match offered {
-        Some(label) => format!("{label}.{HOST_ZONE}"),
-        None => dashboard_host(dir, name),
-    }
+    error(status, &e.to_string())
 }
 
 /// Stand the local copy down once a node has confirmed it holds the dashboard — the second half
@@ -1101,15 +575,6 @@ pub fn complete_move(
         );
     }
     dashboards(cfg, ports, live)
-}
-
-/// Quote a value as a TOML basic string, escaping what that grammar requires.
-fn toml_string(value: &str) -> String {
-    let escaped = value
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n");
-    format!("\"{escaped}\"")
 }
 
 /// Every dashboard, sorted by name, with live ports and running flags. `live` is the machine's
@@ -1197,6 +662,8 @@ fn ts_stems(dir: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use adi_dashboards::BundleFile;
+    use base64::Engine as _;
 
     /// A dashboards root of this test's own, under the system temp dir — never the user's store.
     fn scratch(tag: &str) -> PathBuf {
@@ -1298,78 +765,12 @@ mod tests {
     }
 
     /// Parse a dashboard's hive file the way adi-hive will.
-    fn hive_of(dir: &Path) -> HiveFile {
+    fn hive_of(dir: &Path) -> adi_dashboards::HiveFile {
         parse_hive(dir).expect("hive file parses").1
     }
 
-    // MARK: the host label
-
-    #[test]
-    fn a_display_name_becomes_one_lowercase_dns_label() {
-        assert_eq!(
-            slugify("NakitYok Status").as_deref(),
-            Some("nakityok-status")
-        );
-        assert_eq!(slugify("  My  Dash!!  ").as_deref(), Some("my-dash"));
-        assert_eq!(slugify("CRM").as_deref(), Some("crm"));
-        assert_eq!(slugify("v2.1 metrics").as_deref(), Some("v2-1-metrics"));
-    }
-
-    #[test]
-    fn a_name_with_nothing_ascii_in_it_slugs_to_nothing() {
-        // Transliterating would invent a hostname nobody chose; the id is the honest fallback.
-        for name in ["Панель мониторинга", "ダッシュボード", "—", "  ", "!!!"]
-        {
-            assert_eq!(slugify(name), None, "{name}");
-        }
-    }
-
-    #[test]
-    fn a_long_name_is_cut_to_a_valid_label() {
-        for name in [
-            "a".repeat(200),
-            format!("{} status page", "b".repeat(70)),
-            format!("{}   ", "c".repeat(63)),
-        ] {
-            let label = slugify(&name).expect("a label");
-            assert!(is_dns_label(&label), "{label:?} from {name:?}");
-        }
-    }
-
-    #[test]
-    fn the_host_label_falls_back_to_the_id_when_the_name_yields_none() {
-        let root = scratch("fallback-id");
-        let id = "84ddcba0-5aaf-4992-80d7-4fdda4bd6339";
-        let label = host_label(&root.join(id), id, "Панель");
-        assert_eq!(label, id);
-        assert!(is_dns_label(&label));
-    }
-
-    #[test]
-    fn a_label_another_dashboard_already_claims_falls_back_to_the_id() {
-        let root = scratch("collision");
-        // The neighbour is on `crm.adi` already — derived or hand-picked, it makes no difference.
-        let neighbour = legacy_dashboard(&root, "1111", "CRM");
-        std::fs::write(
-            neighbour.join(".adi").join(HIVE_LIVE),
-            legacy_hive_yaml(&neighbour, Some("crm.adi")),
-        )
-        .expect("neighbour hive");
-
-        let id = "2222";
-        assert_eq!(host_label(&root.join(id), id, "CRM"), id);
-        // …while the neighbour itself keeps it: its own host never counts as taken.
-        assert_eq!(host_label(&neighbour, "1111", "CRM"), "crm");
-    }
-
-    #[test]
-    fn reserved_labels_are_never_handed_to_a_dashboard() {
-        let root = scratch("reserved");
-        // `n` is the mesh zone and `app` the control panel — either would shadow live routing.
-        for (id, name) in [("3333", "app"), ("4444", "N"), ("5555", "www")] {
-            assert_eq!(host_label(&root.join(id), id, name), id, "{name}");
-        }
-    }
+    // MARK: the host label — the derivation itself and its tests live in `adi-dashboards`; what
+    // stays here is what the scaffold writes through it.
 
     #[test]
     fn the_derived_host_is_a_label_under_the_adi_zone() {

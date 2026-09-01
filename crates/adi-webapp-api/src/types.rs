@@ -2890,47 +2890,9 @@ pub struct SetDashboardProject {
 
 // MARK: moving a dashboard to another machine (`docs/fleet.md` §10)
 
-/// One file of a [`DashboardBundle`].
-///
-/// The bytes are base64 rather than text because a dashboard is a directory a human fills: an
-/// icon, a font, a fixture `.db` are all ordinary things to find in one, and a transfer that
-/// silently dropped whatever was not UTF-8 would be a transfer you cannot trust.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BundleFile {
-    /// Path relative to the dashboard's own directory, always `/`-separated. Never absolute and
-    /// never containing `..` — the receiving side re-checks both before it writes anything.
-    pub path: String,
-    /// The file's bytes, base64 (standard alphabet, padded).
-    pub contents: String,
-}
-
-/// A dashboard packed up for another machine — the body of `POST /api/dashboards/import`.
-///
-/// What is **not** in here is the point. The manifest and `.adi/hive.yaml` are omitted and rebuilt
-/// on the far side, because both name things that are true only where they were written: the hive
-/// file carries an absolute `working_dir`, and its `proxy.host` may already belong to a different
-/// dashboard over there. Everything a person or an agent authored travels verbatim.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DashboardBundle {
-    /// The dashboard's id, carried across so a second transfer **updates** the copy on the node
-    /// instead of leaving a duplicate behind. Ids are UUIDs, so this can never collide with an
-    /// unrelated dashboard that was already there.
-    pub id: String,
-    pub name: String,
-    #[serde(default)]
-    pub description: Option<String>,
-    /// The project it is filed under here. Honoured on the far side only if a project with that
-    /// id exists there too; otherwise the copy arrives unfiled, which is what an id that means
-    /// nothing on that machine should do.
-    #[serde(default)]
-    pub project: Option<String>,
-    /// The hostname it answers on where it came from — a *preference*, not an instruction. The
-    /// receiving machine keeps the label when it is free there and derives a fresh one when it is
-    /// not, because two dashboards on one hostname is a routing coin-flip.
-    #[serde(default)]
-    pub host: Option<String>,
-    pub files: Vec<BundleFile>,
-}
+// The bundle a dashboard travels as lives in `adi-dashboards` beside the rules that confine it;
+// re-exported here so the wire contract stays one import away for both halves of the panel.
+pub use adi_dashboards::{BundleFile, DashboardBundle};
 
 /// What a transfer does with the copy it leaves behind — `POST /api/dashboards/transfer`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

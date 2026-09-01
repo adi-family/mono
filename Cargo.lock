@@ -117,6 +117,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "adi-dashboards"
+version = "0.1.0"
+dependencies = [
+ "adi-config",
+ "adi-fs",
+ "base64 0.22.1",
+ "serde",
+ "serde_yaml_ng",
+ "thiserror 2.0.20",
+ "toml",
+]
+
+[[package]]
 name = "adi-db"
 version = "0.1.0"
 dependencies = [
@@ -467,6 +480,7 @@ version = "0.1.0"
 dependencies = [
  "adi-agents",
  "adi-config",
+ "adi-dashboards",
  "adi-db",
  "adi-events",
  "adi-fs",

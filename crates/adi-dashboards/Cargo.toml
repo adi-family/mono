@@ -1,0 +1,26 @@
+[package]
+name = "adi-dashboards"
+description = "The on-disk contract of a dashboard directory: its manifest, its hive file and hostname, and the bundle it becomes when it travels."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The path jail a bundle's files are confined by on the way in. Dependency-free itself, so this
+# crate stays compilable for wasm32 — the bundle DTOs travel to the browser with the panel.
+adi-fs = { workspace = true }
+# Only for `unique_id`, the one rule every registry settles a collision by — the numbered
+# fallback host label must not invent a second numbering scheme.
+adi-config = { workspace = true }
+
+base64 = { workspace = true }
+serde = { workspace = true }
+serde_yaml_ng = { workspace = true }
+thiserror = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true

@@ -17,6 +17,7 @@ default-members = [
     "crates/adi-config",
     "crates/adi-core",
     "crates/adi-css",
+    "crates/adi-dashboards",
     "crates/adi-db",
     "crates/adi-dns",
     "crates/adi-events",
@@ -63,6 +64,7 @@ repository = "https://github.com/adi-family/mono"
 # Internal crates
 adi-agents = { path = "crates/adi-agents" }
 adi-config = { path = "crates/adi-config" }
+adi-dashboards = { path = "crates/adi-dashboards" }
 adi-core = { path = "crates/adi-core" }
 adi-css = { path = "crates/adi-css" }
 adi-db = { path = "crates/adi-db" }

@@ -60,6 +60,11 @@ server = [
 [dependencies]
 serde = { workspace = true }
 
+# The on-disk dashboard contract: manifest, hive file, and the bundle a dashboard travels as.
+# Non-optional (not behind `server`) because the bundle DTOs are part of the wire contract the
+# wasm client deserializes — see the re-export in `types.rs`.
+adi-dashboards = { workspace = true }
+
 adi-config = { workspace = true, optional = true }
 adi-osext = { workspace = true, optional = true }
 adi-ports-manager = { workspace = true, optional = true }
