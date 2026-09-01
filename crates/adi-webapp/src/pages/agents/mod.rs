@@ -681,12 +681,6 @@ fn send_to_agent(state: State, watch: AgentsWatch, text: String, key: &'static s
     });
 }
 
-/// Trim a form string into an optional, dropping it when blank.
-fn opt_str(value: String) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
 fn argument_text(arguments: &BTreeMap<String, serde_json::Value>, name: &str) -> String {
     arguments
         .get(name)

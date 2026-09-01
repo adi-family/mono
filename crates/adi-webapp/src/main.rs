@@ -203,6 +203,12 @@ fn Home() -> impl IntoView {
             {
                 state.dashboards.set(Some(dd));
             }
+            // Which paired nodes this machine can drive — the sessions rail's node menu.
+            if let Ok(n) = fetch::fleet_nodes().await
+                && state.fleet_nodes.get_untracked().as_ref() != Some(&n)
+            {
+                state.fleet_nodes.set(Some(n));
+            }
             // The dashboards rail groups by project, so it needs the project names.
             if let Ok(pp) = fetch::projects().await
                 && state.projects.get_untracked().as_ref() != Some(&pp)
@@ -233,7 +239,22 @@ fn Home() -> impl IntoView {
     // What the chat home watches: the open conversation, plus the rails around it. The same lists
     // `refresh` fetches, arriving only when they change instead of every four seconds.
     Effect::new(move |_| {
+        // Which machine these are about, read *tracked* (`docs/fleet.md` §13). Every agent path
+        // below is rewritten by `fetch::routed` as the `Sub` is built, so picking a node in the
+        // rail has to rebuild them — otherwise the socket would go on reporting the machine that
+        // was chosen when this effect last ran, under the new node's name.
+        let _node = state.session_node.get();
         let mut subs = state::chat_subscriptions(watch);
+        // The node menu's own list: which paired nodes this machine holds a password for. Local
+        // and cheap — it asks no node anything — so it rides the socket with everything else.
+        subs.push(live::Sub::get(
+            "/api/fleet/nodes",
+            move |n: adi_webapp_api::types::FleetNodes| {
+                if state.fleet_nodes.get_untracked().as_ref() != Some(&n) {
+                    state.fleet_nodes.set(Some(n));
+                }
+            },
+        ));
         subs.push(live::Sub::get("/api/agents", move |a: AgentsState| {
             // Keep the live view shaped to *the agent it is on*: a pty backend is interactive.
             let watched = watch.name.get_untracked();
@@ -644,6 +665,11 @@ fn App() -> impl IntoView {
         show_hidden: RwSignal::new(false),
         session_filter: RwSignal::new(SessionFilter::default()),
         session_filter_menu: RwSignal::new(None),
+        // The workbench shell has no sessions rail and so no node menu: it is always about this
+        // machine, and `None` here is what keeps `fetch::routed` pointed at it.
+        session_node: RwSignal::new(None),
+        session_node_menu: RwSignal::new(None),
+        fleet_nodes: RwSignal::new(None),
         // No sessions rail on the workbench shell either — its "All chats" table reads the whole
         // index, so nothing here pages. The field exists because `State` is one shape.
         rail_limit: RwSignal::new(state::SESSION_PAGE),

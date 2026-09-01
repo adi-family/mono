@@ -270,6 +270,16 @@
 
     // The chosen one, where the menu is a set to pick from rather than a list of actions.
     &.is-on { color: var(--accent); }
+
+    // An option that is listed but cannot be taken — a fleet node this machine holds no password
+    // for. Shown rather than hidden, because its absence would read as "that node is gone" when
+    // the truth is "unlock it on the Fleet page", and the row carries that sentence in its title.
+    &:disabled {
+      color: var(--muted);
+      cursor: default;
+
+      &:hover { background: none; }
+    }
   }
 
   // The tick column of such a menu. A fixed width whether or not it is carrying the mark, so the

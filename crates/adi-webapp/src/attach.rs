@@ -62,9 +62,22 @@ pub(crate) fn attaching(
 }
 
 /// Where a stored attachment's bytes are served from.
+///
+/// The one agent read that does not go through `/api/node/<node>` while a node's sessions are on
+/// screen (`docs/fleet.md` §13): the forwarder answers JSON and this answers a PNG. It goes to the
+/// node's own origin instead, which needs nothing new — the front door routes `*.n.adi` to the
+/// gateway, and the gateway attaches the password this machine already holds (§11). An `<img src>`
+/// is a plain GET, so there is no preflight to fail on the way.
 #[must_use]
 pub(crate) fn url_of(id: &str) -> String {
-    format!("/api/agents/attachment/{id}")
+    let path = format!("/api/agents/attachment/{id}");
+    match crate::fetch::node() {
+        Some(node) => format!(
+            "http://{}{path}",
+            adi_webapp_api::types::node_app_host(&node)
+        ),
+        None => path,
+    }
 }
 
 /// The ids of everything in a tray that is ready to send, in the order it was attached.
@@ -125,7 +138,10 @@ fn start(state: State, files: RwSignal<Vec<Attached>>, file: web_sys::File, medi
     // The tray's own identity for this row, minted before there is a server id — the ✕ has to work
     // during the upload, and `key` is what it removes by. Monotonic within the page, which is all
     // it has to be: it never leaves the browser.
-    let key = format!("attach-{}", js_sys::Date::now() as u64 + files.get_untracked().len() as u64);
+    let key = format!(
+        "attach-{}",
+        js_sys::Date::now() as u64 + files.get_untracked().len() as u64
+    );
     let name = {
         let given = file.name();
         if given.trim().is_empty() {

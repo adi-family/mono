@@ -564,6 +564,38 @@
     &.is-on { color: var(--accent); }
     &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
   }
+  // The rail's node button, left of the funnel: which *machine* these sessions belong to
+  // (`docs/fleet.md` §13). A bare glyph while they are this machine's — the ordinary case, which
+  // should cost the head no words — and the node's petname beside it the moment they are not.
+  // The name is on screen rather than in a tooltip on purpose: every control below it stops, hides
+  // and deletes runs, and which machine that happens on is not a thing to have to hover for.
+  &__node {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    max-width: 124px;
+    height: 24px;
+    padding: 0 5px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: var(--text-xs);
+    cursor: pointer;
+    transition: color var(--transition), background var(--transition);
+
+    svg { flex: none; width: 14px; height: 14px; }
+
+    // A petname is a DNS label and can be 63 characters. Clipped, never wrapped: the head is one
+    // line, and a second would push the whole rail down.
+    &-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    &:hover { color: var(--ink); background: var(--surface-2); }
+    &.is-on { color: var(--accent); }
+    &:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  }
   &__empty {
     padding: var(--space-3);
     color: var(--muted);

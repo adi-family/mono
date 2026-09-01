@@ -6,13 +6,13 @@ use adi_webapp_api::types::{
     AgentTokens, AgentsState, AllAgentRuns, AnswerRun, ApiError, CloseGoal, Dashboard,
     DashboardRef, DashboardTransferred, DashboardsState, DbExecResult, DbQuery, DbQueryResult,
     DbSchema, DbScope, DbState, DbTablesState, DirListing, FileContent, FilesRef, FleetDashboards,
-    FleetGrantRef, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing, FsRef,
-    FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait, KnowledgeBaseRef, KnowledgeNoteDto,
-    KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed, KnowledgeResults, KnowledgeSaved,
-    KnowledgeSearch, KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool, MeshForwardRef,
-    MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard, NewKnowledgeBase,
-    NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool, NewWorkspace,
-    NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
+    FleetGrantRef, FleetNodes, FleetRef, FleetRename, FleetState, FsContent, FsCreate, FsListing,
+    FsRef, FsWrite, GoalsOf, Health, HideRun, HiveState, IgnoreAwait, KnowledgeBaseRef,
+    KnowledgeNoteDto, KnowledgeNoteRef, KnowledgeNotes, KnowledgeReembed, KnowledgeResults,
+    KnowledgeSaved, KnowledgeSearch, KnowledgeState, LAUNCHED_BY_HUMAN, LeaseRef, LinkTool,
+    MeshForwardRef, MeshListenRef, MeshPeerRef, MeshPortRef, MeshState, MetaState, NewDashboard,
+    NewKnowledgeBase, NewKnowledgeNote, NewProject, NewProjectHook, NewService, NewTask, NewTool,
+    NewWorkspace, NodeServiceRef, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef,
     ProjectHookRunResult, ProjectRef, ProjectRenamed, ProjectsState, ReleaseResponse,
     RenameProject, ReplyToRun, ReserveResponse, RevealedSecret, ReviewRun, RunAgent, RunRef,
     RunTool, SaveAgent, SaveTrigger, SecretRef, SecretsState, SetDashboardProject, SetGoal,
@@ -161,6 +161,13 @@ pub async fn fleet_dismiss_nickname(petname: String) -> Result<FleetState, Strin
 
 pub async fn fleet_dashboards() -> Result<FleetDashboards, String> {
     get("/api/fleet/dashboards").await
+}
+
+/// Which paired nodes this machine holds a password for — the cheap read behind the sessions
+/// rail's node menu (`docs/fleet.md` §13). Local: unlike the listing above it asks no node
+/// anything, so it is polled with the rest of the page rather than on a click.
+pub async fn fleet_nodes() -> Result<FleetNodes, String> {
+    get("/api/fleet/nodes").await
 }
 
 /// Give this machine a node's password, so that node's dashboards can be listed. Checked against
@@ -1009,6 +1016,17 @@ pub async fn upload_attachment(
     mime: &str,
     bytes: &[u8],
 ) -> Result<AgentAttachment, String> {
+    // The one agent call that does not follow the page to a node (`docs/fleet.md` §13): the
+    // forwarder carries JSON, and this body is a PNG. Refused outright rather than uploaded here
+    // and referenced there, which would put an id in the node's transcript that names bytes only
+    // this machine holds — a broken picture instead of an error anyone can act on.
+    if let Some(node) = node() {
+        return Err(format!(
+            "a picture can only be attached to a session on this machine \u{2014} {node} is being \
+             driven through its API, which carries JSON. Open {node}'s own panel to attach one \
+             there."
+        ));
+    }
     let resp = Request::post("/api/agents/attachment")
         .header("content-type", mime)
         // The filename travels in a header because the body is the file. Percent-encoded: a
@@ -1038,13 +1056,61 @@ fn encode_header(name: &str) -> String {
         .collect()
 }
 
+// ---------------------------------------------------------------------------------------
+// Which machine's agents these calls are about (`docs/fleet.md` §13)
+// ---------------------------------------------------------------------------------------
+
+thread_local! {
+    /// The paired node the agent API is currently pointed at, or `None` for this machine.
+    ///
+    /// A thread-local rather than a signal because this is not something the page *renders* — it is
+    /// where a request goes, read once per call at the moment it is made. What the page renders is
+    /// `State::session_node`, set beside it by `state::view_sessions_on`, which is also what makes
+    /// the live channel re-subscribe.
+    static NODE: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The node the agent API is pointed at, or `None` for this machine.
+pub(crate) fn node() -> Option<String> {
+    NODE.with(|n| n.borrow().clone())
+}
+
+/// Point the agent API at a paired node, or back at this machine.
+pub(crate) fn set_node(node: Option<String>) {
+    NODE.with(|n| *n.borrow_mut() = node);
+}
+
+/// Where a call actually goes: the path itself, or that path on the node in view.
+///
+/// **Only the agent API moves**, and that is the whole scope of §13 rather than an accident of
+/// where the prefix was easiest to add. The rest of the panel — projects, ports, the store browser,
+/// the fleet page that chose the node in the first place — is about *this* machine and its files,
+/// and silently repointing it would mean an operator who forgot which node was selected could
+/// create a project on the wrong one. Sessions are the thing you go looking for on another machine.
+///
+/// Applied in exactly two places, which is what keeps it honest: here, for every one-off read and
+/// every mutation, and in [`crate::live::Sub`], for the reads the socket repeats.
+pub(crate) fn routed(path: &str) -> String {
+    match node() {
+        Some(node) if is_agent_path(path) => format!("/api/node/{node}{path}"),
+        _ => path.to_string(),
+    }
+}
+
+/// Whether a path belongs to the agent API — the sessions, their transcripts, and the definitions
+/// behind them. Matched on the whole segment, so `/api/agentsomething` is not one of them.
+fn is_agent_path(path: &str) -> bool {
+    let route = path.split('?').next().unwrap_or(path);
+    route == "/api/agents" || route.starts_with("/api/agents/")
+}
+
 async fn get<T: DeserializeOwned>(url: &str) -> Result<T, String> {
-    let resp = Request::get(url).send().await.map_err(stringify)?;
+    let resp = Request::get(&routed(url)).send().await.map_err(stringify)?;
     finish(resp).await
 }
 
 async fn post<B: Serialize, T: DeserializeOwned>(url: &str, body: &B) -> Result<T, String> {
-    let resp = Request::post(url)
+    let resp = Request::post(&routed(url))
         .json(body)
         .map_err(stringify)?
         .send()

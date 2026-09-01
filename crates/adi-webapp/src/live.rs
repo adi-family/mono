@@ -73,7 +73,11 @@ impl Sub {
     {
         Self {
             method,
-            path,
+            // Through the same mapping a one-off read takes, so a subscription and the fetch it
+            // replaces can never be pointed at two different machines (`crate::fetch::routed`).
+            // The server keys a topic by its path, so a node's read is its own topic and two tabs
+            // watching two nodes get an answer each.
+            path: crate::fetch::routed(&path),
             body,
             // A payload that won't parse is dropped rather than surfaced: it means the server and
             // this bundle disagree about a type, which a reload fixes and a flash message doesn't.

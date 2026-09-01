@@ -2575,6 +2575,7 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
                     title="Sessions"
                     actions=move || {
                         view! {
+                            {move || chat_session_node(state)}
                             {move || chat_session_filter(state)}
                             {move || chat_new_button(state, watch)}
                             <button class="adi-chome__drawer-close" type="button"
@@ -2643,6 +2644,10 @@ pub(crate) fn chat_home_view(state: State, watch: AgentsWatch) -> AnyView {
             // The Sessions head's filter menu, drawn here for the same reasons: one at a time, and
             // it must not be clipped by the rail it hangs off.
             {move || chat_filter_menu(state)}
+
+            // …and the node menu beside it, which is the same control for a different question:
+            // not which of these sessions, but whose.
+            {move || chat_node_menu(state, watch)}
         </div>
     }
     .into_any()
@@ -3842,6 +3847,131 @@ fn chat_filter_menu(state: State) -> Option<AnyView> {
                                 {if on { "\u{2713}" } else { "" }}
                             </span>
                             {f.label()}
+                        </button>
+                    }
+                }).collect::<Vec<_>>()}
+            </div>
+        }
+        .into_any(),
+    )
+}
+
+/// The rail's node button: **whose** sessions are listed below (`docs/fleet.md` §13).
+///
+/// Absent entirely on a machine paired with nobody, which is most of them — a control that can only
+/// ever say "this machine" is a control that costs the head 24px to say nothing. It appears the
+/// moment there is a fleet, and once a node is picked it takes the accent *and prints the petname*,
+/// because everything under it stops, hides and deletes runs, and which machine that lands on is
+/// not a fact to leave in a tooltip.
+fn chat_session_node(state: State) -> AnyView {
+    // Nothing paired: no question to ask. `None` while the list has not arrived either, so the
+    // head does not flash a control into existence a beat after the page draws.
+    if state.fleet_nodes.get().is_none_or(|n| n.nodes.is_empty()) {
+        return ().into_any();
+    }
+    let on = state.session_node.get();
+    let picked = on.is_some();
+    let hint = match on.as_deref() {
+        Some(node) => format!(
+            "showing the sessions on {node} \u{2014} starting, replying to and stopping a run here \
+             does it there"
+        ),
+        None => {
+            "showing this machine's sessions \u{2014} pick a paired node to see its".to_string()
+        }
+    };
+    view! {
+        <button class="adi-chome__node" class:is-on=picked type="button"
+            title=hint.clone() aria-label=hint aria-haspopup="menu"
+            aria-expanded=move || state.session_node_menu.get().is_some().to_string()
+            on:click=move |ev: web_sys::MouseEvent| open_node_menu(state, &ev)>
+            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"
+                stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"
+                inner_html=crate::icons::Icon::Node.path()></svg>
+            {on.map(|node| view! { <span class="adi-chome__node-name">{node}</span> })}
+        </button>
+    }
+    .into_any()
+}
+
+/// Drop the node menu from under its button, exactly as [`open_filter_menu`] does — and close the
+/// filter menu if that one is open, since both hang off the same 264px head and two menus over each
+/// other is one of them unreachable.
+fn open_node_menu(state: State, ev: &web_sys::MouseEvent) {
+    use wasm_bindgen::JsCast as _;
+
+    state.session_filter_menu.set(None);
+    if state.session_node_menu.get_untracked().is_some() {
+        state.session_node_menu.set(None);
+        return;
+    }
+    let at = ev
+        .current_target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+        .map(|el: web_sys::Element| {
+            let r = el.get_bounding_client_rect();
+            (r.left() as i32, r.bottom() as i32 + 4)
+        })
+        .unwrap_or((ev.client_x(), ev.client_y()));
+    state.session_node_menu.set(Some(at));
+}
+
+/// The node menu: this machine, then every paired node.
+///
+/// A locked node is **listed and disabled**, not dropped. Dropping it would say the node is gone
+/// when what is true is that this machine holds no password for it, and the item's title says where
+/// to fix that — the same Fleet page that took the password for the dashboards rail. There is only
+/// ever one credential per node, so unlocking a node for its dashboards unlocks it for this too.
+fn chat_node_menu(state: State, watch: AgentsWatch) -> Option<AnyView> {
+    let (x, y) = state.session_node_menu.get()?;
+    let nodes = state.fleet_nodes.get()?;
+    let current = state.session_node.get();
+    let here = current.is_none();
+    Some(
+        view! {
+            <div class="adi-menu__scrim"
+                on:click=move |_| state.session_node_menu.set(None)></div>
+            <div class="adi-menu" role="menu" style=format!("left:{x}px; top:{y}px")>
+                <div class="adi-menu__head">"Sessions on"</div>
+                <button class="adi-menu__item" class:is-on=here type="button"
+                    role="menuitemradio" aria-checked=here.to_string()
+                    on:click=move |_| {
+                        crate::state::view_sessions_on(state, watch, None);
+                        state.session_node_menu.set(None);
+                    }>
+                    <span class="adi-menu__tick" aria-hidden="true">
+                        {if here { "\u{2713}" } else { "" }}
+                    </span>
+                    "This machine"
+                </button>
+                {nodes.nodes.into_iter().map(|node| {
+                    let on = current.as_deref() == Some(node.node.as_str());
+                    let name = node.node.clone();
+                    let title = if node.locked {
+                        format!(
+                            "{name} is locked here \u{2014} give this machine its password on the \
+                             Fleet page first"
+                        )
+                    } else {
+                        format!("show {name}'s sessions, and drive them from here")
+                    };
+                    view! {
+                        <button class="adi-menu__item" class:is-on=on type="button"
+                            role="menuitemradio" aria-checked=on.to_string()
+                            disabled=node.locked title=title
+                            on:click=move |_| {
+                                crate::state::view_sessions_on(
+                                    state, watch, Some(name.clone()),
+                                );
+                                state.session_node_menu.set(None);
+                            }>
+                            <span class="adi-menu__tick" aria-hidden="true">
+                                {if on { "\u{2713}" } else { "" }}
+                            </span>
+                            {node.node}
+                            {node.locked.then(|| view! {
+                                <span class="adi-menu__tick" aria-hidden="true">"\u{1F512}"</span>
+                            })}
                         </button>
                     }
                 }).collect::<Vec<_>>()}

@@ -8,11 +8,12 @@ use adi_ui::{Block, Flag, ToolDecl};
 use adi_webapp_api::types::{
     AgentGoal, AgentPeek, AgentRef, AgentRunInfo, AgentRuns, AgentSimState, AgentTokens,
     AgentsState, AllAgentRuns, DashboardsState, DbExecResult, DbQueryResult, DbState,
-    DbTablesState, DirListing, FileEntry, FleetDashboards, FleetState, Health, HiveState,
-    KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults, KnowledgeState,
-    MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog, ProjectHookRef, ProjectsState,
-    RunRef, SecretsState, TasksState, ToolsState, TriggerLog, TriggerRef, TriggersState, UsedPorts,
-    WorkspaceTerm, WorkspaceTermRef, WorkspacesRef, WorkspacesState,
+    DbTablesState, DirListing, FileEntry, FleetDashboards, FleetNodes, FleetState, Health,
+    HiveState, KnowledgeBaseDto, KnowledgeNoteDto, KnowledgeNotes, KnowledgeResults,
+    KnowledgeState, MeshState, MetaState, PortsState, ProjectDetail, ProjectHookLog,
+    ProjectHookRef, ProjectsState, RunRef, SecretsState, TasksState, ToolsState, TriggerLog,
+    TriggerRef, TriggersState, UsedPorts, WorkspaceTerm, WorkspaceTermRef, WorkspacesRef,
+    WorkspacesState,
 };
 use leptos::prelude::*;
 
@@ -127,6 +128,25 @@ pub(crate) struct State {
     /// home is re-rendered whenever `/api/meta` moves, and a signal created inside it would take
     /// the open menu with it twice a second.
     pub(crate) session_filter_menu: RwSignal<Option<(i32, i32)>>,
+    /// **Whose** sessions the rail is showing: `None` for this machine, or the petname of a paired
+    /// node (`docs/fleet.md` §13). Setting it repoints every agent read and every agent mutation at
+    /// that node's own control panel — see [`view_sessions_on`].
+    ///
+    /// The rendered half of a pair: [`crate::fetch::node`] is what a request consults, and this is
+    /// what the page draws and what makes the live channel re-subscribe. They are only ever set
+    /// together, by [`view_sessions_on`].
+    ///
+    /// Page state rather than a stored preference, deliberately and unlike most such choices: a
+    /// reload comes back to *this* machine, so it is impossible to return to a tab tomorrow and
+    /// stop a run on a machine you have forgotten you were driving.
+    pub(crate) session_node: RwSignal<Option<String>>,
+    /// Where the rail's node menu is open, in viewport coordinates — `None` while it is closed.
+    /// On [`State`] for the same reason [`Self::session_filter_menu`] is.
+    pub(crate) session_node_menu: RwSignal<Option<(i32, i32)>>,
+    /// The paired nodes this machine holds a password for (`/api/fleet/nodes`) — what the node menu
+    /// offers. Local and cheap, unlike [`Self::fleet_dashboards`] beside it, so it is watched with
+    /// the rest of the chat page rather than fetched on a click.
+    pub(crate) fleet_nodes: RwSignal<Option<FleetNodes>>,
     /// How many sessions the chat rail has asked the backend for — [`SESSION_PAGE`] to begin with,
     /// another page each time its **Load more** is pressed.
     ///
@@ -318,6 +338,9 @@ impl State {
             show_hidden: RwSignal::new(false),
             session_filter: RwSignal::new(SessionFilter::default()),
             session_filter_menu: RwSignal::new(None),
+            session_node: RwSignal::new(None),
+            session_node_menu: RwSignal::new(None),
+            fleet_nodes: RwSignal::new(None),
             rail_limit: RwSignal::new(SESSION_PAGE),
             chat_drawer: RwSignal::new(None),
             tables: Tables::new(),
@@ -346,25 +369,6 @@ pub(crate) enum SessionFilter {
 }
 
 impl SessionFilter {
-    /// The value it rides under in the `<select>`, and what a change event is read back as.
-    pub(crate) fn key(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Starred => "starred",
-            Self::Mine => "mine",
-        }
-    }
-
-    /// The filter for a `<select>` value; anything unrecognised is the unfiltered rail, which is
-    /// the one answer that can never hide a conversation.
-    pub(crate) fn from_key(key: &str) -> Self {
-        match key {
-            "starred" => Self::Starred,
-            "mine" => Self::Mine,
-            _ => Self::All,
-        }
-    }
-
     /// What the box says while this one is chosen.
     pub(crate) fn label(self) -> &'static str {
         match self {
@@ -1594,6 +1598,51 @@ pub(crate) fn refresh_fleet_dashboards(s: State) {
             Err(e) => s.flash.set(Some(Flash::err(e))),
         }
         s.fleet_dashboards_busy.set(false);
+    });
+}
+
+/// Point the sessions rail — and everything the chat pane does — at a paired node, or back at this
+/// machine (`docs/fleet.md` §13).
+///
+/// Three things happen together, and they have to:
+///
+/// 1. **The address changes.** [`fetch::set_node`] is what every later agent read and every later
+///    agent write consults, so from here on `/api/agents/…` means that node's.
+/// 2. **What is on screen is dropped.** The rail, the open conversation and its transcript all
+///    describe the machine we are leaving, and a run id is only unique on the machine that minted
+///    it — left in place, the next transcript poll would ask the *new* node for a run it has never
+///    heard of, and the pane would sit on a stale conversation while reporting an error about
+///    another one. Clearing is also what makes the switch legible: the rail visibly refills.
+/// 3. **The socket re-subscribes**, because [`subscriptions`] reads `session_node` tracked. Until
+///    those land, the fetch below fills the rail — the same fallback the panel uses whenever the
+///    live channel is down.
+pub(crate) fn view_sessions_on(s: State, watch: AgentsWatch, node: Option<String>) {
+    if s.session_node.get_untracked() == node {
+        return;
+    }
+    fetch::set_node(node.clone());
+    s.session_node.set(node);
+
+    watch.name.set(None);
+    watch.run_id.set(None);
+    watch.runs.set(Vec::new());
+    watch.peek.set(None);
+    watch.log.set(String::new());
+    s.all_chats.set(None);
+    s.agents.set(None);
+    s.rail_limit.set(SESSION_PAGE);
+
+    wasm_bindgen_futures::spawn_local(async move {
+        // The two reads the rail is built from. A failure is a flash and an empty rail, which is
+        // the honest picture: the node was reachable enough to be offered in the menu and is not
+        // answering now, and the way back is the same menu.
+        match fetch::agents().await {
+            Ok(a) => set_if_changed(s.agents, a),
+            Err(e) => s.flash.set(Some(Flash::err(e))),
+        }
+        if let Ok(c) = fetch::all_agent_runs(None).await {
+            set_if_changed(s.all_chats, c);
+        }
     });
 }
 

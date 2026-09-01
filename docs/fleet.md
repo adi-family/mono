@@ -523,6 +523,80 @@ machine in the fleet — there is no node behind it, nothing dials it, and it se
 
 ---
 
+## 13. Driving a node's sessions from here
+
+§11 puts another machine's *dashboards* in this panel. This does the same for its **agents and their
+sessions** — the rail on the chat home lists the node's conversations, and starting, replying to,
+stopping, hiding and deleting one from here does it there. The rail's head grows one control, a node
+menu beside the filter, and picking a node is the whole gesture.
+
+**Nothing new is drawn.** The screens for this already exist and already work; what they lacked was
+an address for data that is not this machine's. So the pages stay where they are and the *API*
+moves:
+
+```
+GET|POST /api/node/<node>/api/…   →  the same request, answered by that node's control panel
+```
+
+One route (`adi-app/src/viewer.rs`, `proxy`), forwarded over the same `node::get`/`node::post` a
+transfer and the dashboards listing use, with the credential this machine already holds (§11). The
+client rewrites its own paths in one place — `fetch::routed`, which every one-off read, every
+mutation and every live subscription passes through — so a page and the socket watching it can never
+be pointed at two different machines. There is no second copy of the sessions rail, no second DTO,
+and nothing to keep in step.
+
+**Only the agent API moves, and that is a decision rather than an accident.** `/api/agents…` follows
+the node; projects, ports, hive, secrets and the store browser do not. Sessions are the thing you go
+looking for on another machine — the rest of the panel is about *this* one's files and services, and
+silently repointing all of it would mean an operator who forgot which node was selected creates a
+project on the wrong machine. The node menu is in the sessions rail for the same reason: it is
+scoped to what it actually changes.
+
+**It grants no authority that was not already granted.** Holding a node's password means this panel
+can list it, grant against it and transfer to it; a forwarded `POST /api/agents/run` spends the same
+authority through a different screen. Both halves of §5 are still enforced **on the node** — the
+mesh grant that admitted the connection, and the Basic-auth gate behind it — and both are the node's
+to withdraw. Without a stored credential the forwarder answers `401` and says the node is locked
+rather than reaching anything, and **Lock** on the Fleet page is still the undo.
+
+Four things worth knowing before changing any of it:
+
+- **`/api` and nothing else.** A node's own page, its wasm and its assets are not reachable through
+  the forwarder — a `Response` here is a status and a JSON string, and the point is that the UI is
+  *this* machine's while only the data is the node's. `app.<node>.n.adi` is still how you open the
+  node's own panel, and always was. `/api/ws` is refused by name: it is a socket upgrade, and what
+  this forwards is one request and one response.
+- **No chains.** `/api/node/a/api/node/b/…` is refused, for the reason §4 refuses an `n.adi` name
+  inside a page already read through one: one hop is what this machine can reason about, and a chain
+  would put a third machine's data on screen under the second one's name.
+- **A node's read is watched at `SLOW`, never `FAST`.** The live channel will watch a forwarded read
+  exactly when it would watch the local one — it *is* that read — but each tick is an authenticated
+  mesh round trip with a third of a second of relay latency in front of it (§9). A transcript on
+  another machine updates every three seconds instead of every one, and that is the cost of it being
+  on another machine.
+- **Pictures are the one thing that does not follow.** Uploading one is a POST whose body is a PNG,
+  which a JSON forwarder cannot carry, so the composer refuses it with a sentence naming the node
+  rather than storing bytes here and putting an id in the node's transcript that names them.
+  *Reading* one does follow, by a different road: `<img src>` points at
+  `http://app.<node>.n.adi/api/agents/attachment/<id>`, which needs nothing new — the front door
+  routes it, the gateway attaches the password (§11), and a plain GET has no preflight to fail on.
+
+**The menu's list is its own endpoint, and a cheap one.** `GET /api/fleet/nodes` is the registry
+joined to the credentials kept here: which nodes are paired, and which of them this machine holds a
+password for. It leaves the machine not at all, which is what makes it watchable beside every other
+list — where `/api/fleet/dashboards` is one authenticated mesh call *per node* and belongs to a rail
+somebody opened. A locked node is listed and disabled rather than hidden, because a missing row
+reads as "that node is gone" when the truth is "unlock it on the Fleet page", and there is one
+credential per node, so unlocking it for the dashboards rail unlocks it for this.
+
+**The choice is not stored.** A reload comes back to this machine. Most page state here is
+deliberately unstored, but this one is load-bearing rather than tidy: it must be impossible to
+return to a tab tomorrow and stop a run on a machine you have forgotten you were driving. While a
+node *is* picked the rail's button takes the accent and **prints the petname**, for the same reason
+— which machine a Stop lands on is not a fact to leave in a tooltip.
+
+---
+
 ## Checklist
 
 Each item ships with unit tests in the same file.
@@ -648,3 +722,21 @@ Each item ships with unit tests in the same file.
       renders another machine's dashboard on the origin that holds the key and every password.
 - [ ] I9 A backgrounded tab: what a phone's browser does to a relayed QUIC session while the
       screen is off, and whether the reconnect path is enough. Untested.
+
+### J — driving a node's sessions from here (§13)
+
+- [x] J1 `viewer::proxy` + `split_node_path`: `GET|POST /api/node/<node>/api/…` forwarded on the
+      held credential, `/api` only, no `/api/ws`, no chains, a lock answered as a `401`.
+- [x] J2 `GET /api/fleet/nodes`: the registry joined to the credentials kept here, local and cheap,
+      so the node menu can be watched rather than clicked for.
+- [x] J3 `fetch::routed` — the client's one rewrite, applied to every one-off read, every mutation
+      and (through `live::Sub`) every subscription, so no two of them can name different machines.
+- [x] J4 The live channel watches a node's read exactly when it watches the local one, floored to
+      `SLOW` because each tick crosses the mesh.
+- [x] J5 The rail's node menu, `state::view_sessions_on` (address, then what is on screen, then the
+      socket), and the petname printed while a node is picked.
+- [x] J6 Attachments: reading one goes to `app.<node>.n.adi` directly, uploading one is refused with
+      a sentence naming the node.
+- [ ] J7 A run's images uploaded to a node. Needs a body the forwarder can carry that is not JSON —
+      either a bytes path beside `Response`, or the browser posting at the node's own origin, which
+      is a CORS question and not a routing one.
