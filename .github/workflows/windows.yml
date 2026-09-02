@@ -41,10 +41,14 @@ jobs:
       - name: Unit tests (windows-msvc)
         run: >
           cargo test --no-fail-fast
-          -p adi-osext -p adi-config -p adi-secrets -p adi-core -p adi-agents
+          -p adi-osext -p adi-config -p adi-secrets -p adi-core -p adi-agents -p adi-launcher
 
+      # adi-launcher is `ADI.exe`, the only one of these a person ever names. It is compiled here
+      # for the same reason as the rest — it is Windows-only code written on a Mac — though its
+      # icon is not: the resource compiler is mingw's `windres`, and the crate's build script
+      # skips the resources under MSVC rather than failing. Nothing that ships is built this way.
       - name: Build release binaries
-        run: cargo build --release -p adi-cli -p adi-dns -p adi-hive -p adi-app
+        run: cargo build --release -p adi-cli -p adi-dns -p adi-hive -p adi-app -p adi-launcher
 
       # Read-only smoke test: proves the binary runs on real Windows, resolves its store under
       # %USERPROFILE%, and that the status pipeline actually shells out to `schtasks /Query`
@@ -138,3 +142,96 @@ jobs:
             Stop-Job $job
             Write-Host "lifecycle timed out at 90s (likely the elevated DNS-route step in a non-interactive session); this is expected on CI."
           }
+
+      # ── the installer, on real Windows ──────────────────────────────────────────────────────
+      #
+      # The release build cross-compiles the installer from Linux, where nothing can run it. An
+      # installer that compiles is not an installer that works: what breaks is the PATH edit, a
+      # shortcut path, a registry key, an uninstall that leaves the folder behind — none of which
+      # is visible until someone runs it. So it is built and *exercised* here, against the MSVC
+      # binaries this job already produced, and then undone again.
+      #
+      # Last in the job on purpose: the uninstall runs `adi-mono disable`, which unregisters this
+      # user's scheduled tasks, and the lifecycle step above wants its own.
+      - name: Install NSIS
+        run: choco install nsis -y --no-progress
+
+      - name: Build and exercise the installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+
+          # The package layout apps/windows/build.sh assembles, staged here from the MSVC build.
+          # Kept in step with that script by the assertion below: every file the installer expects
+          # has to be present, or makensis fails outright.
+          $stage = "$env:RUNNER_TEMP\pkg"
+          New-Item -ItemType Directory -Force -Path "$stage\bin" | Out-Null
+          foreach ($b in 'adi-mono', 'adi-dns', 'adi-hive', 'adi-app') {
+            Copy-Item "target\release\$b.exe" "$stage\bin\$b.exe"
+          }
+          Copy-Item "target\release\adi-launcher.exe" "$stage\bin\ADI.exe"
+          Copy-Item "apps\windows\ADI.ico" "$stage\bin\ADI.ico"
+          '@echo off'                     | Set-Content "$stage\bin\adi.cmd"
+          '"%~dp0adi-mono.exe" %*'        | Add-Content "$stage\bin\adi.cmd"
+          '9.9.9'                         | Set-Content "$stage\VERSION"
+          Copy-Item "apps\windows\README.md" "$stage\README.txt"
+          Copy-Item "LICENSE" "$stage\LICENSE.txt"
+
+          $setup = "$env:RUNNER_TEMP\ADI-Setup-x64.exe"
+          & $makensis /V2 /DVERSION=9.9.9 /DVERSION_QUAD=9.9.9.0 `
+            "/DSOURCE_DIR=$stage" "/DOUTFILE=$setup" "apps\windows\installer\adi.nsi"
+          if ($LASTEXITCODE -ne 0) { throw "makensis exited $LASTEXITCODE" }
+          Write-Host "installer built: $((Get-Item $setup).Length) bytes"
+
+          # /S is a silent install. The .adi route step and the finish page (which would launch
+          # the tray app) are both skipped for a silent install by design — there is nobody here
+          # to answer a UAC prompt or look at a tray icon.
+          $install = "$env:LOCALAPPDATA\Programs\ADI"
+          Start-Process -Wait -FilePath $setup -ArgumentList '/S'
+
+          foreach ($f in 'bin\ADI.exe', 'bin\adi-mono.exe', 'bin\adi-dns.exe', 'bin\adi-hive.exe',
+                         'bin\adi-app.exe', 'bin\adi.cmd', 'bin\VERSION', 'README.txt', 'VERSION',
+                         'Uninstall ADI.exe') {
+            if (-not (Test-Path "$install\$f")) { throw "the install is missing $f" }
+          }
+          # Nothing loose in the root but documents and the uninstaller: no person should have to
+          # choose between four .exe files, and that is the whole reason this installer exists.
+          $loose = Get-ChildItem $install -File -Filter *.exe | Where-Object { $_.Name -ne 'Uninstall ADI.exe' }
+          if ($loose) { throw "the install root has stray executables: $($loose.Name -join ', ')" }
+          Write-Host "installed layout OK"
+
+          # The installed CLI runs, and it is the one we just built.
+          & "$install\bin\adi-mono.exe" --help | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "the installed adi-mono --help exited $LASTEXITCODE" }
+
+          # PATH, read raw: path.ps1 must not have expanded anyone else's variables while adding
+          # ours, so assert both that ours is there and that a %VAR% written by someone else
+          # survives. (There need not be one; this only checks we did not create the damage.)
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $raw = $key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          if (($raw -split ';') -notcontains "$install\bin") { throw "PATH is missing $install\bin (raw: $raw)" }
+          Write-Host "PATH OK"
+
+          $shortcut = "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\ADI.lnk"
+          if (-not (Test-Path $shortcut)) { throw "no Start-menu shortcut" }
+
+          $uninstKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\ADI'
+          $entry = Get-ItemProperty $uninstKey
+          if ($entry.DisplayVersion -ne '9.9.9') { throw "Installed apps shows '$($entry.DisplayVersion)'" }
+          Write-Host "Add/Remove Programs entry OK"
+
+          # An NSIS uninstaller copies itself to %TEMP% and runs from there — which is what lets
+          # it delete its own folder, and why the process we started returns long before the work
+          # is done. Wait for the folder to actually go.
+          Start-Process -Wait -FilePath "$install\Uninstall ADI.exe" -ArgumentList '/S'
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Test-Path $install) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (Test-Path $install) { throw "the uninstaller left $install behind" }
+
+          $raw = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment').GetValue(
+            'Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+          if (($raw -split ';') -contains "$install\bin") { throw "the uninstaller left ADI on PATH" }
+          if (Test-Path $shortcut) { throw "the uninstaller left the Start-menu shortcut" }
+          if (Test-Path $uninstKey) { throw "the uninstaller left its Installed apps entry" }
+          Write-Host "OK: installed, verified and uninstalled cleanly on real Windows."

@@ -165,6 +165,93 @@ runs now + at login, auto-restart via `KeepAlive`) and, on first enable, the `.a
 route (`/etc/resolver/adi` + the landing daemon — one admin-password prompt). The status
 word reads `Running` / `Starting…` / `Off`.
 
+### The two controls at the foot of the window
+
+Below a rule, on **every** step including the two setup ones, sit the two things that have to
+work when nothing else does (`Sources/Maintenance.swift`).
+
+**Update.** The installed version, what the release channel says about it, and one button —
+*Check for Updates*, becoming *Update to X* when there is one. It runs the bundled CLI
+(`adi-mono update check` / `update run`) and reaches GitHub over the system's own DNS.
+
+> **It is in the app, and not only on the control panel, on purpose.** The panel is `app.adi`,
+> so every route to it goes through a name *this install* serves — and a broken `.adi` route is
+> precisely the fault someone needs the fix for. An update offered only on a page you cannot
+> load is an update that is not offered. `adi-mono` sits in `Contents/Resources` and needs
+> nothing of ADI's own to be working.
+
+A successful install swaps the bundle and then terminates and reopens the app, so the window
+disappears and comes back as the new version; the row says so before it happens. The row is
+hidden on a non-release flavour (there is one release channel and its artifact is `ADI.app` —
+a dev build updating itself would swap the released bundle over its own), and on the *move me*
+step (an update installs into `/Applications` wherever the running copy is, so from a disk image
+it would update a different bundle and leave this window untouched).
+
+**Something not working?** Marked with a ladybug, and carrying two buttons.
+
+*Create Report* runs `adi-mono diagnose`, writes an archive of everything that could explain a
+fault, and reveals it in Finder (it becomes *Show in Finder* afterwards). It also says what the
+collector already thinks is wrong, so a fixable problem need not be sent anywhere. See
+**Diagnostic reports** below.
+
+*Open an Issue ↗* opens a **pre-filled** GitHub issue at `ADIIssuesURL` (`Info.plist`, canonical
+value = the workspace `Cargo.toml`'s `repository`): a blank space to write in, then the ADI
+version and flavour, the macOS version and the architecture slice actually running, the three
+setup gates, every service's state, and the findings from the last report by name. Those are the
+facts that decide a bug report and the ones nobody thinks to include — each one otherwise costs a
+round trip.
+
+The one thing the URL cannot carry is the archive: GitHub takes an attachment only from a drop
+onto the form, so the draft ends by asking for it by filename. Both buttons sit under the text
+rather than beside it — side by side on the title's line they do not fit 340pt, and shortening
+either costs the word that says what it does.
+
+> Two things about the URL are easy to break. `URLComponents` leaves a literal `+` alone in a
+> query and the form reads it back as a *space*, so a version like `1.2.0+dev` arrives mangled —
+> hence the post-encoding fixup to `%2B`, which is the only point where a real plus and an
+> encoded space can still be told apart. And the body is capped (6000 chars): a prefill past
+> what GitHub or the browser will accept presents as a button that opens a blank page.
+
+## Diagnostic reports
+
+`adi-mono diagnose` collects one archive of this machine's ADI state. It is what the window's
+report button runs, and it can be run in a terminal on a Mac whose app will not open at all:
+
+```bash
+/Applications/ADI.app/Contents/Resources/adi-mono diagnose
+adi-mono diagnose --out ~/Desktop            # somewhere else
+adi-mono diagnose --json                     # what the app reads
+```
+
+It lands in `~/.adi/mono/reports/adi-report-<version>-<stamp>.zip` — the store rather than the
+Desktop, because writing to `~/Desktop` raises a macOS file-access consent prompt, and a prompt
+is one more thing to fail on a machine somebody is already reporting as broken.
+
+Inside: `summary.txt` (versions, the three setup gates, every service, and the collector's own
+reading of what looks wrong — read this first), `status.json`, `install.txt` (bundle path,
+quarantine, code signature, Gatekeeper, architectures), `services.txt` (`launchctl print` per
+job), `network.txt` (the resolver file, `scutil --dns`, a `dig` against the resolver, listening
+sockets, and HTTP probes of the panel and the front door), `update.txt`, `store.txt`,
+`environment.txt`, `logs/` (the last 256 KB of every `adi*.log`, including the root front
+door's), `crash-reports/`, and `unified-log.txt`.
+
+Two properties are load-bearing and worth not breaking:
+
+- **It reads and changes nothing.** No service is started, stopped or reconfigured, so it is
+  safe on a machine mid-incident — including one whose DNS is down, which is the case it exists
+  for.
+- **Secrets never enter it.** `secrets/`, the database, agent transcripts and the front door's
+  TLS keys are listed in `store.txt` and never opened; only a fixed whitelist of config files is
+  copied verbatim, and every line written is passed through a redactor first, so a key whose
+  name says it carries a credential ships as `«redacted»`. The marker list deliberately spells
+  out `authorization` rather than `auth`, because `codesign` reports the signing chain as
+  `Authority=…` and that is the one line saying whether the bundle is genuine.
+
+It replaces the pair of hand-written scripts that used to be airdropped to whoever was stuck
+(`build/adi-diagnose.sh`, `build/adi-services-diagnose.sh`, both untracked). Those still have
+one use this does not: a Mac where the app will not launch at all can still be asked to run the
+CLI, but only the scripts do a foreground launch of the app binary to show why it dies.
+
 ## Architecture
 
 The control logic is in Rust (`adi-core`), triggered through the `adi-mono` CLI; the
@@ -186,11 +273,12 @@ apps/macos/Sources/
   ADIApp.swift         @main — a single translucent Window (content-sized)
   ContentView.swift    the window: logo + big power button + status word
   PowerButton.swift    the big circular On/Off toggle
+  Maintenance.swift    the footer: the update row and the report-a-problem row
   VisualEffectView.swift  NSVisualEffectView vibrancy + non-opaque window
   ADILogo.swift        the ADI mark (hexagon cage + orange core, from the .adi page)
   AppModel.swift       holds the last report + 2s refresh + isOn/busy + toggle
   Core.swift           the only bridge to core: runs `adi-mono`, decodes its JSON
-  Models.swift         Codable mirror of `adi-mono status --json`
+  Models.swift         Codable mirror of `adi-mono status/update/diagnose --json`
 apps/macos/
   icon-gen.swift       renders the app icon (same design as ADILogo); see below
   ADI.icns             the built app icon (Info.plist CFBundleIconFile = ADI)

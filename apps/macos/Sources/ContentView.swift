@@ -28,6 +28,12 @@ struct ContentView: View {
                 case .needsPermissions: permissionsStep
                 case .ready: readyStep
                 }
+
+                // Below every step, including the two the gate above has not let past yet. The
+                // gate is about what can be *installed*; reporting needs none of it, and a
+                // person stuck on a permission they cannot grant has exactly two useful moves
+                // left — take a version that fixes it, or send somebody the evidence.
+                MaintenanceFooter(model: model, offerUpdate: model.stage != .mustMove)
             }
             .padding(.horizontal, 36)
             .padding(.vertical, 34)

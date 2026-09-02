@@ -8,6 +8,7 @@ use adi_config::Flavor;
 use crate::app::App;
 use crate::bun;
 use crate::dashboards::Dashboards;
+use crate::diagnose::Diagnose;
 use crate::dns::Dns;
 use crate::install;
 use crate::service::{Service, ServiceReport};
@@ -63,6 +64,13 @@ impl Adi {
     #[must_use]
     pub fn update(self) -> Update {
         Update::new()
+    }
+
+    /// The diagnostics facade — collect one sendable archive of this machine's state
+    /// (`adi.diagnose().collect(None)`). Reads only; it starts and stops nothing.
+    #[must_use]
+    pub fn diagnose(self) -> Diagnose {
+        Diagnose::new()
     }
 
     /// The projects registry backed by the standard store — `Adi::new().projects().list()`.

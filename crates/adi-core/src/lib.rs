@@ -6,6 +6,7 @@ pub mod app;
 pub mod bun;
 mod commands;
 pub mod dashboards;
+pub mod diagnose;
 pub mod dns;
 pub mod install;
 pub mod launchd;
@@ -19,6 +20,7 @@ pub mod update;
 
 pub use app::App;
 pub use commands::{Adi, Report, SetupReport};
+pub use diagnose::{Bundle as DiagnosticBundle, Diagnose, Error as DiagnoseError};
 pub use dns::Dns;
 pub use install::Location;
 pub use service::{Action, Service, ServiceReport};

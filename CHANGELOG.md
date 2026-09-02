@@ -20,6 +20,50 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.2.0 — 2026-09-02
+
+### Added
+
+- **Windows installs like an app now.** Download `ADI-Setup-x64.exe`, click through it, and what
+  you get is one entry in the Start menu called ADI. Opening it starts the platform, opens the
+  control panel, and leaves an icon by the clock you can start, stop and reach ADI from. Before
+  this, the download was a zip of four `.exe` files and four `.cmd` files in one folder, and the
+  first thing it asked a new person was which of them to run — a question with no good answer,
+  since all four are the platform and none of them is the app. The four are still there, because
+  the platform is genuinely four supervised services; they are in a `bin\` folder now, exactly as
+  they have always been hidden inside `ADI.app` on a Mac. The install goes into your own user
+  account and needs no administrator, `adi` lands on your PATH, ADI appears in Installed apps, and
+  uninstalling gives back the `.adi` domain and leaves `%USERPROFILE%\.adi` — your projects,
+  secrets and database — untouched. The one administrator prompt, for the `.adi` domain, is now
+  asked during the install where a prompt is expected, instead of arriving unexplained the first
+  time you opened something.
+
+- **The Mac app updates itself, from the app.** The window now shows which version you are on and
+  a button that fetches the next one. This was only ever on the control panel before, and the
+  control panel is `app.adi` — a page reached through a name ADI itself has to resolve. So the one
+  fault that most needs a new version, a `.adi` route that has stopped working, was also the fault
+  that hid the way to get one: nothing loaded, and the only remaining advice was to download the
+  disk image again by hand. The button runs the copy of the CLI inside the app bundle and talks to
+  GitHub over your Mac's own DNS, so it works when nothing of ADI's does. It says what it is doing
+  — including that ADI closes and reopens itself to finish — and a version that turns out not to
+  work is still rolled back, exactly as a background update is.
+- **"Something not working?" makes one file to send.** A second button at the foot of the window
+  collects everything that could explain a fault — the versions, the two permissions, every
+  service and what its supervisor last did with it, the `.adi` route, what is listening, whether
+  the panel and the front door actually answer, the tail of every log, any crash reports — into a
+  single archive, and shows it in Finder ready to attach to a message. It reads only; nothing is
+  started or stopped, so it is safe to press while something is broken. It also tells you in the
+  window what it already thinks is wrong, which for a stopped service or a missing route is the
+  whole answer and needs sending to nobody. Secrets, your database and agent transcripts are never
+  opened, and any credential-looking value in the config it does copy is blanked out first. The
+  same thing is `adi-mono diagnose` in a terminal, for a Mac where the app will not open at all.
+- **…and a second button next to it opens the issue for you.** *Open an Issue* goes straight to
+  GitHub with the report already written up: which build this is, which macOS, whether each of the
+  three setup steps is done, what every service is doing, and anything the report flagged — with a
+  blank space at the top for what actually happened. Those are the details that decide whether a
+  bug can be looked at, and every one of them used to cost a message asking for it. Drag the
+  archive into the box and it is a complete report.
+
 ## 1.1.0 — 2026-09-01
 
 ### Added

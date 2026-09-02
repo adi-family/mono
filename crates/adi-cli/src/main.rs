@@ -30,7 +30,7 @@ use crate::db::{DbCommand, run_db};
 use crate::dns::DnsCommand;
 use crate::events::{EventsCommand, run_events};
 use crate::facts::{FactsCommand, run_facts};
-use crate::format::{print_bun, print_report, print_service};
+use crate::format::{print_bun, print_json, print_report, print_service};
 use crate::goals::{GoalsCommand, run_goals};
 use crate::indexer::{IndexerCommand, run_indexer};
 use crate::knowledge::{KnowledgeCommand, run_knowledge};
@@ -202,6 +202,21 @@ enum Command {
     Update {
         #[command(subcommand)]
         command: UpdateCommand,
+    },
+    /// Collect one sendable archive of this machine's ADI state — versions, setup, services,
+    /// routes, ports, logs and crash reports — for somebody debugging it from the outside.
+    ///
+    /// Reads only: nothing is started, stopped or reconfigured, so it is safe to run on a
+    /// machine mid-incident. Secrets, the database and agent transcripts are never opened, and
+    /// credential-looking config values are blanked out before anything is written.
+    Diagnose {
+        /// Where to write it — a file, or a directory to name it in. Default: the store's
+        /// `reports/` directory.
+        #[arg(long, value_name = "PATH")]
+        out: Option<std::path::PathBuf>,
+        /// Emit machine-readable JSON (what the macOS app's report button reads).
+        #[arg(long)]
+        json: bool,
     },
     /// Internal: serve one conversation's ADI tools to a Claude engine over MCP on stdio. Spawned
     /// by that engine's CLI, which the runner points at this command; not for direct use.
@@ -398,6 +413,7 @@ fn main() {
             }
         }
         Command::Update { command } => run_update(adi, command),
+        Command::Diagnose { out, json } => run_diagnose(adi, out.as_deref(), json),
         // stdout is the MCP transport, so a failure cannot be reported there — only on stderr,
         // which the engine's CLI surfaces as the server's own log.
         Command::Mcp {
@@ -436,6 +452,40 @@ fn main() {
     }
 }
 
+/// Collect a diagnostic archive and say where it landed.
+///
+/// The human form leads with the path, because the whole point of the command is that somebody
+/// has to find that file and send it; the findings follow, so a person who can fix it themselves
+/// need not send anything.
+fn run_diagnose(adi: Adi, out: Option<&std::path::Path>, json: bool) {
+    match adi.diagnose().collect(out) {
+        Ok(bundle) => {
+            if json {
+                print_json(&bundle);
+                return;
+            }
+            println!("Wrote {}", bundle.path.display());
+            println!(
+                "{} · {} files — send this file to whoever is debugging it.",
+                adi_config::human_bytes(bundle.bytes),
+                bundle.files.len()
+            );
+            if bundle.findings.is_empty() {
+                println!("\nEvery check passed, so nothing here says what is wrong.");
+            } else {
+                println!("\nWhat looks wrong:");
+                for finding in &bundle.findings {
+                    println!("  - {finding}");
+                }
+            }
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -444,6 +494,26 @@ mod tests {
     #[test]
     fn the_command_tree_is_well_formed() {
         Cli::command().debug_assert();
+    }
+
+    /// The macOS app's report button runs exactly this argv, so it is pinned here rather than
+    /// only in Swift, where nothing in CI would notice it drifting.
+    #[test]
+    fn diagnose_is_reachable_and_takes_a_destination() {
+        let cli = Cli::try_parse_from(["adi-mono", "diagnose", "--json"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Diagnose {
+                out: None,
+                json: true
+            }
+        ));
+        let cli =
+            Cli::try_parse_from(["adi-mono", "diagnose", "--out", "/tmp/r.zip"]).expect("parses");
+        assert!(matches!(
+            cli.command,
+            Command::Diagnose { out: Some(ref p), json: false } if p.as_os_str() == "/tmp/r.zip"
+        ));
     }
 
     #[test]

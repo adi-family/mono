@@ -871,6 +871,12 @@ enum Command {
         #[command(subcommand)]
         command: UpdateCommand,
     },
+    Diagnose {
+        #[arg(long, value_name = "PATH")]
+        out: Option<std::path::PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
     #[command(hide = true)]
     Mcp {
         #[arg(long)]

@@ -27,6 +27,7 @@ default-members = [
     "crates/adi-hooks",
     "crates/adi-indexer",
     "crates/adi-knowledge",
+    "crates/adi-launcher",
     "crates/adi-marketplace",
     "crates/adi-mesh",
     "crates/adi-mesh-ffi",

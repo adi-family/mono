@@ -554,8 +554,8 @@ mod tests {
     }
 
     #[test]
-    fn find_bin_dir_handles_both_package_layouts() {
-        // Linux: <pkg>/bin/adi-mono
+    fn find_bin_dir_handles_every_package_layout() {
+        // Linux, and Windows since the installer landed: <pkg>/bin/adi-mono
         let linux = scratch("layout-linux");
         write(&linux.join("adi-linux-x64/bin").join(mono_file()), "x");
         write(&linux.join("adi-linux-x64/README.md"), "docs");
@@ -564,19 +564,30 @@ mod tests {
             linux.join("adi-linux-x64/bin")
         );
 
-        // Windows: <pkg>/adi-mono.exe, no bin/ level at all.
         let win = scratch("layout-win");
-        write(&win.join("ADI-windows-x64").join(mono_file()), "x");
+        write(&win.join("ADI-windows-x64/bin").join(mono_file()), "x");
+        write(&win.join("ADI-windows-x64/README.txt"), "docs");
         assert_eq!(
             find_bin_dir(&win, UNPACK_SEARCH_DEPTH).expect("win"),
-            win.join("ADI-windows-x64")
+            win.join("ADI-windows-x64/bin")
+        );
+
+        // The Windows package before 1.2.0 put the binaries in the archive root. Still found,
+        // and it has to be: the copy doing the updating is the *old* one, so a machine only
+        // reaches the new layout by way of a payload the old rule could locate — and the flat
+        // one is what an install from an older zip still looks like on disk.
+        let flat = scratch("layout-win-flat");
+        write(&flat.join("ADI-windows-x64").join(mono_file()), "x");
+        assert_eq!(
+            find_bin_dir(&flat, UNPACK_SEARCH_DEPTH).expect("flat"),
+            flat.join("ADI-windows-x64")
         );
 
         let empty = scratch("layout-empty");
         write(&empty.join("pkg/README.md"), "no binaries here");
         assert!(find_bin_dir(&empty, UNPACK_SEARCH_DEPTH).is_none());
 
-        for d in [linux, win, empty] {
+        for d in [linux, win, flat, empty] {
             let _ = fs::remove_dir_all(d);
         }
     }

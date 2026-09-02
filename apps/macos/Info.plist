@@ -31,5 +31,10 @@
          shelling out to ask. Restamped per flavour by build.sh alongside ADIFlavor. -->
     <key>ADIDomain</key>
     <string>adi</string>
+    <!-- Where the "Open an Issue" button goes. NOT restamped per flavour: a dev build's bugs
+         belong in the same tracker as a release build's. The canonical value is the workspace
+         Cargo.toml's `repository` — change the two together. -->
+    <key>ADIIssuesURL</key>
+    <string>https://github.com/adi-family/mono/issues/new</string>
 </dict>
 </plist>

@@ -257,7 +257,10 @@ jobs:
 
       - name: Toolchain (mingw-w64)
         run: |
-          sudo apt-get update && sudo apt-get install -y mingw-w64 zip
+          # nsis builds ADI-Setup-x64.exe. NSIS is itself a cross-compiler — the installer it
+          # produces here is the same executable it would produce on Windows — so the whole
+          # Windows release stays one Linux job.
+          sudo apt-get update && sudo apt-get install -y mingw-w64 zip nsis
           rustup target add x86_64-pc-windows-gnu wasm32-unknown-unknown
           # usearch (through adi-indexer) includes <Windows.h>; mingw-w64 ships the header as
           # `windows.h`. On Windows and on macOS the filesystem is case-insensitive and the
@@ -289,10 +292,14 @@ jobs:
       - name: Build the Windows package
         run: apps/windows/build.sh
 
+      # Two files, and they are not interchangeable. The installer is what a person downloads;
+      # the zip is what the auto-updater takes, and what an unattended install unpacks.
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64
-          path: apps/windows/build/ADI-windows-x64.zip
+          path: |
+            apps/windows/build/ADI-windows-x64.zip
+            apps/windows/build/ADI-Setup-x64.exe
           if-no-files-found: error
 
   # ── the manifest, and the release itself ─────────────────────────────────────────────────
@@ -334,6 +341,13 @@ jobs:
           add macos          artifacts/macos/ADI.dmg
           add linux-x86_64   artifacts/linux-x86_64/adi-linux-x64.tar.gz
           add windows-x86_64 artifacts/windows-x86_64/ADI-windows-x64.zip
+
+          # The Windows installer is attached to the release but is deliberately *not* a manifest
+          # artifact: the manifest names update payloads, and an update unpacks an archive into
+          # the install directory rather than running setup again. A machine handed this file by
+          # the updater would try to unzip an installer and fail every check from then on.
+          SETUP=artifacts/windows-x86_64/ADI-Setup-x64.exe
+          if [ -f "$SETUP" ]; then ASSETS+=("$SETUP"); fi
 
           if [ ${#MISSING[@]} -gt 0 ]; then
             echo "::warning::no artifact built for: ${MISSING[*]} — those platforms will not see this release"

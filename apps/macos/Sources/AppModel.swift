@@ -64,6 +64,7 @@ final class AppModel: ObservableObject {
         // refusals on every launch is not onboarding — the window asks for what is missing
         // instead, and `autoStartIfReady` runs this the moment the last piece lands.
         autoStartIfReady()
+        seedUpdateState()
         // Unwrap *before* the Task, so it captures an immutable binding rather than the
         // outer closure's mutable optional. Reading a captured `var` from concurrently
         // executing code is rejected outright by Swift 5.10 ("reference to captured var
@@ -224,6 +225,278 @@ final class AppModel: ObservableObject {
         Binding(get: { self.isOn }, set: { _ in self.togglePower() })
     }
 
+
+    // MARK: keeping this install current
+    //
+    // The update control lives in the app, and it runs the bundled CLI, because that is the only
+    // place it can be counted on. Every other way to a new version goes through a name this
+    // install serves — the control panel is `app.adi` — and a broken `.adi` route is exactly the
+    // fault somebody needs the fix for: they cannot open the page that would tell them how to
+    // repair the thing that stops them opening pages. `adi-mono` is in `Contents/Resources` and
+    // talks to GitHub over the system's own DNS, so it works when nothing else here does.
+
+    @Published private(set) var updateState: UpdateState = .unknown
+
+    enum UpdateState: Equatable {
+        /// Nothing has been asked yet, or the record on disk says nothing useful.
+        case unknown
+        case checking
+        case upToDate
+        case available(String)
+        /// The published version has no build for this machine — a real answer, not an error.
+        case unavailable(String)
+        case installing
+        case failed
+    }
+
+    /// The version in the bundle. Never blank and never late: this is the number to show while
+    /// the updater is deciding what to say about it.
+    let installedVersion = Core.installedVersion
+
+    /// Whether to offer the control at all — see `Core.isReleaseInstall`.
+    let updatable = Core.isReleaseInstall
+
+    /// Seed the update row from what the background agent already wrote down.
+    ///
+    /// A local file read, so it costs nothing and needs no network: the periodic updater has
+    /// been checking every few hours, and the window can say what it found before anyone
+    /// presses anything.
+    private func seedUpdateState() {
+        guard updatable else { return }
+        Task.detached(priority: .utility) {
+            guard case let .success(status) = Core.json(["update", "status", "--json"],
+                                                        as: UpdateStatus.self)
+            else { return }
+            let state: UpdateState? = switch status.lastOutcome {
+            case "update-available": status.latestVersion.map { .available($0) }
+            case "up-to-date", "installed": .upToDate
+            default: nil
+            }
+            guard let state else { return }
+            await MainActor.run { self.updateState = state }
+        }
+    }
+
+    /// Ask the release channel, now. The one action that reaches the network on purpose.
+    func checkForUpdates() {
+        guard updateState != .checking, updateState != .installing else { return }
+        updateState = .checking
+        Task.detached(priority: .userInitiated) {
+            let result = Core.json(["update", "check", "--json"], as: UpdateCheck.self)
+            await MainActor.run {
+                switch result {
+                case let .success(check) where check.updateAvailable:
+                    self.updateState = .available(check.latest)
+                case let .success(check) where !check.hasArtifact && check.latest != check.installed:
+                    self.updateState = .unavailable(check.latest)
+                case .success:
+                    self.updateState = .upToDate
+                case let .failure(why):
+                    self.updateState = .failed
+                    self.notice = Notice(
+                        title: "ADI could not check for updates",
+                        body: why.message + "\n\nThis usually means no route to the internet. Everything "
+                            + "already installed keeps working."
+                    )
+                }
+            }
+        }
+    }
+
+    /// Install the published version.
+    ///
+    /// This process does not outlive the command it starts: a successful update swaps the bundle
+    /// and then terminates and reopens the app from the new one. The CLI is a child rather than a
+    /// part of this process, so it survives that and finishes the job — which is why nothing here
+    /// tries to report success. What comes back is a window that is already the new version.
+    func installUpdate() {
+        guard updateState != .installing else { return }
+        updateState = .installing
+        Task.detached(priority: .userInitiated) {
+            let result = Core.json(["update", "run", "--json"], as: UpdateRun.self)
+            await MainActor.run {
+                switch result {
+                case let .success(run) where run.outcome == "rolled-back":
+                    self.updateState = .failed
+                    self.notice = Notice(
+                        title: "The update was rolled back",
+                        body: (run.why ?? "The services did not come back.")
+                            + "\n\nADI is running the version it was on before, so nothing is lost."
+                    )
+                case let .success(run):
+                    self.updateState = .upToDate
+                    if run.outcome == "installed" {
+                        self.notice = Notice(
+                            title: "ADI was updated",
+                            body: "Now on \(run.to ?? "the latest version")."
+                        )
+                    }
+                case let .failure(why):
+                    self.updateState = .failed
+                    self.notice = Notice(title: "The update did not finish", body: why.message)
+                }
+            }
+        }
+    }
+
+    // MARK: reporting a problem
+
+    @Published private(set) var reportState: ReportState = .idle
+
+    enum ReportState: Equatable {
+        case idle
+        case collecting
+        /// Where the archive landed, and how many things the collector already thinks are wrong.
+        case ready(URL, Int)
+        case failed
+    }
+
+    /// The last archive collected, kept whole so the issue draft can name it and repeat its
+    /// findings. The published state carries only what the row draws.
+    private var lastReport: DiagnosticBundle?
+
+    /// Collect one archive of everything that could explain a failure, and show it in Finder.
+    ///
+    /// The button exists because the person who hits a fault here is the one least able to say
+    /// what it was: DNS, the front door, a service that never started and an update that rolled
+    /// back all present as "it doesn't work". `adi-mono diagnose` reads all of it at once — it
+    /// starts and stops nothing — and leaves one file to attach to a message.
+    func createReport() {
+        guard reportState != .collecting else { return }
+        reportState = .collecting
+        Task.detached(priority: .userInitiated) {
+            let result = Core.json(["diagnose", "--json"], as: DiagnosticBundle.self)
+            await MainActor.run {
+                switch result {
+                case let .success(bundle):
+                    let url = URL(fileURLWithPath: bundle.path)
+                    self.lastReport = bundle
+                    self.reportState = .ready(url, bundle.findings.count)
+                    // Revealed rather than merely reported: the next thing anyone does with this
+                    // file is drag it into a message, and the store directory it lands in is
+                    // hidden in Finder — a path in a label would be a dead end.
+                    Self.reveal(url)
+                case let .failure(why):
+                    self.reportState = .failed
+                    self.notice = Notice(title: "The report could not be written", body: why.message)
+                }
+            }
+        }
+    }
+
+    /// Show a finished report in Finder again, for a second attempt at sending it.
+    func revealReport() {
+        guard case let .ready(url, _) = reportState else { return }
+        Self.reveal(url)
+    }
+
+    private static func reveal(_ url: URL) {
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    // MARK: filing it upstream
+
+    /// How much of the draft to put in the URL. GitHub prefills an issue from the query string,
+    /// and both it and the browser have a length past which the request is simply refused —
+    /// which would present as a button that opens a blank page. The draft is a few hundred
+    /// characters, so this only ever bites a machine with an implausible number of findings.
+    private static let issueBodyLimit = 6000
+
+    /// Open a new GitHub issue with what we already know filled in.
+    ///
+    /// Prefilled because the facts that decide a bug report — which build, which OS, and which
+    /// of the three setup gates is open — are exactly the ones nobody thinks to include, and
+    /// asking for them costs a round trip each. The one thing it cannot carry is the archive:
+    /// GitHub takes an attachment only from a drop onto the form, so the draft ends by saying so.
+    func openIssue() {
+        guard let url = issueURL() else {
+            notice = Notice(
+                title: "ADI could not open GitHub",
+                body: "The issue address in this build is not a valid URL."
+            )
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func issueURL() -> URL? {
+        guard let base = Core.issuesURL,
+              var components = URLComponents(url: base, resolvingAgainstBaseURL: false)
+        else { return nil }
+        components.queryItems = [
+            URLQueryItem(name: "body", value: String(issueBody().prefix(Self.issueBodyLimit))),
+        ]
+        // `URLComponents` leaves a literal `+` alone in a query, and a form on the other end
+        // reads it back as a space — so a version like `1.2.0+dev` would arrive mangled. After
+        // encoding is the only point where a real plus and an encoded space can still be told
+        // apart, which is why this is a fixup rather than part of building the value.
+        components.percentEncodedQuery = components.percentEncodedQuery?
+            .replacingOccurrences(of: "+", with: "%2B")
+        return components.url
+    }
+
+    /// The draft: a space to write in, then the state of this install.
+    private func issueBody() -> String {
+        func mark(_ granted: Bool) -> String { granted ? "yes" : "**no**" }
+
+        let setup = report.setup
+        var lines = [
+            "<!-- What happened, and what you expected instead. -->",
+            "",
+            "",
+            "---",
+            "",
+            "**ADI** \(Core.installedVersion) · \(Core.flavorId) · "
+                + "macOS \(Self.osVersion) · \(Self.architecture)",
+            "",
+            "**Setup** — app somewhere durable: \(mark(setup.locationDurable)) · "
+                + ".\(Core.domain) route: \(mark(setup.dnsRoute)) · "
+                + "front door: \(mark(setup.frontDoor))",
+        ]
+
+        if !report.services.isEmpty {
+            let states = report.services.map { service -> String in
+                let word = if service.running {
+                    "running"
+                } else {
+                    service.enabled ? "enabled, not running" : "off"
+                }
+                return "\(service.name): \(word)"
+            }
+            lines += ["", "**Services** — " + states.joined(separator: " · ")]
+        }
+
+        if let bundle = lastReport {
+            if !bundle.findings.isEmpty {
+                lines += ["", "**The report already flags**"]
+                lines += bundle.findings.prefix(10).map { "- \($0)" }
+            }
+            let name = (bundle.path as NSString).lastPathComponent
+            lines += ["", "Attached: `\(name)` — drag it into this box; it has the logs."]
+        } else {
+            lines += [
+                "",
+                "Press **Create Report** in ADI and drag the archive it makes into this box — "
+                    + "it carries the logs, the routes and every service's state.",
+            ]
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private static var osVersion: String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        return "\(v.majorVersion).\(v.minorVersion).\(v.patchVersion)"
+    }
+
+    /// Which slice of the universal binary is running — the truth on a Mac using Rosetta, and
+    /// the thing to know when an app launches on one machine and not another.
+    private static var architecture: String {
+        #if arch(arm64)
+            "arm64"
+        #else
+            "x86_64"
+        #endif
+    }
 
     /// Poll `adi-mono status --json` off the main thread; publish on the main actor.
     func refresh() {

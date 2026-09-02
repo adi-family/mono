@@ -4,7 +4,7 @@
 
 > Core shared library for the adi-family workspace.
 
-17 structs · 5 enums across 12 files.
+21 structs · 6 enums across 13 files.
 
 ## Index
 
@@ -12,6 +12,7 @@
 - [`src/bun.rs`](#srcbunrs) — `Artifact`, `Outcome`, `Staging`
 - [`src/commands.rs`](#srccommandsrs) — `Report`, `SetupReport`, `Adi`
 - [`src/dashboards.rs`](#srcdashboardsrs) — `Dashboards`
+- [`src/diagnose.rs`](#srcdiagnosers) — `Error`, `Bundle`, `Diagnose`, `Part`, `Stamp`
 - [`src/dns.rs`](#srcdnsrs) — `FrontdoorSettings`, `Unsafe`, `MeshNodeChange`, `Dns`
 - [`src/install.rs`](#srcinstallrs) — `Location`
 - [`src/proc.rs`](#srcprocrs) — `Output`
@@ -133,6 +134,68 @@ The dashboards supervisor service (`adi-mono dashboards …`).
 ```rust
 #[derive(Debug, Default, Clone, Copy)]
 pub struct Dashboards;
+```
+
+---
+
+## `src/diagnose.rs`
+
+### enum `Error`
+
+Why a report could not be produced. Both arms are terminal for the collection: a section that merely fails to read something records the failure in its own text and the report still ships.
+
+```rust
+#[derive(Debug)]
+pub enum Error {
+    Write(String),
+    Archive(String),
+}
+```
+
+### struct `Bundle`
+
+A finished report: the file to send, and enough about it to be described without opening it.
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub struct Bundle {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub files: Vec<String>,
+    pub findings: Vec<String>,
+}
+```
+
+### struct `Diagnose`
+
+The diagnostics command surface (`adi.diagnose().collect(…)`) — a zero-sized facade like `crate::Dns`.
+
+```rust
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Diagnose;
+```
+
+### struct `Part`
+
+One file in the archive.
+
+```rust
+struct Part {
+    name: String,
+    body: String,
+}
+```
+
+### struct `Stamp`
+
+The moment of collection, in the two forms the report needs it: one for a filename and one for a person.
+
+```rust
+struct Stamp {
+    unix: u64,
+    human: String,
+    file: String,
+}
 ```
 
 ---
