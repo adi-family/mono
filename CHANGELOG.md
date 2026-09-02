@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.2.1 — 2026-09-02
+
 ### Fixed
 
 - **ADI starts on a Windows machine that has never had a compiler on it.** The installer put
