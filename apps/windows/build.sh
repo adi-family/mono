@@ -207,12 +207,57 @@ CMD
 cp "$SCRIPT_DIR/README.md" "$PKG/README.txt"
 cp "$ROOT/LICENSE" "$PKG/LICENSE.txt"
 
+# ── nothing in bin\ may need a DLL that only the build host has ──────────────────────────────
+#
+# A binary linked against a shared mingw runtime installs perfectly and then refuses to start:
+# Windows reports "the code execution cannot proceed because libstdc++-6.dll was not found" and
+# advises reinstalling, which cannot help. The failure is invisible on the machine that built the
+# package — Homebrew's mingw links that runtime in, Debian's does not — so it is asserted here
+# rather than discovered by whoever downloads the release. `-Clink-arg=-static` in
+# .cargo/config.toml is what keeps it true; this is the check that it stayed true.
+#
+# The test is the shape of the name: the mingw runtime DLLs are all `lib<name>-<n>.dll`
+# (libstdc++-6, libgcc_s_seh-1, libwinpthread-1, libssp-0), and nothing shipped with Windows is
+# named that way. objdump comes with the same mingw toolchain that did the link.
+OBJDUMP="${OBJDUMP:-x86_64-w64-mingw32-objdump}"
+if command -v "$OBJDUMP" >/dev/null; then
+    echo "==> checking the package carries its runtime"
+    NEEDS=""
+    for exe in "$PKG"/bin/*.exe; do
+        deps="$("$OBJDUMP" -p "$exe" | sed -n 's/^[[:space:]]*DLL Name:[[:space:]]*//p' \
+                | grep -i '^lib.*\.dll$' | sort -fu || true)"
+        if [ -n "$deps" ]; then
+            NEEDS="$NEEDS    $(basename "$exe"): $(echo "$deps" | tr '\n' ' ')
+"
+        fi
+    done
+    if [ -n "$NEEDS" ]; then
+        echo "error: these binaries import a DLL that is not part of Windows:" >&2
+        printf '%s' "$NEEDS" >&2
+        echo "       They were linked against a shared mingw runtime, so ADI will not start on a" >&2
+        echo "       machine that has never had a GCC toolchain on it. What keeps that from" >&2
+        echo "       happening lives in .cargo/config.toml: the -static link arg, and the" >&2
+        echo "       CXXSTDLIB_x86_64_pc_windows_gnu under [env] that asks for the C++ runtime" >&2
+        echo "       as a static library. Check both survived — a RUSTFLAGS in the environment" >&2
+        echo "       replaces the config's rustflags wholesale, and so does a CXXSTDLIB set for" >&2
+        echo "       this target." >&2
+        exit 1
+    fi
+    echo "    ok — system DLLs only"
+else
+    echo "warning: $OBJDUMP not found — shipping unverified that the package carries its runtime" >&2
+fi
+
 echo "==> zipping"
 rm -f "$BUILD/$PKG_NAME.zip"
 ( cd "$BUILD" && zip -qr "$PKG_NAME.zip" "$PKG_NAME" )
 
 if [ "${SKIP_INSTALLER:-}" = "1" ]; then
-    echo "==> skipping the installer (SKIP_INSTALLER=1)"
+    # And take any earlier one with it. A build/ holding a fresh zip beside last week's installer
+    # is how a stale artifact gets shipped, or measured, or handed to someone to test — the
+    # directory says nothing about which of the two the current source produced.
+    rm -f "$BUILD/$SETUP_NAME"
+    echo "==> skipping the installer (SKIP_INSTALLER=1; removed any earlier $SETUP_NAME)"
 else
     # Windows' VERSIONINFO is four numbers; the tag is one, two or three.
     quad="$(printf '%s' "$VERSION" | tr -d 'v' | awk -F'[.-]' '{printf "%d.%d.%d.%d", $1, $2, $3, $4}')"

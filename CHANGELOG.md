@@ -20,6 +20,15 @@ extraction script cares about.
 
 ## Unreleased
 
+### Fixed
+
+- **ADI starts on a Windows machine that has never had a compiler on it.** The installer put
+  everything in place and then Windows refused to run any of it: *"the code execution cannot
+  proceed because libstdc++-6.dll was not found"*, over an offer to reinstall that could not
+  help. The released binaries were linked against a GCC runtime library that is not part of
+  Windows and that nothing installs; they now carry it inside them. Install this version over the
+  broken one — an ADI that cannot start cannot update itself.
+
 ## 1.2.0 — 2026-09-02
 
 ### Added

@@ -7,4 +7,55 @@
 # because nothing links iroh-relay's cdylib — all our own crates are executables or rlibs — and it
 # lets the cross build link in every profile. Scoped to this target, so native builds are untouched.
 [target.x86_64-pc-windows-gnu]
-rustflags = ["-Clink-arg=-Wl,--exclude-all-symbols"]
+rustflags = [
+    "-Clink-arg=-Wl,--exclude-all-symbols",
+    # ── the C++ runtime goes *into* the binaries ────────────────────────────────────────────
+    #
+    # Otherwise the install dies before it runs: Windows says "the code execution cannot proceed
+    # because libstdc++-6.dll was not found" and offers a reinstall that cannot help. Nothing on
+    # Windows ships that DLL — it belongs to whichever GCC did the link.
+    #
+    # `-static` covers libgcc and winpthread, and everything the driver pulls in for itself.
+    # libstdc++ it does not cover — and neither do the two flags anyone reaches for next. All
+    # three were tried, against Homebrew's toolchain and Debian's:
+    #
+    #   `-static-libstdc++`         governs only the `-lstdc++` the *g++ driver* adds for itself.
+    #                               Ours comes from a build script, so the import survives it.
+    #   `-static`                   is overridden for that one library: rustc brackets every
+    #                               native lib of kind `dylib` in `-Wl,-Bdynamic ... -Bstatic`,
+    #                               and an explicit -Bdynamic beats the driver's static default.
+    #   `-Clink-arg=-l:libstdc++.a` links the right file in the wrong place. Link args land at
+    #                               the very end of the command, after the mingw system libraries
+    #                               rustc supplies itself (windows-gnu links -nodefaultlibs), so
+    #                               nothing is left to resolve the archive's own references and
+    #                               the build dies on __mingw_strtod, __imp_setlocale and
+    #                               __emutls_get_address.
+    #
+    # What works is to change the *kind* of library the build script asks for — the CXXSTDLIB
+    # entry under [env]. rustc then places it among the native libs, where the system libraries
+    # still follow it, and links it -Bstatic.
+    #
+    # Windows' own libraries are import stubs (libkernel32.a and friends) and still resolve to
+    # their DLLs, so this makes the package self-contained, not static. apps/windows/build.sh
+    # asserts the result on every build.
+    "-Clink-arg=-static",
+]
+
+# The C++ standard library for the mingw cross-build: linked in, not left as a DLL import.
+#
+# `link-cplusplus` (via cxx, under usearch → adi-indexer) leaves the choice to cc-rs, which reads
+# CXXSTDLIB and passes its value through verbatim into `cargo:rustc-link-lib=`. So a kind prefix
+# in the value is how a static C++ runtime is asked for from outside the crate: cc has a builder
+# method for it, no environment variable, and link-cplusplus does not call the method.
+#
+# `-bundle` is not decoration. Without it rustc has to read libstdc++.a while it builds the rlib,
+# to bundle the archive in — and rustc searches only the paths it was given, not the mingw
+# toolchain's own, so it stops with "could not find native static library `stdc++`". The
+# modifier defers the library to the final link, which is run through the gcc driver, which does
+# know where its own runtime lives.
+#
+# `[env]` has no per-target form, but this variable does — cc-rs looks up the target-suffixed
+# name first, so this reaches the cross-build and nothing else. Do not drop the suffix: a bare
+# CXXSTDLIB would rewrite how the macOS build links libc++ as well.
+[env]
+CXXSTDLIB_x86_64_pc_windows_gnu = "static:-bundle=stdc++"
