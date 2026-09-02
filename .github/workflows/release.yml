@@ -82,9 +82,49 @@ jobs:
             echo "::warning::no CHANGELOG.md section for ${{ steps.resolve.outputs.version }} — fine for a dry run, but a real tag would be refused"
           fi
 
+  # ── the webapp, built once and handed to all three platform jobs ─────────────────────────
+  #
+  # The control panel's UI is wasm: one artifact, byte-for-byte the same whichever machine
+  # produced it, embedded into adi-app by every platform's packaging script. Built per-job it
+  # cost 13m41s of runner time on v1.2.0 (6m56s of it on the macOS runner, which is both the
+  # slowest and the dearest) to produce the same bundle three times.
+  #
+  # It is a job rather than a step in `version` so its failure names itself, and so the
+  # platform jobs' `needs:` says plainly what they are waiting for. `needs: version` keeps the
+  # cheap gates — a malformed tag, a missing changelog section — in front of every build.
+  webapp:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Toolchain (wasm)
+        run: rustup target add wasm32-unknown-unknown
+
+      - name: Install trunk
+        run: |
+          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
+            | sudo tar -xzf - -C /usr/local/bin
+          trunk --version
+
+      - name: Build the webapp
+        run: cd crates/adi-webapp && trunk build --release
+
+      # `dist/` is the contract — `scripts/require-webapp-dist.sh`, which every packaging
+      # script runs, asserts index.html and a .wasm are in it. Short retention: this is
+      # scaffolding for the run, not something anyone downloads from the release.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: webapp-dist
+          path: crates/adi-webapp/dist
+          if-no-files-found: error
+          retention-days: 1
+
   # ── macOS: the notarized universal bundle, as a DMG ──────────────────────────────────────
   macos:
-    needs: version
+    needs: [version, webapp]
     # macos-15, not -14: the older image ships Swift 5.10, which rejects concurrency patterns
     # the Swift 6 toolchain on a developer's machine accepts. A release build that compiles
     # locally and fails only here — 15 minutes in, after the Rust build — is a bad trade for
@@ -138,16 +178,17 @@ jobs:
 
       - name: Rust targets (the bundle is universal)
         run: |
-          rustup target add aarch64-apple-darwin x86_64-apple-darwin wasm32-unknown-unknown
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
 
-      - name: Install trunk
-        run: |
-          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-aarch64-apple-darwin.tar.gz" \
-            | tar -xzf - -C /usr/local/bin
-          trunk --version
-
-      - name: Build the webapp
-        run: cd crates/adi-webapp && trunk build --release
+      # Built once, in the `webapp` job — the wasm is identical on all three platforms, and
+      # this is the slowest runner we own. `apps/macos/build.sh` calls
+      # `scripts/require-webapp-dist.sh`, so an artifact that failed to arrive stops the build
+      # rather than embedding an empty directory.
+      - name: Take the webapp built once
+        uses: actions/download-artifact@v4
+        with:
+          name: webapp-dist
+          path: crates/adi-webapp/dist
 
       - name: Import the Developer ID certificate
         env:
@@ -171,12 +212,23 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12"
           security find-identity -v -p codesigning "$KEYCHAIN"
 
-      - name: Build, sign, notarize, staple
+      # Two steps, not one. Together they are the whole macOS job; apart, the log finally says
+      # which half of it is ours. The first is cargo (twice — the bundle is universal), swiftc
+      # and hdiutil, and it is the one a build change can move. The second is Apple's notary
+      # queue, which we neither control nor should try to optimise: a jump there is weather,
+      # not a regression. Nothing to tell them apart is why "it got 9 minutes slower" sat
+      # unexplained between v1.1.0 and v1.2.0.
+      - name: Build and sign the universal bundle
+        env:
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: apps/macos/release.sh build
+
+      - name: Notarize and staple (waits on Apple)
         env:
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           AC_USER: ${{ secrets.APPLE_ID }}
           AC_PASS: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: apps/macos/release.sh
+        run: apps/macos/release.sh notarize
 
       - name: Confirm the DMG is stapled
         run: |
@@ -191,7 +243,7 @@ jobs:
 
   # ── Linux: the static musl node package ──────────────────────────────────────────────────
   linux:
-    needs: version
+    needs: [version, webapp]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -200,17 +252,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
 
-      - name: Toolchain (for the wasm half — the musl half is built in a container)
-        run: rustup target add wasm32-unknown-unknown
-
-      - name: Install trunk
-        run: |
-          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | sudo tar -xzf - -C /usr/local/bin
-          trunk --version
-
-      - name: Build the webapp
-        run: cd crates/adi-webapp && trunk build --release
+      # Nothing else here needs a host toolchain: the musl half is a native build inside
+      # Alpine, and the wasm half arrives prebuilt from the `webapp` job.
+      # `apps/linux/build.sh` calls `scripts/require-webapp-dist.sh` before it packages.
+      - name: Take the webapp built once
+        uses: actions/download-artifact@v4
+        with:
+          name: webapp-dist
+          path: crates/adi-webapp/dist
 
       # The musl half is built inside Alpine, whose *own* libc is musl — so this is a native
       # compile, not a cross one, and the toolchain question disappears instead of being worked
@@ -219,8 +268,8 @@ jobs:
       # musl-cross-make tarballs that would supply one stop at GCC 11, which is too old for
       # usearch's SIMD backend, and zig's clang fails on the same code. Alpine 3.22 is GCC 14.
       #
-      # Everything the build needs is on the mounted workspace, including the `dist/` trunk just
-      # produced; only rustup is fetched inside. Output lands in `target/` as root, which the
+      # Everything the build needs is on the mounted workspace, including the `dist/` downloaded
+      # above; only rustup is fetched inside. Output lands in `target/` as root, which the
       # upload step after this reads without trouble.
       - name: Build the node package (Alpine — musl is native there)
         run: |
@@ -246,7 +295,7 @@ jobs:
 
   # ── Windows: cross-compiled with mingw, same as the local packaging route ────────────────
   windows:
-    needs: version
+    needs: [version, webapp]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -261,7 +310,7 @@ jobs:
           # produces here is the same executable it would produce on Windows — so the whole
           # Windows release stays one Linux job.
           sudo apt-get update && sudo apt-get install -y mingw-w64 zip nsis
-          rustup target add x86_64-pc-windows-gnu wasm32-unknown-unknown
+          rustup target add x86_64-pc-windows-gnu
           # usearch (through adi-indexer) includes <Windows.h>; mingw-w64 ships the header as
           # `windows.h`. On Windows and on macOS the filesystem is case-insensitive and the
           # difference never surfaces — which is exactly why this only ever fails here, and why
@@ -280,14 +329,12 @@ jobs:
           sudo update-alternatives --set x86_64-w64-mingw32-g++ /usr/bin/x86_64-w64-mingw32-g++-posix
           x86_64-w64-mingw32-gcc -v 2>&1 | grep -i "thread model" || true
 
-      - name: Install trunk
-        run: |
-          curl -fsSL "https://github.com/trunk-rs/trunk/releases/download/${TRUNK_VERSION}/trunk-x86_64-unknown-linux-gnu.tar.gz" \
-            | sudo tar -xzf - -C /usr/local/bin
-          trunk --version
-
-      - name: Build the webapp
-        run: cd crates/adi-webapp && trunk build --release
+      # `apps/windows/build.sh` calls `scripts/require-webapp-dist.sh` before it packages.
+      - name: Take the webapp built once
+        uses: actions/download-artifact@v4
+        with:
+          name: webapp-dist
+          path: crates/adi-webapp/dist
 
       - name: Build the Windows package
         run: apps/windows/build.sh
@@ -316,9 +363,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # By name, not everything: `webapp-dist` is scaffolding passed between build jobs, and
+      # downloading a wasm bundle nothing here reads only invites someone to publish it.
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          pattern: '{macos,linux-x86_64,windows-x86_64}'
 
       - name: Assemble manifest.json
         id: manifest

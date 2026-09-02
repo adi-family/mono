@@ -9,6 +9,16 @@
 #   cp apps/macos/.env.example apps/macos/.env   # then set TEAM_ID/AC_USER/AC_PASS
 #   apps/macos/release.sh
 #
+# Usage: release.sh [build|notarize]
+#
+#   (no argument)  the lot: build, sign, notarize, staple. What a developer runs.
+#   build          compile and Developer-ID-sign the app and DMG, then stop.
+#   notarize       notarize and staple what `build` left in build/. Compiles nothing.
+#
+# The two halves exist for CI, and must run in that order on the same machine. As one step
+# the log cannot say how much of half an hour was our cargo build and how much was spent
+# waiting in Apple's notary queue — and only the first of those is ours to make faster.
+#
 # Env:
 #   TEAM_ID  Apple Developer team ID           (default: 752556J5V6)
 #   SIGN_ID  "Developer ID Application: …"      (default: auto-found for TEAM_ID)
@@ -21,7 +31,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="ADI"
+APP="$SCRIPT_DIR/build/$APP_NAME.app"
 DMG="$SCRIPT_DIR/build/$APP_NAME.dmg"
+
+STEP="${1:-all}"
+case "$STEP" in
+    all|build|notarize) ;;
+    *) echo "usage: $(basename "$0") [build|notarize]" >&2; exit 2 ;;
+esac
 
 # Auto-load local credentials (gitignored) if present, so this can run standalone.
 if [ -f "$SCRIPT_DIR/.env" ]; then set -a; . "$SCRIPT_DIR/.env"; set +a; fi
@@ -37,10 +54,23 @@ SIGN_ID="${SIGN_ID:-$(security find-identity -v -p codesigning \
 }
 export SIGN_ID
 
-echo "==> building + Developer ID signing the app"
-"$SCRIPT_DIR/build.sh"
+if [ "$STEP" != "notarize" ]; then
+    echo "==> building + Developer ID signing the app"
+    "$SCRIPT_DIR/build.sh"
+fi
 
-APP="$SCRIPT_DIR/build/$APP_NAME.app"
+if [ "$STEP" = "build" ]; then
+    echo "✓ built and signed: $DMG"
+    echo "  notarization left to \`release.sh notarize\`"
+    exit 0
+fi
+
+# Redundant when the build above just ran; it is `notarize` on its own that needs saying —
+# there, a missing bundle means the build half never ran, not that the build failed.
+[ -d "$APP" ] && [ -f "$DMG" ] || {
+    echo "✗ nothing to notarize — $APP / $DMG missing; run \`release.sh build\` first" >&2
+    exit 1
+}
 
 if [ -n "${AC_USER:-}" ] && [ -n "${AC_PASS:-}" ]; then
     # Staple the notarization ticket to the .app — not only the DMG. Users drag the app OUT

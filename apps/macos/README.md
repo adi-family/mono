@@ -148,6 +148,10 @@ DMG, submits it to Apple's notary service (`notarytool --wait`), and staples the
 ticket. Credentials are read from the environment and never stored in the repo. If
 `AC_USER`/`AC_PASS` are unset, the DMG is signed but left un-notarized.
 
+It also takes `build` or `notarize` to run one half. That is for CI, which wants the
+compile and the wait in Apple's queue timed as two steps rather than one opaque
+half-hour; locally, run it with no argument and it does both.
+
 Verify a finished DMG:
 
 ```bash
