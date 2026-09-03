@@ -20,6 +20,8 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.3.0 — 2026-09-03
+
 ### Changed
 
 - **The whole product is drawn to one design system now**, written down in `design/DESIGN.md`
