@@ -64,15 +64,16 @@ struct ServiceView: View {
         .colorScheme(.dark)
         .navigationTitle("\(service) · \(node.petname)")
         .navigationBarTitleDisplayMode(.inline)
-        // The bar goes away for the page itself, and only for the page. A dashboard is one origin
-        // with its own header (`docs/fleet.md` §4), so a second one stacked above it spends ~44pt
-        // restating the row that was just tapped — on a phone that is the difference between one
-        // panel visible and two.
+        // The bar stays, page or no page. It used to be hidden once the port was bound, to spend
+        // the ~44pt on the dashboard instead — a dashboard is one origin with its own header
+        // (`docs/fleet.md` §4), so the second bar restated the row that had just been tapped.
         //
-        // Kept for the loading and failure states on purpose: those have nothing to fill the screen
-        // with, and the failure state in particular is the one place a person needs an obvious way
-        // back rather than a gesture they have to know about.
-        .toolbar(port == nil ? .visible : .hidden, for: .navigationBar)
+        // That trade was wrong, and it was wrong in the direction that matters. What it bought was
+        // a strip of pixels; what it cost was the way out: an opened dashboard became a full-screen
+        // page of somebody else's making with no back button and no title, leaving only the edge
+        // swipe — a gesture a person has to already know, that a page handling its own horizontal
+        // drags can swallow, and that nothing on screen suggests. Whatever is behind that bar, the
+        // app has to remain obviously escapable from it.
         .task {
             if share {
                 asking = true

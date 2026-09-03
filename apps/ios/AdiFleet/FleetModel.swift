@@ -9,7 +9,9 @@ import SwiftUI
 @MainActor
 @Observable
 final class FleetModel {
-    /// This device's key: what a node's operator authorizes (§2), shown so it can be read out.
+    /// This device's key: what a node's operator authorizes (§2). Kept because it is what the mesh
+    /// reports about itself, and cheap to hold; no screen shows it since the toolbar chip that used
+    /// to went — an invite carries the key, so nobody has to read it off a screen to pair.
     private(set) var key: String = ""
     /// False until the relay session is up. Until then an invite would name an endpoint that only
     /// the local network can dial, so the pairing button says so instead of minting one.
@@ -78,17 +80,40 @@ final class FleetModel {
         let nodes = nodes
         await withTaskGroup(of: Void.self) { group in
             for node in nodes {
-                group.addTask { @MainActor in await self.list(node) }
+                // A node nothing has ever been listed for may be one whose pairing landed a moment
+                // ago, and a pairing is not visible to the node's own gateway straight away — see
+                // `list(_:attempts:)`. Patience is spent only there: a node already listed once is
+                // asked once, so an ordinary refresh stays as quick as it was.
+                let attempts = dashboards[node.petname] == nil ? Self.grantWindowAttempts : 1
+                group.addTask { @MainActor in await self.list(node, attempts: attempts) }
             }
         }
     }
+
+    /// How many times a just-paired node is asked before its refusal is believed.
+    ///
+    /// One a second, and comfortably past the five seconds the node's gateway takes to notice the
+    /// grant (`adi-mesh/src/gateway.rs`, `RELOAD_INTERVAL`).
+    private static let grantWindowAttempts = 8
 
     /// Ask one node what dashboards it has.
     ///
     /// A node this phone has no password for is not asked at all. That is not a failure to report
     /// as one: the panel's own gate is what the password answers (`docs/fleet.md` §5), and opening
     /// the node's control panel once is what fills the Keychain — so the sentence says that.
-    func list(_ node: Node) async {
+    ///
+    /// `attempts` exists for the one moment the first answer is expected to be wrong. A node whose
+    /// pairing has just completed refuses this call for a few seconds: its gateway judges requests
+    /// against an in-memory snapshot of its registry and re-reads it every five seconds
+    /// (`adi-mesh/src/gateway.rs`, `RELOAD_INTERVAL`), so a listing sent the instant the handshake
+    /// returns is judged against a registry that has never heard of this phone. `ServiceView`
+    /// already waits that window out for the same reason.
+    ///
+    /// Asking once and keeping that refusal is what left a freshly paired node showing nothing but
+    /// its `app` row — with no way back to the dashboards short of relaunching the app, since
+    /// nothing asks again on its own. So the refusals inside the window are not the node's answer
+    /// and are not shown; only the last one is.
+    func list(_ node: Node, attempts: Int = 1) async {
         guard let credential = Keychain.credential(for: node.petname) else {
             listingFailure[node.petname] =
                 "No password for \(node.petname) on this phone yet — open its control panel once and sign in."
@@ -96,12 +121,19 @@ final class FleetModel {
         }
         listing.insert(node.petname)
         defer { listing.remove(node.petname) }
-        do {
-            let catalog = try await Mesh.shared.dashboards(node: node.petname, credential: credential)
-            dashboards[node.petname] = catalog.dashboards
-            listingFailure[node.petname] = nil
-        } catch {
-            listingFailure[node.petname] = error.localizedDescription
+        for attempt in 1...max(attempts, 1) {
+            do {
+                let catalog = try await Mesh.shared.dashboards(node: node.petname, credential: credential)
+                dashboards[node.petname] = catalog.dashboards
+                listingFailure[node.petname] = nil
+                return
+            } catch {
+                guard attempt < attempts else {
+                    listingFailure[node.petname] = error.localizedDescription
+                    return
+                }
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 

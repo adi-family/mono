@@ -40,9 +40,6 @@ struct ContentView: View {
                     }
                     .disabled(!model.ready)
                 }
-                ToolbarItem(placement: .status) {
-                    identity
-                }
             }
             .refreshable { await model.refresh() }
             .sheet(isPresented: $pairing) { PairView(model: model) }
@@ -198,23 +195,6 @@ struct ContentView: View {
             Note(icon: .triangleAlert, text: problem)
                 .adiRow()
                 .listRowSeparator(.hidden)
-        }
-    }
-
-    /// This device's own key, which is what a node's operator authorizes.
-    private var identity: some View {
-        VStack(spacing: 2) {
-            HStack(spacing: 7) {
-                StatusDot(color: model.ready ? ADI.ok : ADI.ink3)
-                Text(model.ready ? "On the mesh" : "Connecting…")
-                    .font(ADI.TextStyle.label)
-                    .foregroundStyle(ADI.ink3)
-            }
-            if !model.key.isEmpty {
-                Text(model.key.prefix(12) + "…")
-                    .font(ADI.mono(12))
-                    .foregroundStyle(ADI.ink3)
-            }
         }
     }
 
