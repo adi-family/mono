@@ -341,6 +341,11 @@ jobs:
 
       # Two files, and they are not interchangeable. The installer is what a person downloads;
       # the zip is what the auto-updater takes, and what an unattended install unpacks.
+      #
+      # The zip's download count is zero and stays zero — withadi.dev has linked Windows to the
+      # installer since 2026-09-03, which is the intended state. Removing the zip was proposed
+      # that day and refused: it is the `windows-x86_64` manifest artifact, so deleting it stops
+      # self-update on every installed Windows copy. docs/adi-update.md has the whole of it.
       - uses: actions/upload-artifact@v4
         with:
           name: windows-x86_64

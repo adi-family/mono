@@ -82,6 +82,18 @@ The top-level `dmg` field is **legacy and must keep being published**: clients r
 per-platform artifacts existed require it, and dropping it would strand every Mac still running
 one of those builds. `scripts/manifest.sh` mirrors the `macos` artifact into it automatically.
 
+`ADI-windows-x64.zip` is **also load-bearing, and it is not the file anyone downloads**. Every
+Windows release carries two things: `ADI-Setup-x64.exe`, which is what a person installs and the
+only Windows file withadi.dev has linked to since 2026-09-03, and this zip, which exists solely
+so `windows-x86_64` above has an artifact — an update unpacks an archive into the install
+directory, and `adi-update` has no way to run an installer. It was proposed on 2026-09-03 that
+the zip be dropped as redundant, and the operator's call after seeing this was to **keep
+publishing it**: nothing on the download page points at it, its download count stays at zero,
+and that is the intended state, not a leak. Deleting it stops self-update on every installed
+Windows copy. To actually be rid of it, `adi-update` first has to learn a payload kind that runs
+`ADI-Setup-x64.exe` silently — NSIS supports it, the install is per-user into `%LOCALAPPDATA%`,
+and none of it can be tested anywhere but on Windows.
+
 A release that publishes no artifact for a platform is not an available update *for that
 platform* — the check reports it as such instead of offering an update that would fail to
 download on every scheduled run.
