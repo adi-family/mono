@@ -3696,10 +3696,13 @@ fn paged(runs: Vec<AgentRunInfo>, state: State) -> Vec<AgentRunInfo> {
 /// shortlist the agent picker draws from — or to the sessions a person started, as against the ones
 /// agents spawned for themselves ([`SessionFilter`]).
 ///
-/// [`SessionFilter::All`] by default: the rail opens on every conversation, so nothing a person had
-/// is missing until they ask for it to be. It takes the accent while it is narrowed, because a list
-/// showing less than everything has to say so — and at this size the colour is the whole of what
-/// says it. The choice is not stored, so a reload comes back to the full list.
+/// [`SessionFilter::Mine`] by default: the rail opens on the sessions a person started, because
+/// that is the list it exists to be — a fleet that launches its own work buries the handful of
+/// conversations you had under hundreds it spawned for itself, and a rail nobody can find their own
+/// chat in is worse than one they have to widen. It takes the accent while it is narrowed, because
+/// a list showing less than everything has to say so — and at this size the colour is the whole of
+/// what says it, which is why it is lit from the first draw rather than only after a choice. The
+/// choice is not stored, so a reload comes back to your own sessions.
 ///
 /// A funnel button rather than a dropdown in the head: the head already carries "+ New" and a close
 /// ✕ on a 264px rail, and a control wide enough to print "Only started by me" would take the room
@@ -4220,6 +4223,20 @@ fn session_bands(state: State, watch: AgentsWatch) -> ([Vec<SessionRow>; 5], Ses
     ([waiting, running, awaiting, starred, rest], filter)
 }
 
+/// Whether the cross-agent index holds any listable session *before* the filter — what tells an
+/// empty rail apart from a rail emptied by the default narrowing.
+///
+/// Only run records count. A pty agent contributes a row when it is live, and a live one survives
+/// the "mine" filter anyway (nobody records who opened a terminal, so it is never filtered out), so
+/// a rail that is empty despite one cannot exist.
+fn any_session(state: State) -> bool {
+    state.all_chats.get().is_some_and(|all| {
+        all.agents
+            .iter()
+            .any(|ar| ar.runs.iter().any(|r| !r.hidden))
+    })
+}
+
 /// The rail's session list: the five bands, or the one line that says why there are none.
 fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     let ([waiting, running, awaiting, kept, rest], filter) = session_bands(state, watch);
@@ -4231,14 +4248,21 @@ fn chat_all_sessions(state: State, watch: AgentsWatch) -> AnyView {
     {
         // Which emptiness this is: nothing to show, or nothing left after the filter — said apart,
         // so a narrowed rail never reads as "you have no chats". Each says how to get back.
+        //
+        // "Mine" is the default, so its line is also what a machine with no chats at all would read
+        // on its first run — and telling someone their sessions were filtered out when they have
+        // none is how a person learns nothing. When the unfiltered index is empty too, the plain
+        // first-run line wins.
         let msg = match filter {
             SessionFilter::All => "No chats yet — press New to start one.",
             SessionFilter::Starred => {
                 "No chats from starred agents — star one on the Agents page, or show all sessions."
             }
+            SessionFilter::Mine if !any_session(state) => "No chats yet — press New to start one.",
             SessionFilter::Mine => {
                 "No sessions started by you — the ones agents start for themselves are filtered \
-                 out, as are sessions from before ADI recorded who started a run."
+                 out, as are sessions from before ADI recorded who started a run. Show all \
+                 sessions from the filter box above to see them."
             }
         };
         return view! { <div class="adi-chome__empty">{msg}</div> }.into_any();

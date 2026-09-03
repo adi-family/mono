@@ -115,12 +115,14 @@ pub(crate) struct State {
     /// to get a session *back*, not to be read; it is page state rather than a stored preference, so
     /// a reload closes it again.
     pub(crate) show_hidden: RwSignal<bool>,
-    /// How the chat rail is narrowed — see [`SessionFilter`]. [`SessionFilter::All`] by default:
-    /// the rail opens on every conversation, because a chat that is missing reads as a chat that is
-    /// gone, and no filter should be the first thing a person has to notice and undo.
+    /// How the chat rail is narrowed — see [`SessionFilter`]. [`SessionFilter::Mine`] by default:
+    /// the rail opens on the conversations a person started, because a working fleet starts most of
+    /// its own work and the handful you had is otherwise buried under hundreds the machine spawned
+    /// for itself. The funnel takes the accent while it is narrowed, and **All sessions** is one
+    /// press away, so nothing is hidden without the head saying so.
     ///
     /// Page state rather than a stored preference, like the two signals around it — a reload comes
-    /// back to the full list.
+    /// back to your own sessions, not to the last narrowing.
     ///
     /// Whatever is on screen is exempt while a filter is on, the same escape hatch the agent
     /// picker gives itself: a filter must never hide what the centre pane is showing.
@@ -363,13 +365,17 @@ impl State {
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum SessionFilter {
     /// Every conversation, whoever it belongs to and whoever started it.
-    #[default]
     All,
     /// Only sessions of agents starred on the Agents page.
     Starred,
     /// Only sessions a person started — `launched_by: "human"` on the run. A session opened before
     /// the store recorded who started it is *not* one of these: nobody wrote it down, and a filter
     /// that assumed a person would be showing a year of agent-spawned runs under that name.
+    ///
+    /// The default, and the one narrowing worth opening on: the rail's job is the conversations you
+    /// are having, and on a machine whose agents launch each other those are the minority of what
+    /// is in it.
+    #[default]
     Mine,
 }
 

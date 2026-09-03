@@ -762,9 +762,9 @@ What the chat rail is narrowed to — the Sessions head's filter box.
 ```rust
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub(crate) enum SessionFilter {
-    #[default]
     All,
     Starred,
+    #[default]
     Mine,
 }
 ```

@@ -20,6 +20,20 @@ extraction script cares about.
 
 ## Unreleased
 
+### Changed
+
+- **The chat rail opens on the sessions you started.** The filter box in the Sessions head has
+  been there since 1.1.0, but it opened on **All sessions** — and on a machine whose agents launch
+  each other, that is a rail where the four conversations you had are somewhere among the four
+  hundred the machine spawned for itself. **Only started by me** is now the default, so the rail
+  answers "what was I just doing" first and the rest is one press of the funnel away. Nothing is
+  hidden quietly: the funnel is lit from the first draw because the list is narrowed, whatever is
+  on screen stays listed whoever started it, a live terminal session stays listed because nobody
+  records who opened one, and **All sessions** still shows everything. Two things to know if the
+  rail looks short: a conversation from before 1.1.0 is attributed to nobody and so is not counted
+  as yours, and a machine with no chats at all still reads "No chats yet — press New to start
+  one." rather than blaming the filter.
+
 ## 1.4.2 — 2026-09-03
 
 ### Fixed
