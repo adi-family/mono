@@ -20,6 +20,15 @@ extraction script cares about.
 
 ## Unreleased
 
+## 1.4.2 — 2026-09-03
+
+### Fixed
+
+- **The Windows package is built again.** 1.4.1 shipped without one, so no Windows machine could
+  take that release at all: a diagnostic section written for the macOS front door read a file's
+  permission bits through `std::os::unix`, which Windows does not have — and although that code
+  can never run there, it still had to compile there. This is 1.4.1, for Windows.
+
 ## 1.4.1 — 2026-09-03
 
 ### Fixed
